@@ -4,9 +4,9 @@
 [中文](../README.md) / [English](../README.en.md)
 <!-- docs-language-switcher:end -->
 
-- [ ] Prepare 4.7.6 version surfaces and lock frozen protocols
-- [ ] Build fail-closed production fresh-state bundle
-- [ ] Remove caller-supplied Wave freshness and safety inputs
+- [x] Prepare 4.7.6 version surfaces and lock frozen protocols
+- [x] Build fail-closed production fresh-state bundle
+- [x] Remove caller-supplied Wave freshness and safety inputs
 - [ ] Add fenced schedule/wave/action execution epochs and leases
 - [ ] Run admitted actions through the production Action Journal
 - [ ] Reconcile crash takeover without duplicate remote effects

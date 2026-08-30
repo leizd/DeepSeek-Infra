@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from deepseek_infra.infra.workspace import (
+    resilience_fresh_state,
     resilience_scheduler_service,
     resilience_wave_executor,
 )
@@ -34,36 +35,57 @@ def _schedule() -> dict[str, object]:
     }
 
 
-def test_wave_one_cannot_start_before_wave_zero_verified(tmp_settings: Path) -> None:
-    resilience_wave_executor.persist_planned_schedule(_schedule(), authority_head_digest="auth-aaa")
-    blocked = resilience_wave_executor.admit_wave(
-        "wave-sched",
-        1,
-        risk_snapshot={"riskDigest": "risk-aaa"},
-        authority_head_digest="auth-aaa",
-        blast_simulation={"passed": True},
+def _fresh_bundle(
+    *,
+    risk_digest: str = "risk-aaa",
+    authority_digest: str = "auth-aaa",
+    budget_admitted: bool = True,
+    blast_passed: bool = True,
+) -> dict[str, object]:
+    return {
+        "authorityHeadDigest": authority_digest,
+        "riskDigest": risk_digest,
+        "authorityState": {"workersAllowed": True, "mutationsAllowed": True},
+        "maintenanceDecisions": [{"actionId": "test", "allowed": True}],
+        "budgets": {"admitted": budget_admitted},
+        "blastSimulation": {"passed": blast_passed},
+        "freshStateBundleDigest": "f" * 64,
+    }
+
+
+def _use_fresh_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    risk_digest: str = "risk-aaa",
+    authority_digest: str = "auth-aaa",
+    budget_admitted: bool = True,
+    blast_passed: bool = True,
+) -> None:
+    monkeypatch.setattr(
+        resilience_fresh_state,
+        "build_fresh_state_bundle",
+        lambda schedule, wave_actions, *, now=None: _fresh_bundle(
+            risk_digest=risk_digest,
+            authority_digest=authority_digest,
+            budget_admitted=budget_admitted,
+            blast_passed=blast_passed,
+        ),
     )
+
+
+def test_wave_one_cannot_start_before_wave_zero_verified(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    resilience_wave_executor.persist_planned_schedule(_schedule(), authority_head_digest="auth-aaa")
+    _use_fresh_bundle(monkeypatch)
+    blocked = resilience_wave_executor.admit_wave("wave-sched", 1)
     assert blocked["admitted"] is False
     assert blocked["reason"] == "PREDECESSOR_WAVE_NOT_VERIFIED"
-    first = resilience_wave_executor.admit_wave(
-        "wave-sched",
-        0,
-        risk_snapshot={"riskDigest": "risk-aaa"},
-        authority_head_digest="auth-aaa",
-        blast_simulation={"passed": True},
-    )
+    first = resilience_wave_executor.admit_wave("wave-sched", 0)
     assert first["admitted"] is True
-    still_blocked = resilience_wave_executor.admit_wave(
-        "wave-sched",
-        1,
-        risk_snapshot={"riskDigest": "risk-aaa"},
-        authority_head_digest="auth-aaa",
-        blast_simulation={"passed": True},
-    )
+    still_blocked = resilience_wave_executor.admit_wave("wave-sched", 1)
     assert still_blocked["admitted"] is False
 
 
-def test_verified_wave_zero_releases_wave_one_and_charges_bytes(tmp_settings: Path) -> None:
+def test_verified_wave_zero_releases_wave_one_and_charges_bytes(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plan = _schedule()
     assigned = [
         {"actionId": "repair-a", "parameters": {"policyId": "p1", "estimatedBytes": 100}},
@@ -71,13 +93,8 @@ def test_verified_wave_zero_releases_wave_one_and_charges_bytes(tmp_settings: Pa
     ]
     resilience_scheduler_service.record_schedule_result(plan, assigned)
     resilience_wave_executor.persist_planned_schedule(plan, authority_head_digest="auth-aaa")
-    resilience_wave_executor.admit_wave(
-        "wave-sched",
-        0,
-        risk_snapshot={"riskDigest": "risk-aaa"},
-        authority_head_digest="auth-aaa",
-        blast_simulation={"passed": True},
-    )
+    _use_fresh_bundle(monkeypatch)
+    resilience_wave_executor.admit_wave("wave-sched", 0)
     verified = resilience_wave_executor.verify_wave_action(
         "wave-sched",
         "repair-a",
@@ -87,33 +104,22 @@ def test_verified_wave_zero_releases_wave_one_and_charges_bytes(tmp_settings: Pa
         actual_traffic_class="repair",
     )
     assert verified["status"] == "VERIFIED_SUCCESS"
-    second = resilience_wave_executor.admit_wave(
-        "wave-sched",
-        1,
-        risk_snapshot={"riskDigest": "risk-aaa"},
-        authority_head_digest="auth-aaa",
-        blast_simulation={"passed": True},
-    )
+    second = resilience_wave_executor.admit_wave("wave-sched", 1)
     assert second["admitted"] is True
     state = resilience_scheduler_service.get_policy_service("p1")
     assert state is not None and state["bytesServed"] == 50
     assert state["actionsServed"] == 1
 
 
-def test_failed_wave_pauses_downstream_and_stale_requires_replan(tmp_settings: Path) -> None:
+def test_failed_wave_pauses_downstream_and_stale_requires_replan(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plan = _schedule()
     resilience_scheduler_service.record_schedule_result(plan, plan["executionWaves"][0]["actions"])  # type: ignore[index]
     resilience_wave_executor.persist_planned_schedule(plan, authority_head_digest="auth-aaa")
-    resilience_wave_executor.admit_wave(
-        "wave-sched",
-        0,
-        risk_snapshot={"riskDigest": "risk-aaa"},
-        authority_head_digest="auth-aaa",
-        blast_simulation={"passed": True},
-    )
+    _use_fresh_bundle(monkeypatch)
+    resilience_wave_executor.admit_wave("wave-sched", 0)
     failed = resilience_wave_executor.verify_wave_action("wave-sched", "repair-a", success=False)
     assert failed["status"] == "FAILED"
-    downstream = resilience_wave_executor.admit_wave("wave-sched", 1, risk_snapshot={"riskDigest": "risk-aaa"})
+    downstream = resilience_wave_executor.admit_wave("wave-sched", 1)
     assert downstream["admitted"] is False
     assert downstream["reason"] == "FAILED"
 
@@ -125,20 +131,15 @@ def test_failed_wave_pauses_downstream_and_stale_requires_replan(tmp_settings: P
     }
     resilience_scheduler_service.record_schedule_result(other, other["executionWaves"][0]["actions"])  # type: ignore[index]
     resilience_wave_executor.persist_planned_schedule(other, authority_head_digest="old-auth")
-    stale = resilience_wave_executor.admit_wave(
-        "stale-sched",
-        0,
-        risk_snapshot={"riskDigest": "new-risk"},
-        authority_head_digest="old-auth",
-        blast_simulation={"passed": True},
-    )
+    _use_fresh_bundle(monkeypatch, risk_digest="new-risk", authority_digest="old-auth")
+    stale = resilience_wave_executor.admit_wave("stale-sched", 0)
     assert stale["admitted"] is False
     assert stale["status"] == "PAUSED_REPLAN"
     assert stale["reason"] == "STALE"
     assert resilience_scheduler_service.get_reservation("stale-a")["status"] == "RELEASED"  # type: ignore[index]
 
 
-def test_wave_revalidates_authority_budget_and_blast(tmp_settings: Path) -> None:
+def test_wave_revalidates_authority_budget_and_blast(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def plan_for(schedule_id: str) -> dict[str, object]:
         payload = _schedule()
         payload["scheduleId"] = schedule_id
@@ -149,34 +150,18 @@ def test_wave_revalidates_authority_budget_and_blast(tmp_settings: Path) -> None
 
     auth_plan = plan_for("auth-sched")
     resilience_wave_executor.persist_planned_schedule(auth_plan, authority_head_digest="auth-aaa")
-    authority = resilience_wave_executor.admit_wave(
-        "auth-sched",
-        0,
-        risk_snapshot={"riskDigest": "risk-aaa"},
-        authority_head_digest="auth-bbb",
-        blast_simulation={"passed": True},
-    )
+    _use_fresh_bundle(monkeypatch, authority_digest="auth-bbb")
+    authority = resilience_wave_executor.admit_wave("auth-sched", 0)
     assert authority["admitted"] is False
     blast_plan = plan_for("blast-sched")
     resilience_wave_executor.persist_planned_schedule(blast_plan, authority_head_digest="auth-aaa")
-    blast = resilience_wave_executor.admit_wave(
-        "blast-sched",
-        0,
-        risk_snapshot={"riskDigest": "risk-aaa"},
-        authority_head_digest="auth-aaa",
-        blast_simulation={"passed": False},
-    )
+    _use_fresh_bundle(monkeypatch, blast_passed=False)
+    blast = resilience_wave_executor.admit_wave("blast-sched", 0)
     assert blast["admitted"] is False
     budget_plan = plan_for("budget-sched")
     resilience_wave_executor.persist_planned_schedule(budget_plan, authority_head_digest="auth-aaa")
-    budget = resilience_wave_executor.admit_wave(
-        "budget-sched",
-        0,
-        risk_snapshot={"riskDigest": "risk-aaa"},
-        authority_head_digest="auth-aaa",
-        budgets={"admitted": False},
-        blast_simulation={"passed": True},
-    )
+    _use_fresh_bundle(monkeypatch, budget_admitted=False)
+    budget = resilience_wave_executor.admit_wave("budget-sched", 0)
     assert budget["admitted"] is False
     ok_plan = plan_for("ok-sched")
     resilience_wave_executor.persist_planned_schedule(ok_plan, authority_head_digest="auth-aaa")

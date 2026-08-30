@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from deepseek_infra.core.errors import AppError
 from deepseek_infra.infra.workspace import (
     autonomous_action_policy,
+    backup_control_recovery,
     backup_policies,
     backup_transfer_budget,
     resilience_action_journal,
@@ -516,10 +517,16 @@ def schedule_fleet_resilience(
 
     assigned_actions = [action for wave in waves for action in wave["actions"]]
     schedule_id = f"fsch_{uuid.uuid4().hex[:16]}"
+    try:
+        authority_state = backup_control_recovery.authority_health_snapshot()
+    except Exception:
+        authority_state = {}
+    authority_head_digest = str(authority_state.get("canonicalDigest") or "")
     schedule = {
         "scheduleId": schedule_id,
         "scheduledAt": _utc_iso(current),
         "riskDigest": str(risk_snapshot.get("riskDigest") or ""),
+        "authorityHeadDigest": authority_head_digest,
         "totalCandidateActions": len(sorted_actions),
         "admittedCount": len(assigned_actions),
         "deferredCount": 0,
@@ -544,5 +551,9 @@ def schedule_fleet_resilience(
     resilience_scheduler_service.record_schedule_result(schedule, assigned_actions, scheduled_at=current)
     from deepseek_infra.infra.workspace import resilience_wave_executor
 
-    resilience_wave_executor.persist_planned_schedule(schedule, now=current)
+    resilience_wave_executor.persist_planned_schedule(
+        schedule,
+        authority_head_digest=authority_head_digest or None,
+        now=current,
+    )
     return schedule

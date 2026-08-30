@@ -269,41 +269,42 @@ def _predecessors_verified(conn: sqlite3.Connection, schedule_id: str, wave_inde
 
 def revalidate_wave(
     schedule: dict[str, Any],
-    *,
-    authority_head_digest: str | None,
-    risk_snapshot: dict[str, Any] | None,
-    capacity_snapshot: dict[str, Any] | None,
-    running_effects: list[dict[str, Any]] | None,
-    budgets: dict[str, Any] | None,
-    maintenance_windows_ok: bool | None,
-    blast_simulation: dict[str, Any] | None,
+    fresh_state_bundle: dict[str, Any],
 ) -> dict[str, Any]:
-    """Fresh-state checks that must pass before a planned wave may run."""
+    """Compare a source-backed fresh-state bundle with the immutable plan binding."""
     reasons: list[str] = []
     planned_risk = str(schedule.get("riskDigest") or "")
-    fresh_risk = str((risk_snapshot or {}).get("riskDigest") or planned_risk)
-    if risk_snapshot is not None and planned_risk and fresh_risk != planned_risk:
+    fresh_risk = str(fresh_state_bundle.get("riskDigest") or "")
+    if not planned_risk:
+        reasons.append("PLANNED_RISK_BINDING_MISSING")
+    elif fresh_risk != planned_risk:
         reasons.append("RISK_SNAPSHOT_STALE")
     planned_authority = str(schedule.get("authorityHeadDigest") or "")
-    if authority_head_digest is not None and planned_authority and authority_head_digest != planned_authority:
+    fresh_authority = str(fresh_state_bundle.get("authorityHeadDigest") or "")
+    if not planned_authority:
+        reasons.append("PLANNED_AUTHORITY_BINDING_MISSING")
+    elif fresh_authority != planned_authority:
         reasons.append("AUTHORITY_HEAD_STALE")
-    if maintenance_windows_ok is False:
+    authority_state = fresh_state_bundle.get("authorityState")
+    if not isinstance(authority_state, dict) or authority_state.get("workersAllowed") is not True or authority_state.get("mutationsAllowed") is not True:
+        reasons.append("AUTHORITY_MUTATIONS_BLOCKED")
+    maintenance = fresh_state_bundle.get("maintenanceDecisions")
+    if not isinstance(maintenance, list) or any(
+        not isinstance(item, dict) or item.get("allowed") is not True for item in maintenance
+    ):
         reasons.append("MAINTENANCE_WINDOW_BLOCKED")
-    if isinstance(budgets, dict) and budgets.get("admitted") is False:
+    budgets = fresh_state_bundle.get("budgets")
+    if not isinstance(budgets, dict) or budgets.get("admitted") is not True:
         reasons.append("RESOURCE_OR_TRANSFER_BUDGET_DENIED")
-    blast = blast_simulation if isinstance(blast_simulation, dict) else None
-    if blast is not None and blast.get("passed") is not True:
+    blast = fresh_state_bundle.get("blastSimulation")
+    if not isinstance(blast, dict) or blast.get("passed") is not True:
         reasons.append("BLAST_RADIUS_REVALIDATION_FAILED")
     return {
         "fresh": not reasons,
         "reasons": reasons,
-        "authorityHeadDigest": authority_head_digest,
+        "authorityHeadDigest": fresh_authority,
         "riskDigest": fresh_risk,
-        "capacitySnapshot": capacity_snapshot or {},
-        "runningEffects": list(running_effects or []),
-        "budgets": budgets or {},
-        "maintenanceWindowsOk": True if maintenance_windows_ok is None else bool(maintenance_windows_ok),
-        "blastSimulation": blast or {},
+        "freshStateBundle": fresh_state_bundle,
     }
 
 
@@ -312,15 +313,8 @@ def admit_wave(
     wave_index: int | None = None,
     *,
     now: datetime | None = None,
-    authority_head_digest: str | None = None,
-    risk_snapshot: dict[str, Any] | None = None,
-    capacity_snapshot: dict[str, Any] | None = None,
-    running_effects: list[dict[str, Any]] | None = None,
-    budgets: dict[str, Any] | None = None,
-    maintenance_windows_ok: bool | None = None,
-    blast_simulation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Admit the next PENDING wave only after predecessor verified success and fresh revalidation."""
+    """Admit a wave from production truth only; missing sources leave it PENDING."""
     timestamp = _utc_iso(now)
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -360,16 +354,111 @@ def admit_wave(
                 "reason": "PREDECESSOR_WAVE_NOT_VERIFIED",
             }
         schedule_payload = _schedule_record(schedule_row)
-        revalidation = revalidate_wave(
-            schedule_payload,
-            authority_head_digest=authority_head_digest,
-            risk_snapshot=risk_snapshot,
-            capacity_snapshot=capacity_snapshot,
-            running_effects=running_effects,
-            budgets=budgets,
-            maintenance_windows_ok=maintenance_windows_ok,
-            blast_simulation=blast_simulation,
+        action_rows = conn.execute(
+            "SELECT action_json FROM resilience_wave_actions WHERE schedule_id = ? AND wave_index = ? ORDER BY action_id",
+            (schedule_id, wave_index),
+        ).fetchall()
+        wave_actions = [json.loads(str(row["action_json"])) for row in action_rows]
+        claimed = conn.execute(
+            """
+            UPDATE resilience_wave_states
+            SET status = ?, updated_at = ?
+            WHERE schedule_id = ? AND wave_index = ? AND status = ?
+            """,
+            (WAVE_ADMITTING, timestamp, schedule_id, wave_index, WAVE_PENDING),
         )
+        if claimed.rowcount != 1:
+            current = conn.execute(
+                "SELECT * FROM resilience_wave_states WHERE schedule_id = ? AND wave_index = ?",
+                (schedule_id, wave_index),
+            ).fetchone()
+            assert current is not None
+            return {**_wave_record(current), "admitted": False, "reason": str(current["status"])}
+
+    from deepseek_infra.infra.workspace import resilience_fresh_state
+
+    try:
+        fresh_state_bundle = resilience_fresh_state.build_fresh_state_bundle(
+            schedule_payload,
+            wave_actions,
+            now=now,
+        )
+    except resilience_fresh_state.FreshStateUnavailable as exc:
+        revalidation: dict[str, Any] = {
+            "fresh": False,
+            "reasons": [exc.reason],
+            "sourceUnavailable": exc.source,
+            "detail": exc.detail,
+        }
+        with _connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                UPDATE resilience_wave_states
+                SET status = ?, revalidation_json = ?, updated_at = ?
+                WHERE schedule_id = ? AND wave_index = ? AND status = ?
+                """,
+                (
+                    WAVE_PENDING,
+                    json.dumps(revalidation, ensure_ascii=False, sort_keys=True),
+                    timestamp,
+                    schedule_id,
+                    wave_index,
+                    WAVE_ADMITTING,
+                ),
+            )
+        return {
+            "scheduleId": schedule_id,
+            "waveIndex": wave_index,
+            "admitted": False,
+            "status": "WAVE_NOT_ADMITTED",
+            "reason": exc.reason,
+            "revalidation": revalidation,
+        }
+    except Exception as exc:
+        revalidation = {
+            "fresh": False,
+            "reasons": ["FRESH_STATE_BUILD_FAILED"],
+            "sourceUnavailable": "fresh-state-bundle",
+            "detail": type(exc).__name__,
+        }
+        with _connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                UPDATE resilience_wave_states
+                SET status = ?, revalidation_json = ?, updated_at = ?
+                WHERE schedule_id = ? AND wave_index = ? AND status = ?
+                """,
+                (
+                    WAVE_PENDING,
+                    json.dumps(revalidation, ensure_ascii=False, sort_keys=True),
+                    timestamp,
+                    schedule_id,
+                    wave_index,
+                    WAVE_ADMITTING,
+                ),
+            )
+        return {
+            "scheduleId": schedule_id,
+            "waveIndex": wave_index,
+            "admitted": False,
+            "status": "WAVE_NOT_ADMITTED",
+            "reason": "FRESH_STATE_BUILD_FAILED",
+            "revalidation": revalidation,
+        }
+
+    revalidation = revalidate_wave(schedule_payload, fresh_state_bundle)
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        wave_row = conn.execute(
+            "SELECT * FROM resilience_wave_states WHERE schedule_id = ? AND wave_index = ?",
+            (schedule_id, wave_index),
+        ).fetchone()
+        if wave_row is None:
+            raise ValueError(f"unknown wave: {schedule_id}/{wave_index}")
+        if str(wave_row["status"]) != WAVE_ADMITTING:
+            return {**_wave_record(wave_row), "admitted": False, "reason": str(wave_row["status"])}
         rendered_revalidation = json.dumps(revalidation, ensure_ascii=False, sort_keys=True)
         if not revalidation["fresh"]:
             conn.execute(
@@ -383,15 +472,12 @@ def admit_wave(
             conn.execute(
                 """
                 UPDATE resilience_wave_states
-                SET revalidation_json = ?, updated_at = ?
+                SET status = ?, revalidation_json = ?, updated_at = ?
                 WHERE schedule_id = ? AND wave_index = ?
                 """,
-                (rendered_revalidation, timestamp, schedule_id, wave_index),
+                (WAVE_PENDING, rendered_revalidation, timestamp, schedule_id, wave_index),
             )
-            from deepseek_infra.infra.workspace import resilience_scheduler_service
-
-            resilience_scheduler_service.release_schedule_reservations(schedule_id, reason="STALE", released_at=now)
-            return {
+            stale_result = {
                 "scheduleId": schedule_id,
                 "waveIndex": wave_index,
                 "admitted": False,
@@ -399,28 +485,35 @@ def admit_wave(
                 "reason": "STALE",
                 "revalidation": revalidation,
             }
-        conn.execute(
-            """
-            UPDATE resilience_wave_states
-            SET status = ?, revalidation_json = ?, admitted_at = ?, updated_at = ?
-            WHERE schedule_id = ? AND wave_index = ?
-            """,
-            (WAVE_RUNNING, rendered_revalidation, timestamp, timestamp, schedule_id, wave_index),
-        )
-        conn.execute(
-            """
-            UPDATE resilience_wave_schedules
-            SET status = ?, updated_at = ?
-            WHERE schedule_id = ?
-            """,
-            (SCHEDULE_RUNNING, timestamp, schedule_id),
-        )
-        wave = conn.execute(
-            "SELECT * FROM resilience_wave_states WHERE schedule_id = ? AND wave_index = ?",
-            (schedule_id, wave_index),
-        ).fetchone()
-        assert wave is not None
-        return {**_wave_record(wave), "admitted": True, "revalidation": revalidation}
+        else:
+            conn.execute(
+                """
+                UPDATE resilience_wave_states
+                SET status = ?, revalidation_json = ?, admitted_at = ?, updated_at = ?
+                WHERE schedule_id = ? AND wave_index = ?
+                """,
+                (WAVE_RUNNING, rendered_revalidation, timestamp, timestamp, schedule_id, wave_index),
+            )
+            conn.execute(
+                """
+                UPDATE resilience_wave_schedules
+                SET status = ?, updated_at = ?
+                WHERE schedule_id = ?
+                """,
+                (SCHEDULE_RUNNING, timestamp, schedule_id),
+            )
+            wave = conn.execute(
+                "SELECT * FROM resilience_wave_states WHERE schedule_id = ? AND wave_index = ?",
+                (schedule_id, wave_index),
+            ).fetchone()
+            assert wave is not None
+            admitted_result = {**_wave_record(wave), "admitted": True, "revalidation": revalidation}
+    if not revalidation["fresh"]:
+        from deepseek_infra.infra.workspace import resilience_scheduler_service
+
+        resilience_scheduler_service.release_schedule_reservations(schedule_id, reason="STALE", released_at=now)
+        return stale_result
+    return admitted_result
 
 
 def verify_wave_action(
