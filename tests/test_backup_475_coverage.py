@@ -12,6 +12,7 @@ from deepseek_infra.infra.workspace import (
     resilience_capacity_history,
     resilience_cost_model,
     resilience_forecast_backtest,
+    resilience_fresh_state,
     resilience_placement_optimizer,
     resilience_risk_observations,
     resilience_scheduler_service,
@@ -19,10 +20,28 @@ from deepseek_infra.infra.workspace import (
 )
 
 
-def test_wave_executor_skips_malformed_waves_and_lists_state(tmp_settings: Path) -> None:
+def test_wave_executor_skips_malformed_waves_and_lists_state(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    maintenance_allowed = True
+
+    def fresh_bundle(schedule: dict[str, object], wave_actions: list[dict[str, object]], *, now: object = None) -> dict[str, object]:
+        del wave_actions, now
+        return {
+            "riskDigest": schedule.get("riskDigest"),
+            "authorityHeadDigest": schedule.get("authorityHeadDigest"),
+            "authorityState": {"workersAllowed": True, "mutationsAllowed": True},
+            "maintenanceDecisions": [{"allowed": maintenance_allowed}],
+            "budgets": {"admitted": True},
+            "blastSimulation": {"passed": True},
+        }
+
+    monkeypatch.setattr(resilience_fresh_state, "build_fresh_state_bundle", fresh_bundle)
     schedule = {
         "scheduleId": "cov-sched",
         "riskDigest": "risk-cov",
+        "authorityHeadDigest": "auth-cov",
         "executionWaves": [
             "not-a-wave",
             {"waveIndex": None, "actions": []},
@@ -33,24 +52,15 @@ def test_wave_executor_skips_malformed_waves_and_lists_state(tmp_settings: Path)
             },
         ],
     }
-    resilience_wave_executor.persist_planned_schedule(schedule)
+    resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest="auth-cov")
     assert resilience_wave_executor.list_waves("cov-sched")[0]["waveIndex"] == 0
     assert [item["actionId"] for item in resilience_wave_executor.list_wave_actions("cov-sched", 0)] == ["ok-a"]
-    admitted = resilience_wave_executor.admit_wave(
-        "cov-sched",
-        risk_snapshot={"riskDigest": "risk-cov"},
-        blast_simulation={"passed": True},
-    )
+    admitted = resilience_wave_executor.admit_wave("cov-sched")
     assert admitted["admitted"] is True
-    again = resilience_wave_executor.admit_wave(
-        "cov-sched",
-        0,
-        risk_snapshot={"riskDigest": "risk-cov"},
-        blast_simulation={"passed": True},
-    )
+    again = resilience_wave_executor.admit_wave("cov-sched", 0)
     assert again["admitted"] is False
     with pytest.raises(ValueError, match="unknown wave"):
-        resilience_wave_executor.admit_wave("cov-sched", 9, risk_snapshot={"riskDigest": "risk-cov"})
+        resilience_wave_executor.admit_wave("cov-sched", 9)
     verified = resilience_wave_executor.verify_wave_action("cov-sched", "ok-a", success=True, actual_bytes=1)
     assert verified["status"] == "VERIFIED_SUCCESS"
     assert resilience_wave_executor.get_schedule("cov-sched")["status"] == "COMPLETED"  # type: ignore[index]
@@ -61,16 +71,12 @@ def test_wave_executor_skips_malformed_waves_and_lists_state(tmp_settings: Path)
     maint = {
         "scheduleId": "maint-sched",
         "riskDigest": "risk-maint",
+        "authorityHeadDigest": "auth-maint",
         "executionWaves": [{"waveIndex": 0, "actions": [{"actionId": "maint-a", "parameters": {"policyId": "p"}}]}],
     }
-    resilience_wave_executor.persist_planned_schedule(maint)
-    blocked = resilience_wave_executor.admit_wave(
-        "maint-sched",
-        0,
-        risk_snapshot={"riskDigest": "risk-maint"},
-        maintenance_windows_ok=False,
-        blast_simulation={"passed": True},
-    )
+    resilience_wave_executor.persist_planned_schedule(maint, authority_head_digest="auth-maint")
+    maintenance_allowed = False
+    blocked = resilience_wave_executor.admit_wave("maint-sched", 0)
     assert blocked["admitted"] is False
 
 

@@ -983,6 +983,17 @@ def create_backup_governance_router() -> APIRouter:
         wave_index = body.get("waveIndex") if isinstance(body, dict) else None
         return json_response(resilience_wave_executor.admit_wave(schedule_id, None if wave_index is None else int(wave_index)))
 
+    @router.post("/api/workspace/resilience/waves/run")
+    async def api_resilience_waves_run(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        body = await read_json_body(request)
+        from deepseek_infra.infra.workspace import resilience_wave_executor
+
+        schedule_id = str((body or {}).get("scheduleId") or "") if isinstance(body, dict) else ""
+        if not schedule_id:
+            raise AppError("scheduleId is required", code=ErrorCode.INVALID_REQUEST, status=400)
+        return json_response(resilience_wave_executor.run_next_wave(schedule_id, instance_id="api-wave-runner"))
+
     @router.get("/api/workspace/resilience/capacity-forecast")
     async def api_resilience_capacity_forecast(request: Request) -> JSONResponse:
         require_api_auth(request)

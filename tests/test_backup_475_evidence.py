@@ -162,6 +162,7 @@ def test_predictive_api_routes_are_authenticated(tmp_settings: Path) -> None:
     server, _ = create_server(0, host="127.0.0.1")
     client = TestClient(server.app, base_url="http://127.0.0.1", raise_server_exceptions=False)
     assert client.get("/api/workspace/resilience/waves").status_code == 401
+    assert client.post("/api/workspace/resilience/waves/run", json={}).status_code == 401
     headers = {"Authorization": f"Bearer {settings.auth.token}", "X-DeepSeek-Client": "test"}
     waves = client.get("/api/workspace/resilience/waves", headers=headers)
     assert waves.status_code == 200
@@ -186,3 +187,5 @@ def test_predictive_api_routes_are_authenticated(tmp_settings: Path) -> None:
     assert whatif.json()["s3PutCount"] == 0
     missing = client.post("/api/workspace/resilience/waves/admit", headers=headers, json={})
     assert missing.status_code == 400
+    missing_run = client.post("/api/workspace/resilience/waves/run", headers=headers, json={})
+    assert missing_run.status_code == 400

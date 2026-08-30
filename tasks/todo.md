@@ -7,9 +7,9 @@
 - [x] Prepare 4.7.6 version surfaces and lock frozen protocols
 - [x] Build fail-closed production fresh-state bundle
 - [x] Remove caller-supplied Wave freshness and safety inputs
-- [ ] Add fenced schedule/wave/action execution epochs and leases
-- [ ] Run admitted actions through the production Action Journal
-- [ ] Reconcile crash takeover without duplicate remote effects
+- [x] Add fenced schedule/wave/action execution epochs and leases
+- [x] Run admitted actions through the production Action Journal
+- [x] Reconcile crash takeover without duplicate remote effects
 - [ ] Persist terminal effect transfer telemetry
 - [ ] Settle fair service exactly once from observed telemetry
 - [ ] Add production capacity sampler to maintenance control loop
