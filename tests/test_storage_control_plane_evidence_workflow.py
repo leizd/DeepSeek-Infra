@@ -73,6 +73,8 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
         "tests/test_backup_4410_contracts.py::test_cdc_v3_is_explicit_and_normalized",
         "tests/test_backup_463_control_authority.py::test_control_authority_schema_constant_and_keys",
         "tests/test_backup_463_control_authority.py::test_authority_checkpoint_is_hash_chained_and_secretless",
+        "tests/test_backup_476_fair_service.py::test_drill_service_uses_durable_restore_accounting_without_changing_proof_v1",
+        "tests/test_backup_476_predictive_proof.py::test_predictive_payload_remains_inside_unchanged_evidence_v2_envelope",
     )
     nodes_predictive_fleet = (
         "tests/test_backup_475_risk_lifecycle.py::test_superseded_backup_risk_cannot_remain_open",
