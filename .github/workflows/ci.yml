@@ -596,6 +596,7 @@ jobs:
           path: |
             docs/evidence/storage-control-plane-minio-v${{ env.RELEASE_VERSION }}.json
             docs/evidence/storage-control-plane-autonomous-proof-v${{ env.RELEASE_VERSION }}.json
+            docs/evidence/storage-control-plane-predictive-proof-v${{ env.RELEASE_VERSION }}.json
           if-no-files-found: warn
       - name: Collect Storage Control Plane MinIO diagnostics
         if: always()

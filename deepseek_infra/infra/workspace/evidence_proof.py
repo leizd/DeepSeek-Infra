@@ -895,6 +895,15 @@ def validate_predictive_planning_proof(evidence: dict[str, Any], check_name: str
     return errors
 
 
+def validate_typed_predictive_planning_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    """Validate a predictive-planning-proof-v1 payload inside the v2 envelope."""
+    from deepseek_infra.infra.workspace import resilience_predictive_proof
+
+    if check_name not in resilience_predictive_proof.PREDICTIVE_PROOF_CHECKS:
+        return [f"unsupported-predictive-proof-check:{check_name}"]
+    return resilience_predictive_proof.validate_predictive_planning_proof(evidence)
+
+
 VALIDATORS: dict[str, CheckValidator] = {
     "realPreDisasterBackupIsActuallyRestored": validate_restore_proof,
     "realFreshProcessRestoresPreDisasterBackup": validate_restore_proof,
@@ -964,36 +973,45 @@ VALIDATORS: dict[str, CheckValidator] = {
     "waveRevalidatesBlastRadiusBeforeExecution": validate_predictive_planning_proof,
     "fleetSloExposes1h24h7d30dWindows": validate_predictive_planning_proof,
     "insufficientSloSamplesAreExplicit": validate_predictive_planning_proof,
-    "capacityForecastUsesDurableObservations": validate_predictive_planning_proof,
+    "capacityForecastUsesDurableObservations": validate_typed_predictive_planning_proof,
     "forecastWithInsufficientSamplesFailsClosed": validate_predictive_planning_proof,
     "thirtyDayCapacityForecastProduced": validate_predictive_planning_proof,
     "ninetyDayCapacityForecastProduced": validate_predictive_planning_proof,
     "forecastProvidesP50AndP90Headroom": validate_predictive_planning_proof,
-    "forecastBacktestErrorIsPersisted": validate_predictive_planning_proof,
+    "forecastBacktestErrorIsPersisted": validate_typed_predictive_planning_proof,
     "overoptimisticForecastLowersConfidence": validate_predictive_planning_proof,
-    "costModelUsesVersionedPriceCatalog": validate_predictive_planning_proof,
+    "costModelUsesVersionedPriceCatalog": validate_typed_predictive_planning_proof,
     "unknownTargetPriceDoesNotBecomeZero": validate_predictive_planning_proof,
     "egressCostIsIncluded": validate_predictive_planning_proof,
     "storageCostIsIncluded": validate_predictive_planning_proof,
-    "optimizerNeverReducesMinCommittedCopies": validate_predictive_planning_proof,
-    "optimizerNeverReducesMinFailureDomains": validate_predictive_planning_proof,
+    "optimizerNeverReducesMinCommittedCopies": validate_typed_predictive_planning_proof,
+    "optimizerNeverReducesMinFailureDomains": validate_typed_predictive_planning_proof,
     "optimizerRejectsUnsafeCheaperPlan": validate_predictive_planning_proof,
     "candidatePlanIsDeterministicForSameInputs": validate_predictive_planning_proof,
-    "whatIfProducesNoStorageWrites": validate_predictive_planning_proof,
-    "whatIfProducesNoStorageDeletes": validate_predictive_planning_proof,
-    "whatIfDoesNotMutateAuthority": validate_predictive_planning_proof,
-    "whatIfDoesNotMutateActionJournal": validate_predictive_planning_proof,
-    "whatIfBindsObservedFleetSnapshot": validate_predictive_planning_proof,
-    "whatIfIncludesRunningEffects": validate_predictive_planning_proof,
-    "whatIfIncludesMaintenanceWindows": validate_predictive_planning_proof,
-    "optimizationProofBindsForecastDigest": validate_predictive_planning_proof,
-    "optimizationProofBindsPriceCatalogDigest": validate_predictive_planning_proof,
-    "optimizationProofBindsAuthorityHead": validate_predictive_planning_proof,
-    "optimizationProofRecomputesSafetyConstraints": validate_predictive_planning_proof,
+    "whatIfProducesNoStorageWrites": validate_typed_predictive_planning_proof,
+    "whatIfProducesNoStorageDeletes": validate_typed_predictive_planning_proof,
+    "whatIfDoesNotMutateAuthority": validate_typed_predictive_planning_proof,
+    "whatIfDoesNotMutateActionJournal": validate_typed_predictive_planning_proof,
+    "whatIfBindsObservedFleetSnapshot": validate_typed_predictive_planning_proof,
+    "whatIfIncludesRunningEffects": validate_typed_predictive_planning_proof,
+    "whatIfIncludesMaintenanceWindows": validate_typed_predictive_planning_proof,
+    "optimizationProofBindsForecastDigest": validate_typed_predictive_planning_proof,
+    "optimizationProofBindsPriceCatalogDigest": validate_typed_predictive_planning_proof,
+    "optimizationProofBindsAuthorityHead": validate_typed_predictive_planning_proof,
+    "optimizationProofRecomputesSafetyConstraints": validate_typed_predictive_planning_proof,
     "federationSnapshotContainsNoCredentials": validate_predictive_planning_proof,
     "federationSnapshotIsDigestBound": validate_predictive_planning_proof,
     "incompatibleFleetWireVersionFailsClosed": validate_predictive_planning_proof,
     "federatedSimulationCannotMutateRemoteFleet": validate_predictive_planning_proof,
+    "realThreeMinioPredictivePlanningE2E": validate_minio_endpoints_proof,
+    "realCapacityChangesDriveForecast": validate_typed_predictive_planning_proof,
+    "realMinioInventoryUnchangedByWhatIf": validate_typed_predictive_planning_proof,
+    "predictiveProofBindsCapacityObservationSet": validate_typed_predictive_planning_proof,
+    "predictiveProofBindsForecastRecord": validate_typed_predictive_planning_proof,
+    "predictiveProofBindsForecastBacktest": validate_typed_predictive_planning_proof,
+    "predictiveProofBindsFreshStateBundle": validate_typed_predictive_planning_proof,
+    "predictiveProofBindsPreAndPostState": validate_typed_predictive_planning_proof,
+    "predictiveProofRejectsSelfReportedZeroMutation": validate_typed_predictive_planning_proof,
 }
 
 

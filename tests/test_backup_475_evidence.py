@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from deepseek_infra.core.config import settings
-from deepseek_infra.infra.workspace import evidence_proof, resilience_risk_engine
+from deepseek_infra.infra.workspace import evidence_proof, resilience_predictive_proof, resilience_risk_engine
 from deepseek_infra.web.server import create_server
 from scripts import run_storage_control_plane_minio_e2e
 
@@ -137,12 +137,17 @@ def _passing_evidence(name: str) -> dict[str, object]:
 
 def test_475_required_check_names_are_locked() -> None:
     assert set(PREDICTIVE_CHECK_NAMES) <= set(run_storage_control_plane_minio_e2e.CHECK_SCENARIOS)
-    assert all(
-        run_storage_control_plane_minio_e2e.CHECK_SCENARIOS[name]
-        == run_storage_control_plane_minio_e2e.PREDICTIVE_FLEET_SCENARIO
-        for name in PREDICTIVE_CHECK_NAMES
-    )
+    promoted = set(resilience_predictive_proof.PROMOTED_PREDICTIVE_CLAIM_CHECKS)
     for name in PREDICTIVE_CHECK_NAMES:
+        expected = (
+            run_storage_control_plane_minio_e2e.REAL_PREDICTIVE_SCENARIO
+            if name in promoted
+            else run_storage_control_plane_minio_e2e.PREDICTIVE_FLEET_SCENARIO
+        )
+        assert run_storage_control_plane_minio_e2e.CHECK_SCENARIOS[name] == expected
+    for name in PREDICTIVE_CHECK_NAMES:
+        if name in promoted:
+            continue
         errors = evidence_proof.validate_check(name, {"status": "PASS", "evidence": _passing_evidence(name)})
         assert errors == [], (name, errors)
     assert evidence_proof.validate_check(
@@ -162,6 +167,7 @@ def test_predictive_api_routes_are_authenticated(tmp_settings: Path) -> None:
     server, _ = create_server(0, host="127.0.0.1")
     client = TestClient(server.app, base_url="http://127.0.0.1", raise_server_exceptions=False)
     assert client.get("/api/workspace/resilience/waves").status_code == 401
+    assert client.post("/api/workspace/resilience/waves/run", json={}).status_code == 401
     headers = {"Authorization": f"Bearer {settings.auth.token}", "X-DeepSeek-Client": "test"}
     waves = client.get("/api/workspace/resilience/waves", headers=headers)
     assert waves.status_code == 200
@@ -182,7 +188,14 @@ def test_predictive_api_routes_are_authenticated(tmp_settings: Path) -> None:
             "maintenanceWindows": [],
         },
     )
-    assert whatif.status_code == 200
-    assert whatif.json()["s3PutCount"] == 0
+    assert whatif.status_code == 400
+    candidate_only = client.post(
+        "/api/workspace/resilience/whatif",
+        headers=headers,
+        json={"candidate": {"policyId": "policy-missing", "targetId": "target-missing", "operation": "KEEP"}},
+    )
+    assert candidate_only.status_code == 503
     missing = client.post("/api/workspace/resilience/waves/admit", headers=headers, json={})
     assert missing.status_code == 400
+    missing_run = client.post("/api/workspace/resilience/waves/run", headers=headers, json={})
+    assert missing_run.status_code == 400

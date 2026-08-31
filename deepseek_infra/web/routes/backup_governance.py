@@ -983,41 +983,45 @@ def create_backup_governance_router() -> APIRouter:
         wave_index = body.get("waveIndex") if isinstance(body, dict) else None
         return json_response(resilience_wave_executor.admit_wave(schedule_id, None if wave_index is None else int(wave_index)))
 
+    @router.post("/api/workspace/resilience/waves/run")
+    async def api_resilience_waves_run(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        body = await read_json_body(request)
+        from deepseek_infra.infra.workspace import resilience_wave_executor
+
+        schedule_id = str((body or {}).get("scheduleId") or "") if isinstance(body, dict) else ""
+        if not schedule_id:
+            raise AppError("scheduleId is required", code=ErrorCode.INVALID_REQUEST, status=400)
+        return json_response(resilience_wave_executor.run_next_wave(schedule_id, instance_id="api-wave-runner"))
+
     @router.get("/api/workspace/resilience/capacity-forecast")
     async def api_resilience_capacity_forecast(request: Request) -> JSONResponse:
         require_api_auth(request)
-        from deepseek_infra.infra.workspace import resilience_capacity_forecast
+        from deepseek_infra.infra.workspace import resilience_forecast_registry
 
         horizon = request.query_params.get("horizonDays")
         days = int(horizon) if horizon and horizon.isdigit() else 90
-        return json_response(resilience_capacity_forecast.forecast_all_targets(horizon_days=days))
+        return json_response(resilience_forecast_registry.forecast_registry_snapshot(horizon_days=days))
 
     @router.post("/api/workspace/resilience/whatif")
     async def api_resilience_whatif(request: Request) -> JSONResponse:
         require_api_auth(request)
         body = await read_json_body(request)
-        from deepseek_infra.infra.workspace import resilience_whatif
+        from deepseek_infra.infra.workspace import resilience_optimizer_inputs, resilience_state_digests, resilience_whatif
 
         if not isinstance(body, dict):
             raise AppError("what-if body is required", code=ErrorCode.INVALID_REQUEST, status=400)
-        observed = body.get("observedSnapshot")
-        forecast = body.get("forecast")
-        catalog = body.get("priceCatalog")
+        if set(body) != {"candidate"}:
+            raise AppError("what-if accepts candidate only; present truth is server-controlled", code=ErrorCode.INVALID_PAYLOAD, status=400)
         candidate = body.get("candidate")
-        baseline = body.get("baseline")
-        running = body.get("runningEffects")
-        windows = body.get("maintenanceWindows")
-        return json_response(
-            resilience_whatif.simulate_fleet(
-                observed_snapshot=observed if isinstance(observed, dict) else {},
-                forecast=forecast if isinstance(forecast, dict) else {},
-                price_catalog=catalog if isinstance(catalog, dict) else None,
-                candidate=candidate if isinstance(candidate, dict) else {},
-                baseline=baseline if isinstance(baseline, dict) else {},
-                running_effects=running if isinstance(running, list) else [],
-                maintenance_windows=windows if isinstance(windows, list) else [],
-            )
-        )
+        if not isinstance(candidate, dict):
+            raise AppError("candidate is required", code=ErrorCode.INVALID_PAYLOAD, status=400)
+        try:
+            return json_response(resilience_whatif.simulate_candidate(candidate))
+        except ValueError as exc:
+            raise AppError(str(exc), code=ErrorCode.INVALID_PAYLOAD, status=400) from exc
+        except (resilience_optimizer_inputs.AuthoritativeInputUnavailable, resilience_state_digests.StateDigestUnavailable) as exc:
+            raise AppError(str(exc), code=ErrorCode.INVALID_REQUEST, status=503) from exc
 
     @router.get("/api/workspace/resilience/federation")
     async def api_resilience_federation(request: Request) -> JSONResponse:

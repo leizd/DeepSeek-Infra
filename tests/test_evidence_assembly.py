@@ -23,6 +23,7 @@ from deepseek_infra.infra.diagnostics.evidence_inventory import (
 from deepseek_infra.infra.diagnostics.evidence_manifest import sha256_of, validate_manifest_checksum
 from scripts import generate_release_evidence
 from scripts.verify_release_package import verify_release_package
+from test_backup_476_predictive_proof import _valid_proof
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
@@ -66,28 +67,50 @@ def _producer_downloads(tmp_path: Path) -> tuple[Path, Path]:
         path = source / spec.path(VERSION)
         path.parent.mkdir(parents=True, exist_ok=True)
         if spec.payload_kind == "proof":
+            if spec.required_checks:
+                typed = _valid_proof()
+                checks = {
+                    name: {
+                        "status": "PASS",
+                        "evidence": (
+                            {"endpoints": ["http://minio-a", "http://minio-b", "http://minio-c"]}
+                            if name == "realThreeMinioPredictivePlanningE2E"
+                            else typed
+                        ),
+                    }
+                    for name in spec.required_checks
+                }
+            else:
+                checks = {"assemblyExactProof": {"status": "PASS", "evidence": {"source": "test"}}}
             payload: dict[str, object] = {
                 "schema": "evidence-proof-v2",
                 "scenario": spec.scenario,
-                "checks": {"assemblyExactProof": {"status": "PASS", "evidence": {"source": "test"}}},
+                "checks": checks,
                 "meta": {"producer": spec.producer},
             }
         else:
             payload = _payload()
         path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
     storage_specs = [spec for spec in evidence_specs() if spec.producer == "storage-control-plane-minio-e2e"]
-    proof_spec = next(spec for spec in storage_specs if spec.payload_kind == "proof")
+    proof_specs = [spec for spec in storage_specs if spec.payload_kind == "proof"]
     report_spec = next(spec for spec in storage_specs if spec.payload_kind == "report")
-    proof_path = source / proof_spec.path(VERSION)
     report_path = source / report_spec.path(VERSION)
     report = _payload()
-    report["proofArtifact"] = {
-        "path": proof_spec.path(VERSION),
-        "sha256": sha256_of(proof_path),
-        "bytes": proof_path.stat().st_size,
-        "scenario": proof_spec.scenario,
+    proof_artifacts = {
+        spec.scenario: {
+            "path": spec.path(VERSION),
+            "sha256": sha256_of(source / spec.path(VERSION)),
+            "bytes": (source / spec.path(VERSION)).stat().st_size,
+            "scenario": spec.scenario,
+        }
+        for spec in proof_specs
     }
-    report["requiredProofChecks"] = {proof_spec.scenario: ["assemblyExactProof"]}
+    report["proofArtifacts"] = proof_artifacts
+    autonomous = next(spec for spec in proof_specs if spec.scenario == "real-three-minio-autonomous-remediation")
+    report["proofArtifact"] = proof_artifacts[autonomous.scenario]
+    report["requiredProofChecks"] = {
+        spec.scenario: list(spec.required_checks or ("assemblyExactProof",)) for spec in proof_specs
+    }
     report_path.write_text(json.dumps(report) + "\n", encoding="utf-8")
     for producer in evidence_producers():
         prepare_producer_artifact(
@@ -180,7 +203,7 @@ def test_storage_control_producer_rejects_missing_or_tampered_exact_proof(tmp_pa
     _, downloads = _producer_downloads(tmp_path / "missing")
     producer = "storage-control-plane-minio-e2e"
     directory = downloads / f"evidence-producer-{producer}"
-    proof_rel = f"docs/evidence/storage-control-plane-autonomous-proof-v{VERSION}.json"
+    proof_rel = f"docs/evidence/storage-control-plane-predictive-proof-v{VERSION}.json"
     (directory / proof_rel).unlink()
     _, missing_errors = _validate_producer_directory(
         directory,
@@ -196,7 +219,7 @@ def test_storage_control_producer_rejects_missing_or_tampered_exact_proof(tmp_pa
     tampered_directory = tampered_downloads / f"evidence-producer-{producer}"
     report_path = tampered_directory / f"docs/evidence/storage-control-plane-minio-v{VERSION}.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    report["proofArtifact"]["sha256"] = "0" * 64
+    report["proofArtifacts"]["real-three-minio-predictive-planning"]["sha256"] = "0" * 64
     report_path.write_text(json.dumps(report) + "\n", encoding="utf-8")
     _, tampered_errors = _validate_producer_directory(
         tampered_directory,

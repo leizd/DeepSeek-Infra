@@ -17,6 +17,33 @@ from deepseek_infra.infra.workspace import (
 )
 
 
+def _seed_historical_service(actions: list[dict[str, object]], *, consumed_at: datetime | None = None) -> None:
+    timestamp = resilience_scheduler_service._utc_iso(consumed_at)  # noqa: SLF001 - legacy DB fixture
+    for action in actions:
+        action_id = str(action["actionId"])
+        resilience_scheduler_service.reserve_scheduled_actions([action], schedule_id="legacy", scheduled_at=consumed_at)
+        byte_count = resilience_scheduler_service._estimated_bytes(action)  # noqa: SLF001 - legacy DB fixture
+        policy_id = resilience_scheduler_service._policy_id(action)  # noqa: SLF001 - legacy DB fixture
+        with resilience_scheduler_service._connect() as conn:  # noqa: SLF001 - legacy DB fixture
+            conn.execute("BEGIN IMMEDIATE")
+            charged = resilience_scheduler_service._charge_consumed(  # noqa: SLF001 - legacy DB fixture
+                conn,
+                action_id=action_id,
+                policy_id=policy_id,
+                byte_count=byte_count,
+                timestamp=timestamp,
+            )
+            if charged:
+                conn.execute(
+                    """
+                    UPDATE resilience_service_reservations
+                    SET status = 'CONSUMED', actual_bytes = ?, outcome = 'SUCCEEDED', updated_at = ?
+                    WHERE action_id = ? AND status = 'RESERVED'
+                    """,
+                    (byte_count, timestamp, action_id),
+                )
+
+
 def _snapshot(*, severity: str, generated_at: datetime) -> dict[str, object]:
     return {
         "riskSnapshotVersion": 1,
@@ -135,7 +162,7 @@ def test_cleared_risk_stops_debt_and_reopen_uses_new_open_interval(tmp_settings:
 
 def test_production_scheduler_uses_and_updates_persistent_fairness(tmp_settings: Path) -> None:
     now = datetime(2026, 8, 28, 4, 0, tzinfo=timezone.utc)
-    resilience_scheduler_service.record_consumed_service(
+    _seed_historical_service(
         [
             {
                 "actionId": f"served-a-{index}",
@@ -198,13 +225,13 @@ def test_risk_observation_and_scheduler_ledgers_fail_closed_on_empty_state(tmp_s
     assert resilience_scheduler_service.get_policy_service("missing-policy") is None
     assert resilience_scheduler_service.get_latest_schedule_snapshot() is None
     resilience_scheduler_service.record_scheduled_actions([{}])
-    action = {
+    action: dict[str, object] = {
         "actionId": "idempotent-service",
         "type": "CREATE_REPAIR_JOB",
         "parameters": {"policyId": "policy-service", "estimatedBytes": 1024},
     }
-    resilience_scheduler_service.record_consumed_service([action])
-    resilience_scheduler_service.record_consumed_service([action])
+    _seed_historical_service([action])
+    _seed_historical_service([action])
     assert resilience_scheduler_service.get_policy_service("policy-service")["actionsServed"] == 1  # type: ignore[index]
     with pytest.raises(ValueError, match="scheduleId is required"):
         resilience_scheduler_service.record_schedule_snapshot({})

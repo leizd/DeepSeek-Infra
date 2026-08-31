@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
 
 from deepseek_infra.infra.workspace import backup_crypto  # noqa: E402
 from deepseek_infra.infra.workspace import evidence_proof  # noqa: E402
+from deepseek_infra.infra.workspace import resilience_predictive_proof  # noqa: E402
 from deepseek_infra.infra.diagnostics.evidence_manifest import sha256_of  # noqa: E402
 from scripts.release_evidence import stamp_release_report  # noqa: E402
 
@@ -32,8 +33,10 @@ PROCESS_REPLACE_SCENARIO = "real-three-minio-process-replacement-authority-recov
 AUTONOMOUS_REMEDIATION_SCENARIO = "real-three-minio-autonomous-remediation"
 DURABLE_FLEET_SCENARIO = "durable-fleet-scheduler-slo-correctness"
 PREDICTIVE_FLEET_SCENARIO = "predictive-fleet-planning-verified-optimization"
+REAL_PREDICTIVE_SCENARIO = "real-three-minio-predictive-planning"
 WIRE_FREEZE_SCENARIO = "storage-wire-freeze-contracts"
 AUTONOMOUS_PROOF_TEMPLATE = "docs/evidence/storage-control-plane-autonomous-proof-v{version}.json"
+PREDICTIVE_PROOF_TEMPLATE = "docs/evidence/storage-control-plane-predictive-proof-v{version}.json"
 SCENARIOS: dict[str, tuple[str, ...]] = {
     REAL_SCENARIO: (
         "tests/test_backup_458_real_storage_control_plane_e2e.py::test_real_three_minio_storage_control_plane_e2e",
@@ -85,7 +88,8 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
         "tests/test_backup_475_risk_lifecycle.py::test_superseded_backup_risk_cannot_remain_open",
         "tests/test_backup_475_risk_lifecycle.py::test_unknown_coverage_does_not_implicitly_clear",
         "tests/test_backup_475_fair_service.py::test_schedule_result_reserves_without_consuming",
-        "tests/test_backup_475_fair_service.py::test_completed_action_charges_observed_bytes_exactly_once",
+        "tests/test_backup_476_fair_service.py::test_fair_service_uses_durable_repair_telemetry_not_estimate",
+        "tests/test_backup_476_fair_service.py::test_terminal_replay_does_not_double_charge_fair_service",
         "tests/test_backup_475_fair_service.py::test_preempted_action_releases_reservation",
         "tests/test_backup_475_wave_executor.py::test_wave_one_cannot_start_before_wave_zero_verified",
         "tests/test_backup_475_wave_executor.py::test_failed_wave_pauses_downstream_and_stale_requires_replan",
@@ -98,11 +102,16 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
         "tests/test_backup_475_federation.py::test_federation_snapshot_is_digest_bound_and_credential_free",
         "tests/test_backup_475_federation.py::test_incompatible_wire_and_credentials_fail_closed",
     ),
+    REAL_PREDICTIVE_SCENARIO: (
+        "tests/test_backup_476_real_three_minio_predictive_e2e.py::test_real_three_minio_predictive_planning_e2e",
+    ),
     WIRE_FREEZE_SCENARIO: (
         "tests/test_backup_452_replica_failover.py::test_wire_format_constants_unchanged",
         "tests/test_backup_4410_contracts.py::test_cdc_v3_is_explicit_and_normalized",
         "tests/test_backup_463_control_authority.py::test_control_authority_schema_constant_and_keys",
         "tests/test_backup_463_control_authority.py::test_authority_checkpoint_is_hash_chained_and_secretless",
+        "tests/test_backup_476_fair_service.py::test_drill_service_uses_durable_restore_accounting_without_changing_proof_v1",
+        "tests/test_backup_476_predictive_proof.py::test_predictive_payload_remains_inside_unchanged_evidence_v2_envelope",
     ),
 }
 CHECK_SCENARIOS = {
@@ -272,12 +281,25 @@ CHECK_SCENARIOS = {
     "federationSnapshotIsDigestBound": PREDICTIVE_FLEET_SCENARIO,
     "incompatibleFleetWireVersionFailsClosed": PREDICTIVE_FLEET_SCENARIO,
     "federatedSimulationCannotMutateRemoteFleet": PREDICTIVE_FLEET_SCENARIO,
+    "realThreeMinioPredictivePlanningE2E": REAL_PREDICTIVE_SCENARIO,
+    "realCapacityChangesDriveForecast": REAL_PREDICTIVE_SCENARIO,
+    "realMinioInventoryUnchangedByWhatIf": REAL_PREDICTIVE_SCENARIO,
+    "predictiveProofBindsCapacityObservationSet": REAL_PREDICTIVE_SCENARIO,
+    "predictiveProofBindsForecastRecord": REAL_PREDICTIVE_SCENARIO,
+    "predictiveProofBindsForecastBacktest": REAL_PREDICTIVE_SCENARIO,
+    "predictiveProofBindsFreshStateBundle": REAL_PREDICTIVE_SCENARIO,
+    "predictiveProofBindsPreAndPostState": REAL_PREDICTIVE_SCENARIO,
+    "predictiveProofRejectsSelfReportedZeroMutation": REAL_PREDICTIVE_SCENARIO,
     # Frozen protocols remain explicit gates.
     "fastCdcV3Unchanged": WIRE_FREEZE_SCENARIO,
     "controlAuthorityV1Unchanged": WIRE_FREEZE_SCENARIO,
     "authorityCheckpointV1Unchanged": WIRE_FREEZE_SCENARIO,
+    "drReadinessProofV1Unchanged": WIRE_FREEZE_SCENARIO,
+    "evidenceProofV2EnvelopeUnchanged": WIRE_FREEZE_SCENARIO,
     "randomizedAgeUnchanged": REAL_SCENARIO,
 }
+for _promoted_predictive_claim in resilience_predictive_proof.PROMOTED_PREDICTIVE_CLAIM_CHECKS:
+    CHECK_SCENARIOS[_promoted_predictive_claim] = REAL_PREDICTIVE_SCENARIO
 
 # Claims that MUST be backed by evidence-proof-v2 (semantic validators; not pytest exit alone).
 REQUIRED_PROOF_CHECKS: dict[str, tuple[str, ...]] = {
@@ -328,6 +350,10 @@ REQUIRED_PROOF_CHECKS: dict[str, tuple[str, ...]] = {
         "twoProcessesCannotOversubscribePolicyBudget",
         "twoProcessesCannotOversubscribeFailureDomainBudget",
     ),
+    REAL_PREDICTIVE_SCENARIO: (
+        "realThreeMinioPredictivePlanningE2E",
+        *resilience_predictive_proof.PREDICTIVE_PROOF_CHECKS,
+    ),
 }
 REQUIRED_ENDPOINTS = (
     "DEEPSEEK_TEST_S3_ENDPOINT_A",
@@ -365,9 +391,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     autonomous_proof_rel = AUTONOMOUS_PROOF_TEMPLATE.format(version=version)
-    autonomous_proof_output = ROOT / autonomous_proof_rel
-    if autonomous_proof_output.is_file():
-        autonomous_proof_output.unlink()
+    predictive_proof_rel = PREDICTIVE_PROOF_TEMPLATE.format(version=version)
+    proof_outputs = {
+        AUTONOMOUS_REMEDIATION_SCENARIO: (autonomous_proof_rel, ROOT / autonomous_proof_rel),
+        REAL_PREDICTIVE_SCENARIO: (predictive_proof_rel, ROOT / predictive_proof_rel),
+    }
+    for _proof_rel, proof_output in proof_outputs.values():
+        if proof_output.is_file():
+            proof_output.unlink()
     prerequisite_errors = _prerequisite_errors()
     results: dict[str, dict[str, object]] = {}
     if prerequisite_errors:
@@ -407,23 +438,31 @@ def main(argv: list[str] | None = None) -> int:
         scenario_results=results,
         required_proof_checks=REQUIRED_PROOF_CHECKS,
     )
-    proof_artifact: dict[str, object] | None = None
-    autonomous_result = results.get(AUTONOMOUS_REMEDIATION_SCENARIO) or {}
-    proof_path_raw = autonomous_result.get("proofPath")
-    proof_source = Path(str(proof_path_raw)) if proof_path_raw else None
-    required_autonomous_checks = REQUIRED_PROOF_CHECKS[AUTONOMOUS_REMEDIATION_SCENARIO]
-    if proof_source is not None and proof_source.is_file() and all(checks.get(name) == "PASS" for name in required_autonomous_checks):
-        autonomous_proof_output.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(proof_source, autonomous_proof_output)
-        proof_artifact = {
-            "path": autonomous_proof_rel,
-            "sha256": sha256_of(autonomous_proof_output),
-            "bytes": autonomous_proof_output.stat().st_size,
-            "scenario": AUTONOMOUS_REMEDIATION_SCENARIO,
+    proof_artifacts: dict[str, dict[str, object]] = {}
+    for scenario, (proof_rel, proof_output) in proof_outputs.items():
+        scenario_result = results.get(scenario) or {}
+        proof_path_raw = scenario_result.get("proofPath")
+        proof_source = Path(str(proof_path_raw)) if proof_path_raw else None
+        required_checks = REQUIRED_PROOF_CHECKS[scenario]
+        if proof_source is None or not proof_source.is_file() or not all(checks.get(name) == "PASS" for name in required_checks):
+            continue
+        proof_output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(proof_source, proof_output)
+        proof_artifacts[scenario] = {
+            "path": proof_rel,
+            "sha256": sha256_of(proof_output),
+            "bytes": proof_output.stat().st_size,
+            "scenario": scenario,
         }
+    proof_artifact = proof_artifacts.get(AUTONOMOUS_REMEDIATION_SCENARIO)
+    predictive_proof_artifact = proof_artifacts.get(REAL_PREDICTIVE_SCENARIO)
     checks["autonomousProofArtifactIsUploaded"] = "PASS" if proof_artifact is not None else "FAIL"
+    checks["predictiveProofArtifactIsUploaded"] = "PASS" if predictive_proof_artifact is not None else "FAIL"
+    checks["predictiveProofArtifactIsSemanticallyValidated"] = "PASS" if predictive_proof_artifact is not None else "FAIL"
     check_provenance = dict(CHECK_SCENARIOS)
     check_provenance["autonomousProofArtifactIsUploaded"] = "exact-proof-artifact-copy"
+    check_provenance["predictiveProofArtifactIsUploaded"] = "exact-proof-artifact-copy"
+    check_provenance["predictiveProofArtifactIsSemanticallyValidated"] = REAL_PREDICTIVE_SCENARIO
     report = stamp_release_report(
         {
             "ok": all(value == "PASS" for value in checks.values()),
@@ -433,6 +472,7 @@ def main(argv: list[str] | None = None) -> int:
             "checkProvenance": check_provenance,
             "requiredProofChecks": {k: list(v) for k, v in REQUIRED_PROOF_CHECKS.items()},
             "proofArtifact": proof_artifact,
+            "proofArtifacts": proof_artifacts,
             "scenarios": results,
             "endpoints": {name: os.environ.get(name) for name in REQUIRED_ENDPOINTS},
         },

@@ -17,6 +17,7 @@ class EvidenceSpec:
     required_for_ga: bool = True
     payload_kind: EvidencePayloadKind = "report"
     scenario: str | None = None
+    required_checks: tuple[str, ...] = ()
 
     def path(self, version: str) -> str:
         return self.path_template.format(version=version)
@@ -82,6 +83,40 @@ EVIDENCE_SPECS = (
         "exact-merge",
         payload_kind="proof",
         scenario="real-three-minio-autonomous-remediation",
+    ),
+    EvidenceSpec(
+        "docs/evidence/storage-control-plane-predictive-proof-v{version}.json",
+        "storage-control-plane-minio-e2e",
+        "exact-merge",
+        payload_kind="proof",
+        scenario="real-three-minio-predictive-planning",
+        required_checks=(
+            "realThreeMinioPredictivePlanningE2E",
+            "realCapacityChangesDriveForecast",
+            "realMinioInventoryUnchangedByWhatIf",
+            "predictiveProofBindsCapacityObservationSet",
+            "predictiveProofBindsForecastRecord",
+            "predictiveProofBindsForecastBacktest",
+            "predictiveProofBindsFreshStateBundle",
+            "predictiveProofBindsPreAndPostState",
+            "predictiveProofRejectsSelfReportedZeroMutation",
+            "capacityForecastUsesDurableObservations",
+            "forecastBacktestErrorIsPersisted",
+            "costModelUsesVersionedPriceCatalog",
+            "optimizerNeverReducesMinCommittedCopies",
+            "optimizerNeverReducesMinFailureDomains",
+            "whatIfProducesNoStorageWrites",
+            "whatIfProducesNoStorageDeletes",
+            "whatIfDoesNotMutateAuthority",
+            "whatIfDoesNotMutateActionJournal",
+            "whatIfBindsObservedFleetSnapshot",
+            "whatIfIncludesRunningEffects",
+            "whatIfIncludesMaintenanceWindows",
+            "optimizationProofBindsForecastDigest",
+            "optimizationProofBindsPriceCatalogDigest",
+            "optimizationProofBindsAuthorityHead",
+            "optimizationProofRecomputesSafetyConstraints",
+        ),
     ),
     EvidenceSpec("docs/evidence/python-coverage-stability-v{version}.json", "test", "optional", required_for_ga=False),
 )

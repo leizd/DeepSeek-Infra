@@ -854,6 +854,18 @@ def _drill_records(root: Path | None = None) -> list[dict[str, Any]]:
     return results
 
 
+def get_dr_drill_by_resilience_action_id(action_id: str) -> dict[str, Any] | None:
+    """Read the durable DR drill record bound to one autonomous Action."""
+    if not action_id:
+        return None
+    for record in _drill_records():
+        proof = record.get("proof")
+        proof_action_id = str(proof.get("resilienceActionId") or "") if isinstance(proof, dict) else ""
+        if str(record.get("resilienceActionId") or "") == action_id or proof_action_id == action_id:
+            return record
+    return None
+
+
 def _resolve_recoverable_chain(
     item_or_records: Any,
     records_or_id: Any = None,
@@ -967,6 +979,7 @@ def run_dr_drill(
                     "targetId": rec.get("targetId"),
                     "proof": rec.get("proof") or {},
                     "durationMs": int((float(rec.get("rtoSeconds") or 1)) * 1000),
+                    "bytesRestored": int(rec.get("bytesRestored") or 0),
                     "resilienceActionId": resilience_action_id,
                 }
 
@@ -1006,15 +1019,18 @@ def run_dr_drill(
                 chosen_backup_id = f"backup_synth_{uuid.uuid4().hex[:8]}"
 
         # 2. Simulate / execute production restore path into scratch_dir
+        bytes_restored = 0
         if ws_root.is_dir():
             for src_file in ws_root.rglob("*"):
                 if src_file.is_file():
+                    bytes_restored += int(src_file.stat().st_size)
                     rel = src_file.relative_to(ws_root)
                     dest = scratch_dir / rel
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(src_file, dest)
         else:
             (scratch_dir / "sample.txt").write_text("sample content\n", encoding="utf-8")
+            bytes_restored = int((scratch_dir / "sample.txt").stat().st_size)
             pre_digest = _compute_dir_digest(scratch_dir)
 
         # 3. Calculate post-restore digest
@@ -1062,6 +1078,7 @@ def run_dr_drill(
                     "backupId": chosen_backup_id,
                     "result": "success",
                     "rtoSeconds": elapsed_ms / 1000.0,
+                    "bytesRestored": bytes_restored,
                     "observedAt": now_iso,
                     "proof": proof,
                 },
@@ -1080,6 +1097,7 @@ def run_dr_drill(
             "targetId": tested_target_id,
             "proof": proof,
             "durationMs": elapsed_ms,
+            "bytesRestored": bytes_restored,
         }
     finally:
         set_dr_drill_running(False)

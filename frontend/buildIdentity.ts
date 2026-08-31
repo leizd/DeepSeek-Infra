@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 
 export const FRONTEND_BUILD_IDENTITY_SCHEMA_VERSION = 1;
-export const FRONTEND_BUILD_CONFIGURATION_VERSION = "4.7.5-predictive-fleet-planning-verified-optimization";
+export const FRONTEND_BUILD_CONFIGURATION_VERSION = "4.7.6-production-predictive-control-verifiable-simulation";
 
 export interface FrontendBuildIdentity {
   schemaVersion: 1;

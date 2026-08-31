@@ -21,6 +21,7 @@ listing and scrubbing stay allowed.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import re
@@ -120,6 +121,7 @@ def _write_checkpoint(target_id: str, marker_data: dict[str, Any]) -> None:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    _guard_target_mutation("projection_write", target_id=str(payload.get("targetId") or path.stem))
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     with tmp.open("w", encoding="utf-8", newline="\n") as handle:
@@ -129,12 +131,23 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def _guard_target_mutation(operation: str, *, target_id: str = "") -> None:
+    from deepseek_infra.infra.workspace import resilience_simulation_capability
+
+    resilience_simulation_capability.assert_mutation_allowed(
+        "target",
+        operation,
+        detail={"targetId": target_id},
+    )
+
+
 def _project_target(record: dict[str, Any]) -> None:
     _assert_no_secrets(record)
     _atomic_write_json(_registry_path(str(record["targetId"])), record)
 
 
 def _store_target(record: dict[str, Any], *, expected_generation: int | None = None) -> dict[str, Any]:
+    _guard_target_mutation("store_target", target_id=str(record.get("targetId") or ""))
     authoritative = backup_control.upsert_target(record, expected_generation=expected_generation)
     _project_target(authoritative)
     return authoritative
@@ -147,6 +160,7 @@ def _mutate_target(
     expected_generation: int | None = None,
     bump_generation: bool = True,
 ) -> dict[str, Any]:
+    _guard_target_mutation("mutate_target", target_id=target_id)
     # Adopt pre-4.5.8 JSON before entering the cross-process mutation.
     current = get_target(target_id)
     if backup_control.get_target(target_id) is None:
@@ -268,6 +282,7 @@ def init_target(
     max_concurrent_transfers: int | None = None,
 ) -> dict[str, Any]:
     """Initialize a directory as a backup target and register it."""
+    _guard_target_mutation("init_target")
     resolved = _resolve_basic(Path(path))
     marker = resolved / TARGET_MARKER_NAME
     if marker.is_file():
@@ -366,6 +381,7 @@ def register_filesystem_target(
     max_write_bytes_per_second: int | None = None,
     max_concurrent_transfers: int | None = None,
 ) -> dict[str, Any]:
+    _guard_target_mutation("register_filesystem_target", target_id=target_id)
     p = Path(path)
     p.mkdir(parents=True, exist_ok=True)
     resolved = _resolve_basic(p)
@@ -515,6 +531,7 @@ def init_s3_target(
     probe: bool = True,
 ) -> dict[str, Any]:
     """Register a secret-free S3-compatible target (schema v3)."""
+    _guard_target_mutation("init_s3_target")
     from deepseek_infra.infra.workspace import backup_target_s3
     from deepseek_infra.infra.workspace.backup_target_store import (
         head_key,
@@ -732,6 +749,51 @@ def get_target(target_id: str) -> dict[str, Any]:
     return authoritative
 
 
+def read_target_capacity_identity(target_id: str) -> dict[str, Any]:
+    """Read the current target incarnation from the target itself without mutating it."""
+    record = get_target(target_id)
+    kind = str(record.get("kind") or "filesystem")
+    identity: dict[str, Any]
+    head: dict[str, Any]
+    if kind == "filesystem":
+        root = verify_target_ready(target_id, write_intent=False)
+        marker = root / TARGET_MARKER_NAME
+        try:
+            raw = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AppError("capacity identity unavailable: target marker is unreadable", code=ErrorCode.INVALID_REQUEST, status=409) from exc
+        if not isinstance(raw, dict):
+            raise AppError("capacity identity unavailable: target marker is invalid", code=ErrorCode.INVALID_REQUEST, status=409)
+        identity = raw
+        head = raw
+    elif kind == "s3":
+        from deepseek_infra.infra.workspace.backup_target_store import head_key, identity_key, read_json
+
+        store = open_target_store(target_id, write_intent=False)
+        identity = read_json(store, identity_key()) or {}
+        head = read_json(store, head_key()) or {}
+    else:
+        raise AppError(f"capacity identity unavailable: unsupported target kind {kind}", code=ErrorCode.INVALID_REQUEST, status=409)
+
+    if str(identity.get("targetId") or "") != target_id:
+        raise AppError("capacity identity unavailable: target identity mismatch", code=ErrorCode.INVALID_REQUEST, status=409)
+    incarnation = str(identity.get("incarnationId") or "").strip()
+    if not incarnation:
+        raise AppError("capacity identity unavailable: target incarnation is missing", code=ErrorCode.INVALID_REQUEST, status=409)
+    payload = {
+        "targetId": target_id,
+        "targetIncarnation": incarnation,
+        "kind": kind,
+        "provider": str(record.get("provider") or kind),
+        "quotaBytes": record.get("quotaBytes"),
+        "targetGeneration": int(head.get("targetGeneration") or identity.get("targetGeneration") or 0),
+        "latestCommitHash": str(head.get("latestCommitHash") or identity.get("latestCommitHash") or TARGET_GENESIS_HASH),
+    }
+    raw_payload = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    payload["identityDigest"] = hashlib.sha256(raw_payload).hexdigest()
+    return payload
+
+
 def list_targets() -> list[dict[str, Any]]:
     if BACKUP_TARGET_DIR.is_dir():
         for path in sorted(BACKUP_TARGET_DIR.glob("*.json")):
@@ -756,6 +818,7 @@ def list_targets() -> list[dict[str, Any]]:
 
 
 def delete_target(target_id: str, *, expected_generation: int | None = None) -> dict[str, Any]:
+    _guard_target_mutation("delete_target", target_id=target_id)
     get_target(target_id)
     record = backup_control.delete_target(target_id, expected_generation=expected_generation)
     _registry_path(target_id).unlink(missing_ok=True)
@@ -964,6 +1027,7 @@ def record_target_head(root: Path, *, target_id: str, generation: int, commit_ha
 
 def adopt_target_incarnation(target_id: str) -> dict[str, Any]:
     """Accept the currently attached disk as the authoritative branch of a fork."""
+    _guard_target_mutation("adopt_target_incarnation", target_id=target_id)
     record = get_target(target_id)
     resolved = validate_target_location(Path(str(record.get("path") or "")), exclude_target_id=target_id)
     marker = resolved / TARGET_MARKER_NAME
@@ -990,6 +1054,7 @@ def adopt_target_incarnation(target_id: str) -> dict[str, Any]:
 
 def reinitialize_target(path: Path | str, *, label: str = "") -> dict[str, Any]:
     """Register a directory as a brand-new target with a fresh lineage."""
+    _guard_target_mutation("reinitialize_target")
     resolved = _resolve_basic(Path(path))
     marker = resolved / TARGET_MARKER_NAME
     previous_id: str | None = None
@@ -1092,6 +1157,40 @@ def get_target_drain_state(target_id: str) -> str:
         return "unknown"
 
 
+def _measure_s3_object_inventory(target_id: str) -> dict[str, int]:
+    """Read every object page from the provider; never substitute local accounting."""
+    store = open_target_store(target_id, write_intent=False)
+    cursor: str | None = None
+    seen_cursors: set[str] = set()
+    object_count = 0
+    total_bytes = 0
+    control_plane_bytes = 0
+    while True:
+        page = store.list_objects("", cursor=cursor, limit=1000)
+        for item in page.objects:
+            size = int(item.size)
+            if size < 0:
+                raise AppError("S3 capacity inventory returned a negative object size", code=ErrorCode.INVALID_REQUEST, status=503)
+            object_count += 1
+            if object_count > 1_000_000:
+                raise AppError("S3 capacity inventory exceeds the exact probe limit", code=ErrorCode.INVALID_REQUEST, status=503)
+            total_bytes += size
+            if not (item.key.startswith("objects/") or item.key.startswith("ciphertext/")):
+                control_plane_bytes += size
+        next_cursor = str(page.cursor or "")
+        if not next_cursor:
+            break
+        if next_cursor in seen_cursors:
+            raise AppError("S3 capacity inventory cursor did not advance", code=ErrorCode.INVALID_REQUEST, status=503)
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+    return {
+        "objectCount": object_count,
+        "physicalStoredBytes": total_bytes,
+        "controlPlaneBytes": control_plane_bytes,
+    }
+
+
 def probe_target_capacity(target_id: str) -> dict[str, Any]:
     """Probe physical or configured capacity for a target without forging fake disk sizes."""
     import shutil
@@ -1136,6 +1235,43 @@ def probe_target_capacity(target_id: str) -> dict[str, Any]:
     if quota_bytes is not None and int(quota_bytes) > 0:
         quota = int(quota_bytes)
         physical_usage = backup_control.physical_usage_summary(target_id)
+        if kind == "s3":
+            try:
+                provider_usage = _measure_s3_object_inventory(target_id)
+            except Exception as exc:
+                return {
+                    "targetId": target_id,
+                    "totalBytes": quota,
+                    "usedBytes": None,
+                    "freeBytes": None,
+                    "freePercent": None,
+                    "observedAt": _utc_iso(),
+                    "source": "s3-object-inventory-unavailable",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            physical = int(provider_usage["physicalStoredBytes"])
+            control_plane = int(provider_usage["controlPlaneBytes"])
+            indexed_physical = int(physical_usage.get("physicalStoredBytes") or 0)
+            live_bytes = min(physical, int(physical_usage.get("liveReferencedBytes") or 0))
+            retired_pending = min(max(0, physical - live_bytes), int(physical_usage.get("retiredPendingGcBytes") or 0))
+            free = max(0, quota - physical)
+            free_pct = round((free / quota) * 100.0, 2) if quota > 0 else 0.0
+            return {
+                "targetId": target_id,
+                "totalBytes": quota,
+                "usedBytes": physical,
+                "freeBytes": free,
+                "freePercent": free_pct,
+                "physicalStoredBytes": physical,
+                "liveReferencedBytes": live_bytes,
+                "retiredPendingGcBytes": retired_pending,
+                "controlPlaneBytes": control_plane,
+                "unknownExternalBytes": max(0, physical - indexed_physical - control_plane),
+                "objectCount": int(provider_usage["objectCount"]),
+                "capacityConfidence": "provider-exact",
+                "observedAt": _utc_iso(),
+                "source": "s3-object-inventory",
+            }
         physical = int(physical_usage.get("physicalStoredBytes") or 0)
         live_bytes = int(physical_usage.get("liveReferencedBytes") or 0)
         retired_pending = int(physical_usage.get("retiredPendingGcBytes") or 0)

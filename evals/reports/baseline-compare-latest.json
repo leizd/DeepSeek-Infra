@@ -1,13 +1,13 @@
 {
   "schemaVersion": "offline-eval-compare.v1",
-  "version": "4.7.4",
-  "commit": "c4fcde19da47c49e483426e2de540198a354db26",
-  "testedRevision": "c4fcde19da47c49e483426e2de540198a354db26",
-  "sourceRevision": "c4fcde19da47c49e483426e2de540198a354db26",
-  "sourceTreeDirty": true,
+  "version": "4.7.6",
+  "commit": "68ac387a7739c4c8d589868d85485a2441762145",
+  "testedRevision": "701962f7e528502f190abbcd51af40042cae4e29",
+  "sourceRevision": "701962f7e528502f190abbcd51af40042cae4e29",
+  "sourceTreeDirty": false,
   "releaseRevision": null,
   "ciRevision": null,
-  "generatedAt": "2026-08-29T05:49:01Z",
+  "generatedAt": "2026-08-31T04:18:38Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
@@ -19,8 +19,8 @@
     "gitSha": "v2.2.6-baseline"
   },
   "current": {
-    "version": "4.7.4",
-    "gitSha": "c4fcde19da47c49e483426e2de540198a354db26"
+    "version": "4.7.6",
+    "gitSha": "68ac387a7739c4c8d589868d85485a2441762145"
   },
   "checks": [
     {

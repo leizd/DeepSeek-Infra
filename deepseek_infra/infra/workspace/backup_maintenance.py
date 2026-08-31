@@ -18,9 +18,9 @@ from deepseek_infra.infra.workspace import (
     backup_recovery_keeper,
     backup_replication,
     backup_retirement,
-    backup_targets,
     backup_tiering,
     backup_transfer_budget,
+    resilience_capacity_sampler,
 )
 
 _logger = logging.getLogger("deepseek_infra.storage_maintenance")
@@ -96,8 +96,11 @@ def _probe_capacity_page(*, limit: int) -> int:
     after_target_id = str(cursor.get("targetId") or "") if isinstance(cursor, dict) else ""
     target_ids = backup_control.list_target_ids_page(after_target_id=after_target_id or None, limit=limit)
     for target_id in target_ids:
-        observation = backup_targets.probe_target_capacity(target_id)
-        backup_control.record_target_capacity_observation(target_id, observation)
+        sample = resilience_capacity_sampler.sample_target_capacity(target_id)
+        raw_probe = sample.get("probe")
+        observation: dict[str, Any] = raw_probe if isinstance(raw_probe, dict) else {}
+        if observation:
+            backup_control.record_target_capacity_observation(target_id, observation)
         physical = observation.get("physicalStoredBytes")
         if isinstance(physical, int) and not isinstance(physical, bool):
             backup_control.record_capacity_growth_observation(

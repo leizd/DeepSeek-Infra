@@ -130,7 +130,8 @@ def test_set_storage_tier_and_capacity_paths(tmp_settings: Path) -> None:
         cap2 = backup_targets.probe_target_capacity(tid)
     assert cap2["source"] in {"unknown", "configured-quota-physical-estimate", "filesystem"}
 
-    # quota + physical index path with retired copies
+    # A projected S3 record without a reachable provider inventory fails closed;
+    # local DR-ledger estimates may not manufacture production capacity.
     backup_control.mutate_target(
         tid,
         expected_generation=None,
@@ -167,10 +168,11 @@ def test_set_storage_tier_and_capacity_paths(tmp_settings: Path) -> None:
             },
             {"recoverable": True, "metadata": {"ciphertextBytes": 20}, "backupId": "b4"},
         ],
-    ):
+        ):
         qcap = backup_targets.probe_target_capacity(tid)
-    assert qcap["usedBytes"] is not None
+    assert qcap["usedBytes"] is None
     assert qcap["totalBytes"] == 1000
+    assert qcap["source"] == "s3-object-inventory-unavailable"
 
     # unknown target
     unknown = backup_targets.probe_target_capacity("target_does_not_exist_zzz")

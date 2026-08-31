@@ -5,9 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.7.5。
+适用版本：v4.7.6。
 
-> 4.7.5：预测式全局规划与可验证优化（Predictive Fleet Planning & Verified Optimization）：覆盖感知风险生命周期、预留/实耗公平服务、耐久多波次执行与逐波重验、窗口化 Fleet SLO、耐久容量观测与 30/90 天 P50/P90 预测及回测、版本化成本目录、耐久约束放置优化、零副作用 What-If、只读联邦 readiness；保持 object-set-v1 / Receipt v4 / Commit v4 / FastCDC v3 / randomized Age / control-authority-v1 完全冻结。
+> 4.7.6：生产级预测控制与可验证仿真闭环（Production Predictive Control & Verifiable Simulation）：生产 fresh-state admission、真实且可崩溃接管的 Wave runner、effect telemetry 驱动的 exactly-once 公平结算、provider-backed MinIO/S3 capacity inventory、自动 Forecast Registry/到期回测、authoritative optimizer input、write-deny What-If 与独立 predictive-planning-proof-v1；Federation 只增加 tamper/freshness/fleet-ID/wire fail-closed 校验，跨 Fleet 写入仍是明确 non-goal，全部既有 storage/control/encryption wire contract 保持冻结。
 
 > 4.7.2：协调式自治修复与崩溃可恢复执行（Coordinated Autonomous Remediation & Crash-Recoverable Execution）：不可变规划与动作身份（Immutable Plan & Action Identity）、崩溃可恢复租约与 CAS 隔离（Crash-Recoverable Action Leases & CAS Fencing）、副作用对账引擎与 EFFECT_UNKNOWN（Effect Reconciliation Engine）、全子系统动作幂等（All-Subsystem Idempotency）、真实目标耐久性与完成契约（Real Outcome Contracts）、作用域风险削减验证（Scoped Risk Effect Verification）、多风险协调图（Multi-Risk Coordination DAG）、资源冲突与依赖锁（Resource Conflict & Dependency Locks）、原子全局与单目标安全预算（Atomic Safety Budgets）、爆炸半径不变量防护（Blast-Radius Invariants）与真实三 MinIO 自治修复 Evidence。
 

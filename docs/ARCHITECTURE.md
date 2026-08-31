@@ -5,16 +5,38 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.7.5。
+适用版本：v4.7.6。
 
 DeepSeek Infra 是一个本地优先的 **Agentic AI Infra 平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以标准协议互操作：默认 Python **MCP Tool Hub**（`POST /mcp`）提供完整兼容工具面；可选的 TypeScript **无状态 MCP 执行平面**为代码检索和测试任务提供双实例恢复能力；本地 Agent 经 **A2A** 风格的 Agent Card 与任务生命周期（`/.well-known/agent-card.json`、`/a2a`）与外部 Agent 互通。
 
-## 4.7.5 预测式全局规划与可验证优化
+## 4.7.6 生产级预测控制与可验证仿真
 
-4.7.5 不改变备份数据线格式。它在 4.7.4 的 Evidence-closed 自治运维之上增加
-覆盖感知的风险对账、预留/实耗公平服务、耐久多波次执行器、窗口化 SLO、
-耐久容量观测与 30/90 天预测，以及只产生 What-If 候选的耐久约束优化器。
-优化器不得把 minCommittedCopies / minFailureDomains 当成目标函数权重。
+4.7.6 不改变备份数据线格式，而是把 4.7.5 的预测原语接入生产执行链。统一
+fresh-state bundle 从 Authority、完整 RiskSnapshot、真实容量、running effects、
+预算、维护窗口与 blast simulation 取当前真相；缺任一来源即 fail closed。耐久
+Wave runner 通过 Action Journal claim/execute/reconcile 真实 effect，并从 terminal
+effect telemetry exactly-once 结算公平服务。
+
+```mermaid
+flowchart LR
+    S["Production sources<br/>Authority · Risk · Capacity · Budgets"] --> F["Fresh-state bundle<br/>digest-bound · fail closed"]
+    F --> W["Fenced Wave runner<br/>schedule · wave · action epoch"]
+    W --> J["Action Journal<br/>Repair · Rebalance · Drill"]
+    J --> T["Observed effect telemetry<br/>exactly-once settlement"]
+    P["Real target probe"] --> O[("Capacity observations<br/>incarnation-isolated")]
+    O --> R[("Forecast Registry<br/>30/90d · due backtest")]
+    F --> I["Authoritative optimizer input"]
+    R --> I
+    I --> X["Write-deny What-If<br/>attempt audit · pre/post digests"]
+    X --> E["predictive-planning-proof-v1<br/>exact predictive artifact"]
+```
+
+Optimizer 客户端只能提交 hypothetical candidate。Storage、Authority、Action
+Journal、Policy 与 Target mutation 均被 capability 拒绝；attempted write 本身即
+证明失败。MinIO/S3 capacity 由 provider 分页对象清单实测，Forecast 到期后由稍后
+真实 observation 自动回测。Federation 仍只读，仅增加 digest/freshness/fleet ID/
+wire compatibility 校验；签名与跨 Fleet 写入留给 4.8.0。架构决策见
+[ADR-0047](adr/ADR-0047-production-predictive-control-verifiable-simulation.md)。
 
 ## 4.7.4 持久化自治运维闭环
 
@@ -50,7 +72,7 @@ proof 时 Assembly 必须失败。详细运维步骤见
 Age、Projection semantics、`control-authority-v1`、AuthorityCheckpoint v1 与
 `dr-readiness-proof-v1` 不变。
 
-## Hybrid Runtime 总览（v4.7.5）
+## Hybrid Runtime 总览（v4.7.6）
 
 > 运维细节、feature flags 与回滚命令见 [RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)。
 
@@ -160,7 +182,7 @@ Sidecar **不实现**：网关流式、上游 HTTP、MCP 传输、真实工具�
 
 ### 版本说明
 
-- **Current development version:** `4.7.5`（只有 exact-merge CI Evidence 全绿后才 release-ready）。默认运行时仍由 Python 拥有；`backup-crypto` 负责 age 流式密码边界，`deepseek-backup` 负责可验证的持久批量 Chunk 扫描。Python 拥有 Persistent Snapshot Index、Pack/Delta Manifest、Projection Planner、Bloom/Exact Lookup、备份事务、持久化 Risk/Scheduler/SLO Ledgers、租约围栏提交、Contributor 编排和恢复状态机；可选无状态 MCP 是独立部署面。生产恢复编排在冻结的 `object-set-v1`、Receipt v4、Commit v4 与投影语义之上增加耐久 Job、全局多波次调度、安全控制和 Evidence closure，不迁移或重写线格式。
+- **Current development version:** `4.7.6`（只有 exact-merge CI Evidence 全绿后才 release-ready）。默认运行时仍由 Python 拥有；`backup-crypto` 负责 age 流式密码边界，`deepseek-backup` 负责可验证的持久批量 Chunk 扫描。Python 拥有 Persistent Snapshot Index、Pack/Delta Manifest、Projection Planner、Bloom/Exact Lookup、备份事务、持久化 Risk/Scheduler/SLO Ledgers、租约围栏提交、Contributor 编排和恢复状态机；可选无状态 MCP 是独立部署面。生产恢复编排在冻结的 `object-set-v1`、Receipt v4、Commit v4 与投影语义之上增加耐久 Job、全局多波次调度、安全控制和 Evidence closure，不迁移或重写线格式。
 - **Historical qualification:** `v4.0.0-rc.1` 已被 rc.2 supersede，只保留为历史架构预览；stable `4.0.0` 从已验证的 rc.2 提升。
 - **Patch boundary:** Python-first 所有权、默认关闭的 Rust delegates 和冻结协议均不改变。
 

@@ -88,6 +88,7 @@ def _candidate_cost(candidate: dict[str, Any], catalog: dict[str, Any] | None) -
         replication_bytes=int(candidate.get("replicationBytes") or 0),
         egress_bytes=int(candidate.get("egressBytes") or 0),
         retrieval_bytes=int(candidate.get("retrievalBytes") or 0),
+        request_count=int(candidate.get("requestCount") or 0),
         catalog=catalog,
     )
 

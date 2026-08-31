@@ -23,6 +23,7 @@ from deepseek_infra.infra.workspace.backup_target_store import (
     ObjectMeta,
     PutResult,
     TargetCapabilities,
+    _guard_storage_mutation,
     _read_source,
     _sha256_bytes,
 )
@@ -279,6 +280,7 @@ class S3TargetStore:
         checksum_sha256: str | None = None,
         content_type: str = "application/octet-stream",
     ) -> PutResult:
+        _guard_storage_mutation("put_if_absent", key, backend="s3")
         data = _read_source(source)
         digest = _sha256_bytes(data)
         if checksum_sha256 is not None and digest != checksum_sha256:
@@ -327,6 +329,7 @@ class S3TargetStore:
         checksum_sha256: str | None = None,
         content_type: str = "application/octet-stream",
     ) -> PutResult:
+        _guard_storage_mutation("put_if_match", key, backend="s3")
         data = _read_source(source)
         digest = _sha256_bytes(data)
         if checksum_sha256 is not None and digest != checksum_sha256:
@@ -359,6 +362,7 @@ class S3TargetStore:
         )
 
     def delete_if_match(self, key: str, *, expected_etag: str | None = None) -> bool:
+        _guard_storage_mutation("delete_if_match", key, backend="s3")
         client = self._client_or_create()
         full = self._full_key(key)
         if expected_etag is not None:
@@ -407,6 +411,7 @@ class S3TargetStore:
         return ListPage(objects=tuple(objects), cursor=next_cursor)
 
     def begin_multipart(self, key: str, *, checksum_sha256: str) -> MultipartUpload:
+        _guard_storage_mutation("begin_multipart", key, backend="s3")
         client = self._client_or_create()
         full = self._full_key(key)
         try:
@@ -422,6 +427,7 @@ class S3TargetStore:
         return MultipartUpload(key=key, upload_id=str(response["UploadId"]), checksum_sha256=checksum_sha256)
 
     def upload_part(self, upload: MultipartUpload, part_number: int, data: bytes, *, checksum_sha256: str | None = None) -> dict[str, Any]:
+        _guard_storage_mutation("upload_part", upload.key, backend="s3")
         if checksum_sha256 is not None and _sha256_bytes(data) != checksum_sha256:
             raise AppError("multipart part checksum mismatch", code=ErrorCode.INTERNAL, status=500)
         client = self._client_or_create()
@@ -478,6 +484,7 @@ class S3TargetStore:
         return parts
 
     def complete_multipart_if_absent(self, upload: MultipartUpload) -> PutResult:
+        _guard_storage_mutation("complete_multipart_if_absent", upload.key, backend="s3")
         client = self._client_or_create()
         full = self._full_key(upload.key)
         parts = [
@@ -517,6 +524,7 @@ class S3TargetStore:
         )
 
     def abort_multipart(self, upload: MultipartUpload) -> None:
+        _guard_storage_mutation("abort_multipart", upload.key, backend="s3")
         client = self._client_or_create()
         full = self._full_key(upload.key)
         try:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
 from pathlib import Path
 from types import ModuleType
@@ -14,6 +15,20 @@ def _load(path: Path, name: str) -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_storage_control_plane_scenario_node_ids_exist() -> None:
+    runner = _load(ROOT / "scripts" / "run_storage_control_plane_minio_e2e.py", "storage_control_node_inventory")
+
+    for scenario, node_ids in runner.SCENARIOS.items():
+        for node_id in node_ids:
+            relative_path, separator, function_name = node_id.partition("::")
+            assert separator and function_name, f"invalid pytest node ID for {scenario}: {node_id}"
+            source_path = ROOT / relative_path
+            assert source_path.is_file(), f"missing pytest module for {scenario}: {relative_path}"
+            tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+            functions = {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+            assert function_name in functions, f"missing pytest function for {scenario}: {node_id}"
 
 
 def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios() -> None:
@@ -73,12 +88,15 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
         "tests/test_backup_4410_contracts.py::test_cdc_v3_is_explicit_and_normalized",
         "tests/test_backup_463_control_authority.py::test_control_authority_schema_constant_and_keys",
         "tests/test_backup_463_control_authority.py::test_authority_checkpoint_is_hash_chained_and_secretless",
+        "tests/test_backup_476_fair_service.py::test_drill_service_uses_durable_restore_accounting_without_changing_proof_v1",
+        "tests/test_backup_476_predictive_proof.py::test_predictive_payload_remains_inside_unchanged_evidence_v2_envelope",
     )
     nodes_predictive_fleet = (
         "tests/test_backup_475_risk_lifecycle.py::test_superseded_backup_risk_cannot_remain_open",
         "tests/test_backup_475_risk_lifecycle.py::test_unknown_coverage_does_not_implicitly_clear",
         "tests/test_backup_475_fair_service.py::test_schedule_result_reserves_without_consuming",
-        "tests/test_backup_475_fair_service.py::test_completed_action_charges_observed_bytes_exactly_once",
+        "tests/test_backup_476_fair_service.py::test_fair_service_uses_durable_repair_telemetry_not_estimate",
+        "tests/test_backup_476_fair_service.py::test_terminal_replay_does_not_double_charge_fair_service",
         "tests/test_backup_475_fair_service.py::test_preempted_action_releases_reservation",
         "tests/test_backup_475_wave_executor.py::test_wave_one_cannot_start_before_wave_zero_verified",
         "tests/test_backup_475_wave_executor.py::test_failed_wave_pauses_downstream_and_stale_requires_replan",
@@ -90,6 +108,9 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
         "tests/test_backup_475_whatif.py::test_what_if_is_zero_mutation_and_binds_snapshot",
         "tests/test_backup_475_federation.py::test_federation_snapshot_is_digest_bound_and_credential_free",
         "tests/test_backup_475_federation.py::test_incompatible_wire_and_credentials_fail_closed",
+    )
+    node_476_predictive = (
+        "tests/test_backup_476_real_three_minio_predictive_e2e.py::test_real_three_minio_predictive_planning_e2e"
     )
     assert runner.SCENARIOS == {
         "real-three-minio-storage-control-plane": (node_458,),
@@ -103,6 +124,7 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
         "real-three-minio-autonomous-remediation": (node_472,),
         "durable-fleet-scheduler-slo-correctness": nodes_durable_fleet,
         "predictive-fleet-planning-verified-optimization": nodes_predictive_fleet,
+        "real-three-minio-predictive-planning": (node_476_predictive,),
         "storage-wire-freeze-contracts": nodes_wire_freeze,
     }
     assert set(runner.REQUIRED_ENDPOINTS) == {
@@ -170,6 +192,11 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
     assert "realThreeMinioAutonomousRepairE2E" in required_remediation
     assert "realReplicaTransferUsesEndpointAAndB" in required_remediation
     assert "destinationReceiptAuthenticated" in required_remediation
+    required_predictive = runner.REQUIRED_PROOF_CHECKS["real-three-minio-predictive-planning"]
+    assert "realThreeMinioPredictivePlanningE2E" in required_predictive
+    assert "predictiveProofRejectsSelfReportedZeroMutation" in required_predictive
+    assert "whatIfProducesNoStorageWrites" in required_predictive
+    assert runner.CHECK_SCENARIOS["whatIfProducesNoStorageWrites"] == runner.REAL_PREDICTIVE_SCENARIO
 
 
 def test_real_evidence_sources_forbid_fake_s3_stub_crypto_and_resolver_monkeypatch() -> None:
@@ -180,6 +207,7 @@ def test_real_evidence_sources_forbid_fake_s3_stub_crypto_and_resolver_monkeypat
         "tests/test_backup_462_real_transactional_gc_e2e.py",
         "tests/test_backup_463_real_control_authority_disaster_e2e.py",
         "tests/test_backup_472_real_three_minio_remediation_e2e.py",
+        "tests/test_backup_476_real_three_minio_predictive_e2e.py",
     ):
         source = (ROOT / rel).read_text(encoding="utf-8")
         assert "ProductionFakeS3Client" not in source
@@ -204,5 +232,6 @@ def test_ci_runs_three_independent_minio_servers_and_requires_new_producer() -> 
     assert "--publish 9002:9002" in workflow
     assert "python scripts/run_storage_control_plane_minio_e2e.py" in workflow
     assert "--producer storage-control-plane-minio-e2e" in workflow
+    assert "storage-control-plane-predictive-proof-v${{ env.RELEASE_VERSION }}.json" in workflow
     assert workflow.count("      - storage-control-plane-minio-e2e\n") == 2
     assert "RC_CI_STORAGE_CONTROL_PLANE_MINIO_E2E" in workflow

@@ -241,6 +241,7 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
         resilience_capacity_history as workspace_resilience_capacity_history,
         resilience_cost_model as workspace_resilience_cost_model,
         resilience_forecast_backtest as workspace_resilience_forecast_backtest,
+        resilience_forecast_registry as workspace_resilience_forecast_registry,
         resilience_placement_optimizer as workspace_resilience_placement_optimizer,
         resilience_risk_observations as workspace_resilience_risk_observations,
         resilience_scheduler_service as workspace_resilience_scheduler_service,
@@ -271,6 +272,8 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     monkeypatch.setattr(workspace_resilience_capacity_history, "CAPACITY_HISTORY_DB", resilience_capacity_dir / "capacity.sqlite3")
     monkeypatch.setattr(workspace_resilience_forecast_backtest, "CAPACITY_HISTORY_DIR", resilience_capacity_dir)
     monkeypatch.setattr(workspace_resilience_forecast_backtest, "CAPACITY_HISTORY_DB", resilience_capacity_dir / "capacity.sqlite3")
+    monkeypatch.setattr(workspace_resilience_forecast_registry, "CAPACITY_HISTORY_DIR", resilience_capacity_dir)
+    monkeypatch.setattr(workspace_resilience_forecast_registry, "CAPACITY_HISTORY_DB", resilience_capacity_dir / "capacity.sqlite3")
     resilience_cost_dir = tmp_path / ".resilience-cost"
     monkeypatch.setattr(workspace_resilience_cost_model, "COST_MODEL_DIR", resilience_cost_dir)
     monkeypatch.setattr(workspace_resilience_cost_model, "COST_MODEL_DB", resilience_cost_dir / "cost.sqlite3")
