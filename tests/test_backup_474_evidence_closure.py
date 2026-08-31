@@ -221,6 +221,8 @@ def test_474_required_check_names_are_locked_to_proof_or_explicit_scenarios() ->
         "randomizedAgeUnchanged",
         "controlAuthorityV1Unchanged",
         "authorityCheckpointV1Unchanged",
+        "drReadinessProofV1Unchanged",
+        "evidenceProofV2EnvelopeUnchanged",
     } <= set(run_storage_control_plane_minio_e2e.CHECK_SCENARIOS)
 
 

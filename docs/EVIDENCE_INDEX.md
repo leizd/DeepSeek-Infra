@@ -50,6 +50,7 @@ Wire-format claims remain frozen:
 - `controlAuthorityV1Unchanged`
 - `authorityCheckpointV1Unchanged`
 - `drReadinessProofV1Unchanged`
+- `evidenceProofV2EnvelopeUnchanged`
 
 ## 4.7.4 evidence-closed fleet operations contract
 

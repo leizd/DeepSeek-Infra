@@ -109,6 +109,8 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
         "tests/test_backup_4410_contracts.py::test_cdc_v3_is_explicit_and_normalized",
         "tests/test_backup_463_control_authority.py::test_control_authority_schema_constant_and_keys",
         "tests/test_backup_463_control_authority.py::test_authority_checkpoint_is_hash_chained_and_secretless",
+        "tests/test_backup_476_fair_service.py::test_drill_service_uses_durable_restore_accounting_without_changing_proof_v1",
+        "tests/test_backup_476_predictive_proof.py::test_predictive_payload_remains_inside_unchanged_evidence_v2_envelope",
     ),
 }
 CHECK_SCENARIOS = {
@@ -291,6 +293,8 @@ CHECK_SCENARIOS = {
     "fastCdcV3Unchanged": WIRE_FREEZE_SCENARIO,
     "controlAuthorityV1Unchanged": WIRE_FREEZE_SCENARIO,
     "authorityCheckpointV1Unchanged": WIRE_FREEZE_SCENARIO,
+    "drReadinessProofV1Unchanged": WIRE_FREEZE_SCENARIO,
+    "evidenceProofV2EnvelopeUnchanged": WIRE_FREEZE_SCENARIO,
     "randomizedAgeUnchanged": REAL_SCENARIO,
 }
 for _promoted_predictive_claim in resilience_predictive_proof.PROMOTED_PREDICTIVE_CLAIM_CHECKS:
