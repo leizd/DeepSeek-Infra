@@ -82,6 +82,54 @@ def _connect() -> Iterator[sqlite3.Connection]:
             conn.close()
 
 
+def _row_to_backtest(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "backtestKey": str(row["backtest_key"]),
+        "forecastId": str(row["forecast_id"]),
+        "targetId": str(row["target_id"]),
+        "forecastedAt": str(row["forecasted_at"]),
+        "evaluatedAt": str(row["evaluated_at"]),
+        "horizonDays": int(row["horizon_days"]),
+        "predictedP50FreeBytes": int(row["predicted_p50_free"]),
+        "predictedP90FreeBytes": int(row["predicted_p90_free"]),
+        "actualFreeBytes": int(row["actual_free"]),
+        "mae": float(row["absolute_error"]),
+        "mape": row["percent_error"],
+        "bias": float(row["bias"]),
+        "intervalHit": bool(row["interval_hit"]),
+        "targetIncarnation": str(row["target_incarnation"]),
+        "capacityRevision": str(row["capacity_revision"]),
+        "forecastDigest": str(row["forecast_digest"]),
+        "actualObservationKey": str(row["actual_observation_key"]),
+    }
+
+
+def list_forecast_backtests(
+    target_id: str,
+    *,
+    target_incarnation: str | None = None,
+    capacity_revision: str | None = None,
+    limit: int = 100000,
+) -> list[dict[str, Any]]:
+    clauses = ["target_id = ?"]
+    params: list[Any] = [target_id]
+    if target_incarnation is not None:
+        clauses.append("target_incarnation = ?")
+        params.append(target_incarnation)
+    if capacity_revision is not None:
+        clauses.append("capacity_revision = ?")
+        params.append(capacity_revision)
+    query = (
+        "SELECT * FROM resilience_forecast_backtests WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY evaluated_at ASC, backtest_key ASC LIMIT ?"
+    )
+    params.append(max(1, min(int(limit), 100000)))
+    with _connect() as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return [_row_to_backtest(row) for row in rows]
+
+
 def record_forecast_backtest(
     target_id: str,
     *,
@@ -156,25 +204,7 @@ def record_forecast_backtest(
             (key,),
         ).fetchone()
         assert row is not None
-        return {
-            "backtestKey": str(row["backtest_key"]),
-            "forecastId": str(row["forecast_id"]),
-            "targetId": str(row["target_id"]),
-            "forecastedAt": str(row["forecasted_at"]),
-            "evaluatedAt": str(row["evaluated_at"]),
-            "horizonDays": int(row["horizon_days"]),
-            "predictedP50FreeBytes": int(row["predicted_p50_free"]),
-            "predictedP90FreeBytes": int(row["predicted_p90_free"]),
-            "actualFreeBytes": int(row["actual_free"]),
-            "mae": float(row["absolute_error"]),
-            "mape": row["percent_error"],
-            "bias": float(row["bias"]),
-            "intervalHit": bool(row["interval_hit"]),
-            "targetIncarnation": str(row["target_incarnation"]),
-            "capacityRevision": str(row["capacity_revision"]),
-            "forecastDigest": str(row["forecast_digest"]),
-            "actualObservationKey": str(row["actual_observation_key"]),
-        }
+        return _row_to_backtest(row)
 
 
 def summarize_backtest(

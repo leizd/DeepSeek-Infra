@@ -1157,6 +1157,40 @@ def get_target_drain_state(target_id: str) -> str:
         return "unknown"
 
 
+def _measure_s3_object_inventory(target_id: str) -> dict[str, int]:
+    """Read every object page from the provider; never substitute local accounting."""
+    store = open_target_store(target_id, write_intent=False)
+    cursor: str | None = None
+    seen_cursors: set[str] = set()
+    object_count = 0
+    total_bytes = 0
+    control_plane_bytes = 0
+    while True:
+        page = store.list_objects("", cursor=cursor, limit=1000)
+        for item in page.objects:
+            size = int(item.size)
+            if size < 0:
+                raise AppError("S3 capacity inventory returned a negative object size", code=ErrorCode.INVALID_REQUEST, status=503)
+            object_count += 1
+            if object_count > 1_000_000:
+                raise AppError("S3 capacity inventory exceeds the exact probe limit", code=ErrorCode.INVALID_REQUEST, status=503)
+            total_bytes += size
+            if not (item.key.startswith("objects/") or item.key.startswith("ciphertext/")):
+                control_plane_bytes += size
+        next_cursor = str(page.cursor or "")
+        if not next_cursor:
+            break
+        if next_cursor in seen_cursors:
+            raise AppError("S3 capacity inventory cursor did not advance", code=ErrorCode.INVALID_REQUEST, status=503)
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+    return {
+        "objectCount": object_count,
+        "physicalStoredBytes": total_bytes,
+        "controlPlaneBytes": control_plane_bytes,
+    }
+
+
 def probe_target_capacity(target_id: str) -> dict[str, Any]:
     """Probe physical or configured capacity for a target without forging fake disk sizes."""
     import shutil
@@ -1201,6 +1235,43 @@ def probe_target_capacity(target_id: str) -> dict[str, Any]:
     if quota_bytes is not None and int(quota_bytes) > 0:
         quota = int(quota_bytes)
         physical_usage = backup_control.physical_usage_summary(target_id)
+        if kind == "s3":
+            try:
+                provider_usage = _measure_s3_object_inventory(target_id)
+            except Exception as exc:
+                return {
+                    "targetId": target_id,
+                    "totalBytes": quota,
+                    "usedBytes": None,
+                    "freeBytes": None,
+                    "freePercent": None,
+                    "observedAt": _utc_iso(),
+                    "source": "s3-object-inventory-unavailable",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            physical = int(provider_usage["physicalStoredBytes"])
+            control_plane = int(provider_usage["controlPlaneBytes"])
+            indexed_physical = int(physical_usage.get("physicalStoredBytes") or 0)
+            live_bytes = min(physical, int(physical_usage.get("liveReferencedBytes") or 0))
+            retired_pending = min(max(0, physical - live_bytes), int(physical_usage.get("retiredPendingGcBytes") or 0))
+            free = max(0, quota - physical)
+            free_pct = round((free / quota) * 100.0, 2) if quota > 0 else 0.0
+            return {
+                "targetId": target_id,
+                "totalBytes": quota,
+                "usedBytes": physical,
+                "freeBytes": free,
+                "freePercent": free_pct,
+                "physicalStoredBytes": physical,
+                "liveReferencedBytes": live_bytes,
+                "retiredPendingGcBytes": retired_pending,
+                "controlPlaneBytes": control_plane,
+                "unknownExternalBytes": max(0, physical - indexed_physical - control_plane),
+                "objectCount": int(provider_usage["objectCount"]),
+                "capacityConfidence": "provider-exact",
+                "observedAt": _utc_iso(),
+                "source": "s3-object-inventory",
+            }
         physical = int(physical_usage.get("physicalStoredBytes") or 0)
         live_bytes = int(physical_usage.get("liveReferencedBytes") or 0)
         retired_pending = int(physical_usage.get("retiredPendingGcBytes") or 0)

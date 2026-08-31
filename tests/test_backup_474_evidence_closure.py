@@ -138,15 +138,34 @@ def test_real_minio_producer_has_no_synthetic_digest_or_fallback_proof_path() ->
     assert "resolve_proof_path" in source
 
 
+def test_real_predictive_producer_uses_production_sources_without_test_substitution() -> None:
+    source = (ROOT / "tests" / "test_backup_476_real_three_minio_predictive_e2e.py").read_text(encoding="utf-8")
+
+    assert "monkeypatch.setattr" not in source
+    assert "unittest.mock" not in source
+    assert "MemoryTargetStore" not in source
+    assert "probe_target_capacity" not in source
+    assert "sample_fleet_capacity" in source
+    assert "execute_run" in source
+    assert "execute_repair_job_instance" in source
+    assert "execute_rebalance_job" in source
+    assert "simulate_candidate_with_inputs" in source
+    assert "capture_predictive_planning_proof" in source
+    assert "resolve_proof_path" in source
+
+
 def test_storage_control_plane_inventory_and_ci_require_exact_proof_artifact() -> None:
     proof_path = f"docs/evidence/storage-control-plane-autonomous-proof-v{APP_VERSION}.json"
+    predictive_path = f"docs/evidence/storage-control-plane-predictive-proof-v{APP_VERSION}.json"
     owned_paths = evidence_paths_for_producer("storage-control-plane-minio-e2e", APP_VERSION)
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     runner = (ROOT / "scripts" / "run_storage_control_plane_minio_e2e.py").read_text(encoding="utf-8")
 
     assert proof_path in owned_paths
-    assert "proofArtifact" in runner
+    assert predictive_path in owned_paths
+    assert "proofArtifacts" in runner
     assert "storage-control-plane-autonomous-proof-v${{ env.RELEASE_VERSION }}.json" in workflow
+    assert "storage-control-plane-predictive-proof-v${{ env.RELEASE_VERSION }}.json" in workflow
 
 
 def test_474_required_check_names_are_locked_to_proof_or_explicit_scenarios() -> None:

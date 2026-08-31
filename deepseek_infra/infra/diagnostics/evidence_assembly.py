@@ -84,51 +84,64 @@ def validate_evidence_payload(
 
 
 def _validate_exact_proof_binding(root: Path, *, producer: str, version: str) -> list[str]:
-    """Bind the storage summary to the exact autonomous proof bytes it validated."""
+    """Bind the storage summary to every exact typed proof byte stream it validated."""
     specs = evidence_specs_for_producer(producer)
     proof_specs = [spec for spec in specs if spec.payload_kind == "proof"]
     if not proof_specs:
         return []
     report_specs = [spec for spec in specs if spec.payload_kind == "report"]
-    if len(proof_specs) != 1 or len(report_specs) != 1:
+    if len(report_specs) != 1:
         return [f"producer exact proof topology invalid: {producer}"]
-    proof_spec = proof_specs[0]
     report_spec = report_specs[0]
-    proof_path = root / proof_spec.path(version)
     report_path = root / report_spec.path(version)
-    if not proof_path.is_file() or not report_path.is_file():
+    proof_paths = {spec.scenario or "": root / spec.path(version) for spec in proof_specs}
+    if not report_path.is_file() or any(not path.is_file() for path in proof_paths.values()):
         return [f"producer exact proof pair missing: {producer}"]
     try:
         report = _load_object(report_path)
         from deepseek_infra.infra.workspace import evidence_proof
-
-        proof = evidence_proof.load_evidence_proof(proof_path, expected_scenario=proof_spec.scenario)
     except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
         return [f"producer exact proof pair invalid: {producer}: {exc}"]
 
-    artifact = report.get("proofArtifact")
-    if not isinstance(artifact, dict):
-        return [f"producer report proofArtifact missing: {producer}"]
+    raw_artifacts = report.get("proofArtifacts")
+    artifacts: dict[str, Any] = raw_artifacts if isinstance(raw_artifacts, dict) else {}
     errors: list[str] = []
-    expected_rel = proof_spec.path(version)
-    if artifact.get("path") != expected_rel:
-        errors.append(f"producer report proof path mismatch: {producer}")
-    if artifact.get("scenario") != proof_spec.scenario:
-        errors.append(f"producer report proof scenario mismatch: {producer}")
-    if artifact.get("sha256") != sha256_of(proof_path):
-        errors.append(f"producer report proof checksum mismatch: {producer}")
-    if artifact.get("bytes") != proof_path.stat().st_size:
-        errors.append(f"producer report proof byte size mismatch: {producer}")
-
     required_by_scenario = report.get("requiredProofChecks")
     required_map = required_by_scenario if isinstance(required_by_scenario, dict) else {}
-    required = required_map.get(proof_spec.scenario or "")
-    if not isinstance(required, list) or not required or not all(isinstance(item, str) for item in required):
-        errors.append(f"producer report required proof checks missing: {producer}")
-    else:
-        for check_name in required:
+    expected_scenarios = {spec.scenario or "" for spec in proof_specs}
+    if set(artifacts) != expected_scenarios:
+        errors.append(f"producer report proof artifact inventory mismatch: {producer}")
+    for proof_spec in proof_specs:
+        scenario = proof_spec.scenario or ""
+        proof_path = proof_paths[scenario]
+        try:
+            proof = evidence_proof.load_evidence_proof(proof_path, expected_scenario=proof_spec.scenario)
+        except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+            errors.append(f"producer exact proof pair invalid: {producer}:{scenario}:{exc}")
+            continue
+        raw_artifact = artifacts.get(scenario)
+        artifact: dict[str, Any] = raw_artifact if isinstance(raw_artifact, dict) else {}
+        expected_rel = proof_spec.path(version)
+        if artifact.get("path") != expected_rel:
+            errors.append(f"producer report proof path mismatch: {producer}:{scenario}")
+        if artifact.get("scenario") != scenario:
+            errors.append(f"producer report proof scenario mismatch: {producer}:{scenario}")
+        if artifact.get("sha256") != sha256_of(proof_path):
+            errors.append(f"producer report proof checksum mismatch: {producer}:{scenario}")
+        if artifact.get("bytes") != proof_path.stat().st_size:
+            errors.append(f"producer report proof byte size mismatch: {producer}:{scenario}")
+
+        declared_required = required_map.get(scenario)
+        if not isinstance(declared_required, list) or not declared_required or not all(isinstance(item, str) for item in declared_required):
+            errors.append(f"producer report required proof checks missing: {producer}:{scenario}")
+            continue
+        required = proof_spec.required_checks or tuple(declared_required)
+        if proof_spec.required_checks and not set(proof_spec.required_checks) <= set(declared_required):
+            errors.append(f"producer report required proof checks mismatch: {producer}:{scenario}")
+        checks_to_validate = tuple(declared_required) if proof_spec.required_checks else required
+        for check_name in checks_to_validate:
             if evidence_proof.proof_check_status(proof, check_name, semantic=True) != "PASS":
-                errors.append(f"producer exact proof required check failed: {producer}:{check_name}")
+                errors.append(f"producer exact proof required check failed: {producer}:{scenario}:{check_name}")
     return errors
 
 
@@ -308,6 +321,9 @@ def assemble_evidence(
         "evidenceManifestChecksum": "PASS",
         "assembledEvidenceIncludesExactAutonomousProof": "PASS",
         "missingAutonomousProofFailsAssembly": "PASS",
+        "assembledEvidenceIncludesExactPredictiveProof": "PASS",
+        "predictiveProofArtifactIsSemanticallyValidated": "PASS",
+        "missingPredictiveProofFailsAssembly": "PASS",
         "releasePackageEvidenceComplete": "PENDING",
         "releasePackageReverified": "PENDING",
     }

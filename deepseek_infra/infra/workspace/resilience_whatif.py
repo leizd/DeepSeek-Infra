@@ -193,8 +193,12 @@ def simulate_authoritative_inputs(
     )
 
 
-def simulate_candidate(candidate: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
-    """Build production truth and evaluate it within one audited read-only boundary."""
+def simulate_candidate_with_inputs(
+    candidate: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return the exact production truth and result from one audited read-only boundary."""
     before = resilience_state_digests.capture_mutation_state()
     inputs: dict[str, Any] = {"hypotheticalDelta": dict(candidate)}
     capability = resilience_simulation_capability.SimulationCapability(inputs)
@@ -213,7 +217,7 @@ def simulate_candidate(candidate: dict[str, Any], *, now: datetime | None = None
     after = resilience_state_digests.capture_mutation_state()
     if pending_error is not None and capability.audit()["attemptedMutationCount"] == 0 and not _changed_domains(before, after):
         raise pending_error
-    return _finish_simulation(
+    simulation = _finish_simulation(
         inputs,
         evaluated=evaluated,
         capability=capability,
@@ -222,6 +226,13 @@ def simulate_candidate(candidate: dict[str, Any], *, now: datetime | None = None
         violation=violation,
         now=now,
     )
+    return inputs, simulation
+
+
+def simulate_candidate(candidate: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    """Build production truth and evaluate it within one audited read-only boundary."""
+    _, simulation = simulate_candidate_with_inputs(candidate, now=now)
+    return simulation
 
 
 def simulate_fleet(

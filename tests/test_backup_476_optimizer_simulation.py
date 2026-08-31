@@ -278,6 +278,22 @@ def test_whatif_uses_read_only_capability_and_pre_post_digests(tmp_settings: Pat
     assert simulation["simulation"]["stateUnchanged"] is True
 
 
+def test_whatif_can_return_exact_authoritative_inputs_used_for_evaluation(tmp_settings: Path, monkeypatch: Any) -> None:
+    authoritative = _inputs()
+    monkeypatch.setattr(resilience_optimizer_inputs, "build_authoritative_optimizer_inputs", lambda *_args, **_kwargs: authoritative)
+    states = [
+        {"stateDigest": "same", "digests": {"storage": "s", "authority": "a", "actionJournal": "j", "policy": "p", "target": "t"}},
+        {"stateDigest": "same", "digests": {"storage": "s", "authority": "a", "actionJournal": "j", "policy": "p", "target": "t"}},
+    ]
+    monkeypatch.setattr(resilience_state_digests, "capture_mutation_state", lambda *_args, **_kwargs: states.pop(0))
+
+    captured_inputs, simulation = resilience_whatif.simulate_candidate_with_inputs(_candidate())
+
+    assert captured_inputs == authoritative
+    assert simulation["optimizerInputDigest"] == authoritative["optimizerInputDigest"]
+    assert simulation["status"] == "OK"
+
+
 def test_whatif_write_attempt_fails_closed_before_real_storage_mutation(tmp_settings: Path, monkeypatch: Any) -> None:
     states = [
         {"stateDigest": "same", "digests": {}},

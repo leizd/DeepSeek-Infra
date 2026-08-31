@@ -20,6 +20,7 @@ from deepseek_infra.infra.workspace import (
     resilience_capacity_sampler,
     resilience_forecast_registry,
 )
+from deepseek_infra.infra.workspace.backup_target_store import ListPage, ObjectMeta
 from deepseek_infra.web.server import create_server
 
 
@@ -43,6 +44,54 @@ def _identity(incarnation: str = "inc-a") -> dict[str, Any]:
         "quotaBytes": 10_000,
         "identityDigest": f"identity-{incarnation}",
     }
+
+
+def test_s3_capacity_probe_measures_real_paginated_object_inventory(tmp_settings: Path, monkeypatch: Any) -> None:
+    del tmp_settings
+
+    class Store:
+        def list_objects(self, _prefix: str, *, cursor: str | None = None, limit: int = 1000) -> ListPage:
+            assert limit == 1000
+            if cursor is None:
+                return ListPage(
+                    objects=(ObjectMeta(key="objects/sha256/a.age", size=700, etag="a"),),
+                    cursor="page-2",
+                )
+            assert cursor == "page-2"
+            return ListPage(
+                objects=(ObjectMeta(key="commits/policy/backup.json", size=100, etag="b"),),
+                cursor=None,
+            )
+
+    monkeypatch.setattr(
+        backup_targets,
+        "get_target",
+        lambda _target_id: {"targetId": "target-a", "kind": "s3", "provider": "minio", "quotaBytes": 10_000},
+    )
+    monkeypatch.setattr(backup_targets, "open_target_store", lambda *_args, **_kwargs: Store())
+    monkeypatch.setattr(
+        backup_control,
+        "physical_usage_summary",
+        lambda _target_id: {
+            "physicalStoredBytes": 0,
+            "liveReferencedBytes": 0,
+            "retiredPendingGcBytes": 0,
+            "controlPlaneBytes": 0,
+            "unknownExternalBytes": None,
+            "objectCount": 0,
+            "confidence": "unavailable",
+        },
+    )
+
+    capacity = backup_targets.probe_target_capacity("target-a")
+
+    assert capacity["source"] == "s3-object-inventory"
+    assert capacity["usedBytes"] == 800
+    assert capacity["freeBytes"] == 9_200
+    assert capacity["physicalStoredBytes"] == 800
+    assert capacity["controlPlaneBytes"] == 100
+    assert capacity["objectCount"] == 2
+    assert capacity["capacityConfidence"] == "provider-exact"
 
 
 def test_capacity_observation_comes_from_real_target_probe(

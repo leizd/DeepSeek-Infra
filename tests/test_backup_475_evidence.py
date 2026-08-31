@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from deepseek_infra.core.config import settings
-from deepseek_infra.infra.workspace import evidence_proof, resilience_risk_engine
+from deepseek_infra.infra.workspace import evidence_proof, resilience_predictive_proof, resilience_risk_engine
 from deepseek_infra.web.server import create_server
 from scripts import run_storage_control_plane_minio_e2e
 
@@ -137,12 +137,17 @@ def _passing_evidence(name: str) -> dict[str, object]:
 
 def test_475_required_check_names_are_locked() -> None:
     assert set(PREDICTIVE_CHECK_NAMES) <= set(run_storage_control_plane_minio_e2e.CHECK_SCENARIOS)
-    assert all(
-        run_storage_control_plane_minio_e2e.CHECK_SCENARIOS[name]
-        == run_storage_control_plane_minio_e2e.PREDICTIVE_FLEET_SCENARIO
-        for name in PREDICTIVE_CHECK_NAMES
-    )
+    promoted = set(resilience_predictive_proof.PROMOTED_PREDICTIVE_CLAIM_CHECKS)
     for name in PREDICTIVE_CHECK_NAMES:
+        expected = (
+            run_storage_control_plane_minio_e2e.REAL_PREDICTIVE_SCENARIO
+            if name in promoted
+            else run_storage_control_plane_minio_e2e.PREDICTIVE_FLEET_SCENARIO
+        )
+        assert run_storage_control_plane_minio_e2e.CHECK_SCENARIOS[name] == expected
+    for name in PREDICTIVE_CHECK_NAMES:
+        if name in promoted:
+            continue
         errors = evidence_proof.validate_check(name, {"status": "PASS", "evidence": _passing_evidence(name)})
         assert errors == [], (name, errors)
     assert evidence_proof.validate_check(

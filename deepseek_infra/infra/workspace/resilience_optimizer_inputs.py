@@ -249,6 +249,7 @@ def build_authoritative_optimizer_inputs(
         "priceCatalog": catalog,
         "authorityHeadDigest": str(fresh.get("authorityHeadDigest") or ""),
         "freshStateBundleDigest": str(fresh.get("freshStateBundleDigest") or ""),
+        "freshStateBundle": fresh,
         "runningEffects": list(fresh.get("runningEffects") or []),
         "maintenanceWindows": list(fresh.get("maintenanceDecisions") or []),
         "capacitySnapshot": capacity_snapshot,

@@ -91,6 +91,9 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
         "tests/test_backup_475_federation.py::test_federation_snapshot_is_digest_bound_and_credential_free",
         "tests/test_backup_475_federation.py::test_incompatible_wire_and_credentials_fail_closed",
     )
+    node_476_predictive = (
+        "tests/test_backup_476_real_three_minio_predictive_e2e.py::test_real_three_minio_predictive_planning_e2e"
+    )
     assert runner.SCENARIOS == {
         "real-three-minio-storage-control-plane": (node_458,),
         "real-three-minio-tiering-control-recovery": (node_459,),
@@ -103,6 +106,7 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
         "real-three-minio-autonomous-remediation": (node_472,),
         "durable-fleet-scheduler-slo-correctness": nodes_durable_fleet,
         "predictive-fleet-planning-verified-optimization": nodes_predictive_fleet,
+        "real-three-minio-predictive-planning": (node_476_predictive,),
         "storage-wire-freeze-contracts": nodes_wire_freeze,
     }
     assert set(runner.REQUIRED_ENDPOINTS) == {
@@ -170,6 +174,11 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
     assert "realThreeMinioAutonomousRepairE2E" in required_remediation
     assert "realReplicaTransferUsesEndpointAAndB" in required_remediation
     assert "destinationReceiptAuthenticated" in required_remediation
+    required_predictive = runner.REQUIRED_PROOF_CHECKS["real-three-minio-predictive-planning"]
+    assert "realThreeMinioPredictivePlanningE2E" in required_predictive
+    assert "predictiveProofRejectsSelfReportedZeroMutation" in required_predictive
+    assert "whatIfProducesNoStorageWrites" in required_predictive
+    assert runner.CHECK_SCENARIOS["whatIfProducesNoStorageWrites"] == runner.REAL_PREDICTIVE_SCENARIO
 
 
 def test_real_evidence_sources_forbid_fake_s3_stub_crypto_and_resolver_monkeypatch() -> None:
@@ -180,6 +189,7 @@ def test_real_evidence_sources_forbid_fake_s3_stub_crypto_and_resolver_monkeypat
         "tests/test_backup_462_real_transactional_gc_e2e.py",
         "tests/test_backup_463_real_control_authority_disaster_e2e.py",
         "tests/test_backup_472_real_three_minio_remediation_e2e.py",
+        "tests/test_backup_476_real_three_minio_predictive_e2e.py",
     ):
         source = (ROOT / rel).read_text(encoding="utf-8")
         assert "ProductionFakeS3Client" not in source
@@ -204,5 +214,6 @@ def test_ci_runs_three_independent_minio_servers_and_requires_new_producer() -> 
     assert "--publish 9002:9002" in workflow
     assert "python scripts/run_storage_control_plane_minio_e2e.py" in workflow
     assert "--producer storage-control-plane-minio-e2e" in workflow
+    assert "storage-control-plane-predictive-proof-v${{ env.RELEASE_VERSION }}.json" in workflow
     assert workflow.count("      - storage-control-plane-minio-e2e\n") == 2
     assert "RC_CI_STORAGE_CONTROL_PLANE_MINIO_E2E" in workflow
