@@ -13,11 +13,16 @@
 - **Real Wave execution:** a fenced, crash-recoverable runner owns Action Journal
   execution and settles fair service from observed effect telemetry.
 - **Production forecasting:** maintenance target probes feed incarnation-isolated
-  observations, durable Forecast Records, and automatic due backtests.
+  observations, durable Forecast Records, and automatic due backtests; MinIO/S3
+  usage is measured from the real paginated provider inventory and fails closed
+  when that inventory is unavailable.
 - **Verifiable What-If:** write-deny capabilities, attempted-write audit, and
   measured pre/post state digests replace self-reported zero mutation.
 - **Exact predictive Evidence:** `predictive-planning-proof-v1` is carried inside
-  the unchanged `evidence-proof-v2` envelope as a separate required artifact.
+  the unchanged `evidence-proof-v2` envelope as a separate required artifact;
+  legacy zero-write and optimizer-binding claims now use that typed runtime proof.
+- **Read-only federation hardening:** tampered, stale/future, same-fleet, or wire-
+  incompatible snapshots are rejected without adding any remote mutation path.
 - **Wire freeze unchanged:** object-set-v1, Receipt v4, Commit v4, FastCDC v3,
   randomized Age, control-authority-v1, AuthorityCheckpoint v1, and
   dr-readiness-proof-v1 remain unchanged; federation remains read-only.

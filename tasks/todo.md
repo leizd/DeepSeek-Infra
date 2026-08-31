@@ -20,10 +20,10 @@
 - [x] Restrict What-If requests to hypothetical candidates
 - [x] Add write-deny simulation capability and attempted-write audit
 - [x] Measure and compare pre/post state digests for every mutation domain
-- [ ] Add `predictive-planning-proof-v1` typed payload and validator
-- [ ] Emit exact predictive proof artifact from the real runner
-- [ ] Require report + autonomous proof + predictive proof in assembly
-- [ ] Add real Three-MinIO predictive planning E2E
-- [ ] Preserve read-only federation boundary
-- [ ] Update runbook, ADR, architecture, and release notes
+- [x] Add `predictive-planning-proof-v1` typed payload and validator
+- [x] Emit exact predictive proof artifact from the real runner
+- [x] Require report + autonomous proof + predictive proof in assembly
+- [x] Add real Three-MinIO predictive planning E2E
+- [x] Preserve read-only federation boundary
+- [x] Update runbook, ADR, architecture, and release notes
 - [ ] Run CI-equivalent verification with 95.0% coverage margin

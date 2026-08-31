@@ -27,8 +27,8 @@ DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines
 - Durability-constrained, side-effect-free What-If optimization proofs; federation
   readiness is credential-free and read-only.
 
-See the [4.7.5 release notes](docs/releases/4.7.5.en.md),
-[autonomous operations runbook](docs/runbooks/COORDINATED_AUTONOMOUS_REMEDIATION.md),
+See the [4.7.6 release notes](docs/releases/4.7.6.en.md),
+[predictive control runbook](docs/runbooks/PREDICTIVE_FLEET_PLANNING.md),
 and [Evidence index](docs/EVIDENCE_INDEX.md).
 
 - Python remains the default and authoritative runtime.
