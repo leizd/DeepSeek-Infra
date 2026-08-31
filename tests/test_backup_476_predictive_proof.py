@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from deepseek_infra.infra.workspace import (
     evidence_proof,
     resilience_capacity_history,
@@ -274,6 +276,13 @@ def _rebind_proof(proof: dict[str, Any]) -> None:
     proof["proofDigest"] = _digest({key: value for key, value in proof.items() if key != "proofDigest"})
 
 
+def _set_path(payload: dict[str, Any], path: tuple[str | int, ...], value: Any) -> None:
+    current: Any = payload
+    for key in path[:-1]:
+        current = current[key]
+    current[path[-1]] = value
+
+
 def test_predictive_planning_proof_binds_all_authoritative_inputs(tmp_settings: Path) -> None:
     proof = _valid_proof()
 
@@ -307,6 +316,17 @@ def test_predictive_proof_capture_reads_exact_durable_series(tmp_settings: Path,
     assert calls == [("target-a", "inc-a", "revision-a"), ("target-a", "inc-a", "revision-a")]
     assert proof["capacityObservations"] == observations
     assert proof["forecastBacktests"] == backtests
+
+
+def test_predictive_proof_capture_requires_exact_series_binding() -> None:
+    inputs, simulation, _observations, _backtests = _proof_inputs()
+    inputs["forecastRecord"] = {"targetId": "target-a"}
+
+    with pytest.raises(ValueError, match="series binding is required"):
+        resilience_predictive_proof.capture_predictive_planning_proof(
+            authoritative_inputs=inputs,
+            whatif_result=simulation,
+        )
 
 
 def test_predictive_proof_rejects_observation_forecast_catalog_and_plan_tamper(tmp_settings: Path) -> None:
@@ -370,6 +390,159 @@ def test_predictive_proof_rejects_state_change_and_self_reported_zero_mutation(t
     errors = resilience_predictive_proof.validate_predictive_planning_proof(self_reported)
     assert "simulation-attempt-count-mismatch" in errors
     assert "simulation-attempted-mutation" in errors
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "expected"),
+    [
+        (("sourceSnapshot", "riskDigest"), "0" * 64, "source-snapshot-digest-mismatch"),
+        (("sourceSnapshotDigest",), "0" * 64, "source-snapshot-binding-mismatch"),
+        (("freshStateBundle", "capacitySnapshot", "targets", 0, "freeBytes"), 123, "fresh-state-component-digest-mismatch"),
+        (("freshStateBundle", "authorityHeadDigest"), "0" * 64, "fresh-state-authority-binding-mismatch"),
+        (("freshStateBundle", "authorityState", "canonicalDigest"), "0" * 64, "authority-head-state-mismatch"),
+        (("freshStateBundle", "riskDigest"), "0" * 64, "fresh-state-risk-binding-mismatch"),
+        (("freshStateBundle", "riskSnapshot"), {}, "fresh-state-risk-snapshot-mismatch"),
+        (("freshStateBundle", "freshStateBundleDigest"), "0" * 64, "fresh-state-bundle-digest-mismatch"),
+        (("freshStateBundleDigest",), "0" * 64, "fresh-state-top-level-binding-mismatch"),
+        (("capacityObservations", 0, "source"), "manual", "observation-not-production-probe"),
+        (("capacityObservations", 0, "probeSource"), "caller", "observation-probe-source-untrusted"),
+        (("capacityObservations", 0, "targetId"), "other-target", "observation-series-binding-mismatch"),
+        (("capacityObservationSetDigest",), "0" * 64, "capacity-observation-set-digest-mismatch:payload"),
+        (("forecastRecord", "capacityObservationSetDigest"), "0" * 64, "capacity-observation-set-digest-mismatch:record"),
+        (("forecastRecord", "forecast", "capacityObservationSetDigest"), "0" * 64, "capacity-observation-set-digest-mismatch:forecast"),
+        (("forecastDigest",), "0" * 64, "forecast-digest-mismatch:payload"),
+        (("forecastRecord", "forecastDigest"), "0" * 64, "forecast-digest-mismatch:record"),
+        (("forecastRecord", "forecast", "forecastDigest"), "0" * 64, "forecast-digest-mismatch:forecast"),
+        (("forecastRecord", "p50FreeBytes"), 1, "forecast-record-field-mismatch:p50FreeBytes"),
+        (("forecastRecord", "forecast", "forecastStatus"), "FAILED", "forecast-record-not-ok"),
+        (("forecastRecord", "status"), "BACKTESTED", "forecast-record-not-current"),
+        (("forecastRecord", "forecastId"), "forecast:invalid", "forecast-id-binding-mismatch"),
+        (("forecastBacktests",), [], "forecast-backtests-empty"),
+        (("forecastBacktests", 0, "mae"), 999.0, "forecast-backtest-metric-mismatch:0:mae"),
+        (("forecastBacktests", 0, "intervalHit"), False, "forecast-backtest-metric-mismatch:0:intervalHit"),
+        (("forecastBacktests", 0, "targetId"), "other-target", "forecast-backtest-series-binding-mismatch"),
+        (("forecastBacktests", 0, "actualObservationKey"), "missing", "forecast-backtest-observation-binding-mismatch"),
+        (("forecastBacktests", 0, "forecastDigest"), "invalid", "forecast-backtest-invalid-forecast-digest"),
+        (("forecastBacktestDigest",), "0" * 64, "forecast-backtest-digest-mismatch"),
+        (("forecastRecord", "forecast", "calibration", "samples"), 99, "forecast-calibration-mismatch:samples"),
+        (("forecastRecord", "forecast", "calibration", "calibrationDigest"), "0" * 64, "forecast-calibration-digest-mismatch"),
+        (("priceCatalog", "priceCatalogDigest"), "0" * 64, "price-catalog-digest-mismatch:catalog"),
+        (("priceCatalogDigest",), "0" * 64, "price-catalog-digest-mismatch:payload"),
+        (("candidatePlan", "candidatePlanDigest"), "0" * 64, "candidate-plan-digest-mismatch:plan"),
+        (("candidatePlanDigest",), "0" * 64, "candidate-plan-digest-mismatch:payload"),
+        (("candidatePlan", "authorityHeadDigest"), "0" * 64, "candidate-plan-input-binding-mismatch:authorityHeadDigest"),
+        (("candidatePlan", "status"), "REJECTED", "candidate-plan-not-accepted"),
+        (("candidatePlan", "selected", "accepted"), False, "candidate-plan-not-accepted"),
+        (("candidatePlan", "selected", "violations"), ["declared"], "candidate-plan-declared-violations"),
+        (("candidatePlan", "selected", "candidate", "failureDomains"), 0, "unsafe-plan-min-failure-domains"),
+        (("candidatePlan", "selected", "candidate", "forecastFreeBytes"), 0, "unsafe-plan-forecast-headroom"),
+        (("candidatePlan", "selected", "candidate", "breaksDrDependency"), True, "unsafe-plan-breaks-dr-dependency"),
+        (("candidatePlan", "selected", "candidate", "mutatesAuthority"), True, "unsafe-plan-mutates-authority"),
+        (("whatIfResult", "whatIfDigest"), "0" * 64, "what-if-digest-mismatch:result"),
+        (("whatIfDigest",), "0" * 64, "what-if-digest-mismatch:payload"),
+        (("whatIfResult", "simulation", "stateUnchanged"), False, "what-if-simulation-binding-mismatch"),
+        (("whatIfResult", "candidatePlan", "selected", "accepted"), False, "what-if-candidate-plan-binding-mismatch"),
+        (("whatIfResult", "authorityHeadDigest"), "0" * 64, "what-if-input-binding-mismatch:authorityHeadDigest"),
+        (("simulation", "preStateDigests", "storage"), "invalid", "simulation-pre-state-digest-invalid:storage"),
+        (("simulation", "preStateDigest"), "0" * 64, "simulation-pre-state-digest-mismatch"),
+        (("simulation", "postStateDigest"), "0" * 64, "simulation-post-state-digest-mismatch"),
+        (("simulation", "storageInventoryAfter"), [], "simulation-state-changed"),
+        (("simulation", "attemptedMutationCount"), 1, "simulation-attempt-count-mismatch"),
+        (("simulation", "blockedMutationCount"), 1, "simulation-blocked-count-mismatch"),
+        (("simulation", "blockedWrites"), [{"domain": "storage"}], "simulation-blocked-mutation"),
+        (("whatIfResult", "sideEffectsObserved"), 9, "what-if-side-effect-count-mismatch"),
+        (("whatIfResult", "status"), "SIMULATION_VIOLATION", "what-if-result-not-ok"),
+    ],
+)
+def test_predictive_validator_recomputes_every_security_binding(
+    path: tuple[str | int, ...],
+    value: Any,
+    expected: str,
+) -> None:
+    proof = _valid_proof()
+    _set_path(proof, path, value)
+    _rebind_proof(proof)
+
+    errors = resilience_predictive_proof.validate_predictive_planning_proof(proof)
+
+    assert any(expected in error for error in errors), (expected, errors)
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "expected"),
+    [
+        (("sourceSnapshot",), [], "source-snapshot-must-be-object"),
+        (("capacityObservations",), "invalid", "capacity-observations-must-be-list"),
+        (("forecastBacktests",), "invalid", "forecast-backtests-must-be-list"),
+        (("priceCatalog",), [], "price-catalog-must-be-object"),
+        (("candidatePlan",), [], "candidate-plan-must-be-object"),
+        (("simulation",), [], "simulation-must-be-object"),
+        (("whatIfResult",), [], "what-if-result-must-be-object"),
+    ],
+)
+def test_predictive_validator_rejects_malformed_typed_sections(
+    path: tuple[str | int, ...],
+    value: Any,
+    expected: str,
+) -> None:
+    proof = _valid_proof()
+    _set_path(proof, path, value)
+    _rebind_proof(proof)
+
+    assert expected in resilience_predictive_proof.validate_predictive_planning_proof(proof)
+
+
+def test_predictive_validator_rejects_invalid_envelope_fields() -> None:
+    assert resilience_predictive_proof.validate_predictive_planning_proof([]) == ["predictive-proof-must-be-object"]  # type: ignore[arg-type]
+    proof = _valid_proof()
+    proof["schema"] = "wrong-schema"
+    proof["authorityHeadDigest"] = "invalid"
+    proof["proofDigest"] = "0" * 64
+
+    errors = resilience_predictive_proof.validate_predictive_planning_proof(proof)
+
+    assert "predictive-proof-schema-mismatch" in errors
+    assert "invalid-sha256:authorityHeadDigest" in errors
+    assert "predictive-proof-digest-mismatch" in errors
+
+
+def test_predictive_validator_rejects_invalid_numeric_and_nested_entries() -> None:
+    numeric_errors: list[str] = []
+    assert resilience_predictive_proof._as_int(True, "bool-value", numeric_errors) is None  # noqa: SLF001
+    assert resilience_predictive_proof._as_int("invalid", "text-value", numeric_errors) is None  # noqa: SLF001
+    assert numeric_errors == ["bool-value-must-be-integer", "text-value-must-be-integer"]
+    assert resilience_predictive_proof._same_number(None, None) is True  # noqa: SLF001
+    assert resilience_predictive_proof._same_number("invalid", 1) is False  # noqa: SLF001
+
+    malformed_observation = _valid_proof()
+    malformed_observation["capacityObservations"] = [None]
+    _rebind_proof(malformed_observation)
+    assert "capacity-observation-0-must-be-object" in resilience_predictive_proof.validate_predictive_planning_proof(
+        malformed_observation
+    )
+
+    malformed_backtest = _valid_proof()
+    malformed_backtest["forecastBacktests"] = [None]
+    _rebind_proof(malformed_backtest)
+    assert "forecast-backtest-0-must-be-object" in resilience_predictive_proof.validate_predictive_planning_proof(malformed_backtest)
+
+    missing_forecast = _valid_proof()
+    missing_forecast["forecastRecord"]["forecast"] = {}
+    _rebind_proof(missing_forecast)
+    assert "forecast-empty" in resilience_predictive_proof.validate_predictive_planning_proof(missing_forecast)
+
+
+def test_predictive_proof_builder_refuses_invalid_authoritative_inputs() -> None:
+    inputs, simulation, observations, backtests = _proof_inputs()
+    inputs["freshStateBundle"] = {}
+
+    with pytest.raises(ValueError, match="invalid predictive planning proof"):
+        resilience_predictive_proof.build_predictive_planning_proof(
+            authoritative_inputs=inputs,
+            whatif_result=simulation,
+            capacity_observations=observations,
+            forecast_backtests=backtests,
+        )
 
 
 def test_predictive_payload_remains_inside_unchanged_evidence_v2_envelope(tmp_settings: Path, tmp_path: Path) -> None:

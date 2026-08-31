@@ -223,6 +223,8 @@ def _same_number(actual: Any, expected: float | int | None) -> bool:
 
 def _validate_source_and_fresh_state(payload: dict[str, Any], errors: list[str]) -> None:
     source = _as_dict(payload.get("sourceSnapshot"), "source-snapshot", errors)
+    if not source:
+        errors.append("source-snapshot-empty")
     declared_source = str(payload.get("sourceSnapshotDigest") or "")
     computed_source = _risk_digest(source)
     if source and str(source.get("riskDigest") or "") != computed_source:
@@ -240,6 +242,7 @@ def _validate_source_and_fresh_state(payload: dict[str, Any], errors: list[str])
         if not _is_sha256(value):
             errors.append(f"invalid-sha256:{field}")
     if not fresh:
+        errors.append("fresh-state-bundle-empty")
         return
     components = {
         "capacitySnapshotDigest": fresh.get("capacitySnapshot"),
@@ -298,6 +301,10 @@ def _validate_observations_and_forecast(payload: dict[str, Any], errors: list[st
 
     record = _as_dict(payload.get("forecastRecord"), "forecast-record", errors)
     forecast = _as_dict(record.get("forecast"), "forecast", errors)
+    if not record:
+        errors.append("forecast-record-empty")
+    elif not forecast:
+        errors.append("forecast-empty")
     if not observations or not record or not forecast:
         return
     target_id = str(record.get("targetId") or "")
