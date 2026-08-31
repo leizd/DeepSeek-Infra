@@ -1,4 +1,4 @@
-"""Production fresh-state admission contracts for 4.7.6 Gates A-B."""
+"""Production fresh-state admission contracts for release Gates A-B."""
 
 from __future__ import annotations
 

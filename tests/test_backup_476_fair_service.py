@@ -1,4 +1,4 @@
-"""Source-of-truth fair-service settlement contracts for 4.7.6 Gate D."""
+"""Source-of-truth fair-service settlement contracts for release Gate D."""
 
 from __future__ import annotations
 

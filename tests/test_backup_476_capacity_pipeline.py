@@ -1,4 +1,4 @@
-"""Production capacity sampling and durable forecast lifecycle (4.7.6 Gates E-G)."""
+"""Production capacity sampling and durable forecast lifecycle (release Gates E-G)."""
 
 from __future__ import annotations
 

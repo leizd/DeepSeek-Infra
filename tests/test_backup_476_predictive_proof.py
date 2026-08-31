@@ -1,4 +1,4 @@
-"""Typed predictive planning proof and independent semantic validation (4.7.6 Gate J)."""
+"""Typed predictive planning proof and independent semantic validation (release Gate J)."""
 
 from __future__ import annotations
 

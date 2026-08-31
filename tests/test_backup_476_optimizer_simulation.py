@@ -1,4 +1,4 @@
-"""Authoritative optimizer inputs and write-deny simulation (4.7.6 Gates H-I)."""
+"""Authoritative optimizer inputs and write-deny simulation (release Gates H-I)."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Production Wave Runner and crash-takeover contracts for 4.7.6 Gates B-C."""
+"""Production Wave Runner and crash-takeover contracts for release Gates B-C."""
 
 from __future__ import annotations
 
