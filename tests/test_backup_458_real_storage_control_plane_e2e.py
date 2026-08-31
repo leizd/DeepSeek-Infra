@@ -344,7 +344,10 @@ def test_real_three_minio_storage_control_plane_e2e(tmp_settings: Path, real_sto
         receipt_key_b, receipt_bytes_before = _formal_bytes(source_b, "receipts/", second_backup_id)
         commit_key_b, commit_bytes_before = _formal_bytes(source_b, f"commits/{policy_id}/", second_backup_id)
         backup_drain.start_target_drain(target_b, reason="real-three-minio-e2e")
-        drain_deadline = time.monotonic() + 60
+        # A real provider tick completes rebalance and retirement before the
+        # following drain reconciliation. Under coverage, that full sequence
+        # can legitimately cross 60 seconds even though every effect succeeds.
+        drain_deadline = time.monotonic() + 120
         drain_job = backup_drain.get_target_drain_job(target_id=target_b)
         while time.monotonic() < drain_deadline:
             if drain_job["phase"] == "drained":  # type: ignore[index]
