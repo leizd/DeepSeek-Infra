@@ -548,9 +548,13 @@ def schedule_fleet_resilience(
         sample_key=f"starvation:{schedule_id}",
         metadata={"candidateActions": len(sorted_actions), "unschedulableActions": len(unschedulable_actions)},
     )
-    resilience_scheduler_service.record_schedule_result(schedule, assigned_actions, scheduled_at=current)
     from deepseek_infra.infra.workspace import resilience_wave_executor
 
+    schedule["scheduleDigest"] = resilience_wave_executor.compute_schedule_digest(
+        schedule,
+        authority_head_digest=authority_head_digest or None,
+    )
+    resilience_scheduler_service.record_schedule_result(schedule, assigned_actions, scheduled_at=current)
     resilience_wave_executor.persist_planned_schedule(
         schedule,
         authority_head_digest=authority_head_digest or None,

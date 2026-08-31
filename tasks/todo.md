@@ -10,11 +10,11 @@
 
 ## Gate A — Correctness closure before Federation writes
 
-- [ ] Add canonical server-computed `scheduleDigest`
-- [ ] Make same schedule ID and digest non-mutating/idempotent
-- [ ] Reject same schedule ID with different digest as `SCHEDULE_IDENTITY_CONFLICT`
-- [ ] Prevent running and terminal schedule rewrites
-- [ ] Migrate legacy schedule rows without resetting state or epochs
+- [x] Add canonical server-computed `scheduleDigest`
+- [x] Make same schedule ID and digest non-mutating/idempotent
+- [x] Reject same schedule ID with different digest as `SCHEDULE_IDENTITY_CONFLICT`
+- [x] Prevent running and terminal schedule rewrites
+- [x] Migrate legacy schedule rows without resetting state or epochs
 - [ ] Add CAS renewal for schedule and wave leases
 - [ ] Add bounded Wave Runner heartbeat and fence on lease loss
 - [ ] Prove stale runner token/epoch cannot renew or commit

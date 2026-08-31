@@ -1,11 +1,14 @@
-"""Fail-closed, fenced production Wave execution through the Action Journal (4.7.6 Gates A-C)."""
+"""Fail-closed, fenced production Wave execution through the Action Journal (4.8.0 Gate A)."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import threading
+import time
 import uuid
+from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
@@ -14,6 +17,9 @@ from deepseek_infra.core import config
 
 WAVE_EXECUTOR_DIR = config.ROOT / ".resilience-waves"
 WAVE_EXECUTOR_DB = WAVE_EXECUTOR_DIR / "waves.sqlite3"
+
+SCHEDULE_IDENTITY_SCHEMA = "resilience-wave-schedule-identity-v1"
+_SCHEDULE_IDENTITY_DOMAIN = f"deepseek-infra:{SCHEDULE_IDENTITY_SCHEMA}\0".encode("ascii")
 
 SCHEDULE_PLANNED = "PLANNED"
 SCHEDULE_RUNNING = "RUNNING"
@@ -40,10 +46,27 @@ ACTION_FAILED = "FAILED"
 ACTION_PREEMPTED = "PREEMPTED"
 ACTION_STALE = "STALE"
 
+
+class ScheduleIdentityConflictError(RuntimeError):
+    """Raised when an existing schedule ID is rebound to different content."""
+
+    code = "SCHEDULE_IDENTITY_CONFLICT"
+
+    def __init__(self, schedule_id: str, existing_digest: str, incoming_digest: str) -> None:
+        self.schedule_id = schedule_id
+        self.existing_digest = existing_digest
+        self.incoming_digest = incoming_digest
+        super().__init__(
+            f"{self.code}: schedule '{schedule_id}' already binds digest "
+            f"{existing_digest}, not {incoming_digest}"
+        )
+
+
 _LOCK = threading.RLock()
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS resilience_wave_schedules (
     schedule_id TEXT PRIMARY KEY,
+    schedule_digest TEXT,
     status TEXT NOT NULL,
     risk_digest TEXT NOT NULL,
     authority_head_digest TEXT,
@@ -95,6 +118,7 @@ ON resilience_wave_actions(schedule_id, wave_index, status);
 
 _SCHEMA_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
     "resilience_wave_schedules": (
+        ("schedule_digest", "TEXT"),
         ("execution_epoch", "INTEGER NOT NULL DEFAULT 0"),
         ("owner_instance_id", "TEXT"),
         ("lease_until", "TEXT"),
@@ -125,26 +149,140 @@ def _utc_iso(value: datetime | None = None) -> str:
     return current.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _normalized_schedule_identity(
+    schedule: dict[str, Any],
+    *,
+    authority_head_digest: str | None,
+) -> dict[str, Any]:
+    normalized = dict(schedule)
+    normalized.pop("scheduleDigest", None)
+    if authority_head_digest is not None:
+        normalized["authorityHeadDigest"] = str(authority_head_digest)
+    return normalized
+
+
+def _canonical_schedule_bytes(
+    schedule: dict[str, Any],
+    *,
+    authority_head_digest: str | None,
+) -> bytes:
+    normalized = _normalized_schedule_identity(schedule, authority_head_digest=authority_head_digest)
+    return json.dumps(
+        normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def compute_schedule_digest(
+    schedule: dict[str, Any],
+    *,
+    authority_head_digest: str | None = None,
+) -> str:
+    """Compute the server-authoritative, domain-separated Wave Schedule digest."""
+
+    canonical = _canonical_schedule_bytes(schedule, authority_head_digest=authority_head_digest)
+    return hashlib.sha256(_SCHEDULE_IDENTITY_DOMAIN + canonical).hexdigest()
+
+
+def _backfill_schedule_digests(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT schedule_id, schedule_json, authority_head_digest
+        FROM resilience_wave_schedules
+        WHERE schedule_digest IS NULL OR schedule_digest = ''
+        """
+    ).fetchall()
+    for row in rows:
+        raw_schedule = json.loads(str(row["schedule_json"]))
+        if not isinstance(raw_schedule, dict):
+            raise ValueError(f"invalid persisted Wave Schedule: {row['schedule_id']}")
+        digest = compute_schedule_digest(
+            raw_schedule,
+            authority_head_digest=str(row["authority_head_digest"]) if row["authority_head_digest"] is not None else None,
+        )
+        conn.execute(
+            """
+            UPDATE resilience_wave_schedules
+            SET schedule_digest = ?
+            WHERE schedule_id = ? AND (schedule_digest IS NULL OR schedule_digest = '')
+            """,
+            (digest, str(row["schedule_id"])),
+        )
+
+
+def _retry_locked(operation: Callable[[], Any], *, timeout_seconds: float = 30.0) -> Any:
+    """Retry bounded SQLite startup work while another process initializes the Wave DB."""
+
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    delay = 0.01
+    while True:
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            message = str(exc).casefold()
+            if "locked" not in message and "busy" not in message:
+                raise
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(delay)
+            delay = min(0.25, delay * 2)
+
+
 def _ensure_schema_columns(conn: sqlite3.Connection) -> None:
     for table, definitions in _SCHEMA_COLUMNS.items():
         existing = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
         for column, definition in definitions:
             if column not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    _backfill_schedule_digests(conn)
+
+
+def _schema_requires_migration(conn: sqlite3.Connection) -> bool:
+    for table, definitions in _SCHEMA_COLUMNS.items():
+        existing = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if any(column not in existing for column, _definition in definitions):
+            return True
+    missing_digest = conn.execute(
+        """
+        SELECT 1 FROM resilience_wave_schedules
+        WHERE schedule_digest IS NULL OR schedule_digest = ''
+        LIMIT 1
+        """
+    ).fetchone()
+    return missing_digest is not None
+
+
+def _initialize_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(_SCHEMA)
+    if not _schema_requires_migration(conn):
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        _ensure_schema_columns(conn)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
 
 
 @contextmanager
 def _connect() -> Iterator[sqlite3.Connection]:
     WAVE_EXECUTOR_DIR.mkdir(parents=True, exist_ok=True)
     with _LOCK:
-        conn = sqlite3.connect(WAVE_EXECUTOR_DB, timeout=30.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.executescript(_SCHEMA)
-        _ensure_schema_columns(conn)
+        conn = sqlite3.connect(WAVE_EXECUTOR_DB, timeout=30.0, isolation_level=None)
         try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=30000")
+            _retry_locked(lambda: conn.execute("PRAGMA journal_mode=WAL"))
+            _retry_locked(lambda: _initialize_schema(conn))
             yield conn
             conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -152,6 +290,7 @@ def _connect() -> Iterator[sqlite3.Connection]:
 def _schedule_record(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "scheduleId": str(row["schedule_id"]),
+        "scheduleDigest": str(row["schedule_digest"]),
         "status": str(row["status"]),
         "riskDigest": str(row["risk_digest"]),
         "authorityHeadDigest": row["authority_head_digest"],
@@ -192,28 +331,46 @@ def persist_planned_schedule(
     if not schedule_id:
         raise ValueError("scheduleId is required")
     timestamp = _utc_iso(now)
-    raw_waves = schedule.get("executionWaves")
+    normalized_schedule = _normalized_schedule_identity(schedule, authority_head_digest=authority_head_digest)
+    schedule_digest = compute_schedule_digest(normalized_schedule)
+    declared_digest = str(schedule.get("scheduleDigest") or "")
+    declared_digest_mismatch = bool(declared_digest and declared_digest != schedule_digest)
+    raw_waves = normalized_schedule.get("executionWaves")
     waves = raw_waves if isinstance(raw_waves, list) else []
-    rendered = json.dumps(schedule, ensure_ascii=False, sort_keys=True)
+    rendered = _canonical_schedule_bytes(normalized_schedule, authority_head_digest=None).decode("utf-8")
+    effective_authority_digest = str(normalized_schedule.get("authorityHeadDigest") or "") or None
     with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT * FROM resilience_wave_schedules WHERE schedule_id = ?",
+            (schedule_id,),
+        ).fetchone()
+        if existing is not None:
+            existing_digest = str(existing["schedule_digest"] or "")
+            if existing_digest != schedule_digest:
+                raise ScheduleIdentityConflictError(schedule_id, existing_digest, schedule_digest)
+            if declared_digest_mismatch:
+                raise ValueError(
+                    f"SCHEDULE_DIGEST_MISMATCH: declared={declared_digest}, computed={schedule_digest}"
+                )
+            return _schedule_record(existing)
+        if declared_digest_mismatch:
+            raise ValueError(
+                f"SCHEDULE_DIGEST_MISMATCH: declared={declared_digest}, computed={schedule_digest}"
+            )
         conn.execute(
             """
             INSERT INTO resilience_wave_schedules (
-                schedule_id, status, risk_digest, authority_head_digest,
+                schedule_id, schedule_digest, status, risk_digest, authority_head_digest,
                 schedule_json, stale_reason, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
-            ON CONFLICT(schedule_id) DO UPDATE SET
-                schedule_json = excluded.schedule_json,
-                risk_digest = excluded.risk_digest,
-                authority_head_digest = excluded.authority_head_digest,
-                updated_at = excluded.updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
             """,
             (
                 schedule_id,
+                schedule_digest,
                 SCHEDULE_PLANNED,
-                str(schedule.get("riskDigest") or ""),
-                authority_head_digest,
+                str(normalized_schedule.get("riskDigest") or ""),
+                effective_authority_digest,
                 rendered,
                 timestamp,
                 timestamp,

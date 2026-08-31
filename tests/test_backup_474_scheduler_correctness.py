@@ -16,6 +16,7 @@ from deepseek_infra.infra.workspace import (
     resilience_action_journal,
     resilience_coordinator,
     resilience_fleet_scheduler,
+    resilience_wave_executor,
 )
 
 
@@ -63,6 +64,12 @@ def test_all_schedulable_actions_are_partitioned_into_dependency_waves(tmp_setti
     assert schedule["unschedulableActions"] == []
     assert schedule["admittedCount"] == 3
     assert all("waveIndex" in item for wave in schedule["executionWaves"] for item in wave["actions"])
+    assert schedule["scheduleDigest"] == resilience_wave_executor.compute_schedule_digest(
+        schedule,
+        authority_head_digest=str(schedule.get("authorityHeadDigest") or "") or None,
+    )
+    persisted = resilience_wave_executor.get_schedule(str(schedule["scheduleId"]))
+    assert persisted is not None and persisted["scheduleDigest"] == schedule["scheduleDigest"]
 
 
 def test_missing_dependency_is_typed_unschedulable(tmp_settings: Path) -> None:

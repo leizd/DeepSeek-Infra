@@ -92,6 +92,148 @@ def _successful_action(action_id: str, *, epoch: int = 1) -> dict[str, Any]:
     }
 
 
+def test_wave_schedule_identity_is_create_once_and_idempotent(tmp_settings: Path) -> None:
+    created_at = datetime(2026, 8, 31, 8, 0, tzinfo=timezone.utc)
+    replayed_at = created_at + timedelta(minutes=5)
+    schedule = _schedule("immutable-schedule")
+    schedule_id = str(schedule["scheduleId"])
+
+    first = resilience_wave_executor.persist_planned_schedule(
+        schedule,
+        authority_head_digest=AUTHORITY_DIGEST,
+        now=created_at,
+    )
+    assert first["scheduleDigest"] == resilience_wave_executor.compute_schedule_digest(
+        schedule,
+        authority_head_digest=AUTHORITY_DIGEST,
+    )
+    assert len(first["scheduleDigest"]) == 64
+
+    lease_until = (created_at + timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
+    with sqlite3.connect(resilience_wave_executor.WAVE_EXECUTOR_DB) as conn:
+        conn.execute(
+            """
+            UPDATE resilience_wave_schedules
+            SET status = ?, execution_epoch = 7, owner_instance_id = ?,
+                lease_until = ?, runner_token = ?, updated_at = ?
+            WHERE schedule_id = ?
+            """,
+            (
+                resilience_wave_executor.SCHEDULE_RUNNING,
+                "worker-a",
+                lease_until,
+                "runner-a",
+                created_at.isoformat().replace("+00:00", "Z"),
+                schedule_id,
+            ),
+        )
+        conn.execute(
+            "UPDATE resilience_wave_states SET status = ?, execution_epoch = 5 WHERE schedule_id = ? AND wave_index = 0",
+            (resilience_wave_executor.WAVE_EXECUTING, schedule_id),
+        )
+        conn.execute(
+            "UPDATE resilience_wave_actions SET status = ?, execution_epoch = 3 WHERE schedule_id = ?",
+            (resilience_wave_executor.ACTION_EXECUTING, schedule_id),
+        )
+
+    before = resilience_wave_executor.get_schedule(schedule_id)
+    before_wave = resilience_wave_executor.list_waves(schedule_id)
+    before_actions = resilience_wave_executor.list_wave_actions(schedule_id)
+    replay = resilience_wave_executor.persist_planned_schedule(
+        dict(reversed(list(schedule.items()))),
+        authority_head_digest=AUTHORITY_DIGEST,
+        now=replayed_at,
+    )
+
+    assert replay == before
+    assert replay["status"] == resilience_wave_executor.SCHEDULE_RUNNING
+    assert replay["scheduleExecutionEpoch"] == 7
+    assert replay["ownerInstanceId"] == "worker-a"
+    assert replay["leaseUntil"] == lease_until
+    assert resilience_wave_executor.list_waves(schedule_id) == before_wave
+    assert resilience_wave_executor.list_wave_actions(schedule_id) == before_actions
+
+
+def test_same_schedule_id_with_different_digest_fails_closed(tmp_settings: Path) -> None:
+    schedule = _schedule("schedule-identity-conflict")
+    schedule_id = str(schedule["scheduleId"])
+    first = resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+    changed = _schedule(schedule_id)
+    changed["executionWaves"][0]["actions"][0]["parameters"]["backupId"] = "different-backup"
+
+    with pytest.raises(resilience_wave_executor.ScheduleIdentityConflictError) as exc_info:
+        resilience_wave_executor.persist_planned_schedule(changed, authority_head_digest=AUTHORITY_DIGEST)
+
+    assert exc_info.value.code == "SCHEDULE_IDENTITY_CONFLICT"
+    assert exc_info.value.schedule_id == schedule_id
+    assert exc_info.value.existing_digest == first["scheduleDigest"]
+    assert exc_info.value.incoming_digest != first["scheduleDigest"]
+    persisted = resilience_wave_executor.get_schedule(schedule_id)
+    assert persisted == first
+    assert persisted["schedule"]["executionWaves"][0]["actions"][0]["parameters"]["backupId"] == "backup-0"
+
+    changed["scheduleDigest"] = first["scheduleDigest"]
+    with pytest.raises(resilience_wave_executor.ScheduleIdentityConflictError):
+        resilience_wave_executor.persist_planned_schedule(changed, authority_head_digest=AUTHORITY_DIGEST)
+
+    with pytest.raises(resilience_wave_executor.ScheduleIdentityConflictError):
+        resilience_wave_executor.persist_planned_schedule(
+            schedule,
+            authority_head_digest="8" * 64,
+        )
+    assert resilience_wave_executor.get_schedule(schedule_id) == first
+
+
+def test_caller_declared_schedule_digest_must_match_server_computation(tmp_settings: Path) -> None:
+    schedule = _schedule("declared-digest-mismatch")
+    schedule["scheduleDigest"] = "f" * 64
+
+    with pytest.raises(ValueError, match="SCHEDULE_DIGEST_MISMATCH"):
+        resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+
+    assert resilience_wave_executor.get_schedule("declared-digest-mismatch") is None
+
+
+def test_terminal_schedule_cannot_be_rewritten(tmp_settings: Path) -> None:
+    completed_at = datetime(2026, 8, 31, 9, 0, tzinfo=timezone.utc)
+    schedule = _schedule("terminal-identity")
+    schedule_id = str(schedule["scheduleId"])
+    resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+    with sqlite3.connect(resilience_wave_executor.WAVE_EXECUTOR_DB) as conn:
+        conn.execute(
+            "UPDATE resilience_wave_schedules SET status = ?, execution_epoch = 11, updated_at = ? WHERE schedule_id = ?",
+            (
+                resilience_wave_executor.SCHEDULE_COMPLETED,
+                completed_at.isoformat().replace("+00:00", "Z"),
+                schedule_id,
+            ),
+        )
+        conn.execute(
+            "UPDATE resilience_wave_states SET status = ?, execution_epoch = 9, verified_at = ? WHERE schedule_id = ?",
+            (
+                resilience_wave_executor.WAVE_COMPLETED,
+                completed_at.isoformat().replace("+00:00", "Z"),
+                schedule_id,
+            ),
+        )
+        conn.execute(
+            "UPDATE resilience_wave_actions SET status = ?, execution_epoch = 8 WHERE schedule_id = ?",
+            (resilience_wave_executor.ACTION_VERIFIED_SUCCESS, schedule_id),
+        )
+
+    terminal = resilience_wave_executor.get_schedule(schedule_id)
+    assert resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST) == terminal
+
+    changed = _schedule(schedule_id)
+    changed["riskDigest"] = "9" * 64
+    with pytest.raises(resilience_wave_executor.ScheduleIdentityConflictError):
+        resilience_wave_executor.persist_planned_schedule(changed, authority_head_digest=AUTHORITY_DIGEST)
+
+    assert resilience_wave_executor.get_schedule(schedule_id) == terminal
+    assert resilience_wave_executor.list_waves(schedule_id)[0]["status"] == resilience_wave_executor.WAVE_COMPLETED
+    assert resilience_wave_executor.list_wave_actions(schedule_id)[0]["status"] == resilience_wave_executor.ACTION_VERIFIED_SUCCESS
+
+
 def test_production_wave_runner_executes_action_journal_effect(
     tmp_settings: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -153,8 +295,131 @@ def test_existing_475_wave_database_is_migrated_with_zero_epochs(tmp_settings: P
 
     assert migrated is not None
     assert migrated["scheduleExecutionEpoch"] == 0
+    assert migrated["status"] == resilience_wave_executor.SCHEDULE_PLANNED
     assert migrated["ownerInstanceId"] is None
     assert migrated["leaseUntil"] is None
+    assert migrated["createdAt"] == "2026-08-29T00:00:00Z"
+    assert migrated["updatedAt"] == "2026-08-29T00:00:00Z"
+    assert migrated["scheduleDigest"] == resilience_wave_executor.compute_schedule_digest(
+        migrated["schedule"],
+        authority_head_digest="legacy-authority",
+    )
+    assert len(migrated["scheduleDigest"]) == 64
+
+
+def test_existing_476_active_database_digest_migration_preserves_runner_state(tmp_settings: Path) -> None:
+    schedule = _schedule("legacy-476-active")
+    schedule_id = str(schedule["scheduleId"])
+    resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+    with sqlite3.connect(resilience_wave_executor.WAVE_EXECUTOR_DB) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            UPDATE resilience_wave_schedules
+            SET status = ?, stale_reason = ?, execution_epoch = 17,
+                owner_instance_id = ?, lease_until = ?, runner_token = ?, updated_at = ?
+            WHERE schedule_id = ?
+            """,
+            (
+                resilience_wave_executor.SCHEDULE_RUNNING,
+                "legacy-stale-reason",
+                "legacy-worker",
+                "2026-08-31T10:05:00Z",
+                "legacy-runner-token",
+                "2026-08-31T10:00:00Z",
+                schedule_id,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE resilience_wave_states
+            SET status = ?, revalidation_json = ?, admitted_at = ?, verified_at = ?,
+                execution_epoch = 13, owner_instance_id = ?, lease_until = ?,
+                runner_token = ?, updated_at = ?
+            WHERE schedule_id = ? AND wave_index = 0
+            """,
+            (
+                resilience_wave_executor.WAVE_EXECUTING,
+                '{"fresh":true}',
+                "2026-08-31T09:59:00Z",
+                "2026-08-31T09:59:30Z",
+                "legacy-worker",
+                "2026-08-31T10:05:00Z",
+                "legacy-runner-token",
+                "2026-08-31T10:00:00Z",
+                schedule_id,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE resilience_wave_actions
+            SET status = ?, outcome = ?, execution_epoch = 11,
+                schedule_execution_epoch = 17, wave_execution_epoch = 13,
+                owner_instance_id = ?, lease_until = ?, runner_token = ?,
+                journal_execution_epoch = 19, effect_handle_json = ?,
+                terminal_json = ?, updated_at = ?
+            WHERE schedule_id = ?
+            """,
+            (
+                resilience_wave_executor.ACTION_EXECUTING,
+                "REMOTE_EFFECT_RUNNING",
+                "legacy-worker",
+                "2026-08-31T10:05:00Z",
+                "legacy-runner-token",
+                '{"repairId":"repair-existing"}',
+                '{"state":"EXECUTING"}',
+                "2026-08-31T10:00:00Z",
+                schedule_id,
+            ),
+        )
+        conn.execute("ALTER TABLE resilience_wave_schedules RENAME TO resilience_wave_schedules_with_digest")
+        conn.execute(
+            """
+            CREATE TABLE resilience_wave_schedules (
+                schedule_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                risk_digest TEXT NOT NULL,
+                authority_head_digest TEXT,
+                schedule_json TEXT NOT NULL,
+                stale_reason TEXT,
+                execution_epoch INTEGER NOT NULL DEFAULT 0,
+                owner_instance_id TEXT,
+                lease_until TEXT,
+                runner_token TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        legacy_columns = (
+            "schedule_id, status, risk_digest, authority_head_digest, schedule_json, stale_reason, "
+            "execution_epoch, owner_instance_id, lease_until, runner_token, created_at, updated_at"
+        )
+        conn.execute(
+            f"INSERT INTO resilience_wave_schedules ({legacy_columns}) "
+            f"SELECT {legacy_columns} FROM resilience_wave_schedules_with_digest"
+        )
+        conn.execute("DROP TABLE resilience_wave_schedules_with_digest")
+        schedule_before = dict(conn.execute("SELECT * FROM resilience_wave_schedules WHERE schedule_id = ?", (schedule_id,)).fetchone())
+        wave_before = dict(conn.execute("SELECT * FROM resilience_wave_states WHERE schedule_id = ?", (schedule_id,)).fetchone())
+        action_before = dict(conn.execute("SELECT * FROM resilience_wave_actions WHERE schedule_id = ?", (schedule_id,)).fetchone())
+
+    migrated = resilience_wave_executor.get_schedule(schedule_id)
+    assert migrated is not None
+    with sqlite3.connect(resilience_wave_executor.WAVE_EXECUTOR_DB) as conn:
+        conn.row_factory = sqlite3.Row
+        schedule_after = dict(conn.execute("SELECT * FROM resilience_wave_schedules WHERE schedule_id = ?", (schedule_id,)).fetchone())
+        wave_after = dict(conn.execute("SELECT * FROM resilience_wave_states WHERE schedule_id = ?", (schedule_id,)).fetchone())
+        action_after = dict(conn.execute("SELECT * FROM resilience_wave_actions WHERE schedule_id = ?", (schedule_id,)).fetchone())
+
+    schedule_digest = str(schedule_after.pop("schedule_digest"))
+    assert schedule_after == schedule_before
+    assert wave_after == wave_before
+    assert action_after == action_before
+    assert schedule_digest == resilience_wave_executor.compute_schedule_digest(
+        migrated["schedule"],
+        authority_head_digest=AUTHORITY_DIGEST,
+    )
 
 
 def test_wave_one_waits_for_real_wave_zero_outcome(

@@ -22,6 +22,7 @@ from deepseek_infra.infra.workspace import (
     evidence_proof,
     resilience_action_journal,
     resilience_resource_locks,
+    resilience_wave_executor,
 )
 
 
@@ -207,6 +208,125 @@ def test_independent_processes_cannot_oversubscribe_atomic_budgets(
     ) == []
     for action in actions:
         resilience_action_journal.update_action_state(str(action["actionId"]), "PREEMPTED", error="evidence-race-cleanup")
+
+
+@pytest.mark.parametrize("legacy_schema", [False, True], ids=["fresh-database", "4.7.5-migration"])
+def test_independent_processes_cannot_rebind_one_wave_schedule_id(
+    tmp_settings: Path,
+    legacy_schema: bool,
+) -> None:
+    nonce = uuid.uuid4().hex[:8]
+    if legacy_schema:
+        resilience_wave_executor.WAVE_EXECUTOR_DIR.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(resilience_wave_executor.WAVE_EXECUTOR_DB) as conn:
+            conn.execute(
+                """
+                CREATE TABLE resilience_wave_schedules (
+                    schedule_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    risk_digest TEXT NOT NULL,
+                    authority_head_digest TEXT,
+                    schedule_json TEXT NOT NULL,
+                    stale_reason TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+    ready_dir = tmp_settings / f"schedule-identity-ready-{nonce}"
+    ready_dir.mkdir(parents=True, exist_ok=True)
+    start_file = tmp_settings / f"schedule-identity-start-{nonce}"
+    script = textwrap.dedent(
+        """
+        import json, os, sys, time
+        from pathlib import Path
+        from deepseek_infra.infra.workspace import resilience_wave_executor
+
+        backup_id = sys.argv[1]
+        ready_dir = Path(sys.argv[2])
+        start_file = Path(sys.argv[3])
+        (ready_dir / f"{os.getpid()}.ready").write_text(backup_id, encoding="utf-8")
+        deadline = time.monotonic() + 20
+        while not start_file.is_file():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("schedule-identity-start-timeout")
+            time.sleep(0.005)
+        schedule = {
+            "scheduleId": "shared-process-schedule",
+            "riskDigest": "1" * 64,
+            "authorityHeadDigest": "2" * 64,
+            "executionWaves": [{
+                "waveIndex": 0,
+                "actions": [{
+                    "actionId": "shared-process-action",
+                    "type": "CREATE_REPAIR_JOB",
+                    "parameters": {"backupId": backup_id, "policyId": "policy-a"},
+                }],
+            }],
+        }
+        try:
+            record = resilience_wave_executor.persist_planned_schedule(
+                schedule,
+                authority_head_digest="2" * 64,
+            )
+            result = {
+                "pid": os.getpid(),
+                "status": "PERSISTED",
+                "backupId": backup_id,
+                "scheduleDigest": record["scheduleDigest"],
+            }
+        except resilience_wave_executor.ScheduleIdentityConflictError as exc:
+            result = {
+                "pid": os.getpid(),
+                "status": exc.code,
+                "backupId": backup_id,
+                "existingDigest": exc.existing_digest,
+                "incomingDigest": exc.incoming_digest,
+            }
+        print(json.dumps(result))
+        """
+    )
+    environment = os.environ.copy()
+    environment["DEEPSEEK_INFRA_ROOT"] = str(tmp_settings)
+    processes = [
+        subprocess.Popen(
+            [sys.executable, "-c", script, backup_id, str(ready_dir), str(start_file)],
+            cwd=Path(__file__).resolve().parents[1],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for backup_id in ("backup-a", "backup-b")
+    ]
+    deadline = time.monotonic() + 20
+    while len(list(ready_dir.glob("*.ready"))) != 2:
+        if time.monotonic() >= deadline:
+            for process in processes:
+                process.kill()
+            pytest.fail("independent schedule processes did not become ready")
+        time.sleep(0.01)
+    start_file.write_text("go", encoding="utf-8")
+
+    results: list[dict[str, Any]] = []
+    for process in processes:
+        stdout, stderr = process.communicate(timeout=30)
+        assert process.returncode == 0, stderr
+        results.append(json.loads(stdout.strip().splitlines()[-1]))
+
+    assert len({int(result["pid"]) for result in results}) == 2
+    assert sorted(result["status"] for result in results) == [
+        "PERSISTED",
+        "SCHEDULE_IDENTITY_CONFLICT",
+    ]
+    winner = next(result for result in results if result["status"] == "PERSISTED")
+    conflict = next(result for result in results if result["status"] == "SCHEDULE_IDENTITY_CONFLICT")
+    assert conflict["existingDigest"] == winner["scheduleDigest"]
+    assert conflict["incomingDigest"] != winner["scheduleDigest"]
+    persisted = resilience_wave_executor.get_schedule("shared-process-schedule")
+    assert persisted is not None
+    assert persisted["scheduleDigest"] == winner["scheduleDigest"]
+    assert persisted["schedule"]["executionWaves"][0]["actions"][0]["parameters"]["backupId"] == winner["backupId"]
 
 
 def test_same_run_higher_fence_takes_over_active_writer_lease(tmp_path: Path) -> None:
