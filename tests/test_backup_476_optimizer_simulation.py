@@ -221,6 +221,115 @@ def test_missing_authoritative_optimizer_source_fails_closed(
         resilience_optimizer_inputs.build_authoritative_optimizer_inputs(_candidate())
 
 
+@pytest.mark.parametrize(
+    ("candidate", "expected"),
+    [
+        ({}, "candidate is required"),
+        ({"targetId": "target-a"}, "policyId is required"),
+        ({"policyId": "policy-a"}, "targetId or candidate.destTargetId is required"),
+        (_candidate(operation="DELETE_REPLICA"), "candidate.operation"),
+        (_candidate(forecastHorizonDays=7), "forecastHorizonDays"),
+        (_candidate(storedBytes=True), "storedBytes must be an integer"),
+        (_candidate(storedBytes=-1), "storedBytes must be non-negative"),
+    ],
+)
+def test_optimizer_candidate_validation_rejects_unsafe_or_malformed_hypotheses(
+    candidate: dict[str, Any],
+    expected: str,
+) -> None:
+    with pytest.raises(ValueError, match=expected):
+        resilience_optimizer_inputs._validate_candidate(candidate)  # noqa: SLF001
+
+
+def test_optimizer_candidate_action_maps_only_supported_hypotheses() -> None:
+    add = resilience_optimizer_inputs._candidate_action(_candidate(operation="ADD_REPLICA"))  # noqa: SLF001
+    rebalance = resilience_optimizer_inputs._candidate_action(_candidate(operation="REBALANCE"))  # noqa: SLF001
+
+    assert add["type"] == "CREATE_REPAIR_JOB"
+    assert rebalance["type"] == "CREATE_REBALANCE_JOB"
+
+
+def test_optimizer_baseline_fails_closed_on_ledger_and_topology_gaps(monkeypatch: pytest.MonkeyPatch) -> None:
+    policy = {"policyId": "policy-a", "replication": {"minCommittedCopies": 1, "minFailureDomains": 1}}
+
+    def ledger_unavailable(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("ledger offline")
+
+    monkeypatch.setattr(backup_dr_ledger, "latest_recovery_point", ledger_unavailable)
+    with pytest.raises(resilience_optimizer_inputs.AuthoritativeInputUnavailable, match="BASELINE_TRUTH_UNAVAILABLE"):
+        resilience_optimizer_inputs._read_baseline(policy)  # noqa: SLF001
+
+    monkeypatch.setattr(backup_dr_ledger, "latest_recovery_point", lambda **_kwargs: {"backupId": "backup-a"})
+    monkeypatch.setattr(
+        backup_dr_ledger,
+        "list_logical_recovery_copies",
+        lambda **_kwargs: [{"targetId": "target-missing", "recoverable": True, "state": "healthy"}],
+    )
+    monkeypatch.setattr(backup_control, "list_targets", lambda: [])
+    with pytest.raises(resilience_optimizer_inputs.AuthoritativeInputUnavailable, match="BASELINE_TARGET_UNAVAILABLE"):
+        resilience_optimizer_inputs._read_baseline(policy)  # noqa: SLF001
+
+    monkeypatch.setattr(backup_control, "list_targets", lambda: [{"targetId": "target-missing"}])
+    with pytest.raises(resilience_optimizer_inputs.AuthoritativeInputUnavailable, match="BASELINE_FAILURE_DOMAIN_UNAVAILABLE"):
+        resilience_optimizer_inputs._read_baseline(policy)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("policy-exception", "POLICY_TRUTH_UNAVAILABLE"),
+        ("forecast-invalid", "FORECAST_REGISTRY_UNAVAILABLE"),
+        ("target-price", "TARGET_PRICE_UNAVAILABLE"),
+        ("fresh-exception", "RISK_SNAPSHOT_UNAVAILABLE"),
+        ("target-exception", "TARGET_TRUTH_UNAVAILABLE"),
+    ],
+)
+def test_optimizer_propagates_authoritative_source_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    expected: str,
+) -> None:
+    _authoritative_sources(monkeypatch)
+    if source == "policy-exception":
+        monkeypatch.setattr(backup_control, "get_policy", lambda _policy_id: (_ for _ in ()).throw(RuntimeError("offline")))
+    elif source == "forecast-invalid":
+        monkeypatch.setattr(
+            resilience_forecast_registry,
+            "get_current_forecast",
+            lambda *_args, **_kwargs: {
+                "status": "ACTIVE",
+                "forecastDigest": "f" * 64,
+                "forecast": {"forecastStatus": "INSUFFICIENT_DATA", "forecastDigest": "f" * 64},
+            },
+        )
+    elif source == "target-price":
+        monkeypatch.setattr(
+            resilience_cost_model,
+            "get_price_catalog",
+            lambda: {"priceCatalogDigest": "p" * 64, "targets": {}},
+        )
+    elif source == "fresh-exception":
+        def fresh_unavailable(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            raise resilience_fresh_state.FreshStateUnavailable("RISK_SNAPSHOT_UNAVAILABLE", source="risk")
+
+        monkeypatch.setattr(resilience_fresh_state, "build_fresh_state_bundle", fresh_unavailable)
+    else:
+        authoritative_targets = backup_control.list_targets()
+        calls = 0
+
+        def target_truth() -> list[dict[str, Any]]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return authoritative_targets
+            raise RuntimeError("target truth offline")
+
+        monkeypatch.setattr(backup_control, "list_targets", target_truth)
+
+    with pytest.raises(resilience_optimizer_inputs.AuthoritativeInputUnavailable, match=expected):
+        resilience_optimizer_inputs.build_authoritative_optimizer_inputs(_candidate())
+
+
 def test_whatif_api_accepts_candidate_only(tmp_settings: Path, monkeypatch: Any) -> None:
     monkeypatch.setattr(
         resilience_whatif,
@@ -389,3 +498,30 @@ def test_storage_inventory_digest_comes_from_target_listing(tmp_settings: Path, 
     assert before["storageInventory"][0]["objectCount"] == 1
     assert after["storageInventory"][0]["objectCount"] == 2
     assert before["digests"]["storage"] != after["digests"]["storage"]
+
+
+def test_storage_inventory_rejects_non_advancing_provider_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
+    class RepeatingCursorStore:
+        def list_objects(self, _prefix: str, *, cursor: str | None = None, limit: int = 1000) -> backup_target_store.ListPage:
+            del cursor, limit
+            return backup_target_store.ListPage(objects=(), cursor="same-cursor")
+
+    monkeypatch.setattr(backup_targets, "open_target_store", lambda *_args, **_kwargs: RepeatingCursorStore())
+
+    with pytest.raises(resilience_state_digests.StateDigestUnavailable, match="cursor repeated"):
+        resilience_state_digests._target_inventory("target-a")  # noqa: SLF001
+
+
+def test_mutation_state_snapshot_fails_closed_or_reports_explicit_unavailability(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unavailable() -> list[dict[str, Any]]:
+        raise RuntimeError("target registry unavailable")
+
+    monkeypatch.setattr(backup_control, "list_targets", unavailable)
+
+    with pytest.raises(resilience_state_digests.StateDigestUnavailable, match="target registry unavailable"):
+        resilience_state_digests.capture_mutation_state()
+
+    fallback = resilience_state_digests.capture_mutation_state(require_complete=False)
+    assert fallback["targetIds"] == []
+    assert fallback["storageInventory"] == []
+    assert len(fallback["stateDigest"]) == 64

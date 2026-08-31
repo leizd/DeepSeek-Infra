@@ -8,11 +8,13 @@ import json
 import sqlite3
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from deepseek_infra.core.config import settings
 from deepseek_infra.infra.workspace import (
     backup_control,
+    backup_dr_ledger,
     backup_maintenance,
     backup_targets,
     resilience_capacity_forecast,
@@ -94,6 +96,120 @@ def test_s3_capacity_probe_measures_real_paginated_object_inventory(tmp_settings
     assert capacity["capacityConfidence"] == "provider-exact"
 
 
+@pytest.mark.parametrize("failure", ["negative-size", "repeated-cursor"])
+def test_s3_capacity_inventory_rejects_malformed_provider_pages(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    del tmp_settings
+
+    class Store:
+        def list_objects(self, _prefix: str, *, cursor: str | None = None, limit: int = 1000) -> ListPage:
+            assert limit == 1000
+            if failure == "negative-size":
+                return ListPage(objects=(ObjectMeta(key="objects/bad.age", size=-1, etag="bad"),))
+            return ListPage(objects=(), cursor="stuck")
+
+    monkeypatch.setattr(backup_targets, "open_target_store", lambda *_args, **_kwargs: Store())
+
+    with pytest.raises(Exception, match="negative object size|cursor did not advance"):
+        backup_targets._measure_s3_object_inventory("target-a")  # noqa: SLF001 - provider fail-closed contract
+
+
+def test_configured_quota_fallback_counts_unique_physical_copies(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del tmp_settings
+    monkeypatch.setattr(
+        backup_targets,
+        "get_target",
+        lambda _target_id: {"targetId": "target-a", "kind": "virtual", "quotaBytes": 1_000},
+    )
+    monkeypatch.setattr(
+        backup_control,
+        "physical_usage_summary",
+        lambda _target_id: {
+            "physicalStoredBytes": 0,
+            "liveReferencedBytes": 0,
+            "retiredPendingGcBytes": 0,
+            "controlPlaneBytes": 7,
+            "unknownExternalBytes": None,
+            "objectCount": 0,
+            "confidence": "unavailable",
+        },
+    )
+    monkeypatch.setattr(
+        backup_dr_ledger,
+        "list_logical_recovery_copies",
+        lambda **kwargs: [
+            {"backupId": "backup-a", "objectSetDigest": "digest-a", "recoverable": True, "physicalBytes": 100},
+            {"backupId": "backup-a-copy", "objectSetDigest": "digest-a", "recoverable": True, "physicalBytes": 100},
+            {
+                "backupId": "backup-b",
+                "state": "retired",
+                "recoverable": False,
+                "metadata": {"objectSetDigest": "digest-b", "ciphertextBytes": 50},
+            },
+            {"backupId": "backup-c", "recoverable": True, "physicalBytes": True},
+        ],
+    )
+
+    capacity = backup_targets.probe_target_capacity("target-a")
+
+    assert capacity["usedBytes"] == 150
+    assert capacity["liveReferencedBytes"] == 100
+    assert capacity["retiredPendingGcBytes"] == 50
+    assert capacity["freeBytes"] == 850
+    assert capacity["capacityConfidence"] == "low"
+    assert capacity["source"] == "configured-quota-physical-estimate"
+
+
+@pytest.mark.parametrize(
+    ("marker", "expected"),
+    [
+        ("not-json", "marker is unreadable"),
+        (json.dumps([]), "marker is invalid"),
+        (json.dumps({"targetId": "other", "incarnationId": "inc-a"}), "identity mismatch"),
+        (json.dumps({"targetId": "target-a"}), "incarnation is missing"),
+    ],
+)
+def test_capacity_identity_rejects_invalid_filesystem_markers(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    marker: str,
+    expected: str,
+) -> None:
+    target_root = tmp_settings / "invalid-capacity-target"
+    target_root.mkdir(exist_ok=True)
+    (target_root / backup_targets.TARGET_MARKER_NAME).write_text(marker, encoding="utf-8")
+    monkeypatch.setattr(
+        backup_targets,
+        "get_target",
+        lambda _target_id: {"targetId": "target-a", "kind": "filesystem"},
+    )
+    monkeypatch.setattr(backup_targets, "verify_target_ready", lambda *_args, **_kwargs: target_root)
+
+    with pytest.raises(Exception, match=expected):
+        backup_targets.read_target_capacity_identity("target-a")
+
+
+def test_capacity_identity_rejects_unsupported_target_kind(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del tmp_settings
+    monkeypatch.setattr(
+        backup_targets,
+        "get_target",
+        lambda _target_id: {"targetId": "target-a", "kind": "tape"},
+    )
+
+    with pytest.raises(Exception, match="unsupported target kind"):
+        backup_targets.read_target_capacity_identity("target-a")
+
+
 def test_capacity_observation_comes_from_real_target_probe(
     tmp_settings: Path,
     monkeypatch: Any,
@@ -143,6 +259,59 @@ def test_unavailable_capacity_source_does_not_create_observation(
 
     assert result["status"] == "UNAVAILABLE"
     assert resilience_capacity_history.list_capacity_observations() == []
+
+
+def test_capacity_sampler_rejects_empty_target_and_invalid_timestamps() -> None:
+    with pytest.raises(ValueError, match="targetId is required"):
+        resilience_capacity_sampler.sample_target_capacity("  ")
+    assert resilience_capacity_sampler._parse_iso(None) is None  # noqa: SLF001
+    assert resilience_capacity_sampler._parse_iso("not-a-time") is None  # noqa: SLF001
+    assert resilience_capacity_sampler._parse_iso("2026-08-30T00:00:00") is None  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("probe_update", "identity_update", "expected_reason"),
+    [
+        ({"totalBytes": True}, {}, "totalBytes"),
+        ({"source": "unknown"}, {}, "source is unavailable"),
+        ({}, {"targetIncarnation": ""}, "target incarnation is unavailable"),
+        ({"usedBytes": 9_000, "freeBytes": 9_000}, {}, "inconsistent byte totals"),
+    ],
+)
+def test_capacity_sampler_fails_closed_on_malformed_provider_observation(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    probe_update: dict[str, Any],
+    identity_update: dict[str, Any],
+    expected_reason: str,
+) -> None:
+    del tmp_settings
+    now = datetime(2026, 8, 30, tzinfo=timezone.utc)
+    probe = {**_probe(used=1_000, observed_at=now), **probe_update}
+    identity = {**_identity(), **identity_update}
+    monkeypatch.setattr(backup_targets, "probe_target_capacity", lambda _target_id: probe)
+    monkeypatch.setattr(backup_targets, "read_target_capacity_identity", lambda _target_id: identity)
+
+    result = resilience_capacity_sampler.sample_target_capacity("target-a", now=now)
+
+    assert result["status"] == "UNAVAILABLE"
+    assert expected_reason in result["reason"]
+    assert result["observation"] is None
+
+
+def test_capacity_sampler_counts_only_enabled_policies_for_nested_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        backup_control,
+        "list_policies",
+        lambda: [
+            {"enabled": False, "targetId": "target-a"},
+            {"enabled": True, "primaryTargetId": "target-a"},
+            {"enabled": True, "replication": {"targets": ["ignored", {"targetId": "target-a"}]}},
+            {"enabled": True, "replication": {"targets": "invalid"}},
+        ],
+    )
+
+    assert resilience_capacity_sampler._active_policy_count("target-a") == 2  # noqa: SLF001
 
 
 def test_production_control_loop_records_capacity_observation(

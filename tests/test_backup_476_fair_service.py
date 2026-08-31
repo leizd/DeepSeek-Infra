@@ -12,7 +12,9 @@ import pytest
 from deepseek_infra.infra.workspace import (
     backup_dr_readiness,
     backup_replication,
+    backup_transfer_budget,
     resilience_action_journal,
+    resilience_effect_telemetry,
     resilience_fresh_state,
     resilience_scheduler_service,
     resilience_wave_executor,
@@ -334,3 +336,161 @@ def test_wave_runner_settles_terminal_action_from_effect_source(
     settlement = result["actions"][0]["fairServiceSettlement"]
     assert settlement["status"] == "CONSUMED"
     assert settlement["actualBytes"] == 777
+
+
+@pytest.mark.parametrize(
+    ("kind", "value"),
+    [
+        ("int", True),
+        ("int", "not-an-integer"),
+        ("int", -1),
+        ("float", True),
+        ("float", "not-a-number"),
+        ("float", -0.5),
+    ],
+)
+def test_effect_telemetry_rejects_invalid_numeric_measurements(kind: str, value: object) -> None:
+    with pytest.raises(resilience_effect_telemetry.EffectTelemetryUnavailable, match="invalid measured"):
+        if kind == "int":
+            resilience_effect_telemetry._non_negative_int(value, field="measured")  # noqa: SLF001
+        else:
+            resilience_effect_telemetry._non_negative_float(value, field="measured")  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("started_at", "completed_at"),
+    [
+        ("not-a-time", "2026-08-30T00:00:01Z"),
+        ("2026-08-30T00:00:00", "2026-08-30T00:00:01Z"),
+        ("2026-08-30T00:00:02Z", "2026-08-30T00:00:01Z"),
+    ],
+)
+def test_effect_telemetry_rejects_unusable_duration(started_at: str, completed_at: str) -> None:
+    with pytest.raises(resilience_effect_telemetry.EffectTelemetryUnavailable, match="duration is unavailable"):
+        resilience_effect_telemetry._elapsed_ms(started_at, completed_at)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        {},
+        {"actionId": "a", "state": "FAILED"},
+        {"actionId": "a", "state": "SUCCEEDED"},
+        {"actionId": "a", "state": "SUCCEEDED", "verificationResult": {}, "executionEpoch": 0},
+        {"actionId": "a", "state": "SUCCEEDED", "verificationResult": {}, "executionEpoch": 1},
+        {
+            "actionId": "a",
+            "state": "SUCCEEDED",
+            "verificationResult": {},
+            "executionEpoch": 1,
+            "effectHandle": {"kind": "unsupported"},
+        },
+    ],
+)
+def test_terminal_effect_telemetry_rejects_unverified_or_unbound_action(action: dict[str, Any]) -> None:
+    with pytest.raises(resilience_effect_telemetry.EffectTelemetryUnavailable):
+        resilience_effect_telemetry.read_terminal_effect_telemetry(action)
+
+
+@pytest.mark.parametrize(
+    ("job_update", "expected"),
+    [
+        ({"repairId": "wrong"}, "repair effect is unavailable"),
+        ({"resilienceActionId": "other"}, "not bound to Action"),
+        ({"phase": "running"}, "not terminal-success"),
+        ({"policyId": "other-policy"}, "does not match Action"),
+        ({"trafficClass": None}, "traffic class is unavailable"),
+        ({"trafficClass": 999}, "traffic class is unavailable"),
+    ],
+)
+def test_repair_telemetry_fails_closed_on_ledger_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    job_update: dict[str, Any],
+    expected: str,
+) -> None:
+    action = {"actionId": "a", "parameters": {"policyId": "p", "backupId": "b"}}
+    job = {
+        "repairId": "repair-1",
+        "resilienceActionId": "a",
+        "phase": "healthy",
+        "policyId": "p",
+        "backupId": "b",
+        "trafficClass": backup_transfer_budget.TrafficClass.P2_REQUIRED_REPAIR.value,
+        "bytesRepaired": 1,
+        "durationMs": 1,
+        **job_update,
+    }
+    monkeypatch.setattr(backup_replication, "read_repair_job", lambda _repair_id: job)
+
+    with pytest.raises(resilience_effect_telemetry.EffectTelemetryUnavailable, match=expected):
+        resilience_effect_telemetry._repair_telemetry(action, {"repairId": "repair-1"})  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("job_update", "expected"),
+    [
+        ({"jobId": "wrong"}, "rebalance effect is unavailable"),
+        ({"resilienceActionId": "other"}, "not bound to Action"),
+        ({"phase": "running"}, "not terminal-success"),
+    ],
+)
+def test_rebalance_telemetry_fails_closed_on_ledger_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    job_update: dict[str, Any],
+    expected: str,
+) -> None:
+    action = {"actionId": "a", "parameters": {"policyId": "p", "backupId": "b"}}
+    job = {
+        "jobId": "rebalance-1",
+        "resilienceActionId": "a",
+        "phase": "complete",
+        "policyId": "p",
+        "backupId": "b",
+        "bytesTransferred": 2,
+        "durationMs": 3,
+        **job_update,
+    }
+    monkeypatch.setattr(backup_replication, "read_rebalance_job", lambda _job_id: job)
+
+    with pytest.raises(resilience_effect_telemetry.EffectTelemetryUnavailable, match=expected):
+        resilience_effect_telemetry._rebalance_telemetry(action, {"jobId": "rebalance-1"})  # noqa: SLF001
+
+
+def test_rebalance_telemetry_derives_duration_from_durable_timestamps(monkeypatch: pytest.MonkeyPatch) -> None:
+    action = {"actionId": "a", "parameters": {"policyId": "p", "backupId": "b"}}
+    job = {
+        "jobId": "rebalance-1",
+        "resilienceActionId": "a",
+        "phase": "complete",
+        "policyId": "p",
+        "backupId": "b",
+        "bytesTransferred": 2,
+        "createdAt": "2026-08-30T00:00:00Z",
+        "updatedAt": "2026-08-30T00:00:01Z",
+    }
+    monkeypatch.setattr(backup_replication, "read_rebalance_job", lambda _job_id: job)
+
+    telemetry = resilience_effect_telemetry._rebalance_telemetry(action, {"jobId": "rebalance-1"})  # noqa: SLF001
+
+    assert telemetry["actualDurationMs"] == 1000.0
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        None,
+        {"resilienceActionId": "a", "drillId": "drill-1", "result": "failed"},
+        {"resilienceActionId": "other", "drillId": "drill-1", "result": "success"},
+    ],
+)
+def test_drill_telemetry_fails_closed_on_unavailable_terminal_proof(
+    monkeypatch: pytest.MonkeyPatch,
+    record: dict[str, Any] | None,
+) -> None:
+    monkeypatch.setattr(backup_dr_readiness, "get_dr_drill_by_resilience_action_id", lambda _action_id: record)
+
+    with pytest.raises(resilience_effect_telemetry.EffectTelemetryUnavailable):
+        resilience_effect_telemetry._drill_telemetry(  # noqa: SLF001
+            {"actionId": "a"},
+            {"drillId": "drill-1"},
+        )

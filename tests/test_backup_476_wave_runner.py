@@ -463,3 +463,418 @@ def test_stale_runner_cannot_commit_after_higher_epoch_takeover(
 
     assert committed is False
     assert resilience_wave_executor.list_waves(schedule_id)[0]["status"] != "COMPLETED"
+
+
+def test_wave_revalidation_and_runner_claims_fail_closed(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    denied = _fresh_bundle()
+    denied["authorityState"] = {"workersAllowed": True, "mutationsAllowed": False}
+    plan = _schedule("claim-guards")
+    plan["riskDigest"] = ""
+    plan["authorityHeadDigest"] = ""
+
+    revalidation = resilience_wave_executor.revalidate_wave(plan, denied)
+
+    assert set(revalidation["reasons"]) >= {
+        "PLANNED_RISK_BINDING_MISSING",
+        "PLANNED_AUTHORITY_BINDING_MISSING",
+        "AUTHORITY_MUTATIONS_BLOCKED",
+    }
+    with pytest.raises(ValueError, match="lease_seconds must be positive"):
+        resilience_wave_executor._claim_runner_epochs(  # noqa: SLF001 - fencing contract
+            "missing",
+            0,
+            instance_id="worker",
+            lease_seconds=0,
+        )
+    with pytest.raises(ValueError, match="unknown schedule"):
+        resilience_wave_executor._claim_runner_epochs(  # noqa: SLF001 - fencing contract
+            "missing",
+            0,
+            instance_id="worker",
+            lease_seconds=30,
+        )
+
+    _install_fresh_state(monkeypatch)
+    persisted = _schedule("claim-helper")
+    schedule_id = str(persisted["scheduleId"])
+    resilience_wave_executor.persist_planned_schedule(persisted, authority_head_digest=AUTHORITY_DIGEST)
+    with pytest.raises(ValueError, match="unknown wave"):
+        resilience_wave_executor._claim_runner_epochs(  # noqa: SLF001 - fencing contract
+            schedule_id,
+            9,
+            instance_id="worker",
+            lease_seconds=30,
+        )
+    not_runnable = resilience_wave_executor._claim_runner_epochs(  # noqa: SLF001 - fencing contract
+        schedule_id,
+        0,
+        instance_id="worker",
+        lease_seconds=30,
+    )
+    assert not_runnable == {"claimed": False, "reason": "PENDING"}
+
+    assert resilience_wave_executor.admit_wave(schedule_id, 0)["admitted"] is True
+    claimed = resilience_wave_executor._claim_runner_epochs(  # noqa: SLF001 - fencing contract
+        schedule_id,
+        0,
+        instance_id="worker-a",
+        lease_seconds=30,
+    )
+    assert claimed["claimed"] is True
+    held = resilience_wave_executor._claim_runner_epochs(  # noqa: SLF001 - fencing contract
+        schedule_id,
+        0,
+        instance_id="worker-b",
+        lease_seconds=30,
+    )
+    assert held == {"claimed": False, "reason": "SCHEDULE_RUNNER_LEASE_HELD"}
+
+    with sqlite3.connect(resilience_wave_executor.WAVE_EXECUTOR_DB) as conn:
+        conn.execute(
+            "UPDATE resilience_wave_schedules SET runner_token = NULL, lease_until = NULL WHERE schedule_id = ?",
+            (schedule_id,),
+        )
+    wave_held = resilience_wave_executor._claim_runner_epochs(  # noqa: SLF001 - fencing contract
+        schedule_id,
+        0,
+        instance_id="worker-b",
+        lease_seconds=30,
+    )
+    assert wave_held == {"claimed": False, "reason": "WAVE_RUNNER_LEASE_HELD"}
+
+
+def test_wave_action_claim_guards_terminal_and_leased_actions(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fresh_state(monkeypatch)
+    schedule = _schedule("action-claim-guards")
+    schedule_id = str(schedule["scheduleId"])
+    action_id = str(schedule["executionWaves"][0]["actions"][0]["actionId"])
+    resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+
+    with pytest.raises(ValueError, match="unknown wave action"):
+        resilience_wave_executor._claim_wave_action(  # noqa: SLF001 - fencing contract
+            schedule_id,
+            0,
+            "missing-action",
+            instance_id="worker",
+            lease_until="2099-01-01T00:00:00Z",
+            schedule_execution_epoch=1,
+            wave_execution_epoch=1,
+            runner_token="token",
+        )
+
+    for terminal_status in (
+        resilience_wave_executor.ACTION_VERIFIED_SUCCESS,
+        resilience_wave_executor.ACTION_FAILED,
+        resilience_wave_executor.ACTION_PREEMPTED,
+        resilience_wave_executor.ACTION_STALE,
+    ):
+        with sqlite3.connect(resilience_wave_executor.WAVE_EXECUTOR_DB) as conn:
+            conn.execute(
+                "UPDATE resilience_wave_actions SET status = ?, runner_token = NULL, lease_until = NULL WHERE action_id = ?",
+                (terminal_status, action_id),
+            )
+        terminal = resilience_wave_executor._claim_wave_action(  # noqa: SLF001 - fencing contract
+            schedule_id,
+            0,
+            action_id,
+            instance_id="worker",
+            lease_until="2099-01-01T00:00:00Z",
+            schedule_execution_epoch=1,
+            wave_execution_epoch=1,
+            runner_token="token",
+        )
+        assert terminal == {"claimed": False, "terminal": True, "reason": terminal_status}
+
+    with sqlite3.connect(resilience_wave_executor.WAVE_EXECUTOR_DB) as conn:
+        conn.execute(
+            """
+            UPDATE resilience_wave_actions
+            SET status = ?, runner_token = ?, lease_until = ?
+            WHERE action_id = ?
+            """,
+            (resilience_wave_executor.ACTION_EXECUTING, "active-token", "2099-01-01T00:00:00Z", action_id),
+        )
+    leased = resilience_wave_executor._claim_wave_action(  # noqa: SLF001 - fencing contract
+        schedule_id,
+        0,
+        action_id,
+        instance_id="worker",
+        lease_until="2099-01-01T00:00:00Z",
+        schedule_execution_epoch=1,
+        wave_execution_epoch=1,
+        runner_token="token",
+    )
+    assert leased == {"claimed": False, "terminal": False, "reason": "ACTION_RUNNER_LEASE_HELD"}
+
+
+def test_wave_cannot_complete_with_an_unverified_action(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fresh_state(monkeypatch)
+    schedule = _schedule("incomplete-wave")
+    schedule_id = str(schedule["scheduleId"])
+    resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+    assert resilience_wave_executor.admit_wave(schedule_id, 0)["admitted"] is True
+    claim = resilience_wave_executor._claim_runner_epochs(  # noqa: SLF001 - fencing contract
+        schedule_id,
+        0,
+        instance_id="worker",
+        lease_seconds=30,
+    )
+
+    completed = resilience_wave_executor._complete_wave_with_fence(  # noqa: SLF001 - fencing contract
+        schedule_id,
+        0,
+        schedule_execution_epoch=claim["scheduleExecutionEpoch"],
+        wave_execution_epoch=claim["waveExecutionEpoch"],
+        runner_token=claim["runnerToken"],
+    )
+
+    assert completed is False
+
+
+@pytest.mark.parametrize(
+    ("scenario", "expected_status"),
+    [
+        ("journal-unavailable", "ACTION_JOURNAL_UNAVAILABLE"),
+        ("journal-terminal-failure", "FAILED"),
+        ("journal-active", "ACTION_EFFECT_IN_PROGRESS"),
+    ],
+)
+def test_wave_runner_handles_journal_states_without_external_verification(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
+    expected_status: str,
+) -> None:
+    _install_fresh_state(monkeypatch)
+    schedule = _schedule(f"journal-state-{scenario}")
+    schedule_id = str(schedule["scheduleId"])
+    resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+
+    if scenario == "journal-unavailable":
+        def record_failure(*args: object, **kwargs: object) -> dict[str, Any]:
+            raise OSError("journal offline")
+
+        monkeypatch.setattr(resilience_action_journal, "record_action_intent", record_failure)
+    elif scenario == "journal-terminal-failure":
+        monkeypatch.setattr(
+            resilience_action_journal,
+            "record_action_intent",
+            lambda *args, **kwargs: {"state": "FAILED_BEFORE_EFFECT", "executionEpoch": 1},
+        )
+    else:
+        monkeypatch.setattr(
+            resilience_action_journal,
+            "record_action_intent",
+            lambda *args, **kwargs: {
+                "state": "EXECUTING",
+                "executionEpoch": 1,
+                "leaseUntil": "2099-01-01T00:00:00Z",
+                "effectHandle": {"kind": "repair", "repairId": "existing"},
+            },
+        )
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "execute_autonomous_action",
+        lambda *args, **kwargs: pytest.fail("journal guard must return before execution"),
+    )
+
+    result = resilience_wave_executor.run_next_wave(schedule_id)
+
+    assert result["status"] == expected_status
+
+
+@pytest.mark.parametrize(
+    ("scenario", "expected_status"),
+    [
+        ("observed-success", "COMPLETED"),
+        ("observed-failure", "FAILED"),
+        ("unknown-after-error", "ACTION_EXECUTION_RETRY_REQUIRED"),
+        ("invalid-terminal", "FAILED"),
+    ],
+)
+def test_wave_runner_reconciles_execution_errors_fail_closed(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
+    expected_status: str,
+) -> None:
+    _install_fresh_state(monkeypatch)
+    schedule = _schedule(f"execute-error-{scenario}")
+    schedule_id = str(schedule["scheduleId"])
+    action_id = str(schedule["executionWaves"][0]["actions"][0]["actionId"])
+    resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+
+    if scenario == "invalid-terminal":
+        monkeypatch.setattr(
+            resilience_action_journal,
+            "execute_autonomous_action",
+            lambda *args, **kwargs: {"actionId": action_id, "state": "UNVERIFIED"},
+        )
+    else:
+        def execute_failure(*args: object, **kwargs: object) -> dict[str, Any]:
+            raise TimeoutError("uncertain remote effect")
+
+        monkeypatch.setattr(resilience_action_journal, "execute_autonomous_action", execute_failure)
+        if scenario == "observed-success":
+            observed = _successful_action(action_id, epoch=3)
+        elif scenario == "observed-failure":
+            observed = {"actionId": action_id, "state": "EFFECT_UNKNOWN", "executionEpoch": 3}
+        else:
+            observed = {"actionId": action_id, "state": "EXECUTING", "executionEpoch": 3}
+        monkeypatch.setattr(resilience_action_journal, "get_action", lambda requested: observed if requested == action_id else None)
+
+    result = resilience_wave_executor.run_next_wave(schedule_id)
+
+    assert result["status"] == expected_status
+
+
+@pytest.mark.parametrize(
+    ("scenario", "expected_status"),
+    [
+        ("execute-state-fence", "RUNNER_FENCED_OUT"),
+        ("outcome-state-fence", "RUNNER_FENCED_OUT"),
+        ("terminal-state-fence", "RUNNER_FENCED_OUT"),
+        ("settlement-exception", "FAIR_SERVICE_SETTLEMENT_REQUIRED"),
+        ("settlement-not-consumed", "FAIR_SERVICE_SETTLEMENT_REQUIRED"),
+        ("final-wave-fence", "RUNNER_FENCED_OUT"),
+        ("complete-fence", "RUNNER_FENCED_OUT"),
+    ],
+)
+def test_wave_runner_fails_closed_at_each_commit_boundary(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
+    expected_status: str,
+) -> None:
+    _install_fresh_state(monkeypatch)
+    schedule = _schedule(f"commit-boundary-{scenario}")
+    schedule_id = str(schedule["scheduleId"])
+    resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "execute_autonomous_action",
+        lambda action_id, **kwargs: _successful_action(action_id),
+    )
+
+    original_set_action = resilience_wave_executor._set_action_state_with_fence  # noqa: SLF001
+    action_commits = 0
+
+    def set_action(*args: Any, **kwargs: Any) -> bool:
+        nonlocal action_commits
+        action_commits += 1
+        denied_at = {
+            "execute-state-fence": 1,
+            "outcome-state-fence": 2,
+            "terminal-state-fence": 3,
+        }.get(scenario)
+        if denied_at == action_commits:
+            return False
+        return original_set_action(*args, **kwargs)
+
+    monkeypatch.setattr(resilience_wave_executor, "_set_action_state_with_fence", set_action)
+
+    original_set_wave = resilience_wave_executor._set_wave_state_with_fence  # noqa: SLF001
+    wave_commits = 0
+
+    def set_wave(*args: Any, **kwargs: Any) -> bool:
+        nonlocal wave_commits
+        wave_commits += 1
+        if scenario == "final-wave-fence" and wave_commits == 2:
+            return False
+        return original_set_wave(*args, **kwargs)
+
+    monkeypatch.setattr(resilience_wave_executor, "_set_wave_state_with_fence", set_wave)
+    if scenario == "settlement-exception":
+        def settlement_failure(*args: object, **kwargs: object) -> dict[str, Any]:
+            raise OSError("telemetry unavailable")
+
+        monkeypatch.setattr(resilience_scheduler_service, "settle_action_from_effect", settlement_failure)
+    elif scenario == "settlement-not-consumed":
+        monkeypatch.setattr(
+            resilience_scheduler_service,
+            "settle_action_from_effect",
+            lambda *args, **kwargs: {"status": "RESERVED"},
+        )
+    if scenario == "complete-fence":
+        monkeypatch.setattr(resilience_wave_executor, "_complete_wave_with_fence", lambda *args, **kwargs: False)
+
+    result = resilience_wave_executor.run_next_wave(schedule_id)
+
+    assert result["status"] == expected_status
+
+
+def test_wave_runner_reports_non_runnable_and_denied_work(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValueError, match="unknown schedule"):
+        resilience_wave_executor.run_next_wave("missing-schedule")
+
+    empty = _schedule("empty-schedule")
+    empty["executionWaves"] = []
+    resilience_wave_executor.persist_planned_schedule(empty, authority_head_digest=AUTHORITY_DIGEST)
+    assert resilience_wave_executor.run_next_wave("empty-schedule")["reason"] == "NO_RUNNABLE_WAVE"
+
+    terminal = _schedule("terminal-schedule")
+    resilience_wave_executor.persist_planned_schedule(terminal, authority_head_digest=AUTHORITY_DIGEST)
+    with sqlite3.connect(resilience_wave_executor.WAVE_EXECUTOR_DB) as conn:
+        conn.execute(
+            "UPDATE resilience_wave_schedules SET status = ? WHERE schedule_id = ?",
+            (resilience_wave_executor.SCHEDULE_FAILED, "terminal-schedule"),
+        )
+    assert resilience_wave_executor.run_next_wave("terminal-schedule")["reason"] == resilience_wave_executor.SCHEDULE_FAILED
+
+    denied = _schedule("admission-denied")
+    resilience_wave_executor.persist_planned_schedule(denied, authority_head_digest=AUTHORITY_DIGEST)
+    monkeypatch.setattr(
+        resilience_wave_executor,
+        "admit_wave",
+        lambda *args, **kwargs: {"admitted": False, "status": "WAVE_NOT_ADMITTED", "reason": "SOURCE_UNAVAILABLE"},
+    )
+    assert resilience_wave_executor.run_next_wave("admission-denied")["status"] == "WAVE_NOT_ADMITTED"
+
+    active = _schedule("claim-denied")
+    resilience_wave_executor.persist_planned_schedule(active, authority_head_digest=AUTHORITY_DIGEST)
+    with sqlite3.connect(resilience_wave_executor.WAVE_EXECUTOR_DB) as conn:
+        conn.execute(
+            "UPDATE resilience_wave_states SET status = ? WHERE schedule_id = ?",
+            (resilience_wave_executor.WAVE_CLAIMING, "claim-denied"),
+        )
+    monkeypatch.setattr(
+        resilience_wave_executor,
+        "_claim_runner_epochs",
+        lambda *args, **kwargs: {"claimed": False, "reason": "LEASE_HELD"},
+    )
+    claim_result = resilience_wave_executor.run_next_wave("claim-denied")
+    assert claim_result["status"] == "WAVE_NOT_CLAIMED"
+
+
+def test_wave_runner_reports_action_claim_and_initial_fence_conflicts(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fresh_state(monkeypatch)
+    action_denied = _schedule("action-denied")
+    resilience_wave_executor.persist_planned_schedule(action_denied, authority_head_digest=AUTHORITY_DIGEST)
+    monkeypatch.setattr(
+        resilience_wave_executor,
+        "_claim_wave_action",
+        lambda *args, **kwargs: {"claimed": False, "reason": "ACTION_RUNNER_LEASE_HELD"},
+    )
+    denied_result = resilience_wave_executor.run_next_wave("action-denied")
+    assert denied_result["status"] == "ACTION_NOT_CLAIMED"
+
+    fenced = _schedule("initial-fence")
+    resilience_wave_executor.persist_planned_schedule(fenced, authority_head_digest=AUTHORITY_DIGEST)
+    monkeypatch.setattr(resilience_wave_executor, "_set_wave_state_with_fence", lambda *args, **kwargs: False)
+    fenced_result = resilience_wave_executor.run_next_wave("initial-fence")
+    assert fenced_result["status"] == "RUNNER_FENCED_OUT"

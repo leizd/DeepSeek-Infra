@@ -9,7 +9,14 @@ from typing import Any
 
 import pytest
 
-from deepseek_infra.infra.workspace import resilience_fleet_scheduler, resilience_fresh_state, resilience_wave_executor
+from deepseek_infra.infra.workspace import (
+    autonomous_action_policy,
+    backup_targets,
+    backup_transfer_budget,
+    resilience_fleet_scheduler,
+    resilience_fresh_state,
+    resilience_wave_executor,
+)
 
 
 RISK_DIGEST = "a" * 64
@@ -240,3 +247,130 @@ def test_planned_schedule_binds_current_authority_head(
     persisted = resilience_wave_executor.get_schedule(str(schedule["scheduleId"]))
     assert persisted is not None
     assert persisted["authorityHeadDigest"] == AUTHORITY_DIGEST
+
+
+def test_required_fresh_state_reader_preserves_source_failure() -> None:
+    def unavailable() -> object:
+        raise RuntimeError("production source offline")
+
+    with pytest.raises(resilience_fresh_state.FreshStateUnavailable) as caught:
+        resilience_fresh_state._read_required(  # noqa: SLF001
+            unavailable,
+            source="capacity",
+            reason="CAPACITY_SNAPSHOT_UNAVAILABLE",
+        )
+
+    assert caught.value.reason == "CAPACITY_SNAPSHOT_UNAVAILABLE"
+    assert caught.value.source == "capacity"
+    assert "production source offline" in caught.value.detail
+
+
+def test_capacity_snapshot_falls_back_to_registered_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backup_targets, "list_targets", lambda: [])
+    assert resilience_fresh_state._read_capacity_snapshot([], now=datetime.now(tz=timezone.utc)) is None  # noqa: SLF001
+
+    monkeypatch.setattr(backup_targets, "list_targets", lambda: [{"targetId": "target-b"}, {"targetId": ""}])
+    monkeypatch.setattr(
+        backup_targets,
+        "probe_target_capacity",
+        lambda target_id: {"targetId": target_id, "usedBytes": 1, "freeBytes": 9, "totalBytes": 10},
+    )
+
+    snapshot = resilience_fresh_state._read_capacity_snapshot([], now=datetime.now(tz=timezone.utc))  # noqa: SLF001
+    assert snapshot == {"targets": [{"targetId": "target-b", "usedBytes": 1, "freeBytes": 9, "totalBytes": 10}]}
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        None,
+        {},
+        {"targets": []},
+        {"targets": ["not-an-object"]},
+        {"targets": [{"targetId": "", "observedAt": "now", "usedBytes": 0, "freeBytes": 1, "totalBytes": 1}]},
+        {"targets": [{"targetId": "a", "observedAt": "now", "usedBytes": True, "freeBytes": 1, "totalBytes": 1}]},
+        {"targets": [{"targetId": "a", "observedAt": "now", "usedBytes": 1, "freeBytes": 1, "totalBytes": 1}]},
+        {"targets": [{"targetId": "a", "observedAt": "now", "usedBytes": 0, "freeBytes": 1, "totalBytes": 1, "source": "unknown"}]},
+    ],
+)
+def test_capacity_snapshot_validator_rejects_incomplete_truth(snapshot: object) -> None:
+    assert resilience_fresh_state._validate_capacity_snapshot(snapshot) is False  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        {},
+        {"coverage": []},
+        {"coverage": {}},
+        {"coverage": {"risk": {"complete": False}}},
+        {"coverage": {"risk": "invalid"}},
+    ],
+)
+def test_risk_coverage_validator_requires_every_scope_complete(snapshot: dict[str, Any]) -> None:
+    assert resilience_fresh_state._coverage_complete(snapshot) is False  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("reader_name", "invalid_value", "expected_reason"),
+    [
+        ("_read_authority_state", {"canonicalDigest": "invalid"}, "AUTHORITY_OBSERVATION_UNAVAILABLE"),
+        ("_read_risk_snapshot", {"riskDigest": "invalid", "coverage": {"risk": {"complete": True}}}, "RISK_SNAPSHOT_UNAVAILABLE"),
+        ("_read_risk_snapshot", {"riskDigest": RISK_DIGEST, "coverage": {"risk": {"complete": False}}}, "RISK_SNAPSHOT_INCOMPLETE"),
+        ("_read_capacity_snapshot", {"targets": []}, "CAPACITY_SNAPSHOT_UNAVAILABLE"),
+        ("_read_running_effects", {}, "RUNNING_EFFECTS_UNAVAILABLE"),
+        ("_read_budget_snapshot", {"admitted": "yes"}, "BUDGET_SNAPSHOT_UNAVAILABLE"),
+        ("_read_maintenance_decisions", [{"allowed": "yes"}], "MAINTENANCE_DECISION_UNAVAILABLE"),
+        ("_read_blast_simulation", {"passed": "yes"}, "BLAST_SIMULATION_UNAVAILABLE"),
+    ],
+)
+def test_malformed_production_source_blocks_fresh_state_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    reader_name: str,
+    invalid_value: object,
+    expected_reason: str,
+) -> None:
+    _install_available_sources(monkeypatch)
+    monkeypatch.setattr(resilience_fresh_state, reader_name, lambda *args, **kwargs: invalid_value)
+
+    with pytest.raises(resilience_fresh_state.FreshStateUnavailable) as caught:
+        resilience_fresh_state.build_fresh_state_bundle(_schedule(), _schedule()["executionWaves"][0]["actions"])
+
+    assert caught.value.reason == expected_reason
+
+
+def test_budget_snapshot_reports_every_concurrency_and_transfer_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        autonomous_action_policy,
+        "get_action_rate_limits",
+        lambda: {
+            "maxConcurrentActions": 0,
+            "maxConcurrentPerTarget": 0,
+            "maxConcurrentPerPolicy": 0,
+            "maxSimultaneousFailureDomainsTouched": 0,
+        },
+    )
+
+    class Manager:
+        def scheduler_reservation_snapshot(self, _actions: list[dict[str, Any]]) -> dict[str, Any]:
+            return {"rebalanceBlockedByRepairReserve": True}
+
+        def transfer_control_summary(self) -> dict[str, Any]:
+            return {"status": "SATURATED"}
+
+    monkeypatch.setattr(backup_transfer_budget, "get_global_transfer_budget_manager", lambda: Manager())
+    action = {
+        "actionId": "budget-action",
+        "parameters": {"policyId": "policy-a", "targetId": "target-a", "failureDomain": "fd-a"},
+    }
+
+    snapshot = resilience_fresh_state._read_budget_snapshot([action], [action])  # noqa: SLF001
+
+    assert snapshot is not None
+    assert set(snapshot["reasons"]) == {
+        "GLOBAL_CONCURRENCY_EXCEEDED",
+        "TARGET_CONCURRENCY_EXCEEDED",
+        "POLICY_CONCURRENCY_EXCEEDED",
+        "FAILURE_DOMAIN_LIMIT_EXCEEDED",
+        "TRANSFER_BUDGET_CLASS_CONFLICT",
+    }
