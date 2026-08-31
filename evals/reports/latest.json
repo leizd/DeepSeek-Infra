@@ -1,20 +1,20 @@
 {
   "schemaVersion": "offline-eval-suite.v1",
-  "version": "4.7.4",
-  "commit": "c4fcde19da47c49e483426e2de540198a354db26",
-  "testedRevision": "c4fcde19da47c49e483426e2de540198a354db26",
-  "sourceRevision": "c4fcde19da47c49e483426e2de540198a354db26",
-  "sourceTreeDirty": true,
+  "version": "4.7.6",
+  "commit": "68ac387a7739c4c8d589868d85485a2441762145",
+  "testedRevision": "68ac387a7739c4c8d589868d85485a2441762145",
+  "sourceRevision": "68ac387a7739c4c8d589868d85485a2441762145",
+  "sourceTreeDirty": false,
   "releaseRevision": null,
   "ciRevision": null,
-  "generatedAt": "2026-08-29T05:49:01Z",
+  "generatedAt": "2026-08-31T04:18:19Z",
   "environment": {
     "os": "Windows",
     "python": "3.13.5",
     "ci": false
   },
-  "gitSha": "c4fcde19da47c49e483426e2de540198a354db26",
-  "gitDirty": true,
+  "gitSha": "68ac387a7739c4c8d589868d85485a2441762145",
+  "gitDirty": false,
   "status": "PASS",
   "paths": {
     "ragGolden": "evals/golden/rag_questions.jsonl",
@@ -34,7 +34,7 @@
     "keywordCoverage": 1.0,
     "latency": {
       "avgMs": 35.49,
-      "p95Ms": 38.42
+      "p95Ms": 37.47
     }
   },
   "toolPolicy": {
