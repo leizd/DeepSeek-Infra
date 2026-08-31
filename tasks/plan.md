@@ -1,248 +1,375 @@
-# Implementation Plan: 4.7.6 Production Predictive Control & Verifiable Simulation
-
-<!-- docs-language-switcher:start -->
-[中文](../README.md) / [English](../README.en.md)
-<!-- docs-language-switcher:end -->
+# Implementation Plan: 4.8.0 Signed Federation & Cross-Fleet Disaster Recovery
 
 ## Overview
 
-Close the production gap left by 4.7.5: predictive inputs must come from
-authoritative production sources, durable waves must execute and reconcile real
-Action Journal effects, fair service must settle from observed effect telemetry,
-capacity forecasts must be sampled and backtested automatically, and What-If
-must prove write denial through capability enforcement and pre/post digests.
-Exact-merge Evidence gains a typed `predictive-planning-proof-v1` artifact while
-all frozen storage, control, encryption, and Evidence envelope contracts remain
-unchanged.
+DeepSeek Infra 4.8.0 establishes verifiable cooperation between two sovereign
+Fleets without shared Authority, global consensus, or remote policy ownership.
+It adds dedicated federation signing identity, operator-pinned peer trust,
+receiver-controlled ciphertext custody, signed remote replica attestations, and
+production federated disaster-recovery drills. Existing storage, encryption,
+control, and Evidence wire contracts remain unchanged.
+
+Implementation starts from exact merge commit
+`a79c90d237db9323d464b284950a4401dc632d15`. Federation write paths are blocked
+until Gate A proves immutable schedule identity, renewable schedule/wave leases,
+and provider-backed process takeover without duplicate effects.
 
 ## Architecture Decisions
 
-- `build_fresh_state_bundle()` is the only production admission source. It reads
-  Authority, complete RiskSnapshot, capacity, active effects, action/transfer
-  budgets, maintenance decisions, and blast simulation internally and fails
-  closed if any source is unavailable.
-- Wave execution owns schedule/wave/action leases and fenced epochs, but delegates
-  remote effect idempotency and crash reconciliation to the existing production
-  `resilience_action_journal.execute_autonomous_action()` lifecycle.
-- Terminal service settlement reads a durable Action Journal telemetry record
-  bound to action ID, execution epoch, and effect handle; callers cannot provide
-  bytes or duration.
-- The existing storage maintenance supervisor is the production sampler loop.
-  It records normalized observations with target incarnation and provenance,
-  persists 30/90-day forecast records, and evaluates due records on later probes.
-- `/whatif` accepts hypothetical candidates only. Present truth is built from
-  production registries and exposed to the optimizer through a read-only
-  capability. Every denied mutation is audited and any attempt fails closed.
-- `predictive-planning-proof-v1` is a typed payload inside the unchanged
-  `evidence-proof-v2` envelope. Assembly requires report, autonomous proof, and
-  predictive proof as distinct exact artifacts.
-- Federation remains read-only. No cross-fleet mutation, consensus, remote
-  placement, or remote remediation is introduced.
+- Each Fleet owns an independent root directory, Authority log, federation root,
+  online signer, journals, HTTP service, storage credentials, and failure policy.
+- `FleetIdentity v1` uses a dedicated Ed25519 federation root. Age identities and
+  Control Authority private state are never federation signing material.
+- Peer roots require operator pinning. TOFU, self-declared trust, and automated
+  trust or routing decisions are rejected.
+- Every signed document uses a versioned domain separator and one repository-wide
+  canonical byte encoding. IDs and digests are recomputed by the receiver; caller
+  supplied values are never authoritative.
+- Transfer identity is the SHA-256 of a domain-separated canonical tuple containing
+  source Fleet, destination Fleet, backup ID, and object-set digest. Raw string
+  concatenation is forbidden.
+- Ingress grants authorize only one transfer identity, prefix, byte ceiling, and
+  validity window. Reuse may resume the same durable transfer journal but can
+  never create a second effect, enlarge scope, or reset consumed capacity.
+- Unknown remote outcomes are reconciled by transfer ID before any write retry.
+- Federation transfers existing randomized-Age ciphertext and `object-set-v1`.
+  Receiver commits use the existing production Receipt v4 and Commit v4 paths.
+- Federated and local durability objectives are independent. A remote copy cannot
+  reduce local copy/domain requirements, promote a primary, mutate policy, prune
+  replicas, or authorize deletion.
+- Historical signature validation and current authorization are distinct:
+  revocation blocks new operations immediately, while proof validation applies an
+  explicit root/signer certificate validity and `revokedAt` policy.
+- Semantic proof validators consume canonical Receipt/Commit documents or an
+  equivalent verifiable proof bundle; bare self-declared digests are insufficient.
 
 ## Dependency Graph
 
 ```text
-Fresh-state sources ──> Wave admission ──> Fenced Wave runner ──> Journal terminal telemetry
-        │                                           │                         │
-        └────────────> Optimizer input builder      └────────────> Fair settlement
-
-Target probe ──> Capacity observation ──> Forecast registry ──> Automatic backtest
-        │                    │                                  │
-        └────────────────────┴──────────> Predictive input/proof bindings
-
-Read-only capability ──> What-If pre/post digest proof ──> Predictive proof artifact
-                                                              │
-Autonomous proof + report ─────────────────────────────────────┴──> Evidence assembly
+4.8.0 version surface
+        |
+        v
+Immutable schedule identity -> renewable schedule/wave leases -> real process takeover
+        |                                                          |
+        +---------------- Gate A hard barrier ----------------------+
+                                                                   |
+Dedicated Fleet root -> pinned peer trust -> signer rotation/revocation
+        |                                      |
+        +-> signed readiness -> challenge/response session --------+
+                                                                   |
+Receiver ingress grant -> immutable transfer journal -> ciphertext custody
+                                                        |          |
+                                                        v          v
+                                                Receipt v4 -> Commit v4
+                                                        |
+                                                        v
+                                             signed replica attestation
+                                                        |
+                  independent federated durability + pinned failure domains
+                                                        |
+                     custody mode -> production restore -> signed DR attestation
+                                                        |
+                                                        v
+                         typed proofs -> two-Fleet/four-MinIO exact Evidence
 ```
 
 ## Task List
 
-### Phase 1: Release baseline and production fresh state
+### Phase 0: Release baseline
 
-#### Task 1: Prepare the 4.7.6 version surface
+#### Task 1: Prepare the 4.8.0 version surface
 
-**Acceptance criteria:** all executable release surfaces resolve to 4.7.6; no
-frozen protocol identifier changes.
+**Acceptance criteria:** executable version surfaces resolve to 4.8.0; the release
+name is Signed Federation & Cross-Fleet Disaster Recovery; frozen protocol
+identifiers and fixtures are byte-for-byte unchanged.
 
-**Verification:** `python scripts/check_release_version.py`; focused wire-freeze
-tests; `git diff --check`.
+**Verification:** `python scripts/check_release_version.py`; focused version and
+wire-freeze tests; `git diff --check`.
 
-**Dependencies:** None.
+**Dependencies:** None. **Estimated scope:** Medium.
 
-#### Task 2: Build and enforce the fresh-state bundle
+### Phase 1: Gate A correctness closure
 
-**Acceptance criteria:** every required source is source-backed and digest-bound;
-missing Authority, risk, capacity, effects, budgets, maintenance, or blast state
-returns `WAVE_NOT_ADMITTED`; API/callers cannot provide freshness flags.
+#### Task 2: Make Wave Schedule identity immutable
 
-**Verification:** focused `test_backup_476_fresh_state.py` RED/GREEN suite plus
-existing 4.7.5 wave tests updated to the production boundary.
+**Acceptance criteria:** a server-computed `scheduleDigest` binds the complete
+canonical immutable schedule; same ID plus same digest is a non-mutating idempotent
+result; same ID plus different digest raises `SCHEDULE_IDENTITY_CONFLICT`; running
+and terminal schedules cannot be rewritten; existing databases are migrated
+without resetting state, waves, actions, timestamps, leases, or epochs.
 
-**Dependencies:** Task 1.
+**Verification:** RED/GREEN unit and SQLite restart tests, including legacy rows,
+action-set mutation, authority/risk mutation, and terminal-state replay.
 
-### Checkpoint: Fresh-state foundation
+**Dependencies:** Task 1. **Estimated scope:** Medium.
 
-- [ ] Missing-source paths fail closed.
-- [ ] No caller-supplied safety input reaches Wave admission.
-- [ ] Ruff and Mypy pass for touched modules.
+#### Task 3: Add renewable schedule and wave runner leases
 
-### Phase 2: Real wave execution, fencing, and service settlement
+**Acceptance criteria:** schedule and wave leases renew together with CAS checks on
+both epochs and the runner token; stale owners cannot renew or commit; heartbeat
+loss fences the runner before another effect can be created; action-journal lease
+fencing remains authoritative for the underlying effect.
 
-#### Task 3: Add the crash-recoverable production Wave runner
+**Verification:** deterministic clock tests, long-running executor tests, stale
+token/epoch tests, heartbeat shutdown tests, and Action Journal reconciliation
+regressions.
 
-**Acceptance criteria:** `run_next_wave(schedule_id)` transitions through
-ADMITTING/CLAIMING/EXECUTING/VERIFYING, invokes the production Action Journal,
-advances successors only after `VERIFIED_SUCCESS`, and persists monotonic
-schedule/wave/action epochs and fenced leases.
+**Dependencies:** Task 2. **Estimated scope:** Medium.
 
-**Verification:** focused real-lifecycle tests, two-worker takeover test, and
-existing action-journal reconciliation suites.
+#### Task 4: Prove real Wave Runner process takeover
 
-**Dependencies:** Task 2.
+**Acceptance criteria:** Worker A starts a real MinIO-backed effect and is SIGKILLed;
+Worker B takes schedule, wave, and action ownership at higher epochs; both workers
+refer to one underlying effect ID; no duplicate repair/rebalance effect or terminal
+settlement is produced.
 
-#### Task 4: Settle fair service from terminal effect telemetry
+**Verification:** dedicated two-OS-process scenario, process/PID assertions,
+provider state inspection, typed proof output, and repeatable Windows/Linux CI
+execution with no fake S3 or stub crypto.
 
-**Acceptance criteria:** actual bytes, duration, traffic class, outcome, effect
-handle, and execution epoch come from durable source-of-truth telemetry; replay
-is exactly once; failed effects release unused reservations.
+**Dependencies:** Task 3. **Estimated scope:** Medium.
 
-**Verification:** focused fairness RED/GREEN tests plus restart/replay coverage.
+### Checkpoint: Federation write barrier
 
-**Dependencies:** Task 3.
+- [ ] Schedule identity is immutable and migration-safe.
+- [ ] Long effects renew schedule and wave leases.
+- [ ] Lease loss fences local commits and reconciles the existing effect.
+- [ ] Real process death produces higher epochs and one provider effect.
+- [ ] No Federation write API or credential path exists before this checkpoint.
 
-### Checkpoint: Production wave closure
+### Phase 2: Fleet identity and explicit trust
 
-- [ ] Manual `verify_wave_action(actual_bytes=...)` is not a completion path.
-- [ ] Takeover reconciles an existing remote effect and never recreates it.
-- [ ] Reservation settlement is bound and exactly once.
+#### Task 5: Add dedicated Fleet signing identity
 
-### Phase 3: Production capacity and forecast lifecycle
+**Acceptance criteria:** create/load an offline-capable Ed25519 federation root and
+root-certified online signer; Fleet ID and key IDs are canonical and collision
+checked; tests prove key material differs from Age and Authority identities.
 
-#### Task 5: Add the production capacity sampler and incarnation isolation
+**Verification:** key lifecycle, permission, corruption, collision, and identity
+separation tests.
 
-**Acceptance criteria:** storage maintenance probes call the sampler; normalized
-observations carry source, target incarnation, capacity revision, and observed
-time; a new incarnation starts a new series; read APIs create no observations.
+**Dependencies:** Task 4. **Estimated scope:** Medium.
 
-**Verification:** sampler tests and maintenance-loop integration tests.
+#### Task 6: Add the pinned Peer Trust Registry
 
-**Dependencies:** Task 1.
+**Acceptance criteria:** operator-pinned root fingerprint is required; state follows
+`PENDING -> VERIFIED -> ACTIVE -> SUSPENDED -> REVOKED`; unknown roots and TOFU
+activation fail closed; provider/region/jurisdiction/siteClass are pinned locally.
 
-#### Task 6: Persist Forecast Registry records and automatic backtests
+**Verification:** state-transition, restart, TOFU rejection, metadata mismatch, and
+Fleet identity collision tests.
 
-**Acceptance criteria:** 30/90-day forecasts persist as ACTIVE records with due
-times and observation-set bindings; later observations atomically transition
-due records to BACKTESTED with MAE, MAPE, bias, and interval coverage; confidence
-uses persisted calibration.
+**Dependencies:** Task 5. **Estimated scope:** Medium.
 
-**Verification:** registry/due-evaluator RED/GREEN tests and restart tests.
+#### Task 7: Add signer rotation and revocation semantics
 
-**Dependencies:** Task 5.
+**Acceptance criteria:** online signers require a valid pinned-root certificate;
+certificate time bounds and purpose constraints are enforced; signer/root
+revocation blocks new sessions; historical proof behavior follows explicit
+`issuedAt`, `notBefore`, `expiresAt`, and `revokedAt` rules.
 
-### Checkpoint: Forecast production closure
+**Verification:** rotation overlap, expired/future certificate, revoked signer,
+revoked root, wrong purpose, and historical-proof tests.
 
-- [ ] A control-loop probe produces a durable observation and forecast record.
-- [ ] A later real observation backtests due forecasts exactly once.
-- [ ] Incarnation changes cannot mix historical series.
+**Dependencies:** Task 6. **Estimated scope:** Medium.
 
-### Phase 4: Authoritative optimizer and verifiable simulation
+### Phase 3: Signed readiness and session establishment
 
-#### Task 7: Build optimizer inputs from production truth
+#### Task 8: Add signed readiness attestations
 
-**Acceptance criteria:** baseline, forecast, price catalog, Authority head,
-running effects, maintenance windows, and observed fleet snapshot are internal
-sources; clients supply only candidate/hypothetical deltas.
+**Acceptance criteria:** `federation-readiness-attestation-v1` signs the full
+canonical readiness snapshot and binds Fleet ID, sequence, digest, signer,
+timestamps, and expiry; durable per-peer sequence high-water marks reject replay;
+clock skew fails closed.
 
-**Verification:** API and module tests reject present-truth overrides and prove
-each source binding.
+**Verification:** full-payload binding, risk projection substitution, replay,
+expiry, future time, tamper, wrong Fleet, and restart tests.
 
-**Dependencies:** Tasks 2 and 6.
+**Dependencies:** Task 7. **Estimated scope:** Medium.
 
-#### Task 8: Add write-deny simulation capability and mutation audit
+#### Task 9: Add challenge/response sessions
 
-**Acceptance criteria:** Storage, Authority, Action Journal, Policy, and Target
-mutation operations are unavailable or denied; attempts are audited and fail
-with `SIMULATION_VIOLATION`; pre/post digest maps are independently measured and
-must match.
+**Acceptance criteria:** challenges bind nonce, both Fleet IDs, signer, timestamp,
+and session purpose; nonces are random, durable for their validity window, and
+single-use; replay, reflection, wrong Fleet, expired signer, revoked peer, and
+future timestamp fail closed.
 
-**Verification:** denied-write tests, real state digest tests, and tamper tests.
+**Verification:** bilateral process tests and a complete negative matrix.
 
-**Dependencies:** Task 7.
+**Dependencies:** Task 8. **Estimated scope:** Medium.
 
-### Checkpoint: Verifiable simulation
+### Phase 4: Receiver-controlled remote custody
 
-- [ ] No constant zero counter is accepted as mutation Evidence.
-- [ ] Every mutation domain has a measured pre/post digest.
-- [ ] Attempted writes cause proof failure even when the write was blocked.
+#### Task 10: Add signed scoped ingress grants
 
-### Phase 5: Typed proof, exact artifacts, and real Three-MinIO
+**Acceptance criteria:** `federation-ingress-grant-v1` binds grant/transfer/policy/
+backup/object-set/Fleet IDs, object prefix, byte ceiling, nonce, issue time, and
+expiry; Receiver authorization is checked on every write; no long-lived Receiver
+S3 credential crosses the boundary.
 
-#### Task 9: Add `predictive-planning-proof-v1` semantic validation
+**Verification:** source/destination/binding tamper, prefix escape, byte overflow,
+expiry, revocation, replay-after-completion, and same-transfer resume tests.
 
-**Acceptance criteria:** the proof binds capacity observation set, forecast
-record/backtest, price catalog, candidate plan, fresh-state bundle, and measured
-simulation state; the validator independently recomputes digests and durability
-constraints and rejects self-reported zero mutation.
+**Dependencies:** Task 9. **Estimated scope:** Medium.
 
-**Verification:** proof construction, tamper, missing-field, and recomputation
+#### Task 11: Add immutable federated transfer identity and journal
+
+**Acceptance criteria:** Receiver recomputes transfer ID from the canonical tuple;
+same identity and content resumes one journal; conflicting fields return
+`FEDERATION_TRANSFER_IDENTITY_CONFLICT`; journal states are durable and unknown
+results always reconcile before retry.
+
+**Verification:** concurrent proposal, restart, conflicting body, partial upload,
+committed-but-response-lost, and blind-retry rejection tests.
+
+**Dependencies:** Task 10. **Estimated scope:** Medium.
+
+#### Task 12: Receive existing ciphertext through production storage semantics
+
+**Acceptance criteria:** Receiver accepts only existing randomized-Age ciphertext
+and `object-set-v1`; validates bounded components; commits through production
+storage to unchanged Receipt v4 and Commit v4; transfer provenance is external and
+does not alter storage wire documents.
+
+**Verification:** wire fixtures, randomized ciphertext, component tamper, provider
+restart, Receipt/Commit semantic validation, and no-v2/v5 assertions.
+
+**Dependencies:** Task 11. **Estimated scope:** Medium.
+
+#### Task 13: Add signed federated replica attestations
+
+**Acceptance criteria:** `federated-replica-attestation-v1` is issued only after a
+durable commit and binds transfer, Fleets, backup, object set, target, Receipt,
+Commit, committed time, sequence, and signer; Sender verifies trust, signature,
+transfer identity, canonical Receipt/Commit/object-set binding, and pinned failure
+domain before recording `FEDERATED_COMMITTED`.
+
+**Verification:** digest substitution, sequence replay, target metadata mismatch,
+tamper, revoked signer, response-loss reconciliation, and delayed-local-recording
 tests.
 
-**Dependencies:** Tasks 4, 6, and 8.
+**Dependencies:** Task 12. **Estimated scope:** Medium.
 
-#### Task 10: Require the predictive exact artifact in assembly
+### Phase 5: Federated durability and disaster recovery
 
-**Acceptance criteria:** the runner emits
-`storage-control-plane-predictive-proof-v4.7.6.json`; CI uploads it; producer and
-global assembly require report + autonomous proof + predictive proof and fail
-closed on absence or semantic invalidity.
+#### Task 14: Add independent federated durability objectives
 
-**Verification:** evidence inventory/producer/assembly workflow tests.
+**Acceptance criteria:** support `minFederatedCopies`, `minDistinctFleets`,
+`maxFederatedCopyAge`, `allowedPeerFleets`, and `allowedJurisdictions`; local
+`minCommittedCopies` and `minFailureDomains` remain unchanged and cannot be reduced
+by remote evidence; remote copies cannot promote, mutate, delete, or prune.
 
-**Dependencies:** Task 9.
+**Verification:** policy boundary, stale copy, jurisdiction, local durability
+regression, promotion denial, and deletion denial tests.
 
-#### Task 11: Prove the pipeline against three real MinIO targets
+**Dependencies:** Task 13. **Estimated scope:** Medium.
 
-**Acceptance criteria:** real backup/repair/rebalance capacity changes feed
-observations and forecasts under injectable logical time; What-If preserves the
-queried object inventory; the exact predictive artifact passes semantic
-validation.
+#### Task 15: Add cold-custody and recovery-capable peer modes
 
-**Verification:** real Three-MinIO predictive E2E plus complete storage-control-
-plane runner.
+**Acceptance criteria:** COLD_CUSTODY can prove ciphertext custody but cannot claim
+plaintext recovery or RTO; RECOVERY_CAPABLE requires an independently
+preprovisioned Age identity; Federation APIs and artifacts never transmit Age
+private identity.
 
-**Dependencies:** Task 10.
+**Verification:** capability matrix, missing recipient, secret scanning, request/
+artifact boundary, and downgrade tests.
 
-### Phase 6: Documentation, release, and final verification
+**Dependencies:** Task 14. **Estimated scope:** Medium.
 
-#### Task 12: Document closure boundaries and verify the release
+#### Task 16: Add the production federated DR drill
 
-**Acceptance criteria:** runbook, ADR/release notes, architecture/version surfaces,
-wire freeze, and explicit federation non-goals are current; all CI-equivalent
-gates pass with coverage margin.
+**Acceptance criteria:** a recovery-capable Receiver restores through the production
+path into an isolated workspace; `federated-dr-drill-attestation-v1` binds transfer,
+backup, object set, remote Receipt/Commit, restore/workspace digests, timing/RTO,
+cleanup, and source revision; Sender semantically validates every claim.
 
-**Verification:** frontend check, Ruff, Mypy, full Pytest at 95.0%, retained JS
-syntax, release-version gate, Evidence assembly, and clean worktree review.
+**Verification:** real restore, corrupted component, wrong lineage, false success,
+RTO tamper, cleanup failure, and isolated-workspace tests.
 
-**Dependencies:** Tasks 1-11.
+**Dependencies:** Task 15. **Estimated scope:** Medium.
+
+### Phase 6: Typed Evidence and exact real topology
+
+#### Task 17: Add three typed Federation proof validators
+
+**Acceptance criteria:** unchanged `evidence-proof-v2` envelopes carry
+`federation-trust-proof-v1`, `federated-replica-proof-v1`, and
+`federated-dr-proof-v1`; validators independently check trust chain, rotation,
+revocation, sequence/nonce/expiry, grant, transfer, storage bindings, drill
+semantics, and non-regression of local durability.
+
+**Verification:** construction plus per-field tamper/recomputation tests.
+
+**Dependencies:** Tasks 7, 13, and 16. **Estimated scope:** Medium.
+
+#### Task 18: Prove two real Fleets and four real MinIO instances
+
+**Acceptance criteria:** independent roots/processes/journals/HTTP servers and
+MinIO A1/A2/B1/B2 prove pinned trust, challenge, grant, ciphertext transfer,
+Receipt v4, Commit v4, signed commit, Receiver SIGKILL/restart on one transfer ID,
+grant replay rejection, attestation tamper rejection, revocation, and production
+federated restore; only one committed remote replica exists.
+
+**Verification:** dedicated exact artifact set with PID, endpoint, provider object,
+journal, signature, digest, and cleanup evidence; semantic validators must pass.
+
+**Dependencies:** Task 17. **Estimated scope:** Medium per scenario, split into
+replication, crash recovery, adversarial, and DR increments.
+
+#### Task 19: Integrate Evidence, CI, runbooks, and release closure
+
+**Acceptance criteria:** Evidence Assembly requires all three typed exact artifacts;
+runbooks cover root protection, signer rotation, peer suspension/revocation,
+partition handling, incident response, and restore; release docs preserve explicit
+non-goals and frozen contracts.
+
+**Verification:** frontend check, Ruff, Mypy, full Pytest with >=95.0% coverage and
+margin on Python 3.10/3.11/3.12, retained JavaScript syntax, offline evals,
+security gates, release-version check, real topology producers, semantic Evidence
+Assembly, `git diff --check`, and clean intended-path review.
+
+**Dependencies:** Task 18. **Estimated scope:** Medium per increment.
 
 ## Risks and Mitigations
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Wave and Action Journal transactions are separate | duplicate or falsely completed effects | use fenced ownership and Journal idempotency; never infer terminal success from Wave state |
-| Fresh probes partially fail | unsafe fail-open admission | typed missing-source reasons and no `None` defaults |
-| Existing DBs lack new columns | startup/runtime failure | idempotent SQLite migrations and restart tests |
-| Sampler mixes replaced targets | invalid trend and forecast | partition every query and forecast by target incarnation |
-| Simulation audit is self-reported | false zero-mutation claim | capability denial plus measured pre/post digests and attempted-write audit |
-| Scenario tests masquerade as runtime proof | invalid release Evidence | exact typed predictive artifact with independent validator and mandatory assembly binding |
-| Large release reduces reviewability | hidden regressions | vertical slices, focused RED/GREEN tests, atomic commits, and checkpoints |
+| Schedule replay mutates active work | effect identity changes under a live runner | immutable canonical digest plus create-once transaction |
+| Heartbeat survives ownership loss | stale runner commits after takeover | CAS renewal and commit fencing on schedule, wave, and action epochs |
+| Signature ambiguity | valid signature is reinterpreted as another document | one canonical encoding and versioned domain separation |
+| Grant replay creates duplicate effects | duplicate remote replica or excess bytes | one durable transfer journal and monotonic consumed-byte accounting |
+| Commit succeeds but response is lost | blind retry uploads again | query transfer ID and verify signed committed attestation first |
+| Peer self-declares a failure domain | false offsite durability credit | operator-pinned provider/region/jurisdiction/siteClass constraints |
+| Remote copy weakens local safety | site-local resilience regresses | separate policy fields and semantic non-regression validator |
+| Revocation invalidates evidence unpredictably | incident response or audit ambiguity | explicit authorization vs historical-proof time semantics |
+| One-process tests impersonate Federation | false sovereignty claims | independent roots, OS processes, journals, HTTP, and four real MinIO instances |
+| Frozen wire drifts accidentally | incompatible restore/storage path | byte-level fixtures and release-wide wire-freeze Evidence |
 
-## Frozen Contracts and Non-goals
+## Frozen Contracts
 
-Frozen unchanged: `object-set-v1`, Receipt v4, Commit v4, FastCDC v3,
-randomized Age, `control-authority-v1`, AuthorityCheckpoint v1,
-`dr-readiness-proof-v1`, and the `evidence-proof-v2` envelope.
+Unchanged throughout 4.8.0:
 
-Not in 4.7.6: cross-fleet writes, remote autonomous repair or policy mutation,
-multi-primary Authority, consensus/Raft, automated durability reduction,
-automatic primary promotion, or any v2/v5 storage/control protocol.
+- `object-set-v1`
+- Receipt v4
+- Commit v4
+- FastCDC v3 and Projection semantics
+- randomized Age
+- `control-authority-v1` and AuthorityCheckpoint v1
+- `dr-readiness-proof-v1`
+- `evidence-proof-v2` envelope
+- `predictive-planning-proof-v1`
+
+New Federation control/evidence documents are not storage wire revisions:
+
+- `federation-readiness-attestation-v1`
+- `federation-ingress-grant-v1`
+- `federated-replica-attestation-v1`
+- `federated-dr-drill-attestation-v1`
+
+## Explicit Non-goals
+
+No automatic cross-Fleet primary promotion, shared Authority log, multi-primary
+Authority, Raft/global consensus, cross-Fleet policy mutation, cross-Fleet delete,
+automatic local replica pruning, remote replacement of local durability, Age
+private-identity transfer, TOFU, LLM trust/routing decisions, Receipt v5, Commit
+v5, `object-set-v2`, or `control-authority-v2`.

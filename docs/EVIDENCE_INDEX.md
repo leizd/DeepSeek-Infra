@@ -5,7 +5,18 @@
 <!-- docs-language-switcher:end -->
 
 
-Applicable version: v4.7.6.
+Applicable version: v4.8.0.
+
+## 4.8.0 signed federation evidence boundary (in development)
+
+No 4.8.0 Federation correctness claim is release-ready yet. Gate A must first
+produce provider-backed proof of immutable schedule identity, renewable schedule
+and wave leases, and real two-process SIGKILL takeover with one underlying MinIO
+effect. Federation Evidence will later add typed trust, replica, and DR payloads
+inside the unchanged `evidence-proof-v2` envelope and will require two independent
+Fleet processes plus MinIO A1/A2/B1/B2. Existing 4.7.6 exact artifacts remain the
+current production baseline and are not renamed or rewritten by the version
+surface preparation.
 
 ## 4.7.6 production predictive control contract
 

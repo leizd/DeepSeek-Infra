@@ -5,16 +5,16 @@
 <!-- docs-language-switcher:end -->
 
 
-![版本](https://img.shields.io/badge/version-4.7.6-blue)
+![版本](https://img.shields.io/badge/version-4.8.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 ![Coverage Gate](https://img.shields.io/badge/coverage%20gate-95%25-brightgreen)
 ![许可证](https://img.shields.io/badge/license-MIT-black)
 
-> **4.7.6 — 生产级预测控制与可验证仿真闭环**。把 4.7.5 的预测原语接入生产 fresh-state、真实 Wave 执行、effect telemetry 公平结算、自动容量采样/预测回测、write-deny What-If 与独立 typed predictive proof；跨 Fleet 写入仍明确留在 4.8.0 之后。详见 [实施计划](tasks/plan.md)、[预测式规划 runbook](docs/runbooks/PREDICTIVE_FLEET_PLANNING.md) 与 [Evidence 索引](docs/EVIDENCE_INDEX.md)。
+> **4.8.0 — 签名联邦与跨 Fleet 灾难恢复（开发中）**。以 Gate A 的不可变 Wave Schedule 身份、可续租 runner lease 与真实进程接管为前置门槛，再引入 dedicated Fleet signing identity、operator-pinned peer trust、Receiver-controlled ingress、签名异地副本证明和 production federated DR；两个 Fleet 始终保持独立 Authority。详见 [实施计划](tasks/plan.md) 与 [Evidence 索引](docs/EVIDENCE_INDEX.md)。
 
-当前发布说明：[4.7.6](docs/releases/4.7.6.md)。
+当前稳定版本说明：[4.7.6](docs/releases/4.7.6.md)。4.8.0 尚未达到 release-ready。
 
-历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)、[4.4.13](docs/releases/4.4.13.md)、[4.5.0](docs/releases/4.5.0.md)、[4.5.1](docs/releases/4.5.1.md), [4.5.2](docs/releases/4.5.2.md)、[4.5.3](docs/releases/4.5.3.md)、[4.5.4](docs/releases/4.5.4.md)、[4.5.5](docs/releases/4.5.5.md)、[4.5.6](docs/releases/4.5.6.md)、[4.5.7](docs/releases/4.5.7.md)、[4.5.8](docs/releases/4.5.8.md)、[4.5.9](docs/releases/4.5.9.md)、[4.6.0](docs/releases/4.6.0.md)、[4.6.2](docs/releases/4.6.2.md)、[4.6.3](docs/releases/4.6.3.md)、[4.6.4](docs/releases/4.6.4.md)、[4.6.5](docs/releases/4.6.5.md)、[4.6.6](docs/releases/4.6.6.md)、[4.6.7](docs/releases/4.6.7.md)、[4.6.8](docs/releases/4.6.8.md)、[4.6.9](docs/releases/4.6.9.md)、[4.7.0](docs/releases/4.7.0.md)、[4.7.1](docs/releases/4.7.1.md)、[4.7.2](docs/releases/4.7.2.md)、[4.7.3](docs/releases/4.7.3.md)、[4.7.4](docs/releases/4.7.4.md)、[4.7.5](docs/releases/4.7.5.md)。
+历史连续性基线：[4.3.6](docs/releases/4.3.6.md)、[4.3.7](docs/releases/4.3.7.md)、[4.4.0](docs/releases/4.4.0.md)、[4.4.1](docs/releases/4.4.1.md)、[4.4.2](docs/releases/4.4.2.md)、[4.4.3](docs/releases/4.4.3.md)、[4.4.4](docs/releases/4.4.4.md)、[4.4.5](docs/releases/4.4.5.md)、[4.4.6](docs/releases/4.4.6.md)、[4.4.7](docs/releases/4.4.7.md)、[4.4.8](docs/releases/4.4.8.md)、[4.4.9](docs/releases/4.4.9.md)、[4.4.10](docs/releases/4.4.10.md)、[4.4.11](docs/releases/4.4.11.md)、[4.4.12](docs/releases/4.4.12.md)、[4.4.13](docs/releases/4.4.13.md)、[4.5.0](docs/releases/4.5.0.md)、[4.5.1](docs/releases/4.5.1.md), [4.5.2](docs/releases/4.5.2.md)、[4.5.3](docs/releases/4.5.3.md)、[4.5.4](docs/releases/4.5.4.md)、[4.5.5](docs/releases/4.5.5.md)、[4.5.6](docs/releases/4.5.6.md)、[4.5.7](docs/releases/4.5.7.md)、[4.5.8](docs/releases/4.5.8.md)、[4.5.9](docs/releases/4.5.9.md)、[4.6.0](docs/releases/4.6.0.md)、[4.6.2](docs/releases/4.6.2.md)、[4.6.3](docs/releases/4.6.3.md)、[4.6.4](docs/releases/4.6.4.md)、[4.6.5](docs/releases/4.6.5.md)、[4.6.6](docs/releases/4.6.6.md)、[4.6.7](docs/releases/4.6.7.md)、[4.6.8](docs/releases/4.6.8.md)、[4.6.9](docs/releases/4.6.9.md)、[4.7.0](docs/releases/4.7.0.md)、[4.7.1](docs/releases/4.7.1.md)、[4.7.2](docs/releases/4.7.2.md)、[4.7.3](docs/releases/4.7.3.md)、[4.7.4](docs/releases/4.7.4.md)、[4.7.5](docs/releases/4.7.5.md)、[4.7.6](docs/releases/4.7.6.md)。
 
 - **持久化 Agent DAG 运行时** — Planner → Worker → Critic → Synthesizer，支持断线恢复
 - **MCP 原生工具中心** — 17 个本地工具以标准 MCP Server 暴露，外部 MCP server 桥接带 health / retry / 熔断

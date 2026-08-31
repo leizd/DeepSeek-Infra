@@ -5,7 +5,9 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.7.6。
+适用版本：v4.8.0。
+
+> 4.8.0 正在开发，当前尚未达到 release-ready。Gate A 先关闭 Wave Schedule identity 可重绑定与 schedule/wave runner lease 不可续租两个前置 correctness 缺口，并要求真实双 OS-process、真实 MinIO effect 的 SIGKILL 接管证明；这些证据通过前不存在 Federation 写入路径。后续 Signed Federation 必须保持 Fleet Authority 独立、operator-pinned root、Receiver-controlled ingress、独立 federated durability 和冻结 storage/control/encryption wire。
 
 > 4.7.6：生产级预测控制与可验证仿真闭环（Production Predictive Control & Verifiable Simulation）：生产 fresh-state admission、真实且可崩溃接管的 Wave runner、effect telemetry 驱动的 exactly-once 公平结算、provider-backed MinIO/S3 capacity inventory、自动 Forecast Registry/到期回测、authoritative optimizer input、write-deny What-If 与独立 predictive-planning-proof-v1；Federation 只增加 tamper/freshness/fleet-ID/wire fail-closed 校验，跨 Fleet 写入仍是明确 non-goal，全部既有 storage/control/encryption wire contract 保持冻结。
 

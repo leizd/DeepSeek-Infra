@@ -16,7 +16,7 @@
   <text x="48" y="54" font-size="26" font-weight="700" fill="#0f172a">DeepSeek Infra</text>
   <text x="48" y="78" font-size="13.5" fill="#64748b">本地优先的 Agentic AI 基础设施平台 — LLM 网关 · Agent DAG · MCP · A2A · 本地 RAG · 工作区 · 容灾恢复 · 可观测性</text>
   <rect x="1070" y="34" width="82" height="28" rx="14" fill="#2563eb"/>
-  <text x="1111" y="53" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">v4.7.6</text>
+  <text x="1111" y="53" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">v4.8.0</text>
 
   <!-- clients layer -->
   <rect x="48" y="98" width="1104" height="68" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
@@ -173,5 +173,5 @@
   </g>
 
   <!-- footer -->
-  <text x="600" y="890" font-size="10" fill="#94a3b8" text-anchor="middle">v4.7.6：生产级预测控制 · 可验证仿真 · 冻结协议格式</text>
+  <text x="600" y="890" font-size="10" fill="#94a3b8" text-anchor="middle">v4.8.0：签名联邦 · 跨 Fleet 灾难恢复（开发中）· 冻结协议格式</text>
 </svg>
