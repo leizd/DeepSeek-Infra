@@ -15,9 +15,9 @@
 - [x] Reject same schedule ID with different digest as `SCHEDULE_IDENTITY_CONFLICT`
 - [x] Prevent running and terminal schedule rewrites
 - [x] Migrate legacy schedule rows without resetting state or epochs
-- [ ] Add CAS renewal for schedule and wave leases
-- [ ] Add bounded Wave Runner heartbeat and fence on lease loss
-- [ ] Prove stale runner token/epoch cannot renew or commit
+- [x] Add CAS renewal for schedule and wave leases
+- [x] Add bounded Wave Runner heartbeat and fence on lease loss
+- [x] Prove stale runner token/epoch cannot renew or commit
 - [ ] Prove real Worker A SIGKILL and Worker B higher-epoch takeover
 - [ ] Prove one real MinIO effect ID and no duplicate effect/settlement
 
