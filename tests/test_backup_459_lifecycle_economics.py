@@ -144,7 +144,7 @@ def test_reference_index_shared_ciphertext_and_retirement(tmp_settings: Path) ->
     candidates = backup_object_index.gc_candidate_keys(target_id)
     assert "ciphertext/shared.age" in candidates or canon in candidates
 
-def test_s3_quota_uses_physical_object_bytes(tmp_settings: Path) -> None:
+def test_s3_quota_fails_closed_without_provider_inventory(tmp_settings: Path) -> None:
     target_id = "target_quota"
     backup_targets.register_filesystem_target(target_id, path=tmp_settings / target_id)
     # Force quota path by mutating target kind/quota.
@@ -183,11 +183,11 @@ def test_s3_quota_uses_physical_object_bytes(tmp_settings: Path) -> None:
         size_bytes=100,
     )
     cap = backup_targets.probe_target_capacity(target_id)
-    assert cap["physicalStoredBytes"] == 500
-    assert cap["usedBytes"] == 500
-    assert cap["retiredPendingGcBytes"] == 100
-    assert cap["freeBytes"] == 500
-    assert cap["source"] == "physical-object-index"
+    assert cap["totalBytes"] == 1000
+    assert cap["usedBytes"] is None
+    assert cap["freeBytes"] is None
+    assert cap["source"] == "s3-object-inventory-unavailable"
+    assert "error" in cap
 
 
 def test_capacity_forecast_uses_elapsed_time(tmp_settings: Path) -> None:
