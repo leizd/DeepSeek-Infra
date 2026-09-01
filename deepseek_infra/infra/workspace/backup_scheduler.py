@@ -18,7 +18,8 @@ import os
 import sqlite3
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -130,16 +131,21 @@ def _parse_iso(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
     BACKUP_SCHEDULER_DIR.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(BACKUP_SCHEDULER_DIR / SCHEDULER_DB_NAME, timeout=30, isolation_level=None)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA journal_mode=WAL")
-    connection.execute("PRAGMA busy_timeout=30000")
-    for statement in _SCHEMA.strip().split(";"):
-        if statement.strip():
-            connection.execute(statement)
-    return connection
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout=30000")
+        for statement in _SCHEMA.strip().split(";"):
+            if statement.strip():
+                connection.execute(statement)
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def _next_token(connection: sqlite3.Connection, name: str) -> int:

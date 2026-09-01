@@ -12,6 +12,8 @@ import json
 import sqlite3
 import threading
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any
 
@@ -198,16 +200,21 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         pass
 
 
-def _get_connection() -> sqlite3.Connection:
+@contextmanager
+def _get_connection() -> Iterator[sqlite3.Connection]:
     BACKUP_DR_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(EVIDENCE_DB), timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA synchronous=NORMAL;")
-    with conn:
-        conn.executescript(_INIT_SQL)
-        _migrate_schema(conn)
-    return conn
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        with conn:
+            conn.executescript(_INIT_SQL)
+            _migrate_schema(conn)
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 # ── Incremental Evidence Recording ──────────────────────────────────────────
