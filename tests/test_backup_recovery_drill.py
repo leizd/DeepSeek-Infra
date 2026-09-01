@@ -54,7 +54,7 @@ def test_recovery_drill_reuses_production_path_scrubs_plaintext_and_preserves_li
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     restore_id = "restore_drillsuccess"
-    _write_session(restore_id)
+    _write_session(restore_id, phase="fetching-controls")
     root = backups.RESTORE_DIR / restore_id
     (root / "control.age").write_bytes(b"ciphertext-control")
     (root / "payload.age").write_bytes(b"ciphertext-payload")
@@ -72,7 +72,8 @@ def test_recovery_drill_reuses_production_path_scrubs_plaintext_and_preserves_li
     def fetch(value: str, *, client: Any = None) -> dict[str, Any]:
         del client
         calls.append(f"fetch:{value}")
-        return {"restoreId": value, "phase": "components-fetched"}
+        phase = "controls-fetched" if sum(call.startswith("fetch:") for call in calls) == 1 else "components-fetched"
+        return {"restoreId": value, "phase": phase}
 
     def materialize(value: str, *, kind: str, secret: bytearray, client: Any = None, _drill: bool = False) -> dict[str, Any]:
         del client, kind, secret
@@ -124,6 +125,7 @@ def test_recovery_drill_reuses_production_path_scrubs_plaintext_and_preserves_li
     assert result["sourceRevision"] == "source-revision-a"
     assert result["cleanupCompleted"] is True
     assert calls == [
+        f"fetch:{restore_id}",
         f"preflight:{restore_id}",
         f"fetch:{restore_id}",
         f"materialize:{restore_id}",

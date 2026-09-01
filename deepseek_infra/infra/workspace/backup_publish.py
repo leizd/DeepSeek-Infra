@@ -756,12 +756,16 @@ def _publish_object_set_filesystem(
         journal.update(phase="objects-published", updatedAt=_utc_iso())
         _write_journal(root, journal)
 
-        receipt_data = receipt_for(
-            package,
-            run_id=run_id,
-            policy_id=policy_id,
-            target_id=target.target_id,
-            schedule_slot=schedule_slot,
+        receipt_data = (
+            dict(receipt)
+            if receipt is not None
+            else receipt_for(
+                package,
+                run_id=run_id,
+                policy_id=policy_id,
+                target_id=target.target_id,
+                schedule_slot=schedule_slot,
+            )
         )
         receipt_data.update(
             schemaVersion=RECEIPT_SCHEMA_VERSION,
@@ -1031,12 +1035,16 @@ def _publish_object_set_via_store(
         journal.update(phase="objects-published", updatedAt=_utc_iso())
         _replace_journal(store, journal)
 
-        receipt_data = receipt_for(
-            spooled,
-            run_id=run_id,
-            policy_id=policy_id,
-            target_id=target.target_id,
-            schedule_slot=schedule_slot,
+        receipt_data = (
+            dict(receipt)
+            if receipt is not None
+            else receipt_for(
+                spooled,
+                run_id=run_id,
+                policy_id=policy_id,
+                target_id=target.target_id,
+                schedule_slot=schedule_slot,
+            )
         )
         receipt_data.update(
             schemaVersion=RECEIPT_SCHEMA_VERSION,

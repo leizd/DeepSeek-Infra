@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -120,7 +120,12 @@ def test_production_commit_keeps_receipt_v4_commit_v4_and_local_durability_separ
         (json.dumps(result.commit, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
     ).hexdigest()
     assert transfer["stateDetails"]["remoteCommitDigest"] != "sha256:" + str(result.commit["commitHash"])
-    assert len(fixture["journal"].list_transfer_events(fixture["transferId"])) == 6
+    events = fixture["journal"].list_transfer_events(fixture["transferId"])
+    assert len(events) == 6
+    committed_event = next(event for event in events if event["nextState"] == federation_transfer_journal.STATE_REMOTE_COMMITTED)
+    assert datetime.fromisoformat(str(committed_event["occurredAt"]).replace("Z", "+00:00")) >= datetime.fromisoformat(
+        str(result.receipt["createdAt"]).replace("Z", "+00:00")
+    )
 
     repeated = _commit(fixture, monkeypatch, target)
     assert repeated.receipt == result.receipt

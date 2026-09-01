@@ -844,6 +844,7 @@ class FederationNode:
         now = self._now()
         try:
             sequence = self._state.next_sequence(f"dr:{transfer_id}", now=now)
+            production_result: dict[str, Any] = {}
             attestation = federated_dr_drill.run_federated_dr_drill(
                 signer=self._signer,
                 receiver=self._receiver,
@@ -858,6 +859,7 @@ class FederationNode:
                 sequence=sequence,
                 signed_at=None,
                 expires_at=None,
+                evidence_sink=production_result,
             )
         except Exception as exc:
             self._raise_domain(exc)
@@ -867,6 +869,7 @@ class FederationNode:
             "requestId": request_id,
             "transferId": transfer_id,
             "attestation": attestation,
+            "productionRestoreResult": production_result,
         }
         return self._state.put_effect(effect_key, effect, now=self._now())
 

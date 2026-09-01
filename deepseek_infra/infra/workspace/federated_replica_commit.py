@@ -131,6 +131,14 @@ def _canonical_utc_timestamp_valid(value: Any) -> bool:
     )
 
 
+def _receipt_created_at(receipt: dict[str, Any]) -> datetime:
+    value = receipt.get("createdAt")
+    if not _canonical_utc_timestamp_valid(value):
+        raise FederatedReplicaCommitError("FEDERATION_REPLICA_REMOTE_RECEIPT_INVALID")
+    assert isinstance(value, str)
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
 def _parse_json(raw: bytes, *, code: str) -> dict[str, Any]:
     try:
         parsed = json.loads(raw.decode("utf-8"))
@@ -536,6 +544,14 @@ def commit_federated_replica(
         reconciled = existing is not None
         converged = reconciled
         if existing is None:
+            receipt = backup_publish.receipt_for(
+                package,
+                run_id=federated_run_id(transfer_id),
+                policy_id=str(transfer["policyId"]),
+                target_id=target.target_id,
+                schedule_slot=federated_schedule_slot(transfer_id),
+            )
+            receipt["createdAt"] = now.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
             try:
                 attempted = backup_publish.publish_backup(
                     target,
@@ -544,6 +560,7 @@ def commit_federated_replica(
                     policy_id=str(transfer["policyId"]),
                     schedule_slot=federated_schedule_slot(transfer_id),
                     fencing_token=fencing_token,
+                    receipt=receipt,
                     checkpoint=checkpoint,
                     traffic_class=backup_transfer_budget.TrafficClass.P3_REQUIRED_REPLICATION,
                     local_durability_credit=False,
@@ -574,7 +591,7 @@ def commit_federated_replica(
             transfer,
             target_id=target_id,
             published=published,
-            now=now,
+            now=max(now.astimezone(timezone.utc), _receipt_created_at(published.receipt)),
         )
         return FederatedReplicaCommitResult(
             transfer_id=transfer_id,

@@ -417,6 +417,7 @@ def run_federated_dr_drill(
     expires_at: datetime | None = None,
     client: Any | None = None,
     clock: Callable[[], datetime] = _now,
+    evidence_sink: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Restore a committed federated replica through the production drill path."""
 
@@ -527,6 +528,8 @@ def run_federated_dr_drill(
         committed_at=committed_at,
         signed_at=normalized_signed_at,
     )
+    if evidence_sink is not None:
+        evidence_sink.update(copy.deepcopy(result))
     payload = {
         "schema": DR_DRILL_ATTESTATION_SCHEMA,
         "fleetId": signer.fleet_id,

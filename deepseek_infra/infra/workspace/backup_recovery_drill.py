@@ -260,6 +260,14 @@ def _run_recovery_drill_locked(restore_id: str, *, client: Any | None = None) ->
     inspected: dict[str, Any] = {}
     try:
         if str(session.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1:
+            if str(session.get("phase") or "") == "fetching-controls":
+                controls = backup_remote_restore.fetch_restore_session(restore_id, client=client)
+                if str(controls.get("phase") or "") != "controls-fetched":
+                    raise AppError(
+                        "Recovery Drill control fetch did not reach a verified terminal phase",
+                        code=ErrorCode.INVALID_REQUEST,
+                        status=409,
+                    )
             backup_remote_restore.preflight_restore_session(restore_id, client=client)
         fetched = backup_remote_restore.fetch_restore_session(restore_id, client=client)
         if str(fetched.get("phase") or "") not in {"fetched", "chain-fetched", "components-fetched"}:
