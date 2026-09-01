@@ -21,6 +21,8 @@ PEER_TRUST_RECORD_SCHEMA = "federation-peer-trust-record-v1"
 ONLINE_SIGNER_TRUST_RECORD_SCHEMA = "federation-online-signer-trust-record-v1"
 READINESS_SEQUENCE_RECORD_SCHEMA = "federation-readiness-sequence-v1"
 CHALLENGE_JOURNAL_RECORD_SCHEMA = "federation-challenge-journal-v1"
+INGRESS_GRANT_RECORD_SCHEMA = "federation-ingress-grant-record-v1"
+INGRESS_WRITE_RESERVATION_SCHEMA = "federation-ingress-write-reservation-v1"
 STATE_PENDING = "PENDING"
 STATE_VERIFIED = "VERIFIED"
 STATE_ACTIVE = "ACTIVE"
@@ -36,11 +38,39 @@ CHALLENGE_DIRECTIONS = frozenset({CHALLENGE_DIRECTION_OUTBOUND, CHALLENGE_DIRECT
 CHALLENGE_STATE_PENDING = "PENDING"
 CHALLENGE_STATE_RESPONDED = "RESPONDED"
 CHALLENGE_STATE_CONSUMED = "CONSUMED"
+INGRESS_GRANT_STATE_ACTIVE = "ACTIVE"
+INGRESS_GRANT_STATE_REVOKED = "REVOKED"
 
 _FLEET_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 _SIGNER_KEY_ID_PATTERN = re.compile(r"^fed-signer-[0-9a-f]{24}$")
 _SHA256_DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+_GRANT_ID_PATTERN = re.compile(r"^grant-[0-9a-f]{32}$")
+_WRITE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_CONTROL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _REQUIRED_METADATA_FIELDS = frozenset({"provider", "region", "jurisdiction", "siteClass"})
+_INGRESS_GRANT_FIELDS = frozenset(
+    {
+        "schema",
+        "fleetId",
+        "grantId",
+        "sourceFleetId",
+        "destinationFleetId",
+        "transferId",
+        "policyId",
+        "backupId",
+        "objectSetDigest",
+        "allowedObjectPrefix",
+        "maxBytes",
+        "issuedAt",
+        "expiresAt",
+        "nonce",
+        "sessionNonceDigest",
+        "signerCertificate",
+        "signerKeyId",
+        "signatureAlgorithm",
+        "signature",
+    }
+)
 _MAX_AUDIT_TEXT_LENGTH = 256
 
 _CREATE_LOCAL_IDENTITY_SQL = """
@@ -176,6 +206,46 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_federation_challenge_nonce
 ON federation_challenge_journal(nonce_digest)
 """
 
+_CREATE_INGRESS_GRANTS_SQL = """
+CREATE TABLE IF NOT EXISTS federation_ingress_grants (
+    grant_id TEXT PRIMARY KEY,
+    session_nonce_digest TEXT NOT NULL UNIQUE,
+    grant_nonce_digest TEXT NOT NULL UNIQUE,
+    source_fleet_id TEXT NOT NULL,
+    destination_fleet_id TEXT NOT NULL,
+    transfer_id TEXT NOT NULL,
+    policy_id TEXT NOT NULL,
+    backup_id TEXT NOT NULL,
+    object_set_digest TEXT NOT NULL,
+    allowed_object_prefix TEXT NOT NULL,
+    max_bytes INTEGER NOT NULL CHECK(max_bytes > 0),
+    signer_key_id TEXT NOT NULL,
+    grant_digest TEXT NOT NULL,
+    grant_json TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('ACTIVE', 'REVOKED')),
+    bytes_reserved INTEGER NOT NULL CHECK(bytes_reserved >= 0),
+    issued_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK(revision >= 1),
+    FOREIGN KEY(source_fleet_id) REFERENCES federation_peer_trust(peer_fleet_id)
+)
+"""
+
+_CREATE_INGRESS_WRITES_SQL = """
+CREATE TABLE IF NOT EXISTS federation_ingress_writes (
+    grant_id TEXT NOT NULL,
+    write_id TEXT NOT NULL,
+    object_key TEXT NOT NULL,
+    byte_count INTEGER NOT NULL CHECK(byte_count > 0),
+    bytes_reserved_after INTEGER NOT NULL CHECK(bytes_reserved_after > 0),
+    reserved_at TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK(revision >= 1),
+    PRIMARY KEY(grant_id, write_id),
+    FOREIGN KEY(grant_id) REFERENCES federation_ingress_grants(grant_id)
+)
+"""
+
 
 class FederationTrustError(RuntimeError):
     """Fail-closed trust-registry error with a stable machine-readable code."""
@@ -235,6 +305,54 @@ def _challenge_nonce_digest(value: Any) -> str:
     except UnicodeEncodeError as exc:
         raise FederationTrustError("FEDERATION_CHALLENGE_NONCE_INVALID") from exc
     return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def _grant_id(value: Any) -> str:
+    if type(value) is not str or _GRANT_ID_PATTERN.fullmatch(value) is None:
+        raise FederationTrustError("FEDERATION_INGRESS_GRANT_ID_INVALID")
+    return value
+
+
+def _write_id(value: Any) -> str:
+    if type(value) is not str or _WRITE_ID_PATTERN.fullmatch(value) is None:
+        raise FederationTrustError("FEDERATION_INGRESS_WRITE_ID_INVALID")
+    return value
+
+
+def _control_id(value: Any, *, code: str) -> str:
+    if type(value) is not str or _CONTROL_ID_PATTERN.fullmatch(value) is None:
+        raise FederationTrustError(code)
+    return value
+
+
+def _object_prefix(value: Any) -> str:
+    if type(value) is not str or not value.startswith("federation/") or not value.endswith("/"):
+        raise FederationTrustError("FEDERATION_INGRESS_OBJECT_PREFIX_INVALID")
+    lowered = value.casefold()
+    if (
+        "\\" in value
+        or "//" in value
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+        or any(encoded in lowered for encoded in ("%2e", "%2f", "%5c"))
+        or any(segment in {".", ".."} for segment in value.split("/") if segment)
+    ):
+        raise FederationTrustError("FEDERATION_INGRESS_OBJECT_PREFIX_INVALID")
+    return value
+
+
+def _object_key(value: Any, *, prefix: str) -> str:
+    if type(value) is not str or not value.startswith(prefix) or value == prefix:
+        raise FederationTrustError("FEDERATION_INGRESS_OBJECT_PREFIX_VIOLATION")
+    lowered = value.casefold()
+    if (
+        "\\" in value
+        or "//" in value
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+        or any(encoded in lowered for encoded in ("%2e", "%2f", "%5c"))
+        or any(segment in {"", ".", ".."} for segment in value[len(prefix) :].split("/"))
+    ):
+        raise FederationTrustError("FEDERATION_INGRESS_OBJECT_PREFIX_VIOLATION")
+    return value
 
 
 def _stored_timestamp(value: Any, *, code: str) -> datetime:
@@ -311,6 +429,8 @@ class PeerTrustRegistry:
             connection.execute(_CREATE_READINESS_SEQUENCES_SQL)
             connection.execute(_CREATE_CHALLENGE_JOURNAL_SQL)
             connection.execute(_CREATE_CHALLENGE_NONCE_INDEX_SQL)
+            connection.execute(_CREATE_INGRESS_GRANTS_SQL)
+            connection.execute(_CREATE_INGRESS_WRITES_SQL)
 
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
@@ -432,6 +552,45 @@ class PeerTrustRegistry:
         }
 
     @staticmethod
+    def _ingress_grant_record(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "schema": INGRESS_GRANT_RECORD_SCHEMA,
+            "grantId": str(row["grant_id"]),
+            "sessionNonceDigest": str(row["session_nonce_digest"]),
+            "grantNonceDigest": str(row["grant_nonce_digest"]),
+            "sourceFleetId": str(row["source_fleet_id"]),
+            "destinationFleetId": str(row["destination_fleet_id"]),
+            "transferId": str(row["transfer_id"]),
+            "policyId": str(row["policy_id"]),
+            "backupId": str(row["backup_id"]),
+            "objectSetDigest": str(row["object_set_digest"]),
+            "allowedObjectPrefix": str(row["allowed_object_prefix"]),
+            "maxBytes": int(row["max_bytes"]),
+            "signerKeyId": str(row["signer_key_id"]),
+            "grantDigest": str(row["grant_digest"]),
+            "grant": json.loads(str(row["grant_json"])),
+            "state": str(row["state"]),
+            "bytesReserved": int(row["bytes_reserved"]),
+            "issuedAt": str(row["issued_at"]),
+            "expiresAt": str(row["expires_at"]),
+            "createdAt": str(row["created_at"]),
+            "revision": int(row["revision"]),
+        }
+
+    @staticmethod
+    def _ingress_write_record(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "schema": INGRESS_WRITE_RESERVATION_SCHEMA,
+            "grantId": str(row["grant_id"]),
+            "writeId": str(row["write_id"]),
+            "objectKey": str(row["object_key"]),
+            "byteCount": int(row["byte_count"]),
+            "bytesReservedAfter": int(row["bytes_reserved_after"]),
+            "reservedAt": str(row["reserved_at"]),
+            "revision": int(row["revision"]),
+        }
+
+    @staticmethod
     def _peer_row(connection: sqlite3.Connection, peer_fleet_id: str) -> sqlite3.Row | None:
         return connection.execute(
             "SELECT * FROM federation_peer_trust WHERE peer_fleet_id = ?",
@@ -502,6 +661,7 @@ class PeerTrustRegistry:
         root_identity: dict[str, Any],
         expected_schema: str,
         validation_time: datetime,
+        required_purpose: str = federation_identity.PURPOSE_SESSION_AUTHENTICATION,
     ) -> dict[str, Any]:
         if type(certificate) is not dict:
             raise FederationTrustError("FEDERATION_CHALLENGE_SIGNER_CERTIFICATE_INVALID")
@@ -512,7 +672,7 @@ class PeerTrustRegistry:
                 root_identity=root_identity,
                 expected_schema=expected_schema,
                 now=validation_time,
-                required_purpose=federation_identity.PURPOSE_SESSION_AUTHENTICATION,
+                required_purpose=required_purpose,
             )
         except federation_identity.FederationIdentityError as exc:
             raise FederationTrustError(exc.code) from exc
@@ -1437,6 +1597,359 @@ class PeerTrustRegistry:
             ).fetchone()
             assert updated is not None
             return self._challenge_record(updated)
+
+    def record_ingress_grant(
+        self,
+        grant: dict[str, Any],
+        *,
+        recorded_at: datetime,
+    ) -> dict[str, Any]:
+        """Atomically bind one receiver-issued grant to one authenticated session."""
+
+        if type(grant) is not dict:
+            raise FederationTrustError("FEDERATION_INGRESS_GRANT_DOCUMENT_INVALID")
+        try:
+            normalized_value = federation_identity.normalize_federation_json(grant)
+        except federation_identity.FederationIdentityError as exc:
+            raise FederationTrustError("FEDERATION_INGRESS_GRANT_DOCUMENT_INVALID") from exc
+        if type(normalized_value) is not dict or set(normalized_value) != _INGRESS_GRANT_FIELDS:
+            raise FederationTrustError("FEDERATION_INGRESS_GRANT_FIELDS_INVALID")
+        normalized = normalized_value
+        if normalized.get("schema") != "federation-ingress-grant-v1":
+            raise FederationTrustError("FEDERATION_INGRESS_GRANT_SCHEMA_INVALID")
+
+        local_fleet_id = str(self._local_identity["fleetId"])
+        grant_id = _grant_id(normalized.get("grantId"))
+        source = _fleet_id(normalized.get("sourceFleetId"))
+        destination = _fleet_id(normalized.get("destinationFleetId"))
+        if normalized.get("fleetId") != destination or destination != local_fleet_id or source == destination:
+            raise FederationTrustError("FEDERATION_INGRESS_GRANT_FLEET_BINDING_INVALID")
+        transfer = _sha256_digest(
+            normalized.get("transferId"),
+            code="FEDERATION_INGRESS_TRANSFER_ID_INVALID",
+        )
+        policy = _control_id(normalized.get("policyId"), code="FEDERATION_INGRESS_POLICY_ID_INVALID")
+        backup = _control_id(normalized.get("backupId"), code="FEDERATION_INGRESS_BACKUP_ID_INVALID")
+        object_set = _sha256_digest(
+            normalized.get("objectSetDigest"),
+            code="FEDERATION_INGRESS_OBJECT_SET_DIGEST_INVALID",
+        )
+        prefix = _object_prefix(normalized.get("allowedObjectPrefix"))
+        max_bytes = normalized.get("maxBytes")
+        if (
+            isinstance(max_bytes, bool)
+            or not isinstance(max_bytes, int)
+            or not (0 < max_bytes <= (1 << 63) - 1)
+        ):
+            raise FederationTrustError("FEDERATION_INGRESS_MAX_BYTES_INVALID")
+        session_nonce = _sha256_digest(
+            normalized.get("sessionNonceDigest"),
+            code="FEDERATION_INGRESS_SESSION_NONCE_DIGEST_INVALID",
+        )
+        grant_nonce = _challenge_nonce_digest(normalized.get("nonce"))
+        signer = _signer_key_id(normalized.get("signerKeyId"))
+        issued_at = _stored_timestamp(
+            normalized.get("issuedAt"),
+            code="FEDERATION_INGRESS_TIMESTAMP_INVALID",
+        )
+        expires_at = _stored_timestamp(
+            normalized.get("expiresAt"),
+            code="FEDERATION_INGRESS_TIMESTAMP_INVALID",
+        )
+        recorded_at_iso = _utc_iso(recorded_at)
+        recorded_time = _stored_timestamp(recorded_at_iso, code="FEDERATION_INGRESS_TIMESTAMP_INVALID")
+        if (
+            normalized.get("issuedAt") != _utc_iso(issued_at)
+            or normalized.get("expiresAt") != _utc_iso(expires_at)
+            or not (issued_at <= recorded_time < expires_at)
+        ):
+            raise FederationTrustError("FEDERATION_INGRESS_GRANT_WINDOW_INVALID")
+        certificate = normalized.get("signerCertificate")
+        if type(certificate) is not dict:
+            raise FederationTrustError("FEDERATION_INGRESS_SIGNER_CERTIFICATE_INVALID")
+        certificate_expires_at = _stored_timestamp(
+            certificate.get("expiresAt"),
+            code="FEDERATION_INGRESS_SIGNER_CERTIFICATE_INVALID",
+        )
+        if expires_at > certificate_expires_at:
+            raise FederationTrustError("FEDERATION_INGRESS_SIGNER_WINDOW_INVALID")
+        self._verify_signed_document(
+            normalized,
+            certificate=certificate,
+            root_identity=self._local_identity,
+            expected_schema="federation-ingress-grant-v1",
+            validation_time=issued_at,
+            required_purpose=federation_identity.PURPOSE_INGRESS_GRANT,
+        )
+        grant_json = _canonical_json(normalized)
+        grant_digest = _digest(normalized)
+
+        with self._write() as connection:
+            peer_row = self._peer_row(connection, source)
+            if peer_row is None:
+                raise FederationTrustError("FEDERATION_PEER_NOT_PINNED")
+            if peer_row["state"] == STATE_REVOKED:
+                raise FederationTrustError("FEDERATION_PEER_REVOKED")
+            if peer_row["state"] != STATE_ACTIVE:
+                raise FederationTrustError("FEDERATION_PEER_NOT_ACTIVE")
+            challenge_row = connection.execute(
+                """
+                SELECT * FROM federation_challenge_journal
+                WHERE direction = ? AND nonce_digest = ?
+                """,
+                (CHALLENGE_DIRECTION_INBOUND, session_nonce),
+            ).fetchone()
+            if challenge_row is None:
+                raise FederationTrustError("FEDERATION_INGRESS_SESSION_NOT_AUTHENTICATED")
+            challenge_document = json.loads(str(challenge_row["challenge_json"]))
+            challenge_certificate = challenge_document.get("signerCertificate")
+            if type(challenge_certificate) is not dict:
+                raise FederationTrustError("FEDERATION_CHALLENGE_SIGNER_CERTIFICATE_INVALID")
+            challenge_signer = _signer_key_id(challenge_document.get("signerKeyId"))
+            self._require_active_signer_in_tx(
+                connection,
+                peer_fleet_id=source,
+                signer_key_id=challenge_signer,
+                validation_time=recorded_time,
+                required_purpose=federation_identity.PURPOSE_SESSION_AUTHENTICATION,
+            )
+            peer_identity = json.loads(str(peer_row["identity_json"]))
+            self._verify_signed_document(
+                challenge_document,
+                certificate=challenge_certificate,
+                root_identity=peer_identity,
+                expected_schema="federation-challenge-v1",
+                validation_time=recorded_time,
+                required_purpose=federation_identity.PURPOSE_SESSION_AUTHENTICATION,
+            )
+            challenge_expires_at = _stored_timestamp(
+                challenge_row["expires_at"],
+                code="FEDERATION_CHALLENGE_TIMESTAMP_INVALID",
+            )
+            if (
+                challenge_row["state"] != CHALLENGE_STATE_RESPONDED
+                or challenge_row["peer_fleet_id"] != source
+                or challenge_row["source_fleet_id"] != source
+                or challenge_row["destination_fleet_id"] != destination
+                or challenge_row["session_purpose"] != "REMOTE_CUSTODY"
+                or recorded_time >= challenge_expires_at
+                or expires_at > challenge_expires_at
+            ):
+                raise FederationTrustError("FEDERATION_INGRESS_SESSION_NOT_AUTHENTICATED")
+            existing_session = connection.execute(
+                "SELECT grant_id FROM federation_ingress_grants WHERE session_nonce_digest = ?",
+                (session_nonce,),
+            ).fetchone()
+            if existing_session is not None:
+                raise FederationTrustError("FEDERATION_INGRESS_SESSION_REPLAY")
+            existing_id = connection.execute(
+                "SELECT grant_digest FROM federation_ingress_grants WHERE grant_id = ?",
+                (grant_id,),
+            ).fetchone()
+            if existing_id is not None:
+                raise FederationTrustError("FEDERATION_INGRESS_GRANT_IDENTITY_CONFLICT")
+            existing_nonce = connection.execute(
+                "SELECT grant_id FROM federation_ingress_grants WHERE grant_nonce_digest = ?",
+                (grant_nonce,),
+            ).fetchone()
+            if existing_nonce is not None:
+                raise FederationTrustError("FEDERATION_INGRESS_GRANT_NONCE_REPLAY")
+            connection.execute(
+                """
+                INSERT INTO federation_ingress_grants (
+                    grant_id, session_nonce_digest, grant_nonce_digest,
+                    source_fleet_id, destination_fleet_id, transfer_id,
+                    policy_id, backup_id, object_set_digest,
+                    allowed_object_prefix, max_bytes, signer_key_id,
+                    grant_digest, grant_json, state, bytes_reserved,
+                    issued_at, expires_at, created_at, revision
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 1)
+                """,
+                (
+                    grant_id,
+                    session_nonce,
+                    grant_nonce,
+                    source,
+                    destination,
+                    transfer,
+                    policy,
+                    backup,
+                    object_set,
+                    prefix,
+                    max_bytes,
+                    signer,
+                    grant_digest,
+                    grant_json,
+                    INGRESS_GRANT_STATE_ACTIVE,
+                    _utc_iso(issued_at),
+                    _utc_iso(expires_at),
+                    recorded_at_iso,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM federation_ingress_grants WHERE grant_id = ?",
+                (grant_id,),
+            ).fetchone()
+            assert row is not None
+            return self._ingress_grant_record(row)
+
+    def get_ingress_grant(self, grant_id: str) -> dict[str, Any] | None:
+        normalized_id = _grant_id(grant_id)
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM federation_ingress_grants WHERE grant_id = ?",
+                (normalized_id,),
+            ).fetchone()
+        return None if row is None else self._ingress_grant_record(row)
+
+    def get_ingress_grant_by_session_nonce(self, session_nonce_digest: str) -> dict[str, Any] | None:
+        nonce = _sha256_digest(
+            session_nonce_digest,
+            code="FEDERATION_INGRESS_SESSION_NONCE_DIGEST_INVALID",
+        )
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM federation_ingress_grants WHERE session_nonce_digest = ?",
+                (nonce,),
+            ).fetchone()
+        return None if row is None else self._ingress_grant_record(row)
+
+    def reserve_ingress_write(
+        self,
+        grant: dict[str, Any],
+        *,
+        source_fleet_id: str,
+        write_id: str,
+        object_key: str,
+        byte_count: int,
+        reserved_at: datetime,
+    ) -> dict[str, Any]:
+        """Atomically fence a scoped write identity and cumulative byte budget."""
+
+        if type(grant) is not dict:
+            raise FederationTrustError("FEDERATION_INGRESS_GRANT_DOCUMENT_INVALID")
+        try:
+            normalized_value = federation_identity.normalize_federation_json(grant)
+        except federation_identity.FederationIdentityError as exc:
+            raise FederationTrustError("FEDERATION_INGRESS_GRANT_DOCUMENT_INVALID") from exc
+        if type(normalized_value) is not dict or set(normalized_value) != _INGRESS_GRANT_FIELDS:
+            raise FederationTrustError("FEDERATION_INGRESS_GRANT_FIELDS_INVALID")
+        normalized = normalized_value
+        grant_id = _grant_id(normalized.get("grantId"))
+        source = _fleet_id(source_fleet_id)
+        normalized_write_id = _write_id(write_id)
+        if isinstance(byte_count, bool) or not isinstance(byte_count, int) or byte_count <= 0:
+            raise FederationTrustError("FEDERATION_INGRESS_BYTE_COUNT_INVALID")
+        reserved_at_iso = _utc_iso(reserved_at)
+        validation_time = _stored_timestamp(reserved_at_iso, code="FEDERATION_INGRESS_TIMESTAMP_INVALID")
+
+        with self._write() as connection:
+            row = connection.execute(
+                "SELECT * FROM federation_ingress_grants WHERE grant_id = ?",
+                (grant_id,),
+            ).fetchone()
+            if row is None:
+                raise FederationTrustError("FEDERATION_INGRESS_GRANT_NOT_FOUND")
+            peer_row = self._peer_row(connection, source)
+            if peer_row is None:
+                raise FederationTrustError("FEDERATION_PEER_NOT_PINNED")
+            if peer_row["state"] == STATE_REVOKED:
+                raise FederationTrustError("FEDERATION_PEER_REVOKED")
+            if peer_row["state"] != STATE_ACTIVE:
+                raise FederationTrustError("FEDERATION_PEER_NOT_ACTIVE")
+            if row["state"] != INGRESS_GRANT_STATE_ACTIVE:
+                raise FederationTrustError("FEDERATION_INGRESS_GRANT_NOT_ACTIVE")
+            if row["source_fleet_id"] != source or normalized.get("sourceFleetId") != source:
+                raise FederationTrustError("FEDERATION_INGRESS_SOURCE_FLEET_MISMATCH")
+            if (
+                row["grant_digest"] != _digest(normalized)
+                or row["grant_json"] != _canonical_json(normalized)
+            ):
+                raise FederationTrustError("FEDERATION_INGRESS_GRANT_IDENTITY_CONFLICT")
+            expires_at = _stored_timestamp(
+                row["expires_at"],
+                code="FEDERATION_INGRESS_TIMESTAMP_INVALID",
+            )
+            issued_at = _stored_timestamp(
+                row["issued_at"],
+                code="FEDERATION_INGRESS_TIMESTAMP_INVALID",
+            )
+            if validation_time < issued_at:
+                raise FederationTrustError("FEDERATION_INGRESS_GRANT_FROM_FUTURE")
+            if validation_time >= expires_at:
+                raise FederationTrustError("FEDERATION_INGRESS_GRANT_EXPIRED")
+            certificate = normalized.get("signerCertificate")
+            if type(certificate) is not dict:
+                raise FederationTrustError("FEDERATION_INGRESS_SIGNER_CERTIFICATE_INVALID")
+            self._verify_signed_document(
+                normalized,
+                certificate=certificate,
+                root_identity=self._local_identity,
+                expected_schema="federation-ingress-grant-v1",
+                validation_time=validation_time,
+                required_purpose=federation_identity.PURPOSE_INGRESS_GRANT,
+            )
+            prefix = _object_prefix(row["allowed_object_prefix"])
+            normalized_key = _object_key(object_key, prefix=prefix)
+            existing = connection.execute(
+                """
+                SELECT * FROM federation_ingress_writes
+                WHERE grant_id = ? AND write_id = ?
+                """,
+                (grant_id, normalized_write_id),
+            ).fetchone()
+            if existing is not None:
+                if existing["object_key"] != normalized_key or int(existing["byte_count"]) != byte_count:
+                    raise FederationTrustError("FEDERATION_INGRESS_WRITE_IDENTITY_CONFLICT")
+                return self._ingress_write_record(existing)
+            bytes_reserved_after = int(row["bytes_reserved"]) + byte_count
+            if bytes_reserved_after > int(row["max_bytes"]):
+                raise FederationTrustError("FEDERATION_INGRESS_MAX_BYTES_EXCEEDED")
+            connection.execute(
+                """
+                INSERT INTO federation_ingress_writes (
+                    grant_id, write_id, object_key, byte_count,
+                    bytes_reserved_after, reserved_at, revision
+                ) VALUES (?, ?, ?, ?, ?, ?, 1)
+                """,
+                (
+                    grant_id,
+                    normalized_write_id,
+                    normalized_key,
+                    byte_count,
+                    bytes_reserved_after,
+                    reserved_at_iso,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE federation_ingress_grants
+                SET bytes_reserved = ?, revision = revision + 1
+                WHERE grant_id = ? AND bytes_reserved = ?
+                """,
+                (bytes_reserved_after, grant_id, int(row["bytes_reserved"])),
+            )
+            created = connection.execute(
+                """
+                SELECT * FROM federation_ingress_writes
+                WHERE grant_id = ? AND write_id = ?
+                """,
+                (grant_id, normalized_write_id),
+            ).fetchone()
+            assert created is not None
+            return self._ingress_write_record(created)
+
+    def list_ingress_writes(self, grant_id: str) -> list[dict[str, Any]]:
+        normalized_id = _grant_id(grant_id)
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM federation_ingress_writes
+                WHERE grant_id = ? ORDER BY reserved_at, write_id
+                """,
+                (normalized_id,),
+            ).fetchall()
+        return [self._ingress_write_record(row) for row in rows]
 
     def get_federation_challenge(self, direction: str, nonce_digest: str) -> dict[str, Any] | None:
         normalized_direction = _challenge_direction(direction)

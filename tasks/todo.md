@@ -41,9 +41,9 @@
 
 ## Receiver-controlled custody
 
-- [ ] Add signed `federation-ingress-grant-v1`
-- [ ] Bind both Fleets, transfer, policy, backup, object set, prefix, bytes, and time
-- [ ] Keep Receiver long-lived S3 credentials private
+- [x] Add signed `federation-ingress-grant-v1`
+- [x] Bind both Fleets, transfer, policy, backup, object set, prefix, bytes, and time
+- [x] Keep Receiver long-lived S3 credentials private
 - [ ] Add domain-separated immutable transfer identity
 - [ ] Add durable transfer journal and query/reconcile API
 - [ ] Make same transfer resume one effect and conflicting transfer fail closed
