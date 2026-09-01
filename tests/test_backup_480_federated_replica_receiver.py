@@ -212,6 +212,7 @@ def _fixture(
         "registry": registry_b,
         "signerB": signer_b,
         "certificateB": certificate_b,
+        "challenge": challenge,
         "receiver": receiver,
         "grant": grant,
         "package": package,
