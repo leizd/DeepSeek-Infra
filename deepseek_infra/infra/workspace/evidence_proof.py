@@ -1403,6 +1403,16 @@ def validate_typed_federated_dr_proof(evidence: dict[str, Any], check_name: str)
     return federated_dr_proof.validate_federated_dr_proof(evidence)
 
 
+def validate_typed_federation_runtime_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    """Validate process/topology evidence from the real federation E2E."""
+
+    from deepseek_infra.infra.workspace import federation_runtime_proof
+
+    if check_name not in federation_runtime_proof.FEDERATION_RUNTIME_PROOF_CHECKS:
+        return [f"unsupported-federation-runtime-proof-check:{check_name}"]
+    return federation_runtime_proof.validate_federation_runtime_proof(evidence)
+
+
 _FEDERATED_REPLICA_WIRE_CHECKS = frozenset(
     {
         "objectSetV1WireFormatUnchanged",
@@ -1605,6 +1615,11 @@ VALIDATORS: dict[str, CheckValidator] = {
     "federatedDrProofBindsRemoteReceiptAndCommit": validate_typed_federated_dr_proof,
     "federatedDrProofRequiresCleanupSuccess": validate_typed_federated_dr_proof,
     "federatedDrProofIsSemanticallyValidated": validate_typed_federated_dr_proof,
+    "realTwoFleetFourMinioReplicationE2E": validate_typed_federation_runtime_proof,
+    "realReceiverProcessSigkillResumesTransfer": validate_typed_federation_runtime_proof,
+    "realReceiverRestartDoesNotDuplicateCommit": validate_typed_federation_runtime_proof,
+    "revokedPeerCannotStartTransfer": validate_typed_federation_runtime_proof,
+    "fleetProcessesUseDistinctStorageCredentials": validate_typed_federation_runtime_proof,
 }
 
 

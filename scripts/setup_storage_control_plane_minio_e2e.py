@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local Storage Control Plane MinIO Evidence environment helper.
 
-Brings up the same three-MinIO topology CI uses, prints shell env, and can
+Brings up the same five-MinIO harness CI uses, prints shell env, and can
 invoke the Evidence runner or the 4.6.8 process-replacement node alone.
 
 Formal release Evidence remains owned by CI job ``storage-control-plane-minio-e2e``
@@ -36,15 +36,21 @@ MINIO_IMAGE = (
 )
 DEFAULT_USER = "deepseekci"
 DEFAULT_PASSWORD = "local-storage-control-e2e"  # pragma: allowlist secret
+DEFAULT_FEDERATION_USER = "deepseekfederation"
+DEFAULT_FEDERATION_PASSWORD = "local-federation-storage-e2e"  # pragma: allowlist secret
 CONTAINERS = (
     ("DEEPSEEK_TEST_MINIO_CONTAINER_A", "deepseek-minio-control-a", 9000),
     ("DEEPSEEK_TEST_MINIO_CONTAINER_B", "deepseek-minio-control-b", 9001),
     ("DEEPSEEK_TEST_MINIO_CONTAINER_C", "deepseek-minio-control-c", 9002),
+    ("DEEPSEEK_TEST_MINIO_CONTAINER_D", "deepseek-minio-control-d", 9003),
+    ("DEEPSEEK_TEST_MINIO_CONTAINER_E", "deepseek-minio-control-e", 9004),
 )
 ENDPOINT_ENV = (
     ("DEEPSEEK_TEST_S3_ENDPOINT_A", "http://127.0.0.1:9000"),
     ("DEEPSEEK_TEST_S3_ENDPOINT_B", "http://127.0.0.1:9001"),
     ("DEEPSEEK_TEST_S3_ENDPOINT_C", "http://127.0.0.1:9002"),
+    ("DEEPSEEK_TEST_S3_ENDPOINT_D", "http://127.0.0.1:9003"),
+    ("DEEPSEEK_TEST_S3_ENDPOINT_E", "http://127.0.0.1:9004"),
 )
 PROCESS_REPLACE_NODE = (
     "tests/test_backup_468_real_backup_dr_sigkill_e2e.py::"
@@ -62,18 +68,39 @@ def default_credentials() -> tuple[str, str]:
     return user, password
 
 
-def evidence_env(*, user: str | None = None, password: str | None = None) -> dict[str, str]:
+def federation_credentials() -> tuple[str, str]:
+    user = str(os.environ.get("FEDERATION_MINIO_ROOT_USER") or DEFAULT_FEDERATION_USER)
+    password = str(os.environ.get("FEDERATION_MINIO_ROOT_PASSWORD") or DEFAULT_FEDERATION_PASSWORD)
+    return user, password
+
+
+def evidence_env(
+    *,
+    user: str | None = None,
+    password: str | None = None,
+    federation_user: str | None = None,
+    federation_password: str | None = None,
+) -> dict[str, str]:
     """Canonical env block for the Storage Control Plane MinIO Evidence runner."""
     access, secret = default_credentials()
     if user is not None:
         access = user
     if password is not None:
         secret = password
+    federation_access, federation_secret = federation_credentials()
+    if federation_user is not None:
+        federation_access = federation_user
+    if federation_password is not None:
+        federation_secret = federation_password
     env: dict[str, str] = {
         "MINIO_ROOT_USER": access,
         "MINIO_ROOT_PASSWORD": secret,
         "AWS_ACCESS_KEY_ID": access,
         "AWS_SECRET_ACCESS_KEY": secret,
+        "FEDERATION_MINIO_ROOT_USER": federation_access,
+        "FEDERATION_MINIO_ROOT_PASSWORD": federation_secret,
+        "DEEPSEEK_TEST_FEDERATION_ACCESS_KEY_ID": federation_access,
+        "DEEPSEEK_TEST_FEDERATION_SECRET_ACCESS_KEY": federation_secret,
         "DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E": "1",
     }
     for key, value in ENDPOINT_ENV:
@@ -141,6 +168,7 @@ def wait_for_minio(*, attempts: int = 45, sleep_seconds: float = 1.0) -> list[st
 
 def prerequisite_report() -> dict[str, Any]:
     user, password = default_credentials()
+    federation_user, federation_password = federation_credentials()
     docker_bin = find_docker()
     helper = backup_crypto.helper_path()
     boto3_ok = importlib.util.find_spec("boto3") is not None
@@ -159,6 +187,10 @@ def prerequisite_report() -> dict[str, Any]:
         errors.append("minio-unhealthy: run start (or docker compose up) then re-check")
     if not user or not password:
         errors.append("credentials-missing")
+    if not federation_user or not federation_password:
+        errors.append("federation-credentials-missing")
+    if (user, password) == (federation_user, federation_password):
+        errors.append("federation-credentials-must-be-distinct")
     return {
         "ok": not errors,
         "errors": errors,
@@ -170,8 +202,19 @@ def prerequisite_report() -> dict[str, Any]:
         "composeFileExists": COMPOSE_FILE.is_file(),
         "endpoints": endpoints,
         "endpointHealth": health,
-        "credentials": {"user": user, "passwordSet": bool(password)},
-        "env": evidence_env(user=user, password=password),
+        "credentials": {
+            "sourceUser": user,
+            "sourcePasswordSet": bool(password),
+            "federationUser": federation_user,
+            "federationPasswordSet": bool(federation_password),
+            "distinct": (user, password) != (federation_user, federation_password),
+        },
+        "env": evidence_env(
+            user=user,
+            password=password,
+            federation_user=federation_user,
+            federation_password=federation_password,
+        ),
     }
 
 
@@ -182,7 +225,7 @@ def _run(cmd: list[str], *, env: dict[str, str] | None = None) -> subprocess.Com
     return subprocess.run(cmd, cwd=ROOT, env=merged, text=True, check=False)
 
 
-def start_with_compose(*, user: str, password: str) -> int:
+def start_with_compose(*, user: str, password: str, federation_user: str, federation_password: str) -> int:
     docker = find_docker()
     if not docker:
         print("docker-cli-missing", file=sys.stderr)
@@ -193,6 +236,8 @@ def start_with_compose(*, user: str, password: str) -> int:
     env = {
         "MINIO_ROOT_USER": user,
         "MINIO_ROOT_PASSWORD": password,
+        "FEDERATION_MINIO_ROOT_USER": federation_user,
+        "FEDERATION_MINIO_ROOT_PASSWORD": federation_password,
     }
     # Prefer `docker compose` plugin; fall back to docker-compose binary.
     base = [docker, "compose", "-f", str(COMPOSE_FILE)]
@@ -218,13 +263,15 @@ def start_with_compose(*, user: str, password: str) -> int:
     return 0
 
 
-def start_with_docker_run(*, user: str, password: str) -> int:
+def start_with_docker_run(*, user: str, password: str, federation_user: str, federation_password: str) -> int:
     docker = find_docker()
     if not docker:
         print("docker-cli-missing", file=sys.stderr)
         return 2
-    env = {"MINIO_ROOT_USER": user, "MINIO_ROOT_PASSWORD": password}
     for _env_name, name, port in CONTAINERS:
+        access = federation_user if port >= 9003 else user
+        secret = federation_password if port >= 9003 else password
+        env = {"MINIO_ROOT_USER": access, "MINIO_ROOT_PASSWORD": secret}
         _run([docker, "rm", "-f", name], env=env)
         cmd = [
             docker,
@@ -309,10 +356,24 @@ def cmd_env(shell: str) -> int:
 
 def cmd_start(mode: str) -> int:
     user, password = default_credentials()
+    federation_user, federation_password = federation_credentials()
+    if (user, password) == (federation_user, federation_password):
+        print("federation-credentials-must-be-distinct", file=sys.stderr)
+        return 2
     if mode == "compose":
-        return start_with_compose(user=user, password=password)
+        return start_with_compose(
+            user=user,
+            password=password,
+            federation_user=federation_user,
+            federation_password=federation_password,
+        )
     if mode == "docker-run":
-        return start_with_docker_run(user=user, password=password)
+        return start_with_docker_run(
+            user=user,
+            password=password,
+            federation_user=federation_user,
+            federation_password=federation_password,
+        )
     print(f"unknown-start-mode:{mode}", file=sys.stderr)
     return 2
 
@@ -325,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
     env_p = sub.add_parser("env", help="Print shell exports for Evidence env")
     env_p.add_argument("--shell", choices=("pwsh", "bash", "dotenv"), default="pwsh")
 
-    start_p = sub.add_parser("start", help="Start three MinIO containers and wait for health")
+    start_p = sub.add_parser("start", help="Start five MinIO containers and wait for health")
     start_p.add_argument(
         "--mode",
         choices=("compose", "docker-run"),
@@ -333,7 +394,7 @@ def main(argv: list[str] | None = None) -> int:
         help="compose uses docker-compose.storage-control-minio.yml (default)",
     )
 
-    sub.add_parser("stop", help="Stop/remove the three MinIO containers")
+    sub.add_parser("stop", help="Stop/remove the five MinIO containers")
     sub.add_parser("check", help="Exit 0 only when full Evidence prereqs are green")
 
     run_p = sub.add_parser("run", help="Run Evidence tests with canonical env")

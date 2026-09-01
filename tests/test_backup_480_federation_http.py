@@ -135,7 +135,7 @@ def test_operator_routes_are_loopback_and_constant_token_protected() -> None:
     node = _Node()
     client = _client(node)
     transfer_id = "sha256:" + "a" * 64
-    routes = (
+    routes: tuple[tuple[str, dict[str, object]], ...] = (
         ("/federation/v1/operator/challenges", {"destinationFleetId": "fleet-b"}),
         ("/federation/v1/operator/challenges/verify", {"challenge": {}, "response": {}}),
         ("/federation/v1/operator/readiness/verify", {"attestation": {}}),

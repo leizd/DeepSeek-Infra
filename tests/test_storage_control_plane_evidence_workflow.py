@@ -5,6 +5,22 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
+from deepseek_infra.infra.diagnostics.evidence_inventory import (
+    FEDERATED_DR_REQUIRED_CHECKS,
+    FEDERATED_REPLICA_REQUIRED_CHECKS,
+    FEDERATION_RUNTIME_REQUIRED_CHECKS,
+    FEDERATION_TRUST_REQUIRED_CHECKS,
+)
+from deepseek_infra.infra.workspace import (
+    evidence_proof,
+    federated_dr_proof,
+    federated_replica_proof,
+    federation_runtime_proof,
+    federation_trust_proof,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -112,6 +128,10 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
     node_476_predictive = (
         "tests/test_backup_476_real_three_minio_predictive_e2e.py::test_real_three_minio_predictive_planning_e2e"
     )
+    node_480_federation = (
+        "tests/test_backup_480_real_two_fleet_four_minio_e2e.py::"
+        "test_real_two_fleet_four_minio_replication_sigkill_and_dr_e2e"
+    )
     assert runner.SCENARIOS == {
         "real-three-minio-storage-control-plane": (node_458,),
         "real-three-minio-tiering-control-recovery": (node_459,),
@@ -125,12 +145,15 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
         "durable-fleet-scheduler-slo-correctness": nodes_durable_fleet,
         "predictive-fleet-planning-verified-optimization": nodes_predictive_fleet,
         "real-three-minio-predictive-planning": (node_476_predictive,),
+        "real-two-fleet-four-minio-signed-federation": (node_480_federation,),
         "storage-wire-freeze-contracts": nodes_wire_freeze,
     }
     assert set(runner.REQUIRED_ENDPOINTS) == {
         "DEEPSEEK_TEST_S3_ENDPOINT_A",
         "DEEPSEEK_TEST_S3_ENDPOINT_B",
         "DEEPSEEK_TEST_S3_ENDPOINT_C",
+        "DEEPSEEK_TEST_S3_ENDPOINT_D",
+        "DEEPSEEK_TEST_S3_ENDPOINT_E",
     }
     assert runner.CHECK_SCENARIOS["realThreeMinioEndpoints"] == "real-three-minio-storage-control-plane"
     assert runner.CHECK_SCENARIOS["realAgeRandomizedEncryption"] == "real-three-minio-storage-control-plane"
@@ -197,6 +220,64 @@ def test_storage_control_plane_runner_owns_458_459_and_460_real_minio_scenarios(
     assert "predictiveProofRejectsSelfReportedZeroMutation" in required_predictive
     assert "whatIfProducesNoStorageWrites" in required_predictive
     assert runner.CHECK_SCENARIOS["whatIfProducesNoStorageWrites"] == runner.REAL_PREDICTIVE_SCENARIO
+    required_federation = runner.REQUIRED_PROOF_CHECKS[runner.REAL_FEDERATION_SCENARIO]
+    assert "realTwoFleetFourMinioReplicationE2E" in required_federation
+    assert "realReceiverProcessSigkillResumesTransfer" in required_federation
+    assert "federatedReplicaCreatesReceiptV4" in required_federation
+    assert "federatedDrDrillUsesProductionRestore" in required_federation
+    assert runner.CHECK_SCENARIOS["revokedPeerCannotStartTransfer"] == runner.REAL_FEDERATION_SCENARIO
+
+
+def test_federation_evidence_inventory_is_synchronized_with_typed_proof_contracts() -> None:
+    assert FEDERATION_TRUST_REQUIRED_CHECKS == federation_trust_proof.FEDERATION_TRUST_PROOF_CHECKS
+    assert FEDERATED_REPLICA_REQUIRED_CHECKS == federated_replica_proof.FEDERATED_REPLICA_PROOF_CHECKS
+    assert FEDERATED_DR_REQUIRED_CHECKS == federated_dr_proof.FEDERATED_DR_PROOF_CHECKS
+    assert FEDERATION_RUNTIME_REQUIRED_CHECKS == federation_runtime_proof.FEDERATION_RUNTIME_PROOF_CHECKS
+
+
+def test_runner_copies_only_semantically_valid_exact_proof_bytes(tmp_path: Path) -> None:
+    runner = _load(ROOT / "scripts" / "run_storage_control_plane_minio_e2e.py", "storage_control_proof_copy")
+    source = evidence_proof.write_evidence_proof(
+        tmp_path / "source.json",
+        scenario="proof-copy-scenario",
+        checks={"proofCopyIsSemantic": {"status": "PASS", "evidence": {"source": "unit-test"}}},
+    )
+    output = tmp_path / "output.json"
+
+    artifact = runner._copy_validated_proof(
+        proof_source=source,
+        proof_output=output,
+        proof_rel="docs/evidence/output.json",
+        scenario="proof-copy-scenario",
+        required_checks=("proofCopyIsSemantic",),
+    )
+
+    assert artifact is not None
+    assert output.read_bytes() == source.read_bytes()
+    assert artifact["bytes"] == output.stat().st_size
+    assert runner._copy_validated_proof(
+        proof_source=source,
+        proof_output=tmp_path / "wrong-scenario.json",
+        proof_rel="docs/evidence/wrong.json",
+        scenario="different-scenario",
+        required_checks=("proofCopyIsSemantic",),
+    ) is None
+
+
+def test_runner_requires_distinct_source_and_receiver_storage_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = _load(ROOT / "scripts" / "run_storage_control_plane_minio_e2e.py", "storage_control_credentials")
+    for index, name in enumerate(runner.REQUIRED_ENDPOINTS):
+        monkeypatch.setenv(name, f"http://127.0.0.1:{9100 + index}")
+    for index, name in enumerate(runner.REQUIRED_CONTAINERS):
+        monkeypatch.setenv(name, f"minio-{index}")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "same-principal")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "same-secret")
+    monkeypatch.setenv("DEEPSEEK_TEST_FEDERATION_ACCESS_KEY_ID", "same-principal")
+    monkeypatch.setenv("DEEPSEEK_TEST_FEDERATION_SECRET_ACCESS_KEY", "same-secret")
+    monkeypatch.setattr(runner.backup_crypto, "helper_path", lambda: ROOT / "bin" / "backup-crypto")
+    monkeypatch.setattr(runner.importlib.util, "find_spec", lambda _name: object())
+
+    assert "source and receiver storage credentials must be distinct" in runner._prerequisite_errors()
 
 
 def test_real_evidence_sources_forbid_fake_s3_stub_crypto_and_resolver_monkeypatch() -> None:
@@ -208,6 +289,7 @@ def test_real_evidence_sources_forbid_fake_s3_stub_crypto_and_resolver_monkeypat
         "tests/test_backup_463_real_control_authority_disaster_e2e.py",
         "tests/test_backup_472_real_three_minio_remediation_e2e.py",
         "tests/test_backup_476_real_three_minio_predictive_e2e.py",
+        "tests/test_backup_480_real_two_fleet_four_minio_e2e.py",
     ):
         source = (ROOT / rel).read_text(encoding="utf-8")
         assert "ProductionFakeS3Client" not in source
@@ -224,14 +306,21 @@ def test_legacy_runner_no_longer_claims_real_minio_evidence() -> None:
     assert "dual-minio-s3-e2e" not in legacy.SCENARIOS
 
 
-def test_ci_runs_three_independent_minio_servers_and_requires_new_producer() -> None:
+def test_ci_runs_five_minio_harness_with_isolated_four_minio_federation() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "  storage-control-plane-minio-e2e:\n" in workflow
     assert "--publish 9000:9000" in workflow
     assert "--publish 9001:9001" in workflow
     assert "--publish 9002:9002" in workflow
+    assert "--publish 9003:9003" in workflow
+    assert "--publish 9004:9004" in workflow
+    assert "DEEPSEEK_TEST_FEDERATION_ACCESS_KEY_ID: deepseekfederation" in workflow
+    assert "MINIO_ROOT_USER=\"$FEDERATION_MINIO_ROOT_USER\"" in workflow
     assert "python scripts/run_storage_control_plane_minio_e2e.py" in workflow
     assert "--producer storage-control-plane-minio-e2e" in workflow
     assert "storage-control-plane-predictive-proof-v${{ env.RELEASE_VERSION }}.json" in workflow
+    assert "federation-trust-proof-v${{ env.RELEASE_VERSION }}.json" in workflow
+    assert "federated-replica-proof-v${{ env.RELEASE_VERSION }}.json" in workflow
+    assert "federated-dr-proof-v${{ env.RELEASE_VERSION }}.json" in workflow
     assert workflow.count("      - storage-control-plane-minio-e2e\n") == 2
     assert "RC_CI_STORAGE_CONTROL_PLANE_MINIO_E2E" in workflow

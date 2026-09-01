@@ -1,4 +1,6 @@
-# Local three-MinIO topology for Storage Control Plane Evidence (matches CI ports).
+# Local five-MinIO harness for Storage Control Plane Evidence (matches CI ports).
+# A/B/C retain the single-Fleet credential domain; Federation uses A/B and the
+# independently credentialed D/E pair as its real four-MinIO topology.
 # Usage:
 #   docker compose -f docker-compose.storage-control-minio.yml up -d
 #   python scripts/setup_storage_control_plane_minio_e2e.py env
@@ -39,3 +41,23 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-local-storage-control-e2e}
     ports:
       - "127.0.0.1:9002:9002"
+
+  minio-d:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+    container_name: deepseek-minio-control-d
+    command: ["server", "/data", "--address", ":9003"]
+    environment:
+      MINIO_ROOT_USER: ${FEDERATION_MINIO_ROOT_USER:-deepseekfederation}
+      MINIO_ROOT_PASSWORD: ${FEDERATION_MINIO_ROOT_PASSWORD:-local-federation-storage-e2e}
+    ports:
+      - "127.0.0.1:9003:9003"
+
+  minio-e:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+    container_name: deepseek-minio-control-e
+    command: ["server", "/data", "--address", ":9004"]
+    environment:
+      MINIO_ROOT_USER: ${FEDERATION_MINIO_ROOT_USER:-deepseekfederation}
+      MINIO_ROOT_PASSWORD: ${FEDERATION_MINIO_ROOT_PASSWORD:-local-federation-storage-e2e}
+    ports:
+      - "127.0.0.1:9004:9004"

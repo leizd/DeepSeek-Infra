@@ -20,8 +20,8 @@ MINIO_IMAGE = (
     "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
     "@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2"
 )
-ENDPOINT_NAMES = tuple(f"DEEPSEEK_TEST_S3_ENDPOINT_{suffix}" for suffix in "ABC")
-INSTANCE_NAMES = tuple(f"DEEPSEEK_TEST_MINIO_CONTAINER_{suffix}" for suffix in "ABC")
+ENDPOINT_NAMES = tuple(f"DEEPSEEK_TEST_S3_ENDPOINT_{suffix}" for suffix in "ABCDE")
+INSTANCE_NAMES = tuple(f"DEEPSEEK_TEST_MINIO_CONTAINER_{suffix}" for suffix in "ABCDE")
 MANAGED_ENV_NAMES = (
     *ENDPOINT_NAMES,
     *INSTANCE_NAMES,
@@ -32,6 +32,10 @@ MANAGED_ENV_NAMES = (
     "AWS_SECRET_ACCESS_KEY",
     "MINIO_ROOT_USER",
     "MINIO_ROOT_PASSWORD",
+    "FEDERATION_MINIO_ROOT_USER",
+    "FEDERATION_MINIO_ROOT_PASSWORD",
+    "DEEPSEEK_TEST_FEDERATION_ACCESS_KEY_ID",
+    "DEEPSEEK_TEST_FEDERATION_SECRET_ACCESS_KEY",
 )
 
 
@@ -224,14 +228,20 @@ class RealStorageEnvironment:
         configured_endpoints = tuple(str(os.environ.get(name) or "").rstrip("/") for name in ENDPOINT_NAMES)
         configured_instances = tuple(str(os.environ.get(name) or "") for name in INSTANCE_NAMES)
         if all(configured_endpoints):
-            if len(set(configured_endpoints)) != 3:
-                raise RuntimeError("configured real S3 endpoints must be three independent URLs")
+            if len(set(configured_endpoints)) != 5:
+                raise RuntimeError("configured real S3 harness endpoints must be five independent URLs")
             if not all(configured_instances):
-                raise RuntimeError("configured real S3 endpoints require three controllable MinIO identities")
+                raise RuntimeError("configured real S3 endpoints require five controllable MinIO identities")
             access_key = str(os.environ.get("AWS_ACCESS_KEY_ID") or "")
             secret_key = str(os.environ.get("AWS_SECRET_ACCESS_KEY") or "")
+            federation_access_key = str(os.environ.get("DEEPSEEK_TEST_FEDERATION_ACCESS_KEY_ID") or "")
+            federation_secret_key = str(os.environ.get("DEEPSEEK_TEST_FEDERATION_SECRET_ACCESS_KEY") or "")
             if not access_key or not secret_key:
                 raise RuntimeError("configured real S3 endpoints require AWS test credentials")
+            if not federation_access_key or not federation_secret_key:
+                raise RuntimeError("configured Federation endpoints require a dedicated credential pair")
+            if (access_key, secret_key) == (federation_access_key, federation_secret_key):
+                raise RuntimeError("source and receiver MinIO credentials must be distinct")
             return cls(
                 values={
                     "DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E": "1",
@@ -246,13 +256,19 @@ class RealStorageEnvironment:
 
         access_key = str(os.environ.get("MINIO_ROOT_USER") or "deepseekci")
         secret_key = str(os.environ.get("MINIO_ROOT_PASSWORD") or f"pytest-minio-{uuid.uuid4().hex}")
-        ports = _free_ports(3)
+        federation_access_key = str(os.environ.get("FEDERATION_MINIO_ROOT_USER") or f"federation{uuid.uuid4().hex[:12]}")
+        federation_secret_key = str(os.environ.get("FEDERATION_MINIO_ROOT_PASSWORD") or f"pytest-federation-{uuid.uuid4().hex}")
+        if (access_key, secret_key) == (federation_access_key, federation_secret_key):
+            raise RuntimeError("source and receiver MinIO credentials must be distinct")
+        ports = _free_ports(5)
         endpoints = tuple(f"http://127.0.0.1:{port}" for port in ports)
         binary = _find_minio_binary(repository_root)
         instances: dict[str, Instance] = {}
         try:
             if binary is not None:
-                for suffix, endpoint in zip("ABC", endpoints, strict=True):
+                for suffix, endpoint in zip("ABCDE", endpoints, strict=True):
+                    instance_access = federation_access_key if suffix in {"D", "E"} else access_key
+                    instance_secret = federation_secret_key if suffix in {"D", "E"} else secret_key
                     identity = f"local-minio-{suffix.lower()}-{uuid.uuid4().hex[:10]}"
                     local_instance = _LocalMinioInstance(
                         binary=binary,
@@ -260,8 +276,8 @@ class RealStorageEnvironment:
                         log_path=work_dir / f"minio-{suffix.lower()}.log",
                         endpoint=endpoint,
                         identity=identity,
-                        access_key=access_key,
-                        secret_key=secret_key,
+                        access_key=instance_access,
+                        secret_key=instance_secret,
                     )
                     instances[identity] = local_instance
                     local_instance.start()
@@ -280,9 +296,11 @@ class RealStorageEnvironment:
                 )
                 if probe.returncode != 0:
                     raise RuntimeError(f"Docker is unavailable and no MinIO binary was found: {probe.stderr[-2000:]}")
-                for suffix, endpoint in zip("ABC", endpoints, strict=True):
+                for suffix, endpoint in zip("ABCDE", endpoints, strict=True):
+                    instance_access = federation_access_key if suffix in {"D", "E"} else access_key
+                    instance_secret = federation_secret_key if suffix in {"D", "E"} else secret_key
                     identity = f"deepseek-pytest-minio-{suffix.lower()}-{uuid.uuid4().hex[:10]}"
-                    docker_instance = _DockerMinioInstance(docker, endpoint, identity, access_key, secret_key)
+                    docker_instance = _DockerMinioInstance(docker, endpoint, identity, instance_access, instance_secret)
                     instances[identity] = docker_instance
                     docker_instance.create()
         except Exception:
@@ -295,6 +313,10 @@ class RealStorageEnvironment:
             "AWS_SECRET_ACCESS_KEY": secret_key,
             "MINIO_ROOT_USER": access_key,
             "MINIO_ROOT_PASSWORD": secret_key,
+            "FEDERATION_MINIO_ROOT_USER": federation_access_key,
+            "FEDERATION_MINIO_ROOT_PASSWORD": federation_secret_key,
+            "DEEPSEEK_TEST_FEDERATION_ACCESS_KEY_ID": federation_access_key,
+            "DEEPSEEK_TEST_FEDERATION_SECRET_ACCESS_KEY": federation_secret_key,
             "DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E": "1",
             "DEEPSEEK_EVIDENCE_PROOF_PATH": str(
                 os.environ.get("DEEPSEEK_EVIDENCE_PROOF_PATH")

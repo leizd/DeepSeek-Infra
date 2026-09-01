@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the real three-MinIO, real-Age Storage Control Plane Evidence gate."""
+"""Run the isolated five-MinIO harness and real-Age Storage Control Plane Evidence gate."""
 
 from __future__ import annotations
 
@@ -18,6 +18,10 @@ if str(ROOT) not in sys.path:
 
 from deepseek_infra.infra.workspace import backup_crypto  # noqa: E402
 from deepseek_infra.infra.workspace import evidence_proof  # noqa: E402
+from deepseek_infra.infra.workspace import federated_dr_proof  # noqa: E402
+from deepseek_infra.infra.workspace import federated_replica_proof  # noqa: E402
+from deepseek_infra.infra.workspace import federation_runtime_proof  # noqa: E402
+from deepseek_infra.infra.workspace import federation_trust_proof  # noqa: E402
 from deepseek_infra.infra.workspace import resilience_predictive_proof  # noqa: E402
 from deepseek_infra.infra.diagnostics.evidence_manifest import sha256_of  # noqa: E402
 from scripts.release_evidence import stamp_release_report  # noqa: E402
@@ -34,9 +38,16 @@ AUTONOMOUS_REMEDIATION_SCENARIO = "real-three-minio-autonomous-remediation"
 DURABLE_FLEET_SCENARIO = "durable-fleet-scheduler-slo-correctness"
 PREDICTIVE_FLEET_SCENARIO = "predictive-fleet-planning-verified-optimization"
 REAL_PREDICTIVE_SCENARIO = "real-three-minio-predictive-planning"
+REAL_FEDERATION_SCENARIO = "real-two-fleet-four-minio-signed-federation"
+FEDERATION_TRUST_PROOF_SCENARIO = f"{REAL_FEDERATION_SCENARIO}-trust"
+FEDERATED_REPLICA_PROOF_SCENARIO = f"{REAL_FEDERATION_SCENARIO}-replica"
+FEDERATED_DR_PROOF_SCENARIO = f"{REAL_FEDERATION_SCENARIO}-dr"
 WIRE_FREEZE_SCENARIO = "storage-wire-freeze-contracts"
 AUTONOMOUS_PROOF_TEMPLATE = "docs/evidence/storage-control-plane-autonomous-proof-v{version}.json"
 PREDICTIVE_PROOF_TEMPLATE = "docs/evidence/storage-control-plane-predictive-proof-v{version}.json"
+FEDERATION_TRUST_PROOF_TEMPLATE = "docs/evidence/federation-trust-proof-v{version}.json"
+FEDERATED_REPLICA_PROOF_TEMPLATE = "docs/evidence/federated-replica-proof-v{version}.json"
+FEDERATED_DR_PROOF_TEMPLATE = "docs/evidence/federated-dr-proof-v{version}.json"
 SCENARIOS: dict[str, tuple[str, ...]] = {
     REAL_SCENARIO: (
         "tests/test_backup_458_real_storage_control_plane_e2e.py::test_real_three_minio_storage_control_plane_e2e",
@@ -104,6 +115,9 @@ SCENARIOS: dict[str, tuple[str, ...]] = {
     ),
     REAL_PREDICTIVE_SCENARIO: (
         "tests/test_backup_476_real_three_minio_predictive_e2e.py::test_real_three_minio_predictive_planning_e2e",
+    ),
+    REAL_FEDERATION_SCENARIO: (
+        "tests/test_backup_480_real_two_fleet_four_minio_e2e.py::test_real_two_fleet_four_minio_replication_sigkill_and_dr_e2e",
     ),
     WIRE_FREEZE_SCENARIO: (
         "tests/test_backup_452_replica_failover.py::test_wire_format_constants_unchanged",
@@ -305,6 +319,13 @@ CHECK_SCENARIOS = {
 }
 for _promoted_predictive_claim in resilience_predictive_proof.PROMOTED_PREDICTIVE_CLAIM_CHECKS:
     CHECK_SCENARIOS[_promoted_predictive_claim] = REAL_PREDICTIVE_SCENARIO
+for _federation_claim in (
+    *federation_trust_proof.FEDERATION_TRUST_PROOF_CHECKS,
+    *federated_replica_proof.FEDERATED_REPLICA_PROOF_CHECKS,
+    *federated_dr_proof.FEDERATED_DR_PROOF_CHECKS,
+    *federation_runtime_proof.FEDERATION_RUNTIME_PROOF_CHECKS,
+):
+    CHECK_SCENARIOS[_federation_claim] = REAL_FEDERATION_SCENARIO
 
 # Claims that MUST be backed by evidence-proof-v2 (semantic validators; not pytest exit alone).
 REQUIRED_PROOF_CHECKS: dict[str, tuple[str, ...]] = {
@@ -364,16 +385,34 @@ REQUIRED_PROOF_CHECKS: dict[str, tuple[str, ...]] = {
         "realThreeMinioPredictivePlanningE2E",
         *resilience_predictive_proof.PREDICTIVE_PROOF_CHECKS,
     ),
+    REAL_FEDERATION_SCENARIO: (
+        *federation_trust_proof.FEDERATION_TRUST_PROOF_CHECKS,
+        *federated_replica_proof.FEDERATED_REPLICA_PROOF_CHECKS,
+        *federated_dr_proof.FEDERATED_DR_PROOF_CHECKS,
+        *federation_runtime_proof.FEDERATION_RUNTIME_PROOF_CHECKS,
+    ),
+}
+FEDERATION_ARTIFACT_REQUIRED_PROOF_CHECKS: dict[str, tuple[str, ...]] = {
+    FEDERATION_TRUST_PROOF_SCENARIO: federation_trust_proof.FEDERATION_TRUST_PROOF_CHECKS,
+    FEDERATED_REPLICA_PROOF_SCENARIO: (
+        *federated_replica_proof.FEDERATED_REPLICA_PROOF_CHECKS,
+        *federation_runtime_proof.FEDERATION_RUNTIME_PROOF_CHECKS,
+    ),
+    FEDERATED_DR_PROOF_SCENARIO: federated_dr_proof.FEDERATED_DR_PROOF_CHECKS,
 }
 REQUIRED_ENDPOINTS = (
     "DEEPSEEK_TEST_S3_ENDPOINT_A",
     "DEEPSEEK_TEST_S3_ENDPOINT_B",
     "DEEPSEEK_TEST_S3_ENDPOINT_C",
+    "DEEPSEEK_TEST_S3_ENDPOINT_D",
+    "DEEPSEEK_TEST_S3_ENDPOINT_E",
 )
 REQUIRED_CONTAINERS = (
     "DEEPSEEK_TEST_MINIO_CONTAINER_A",
     "DEEPSEEK_TEST_MINIO_CONTAINER_B",
     "DEEPSEEK_TEST_MINIO_CONTAINER_C",
+    "DEEPSEEK_TEST_MINIO_CONTAINER_D",
+    "DEEPSEEK_TEST_MINIO_CONTAINER_E",
 )
 
 
@@ -383,16 +422,52 @@ def _prerequisite_errors() -> list[str]:
     missing_endpoints = [name for name, value in zip(REQUIRED_ENDPOINTS, endpoints, strict=True) if not value]
     if missing_endpoints:
         errors.append(f"missing endpoints: {', '.join(missing_endpoints)}")
-    elif len(set(endpoints)) != 3:
-        errors.append("three distinct S3 endpoints are required")
+    elif len(set(endpoints)) != 5:
+        errors.append("five distinct S3 harness endpoints are required")
     missing_containers = [name for name in REQUIRED_CONTAINERS if not os.environ.get(name)]
     if missing_containers:
         errors.append(f"missing container identities: {', '.join(missing_containers)}")
+    source_storage_principal = (
+        str(os.environ.get("AWS_ACCESS_KEY_ID") or ""),
+        str(os.environ.get("AWS_SECRET_ACCESS_KEY") or ""),
+    )
+    receiver_storage_principal = (
+        str(os.environ.get("DEEPSEEK_TEST_FEDERATION_ACCESS_KEY_ID") or ""),
+        str(os.environ.get("DEEPSEEK_TEST_FEDERATION_SECRET_ACCESS_KEY") or ""),
+    )
+    if not all(source_storage_principal) or not all(receiver_storage_principal):
+        errors.append("source and receiver storage credentials are required")
+    elif source_storage_principal == receiver_storage_principal:
+        errors.append("source and receiver storage credentials must be distinct")
     if importlib.util.find_spec("boto3") is None:
         errors.append("boto3 is unavailable")
     if backup_crypto.helper_path() is None:
         errors.append("real Age backup-crypto helper is unavailable")
     return errors
+
+
+def _copy_validated_proof(
+    *,
+    proof_source: Path,
+    proof_output: Path,
+    proof_rel: str,
+    scenario: str,
+    required_checks: tuple[str, ...],
+) -> dict[str, object] | None:
+    try:
+        proof = evidence_proof.load_evidence_proof(proof_source, expected_scenario=scenario)
+    except (OSError, ValueError, json.JSONDecodeError, TypeError):
+        return None
+    if not all(evidence_proof.proof_check_status(proof, check_name, semantic=True) == "PASS" for check_name in required_checks):
+        return None
+    proof_output.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(proof_source, proof_output)
+    return {
+        "path": proof_rel,
+        "sha256": sha256_of(proof_output),
+        "bytes": proof_output.stat().st_size,
+        "scenario": scenario,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -402,11 +477,26 @@ def main(argv: list[str] | None = None) -> int:
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     autonomous_proof_rel = AUTONOMOUS_PROOF_TEMPLATE.format(version=version)
     predictive_proof_rel = PREDICTIVE_PROOF_TEMPLATE.format(version=version)
+    federation_trust_proof_rel = FEDERATION_TRUST_PROOF_TEMPLATE.format(version=version)
+    federated_replica_proof_rel = FEDERATED_REPLICA_PROOF_TEMPLATE.format(version=version)
+    federated_dr_proof_rel = FEDERATED_DR_PROOF_TEMPLATE.format(version=version)
     proof_outputs = {
         AUTONOMOUS_REMEDIATION_SCENARIO: (autonomous_proof_rel, ROOT / autonomous_proof_rel),
         REAL_PREDICTIVE_SCENARIO: (predictive_proof_rel, ROOT / predictive_proof_rel),
     }
+    federation_proof_outputs = {
+        FEDERATION_TRUST_PROOF_SCENARIO: ("trust", federation_trust_proof_rel, ROOT / federation_trust_proof_rel),
+        FEDERATED_REPLICA_PROOF_SCENARIO: (
+            "replica",
+            federated_replica_proof_rel,
+            ROOT / federated_replica_proof_rel,
+        ),
+        FEDERATED_DR_PROOF_SCENARIO: ("dr", federated_dr_proof_rel, ROOT / federated_dr_proof_rel),
+    }
     for _proof_rel, proof_output in proof_outputs.values():
+        if proof_output.is_file():
+            proof_output.unlink()
+    for _suffix, _proof_rel, proof_output in federation_proof_outputs.values():
         if proof_output.is_file():
             proof_output.unlink()
     prerequisite_errors = _prerequisite_errors()
@@ -427,6 +517,11 @@ def main(argv: list[str] | None = None) -> int:
             proof_path = proof_dir / f"evidence-proof-{scenario}.json"
             if proof_path.is_file():
                 proof_path.unlink()
+            if scenario == REAL_FEDERATION_SCENARIO:
+                for suffix_name, _proof_rel, _proof_output in federation_proof_outputs.values():
+                    dedicated_path = proof_path.with_name(f"{proof_path.stem}-{suffix_name}{proof_path.suffix}")
+                    if dedicated_path.is_file():
+                        dedicated_path.unlink()
             env = environment.copy()
             env[evidence_proof.ENV_EVIDENCE_PROOF_PATH] = str(proof_path)
             command = [sys.executable, "-m", "pytest", "--no-cov", "-q", *node_ids]
@@ -456,31 +551,60 @@ def main(argv: list[str] | None = None) -> int:
         required_checks = REQUIRED_PROOF_CHECKS[scenario]
         if proof_source is None or not proof_source.is_file() or not all(checks.get(name) == "PASS" for name in required_checks):
             continue
-        proof_output.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(proof_source, proof_output)
-        proof_artifacts[scenario] = {
-            "path": proof_rel,
-            "sha256": sha256_of(proof_output),
-            "bytes": proof_output.stat().st_size,
-            "scenario": scenario,
-        }
+        artifact = _copy_validated_proof(
+            proof_source=proof_source,
+            proof_output=proof_output,
+            proof_rel=proof_rel,
+            scenario=scenario,
+            required_checks=required_checks,
+        )
+        if artifact is not None:
+            proof_artifacts[scenario] = artifact
+    federation_result = results.get(REAL_FEDERATION_SCENARIO) or {}
+    federation_proof_path_raw = federation_result.get("proofPath")
+    federation_proof_source = Path(str(federation_proof_path_raw)) if federation_proof_path_raw else None
+    if federation_result.get("exitCode") == 0 and federation_proof_source is not None:
+        for proof_scenario, (suffix_name, proof_rel, proof_output) in federation_proof_outputs.items():
+            proof_source = federation_proof_source.with_name(
+                f"{federation_proof_source.stem}-{suffix_name}{federation_proof_source.suffix}"
+            )
+            required_checks = FEDERATION_ARTIFACT_REQUIRED_PROOF_CHECKS[proof_scenario]
+            artifact = _copy_validated_proof(
+                proof_source=proof_source,
+                proof_output=proof_output,
+                proof_rel=proof_rel,
+                scenario=proof_scenario,
+                required_checks=required_checks,
+            )
+            if artifact is not None:
+                proof_artifacts[proof_scenario] = artifact
     proof_artifact = proof_artifacts.get(AUTONOMOUS_REMEDIATION_SCENARIO)
     predictive_proof_artifact = proof_artifacts.get(REAL_PREDICTIVE_SCENARIO)
     checks["autonomousProofArtifactIsUploaded"] = "PASS" if proof_artifact is not None else "FAIL"
     checks["predictiveProofArtifactIsUploaded"] = "PASS" if predictive_proof_artifact is not None else "FAIL"
     checks["predictiveProofArtifactIsSemanticallyValidated"] = "PASS" if predictive_proof_artifact is not None else "FAIL"
+    federation_artifact_checks = {
+        "federationTrustProofArtifactIsUploaded": FEDERATION_TRUST_PROOF_SCENARIO,
+        "federatedReplicaProofArtifactIsUploaded": FEDERATED_REPLICA_PROOF_SCENARIO,
+        "federatedDrProofArtifactIsUploaded": FEDERATED_DR_PROOF_SCENARIO,
+    }
+    for check_name, proof_scenario in federation_artifact_checks.items():
+        checks[check_name] = "PASS" if proof_artifacts.get(proof_scenario) is not None else "FAIL"
     check_provenance = dict(CHECK_SCENARIOS)
     check_provenance["autonomousProofArtifactIsUploaded"] = "exact-proof-artifact-copy"
     check_provenance["predictiveProofArtifactIsUploaded"] = "exact-proof-artifact-copy"
     check_provenance["predictiveProofArtifactIsSemanticallyValidated"] = REAL_PREDICTIVE_SCENARIO
+    for check_name, proof_scenario in federation_artifact_checks.items():
+        check_provenance[check_name] = proof_scenario
+    declared_required_proof_checks = {**REQUIRED_PROOF_CHECKS, **FEDERATION_ARTIFACT_REQUIRED_PROOF_CHECKS}
     report = stamp_release_report(
         {
             "ok": all(value == "PASS" for value in checks.values()),
             "status": "PASS" if all(value == "PASS" for value in checks.values()) else "FAIL",
-            "title": "Real Three-MinIO Storage Control Plane, Tiering, Placement, and Control Recovery E2E",
+            "title": "Real Five-MinIO Harness with Isolated Four-MinIO Federation and Control Recovery E2E",
             "checks": checks,
             "checkProvenance": check_provenance,
-            "requiredProofChecks": {k: list(v) for k, v in REQUIRED_PROOF_CHECKS.items()},
+            "requiredProofChecks": {k: list(v) for k, v in declared_required_proof_checks.items()},
             "proofArtifact": proof_artifact,
             "proofArtifacts": proof_artifacts,
             "scenarios": results,

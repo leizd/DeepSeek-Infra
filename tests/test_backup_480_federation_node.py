@@ -14,6 +14,7 @@ from deepseek_infra.infra.workspace import (
     federation_custody_capability,
     federation_identity,
     federation_node,
+    federation_peer_trust,
     federation_replica_receiver,
     federation_transfer_journal,
 )
@@ -26,7 +27,7 @@ def _node(
     *,
     identity: dict[str, object],
     signer: federation_identity.OnlineFleetSigner,
-    registry: object,
+    registry: federation_peer_trust.PeerTrustRegistry,
     journal: federation_transfer_journal.FederatedTransferJournal,
     receiver: federation_replica_receiver.FederatedReplicaReceiver,
 ) -> federation_node.FederationNode:
@@ -226,7 +227,9 @@ def test_sender_node_verifies_grant_documents_attestation_and_records_zero_local
     )
     assert verified["federatedCopy"]["localDurabilityCredit"] is False
     assert verified["transfer"]["state"] == federation_transfer_journal.STATE_SUCCEEDED
-    assert node_a.durability_ledger.get_copy(fixture["transferId"])["localDurabilityCredit"] is False
+    recorded_copy = node_a.durability_ledger.get_copy(fixture["transferId"])
+    assert recorded_copy is not None
+    assert recorded_copy["localDurabilityCredit"] is False
 
 
 def test_node_loads_only_public_root_and_encrypted_online_signer_config(
