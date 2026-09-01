@@ -57,9 +57,9 @@
 - [x] Add independent federated durability objective fields
 - [x] Prove remote copies never reduce local copies or failure domains
 - [x] Prove remote copies cannot promote, mutate, prune, or delete
-- [ ] Add COLD_CUSTODY and RECOVERY_CAPABLE modes
-- [ ] Require independently preprovisioned Age identity for recovery-capable peers
-- [ ] Prove Age private identity never crosses Federation boundaries
+- [x] Add COLD_CUSTODY and RECOVERY_CAPABLE modes
+- [x] Require independently preprovisioned Age identity for recovery-capable peers
+- [x] Prove Age private identity never crosses Federation boundaries
 - [ ] Run production remote restore into an isolated workspace
 - [ ] Add and semantically validate `federated-dr-drill-attestation-v1`
 - [ ] Require successful cleanup before DR proof passes

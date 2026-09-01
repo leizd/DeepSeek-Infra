@@ -74,6 +74,28 @@ _PRIVATE_KEY_AEAD_ALGORITHM = "AES-256-GCM"  # pragma: allowlist secret
 _CERTIFICATE_DOMAIN = b"deepseek-infra:federation-online-signer-certificate-v1\x00"
 _DOCUMENT_DOMAIN_PREFIX = b"deepseek-infra:federation-document\x00"
 _PRIVATE_KEY_ENVELOPE_DOMAIN = b"deepseek-infra:federation-private-key-envelope-v1\x00"
+_FEDERATION_SECRET_FIELD_NAMES = frozenset(
+    {
+        "ageidentity",
+        "ageprivateidentity",
+        "credential",
+        "credentialref",
+        "credentialreference",
+        "password",
+        "passphrase",
+        "privatekey",
+        "privatekeyenvelope",
+        "secret",
+        "secretkey",
+        "accesskey",
+        "sessiontoken",
+    }
+)
+_FEDERATION_SECRET_VALUE_MARKERS = (
+    "age-secret-key-",
+    "begin private key",
+    "begin openssh private key",
+)
 
 
 class FederationIdentityError(RuntimeError):
@@ -82,6 +104,26 @@ class FederationIdentityError(RuntimeError):
     def __init__(self, code: str, message: str | None = None) -> None:
         self.code = str(code)
         super().__init__(message or self.code)
+
+
+def assert_federation_document_secret_free(value: Any) -> None:
+    """Reject private identity and credential material from every wire document."""
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized_key = re.sub(r"[^a-z0-9]", "", str(key).casefold())
+            if normalized_key in _FEDERATION_SECRET_FIELD_NAMES:
+                raise FederationIdentityError("FEDERATION_DOCUMENT_CONTAINS_SECRET")
+            assert_federation_document_secret_free(item)
+        return
+    if isinstance(value, list | tuple):
+        for item in value:
+            assert_federation_document_secret_free(item)
+        return
+    if isinstance(value, str):
+        lowered = value.casefold()
+        if any(marker in lowered for marker in _FEDERATION_SECRET_VALUE_MARKERS):
+            raise FederationIdentityError("FEDERATION_DOCUMENT_CONTAINS_SECRET")
 
 
 def _utc_iso(value: datetime) -> str:
@@ -759,6 +801,7 @@ def sign_federation_document(
 
     if type(document) is not dict:
         raise FederationIdentityError("FEDERATION_DOCUMENT_INVALID")
+    assert_federation_document_secret_free(document)
     if purpose is not None:
         purpose_errors = _certificate_purpose_errors(signer.certificate, purpose)
         if purpose_errors:
@@ -801,6 +844,7 @@ def verify_federation_document(
     )
     if type(document) is not dict:
         raise FederationIdentityError("FEDERATION_DOCUMENT_INVALID")
+    assert_federation_document_secret_free(document)
     normalized = _normalize_json_value(document)
     assert isinstance(normalized, dict)
     schema = normalized.get("schema")
