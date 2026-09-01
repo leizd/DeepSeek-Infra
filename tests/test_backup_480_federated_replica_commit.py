@@ -625,3 +625,108 @@ def test_remote_commit_event_binding_rejects_a_different_target(
             now=NOW + timedelta(seconds=20),
         )
     assert conflict.value.code == "FEDERATION_REPLICA_REMOTE_COMMIT_STATE_CONFLICT"
+
+
+def test_inspect_committed_replica_rechecks_provider_journal_and_remote_effect(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _prepared_fixture(tmp_settings)
+    target, store = _memory_target()
+    committed = _commit(fixture, monkeypatch, target)
+    checkpoints = 0
+
+    def checkpoint() -> None:
+        nonlocal checkpoints
+        checkpoints += 1
+
+    inspected = federated_replica_commit.inspect_committed_federated_replica(
+        receiver=fixture["receiver"],
+        transfer_id=fixture["transferId"],
+        target_id=TARGET_ID,
+        checkpoint=checkpoint,
+    )
+    assert inspected.receipt == committed.receipt
+    assert inspected.commit == committed.commit
+    assert inspected.fencing_token == committed.commit["fencingToken"]
+    assert inspected.converged is True and inspected.reconciled is True
+    assert checkpoints > 0
+    assert federated_replica_commit._canonical_utc_timestamp_valid(None) is False
+
+    original_get_transfer = fixture["journal"].get_transfer
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            fixture["journal"],
+            "get_transfer",
+            lambda transfer_id: {**original_get_transfer(transfer_id), "role": federation_transfer_journal.ROLE_SENDER},
+        )
+        with pytest.raises(federated_replica_commit.FederatedReplicaCommitError) as role_error:
+            federated_replica_commit.inspect_committed_federated_replica(
+                receiver=fixture["receiver"],
+                transfer_id=fixture["transferId"],
+                target_id=TARGET_ID,
+            )
+        assert role_error.value.code == "FEDERATION_REPLICA_RECEIVER_FLEET_MISMATCH"
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            fixture["journal"],
+            "get_transfer",
+            lambda transfer_id: {**original_get_transfer(transfer_id), "objectSetDigest": "sha256:" + ("f" * 64)},
+        )
+        with pytest.raises(federated_replica_commit.FederatedReplicaCommitError) as digest_error:
+            federated_replica_commit.inspect_committed_federated_replica(
+                receiver=fixture["receiver"],
+                transfer_id=fixture["transferId"],
+                target_id=TARGET_ID,
+            )
+        assert digest_error.value.code == "FEDERATION_REPLICA_OBJECT_SET_DIGEST_MISMATCH"
+
+    for replacement, expected in (
+        (lambda _target_id: (_ for _ in ()).throw(RuntimeError("offline")), "FEDERATION_REPLICA_TARGET_UNAVAILABLE"),
+        (lambda _target_id: None, "FEDERATION_REPLICA_TARGET_IDENTITY_INVALID"),
+        (
+            lambda _target_id: backup_publish.ResolvedTarget(
+                target_id=TARGET_ID,
+                root=tmp_settings / "filesystem",
+                managed=False,
+                kind="filesystem",
+                store=store,
+            ),
+            "FEDERATION_REPLICA_PROVIDER_TARGET_REQUIRED",
+        ),
+    ):
+        with monkeypatch.context() as scoped:
+            scoped.setattr(backup_publish, "resolve_target", replacement)
+            with pytest.raises(federated_replica_commit.FederatedReplicaCommitError) as target_error:
+                federated_replica_commit.inspect_committed_federated_replica(
+                    receiver=fixture["receiver"],
+                    transfer_id=fixture["transferId"],
+                    target_id=TARGET_ID,
+                )
+            assert target_error.value.code == expected
+
+    real_events = fixture["journal"].list_transfer_events
+    with monkeypatch.context() as scoped:
+        scoped.setattr(fixture["journal"], "list_transfer_events", lambda _transfer_id: real_events(fixture["transferId"])[:-1])
+        with pytest.raises(federated_replica_commit.FederatedReplicaCommitError) as event_error:
+            federated_replica_commit.inspect_committed_federated_replica(
+                receiver=fixture["receiver"],
+                transfer_id=fixture["transferId"],
+                target_id=TARGET_ID,
+            )
+        assert event_error.value.code == "FEDERATION_REPLICA_REMOTE_COMMIT_STATE_CONFLICT"
+
+    commit_key = backup_target_store.commit_marker_key(
+        str(committed.receipt["policyId"]),
+        str(committed.receipt["scheduleSlot"]),
+    )
+    commit_meta = store.stat(commit_key)
+    assert commit_meta is not None and store.delete_if_match(commit_key, expected_etag=commit_meta.etag)
+    with pytest.raises(federated_replica_commit.FederatedReplicaCommitError) as missing_commit:
+        federated_replica_commit.inspect_committed_federated_replica(
+            receiver=fixture["receiver"],
+            transfer_id=fixture["transferId"],
+            target_id=TARGET_ID,
+        )
+    assert missing_commit.value.code == "FEDERATION_REPLICA_REMOTE_COMMIT_MISSING"

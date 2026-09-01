@@ -20,6 +20,7 @@ PEER_TRUST_DB = FEDERATION_DIR / "peer-trust.sqlite3"
 PEER_TRUST_RECORD_SCHEMA = "federation-peer-trust-record-v1"
 ONLINE_SIGNER_TRUST_RECORD_SCHEMA = "federation-online-signer-trust-record-v1"
 READINESS_SEQUENCE_RECORD_SCHEMA = "federation-readiness-sequence-v1"
+REPLICA_ATTESTATION_RECORD_SCHEMA = "federated-replica-attestation-record-v1"
 CHALLENGE_JOURNAL_RECORD_SCHEMA = "federation-challenge-journal-v1"
 INGRESS_GRANT_RECORD_SCHEMA = "federation-ingress-grant-record-v1"
 INGRESS_WRITE_RESERVATION_SCHEMA = "federation-ingress-write-reservation-v1"
@@ -72,6 +73,8 @@ _INGRESS_GRANT_FIELDS = frozenset(
     }
 )
 _MAX_AUDIT_TEXT_LENGTH = 256
+_MAX_REPLICA_ATTESTATION_BYTES = 256 * 1024
+_REPLICA_ATTESTATION_SCHEMA = "federated-replica-attestation-v1"
 
 _CREATE_LOCAL_IDENTITY_SQL = """
 CREATE TABLE IF NOT EXISTS federation_local_identity (
@@ -172,6 +175,24 @@ CREATE TABLE IF NOT EXISTS federation_readiness_sequences (
     attestation_digest TEXT NOT NULL,
     accepted_at TEXT NOT NULL,
     revision INTEGER NOT NULL CHECK(revision >= 1),
+    FOREIGN KEY(peer_fleet_id) REFERENCES federation_peer_trust(peer_fleet_id),
+    FOREIGN KEY(peer_fleet_id, signer_key_id)
+        REFERENCES federation_online_signers(peer_fleet_id, signer_key_id)
+)
+"""
+
+_CREATE_REPLICA_ATTESTATIONS_SQL = """
+CREATE TABLE IF NOT EXISTS federation_replica_attestations (
+    peer_fleet_id TEXT NOT NULL,
+    transfer_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL CHECK(sequence >= 1),
+    signer_key_id TEXT NOT NULL,
+    attestation_digest TEXT NOT NULL,
+    attestation_json TEXT NOT NULL,
+    accepted_at TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK(revision >= 1),
+    PRIMARY KEY(peer_fleet_id, transfer_id),
+    UNIQUE(peer_fleet_id, sequence),
     FOREIGN KEY(peer_fleet_id) REFERENCES federation_peer_trust(peer_fleet_id),
     FOREIGN KEY(peer_fleet_id, signer_key_id)
         REFERENCES federation_online_signers(peer_fleet_id, signer_key_id)
@@ -432,6 +453,7 @@ class PeerTrustRegistry:
             connection.execute(_CREATE_SIGNER_EVENTS_SQL)
             connection.execute(_CREATE_SIGNER_EVENTS_INDEX_SQL)
             connection.execute(_CREATE_READINESS_SEQUENCES_SQL)
+            connection.execute(_CREATE_REPLICA_ATTESTATIONS_SQL)
             connection.execute(_CREATE_CHALLENGE_JOURNAL_SQL)
             connection.execute(_CREATE_CHALLENGE_NONCE_INDEX_SQL)
             connection.execute(_CREATE_INGRESS_GRANTS_SQL)
@@ -531,6 +553,20 @@ class PeerTrustRegistry:
             "highSequence": int(row["high_sequence"]),
             "signerKeyId": str(row["signer_key_id"]),
             "attestationDigest": str(row["attestation_digest"]),
+            "acceptedAt": str(row["accepted_at"]),
+            "revision": int(row["revision"]),
+        }
+
+    @staticmethod
+    def _replica_attestation_record(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "schema": REPLICA_ATTESTATION_RECORD_SCHEMA,
+            "peerFleetId": str(row["peer_fleet_id"]),
+            "transferId": str(row["transfer_id"]),
+            "sequence": int(row["sequence"]),
+            "signerKeyId": str(row["signer_key_id"]),
+            "attestationDigest": str(row["attestation_digest"]),
+            "attestation": json.loads(str(row["attestation_json"])),
             "acceptedAt": str(row["accepted_at"]),
             "revision": int(row["revision"]),
         }
@@ -1317,6 +1353,148 @@ class PeerTrustRegistry:
                 (peer,),
             ).fetchone()
         return None if row is None else self._readiness_sequence_record(row)
+
+    def record_replica_attestation(
+        self,
+        peer_fleet_id: str,
+        *,
+        signer_key_id: str,
+        transfer_id: str,
+        sequence: int,
+        attestation_digest: str,
+        attestation: dict[str, Any],
+        accepted_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Durably accept one current signed replica proof with replay fencing."""
+
+        peer = _fleet_id(peer_fleet_id)
+        signer = _signer_key_id(signer_key_id)
+        transfer = _sha256_digest(
+            transfer_id,
+            code="FEDERATION_REPLICA_ATTESTATION_TRANSFER_ID_INVALID",
+        )
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise FederationTrustError("FEDERATION_REPLICA_ATTESTATION_SEQUENCE_INVALID")
+        digest = _sha256_digest(
+            attestation_digest,
+            code="FEDERATION_REPLICA_ATTESTATION_DIGEST_INVALID",
+        )
+        if type(attestation) is not dict:
+            raise FederationTrustError("FEDERATION_REPLICA_ATTESTATION_INVALID")
+        try:
+            normalized = json.loads(_canonical_json(attestation))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise FederationTrustError("FEDERATION_REPLICA_ATTESTATION_INVALID") from exc
+        attestation_json = _canonical_json(normalized)
+        if len(attestation_json.encode("utf-8")) > _MAX_REPLICA_ATTESTATION_BYTES:
+            raise FederationTrustError("FEDERATION_REPLICA_ATTESTATION_TOO_LARGE")
+        if (
+            normalized.get("schema") != _REPLICA_ATTESTATION_SCHEMA
+            or normalized.get("fleetId") != peer
+            or normalized.get("destinationFleetId") != peer
+            or normalized.get("sourceFleetId") != self._local_identity.get("fleetId")
+            or normalized.get("transferId") != transfer
+            or normalized.get("signerKeyId") != signer
+            or normalized.get("sequence") != sequence
+            or _digest(normalized) != digest
+        ):
+            raise FederationTrustError("FEDERATION_REPLICA_ATTESTATION_RECORD_BINDING_INVALID")
+        timestamp = _utc_iso(accepted_at)
+        validation_time = _stored_timestamp(timestamp, code="FEDERATION_TRUST_TIMESTAMP_INVALID")
+        with self._write() as connection:
+            peer_row, signer_row = self._require_active_signer_in_tx(
+                connection,
+                peer_fleet_id=peer,
+                signer_key_id=signer,
+                validation_time=validation_time,
+                required_purpose=federation_identity.PURPOSE_REPLICA_ATTESTATION,
+            )
+            certificate = normalized.get("signerCertificate")
+            if type(certificate) is not dict or _canonical_json(certificate) != str(signer_row["certificate_json"]):
+                raise FederationTrustError("FEDERATION_REPLICA_ATTESTATION_SIGNER_CERTIFICATE_CONFLICT")
+            root_identity = json.loads(str(peer_row["identity_json"]))
+            try:
+                verified = federation_identity.verify_federation_document(
+                    normalized,
+                    certificate=certificate,
+                    root_identity=root_identity,
+                    expected_schema=_REPLICA_ATTESTATION_SCHEMA,
+                    now=validation_time,
+                    required_purpose=federation_identity.PURPOSE_REPLICA_ATTESTATION,
+                )
+            except federation_identity.FederationIdentityError as exc:
+                raise FederationTrustError(exc.code) from exc
+            if _canonical_json(verified) != attestation_json:
+                raise FederationTrustError("FEDERATION_REPLICA_ATTESTATION_RECORD_BINDING_INVALID")
+            existing = connection.execute(
+                """
+                SELECT * FROM federation_replica_attestations
+                WHERE peer_fleet_id = ? AND transfer_id = ?
+                """,
+                (peer, transfer),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    int(existing["sequence"]) != sequence
+                    or existing["signer_key_id"] != signer
+                    or existing["attestation_digest"] != digest
+                    or existing["attestation_json"] != attestation_json
+                ):
+                    raise FederationTrustError("FEDERATION_REPLICA_ATTESTATION_IDENTITY_CONFLICT")
+                return self._replica_attestation_record(existing)
+            sequence_owner = connection.execute(
+                """
+                SELECT transfer_id FROM federation_replica_attestations
+                WHERE peer_fleet_id = ? AND sequence = ?
+                """,
+                (peer, sequence),
+            ).fetchone()
+            if sequence_owner is not None:
+                raise FederationTrustError("FEDERATION_REPLICA_ATTESTATION_SEQUENCE_CONFLICT")
+            high_water = connection.execute(
+                """
+                SELECT MAX(sequence) AS maximum_sequence
+                FROM federation_replica_attestations WHERE peer_fleet_id = ?
+                """,
+                (peer,),
+            ).fetchone()
+            maximum_sequence = None if high_water is None else high_water["maximum_sequence"]
+            if maximum_sequence is not None and sequence < int(maximum_sequence):
+                raise FederationTrustError("FEDERATION_REPLICA_ATTESTATION_SEQUENCE_REPLAY")
+            connection.execute(
+                """
+                INSERT INTO federation_replica_attestations (
+                    peer_fleet_id, transfer_id, sequence, signer_key_id,
+                    attestation_digest, attestation_json, accepted_at, revision
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                """,
+                (peer, transfer, sequence, signer, digest, attestation_json, timestamp),
+            )
+            created = connection.execute(
+                """
+                SELECT * FROM federation_replica_attestations
+                WHERE peer_fleet_id = ? AND transfer_id = ?
+                """,
+                (peer, transfer),
+            ).fetchone()
+            assert created is not None
+            return self._replica_attestation_record(created)
+
+    def get_replica_attestation(self, peer_fleet_id: str, transfer_id: str) -> dict[str, Any] | None:
+        peer = _fleet_id(peer_fleet_id)
+        transfer = _sha256_digest(
+            transfer_id,
+            code="FEDERATION_REPLICA_ATTESTATION_TRANSFER_ID_INVALID",
+        )
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM federation_replica_attestations
+                WHERE peer_fleet_id = ? AND transfer_id = ?
+                """,
+                (peer, transfer),
+            ).fetchone()
+        return None if row is None else self._replica_attestation_record(row)
 
     def record_outbound_federation_challenge(
         self,

@@ -40,7 +40,7 @@ import deepseek_infra.infra.media.library as media_library
 import deepseek_infra.infra.browser.session as browser_session
 import deepseek_infra.infra.automation.registry as automation_registry
 import deepseek_infra.infra.automation.history as automation_history
-from real_storage_environment import MANAGED_ENV_NAMES, RealStorageEnvironment, ensure_native_backup_helpers
+from .real_storage_environment import MANAGED_ENV_NAMES, RealStorageEnvironment, ensure_native_backup_helpers
 
 
 @pytest.fixture(scope="session")

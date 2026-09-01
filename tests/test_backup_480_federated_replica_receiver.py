@@ -97,6 +97,7 @@ def _fixture(
         purposes=(
             federation_identity.PURPOSE_SESSION_AUTHENTICATION,
             federation_identity.PURPOSE_INGRESS_GRANT,
+            federation_identity.PURPOSE_REPLICA_ATTESTATION,
         ),
     )
     signer_a = federation_identity.load_online_signer(
@@ -208,6 +209,8 @@ def _fixture(
         "journal": journal_b,
         "registryA": registry_a,
         "registry": registry_b,
+        "signerB": signer_b,
+        "certificateB": certificate_b,
         "receiver": receiver,
         "grant": grant,
         "package": package,

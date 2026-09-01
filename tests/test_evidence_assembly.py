@@ -23,7 +23,7 @@ from deepseek_infra.infra.diagnostics.evidence_inventory import (
 from deepseek_infra.infra.diagnostics.evidence_manifest import sha256_of, validate_manifest_checksum
 from scripts import generate_release_evidence
 from scripts.verify_release_package import verify_release_package
-from test_backup_476_predictive_proof import _valid_proof
+from .test_backup_476_predictive_proof import _valid_proof
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()

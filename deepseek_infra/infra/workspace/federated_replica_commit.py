@@ -402,6 +402,66 @@ class _RenewingWriterCheckpoint:
                 self._writer.assert_owned()
 
 
+def inspect_committed_federated_replica(
+    *,
+    receiver: federation_replica_receiver.FederatedReplicaReceiver,
+    transfer_id: str,
+    target_id: str,
+    checkpoint: Callable[[], None] | None = None,
+) -> FederatedReplicaCommitResult:
+    """Re-read and semantically verify the receiver's durable storage effect."""
+
+    try:
+        package = receiver.assemble_verified_package(transfer_id)
+        transfer = receiver.transfer_journal.get_transfer(transfer_id)
+    except federation_replica_receiver.FederatedReplicaReceiverError as exc:
+        raise FederatedReplicaCommitError(exc.code) from exc
+    except federation_transfer_journal.FederatedTransferJournalError as exc:
+        raise FederatedReplicaCommitError(exc.code) from exc
+    if transfer is None:
+        raise FederatedReplicaCommitError("FEDERATION_TRANSFER_NOT_FOUND")
+    if transfer.get("objectSetDigest") != "sha256:" + package.object_set_digest:
+        raise FederatedReplicaCommitError("FEDERATION_REPLICA_OBJECT_SET_DIGEST_MISMATCH")
+    if federation_transfer_journal.TRANSFER_STATES.index(str(transfer["state"])) < federation_transfer_journal.TRANSFER_STATES.index(
+        federation_transfer_journal.STATE_REMOTE_COMMITTED
+    ):
+        raise FederatedReplicaCommitError("FEDERATION_REPLICA_NOT_REMOTE_COMMITTED")
+    try:
+        target = backup_publish.resolve_target(target_id)
+    except Exception as exc:
+        raise FederatedReplicaCommitError("FEDERATION_REPLICA_TARGET_UNAVAILABLE", str(exc)) from exc
+    if not isinstance(target, backup_publish.ResolvedTarget) or target.target_id != target_id:
+        raise FederatedReplicaCommitError("FEDERATION_REPLICA_TARGET_IDENTITY_INVALID")
+    if target.kind != "s3" or target.root is not None or target.store is None:
+        raise FederatedReplicaCommitError("FEDERATION_REPLICA_PROVIDER_TARGET_REQUIRED")
+    effective_checkpoint = checkpoint or (lambda: None)
+    published = _read_existing_commit(
+        target,
+        package=package,
+        transfer=transfer,
+        checkpoint=effective_checkpoint,
+    )
+    if published is None:
+        raise FederatedReplicaCommitError("FEDERATION_REPLICA_REMOTE_COMMIT_MISSING")
+    expected_details = _remote_commit_details(transfer, target_id, published)
+    committed_events = [
+        event
+        for event in receiver.transfer_journal.list_transfer_events(transfer_id)
+        if event["nextState"] == federation_transfer_journal.STATE_REMOTE_COMMITTED
+    ]
+    if len(committed_events) != 1 or committed_events[0]["stateDetails"] != expected_details:
+        raise FederatedReplicaCommitError("FEDERATION_REPLICA_REMOTE_COMMIT_STATE_CONFLICT")
+    return FederatedReplicaCommitResult(
+        transfer_id=transfer_id,
+        target_id=target_id,
+        receipt=dict(published.receipt),
+        commit=dict(published.commit),
+        fencing_token=int(published.commit["fencingToken"]),
+        converged=True,
+        reconciled=True,
+    )
+
+
 def commit_federated_replica(
     *,
     receiver: federation_replica_receiver.FederatedReplicaReceiver,
