@@ -48,7 +48,7 @@
 - [x] Add durable transfer journal and query/reconcile API
 - [x] Make same transfer resume one effect and conflicting transfer fail closed
 - [x] Receive existing randomized-Age ciphertext and `object-set-v1`
-- [ ] Produce unchanged Receipt v4 and Commit v4 through production storage
+- [x] Produce unchanged Receipt v4 and Commit v4 through production storage
 - [ ] Add `federated-replica-attestation-v1`
 - [ ] Record `FEDERATED_COMMITTED` only after independent verification
 

@@ -446,11 +446,15 @@ def publish_backup(
     checkpoint: Callable[[], None] | None = None,
     traffic_class: backup_transfer_budget.TrafficClass = backup_transfer_budget.TrafficClass.P1_BACKUP_PUBLISH,
     retain_spool: bool = False,
+    local_durability_credit: bool = True,
 ) -> PublishResult:
     """Publish a verified package as an immutable object plus slot commit.
 
     ``retain_spool`` transfers cleanup ownership to the replication lifecycle so
     required replicas can reuse the exact ciphertext after the primary commit.
+    ``local_durability_credit`` is false only for externally owned ciphertext
+    custody; the immutable storage commit still completes, but it must not be
+    counted as this Fleet's local recoverable primary.
     """
     result: PublishResult
     if isinstance(package, backup_object_set.ObjectSetPackage):
@@ -504,7 +508,8 @@ def publish_backup(
             checkpoint=checkpoint,
             traffic_class=traffic_class,
         )
-    _record_publish_to_dr_ledger(target.target_id, policy_id, result, package)
+    if local_durability_credit:
+        _record_publish_to_dr_ledger(target.target_id, policy_id, result, package)
     return result
 
 

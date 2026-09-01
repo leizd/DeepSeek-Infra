@@ -218,6 +218,10 @@ class FederatedReplicaReceiver:
     def staging_dir(self) -> Path:
         return self._staging_dir
 
+    @property
+    def transfer_journal(self) -> federation_transfer_journal.FederatedTransferJournal:
+        return self._transfer_journal
+
     def _connect(self) -> sqlite3.Connection:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self._db_path, timeout=30.0, isolation_level=None)
