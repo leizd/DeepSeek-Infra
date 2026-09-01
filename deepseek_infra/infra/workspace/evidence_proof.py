@@ -1373,6 +1373,16 @@ def validate_typed_predictive_planning_proof(evidence: dict[str, Any], check_nam
     return resilience_predictive_proof.validate_predictive_planning_proof(evidence)
 
 
+def validate_typed_federation_trust_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    """Validate a federation-trust-proof-v1 payload inside the frozen v2 envelope."""
+
+    from deepseek_infra.infra.workspace import federation_trust_proof
+
+    if check_name not in federation_trust_proof.FEDERATION_TRUST_PROOF_CHECKS:
+        return [f"unsupported-federation-trust-proof-check:{check_name}"]
+    return federation_trust_proof.validate_federation_trust_proof(evidence)
+
+
 VALIDATORS: dict[str, CheckValidator] = {
     "realPreDisasterBackupIsActuallyRestored": validate_restore_proof,
     "realFreshProcessRestoresPreDisasterBackup": validate_restore_proof,
@@ -1486,6 +1496,21 @@ VALIDATORS: dict[str, CheckValidator] = {
     "predictiveProofBindsFreshStateBundle": validate_typed_predictive_planning_proof,
     "predictiveProofBindsPreAndPostState": validate_typed_predictive_planning_proof,
     "predictiveProofRejectsSelfReportedZeroMutation": validate_typed_predictive_planning_proof,
+    "fleetIdentityUsesDedicatedFederationSigningKey": validate_typed_federation_trust_proof,
+    "federationKeyIsDistinctFromAgeIdentity": validate_typed_federation_trust_proof,
+    "federationKeyIsDistinctFromAuthorityIdentity": validate_typed_federation_trust_proof,
+    "peerTrustRequiresPinnedRoot": validate_typed_federation_trust_proof,
+    "trustOnFirstUseIsRejected": validate_typed_federation_trust_proof,
+    "rotatedOnlineSignerRequiresPinnedRootCertificate": validate_typed_federation_trust_proof,
+    "revokedFederationSignerIsRejected": validate_typed_federation_trust_proof,
+    "federationReadinessSignatureIsVerified": validate_typed_federation_trust_proof,
+    "readinessAttestationBindsFullCanonicalPayload": validate_typed_federation_trust_proof,
+    "readinessSequenceReplayIsRejected": validate_typed_federation_trust_proof,
+    "expiredReadinessAttestationIsRejected": validate_typed_federation_trust_proof,
+    "futureReadinessAttestationBeyondSkewIsRejected": validate_typed_federation_trust_proof,
+    "challengeResponseBindsBothFleetIds": validate_typed_federation_trust_proof,
+    "challengeNonceReplayIsRejected": validate_typed_federation_trust_proof,
+    "federationTrustProofIsSemanticallyValidated": validate_typed_federation_trust_proof,
 }
 
 

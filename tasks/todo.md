@@ -24,7 +24,7 @@
 ## Fleet identity and trust
 
 - [x] Add dedicated Ed25519 Fleet federation root and online signer
-- [ ] Prove federation keys differ from Age and Authority identities
+- [x] Prove federation keys differ from Age and Authority identities
 - [x] Add operator-pinned Peer Trust Registry without TOFU
 - [x] Add pinned provider/region/jurisdiction/siteClass metadata
 - [x] Add online signer rotation certificates
@@ -66,7 +66,7 @@
 
 ## Typed Evidence and real topology
 
-- [ ] Add `federation-trust-proof-v1`
+- [x] Add `federation-trust-proof-v1`
 - [ ] Add `federated-replica-proof-v1`
 - [ ] Add `federated-dr-proof-v1`
 - [ ] Start two independent Fleet processes and MinIO A1/A2/B1/B2
