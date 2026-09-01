@@ -173,5 +173,5 @@
   </g>
 
   <!-- footer -->
-  <text x="600" y="890" font-size="10" fill="#94a3b8" text-anchor="middle">v4.8.0：签名联邦 · 跨 Fleet 灾难恢复（开发中）· 冻结协议格式</text>
+  <text x="600" y="890" font-size="10" fill="#94a3b8" text-anchor="middle">v4.8.0：签名联邦 · 跨 Fleet 灾难恢复（候选实现）· 冻结协议格式</text>
 </svg>

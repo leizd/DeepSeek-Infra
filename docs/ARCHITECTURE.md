@@ -9,17 +9,54 @@
 
 DeepSeek Infra 是一个本地优先的 **Agentic AI Infra 平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以标准协议互操作：默认 Python **MCP Tool Hub**（`POST /mcp`）提供完整兼容工具面；可选的 TypeScript **无状态 MCP 执行平面**为代码检索和测试任务提供双实例恢复能力；本地 Agent 经 **A2A** 风格的 Agent Card 与任务生命周期（`/.well-known/agent-card.json`、`/a2a`）与外部 Agent 互通。
 
-## 4.8.0 签名联邦与跨 Fleet 灾难恢复（开发中）
+## 4.8.0 签名联邦与跨 Fleet 灾难恢复（候选实现完成）
 
-4.8.0 将在两个完全独立的 Fleet 之间建立 operator-pinned cryptographic
-trust、Receiver-controlled ciphertext custody 与可验证的 offsite recovery，
-不会引入 shared Authority、multi-primary、Raft 或 global consensus。Gate A
-先锁定不可变 Wave Schedule identity、可续租 schedule/wave runner lease 和真实
-进程死亡后的单 effect 接管；通过前 Federation 保持无写入能力。
+4.8.0 在两个完全独立的 Fleet 之间建立 operator-pinned cryptographic trust、
+Receiver-controlled ciphertext custody 与可验证的 offsite recovery，不引入 shared
+Authority、multi-primary、Raft 或 global consensus。Gate A 已先锁定不可变 Wave
+Schedule identity、可续租 schedule/wave runner lease 和真实进程死亡后的单 effect
+接管；Git history 保持 Federation write path 位于该 barrier 之后。
 
-Federation 新增的 readiness、ingress、replica 与 DR attestation 都属于
-control/evidence documents。`object-set-v1`、Receipt v4、Commit v4、FastCDC v3、
-randomized Age、Control Authority 与既有 Evidence envelope 继续冻结。
+```mermaid
+flowchart LR
+    subgraph A["Fleet A — sovereign source"]
+        AA["Authority A"]
+        IA["Pinned root + online signer A"]
+        SA["MinIO A1 + A2"]
+        JA[("Transfer journal A")]
+    end
+    subgraph B["Fleet B — sovereign receiver"]
+        AB["Authority B"]
+        IB["Pinned root + online signer B"]
+        SB["MinIO B1 + B2"]
+        JB[("Transfer journal B")]
+    end
+    IA <-->|"signed challenge + readiness"| IB
+    JA -->|"custody request"| JB
+    JB -->|"signed scoped ingress grant"| JA
+    SA -->|"existing randomized-Age object-set-v1"| SB
+    SB -->|"Receipt v4 + Commit v4 + signed attestation"| JA
+```
+
+Dedicated Ed25519 federation roots、短期 online signers、Peer Trust Registry 与
+challenge/readiness 建立 mutual trust。Receiver 签发 scope-bound ingress grant；
+immutable transfer journal 在分区、Sender/Receiver crash 或未知结果后按同一
+`transferId` reconcile。Receiver 只用自己的 storage principal，通过 production
+storage path 生成 Receipt v4/Commit v4。Sender 验证签名、trust chain、transfer、
+object-set、Receipt/Commit 和 pinned failure-domain metadata 后，才记录
+`FEDERATED_COMMITTED`。
+
+Federated durability 与 local durability 使用独立目标。`COLD_CUSTODY` 不能声称
+plaintext recovery；`RECOVERY_CAPABLE` 只使用 federation 外预配置的 Age identity
+执行 isolated production restore。Age private identity 永不进入 Federation wire。
+
+Federation readiness、ingress、replica 与 DR attestation 都属于 control/evidence
+documents。`object-set-v1`、Receipt v4、Commit v4、FastCDC v3、Projection
+semantics、randomized Age、Control Authority 与既有 Evidence envelope 继续冻结。
+架构决策见 [ADR-0048](adr/ADR-0048-signed-federation-cross-fleet-dr.md)，操作流程见
+[Signed Federation 与跨 Fleet DR 运维手册](runbooks/SIGNED_FEDERATION_DR.md)。候选
+实现的本地真实 MinIO 验证已通过；正式 release qualification 仍依赖最终 PR-head/
+merge CI exact artifacts 与 Evidence Assembly。
 
 ## 4.7.6 生产级预测控制与可验证仿真
 
@@ -194,7 +231,7 @@ Sidecar **不实现**：网关流式、上游 HTTP、MCP 传输、真实工具�
 
 ### 版本说明
 
-- **Current development version:** `4.8.0`（只有 Gate A、真实双 Fleet/四 MinIO exact-merge CI Evidence 与全部 release gates 通过后才 release-ready）。默认运行时仍由 Python 拥有；`backup-crypto` 负责 age 流式密码边界，`deepseek-backup` 负责可验证的持久批量 Chunk 扫描。Python 拥有 Persistent Snapshot Index、Pack/Delta Manifest、Projection Planner、Bloom/Exact Lookup、备份事务、持久化 Risk/Scheduler/SLO Ledgers、租约围栏提交、Contributor 编排和恢复状态机；可选无状态 MCP 是独立部署面。生产恢复编排在冻结的 `object-set-v1`、Receipt v4、Commit v4 与投影语义之上增加耐久 Job、全局多波次调度、安全控制和 Evidence closure，不迁移或重写线格式。
+- **Current candidate version:** `4.8.0`（本地实现与真实双 Fleet/四逻辑 MinIO Evidence 已完成；只有最终 PR-head/merge SHA 的 exact artifacts、Evidence Assembly 与全部 release gates 通过后才 release-ready）。默认运行时仍由 Python 拥有；`backup-crypto` 负责 age 流式密码边界，`deepseek-backup` 负责可验证的持久批量 Chunk 扫描。Python 拥有 Persistent Snapshot Index、Pack/Delta Manifest、Projection Planner、Bloom/Exact Lookup、备份事务、持久化 Risk/Scheduler/SLO/Federation Ledgers、租约围栏提交、Contributor 编排和恢复状态机；可选无状态 MCP 是独立部署面。Federation 在冻结的 `object-set-v1`、Receipt v4、Commit v4 与投影语义之上增加签名 trust、Receiver-controlled ingress、异地 custody 与 DR Evidence，不迁移或重写 storage wire。
 - **Historical qualification:** `v4.0.0-rc.1` 已被 rc.2 supersede，只保留为历史架构预览；stable `4.0.0` 从已验证的 rc.2 提升。
 - **Patch boundary:** Python-first 所有权、默认关闭的 Rust delegates 和冻结协议均不改变。
 
