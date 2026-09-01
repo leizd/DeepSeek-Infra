@@ -58,6 +58,8 @@ _SECRET_MARKERS = (
 )
 _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _TARGET_ID = re.compile(r"^(?:managed-local|target_[a-z0-9][a-z0-9._-]{0,63})$")
+_FLEET_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+_JURISDICTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 def _now_iso() -> str:
@@ -461,6 +463,105 @@ def _normalize_replication(raw: Any, *, primary_target_id: str) -> dict[str, Any
     return normalized_res
 
 
+def _normalize_federated_durability(raw: Any) -> dict[str, Any]:
+    """Normalize the offsite objective without changing local replication semantics.
+
+    ``maxFederatedCopyAge`` is expressed in seconds. The section is disabled by
+    default so existing policies never acquire remote durability requirements.
+    """
+
+    defaults = {
+        "enabled": False,
+        "minFederatedCopies": 1,
+        "minDistinctFleets": 1,
+        "maxFederatedCopyAge": 30 * 24 * 60 * 60,
+        "allowedPeerFleets": [],
+        "allowedJurisdictions": [],
+    }
+    if raw is None:
+        return defaults
+    section = _require_mapping(raw, "federatedDurability")
+    allowed_fields = frozenset(defaults)
+    if set(section) - allowed_fields:
+        raise AppError("Backup policy federatedDurability contains unsupported fields", code=ErrorCode.INVALID_PAYLOAD)
+    enabled = _require_bool(section.get("enabled"), "federatedDurability.enabled", False)
+    min_copies = _require_int(
+        section.get("minFederatedCopies"),
+        "federatedDurability.minFederatedCopies",
+        1,
+        1,
+        64,
+    )
+    min_fleets = _require_int(
+        section.get("minDistinctFleets"),
+        "federatedDurability.minDistinctFleets",
+        1,
+        1,
+        64,
+    )
+    max_age = _require_int(
+        section.get("maxFederatedCopyAge"),
+        "federatedDurability.maxFederatedCopyAge",
+        30 * 24 * 60 * 60,
+        1,
+        10 * 365 * 24 * 60 * 60,
+    )
+
+    def _string_list(field: str, pattern: re.Pattern[str]) -> list[str]:
+        value = section.get(field)
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise AppError(f"Backup policy field federatedDurability.{field} must be an array", code=ErrorCode.INVALID_PAYLOAD)
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for index, item in enumerate(value):
+            if type(item) is not str or pattern.fullmatch(item) is None:
+                raise AppError(
+                    f"Backup policy field federatedDurability.{field}[{index}] is invalid",
+                    code=ErrorCode.INVALID_PAYLOAD,
+                )
+            if item in seen:
+                raise AppError(
+                    f"Backup policy field federatedDurability.{field} must be unique",
+                    code=ErrorCode.INVALID_PAYLOAD,
+                )
+            seen.add(item)
+            normalized.append(item)
+        return sorted(normalized)
+
+    allowed_peers = _string_list("allowedPeerFleets", _FLEET_ID)
+    allowed_jurisdictions = _string_list("allowedJurisdictions", _JURISDICTION_ID)
+    if min_fleets > min_copies:
+        raise AppError(
+            "Backup policy federatedDurability.minDistinctFleets exceeds minFederatedCopies",
+            code=ErrorCode.INVALID_PAYLOAD,
+        )
+    if enabled and (not allowed_peers or not allowed_jurisdictions):
+        raise AppError(
+            "Enabled federatedDurability requires allowedPeerFleets and allowedJurisdictions",
+            code=ErrorCode.INVALID_PAYLOAD,
+        )
+    if enabled and min_fleets > len(allowed_peers):
+        raise AppError(
+            "Backup policy federatedDurability.minDistinctFleets exceeds allowedPeerFleets",
+            code=ErrorCode.INVALID_PAYLOAD,
+        )
+    if enabled and min_copies > len(allowed_peers):
+        raise AppError(
+            "Backup policy federatedDurability.minFederatedCopies exceeds allowedPeerFleets",
+            code=ErrorCode.INVALID_PAYLOAD,
+        )
+    return {
+        "enabled": enabled,
+        "minFederatedCopies": min_copies,
+        "minDistinctFleets": min_fleets,
+        "maxFederatedCopyAge": max_age,
+        "allowedPeerFleets": allowed_peers,
+        "allowedJurisdictions": allowed_jurisdictions,
+    }
+
+
 def _normalize_recovery_placement(raw: Any) -> dict[str, Any]:
     """Lazy import avoids circular dependency with backup_placement."""
     from deepseek_infra.infra.workspace.backup_placement import normalize_recovery_placement
@@ -532,6 +633,7 @@ def normalize_policy(payload: dict[str, Any], *, policy_id: str | None = None, c
         "primaryTargetId": target_id,
         "policyRevision": max(1, int(payload.get("policyRevision") or 1)),
         "replication": _normalize_replication(payload.get("replication"), primary_target_id=target_id),
+        "federatedDurability": _normalize_federated_durability(payload.get("federatedDurability")),
         "placement": _normalize_placement(payload.get("placement")),
         "recoveryPlacement": _normalize_recovery_placement(payload.get("recoveryPlacement")),
         "retentionPolicyId": _require_safe_id(payload.get("retentionPolicyId") or DEFAULT_RETENTION_POLICY_ID, "retentionPolicyId"),
@@ -664,6 +766,7 @@ def update_policy(
             "costObjectives",
             "recoveryDrill",
             "replication",
+            "federatedDurability",
             "placement",
         ):
             if key in patch:

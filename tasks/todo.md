@@ -50,13 +50,13 @@
 - [x] Receive existing randomized-Age ciphertext and `object-set-v1`
 - [x] Produce unchanged Receipt v4 and Commit v4 through production storage
 - [x] Add `federated-replica-attestation-v1`
-- [ ] Record `FEDERATED_COMMITTED` only after independent verification
+- [x] Record `FEDERATED_COMMITTED` only after independent verification
 
 ## Durability and federated DR
 
-- [ ] Add independent federated durability objective fields
-- [ ] Prove remote copies never reduce local copies or failure domains
-- [ ] Prove remote copies cannot promote, mutate, prune, or delete
+- [x] Add independent federated durability objective fields
+- [x] Prove remote copies never reduce local copies or failure domains
+- [x] Prove remote copies cannot promote, mutate, prune, or delete
 - [ ] Add COLD_CUSTODY and RECOVERY_CAPABLE modes
 - [ ] Require independently preprovisioned Age identity for recovery-capable peers
 - [ ] Prove Age private identity never crosses Federation boundaries
