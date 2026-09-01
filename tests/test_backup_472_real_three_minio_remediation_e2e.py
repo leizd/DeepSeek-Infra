@@ -31,6 +31,7 @@ from typing import Any
 
 import pytest
 
+from deepseek_infra.core import config
 from deepseek_infra.infra.workspace import (
     backup_crypto,
     backup_control_recovery,
@@ -410,7 +411,7 @@ def test_real_three_minio_autonomous_remediation_e2e(
     del real_storage_environment
     endpoints, containers = _real_prerequisites()
     clients = [_client(ep) for ep in endpoints]
-    authority = backup_control_recovery.initialize_control_authority(reason="4.8.0-real-wave-sigkill")
+    authority = backup_control_recovery.initialize_control_authority(reason=f"{config.APP_VERSION}-real-wave-sigkill")
     assert authority["status"] == "genesis-complete"
     assert authority["recoveryState"] == backup_control_recovery.RECOVERY_ACTIVE
 
@@ -442,7 +443,6 @@ def test_real_three_minio_autonomous_remediation_e2e(
     })
 
     # 4. Seed workspace & publish initial backup to MinIO A
-    from deepseek_infra.core import config
     config.PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     proj = config.PROJECTS_DIR / "resilience-proj"
     proj.mkdir(parents=True, exist_ok=True)
