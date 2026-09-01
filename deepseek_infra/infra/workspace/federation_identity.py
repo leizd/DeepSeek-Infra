@@ -387,6 +387,12 @@ def _require_valid_root_identity(identity: Any) -> dict[str, Any]:
     return normalized
 
 
+def validate_fleet_identity(identity: Any) -> dict[str, Any]:
+    """Validate and normalize an untrusted public ``fleet-identity-v1`` document."""
+
+    return _require_valid_root_identity(identity)
+
+
 def create_fleet_root(
     fleet_id: str,
     *,

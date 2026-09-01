@@ -25,8 +25,8 @@
 
 - [x] Add dedicated Ed25519 Fleet federation root and online signer
 - [ ] Prove federation keys differ from Age and Authority identities
-- [ ] Add operator-pinned Peer Trust Registry without TOFU
-- [ ] Add pinned provider/region/jurisdiction/siteClass metadata
+- [x] Add operator-pinned Peer Trust Registry without TOFU
+- [x] Add pinned provider/region/jurisdiction/siteClass metadata
 - [ ] Add online signer rotation certificates
 - [ ] Add signer/root revocation and explicit historical-proof semantics
 
