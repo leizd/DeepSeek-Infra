@@ -1,5 +1,9 @@
 # Implementation Plan: 4.8.0 Signed Federation & Cross-Fleet Disaster Recovery
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
 ## Overview
 
 DeepSeek Infra 4.8.0 establishes verifiable cooperation between two sovereign
@@ -131,11 +135,14 @@ execution with no fake S3 or stub crypto.
 
 ### Checkpoint: Federation write barrier
 
-- [ ] Schedule identity is immutable and migration-safe.
-- [ ] Long effects renew schedule and wave leases.
-- [ ] Lease loss fences local commits and reconciles the existing effect.
-- [ ] Real process death produces higher epochs and one provider effect.
-- [ ] No Federation write API or credential path exists before this checkpoint.
+- [x] Schedule identity is immutable and migration-safe.
+- [x] Long effects renew schedule and wave leases.
+- [x] Lease loss fences local commits and reconciles the existing effect.
+- [x] Real process death produces higher epochs and one provider effect.
+- [x] No Federation write API or credential path exists before this checkpoint.
+
+Gate A was completed and committed before the first Federation write path. Its
+real process proof remains part of the exact storage-control-plane CI boundary.
 
 ### Phase 2: Fleet identity and explicit trust
 

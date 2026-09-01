@@ -43,4 +43,56 @@ export RELEASE_VERSION="$(cat VERSION)"
 23. Generate the release zip, manifest and SHA-256 checksum with `python scripts/release.py --clean-workspace --version "$RELEASE_VERSION"`; confirm both platform helpers (`backup-crypto` and `deepseek-backup`) are bundled.
 24. Confirm Python coverage is `>=95%` on the 3.10 / 3.11 / 3.12 matrix (`pytest --cov --cov-fail-under=95`) before tagging.
 
+## 4.8.0 Federation qualification addendum
+
+1. Confirm the Gate A history precedes every Federation write path: immutable
+   schedule digest, terminal/running rewrite rejection, renewable schedule/wave
+   leases, lease-loss fencing, and real two-process takeover with higher
+   schedule/wave/action epochs and one underlying provider effect.
+2. Confirm Fleet A and B use independent ROOT directories, Authority stores,
+   federation roots/signers, SQLite journals, HTTP processes, storage targets,
+   and long-lived storage principals. Attempt cross-auth in both directions and
+   require provider denial.
+3. Verify operators pinned each exact federation root fingerprint and
+   provider/region/jurisdiction/siteClass metadata before activation. TOFU,
+   same-Fleet identity, root collision, stale signer sequence, expired signer,
+   and revoked signer must fail closed.
+4. Verify signed readiness binds the complete canonical snapshot rather than only
+   `riskDigest`; verify challenge nonce replay, wrong Fleet IDs, future timestamp,
+   expiry, and revoked identity rejection.
+5. Verify Receiver-signed ingress grants bind source/destination, transfer,
+   policy, backup, object-set digest, prefix, max bytes, nonce, and expiry. Sender
+   process/config/Evidence must contain no Receiver long-lived storage credential.
+6. Verify same transfer ID/same digest resumes, same ID/different digest fails,
+   and every partition or unknown remote outcome performs GET/reconcile before
+   write retry.
+7. Verify the Federation scenario uses four logical real MinIO targets A1/A2/B1/B2
+   across two independent Fleet processes. The shared producer may start a fifth
+   legacy target, but it must not be counted as a federated replica.
+8. SIGKILL Receiver during a real component upload, restart a new PID with the
+   same durable state, resume the same transfer ID, and prove exactly one Receipt
+   v4/Commit v4 effect. Replay the old grant, tamper the replica attestation, and
+   revoke the peer; all must fail closed.
+9. Verify local `minCommittedCopies` and `minFailureDomains` are unchanged before/
+   after Federation. No remote copy may authorize promotion, policy mutation,
+   local pruning, or delete.
+10. Run the recovery-capable production restore into an isolated workspace using
+    an Age identity provisioned outside Federation. Require exact transfer/backup/
+    object-set/Receipt/Commit/workspace binding and successful cleanup; confirm no
+    Age private identity crosses config, HTTP, journal, or proof boundaries.
+11. Download and independently validate the exact CI artifacts with
+    `scripts/validate_evidence_proof.py`:
+    `federation-trust-proof-v${RELEASE_VERSION}.json`,
+    `federated-replica-proof-v${RELEASE_VERSION}.json`, and
+    `federated-dr-proof-v${RELEASE_VERSION}.json`. Match each report path,
+    scenario, SHA-256, and byte size before Evidence Assembly.
+12. Re-run frozen compatibility checks for `object-set-v1`, Receipt v4, Commit v4,
+    FastCDC v3, Projection semantics, randomized Age, `control-authority-v1`,
+    AuthorityCheckpoint v1, `dr-readiness-proof-v1`, the `evidence-proof-v2`
+    envelope, and `predictive-planning-proof-v1`. No new Federation document may
+    be represented as a storage wire revision.
+13. Do not tag or call 4.8.0 release-ready from local MinIO success. Require the
+    final PR head/merge SHA's Python 3.10/3.11/3.12, frontend, eval, security,
+    five-MinIO producer, exact Evidence Assembly, RC readiness, and package gates.
+
 The stateless MCP Redis volume remains operational state and is never copied directly. Preserve it explicitly, or configure the external Contributor to include a portable logical snapshot in Workspace Backup.

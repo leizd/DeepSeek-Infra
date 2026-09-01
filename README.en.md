@@ -12,12 +12,12 @@
 
 DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines an LLM gateway, persistent Agent DAG runtime, MCP-native tool hub, A2A-style agent mesh, local RAG, automation, workspace data, and end-to-end observability in one private runtime.
 
-> **4.8.0 — Signed Federation & Cross-Fleet Disaster Recovery (in development).** Gate A first closes immutable Wave Schedule identity, renewable runner leases, and real process takeover. Only then may dedicated Fleet signing identity, operator-pinned peer trust, receiver-controlled ingress, signed offsite replica proofs, and production federated DR be introduced. Fleets retain independent Authority.
+> **4.8.0 — Signed Federation & Cross-Fleet Disaster Recovery (candidate implementation complete).** Gate A now closes immutable Wave Schedule identity, renewable runner leases, and real process takeover. Signed Federation adds dedicated Fleet signing identity, operator-pinned peer trust, receiver-controlled ingress, signed offsite replica proofs, and production federated DR while Fleets retain independent Authority.
 
-## 4.8.0 development boundary
+## 4.8.0 at a glance
 
-- Gate A blocks Federation writes until schedule identity and long-running runner
-  ownership are proven under a real process kill.
+- Gate A was completed before Federation writes: schedule identity and long-running
+  runner ownership are proven under a real process kill.
 - Fleet signing keys are separate from Age and Control Authority identities.
 - Peer trust is operator-pinned and explicitly rejects TOFU.
 - Receiver-issued, transfer-bound grants authorize ciphertext custody without
@@ -26,9 +26,12 @@ DeepSeek Infra is a local-first Agentic AI infrastructure platform that combines
 - Existing `object-set-v1`, Receipt v4, Commit v4, FastCDC v3, randomized Age,
   Control Authority, and Evidence envelope contracts stay frozen.
 
-See the [4.8.0 implementation plan](tasks/plan.md), the current stable
-[4.7.6 release notes](docs/releases/4.7.6.en.md), and the
-[Evidence index](docs/EVIDENCE_INDEX.md). 4.8.0 is not release-ready yet.
+See the [4.8.0 release notes](docs/releases/4.8.0.en.md), the
+[operations runbook](docs/runbooks/SIGNED_FEDERATION_DR.md), and the
+[Evidence index](docs/EVIDENCE_INDEX.md). The local real-MinIO candidate is
+complete; formal release readiness still requires final PR-head/merge CI, all
+three exact Federation artifacts, and successful Evidence Assembly. The current
+stable release remains [4.7.6](docs/releases/4.7.6.en.md).
 
 - Python remains the default and authoritative runtime.
 - Every Rust delegate is opt-in and protected by Python fallback.

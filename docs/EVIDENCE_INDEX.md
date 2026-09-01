@@ -7,16 +7,59 @@
 
 Applicable version: v4.8.0.
 
-## 4.8.0 signed federation evidence boundary (in development)
+## 4.8.0 signed federation evidence boundary (candidate complete)
 
-No 4.8.0 Federation correctness claim is release-ready yet. Gate A must first
-produce provider-backed proof of immutable schedule identity, renewable schedule
-and wave leases, and real two-process SIGKILL takeover with one underlying MinIO
-effect. Federation Evidence will later add typed trust, replica, and DR payloads
-inside the unchanged `evidence-proof-v2` envelope and will require two independent
-Fleet processes plus MinIO A1/A2/B1/B2. Existing 4.7.6 exact artifacts remain the
-current production baseline and are not renamed or rewritten by the version
-surface preparation.
+Gate A now has provider-backed proof of immutable schedule identity, renewable
+schedule/wave leases, and real two-process SIGKILL takeover with higher epochs and
+one underlying MinIO effect. Federation writes were introduced only after that
+barrier.
+
+The `storage-control-plane-minio-e2e` producer owns three new exact
+`evidence-proof-v2` artifacts:
+
+- `docs/evidence/federation-trust-proof-v4.8.0.json` — 15 trust/identity/
+  readiness/challenge checks, scenario
+  `real-two-fleet-four-minio-signed-federation-trust`;
+- `docs/evidence/federated-replica-proof-v4.8.0.json` — 37 ingress/transfer/
+  Receipt/Commit/runtime checks, scenario
+  `real-two-fleet-four-minio-signed-federation-replica`;
+- `docs/evidence/federated-dr-proof-v4.8.0.json` — 10 custody/production restore/
+  cleanup checks, scenario `real-two-fleet-four-minio-signed-federation-dr`.
+
+The source scenario launches separate Fleet A and B roots, Authorities, SQLite
+journals, HTTP processes, and storage principals. Federation uses four logical
+provider-backed MinIO targets A1/A2/B1/B2. The shared producer starts a fifth
+legacy MinIO target for existing single-Fleet scenarios; it is not counted as a
+Federation replica. Actual cross-auth attempts prove that neither Fleet's
+long-lived principal can access the other Fleet's MinIO domain.
+
+The proof binds real randomized-Age Backup, operator-pinned roots, signer rotation
+and revocation, challenge/readiness, Receiver-controlled ingress, immutable
+transfer identity, Receiver SIGKILL/new-PID resume, one production Receipt v4/
+Commit v4, replay/tamper/revocation rejection, unchanged local durability, and a
+production isolated DR restore with successful cleanup. The report and Evidence
+Assembly reload exact bytes and re-run each typed semantic validator; a bare HTTP
+200, pytest exit code, or self-declared PASS cannot satisfy a claim.
+
+Local real-MinIO generation and semantic validation are candidate evidence only.
+Formal release PASS still requires these exact artifacts from the final PR
+head/merge SHA, matching report SHA-256/byte size, and successful global Evidence
+Assembly. Until then 4.7.6 remains the stable production baseline. Independent
+verification commands are documented in
+[SIGNED_FEDERATION_DR.md](runbooks/SIGNED_FEDERATION_DR.md).
+
+The following compatibility claims remain mandatory:
+
+- `objectSetV1WireFormatUnchanged`
+- `receiptV4Unchanged`
+- `commitV4Unchanged`
+- `fastCdcV3Unchanged`
+- `randomizedAgeUnchanged`
+- `controlAuthorityV1Unchanged`
+- `authorityCheckpointV1Unchanged`
+- `drReadinessProofV1Unchanged`
+- `evidenceProofV2EnvelopeUnchanged`
+- `predictivePlanningProofV1Unchanged`
 
 ## 4.7.6 production predictive control contract
 
@@ -221,51 +264,54 @@ succeeds. For development setup and quality gates, see [AGENTS.md](../AGENTS.md)
 
 - `docs/evidence/headless-mcp-bridge.json`
 - `docs/evidence/a2a-external-peer.json`
-- `docs/evidence/ga-v4.7.6.json`
-- `docs/evidence/workspace-v4.7.6.json`
-- `docs/evidence/edge-router-v4.7.6.json`
-- `docs/evidence/media-v4.7.6.json`
-- `docs/evidence/browser-v4.7.6.json`
-- `docs/evidence/automation-v4.7.6.json`
-- `docs/evidence/skills-v4.7.6.json`
-- `docs/evidence/skills-ui-v4.7.6.json`
-- `docs/evidence/skill-builder-v4.7.6.json`
-- `docs/evidence/skill-packs-v4.7.6.json`
-- `docs/evidence/skill-eval-dashboard-v4.7.6.json`
-- `docs/evidence/skill-versioning-v4.7.6.json`
-- `docs/evidence/skill-analytics-v4.7.6.json`
-- `docs/evidence/skill-security-v4.7.6.json`
-- `docs/evidence/skill-catalog-v4.7.6.json`
-- `docs/evidence/context-taint-v4.7.6.json`
-- `docs/evidence/semantic-cache-onnx-v4.7.6.json`
-- `docs/evidence/upgrade-rollback-v4.7.6.json`
-- `docs/evidence/protocol-contract-v4.7.6.json`
-- `docs/evidence/frontend-bundle-v4.7.6.json`
-- `docs/evidence/frontend-browser-v4.7.6.json`
+- `docs/evidence/ga-v4.8.0.json`
+- `docs/evidence/workspace-v4.8.0.json`
+- `docs/evidence/edge-router-v4.8.0.json`
+- `docs/evidence/media-v4.8.0.json`
+- `docs/evidence/browser-v4.8.0.json`
+- `docs/evidence/automation-v4.8.0.json`
+- `docs/evidence/skills-v4.8.0.json`
+- `docs/evidence/skills-ui-v4.8.0.json`
+- `docs/evidence/skill-builder-v4.8.0.json`
+- `docs/evidence/skill-packs-v4.8.0.json`
+- `docs/evidence/skill-eval-dashboard-v4.8.0.json`
+- `docs/evidence/skill-versioning-v4.8.0.json`
+- `docs/evidence/skill-analytics-v4.8.0.json`
+- `docs/evidence/skill-security-v4.8.0.json`
+- `docs/evidence/skill-catalog-v4.8.0.json`
+- `docs/evidence/context-taint-v4.8.0.json`
+- `docs/evidence/semantic-cache-onnx-v4.8.0.json`
+- `docs/evidence/upgrade-rollback-v4.8.0.json`
+- `docs/evidence/protocol-contract-v4.8.0.json`
+- `docs/evidence/frontend-bundle-v4.8.0.json`
+- `docs/evidence/frontend-browser-v4.8.0.json`
 - `evals/reports/latest.json`
 - `evals/reports/agent-latest.json`
 - `evals/reports/baseline-compare-latest.json`
 - `evals/reports/security-latest.json`
-- `evals/reports/skills-v4.7.6.json`
-- `evals/reports/media-v4.7.6.json`
-- `evals/reports/browser-v4.7.6.json`
-- `evals/reports/automation-v4.7.6.json`
-- `docs/evidence/rust-sidecar-image-v4.7.6.json`
-- `docs/evidence/hybrid-runtime-e2e-v4.7.6.json`
-- `docs/evidence/gateway-request-parity-v4.7.6.json`
-- `docs/evidence/mcp-protocol-parity-v4.7.6.json`
-- `docs/evidence/rag-parity-v4.7.6.json`
-- `docs/evidence/rag-document-preparation-parity-v4.7.6.json`
-- `docs/evidence/rag-vector-binary-parity-v4.7.6.json`
-- `docs/evidence/rust-coverage-v4.7.6.json`
-- `docs/evidence/rust-sidecar-performance-v4.7.6.json`
-- `docs/evidence/packed-delta-s3-v4.7.6.json`
-- `docs/evidence/object-set-s3-v4.7.6.json`
-- `docs/evidence/recovery-faults-v4.7.6.json`
-- `docs/evidence/replica-healing-s3-v4.7.6.json`
-- `docs/evidence/storage-control-plane-minio-v4.7.6.json`
-- `docs/evidence/storage-control-plane-autonomous-proof-v4.7.6.json`
-- `docs/evidence/storage-control-plane-predictive-proof-v4.7.6.json`
+- `evals/reports/skills-v4.8.0.json`
+- `evals/reports/media-v4.8.0.json`
+- `evals/reports/browser-v4.8.0.json`
+- `evals/reports/automation-v4.8.0.json`
+- `docs/evidence/rust-sidecar-image-v4.8.0.json`
+- `docs/evidence/hybrid-runtime-e2e-v4.8.0.json`
+- `docs/evidence/gateway-request-parity-v4.8.0.json`
+- `docs/evidence/mcp-protocol-parity-v4.8.0.json`
+- `docs/evidence/rag-parity-v4.8.0.json`
+- `docs/evidence/rag-document-preparation-parity-v4.8.0.json`
+- `docs/evidence/rag-vector-binary-parity-v4.8.0.json`
+- `docs/evidence/rust-coverage-v4.8.0.json`
+- `docs/evidence/rust-sidecar-performance-v4.8.0.json`
+- `docs/evidence/packed-delta-s3-v4.8.0.json`
+- `docs/evidence/object-set-s3-v4.8.0.json`
+- `docs/evidence/recovery-faults-v4.8.0.json`
+- `docs/evidence/replica-healing-s3-v4.8.0.json`
+- `docs/evidence/storage-control-plane-minio-v4.8.0.json`
+- `docs/evidence/storage-control-plane-autonomous-proof-v4.8.0.json`
+- `docs/evidence/storage-control-plane-predictive-proof-v4.8.0.json`
+- `docs/evidence/federation-trust-proof-v4.8.0.json`
+- `docs/evidence/federated-replica-proof-v4.8.0.json`
+- `docs/evidence/federated-dr-proof-v4.8.0.json`
 
 ## Historical 4.4.15 evidence contract
 

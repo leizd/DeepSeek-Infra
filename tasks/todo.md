@@ -1,5 +1,9 @@
 # 4.8.0 Todo — Signed Federation & Cross-Fleet Disaster Recovery
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
 ## Phase 0 — Baseline
 
 - [x] Verify exact PR #160 merge commit `a79c90d2`
@@ -60,7 +64,7 @@
 - [x] Add COLD_CUSTODY and RECOVERY_CAPABLE modes
 - [x] Require independently preprovisioned Age identity for recovery-capable peers
 - [x] Prove Age private identity never crosses Federation boundaries
-- [ ] Run production remote restore into an isolated workspace
+- [x] Run production remote restore into an isolated workspace
 - [x] Add and semantically validate `federated-dr-drill-attestation-v1`
 - [x] Require successful cleanup before DR proof passes
 
@@ -69,19 +73,19 @@
 - [x] Add `federation-trust-proof-v1`
 - [x] Add `federated-replica-proof-v1`
 - [x] Add `federated-dr-proof-v1`
-- [ ] Start two independent Fleet processes and MinIO A1/A2/B1/B2
-- [ ] Prove receiver SIGKILL/restart resumes the same transfer ID
-- [ ] Prove only one remote commit exists
-- [ ] Reject replayed grants and tampered attestations
-- [ ] Block new transfers after peer revocation
-- [ ] Prove production federated DR restore and signed proof
-- [ ] Require all three exact typed artifacts in Evidence Assembly
+- [x] Start two independent Fleet processes and MinIO A1/A2/B1/B2
+- [x] Prove receiver SIGKILL/restart resumes the same transfer ID
+- [x] Prove only one remote commit exists
+- [x] Reject replayed grants and tampered attestations
+- [x] Block new transfers after peer revocation
+- [x] Prove production federated DR restore and signed proof
+- [x] Require all three exact typed artifacts in Evidence Assembly
 
 ## Release closure
 
-- [ ] Document trust bootstrap, key rotation, revocation, partitions, and incidents
-- [ ] Document cold custody and recovery-capable operational requirements
-- [ ] Update ADR, architecture, API, Evidence index, release notes, and runbooks
+- [x] Document trust bootstrap, key rotation, revocation, partitions, and incidents
+- [x] Document cold custody and recovery-capable operational requirements
+- [x] Update ADR, architecture, API, Evidence index, release notes, and runbooks
 - [ ] Run frontend, Ruff, Mypy, full 95.0% coverage, eval, security, and release gates
 - [ ] Run real two-Fleet/four-MinIO exact Evidence producers and semantic assembly
 - [ ] Review intended paths and preserve unrelated worktree assets
