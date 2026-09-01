@@ -342,6 +342,38 @@ def test_ingress_write_is_receiver_mediated_prefix_scoped_and_byte_bounded(tmp_p
         assert escaped.value.code == "FEDERATION_INGRESS_OBJECT_PREFIX_VIOLATION"
 
 
+def test_ingress_object_key_has_one_immutable_write_identity(tmp_path: Path) -> None:
+    _, registry_b, _, signer_b, challenge, _ = _fixture(tmp_path)
+    grant = _issue(registry_b, signer_b, challenge)
+    object_key = PREFIX + "objects/immutable-component.age"
+    first = federation_ingress_grant.authorize_ingress_write(
+        grant,
+        peer_registry=registry_b,
+        source_fleet_id="fleet-a",
+        write_id="write-object-first",
+        object_key=object_key,
+        byte_count=100,
+        now=NOW + timedelta(seconds=3),
+    )
+
+    with pytest.raises(federation_ingress_grant.FederationIngressGrantError) as conflict:
+        federation_ingress_grant.authorize_ingress_write(
+            grant,
+            peer_registry=registry_b,
+            source_fleet_id="fleet-a",
+            write_id="write-object-rival",
+            object_key=object_key,
+            byte_count=100,
+            now=NOW + timedelta(seconds=4),
+        )
+
+    assert conflict.value.code == "FEDERATION_INGRESS_OBJECT_WRITE_IDENTITY_CONFLICT"
+    stored = registry_b.get_ingress_grant(str(grant["grantId"]))
+    assert stored is not None
+    assert stored["bytesReserved"] == 100
+    assert registry_b.list_ingress_writes(str(grant["grantId"])) == [first]
+
+
 def test_ingress_grant_replay_expiry_tamper_wrong_fleet_and_write_identity_fail_closed(tmp_path: Path) -> None:
     registry_a, registry_b, _, signer_b, challenge, _ = _fixture(tmp_path)
     grant = _issue(registry_b, signer_b, challenge)

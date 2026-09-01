@@ -246,6 +246,11 @@ CREATE TABLE IF NOT EXISTS federation_ingress_writes (
 )
 """
 
+_CREATE_INGRESS_OBJECT_KEY_INDEX_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_federation_ingress_writes_object_key
+ON federation_ingress_writes(grant_id, object_key)
+"""
+
 
 class FederationTrustError(RuntimeError):
     """Fail-closed trust-registry error with a stable machine-readable code."""
@@ -431,6 +436,7 @@ class PeerTrustRegistry:
             connection.execute(_CREATE_CHALLENGE_NONCE_INDEX_SQL)
             connection.execute(_CREATE_INGRESS_GRANTS_SQL)
             connection.execute(_CREATE_INGRESS_WRITES_SQL)
+            connection.execute(_CREATE_INGRESS_OBJECT_KEY_INDEX_SQL)
 
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
@@ -1913,6 +1919,15 @@ class PeerTrustRegistry:
                 if existing["object_key"] != normalized_key or int(existing["byte_count"]) != byte_count:
                     raise FederationTrustError("FEDERATION_INGRESS_WRITE_IDENTITY_CONFLICT")
                 return self._ingress_write_record(existing)
+            existing_object = connection.execute(
+                """
+                SELECT * FROM federation_ingress_writes
+                WHERE grant_id = ? AND object_key = ?
+                """,
+                (grant_id, normalized_key),
+            ).fetchone()
+            if existing_object is not None:
+                raise FederationTrustError("FEDERATION_INGRESS_OBJECT_WRITE_IDENTITY_CONFLICT")
             bytes_reserved_after = int(row["bytes_reserved"]) + byte_count
             if bytes_reserved_after > int(row["max_bytes"]):
                 raise FederationTrustError("FEDERATION_INGRESS_MAX_BYTES_EXCEEDED")

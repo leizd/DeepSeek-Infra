@@ -47,7 +47,7 @@
 - [x] Add domain-separated immutable transfer identity
 - [x] Add durable transfer journal and query/reconcile API
 - [x] Make same transfer resume one effect and conflicting transfer fail closed
-- [ ] Receive existing randomized-Age ciphertext and `object-set-v1`
+- [x] Receive existing randomized-Age ciphertext and `object-set-v1`
 - [ ] Produce unchanged Receipt v4 and Commit v4 through production storage
 - [ ] Add `federated-replica-attestation-v1`
 - [ ] Record `FEDERATED_COMMITTED` only after independent verification

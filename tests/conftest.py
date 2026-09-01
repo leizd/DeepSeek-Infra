@@ -238,6 +238,8 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     from deepseek_infra.infra.workspace import (
         autonomous_action_policy as workspace_autonomous_action_policy,
         federation_peer_trust as workspace_federation_peer_trust,
+        federation_replica_receiver as workspace_federation_replica_receiver,
+        federation_transfer_journal as workspace_federation_transfer_journal,
         resilience_action_journal as workspace_resilience_action_journal,
         resilience_capacity_history as workspace_resilience_capacity_history,
         resilience_cost_model as workspace_resilience_cost_model,
@@ -284,6 +286,17 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     federation_dir = tmp_path / ".federation"
     monkeypatch.setattr(workspace_federation_peer_trust, "FEDERATION_DIR", federation_dir)
     monkeypatch.setattr(workspace_federation_peer_trust, "PEER_TRUST_DB", federation_dir / "peer-trust.sqlite3")
+    monkeypatch.setattr(workspace_federation_transfer_journal, "FEDERATION_TRANSFER_DB", federation_dir / "transfers.sqlite3")
+    monkeypatch.setattr(
+        workspace_federation_replica_receiver,
+        "FEDERATED_REPLICA_RECEIVER_DB",
+        federation_dir / "replica-receiver.sqlite3",
+    )
+    monkeypatch.setattr(
+        workspace_federation_replica_receiver,
+        "FEDERATED_REPLICA_STAGING_DIR",
+        federation_dir / "replica-staging",
+    )
 
     browser_session.reset_sessions_for_tests()
     files._load_cached_file_cached.cache_clear()
