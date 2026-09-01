@@ -86,7 +86,9 @@
 - [x] Document trust bootstrap, key rotation, revocation, partitions, and incidents
 - [x] Document cold custody and recovery-capable operational requirements
 - [x] Update ADR, architecture, API, Evidence index, release notes, and runbooks
-- [ ] Run frontend, Ruff, Mypy, full 95.0% coverage, eval, security, and release gates
-- [ ] Run real two-Fleet/four-MinIO exact Evidence producers and semantic assembly
-- [ ] Review intended paths and preserve unrelated worktree assets
-- [ ] Do not merge automatically
+- [x] Run frontend, Ruff, Mypy, full 95.0% coverage, eval, security, and local release gates
+  - Local qualification: frontend 607 tests, Python 5244 tests at 95.10% coverage, offline smoke 23/23 stages, dependency/security gates, and Rust workspace gates all pass.
+  - `preflight_release.py` remains fail-closed on the intentionally unrefreshed exact-head 4.8.0 evidence paths; those artifacts belong to the CI item below.
+- [ ] Run real two-Fleet/four-MinIO exact Evidence producers and semantic assembly on the exact PR head and merge commit in CI
+- [x] Review intended paths and preserve unrelated worktree assets
+- [x] Do not merge automatically
