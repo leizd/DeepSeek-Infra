@@ -62,6 +62,7 @@ def test_recovery_drill_reuses_production_path_scrubs_plaintext_and_preserves_li
     (config.PROJECTS_DIR / "live.json").write_bytes(b'{"live":true}')
     before = _workspace_bytes()
     calls: list[str] = []
+    workspace_digests: list[str] = []
 
     def preflight(value: str, *, client: Any = None) -> dict[str, Any]:
         del client
@@ -80,6 +81,7 @@ def test_recovery_drill_reuses_production_path_scrubs_plaintext_and_preserves_li
         tree = root / "extracted"
         (tree / "payload" / "projects").mkdir(parents=True)
         (tree / "payload" / "projects" / "restored.json").write_text('{"restored":true}', encoding="utf-8")
+        workspace_digests.append("sha256:" + backups._tree_digest(tree))
         (root / "control-decrypted-0.zip").write_bytes(b"plaintext-control")
         (root / "metadata-0").mkdir()
         (root / "metadata-0" / "manifest.json").write_bytes(b"plaintext-metadata")
@@ -88,6 +90,7 @@ def test_recovery_drill_reuses_production_path_scrubs_plaintext_and_preserves_li
             "phase": "materialized",
             "tree": str(tree),
             "manifest": {
+                "source": {"revision": "source-revision-a"},
                 "files": [{"size": 17}],
                 "contributors": [{"id": "projects"}],
             },
@@ -117,6 +120,9 @@ def test_recovery_drill_reuses_production_path_scrubs_plaintext_and_preserves_li
     assert result["ciphertextBytes"] == 30
     assert result["logicalBytes"] == 17
     assert result["verifiedContributors"] == 1
+    assert result["workspaceDigest"] == workspace_digests[0]
+    assert result["sourceRevision"] == "source-revision-a"
+    assert result["cleanupCompleted"] is True
     assert calls == [
         f"preflight:{restore_id}",
         f"fetch:{restore_id}",
@@ -348,6 +354,7 @@ def test_recovery_drill_cleanup_failure_overrides_success(tmp_settings: Path, mo
         backup_recovery_drill.run_recovery_drill(restore_id)
     result = backup_recovery_drill.get_recovery_drill(restore_id)
     assert result["failureCode"] == "drill-cleanup-failed"
+    assert result["cleanupCompleted"] is False
     assert backup_recovery_drill._plaintext_remains(root) is True
 
 

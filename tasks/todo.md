@@ -61,8 +61,8 @@
 - [x] Require independently preprovisioned Age identity for recovery-capable peers
 - [x] Prove Age private identity never crosses Federation boundaries
 - [ ] Run production remote restore into an isolated workspace
-- [ ] Add and semantically validate `federated-dr-drill-attestation-v1`
-- [ ] Require successful cleanup before DR proof passes
+- [x] Add and semantically validate `federated-dr-drill-attestation-v1`
+- [x] Require successful cleanup before DR proof passes
 
 ## Typed Evidence and real topology
 

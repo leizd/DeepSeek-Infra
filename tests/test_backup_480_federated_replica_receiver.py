@@ -98,6 +98,7 @@ def _fixture(
             federation_identity.PURPOSE_SESSION_AUTHENTICATION,
             federation_identity.PURPOSE_INGRESS_GRANT,
             federation_identity.PURPOSE_REPLICA_ATTESTATION,
+            federation_identity.PURPOSE_DR_ATTESTATION,
         ),
     )
     signer_a = federation_identity.load_online_signer(

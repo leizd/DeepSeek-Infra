@@ -64,7 +64,7 @@ def _commit(
     target: backup_publish.ResolvedTarget,
     **kwargs: Any,
 ) -> federated_replica_commit.FederatedReplicaCommitResult:
-    monkeypatch.setattr(backup_publish, "resolve_target", lambda target_id: target if target_id == TARGET_ID else None)
+    monkeypatch.setattr(backup_publish, "resolve_target", lambda target_id, **_kwargs: target if target_id == TARGET_ID else None)
     owner_instance_id = str(kwargs.pop("owner_instance_id", "fleet-b-worker-1"))
     return federated_replica_commit.commit_federated_replica(
         receiver=fixture["receiver"],
