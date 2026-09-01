@@ -177,6 +177,11 @@ def test_474_required_check_names_are_locked_to_proof_or_explicit_scenarios() ->
         "proofObjectKeysExistOnExpectedMinioEndpoint",
         "degradedFleetCannotBeFurtherDegraded",
         "runningEffectsParticipateInBlastRadiusSimulation",
+        "longRunningWaveRenewsScheduleLease",
+        "longRunningWaveRenewsWaveLease",
+        "realProcessWaveSigkillTakeoverUsesHigherEpoch",
+        "realProcessWaveSigkillDoesNotDuplicateEffect",
+        "realProcessWaveSigkillSettlesExactlyOnce",
         "receiptV4Unchanged",
         "commitV4Unchanged",
     }

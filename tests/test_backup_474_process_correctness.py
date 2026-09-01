@@ -401,6 +401,46 @@ def test_action_journal_persists_claim_and_reconciling_events(tmp_settings: Path
     ]
     assert events[-2]["effectHandle"] == {"kind": "repair", "repairId": "repair-live"}
     assert events[-1]["ownerInstanceId"] == "worker-b-pid-202"
+    assert all(event["actionId"] == action_id for event in events)
+
+
+def _crash_takeover_proof() -> dict[str, Any]:
+    return {
+        "actionId": "action-live",
+        "workerAPid": 101,
+        "workerBPid": 202,
+        "processAReturnCode": -9,
+        "epochA": 1,
+        "epochB": 2,
+        "repairId": "repair-live",
+        "repairPhaseAtCrash": "transferring-components",
+        "reconciliationDirective": "RESUME_EXECUTION",
+        "workerALeaseUntil": "2026-08-28T12:00:10Z",
+        "remoteRepairJobCountBefore": 1,
+        "remoteRepairJobCountAfter": 1,
+        "remoteRepairJobIdsBefore": ["repair-live"],
+        "remoteRepairJobIdsAfter": ["repair-live"],
+        "journalEvents": [
+            {
+                "actionId": "action-live",
+                "eventType": "STATE_TRANSITION",
+                "state": "EXECUTING",
+                "executionEpoch": 1,
+                "ownerInstanceId": "crash-worker-a-101",
+                "effectHandle": {"kind": "repair", "repairId": "repair-live"},
+                "createdAt": "2026-08-28T12:00:01Z",
+            },
+            {
+                "actionId": "action-live",
+                "eventType": "ACTION_TAKEOVER",
+                "state": "RECONCILING",
+                "executionEpoch": 2,
+                "ownerInstanceId": "takeover-worker-b-202",
+                "effectHandle": {"kind": "repair", "repairId": "repair-live"},
+                "createdAt": "2026-08-28T12:00:11Z",
+            },
+        ],
+    }
 
 
 def test_process_and_crash_proof_validators_reject_self_reported_flags() -> None:
@@ -427,44 +467,451 @@ def test_process_and_crash_proof_validators_reject_self_reported_flags() -> None
     )
     assert "missing-field:journalEvents" in old_crash
 
-    actual_crash = {
-        "actionId": "action-live",
-        "workerAPid": 101,
-        "workerBPid": 202,
-        "processAReturnCode": -9,
-        "epochA": 1,
-        "epochB": 2,
-        "repairId": "repair-live",
-        "repairPhaseAtCrash": "transferring-components",
-        "reconciliationDirective": "RESUME_EXECUTION",
-        "workerALeaseUntil": "2026-08-28T12:00:10Z",
-        "remoteRepairJobCountBefore": 1,
-        "remoteRepairJobCountAfter": 1,
-        "remoteRepairJobIdsBefore": ["repair-live"],
-        "remoteRepairJobIdsAfter": ["repair-live"],
-        "journalEvents": [
-            {
-                "eventType": "STATE_TRANSITION",
-                "state": "EXECUTING",
-                "executionEpoch": 1,
-                "ownerInstanceId": "worker-101",
-                "effectHandle": {"kind": "repair", "repairId": "repair-live"},
-                "createdAt": "2026-08-28T12:00:01Z",
-            },
-            {
-                "eventType": "ACTION_TAKEOVER",
-                "state": "RECONCILING",
-                "executionEpoch": 2,
-                "ownerInstanceId": "worker-202",
-                "effectHandle": {"kind": "repair", "repairId": "repair-live"},
-                "createdAt": "2026-08-28T12:00:11Z",
-            },
-        ],
-    }
+    actual_crash = _crash_takeover_proof()
     assert evidence_proof.validate_check(
         "takeoverDoesNotCreateSecondRepairJob",
         {"status": "PASS", "evidence": actual_crash},
     ) == []
+
+
+def _wave_crash_takeover_proof() -> dict[str, Any]:
+    proof = _crash_takeover_proof()
+    proof.update(
+        {
+            "scheduleId": "schedule-live",
+            "waveIndex": 0,
+            "scheduleEpochA": 1,
+            "scheduleEpochB": 2,
+            "waveEpochA": 1,
+            "waveEpochB": 2,
+            "waveActionEpochA": 1,
+            "waveActionEpochB": 2,
+            "workerAScheduleLeaseUntil": "2026-08-28T12:00:10Z",
+            "workerAWaveLeaseUntil": "2026-08-28T12:00:10Z",
+            "workerAWaveActionLeaseUntil": "2026-08-28T12:00:05Z",
+            "firstRunnerLeaseUntil": "2026-08-28T12:00:05Z",
+            "renewedRunnerLeaseUntil": "2026-08-28T12:00:10Z",
+            "runnerLeaseObservations": [
+                {
+                    "schedule": {
+                        "scheduleId": "schedule-live",
+                        "status": "RUNNING",
+                        "scheduleExecutionEpoch": 1,
+                        "ownerInstanceId": "crash-worker-a-101",
+                        "leaseUntil": "2026-08-28T12:00:05Z",
+                        "updatedAt": "2026-08-28T12:00:02Z",
+                    },
+                    "wave": {
+                        "scheduleId": "schedule-live",
+                        "waveIndex": 0,
+                        "status": "EXECUTING",
+                        "waveExecutionEpoch": 1,
+                        "ownerInstanceId": "crash-worker-a-101",
+                        "leaseUntil": "2026-08-28T12:00:05Z",
+                        "updatedAt": "2026-08-28T12:00:02Z",
+                    },
+                },
+                {
+                    "schedule": {
+                        "scheduleId": "schedule-live",
+                        "status": "RUNNING",
+                        "scheduleExecutionEpoch": 1,
+                        "ownerInstanceId": "crash-worker-a-101",
+                        "leaseUntil": "2026-08-28T12:00:10Z",
+                        "updatedAt": "2026-08-28T12:00:07Z",
+                    },
+                    "wave": {
+                        "scheduleId": "schedule-live",
+                        "waveIndex": 0,
+                        "status": "EXECUTING",
+                        "waveExecutionEpoch": 1,
+                        "ownerInstanceId": "crash-worker-a-101",
+                        "leaseUntil": "2026-08-28T12:00:10Z",
+                        "updatedAt": "2026-08-28T12:00:07Z",
+                    },
+                },
+            ],
+            "journalStateAtCrash": {
+                "actionId": "action-live",
+                "state": "EXECUTING",
+                "executionEpoch": 1,
+                "ownerInstanceId": "crash-worker-a-101",
+                "leaseUntil": "2026-08-28T12:00:10Z",
+                "effectHandle": {"kind": "repair", "repairId": "repair-live"},
+            },
+            "runnerStateAtCrash": {
+                "schedule": {
+                    "scheduleId": "schedule-live",
+                    "status": "RUNNING",
+                    "scheduleExecutionEpoch": 1,
+                    "ownerInstanceId": "crash-worker-a-101",
+                    "leaseUntil": "2026-08-28T12:00:10Z",
+                },
+                "wave": {
+                    "scheduleId": "schedule-live",
+                    "waveIndex": 0,
+                    "status": "EXECUTING",
+                    "waveExecutionEpoch": 1,
+                    "ownerInstanceId": "crash-worker-a-101",
+                    "leaseUntil": "2026-08-28T12:00:10Z",
+                },
+                "waveAction": {
+                    "scheduleId": "schedule-live",
+                    "waveIndex": 0,
+                    "actionId": "action-live",
+                    "status": "EXECUTING",
+                    "actionExecutionEpoch": 1,
+                    "scheduleExecutionEpoch": 1,
+                    "waveExecutionEpoch": 1,
+                    "ownerInstanceId": "crash-worker-a-101",
+                    "leaseUntil": "2026-08-28T12:00:05Z",
+                },
+            },
+            "runnerStateAtTakeoverClaim": {
+                "schedule": {
+                    "scheduleId": "schedule-live",
+                    "status": "RUNNING",
+                    "scheduleExecutionEpoch": 2,
+                    "ownerInstanceId": "takeover-worker-b-202",
+                    "leaseUntil": "2026-08-28T12:00:41Z",
+                    "updatedAt": "2026-08-28T12:00:11Z",
+                },
+                "wave": {
+                    "scheduleId": "schedule-live",
+                    "waveIndex": 0,
+                    "status": "EXECUTING",
+                    "waveExecutionEpoch": 2,
+                    "ownerInstanceId": "takeover-worker-b-202",
+                    "leaseUntil": "2026-08-28T12:00:41Z",
+                    "updatedAt": "2026-08-28T12:00:11Z",
+                },
+                "waveAction": {
+                    "scheduleId": "schedule-live",
+                    "waveIndex": 0,
+                    "actionId": "action-live",
+                    "status": "CLAIMED",
+                    "actionExecutionEpoch": 2,
+                    "scheduleExecutionEpoch": 2,
+                    "waveExecutionEpoch": 2,
+                    "ownerInstanceId": "takeover-worker-b-202",
+                    "leaseUntil": "2026-08-28T12:00:41Z",
+                    "updatedAt": "2026-08-28T12:00:11Z",
+                },
+            },
+            "runnerStateAfterTakeover": {
+                "schedule": {
+                    "scheduleId": "schedule-live",
+                    "status": "COMPLETED",
+                    "scheduleExecutionEpoch": 2,
+                    "updatedAt": "2026-08-28T12:00:20Z",
+                },
+                "wave": {
+                    "scheduleId": "schedule-live",
+                    "waveIndex": 0,
+                    "status": "COMPLETED",
+                    "waveExecutionEpoch": 2,
+                    "updatedAt": "2026-08-28T12:00:20Z",
+                },
+                "waveAction": {
+                    "scheduleId": "schedule-live",
+                    "waveIndex": 0,
+                    "actionId": "action-live",
+                    "status": "VERIFIED_SUCCESS",
+                    "actionExecutionEpoch": 2,
+                    "scheduleExecutionEpoch": 2,
+                    "waveExecutionEpoch": 2,
+                    "journalExecutionEpoch": 2,
+                    "effectHandle": {"kind": "repair", "repairId": "repair-live"},
+                    "updatedAt": "2026-08-28T12:00:20Z",
+                },
+            },
+            "settlementEvents": [
+                {
+                    "actionId": "action-live",
+                    "toStatus": "CONSUMING",
+                    "executionEpoch": 2,
+                    "effectHandle": {"kind": "repair", "repairId": "repair-live"},
+                    "createdAt": "2026-08-28T12:00:20Z",
+                },
+                {
+                    "actionId": "action-live",
+                    "toStatus": "CONSUMED",
+                    "executionEpoch": 2,
+                    "effectHandle": {"kind": "repair", "repairId": "repair-live"},
+                    "createdAt": "2026-08-28T12:00:21Z",
+                },
+            ],
+        }
+    )
+    return proof
+
+
+def test_wave_crash_proof_semantically_binds_outer_leases_epochs_effect_and_settlement() -> None:
+    check_names = {
+        "longRunningWaveRenewsScheduleLease",
+        "longRunningWaveRenewsWaveLease",
+        "realProcessWaveSigkillTakeoverUsesHigherEpoch",
+        "realProcessWaveSigkillDoesNotDuplicateEffect",
+        "realProcessWaveSigkillSettlesExactlyOnce",
+    }
+    proof = _wave_crash_takeover_proof()
+    for check_name in check_names:
+        assert evidence_proof.validate_check(check_name, {"status": "PASS", "evidence": proof}) == []
+
+    missing_outer = evidence_proof.validate_check(
+        "realProcessWaveSigkillTakeoverUsesHigherEpoch",
+        {"status": "PASS", "evidence": _crash_takeover_proof()},
+    )
+    assert "missing-field:scheduleId" in missing_outer
+
+    stale_schedule = {**proof, "scheduleEpochB": 1}
+    assert "schedule-execution-epoch-not-increased" in evidence_proof.validate_check(
+        "realProcessWaveSigkillTakeoverUsesHigherEpoch",
+        {"status": "PASS", "evidence": stale_schedule},
+    )
+    divergent_lease = {**proof, "workerAWaveLeaseUntil": "2026-08-28T12:00:09Z"}
+    assert "schedule-wave-lease-diverged" in evidence_proof.validate_check(
+        "longRunningWaveRenewsWaveLease",
+        {"status": "PASS", "evidence": divergent_lease},
+    )
+    duplicate_settlement = {**proof, "settlementEvents": [*proof["settlementEvents"], proof["settlementEvents"][-1]]}
+    assert "settlement-consumed-count-not-exactly-one" in evidence_proof.validate_check(
+        "realProcessWaveSigkillSettlesExactlyOnce",
+        {"status": "PASS", "evidence": duplicate_settlement},
+    )
+    crash_state = proof["runnerStateAtCrash"]
+    tampered_runner_state = {
+        **proof,
+        "runnerStateAtCrash": {
+            **crash_state,
+            "schedule": {**crash_state["schedule"], "scheduleExecutionEpoch": 9},
+        },
+    }
+    assert "runner-state-schedule-epoch-binding-mismatch" in evidence_proof.validate_check(
+        "realProcessWaveSigkillTakeoverUsesHigherEpoch",
+        {"status": "PASS", "evidence": tampered_runner_state},
+    )
+
+
+def _set_substring_impostor_owner(proof: dict[str, Any]) -> None:
+    proof["runnerStateAtCrash"]["wave"]["ownerInstanceId"] = "impostor-crash-worker-a-1010"
+
+
+def _set_negative_wave_index_everywhere(proof: dict[str, Any]) -> None:
+    proof["waveIndex"] = -1
+    for snapshot_name in ("runnerStateAtCrash", "runnerStateAtTakeoverClaim", "runnerStateAfterTakeover"):
+        proof[snapshot_name]["wave"]["waveIndex"] = -1
+        proof[snapshot_name]["waveAction"]["waveIndex"] = -1
+    for observation in proof["runnerLeaseObservations"]:
+        observation["wave"]["waveIndex"] = -1
+
+
+def _move_takeover_claim_after_terminal_and_settlement(proof: dict[str, Any]) -> None:
+    for record in proof["runnerStateAtTakeoverClaim"].values():
+        record["updatedAt"] = "2026-08-28T12:00:30Z"
+        record["leaseUntil"] = "2026-08-28T12:01:00Z"
+
+
+def _rebind_journal_events_to_other_action(proof: dict[str, Any]) -> None:
+    for event in proof["journalEvents"]:
+        event["actionId"] = "other-action"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_error"),
+    [
+        (lambda proof: proof.__setitem__("waveEpochB", 1), "wave-execution-epoch-not-increased"),
+        (lambda proof: proof.__setitem__("waveActionEpochB", 1), "wave-action-execution-epoch-not-increased"),
+        (lambda proof: proof.__setitem__("workerAScheduleLeaseUntil", "2026-08-28T12:00:10"), "invalid-workerAScheduleLeaseUntil"),
+        (lambda proof: proof.__setitem__("renewedRunnerLeaseUntil", "2026-08-28T12:00:05Z"), "runner-lease-not-renewed"),
+        (
+            lambda proof: proof.__setitem__("workerAScheduleLeaseUntil", "2026-08-28T12:00:09Z"),
+            "runner-state-schedule-lease-binding-mismatch",
+        ),
+        (
+            lambda proof: proof.__setitem__("workerALeaseUntil", "2026-08-28T12:00:09Z"),
+            "journal-state-at-crash-lease-binding-mismatch",
+        ),
+        (lambda proof: proof.__setitem__("runnerLeaseObservations", "invalid"), "runner-lease-observations-must-be-list"),
+        (
+            lambda proof: proof.__setitem__("firstRunnerLeaseUntil", "2026-08-28T12:00:01Z"),
+            "first-runner-lease-not-bound-to-durable-observation",
+        ),
+        (
+            lambda proof: proof["runnerLeaseObservations"][1]["schedule"].__setitem__(
+                "leaseUntil", "2026-08-28T12:00:05Z"
+            ),
+            "runner-lease-observation-schedule-wave-lease-diverged",
+        ),
+        (lambda proof: proof.__setitem__("runnerStateAtCrash", "invalid"), "runner-state-at-crash-must-be-object"),
+        (
+            lambda proof: proof.__setitem__("runnerStateAtTakeoverClaim", "invalid"),
+            "runner-state-at-takeover-claim-must-be-object",
+        ),
+        (lambda proof: proof.__setitem__("runnerStateAfterTakeover", "invalid"), "runner-state-after-takeover-must-be-object"),
+        (
+            lambda proof: proof["runnerStateAtCrash"].__setitem__("schedule", "invalid"),
+            "runner-state-crash-schedule-must-be-object",
+        ),
+        (
+            lambda proof: proof["runnerStateAtCrash"]["schedule"].__setitem__("scheduleId", "other"),
+            "runner-state-schedule-id-binding-mismatch",
+        ),
+        (
+            lambda proof: proof["runnerStateAtCrash"]["waveAction"].__setitem__("actionId", "other"),
+            "runner-state-action-id-binding-mismatch",
+        ),
+        (
+            lambda proof: proof["runnerStateAtCrash"]["schedule"].__setitem__("scheduleExecutionEpoch", "invalid"),
+            "runner-state-crash-schedule-invalid-scheduleExecutionEpoch",
+        ),
+        (
+            lambda proof: proof["runnerStateAtCrash"]["wave"].__setitem__("waveExecutionEpoch", 9),
+            "runner-state-wave-epoch-binding-mismatch",
+        ),
+        (
+            lambda proof: proof["runnerStateAtCrash"]["waveAction"].__setitem__("actionExecutionEpoch", 9),
+            "runner-state-wave-action-epoch-binding-mismatch",
+        ),
+        (
+            lambda proof: proof["runnerStateAtCrash"]["waveAction"].__setitem__("leaseUntil", "2026-08-28T12:00:04Z"),
+            "runner-state-wave-action-lease-binding-mismatch",
+        ),
+        (
+            lambda proof: proof["runnerStateAtCrash"]["wave"].__setitem__("ownerInstanceId", "other"),
+            "runner-state-worker-a-owner-binding-mismatch",
+        ),
+        (_set_substring_impostor_owner, "runner-state-worker-a-owner-binding-mismatch"),
+        (
+            lambda proof: proof["runnerStateAtTakeoverClaim"]["wave"].__setitem__("ownerInstanceId", "other"),
+            "runner-state-worker-b-owner-binding-mismatch",
+        ),
+        (
+            lambda proof: proof["runnerStateAtTakeoverClaim"]["schedule"].__setitem__(
+                "updatedAt", "2026-08-28T12:00:10Z"
+            ),
+            "takeover-claim-occurred-before-all-worker-a-leases-expired",
+        ),
+        (
+            lambda proof: proof["journalEvents"][1].__setitem__("createdAt", "2026-08-28T12:00:10Z"),
+            "journal-takeover-occurred-before-all-worker-a-leases-expired",
+        ),
+        (_rebind_journal_events_to_other_action, "missing-action-bound-journal-takeover-event"),
+        (
+            lambda proof: proof["runnerStateAtTakeoverClaim"]["wave"].__setitem__("waveIndex", 9),
+            "runner-state-wave-index-binding-mismatch",
+        ),
+        (_set_negative_wave_index_everywhere, "negative-wave-index"),
+        (_move_takeover_claim_after_terminal_and_settlement, "takeover-claim-not-before-terminal-runner-state"),
+        (
+            lambda proof: proof["runnerStateAtCrash"]["schedule"].__setitem__("status", "PAUSED_REPLAN"),
+            "runner-state-crash-not-active",
+        ),
+        (
+            lambda proof: proof["runnerStateAtCrash"]["waveAction"].__setitem__("status", "PENDING"),
+            "runner-state-crash-action-not-executing",
+        ),
+        (
+            lambda proof: proof["runnerStateAfterTakeover"]["wave"].__setitem__("status", "EXECUTING"),
+            "runner-state-takeover-not-completed",
+        ),
+        (
+            lambda proof: proof["runnerStateAfterTakeover"]["waveAction"].__setitem__("status", "EXECUTING"),
+            "runner-state-takeover-action-not-verified",
+        ),
+        (
+            lambda proof: proof["runnerStateAfterTakeover"]["waveAction"].__setitem__(
+                "effectHandle", {"kind": "repair", "repairId": "other"}
+            ),
+            "runner-state-takeover-effect-binding-mismatch",
+        ),
+        (lambda proof: proof.__setitem__("settlementEvents", "invalid"), "settlement-events-must-be-list"),
+        (
+            lambda proof: proof.__setitem__("settlementEvents", [None, *proof["settlementEvents"]]),
+            "settlement-event-not-object",
+        ),
+        (
+            lambda proof: proof.__setitem__("settlementEvents", [{"toStatus": "RESERVED"}, proof["settlementEvents"][1]]),
+            "settlement-consuming-count-not-exactly-one",
+        ),
+        (
+            lambda proof: proof["settlementEvents"][0].__setitem__("executionEpoch", "invalid"),
+            "invalid-settlement-execution-epoch",
+        ),
+        (
+            lambda proof: proof["settlementEvents"][0].__setitem__("executionEpoch", 1),
+            "settlement-execution-epoch-not-bound-to-takeover",
+        ),
+        (
+            lambda proof: proof["settlementEvents"][0].__setitem__("effectHandle", {"kind": "repair", "repairId": "other"}),
+            "settlement-effect-handle-not-bound-to-repair",
+        ),
+        (
+            lambda proof: proof["settlementEvents"][0].__setitem__("actionId", "other"),
+            "settlement-action-id-not-bound-to-action",
+        ),
+        (
+            lambda proof: proof.__setitem__("settlementEvents", [proof["settlementEvents"][1]]),
+            "settlement-consuming-count-not-exactly-one",
+        ),
+        (
+            lambda proof: proof.__setitem__("settlementEvents", list(reversed(proof["settlementEvents"]))),
+            "settlement-consumed-before-consuming",
+        ),
+    ],
+    ids=(
+        "wave-epoch",
+        "wave-action-epoch",
+        "naive-lease-time",
+        "lease-not-renewed",
+        "crash-lease-before-renewal",
+        "journal-lease-not-bound",
+        "lease-observations-not-list",
+        "first-lease-not-bound",
+        "observation-lease-divergence",
+        "crash-state-not-object",
+        "takeover-claim-state-not-object",
+        "takeover-state-not-object",
+        "crash-schedule-not-object",
+        "runner-schedule-id",
+        "runner-action-id",
+        "runner-epoch-invalid",
+        "runner-wave-epoch",
+        "runner-action-epoch",
+        "runner-action-lease",
+        "runner-owner",
+        "runner-owner-substring-impostor",
+        "takeover-owner",
+        "outer-takeover-before-expiry",
+        "journal-takeover-before-outer-expiry",
+        "journal-event-other-action",
+        "wave-index",
+        "negative-wave-index",
+        "claim-after-terminal",
+        "crash-not-active",
+        "crash-action-not-active",
+        "takeover-not-complete",
+        "takeover-action-not-complete",
+        "takeover-effect",
+        "settlement-not-list",
+        "settlement-event-not-object",
+        "ignored-settlement-event",
+        "settlement-epoch-invalid",
+        "settlement-epoch-stale",
+        "settlement-effect-mismatch",
+        "settlement-action-mismatch",
+        "missing-consuming",
+        "settlement-order",
+    ),
+)
+def test_wave_crash_proof_rejects_each_tampered_binding(mutation: Any, expected_error: str) -> None:
+    proof = _wave_crash_takeover_proof()
+    mutation(proof)
+    errors = evidence_proof.validate_check(
+        "realProcessWaveSigkillSettlesExactlyOnce",
+        {"status": "PASS", "evidence": proof},
+    )
+    assert expected_error in errors
 
 
 def test_action_journal_commit_only_ignores_absent_transaction() -> None:

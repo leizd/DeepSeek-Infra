@@ -18,8 +18,8 @@
 - [x] Add CAS renewal for schedule and wave leases
 - [x] Add bounded Wave Runner heartbeat and fence on lease loss
 - [x] Prove stale runner token/epoch cannot renew or commit
-- [ ] Prove real Worker A SIGKILL and Worker B higher-epoch takeover
-- [ ] Prove one real MinIO effect ID and no duplicate effect/settlement
+- [x] Prove real Worker A SIGKILL and Worker B higher-epoch takeover
+- [x] Prove one real MinIO effect ID and no duplicate effect/settlement
 
 ## Fleet identity and trust
 

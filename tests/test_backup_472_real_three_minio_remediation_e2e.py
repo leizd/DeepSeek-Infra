@@ -33,6 +33,7 @@ import pytest
 
 from deepseek_infra.infra.workspace import (
     backup_crypto,
+    backup_control_recovery,
     backup_dr_readiness,
     backup_executor,
     backup_policies,
@@ -47,6 +48,8 @@ from deepseek_infra.infra.workspace import (
     resilience_fleet_scheduler,
     resilience_planner,
     resilience_risk_engine,
+    resilience_scheduler_service,
+    resilience_wave_executor,
 )
 
 ENDPOINT_NAMES = (
@@ -119,6 +122,107 @@ def _process_environment(root: Path) -> dict[str, str]:
     environment["DEEPSEEK_INFRA_ROOT"] = str(root)
     environment["DEEPSEEK_CONTROL_AUTHORITY_MODE"] = "local-only"
     return environment
+
+
+def _runner_state_evidence(
+    schedule: dict[str, Any],
+    wave: dict[str, Any],
+    wave_action: dict[str, Any],
+) -> dict[str, Any]:
+    """Project only durable runner fencing fields required for semantic proof."""
+
+    return {
+        "schedule": {
+            field: schedule.get(field)
+            for field in (
+                "scheduleId",
+                "status",
+                "scheduleExecutionEpoch",
+                "ownerInstanceId",
+                "leaseUntil",
+                "updatedAt",
+            )
+        },
+        "wave": {
+            field: wave.get(field)
+            for field in (
+                "scheduleId",
+                "waveIndex",
+                "status",
+                "waveExecutionEpoch",
+                "ownerInstanceId",
+                "leaseUntil",
+                "updatedAt",
+            )
+        },
+        "waveAction": {
+            field: wave_action.get(field)
+            for field in (
+                "scheduleId",
+                "waveIndex",
+                "actionId",
+                "status",
+                "actionExecutionEpoch",
+                "scheduleExecutionEpoch",
+                "waveExecutionEpoch",
+                "ownerInstanceId",
+                "leaseUntil",
+                "journalExecutionEpoch",
+                "effectHandle",
+                "updatedAt",
+            )
+        },
+    }
+
+
+def _journal_state_evidence(action: dict[str, Any]) -> dict[str, Any]:
+    """Project durable Action Journal fencing state without exposing claim tokens."""
+
+    return {
+        field: action.get(field)
+        for field in (
+            "actionId",
+            "state",
+            "executionEpoch",
+            "ownerInstanceId",
+            "leaseUntil",
+            "effectHandle",
+            "updatedAt",
+        )
+    }
+
+
+def _runner_lease_observation(
+    schedule: dict[str, Any],
+    wave: dict[str, Any],
+) -> dict[str, Any]:
+    """Project one durable schedule/wave lease observation."""
+
+    return {
+        "schedule": {
+            field: schedule.get(field)
+            for field in (
+                "scheduleId",
+                "status",
+                "scheduleExecutionEpoch",
+                "ownerInstanceId",
+                "leaseUntil",
+                "updatedAt",
+            )
+        },
+        "wave": {
+            field: wave.get(field)
+            for field in (
+                "scheduleId",
+                "waveIndex",
+                "status",
+                "waveExecutionEpoch",
+                "ownerInstanceId",
+                "leaseUntil",
+                "updatedAt",
+            )
+        },
+    }
 
 
 def _run_atomic_process_race(
@@ -306,6 +410,9 @@ def test_real_three_minio_autonomous_remediation_e2e(
     del real_storage_environment
     endpoints, containers = _real_prerequisites()
     clients = [_client(ep) for ep in endpoints]
+    authority = backup_control_recovery.initialize_control_authority(reason="4.8.0-real-wave-sigkill")
+    assert authority["status"] == "genesis-complete"
+    assert authority["recoveryState"] == backup_control_recovery.RECOVERY_ACTIVE
 
     # 1. Register 3 independent MinIO targets
     tag = uuid.uuid4().hex[:8]
@@ -366,7 +473,9 @@ def test_real_three_minio_autonomous_remediation_e2e(
             "destTargets": [t_b_id, t_c_id],
         },
     })
-    snap_before = resilience_risk_engine.assess_risks(probe=False)
+    # The persisted schedule must be bound to the same provider-backed risk
+    # projection that production fresh-state will re-read in the worker PID.
+    snap_before = resilience_risk_engine.assess_risks(probe=True)
     lag_risk = next(
         (r for r in snap_before.get("risks", []) if str(r.get("type")) == "REPLICA_LAG" and str(r.get("policyId")) == policy_id),
         None,
@@ -374,40 +483,49 @@ def test_real_three_minio_autonomous_remediation_e2e(
     assert lag_risk is not None
     assert lag_risk.get("severity") in {"warning", "critical", "degraded"}
 
-    # 6. Fleet Scheduling & Wave Assembly
-    schedule = resilience_fleet_scheduler.schedule_fleet_resilience(snap_before, now=now)
-    assert schedule["status"] == "SCHEDULED"
-    assert len(schedule["executionWaves"]) >= 1
-
-    # 7. Materialize autonomous repair action to MinIO B
+    # 6. Materialize one autonomous repair action to MinIO B.
     base_plan = resilience_planner.plan_resilience_actions(snap_before)
     mat_plan = resilience_action_journal.materialize_resilience_plan(base_plan, created_by="resilience-runner")
     repair_act = next(a for a in mat_plan["actions"] if a["type"] == "CREATE_REPAIR_JOB")
     act_id = str(repair_act["actionId"])
+
+    # 7. Persist the exact action in a production Wave Schedule. The real
+    # process-crash path below must enter through run_next_wave(), not bypass
+    # the schedule/wave ownership layer by calling Action Journal directly.
+    schedule = resilience_fleet_scheduler.schedule_fleet_resilience(
+        snap_before,
+        candidate_actions=[repair_act],
+        now=now,
+    )
+    assert schedule["status"] == "SCHEDULED"
+    assert len(schedule["executionWaves"]) == 1
+    assert [action["actionId"] for action in schedule["executionWaves"][0]["actions"]] == [act_id]
+    schedule_id = str(schedule["scheduleId"])
 
     # 8. Worker A executes the real Repair under a deliberately slow budget.
     # Kill it only after the durable repair job says remote transfer is active.
     worker_script = textwrap.dedent(
         """
         import json, os, sys
-        from deepseek_infra.infra.workspace import backup_transfer_budget, resilience_action_journal
+        from deepseek_infra.infra.workspace import backup_transfer_budget, resilience_wave_executor
 
-        action_id = sys.argv[1]
+        schedule_id = sys.argv[1]
         backup_transfer_budget.configure_global_transfer_budget(
             global_bandwidth_bytes_per_sec=1024 * 1024,
             reserved_dr_bandwidth_bytes_per_sec=0,
         )
-        result = resilience_action_journal.execute_autonomous_action(
-            action_id,
+        result = resilience_wave_executor.run_next_wave(
+            schedule_id,
             instance_id=f"crash-worker-a-{os.getpid()}",
             lease_seconds=3,
+            heartbeat_interval_seconds=0.25,
         )
         print(json.dumps({"pid": os.getpid(), "result": result}))
         """
     )
     repo = Path(__file__).resolve().parents[1]
     process_a = subprocess.Popen(
-        [sys.executable, "-c", worker_script, act_id],
+        [sys.executable, "-c", worker_script, schedule_id],
         cwd=repo,
         env=_process_environment(tmp_settings),
         stdout=subprocess.PIPE,
@@ -417,37 +535,111 @@ def test_real_three_minio_autonomous_remediation_e2e(
     repair_phase_at_crash = ""
     repair_id = ""
     action_a: dict[str, Any] = {}
+    schedule_a: dict[str, Any] = {}
+    wave_a: dict[str, Any] = {}
+    wave_action_a: dict[str, Any] = {}
+    first_runner_lease = ""
+    renewed_runner_lease = ""
+    runner_lease_observations: list[dict[str, Any]] = []
+    last_worker_observation: dict[str, Any] = {}
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
         if process_a.poll() is not None:
             stdout_a, stderr_a = process_a.communicate()
             raise AssertionError(f"worker A exited before crash point\n{stdout_a}\n{stderr_a}")
         current_action = resilience_action_journal.get_action(act_id) or {}
+        current_schedule = resilience_wave_executor.get_schedule(schedule_id) or {}
+        current_waves = resilience_wave_executor.list_waves(schedule_id)
+        current_wave = current_waves[0] if current_waves else {}
+        current_wave_actions = resilience_wave_executor.list_wave_actions(schedule_id, wave_index=0)
+        current_wave_action = current_wave_actions[0] if current_wave_actions else {}
+        schedule_lease = str(current_schedule.get("leaseUntil") or "")
+        wave_lease = str(current_wave.get("leaseUntil") or "")
+        if (
+            schedule_lease
+            and schedule_lease == wave_lease
+            and str(current_schedule.get("ownerInstanceId") or "") == f"crash-worker-a-{process_a.pid}"
+            and str(current_wave.get("ownerInstanceId") or "") == f"crash-worker-a-{process_a.pid}"
+            and (
+                not runner_lease_observations
+                or schedule_lease != str(runner_lease_observations[-1]["schedule"].get("leaseUntil") or "")
+            )
+        ):
+            runner_lease_observations.append(_runner_lease_observation(current_schedule, current_wave))
+            first_runner_lease = str(runner_lease_observations[0]["schedule"]["leaseUntil"])
+            if len(runner_lease_observations) >= 2:
+                renewed_runner_lease = str(runner_lease_observations[-1]["schedule"]["leaseUntil"])
         effect_handle = current_action.get("effectHandle")
         effect = effect_handle if isinstance(effect_handle, dict) else {}
         candidate_id = str(effect.get("repairId") or "")
         repair_job = backup_replication.read_repair_job(candidate_id) if candidate_id else None
         candidate_phase = str((repair_job or {}).get("phase") or "")
-        if candidate_phase == "transferring-components":
+        last_worker_observation = {
+            "journalAction": current_action,
+            "schedule": current_schedule,
+            "wave": current_wave,
+            "waveAction": current_wave_action,
+            "repairJob": repair_job,
+            "firstRunnerLease": first_runner_lease,
+            "renewedRunnerLease": renewed_runner_lease,
+        }
+        if candidate_phase == "transferring-components" and renewed_runner_lease:
             action_a = current_action
+            schedule_a = current_schedule
+            wave_a = current_wave
+            wave_action_a = current_wave_action
             repair_id = candidate_id
             repair_phase_at_crash = candidate_phase
             break
         time.sleep(0.01)
-    assert repair_phase_at_crash == "transferring-components", "worker A never reached a live remote Repair transfer"
-    assert int(action_a.get("executionEpoch") or 0) == 1
+    if repair_phase_at_crash != "transferring-components":
+        if process_a.poll() is None:
+            _kill_hard(process_a)
+        stdout_a, stderr_a = process_a.communicate()
+        raise AssertionError(
+            "worker A never reached a live remote Repair transfer\n"
+            f"observation={json.dumps(last_worker_observation, sort_keys=True)}\n{stdout_a}\n{stderr_a}"
+        )
     repair_jobs_before = [
         job for job in backup_replication.list_repair_jobs(policy_id=policy_id, backup_id=backup_id)
         if str(job.get("resilienceActionId") or "") == act_id
     ]
-    assert len(repair_jobs_before) == 1
     process_a_returncode = _kill_hard(process_a)
     stdout_a, stderr_a = process_a.communicate()
     assert process_a_returncode != 0, f"worker A was not hard-killed\n{stdout_a}\n{stderr_a}"
+    assert int(action_a.get("executionEpoch") or 0) == 1
+    assert int(schedule_a.get("scheduleExecutionEpoch") or 0) == 1
+    assert int(wave_a.get("waveExecutionEpoch") or 0) == 1
+    assert int(wave_action_a.get("actionExecutionEpoch") or 0) == 1
+    assert renewed_runner_lease > first_runner_lease
+    assert schedule_a["leaseUntil"] == wave_a["leaseUntil"] == renewed_runner_lease
+    assert schedule_a["ownerInstanceId"] == wave_a["ownerInstanceId"] == wave_action_a["ownerInstanceId"]
+    assert len(repair_jobs_before) == 1
 
     crashed_action = resilience_action_journal.get_action(act_id) or {}
+    crashed_schedule = resilience_wave_executor.get_schedule(schedule_id) or {}
+    crashed_wave = resilience_wave_executor.list_waves(schedule_id)[0]
+    crashed_wave_action = resilience_wave_executor.list_wave_actions(schedule_id, wave_index=0)[0]
     worker_a_lease_until = str(crashed_action.get("leaseUntil") or "")
+    worker_a_schedule_lease_until = str(crashed_schedule.get("leaseUntil") or "")
+    worker_a_wave_lease_until = str(crashed_wave.get("leaseUntil") or "")
+    worker_a_wave_action_lease_until = str(crashed_wave_action.get("leaseUntil") or "")
+    if (
+        worker_a_schedule_lease_until
+        and worker_a_schedule_lease_until == worker_a_wave_lease_until
+        and (
+            not runner_lease_observations
+            or worker_a_schedule_lease_until
+            != str(runner_lease_observations[-1]["schedule"].get("leaseUntil") or "")
+        )
+    ):
+        runner_lease_observations.append(_runner_lease_observation(crashed_schedule, crashed_wave))
+    assert len(runner_lease_observations) >= 2
+    first_runner_lease = str(runner_lease_observations[0]["schedule"]["leaseUntil"])
+    renewed_runner_lease = str(runner_lease_observations[-1]["schedule"]["leaseUntil"])
     assert worker_a_lease_until
+    assert worker_a_schedule_lease_until == worker_a_wave_lease_until
+    assert worker_a_schedule_lease_until == renewed_runner_lease
     proposed_blast_action = {
         "actionId": f"blast-drill-{tag}",
         "type": "START_DR_DRILL",
@@ -473,50 +665,132 @@ def test_real_three_minio_autonomous_remediation_e2e(
     wait_deadline = time.monotonic() + 15
     while True:
         persisted_after_crash = resilience_action_journal.get_action(act_id) or {}
-        persisted_lease = str(persisted_after_crash.get("leaseUntil") or "")
+        persisted_schedule = resilience_wave_executor.get_schedule(schedule_id) or {}
+        persisted_wave = resilience_wave_executor.list_waves(schedule_id)[0]
+        persisted_wave_action = resilience_wave_executor.list_wave_actions(schedule_id, wave_index=0)[0]
+        persisted_leases = [
+            str(persisted_after_crash.get("leaseUntil") or ""),
+            str(persisted_schedule.get("leaseUntil") or ""),
+            str(persisted_wave.get("leaseUntil") or ""),
+            str(persisted_wave_action.get("leaseUntil") or ""),
+        ]
         now_iso = datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-        if persisted_lease and persisted_lease < now_iso:
+        if all(lease and lease < now_iso for lease in persisted_leases):
             break
-        assert time.monotonic() < wait_deadline, f"worker A action lease did not expire: {persisted_lease} >= {now_iso}"
+        assert time.monotonic() < wait_deadline, f"worker A leases did not expire: {persisted_leases} >= {now_iso}"
         time.sleep(0.05)
 
-    # Worker B is a different fresh PID. Production execution must claim epoch 2,
-    # enter RECONCILING, find repair_id, and resume rather than create another job.
+    # Worker B is a different fresh PID. Production Wave execution must claim
+    # higher schedule, wave, local-action, and Action Journal epochs, enter
+    # RECONCILING, find repair_id, and resume rather than create another job.
+    takeover_ready_path = tmp_settings / f"wave-takeover-ready-{tag}.json"
+    takeover_release_path = tmp_settings / f"wave-takeover-release-{tag}"
     worker_b_script = textwrap.dedent(
         """
-        import json, os, sys
-        from deepseek_infra.infra.workspace import resilience_action_journal
+        import json, os, sys, time
+        from pathlib import Path
+        from deepseek_infra.infra.workspace import resilience_action_journal, resilience_wave_executor
 
-        result = resilience_action_journal.execute_autonomous_action(
+        ready_path = Path(sys.argv[2])
+        release_path = Path(sys.argv[3])
+        original_record_action_intent = resilience_action_journal.record_action_intent
+
+        def record_action_intent_and_pause(*args, **kwargs):
+            action = original_record_action_intent(*args, **kwargs)
+            ready_tmp_path = ready_path.with_name(f"{ready_path.name}.{os.getpid()}.tmp")
+            ready_tmp_path.write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
+            os.replace(ready_tmp_path, ready_path)
+            deadline = time.monotonic() + 30
+            while not release_path.exists():
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("takeover ownership observation was not released")
+                time.sleep(0.01)
+            return action
+
+        resilience_action_journal.record_action_intent = record_action_intent_and_pause
+
+        result = resilience_wave_executor.run_next_wave(
             sys.argv[1],
             instance_id=f"takeover-worker-b-{os.getpid()}",
             lease_seconds=30,
+            heartbeat_interval_seconds=0.5,
         )
         print(json.dumps({"pid": os.getpid(), "result": result}))
         """
     )
-    process_b = subprocess.run(
-        [sys.executable, "-c", worker_b_script, act_id],
+    process_b = subprocess.Popen(
+        [sys.executable, "-c", worker_b_script, schedule_id, str(takeover_ready_path), str(takeover_release_path)],
         cwd=repo,
         env=_process_environment(tmp_settings),
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=180,
-        check=False,
     )
-    assert process_b.returncode == 0, f"worker B takeover failed\n{process_b.stdout}\n{process_b.stderr}"
-    worker_b_output = json.loads(process_b.stdout.strip().splitlines()[-1])
-    worker_b_pid = int(worker_b_output["pid"])
+    worker_b_pid = process_b.pid
     assert worker_b_pid != process_a.pid
+    takeover_claim_state: dict[str, Any] = {}
+    takeover_deadline = time.monotonic() + 30
+    try:
+        while not takeover_ready_path.exists():
+            if process_b.poll() is not None:
+                stdout_b, stderr_b = process_b.communicate()
+                raise AssertionError(f"worker B exited before ownership observation\n{stdout_b}\n{stderr_b}")
+            assert time.monotonic() < takeover_deadline, "worker B did not expose its durable ownership claim"
+            time.sleep(0.01)
+        ready_payload = json.loads(takeover_ready_path.read_text(encoding="utf-8"))
+        assert int(ready_payload["pid"]) == worker_b_pid
+        takeover_claim_schedule = resilience_wave_executor.get_schedule(schedule_id) or {}
+        takeover_claim_wave = resilience_wave_executor.list_waves(schedule_id)[0]
+        takeover_claim_action = resilience_wave_executor.list_wave_actions(schedule_id, wave_index=0)[0]
+        takeover_claim_state = _runner_state_evidence(
+            takeover_claim_schedule,
+            takeover_claim_wave,
+            takeover_claim_action,
+        )
+        expected_worker_b_owner = f"takeover-worker-b-{worker_b_pid}"
+        assert takeover_claim_schedule["ownerInstanceId"] == expected_worker_b_owner
+        assert takeover_claim_wave["ownerInstanceId"] == expected_worker_b_owner
+        assert takeover_claim_action["ownerInstanceId"] == expected_worker_b_owner
+        assert takeover_claim_schedule["status"] == resilience_wave_executor.SCHEDULE_RUNNING
+        assert takeover_claim_wave["status"] == resilience_wave_executor.WAVE_EXECUTING
+        assert takeover_claim_action["status"] == resilience_wave_executor.ACTION_CLAIMED
+        takeover_release_path.touch()
+        stdout_b, stderr_b = process_b.communicate(timeout=180)
+    except Exception:
+        takeover_release_path.touch(exist_ok=True)
+        if process_b.poll() is None:
+            _kill_hard(process_b)
+        process_b.communicate()
+        raise
+    assert process_b.returncode == 0, f"worker B takeover failed\n{stdout_b}\n{stderr_b}"
+    worker_b_output = json.loads(stdout_b.strip().splitlines()[-1])
+    assert int(worker_b_output["pid"]) == worker_b_pid
     exec_result = worker_b_output["result"]
-    assert exec_result["state"] == "SUCCEEDED"
-    assert exec_result["verificationResult"]["executionVerified"] is True
+    assert exec_result["status"] == resilience_wave_executor.WAVE_COMPLETED
+    assert int(exec_result["scheduleExecutionEpoch"]) > int(schedule_a["scheduleExecutionEpoch"])
+    assert int(exec_result["waveExecutionEpoch"]) > int(wave_a["waveExecutionEpoch"])
+    terminal_journal_action = resilience_action_journal.get_action(act_id) or {}
+    terminal_schedule = resilience_wave_executor.get_schedule(schedule_id) or {}
+    terminal_wave = resilience_wave_executor.list_waves(schedule_id)[0]
+    terminal_wave_action = resilience_wave_executor.list_wave_actions(schedule_id, wave_index=0)[0]
+    assert terminal_journal_action["state"] == "SUCCEEDED"
+    assert terminal_journal_action["verificationResult"]["executionVerified"] is True
+    assert int(terminal_journal_action["executionEpoch"]) > int(action_a["executionEpoch"])
+    assert int(terminal_schedule["scheduleExecutionEpoch"]) == int(exec_result["scheduleExecutionEpoch"])
+    assert int(terminal_wave["waveExecutionEpoch"]) == int(exec_result["waveExecutionEpoch"])
+    assert int(terminal_wave_action["actionExecutionEpoch"]) > int(wave_action_a["actionExecutionEpoch"])
+    assert terminal_wave_action["journalExecutionEpoch"] == terminal_journal_action["executionEpoch"]
+    assert terminal_wave_action["effectHandle"] == terminal_journal_action["effectHandle"]
     repair_jobs_after = [
         job for job in backup_replication.list_repair_jobs(policy_id=policy_id, backup_id=backup_id)
         if str(job.get("resilienceActionId") or "") == act_id
     ]
     assert len(repair_jobs_after) == 1
     assert str(repair_jobs_after[0].get("repairId") or "") == repair_id
+    assert terminal_journal_action["effectHandle"] == {"kind": "repair", "repairId": repair_id}
+    settlement_events = resilience_scheduler_service.list_settlement_events(act_id)
+    assert sum(event["toStatus"] == "CONSUMING" for event in settlement_events) == 1
+    assert sum(event["toStatus"] == "CONSUMED" for event in settlement_events) == 1
     journal_events = resilience_action_journal.list_action_events(act_id)
     crash_takeover_proof = {
         "actionId": act_id,
@@ -524,18 +798,45 @@ def test_real_three_minio_autonomous_remediation_e2e(
         "workerBPid": worker_b_pid,
         "processAReturnCode": process_a_returncode,
         "epochA": int(action_a["executionEpoch"]),
-        "epochB": int(exec_result["executionEpoch"]),
+        "epochB": int(terminal_journal_action["executionEpoch"]),
+        "scheduleId": schedule_id,
+        "waveIndex": 0,
+        "scheduleEpochA": int(schedule_a["scheduleExecutionEpoch"]),
+        "scheduleEpochB": int(exec_result["scheduleExecutionEpoch"]),
+        "waveEpochA": int(wave_a["waveExecutionEpoch"]),
+        "waveEpochB": int(exec_result["waveExecutionEpoch"]),
+        "waveActionEpochA": int(wave_action_a["actionExecutionEpoch"]),
+        "waveActionEpochB": int(terminal_wave_action["actionExecutionEpoch"]),
         "repairId": repair_id,
         "repairPhaseAtCrash": repair_phase_at_crash,
         "reconciliationDirective": directive,
         "workerALeaseUntil": worker_a_lease_until,
+        "workerAScheduleLeaseUntil": worker_a_schedule_lease_until,
+        "workerAWaveLeaseUntil": worker_a_wave_lease_until,
+        "workerAWaveActionLeaseUntil": worker_a_wave_action_lease_until,
+        "firstRunnerLeaseUntil": first_runner_lease,
+        "renewedRunnerLeaseUntil": renewed_runner_lease,
+        "runnerLeaseObservations": runner_lease_observations,
+        "journalStateAtCrash": _journal_state_evidence(crashed_action),
+        "runnerStateAtCrash": _runner_state_evidence(crashed_schedule, crashed_wave, crashed_wave_action),
+        "runnerStateAtTakeoverClaim": takeover_claim_state,
+        "runnerStateAfterTakeover": _runner_state_evidence(terminal_schedule, terminal_wave, terminal_wave_action),
         "remoteRepairJobCountBefore": len(repair_jobs_before),
         "remoteRepairJobCountAfter": len(repair_jobs_after),
         "remoteRepairJobIdsBefore": [str(job.get("repairId") or "") for job in repair_jobs_before],
         "remoteRepairJobIdsAfter": [str(job.get("repairId") or "") for job in repair_jobs_after],
+        "settlementEvents": settlement_events,
         "journalEvents": journal_events,
     }
     assert evidence_proof.validate_crash_recovery_proof(crash_takeover_proof, "live-crash") == []
+    for wave_check in (
+        "longRunningWaveRenewsScheduleLease",
+        "longRunningWaveRenewsWaveLease",
+        "realProcessWaveSigkillTakeoverUsesHigherEpoch",
+        "realProcessWaveSigkillDoesNotDuplicateEffect",
+        "realProcessWaveSigkillSettlesExactlyOnce",
+    ):
+        assert evidence_proof.validate_wave_crash_recovery_proof(crash_takeover_proof, wave_check) == []
 
     # 9. Verify cryptographic authentication on MinIO B
     target_b_record = backup_targets.get_target(t_b_id)
@@ -758,6 +1059,26 @@ def test_real_three_minio_autonomous_remediation_e2e(
             "evidence": crash_takeover_proof,
         },
         "takeoverDoesNotCreateSecondRepairJob": {
+            "status": "PASS",
+            "evidence": crash_takeover_proof,
+        },
+        "longRunningWaveRenewsScheduleLease": {
+            "status": "PASS",
+            "evidence": crash_takeover_proof,
+        },
+        "longRunningWaveRenewsWaveLease": {
+            "status": "PASS",
+            "evidence": crash_takeover_proof,
+        },
+        "realProcessWaveSigkillTakeoverUsesHigherEpoch": {
+            "status": "PASS",
+            "evidence": crash_takeover_proof,
+        },
+        "realProcessWaveSigkillDoesNotDuplicateEffect": {
+            "status": "PASS",
+            "evidence": crash_takeover_proof,
+        },
+        "realProcessWaveSigkillSettlesExactlyOnce": {
             "status": "PASS",
             "evidence": crash_takeover_proof,
         },
