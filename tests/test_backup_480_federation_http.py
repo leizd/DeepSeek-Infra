@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 from typing import Any, BinaryIO
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 from deepseek_infra import federation_app as federation_process
+from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.workspace import federation_node
+from deepseek_infra.web import federation_app as federation_http
 from deepseek_infra.web.federation_app import create_federation_app
 
 
@@ -86,6 +90,17 @@ class _Node:
 
     def commit_replica(self, transfer_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return {"kind": "committed", "transferId": transfer_id, **payload}
+
+
+class _Stdin:
+    def __init__(self, content: bytes) -> None:
+        self.buffer = io.BytesIO(content)
+
+
+class _DomainError(RuntimeError):
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
 
 
 def _client(node: _Node, *, token: str = "operator-token-480") -> TestClient:
@@ -188,3 +203,180 @@ def test_process_bind_requires_explicit_non_loopback_opt_in() -> None:
         federation_process._validate_bind("0.0.0.0", allow_non_loopback=False)
     assert rejected.value.code == "FEDERATION_NODE_NON_LOOPBACK_REQUIRES_OPT_IN"
     federation_process._validate_bind("0.0.0.0", allow_non_loopback=True)
+
+
+def test_process_input_and_argument_validation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(federation_node.FederationNodeError) as invalid_host:
+        federation_process._validate_bind("not-an-ip", allow_non_loopback=True)
+    assert invalid_host.value.code == "FEDERATION_NODE_BIND_HOST_INVALID"
+    assert federation_process._read_recovery_identity(False) is None
+
+    monkeypatch.setattr(federation_process.sys, "stdin", _Stdin(b"recovery-identity\r\n"))
+    assert federation_process._read_recovery_identity(True) == bytearray(b"recovery-identity")
+    for content in (b"", b"x" * (federation_process.MAX_RECOVERY_IDENTITY_BYTES + 1)):
+        monkeypatch.setattr(federation_process.sys, "stdin", _Stdin(content))
+        with pytest.raises(federation_node.FederationNodeError) as missing_identity:
+            federation_process._read_recovery_identity(True)
+        assert missing_identity.value.code == "FEDERATION_RECOVERY_IDENTITY_BINDING_REQUIRED"
+
+    config_path = tmp_path / "node.json"
+    with pytest.raises(federation_node.FederationNodeError) as invalid_port:
+        federation_process.main(["--config", str(config_path), "--port", "0"])
+    assert invalid_port.value.code == "FEDERATION_NODE_PORT_INVALID"
+    with pytest.raises(federation_node.FederationNodeError) as invalid_tls:
+        federation_process.main(
+            ["--config", str(config_path), "--port", "8448", "--ssl-certfile", str(tmp_path / "cert.pem")]
+        )
+    assert invalid_tls.value.code == "FEDERATION_NODE_TLS_CONFIG_INVALID"
+
+    monkeypatch.setenv(federation_process.OPERATOR_TOKEN_ENV, "short")
+    monkeypatch.setenv(federation_process.SIGNER_PASSPHRASE_ENV, "s" * 20)
+    with pytest.raises(federation_node.FederationNodeError) as invalid_token:
+        federation_process.main(["--config", str(config_path), "--port", "8448"])
+    assert invalid_token.value.code == "FEDERATION_OPERATOR_TOKEN_INVALID"
+    monkeypatch.setenv(federation_process.OPERATOR_TOKEN_ENV, "operator-token-480")
+    monkeypatch.delenv(federation_process.SIGNER_PASSPHRASE_ENV, raising=False)
+    with pytest.raises(federation_node.FederationNodeError) as missing_signer:
+        federation_process.main(["--config", str(config_path), "--port", "8448"])
+    assert missing_signer.value.code == "FEDERATION_SIGNER_PASSPHRASE_REQUIRED"
+
+
+def test_process_main_loads_and_zeroizes_scoped_identity_material(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "node.json"
+    cert_path = tmp_path / "cert.pem"
+    key_path = tmp_path / "key.pem"
+    node = object()
+    app = object()
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setenv(federation_process.OPERATOR_TOKEN_ENV, "operator-token-480")
+    monkeypatch.setenv(federation_process.SIGNER_PASSPHRASE_ENV, "s" * 20)
+    monkeypatch.setattr(federation_process.sys, "stdin", _Stdin(b"recovery-identity\n"))
+
+    def _load_node(
+        path: Any,
+        *,
+        signer_passphrase: bytearray,
+        recovery_age_identity: bytearray | None,
+    ) -> object:
+        captured["path"] = path
+        captured["signerBefore"] = bytes(signer_passphrase)
+        captured["recoveryBefore"] = None if recovery_age_identity is None else bytes(recovery_age_identity)
+        captured["signerRef"] = signer_passphrase
+        captured["recoveryRef"] = recovery_age_identity
+        return node
+
+    def _create_app(*, node: object, operator_token: str) -> object:
+        captured["appNode"] = node
+        captured["operatorToken"] = operator_token
+        return app
+
+    def _run_uvicorn(candidate: object, **kwargs: Any) -> None:
+        captured["uvicornApp"] = candidate
+        captured["uvicorn"] = kwargs
+
+    monkeypatch.setattr(federation_process.federation_node, "load_federation_node", _load_node)
+    monkeypatch.setattr(federation_process, "create_federation_app", _create_app)
+    monkeypatch.setattr(federation_process.uvicorn, "run", _run_uvicorn)
+
+    assert federation_process.main(
+        [
+            "--config",
+            str(config_path),
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8448",
+            "--allow-non-loopback",
+            "--recovery-identity-stdin",
+            "--ssl-certfile",
+            str(cert_path),
+            "--ssl-keyfile",
+            str(key_path),
+        ]
+    ) == 0
+
+    assert captured["path"] == config_path
+    assert captured["signerBefore"] == b"s" * 20
+    assert captured["recoveryBefore"] == b"recovery-identity"
+    assert captured["signerRef"] == bytearray(20)
+    assert captured["recoveryRef"] == bytearray(len(b"recovery-identity"))
+    assert captured["appNode"] is node
+    assert captured["operatorToken"] == "operator-token-480"
+    assert captured["uvicornApp"] is app
+    assert captured["uvicorn"] == {
+        "host": "0.0.0.0",
+        "port": 8448,
+        "log_level": "info",
+        "access_log": False,
+        "ssl_certfile": str(cert_path),
+        "ssl_keyfile": str(key_path),
+    }
+    assert federation_process.SIGNER_PASSPHRASE_ENV not in federation_process.os.environ
+
+
+@pytest.mark.parametrize(
+    ("code", "status"),
+    (
+        ("FEDERATION_OPERATOR_AUTH_REQUIRED", 401),
+        ("FEDERATION_PEER_REVOKED", 403),
+        ("FEDERATION_PEER_NOT_ACTIVE", 403),
+        ("FEDERATION_TRANSFER_NOT_FOUND", 404),
+        ("FEDERATION_COMPONENT_TOO_LARGE", 413),
+        ("FEDERATION_TRANSFER_IDENTITY_CONFLICT", 409),
+    ),
+)
+def test_http_domain_errors_have_stable_status(code: str, status: int) -> None:
+    assert federation_http._domain_status(code) == status
+
+
+def test_http_loopback_and_error_handlers_fail_closed() -> None:
+    no_client_request = Request({"type": "http", "client": None})
+    invalid_client_request = Request({"type": "http", "client": ("not-an-ip", 50000)})
+    assert federation_http._is_loopback(no_client_request) is False
+    assert federation_http._is_loopback(invalid_client_request) is False
+    with pytest.raises(ValueError):
+        create_federation_app(node=_Node(), operator_token="short")
+
+    cases: tuple[tuple[Exception, int, str | None], ...] = (
+        (AppError("invalid", status=422), 422, None),
+        (_DomainError("FEDERATION_TRANSFER_NOT_FOUND"), 404, "FEDERATION_TRANSFER_NOT_FOUND"),
+        (RuntimeError("internal detail must not escape"), 500, ErrorCode.INTERNAL.value),
+    )
+    for error, expected_status, expected_code in cases:
+        node = _Node()
+
+        def _fail(error: Exception = error) -> dict[str, Any]:
+            raise error
+
+        node.health = _fail  # type: ignore[method-assign]
+        response = _client(node).get("/federation/v1/health")
+        assert response.status_code == expected_status
+        if expected_code is not None:
+            assert response.json()["code"] == expected_code
+
+
+def test_component_transport_rejects_invalid_size_and_stream_bounds() -> None:
+    transfer_id = "sha256:" + "a" * 64
+    digest = "b" * 64
+    endpoint = f"/federation/v1/peer/transfers/{transfer_id}/components/{digest}"
+
+    for expected_size in (0, federation_http.MAX_FEDERATION_COMPONENT_BYTES + 1):
+        node = _Node()
+        node.expected_component_size = lambda *_args, size=expected_size: size  # type: ignore[method-assign]
+        rejected = _client(node).put(endpoint, params={"grantId": "grant-480", "writeId": "write-480"}, content=b"")
+        assert rejected.status_code == 413
+        assert rejected.json()["code"] == "FEDERATION_COMPONENT_TOO_LARGE"
+
+    for content in (b"abc", b"abcdef"):
+        node = _Node()
+        node.expected_component_size = lambda *_args: 5  # type: ignore[method-assign]
+        rejected = _client(node).put(
+            endpoint,
+            params={"grantId": "grant-480", "writeId": "write-480"},
+            content=content,
+            headers={"Content-Length": "5"},
+        )
+        assert rejected.status_code == 409
+        assert rejected.json()["code"] == "FEDERATION_COMPONENT_LENGTH_MISMATCH"
+        assert node.component == b""

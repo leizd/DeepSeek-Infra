@@ -130,3 +130,104 @@ def test_runtime_proof_treats_malformed_topology_as_invalid_instead_of_crashing(
     proof = _mutated(_valid_proof(), lambda value: value["minioTopology"].update(endpoints=[{}, {}, {}, {}]))
 
     assert "four-minio-endpoints-invalid" in federation_runtime_proof.validate_federation_runtime_proof(proof)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_error"),
+    [
+        (lambda proof: proof.update(unexpected=True), "federation-runtime-proof-fields-invalid"),
+        (lambda proof: proof.update(schema="federation-runtime-e2e-proof-v2"), "federation-runtime-proof-schema-invalid"),
+        (lambda proof: proof["dr"].update(privateKey="redacted"), "federation-runtime-proof-contains-secret"),
+        (lambda proof: proof.update(validatedAt="not-a-timestamp"), "federation-runtime-proof-timestamp-invalid"),
+        (lambda proof: proof.update(fleetProcesses=[]), "fleet-processes-must-be-object"),
+        (lambda proof: proof["fleetProcesses"]["source"].update(extra=True), "source-process-fields-invalid"),
+        (lambda proof: proof["fleetProcesses"]["source"].update(pid=True), "source-pid-invalid"),
+        (lambda proof: proof["fleetProcesses"]["source"].update(rootFingerprint="bad"), "source-root-fingerprint-invalid"),
+        (lambda proof: proof["fleetProcesses"]["source"].update(fleetId="fleet-b"), "fleet-process-identity-invalid"),
+        (
+            lambda proof: proof["fleetProcesses"]["source"].update(
+                rootFingerprint=proof["fleetProcesses"]["receiverBefore"]["rootFingerprint"]
+            ),
+            "fleet-root-sovereignty-invalid",
+        ),
+        (lambda proof: proof["fleetProcesses"].update(receiverKillReturnCode=0), "receiver-sigkill-exit-invalid"),
+        (lambda proof: proof.update(storagePrincipalIsolation=None), "storage-principal-isolation-must-be-object"),
+        (
+            lambda proof: proof["storagePrincipalIsolation"].update(sourceToReceiverDeniedCode="HTTP_200"),
+            "cross-fleet-storage-principal-isolation-invalid",
+        ),
+        (lambda proof: proof["minioTopology"].update(extra=True), "minio-topology-fields-invalid"),
+        (
+            lambda proof: proof["minioTopology"]["endpoints"].__setitem__(0, "not-a-provider-url"),
+            "minio-endpoint-invalid",
+        ),
+        (
+            lambda proof: proof["minioTopology"].update(containers=["same"] * 4),
+            "four-minio-containers-invalid",
+        ),
+        (lambda proof: proof["minioTopology"].update(targetBindings="invalid"), "four-minio-target-bindings-invalid"),
+        (
+            lambda proof: proof["minioTopology"]["targetBindings"].__setitem__(0, None),
+            "minio-target-binding-must-be-object",
+        ),
+        (
+            lambda proof: proof["minioTopology"]["targetBindings"][0].update(extra=True),
+            "minio-target-binding-fields-invalid",
+        ),
+        (
+            lambda proof: proof["minioTopology"]["targetBindings"][0].update(role=""),
+            "minio-target-binding-value-invalid",
+        ),
+        (
+            lambda proof: proof["minioTopology"]["targetBindings"][0].update(providerObjectCount=0),
+            "minio-provider-object-count-invalid",
+        ),
+        (lambda proof: proof.update(transferRecovery=None), "transfer-recovery-must-be-object"),
+        (lambda proof: proof["transferRecovery"].pop("senderTransferId"), "transfer-recovery-fields-invalid"),
+        (
+            lambda proof: proof["transferRecovery"].update(interruptedComponentDigest="bad"),
+            "interrupted-component-digest-invalid",
+        ),
+        (
+            lambda proof: proof["transferRecovery"].update(
+                reconcileStatus="COMMITTED",
+                reconcileState="REMOTE_COMMITTED",
+            ),
+            "receiver-reconcile-state-invalid",
+        ),
+        (lambda proof: proof["transferRecovery"].update(senderFinalState="FAILED"), "sender-terminal-state-invalid"),
+        (
+            lambda proof: proof["transferRecovery"].update(remoteCommittedEvents=[None]),
+            "remote-commit-event-must-be-object",
+        ),
+        (lambda proof: proof["transferRecovery"].update(commitEffectDigest="bad"), "commitEffectDigest-invalid"),
+        (lambda proof: proof.update(failClosed={}), "runtime-fail-closed-evidence-invalid"),
+        (lambda proof: proof.update(dr=None), "runtime-dr-must-be-object"),
+        (lambda proof: proof["dr"].update(extra=True), "runtime-dr-fields-invalid"),
+    ],
+)
+def test_runtime_proof_rejects_malformed_process_storage_transfer_and_dr_sections(
+    mutate: Callable[[dict[str, Any]], None],
+    expected_error: str,
+) -> None:
+    errors = federation_runtime_proof.validate_federation_runtime_proof(_mutated(_valid_proof(), mutate))
+
+    assert expected_error in errors
+
+
+def test_runtime_proof_rejects_noncanonical_top_level_and_bad_declared_digest() -> None:
+    assert federation_runtime_proof.validate_federation_runtime_proof(None) == [
+        "federation-runtime-proof-must-be-object"
+    ]
+    assert federation_runtime_proof.validate_federation_runtime_proof({"invalid": object()}) == [
+        "federation-runtime-proof-canonical-payload-invalid"
+    ]
+
+    proof = _valid_proof()
+    proof["proofDigest"] = _digest("f")
+    assert "federation-runtime-proof-digest-mismatch" in federation_runtime_proof.validate_federation_runtime_proof(proof)
+
+
+def test_runtime_proof_timestamp_requires_timezone() -> None:
+    with pytest.raises(ValueError, match="federation-runtime-proof-timestamp-invalid"):
+        federation_runtime_proof._utc_iso(datetime(2026, 9, 2, 12, 0))
