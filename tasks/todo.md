@@ -67,7 +67,7 @@
 ## Typed Evidence and real topology
 
 - [x] Add `federation-trust-proof-v1`
-- [ ] Add `federated-replica-proof-v1`
+- [x] Add `federated-replica-proof-v1`
 - [ ] Add `federated-dr-proof-v1`
 - [ ] Start two independent Fleet processes and MinIO A1/A2/B1/B2
 - [ ] Prove receiver SIGKILL/restart resumes the same transfer ID

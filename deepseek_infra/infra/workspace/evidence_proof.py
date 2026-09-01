@@ -1383,6 +1383,50 @@ def validate_typed_federation_trust_proof(evidence: dict[str, Any], check_name: 
     return federation_trust_proof.validate_federation_trust_proof(evidence)
 
 
+def validate_typed_federated_replica_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    """Validate a federated-replica-proof-v1 payload inside the frozen v2 envelope."""
+
+    from deepseek_infra.infra.workspace import federated_replica_proof
+
+    if check_name not in federated_replica_proof.FEDERATED_REPLICA_PROOF_CHECKS:
+        return [f"unsupported-federated-replica-proof-check:{check_name}"]
+    return federated_replica_proof.validate_federated_replica_proof(evidence)
+
+
+_FEDERATED_REPLICA_WIRE_CHECKS = frozenset(
+    {
+        "objectSetV1WireFormatUnchanged",
+        "receiptV4Unchanged",
+        "commitV4Unchanged",
+        "fastCdcV3Unchanged",
+        "randomizedAgeUnchanged",
+    }
+)
+_LEGACY_WIRE_EXPECTATIONS: dict[str, tuple[str, Any]] = {
+    "objectSetV1WireFormatUnchanged": ("objectSetVersion", "object-set-v1"),
+    "fastCdcV3Unchanged": ("cdcVersion", "fastcdc-v3"),
+    "randomizedAgeUnchanged": ("ageRandomized", True),
+}
+
+
+def validate_federated_wire_compatibility_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    """Preserve earlier wire-proof payloads while accepting the typed replica proof."""
+
+    from deepseek_infra.infra.workspace import federated_replica_proof
+
+    if check_name not in _FEDERATED_REPLICA_WIRE_CHECKS:
+        return [f"unsupported-federated-wire-check:{check_name}"]
+    if evidence.get("schema") == federated_replica_proof.FEDERATED_REPLICA_PROOF_SCHEMA:
+        return validate_typed_federated_replica_proof(evidence, check_name)
+    if check_name in {"receiptV4Unchanged", "commitV4Unchanged"}:
+        return validate_autonomous_storage_bytes_proof(evidence, check_name)
+    errors = validate_predictive_planning_proof(evidence, check_name)
+    field, expected = _LEGACY_WIRE_EXPECTATIONS[check_name]
+    if field in evidence and evidence.get(field) != expected:
+        errors.append(f"frozen-wire-value-mismatch:{field}")
+    return errors
+
+
 VALIDATORS: dict[str, CheckValidator] = {
     "realPreDisasterBackupIsActuallyRestored": validate_restore_proof,
     "realFreshProcessRestoresPreDisasterBackup": validate_restore_proof,
@@ -1418,8 +1462,8 @@ VALIDATORS: dict[str, CheckValidator] = {
     "receiptSha256MatchesCommitReceiptDigest": validate_autonomous_storage_bytes_proof,
     "proofObjectSetDigestMatchesCommit": validate_autonomous_storage_bytes_proof,
     "proofObjectKeysExistOnExpectedMinioEndpoint": validate_autonomous_storage_bytes_proof,
-    "receiptV4Unchanged": validate_autonomous_storage_bytes_proof,
-    "commitV4Unchanged": validate_autonomous_storage_bytes_proof,
+    "receiptV4Unchanged": validate_federated_wire_compatibility_proof,
+    "commitV4Unchanged": validate_federated_wire_compatibility_proof,
     "crashRecoveryObservedExistingEffect": validate_crash_recovery_proof,
     "leaseTakeoverUsedNewExecutionEpoch": validate_crash_recovery_proof,
     "realWorkerCrashOccursDuringRemoteRepair": validate_crash_recovery_proof,
@@ -1511,6 +1555,36 @@ VALIDATORS: dict[str, CheckValidator] = {
     "challengeResponseBindsBothFleetIds": validate_typed_federation_trust_proof,
     "challengeNonceReplayIsRejected": validate_typed_federation_trust_proof,
     "federationTrustProofIsSemanticallyValidated": validate_typed_federation_trust_proof,
+    "ingressGrantIsReceiverSigned": validate_typed_federated_replica_proof,
+    "ingressGrantBindsSourceFleet": validate_typed_federated_replica_proof,
+    "ingressGrantBindsDestinationFleet": validate_typed_federated_replica_proof,
+    "ingressGrantBindsBackupId": validate_typed_federated_replica_proof,
+    "ingressGrantBindsObjectSetDigest": validate_typed_federated_replica_proof,
+    "ingressGrantBindsTransferId": validate_typed_federated_replica_proof,
+    "expiredIngressGrantCannotWrite": validate_typed_federated_replica_proof,
+    "ingressGrantCannotEscapeObjectPrefix": validate_typed_federated_replica_proof,
+    "ingressGrantCannotExceedMaxBytes": validate_typed_federated_replica_proof,
+    "sameTransferIdSameDigestIsIdempotent": validate_typed_federated_replica_proof,
+    "sameTransferIdDifferentDigestFailsClosed": validate_typed_federated_replica_proof,
+    "receiverRestartResumesExistingTransfer": validate_typed_federated_replica_proof,
+    "federatedReplicaUsesExistingObjectSetV1": validate_typed_federated_replica_proof,
+    "federatedReplicaCreatesReceiptV4": validate_typed_federated_replica_proof,
+    "federatedReplicaCreatesCommitV4": validate_typed_federated_replica_proof,
+    "federatedReplicaAttestationBindsReceiptDigest": validate_typed_federated_replica_proof,
+    "federatedReplicaAttestationBindsCommitDigest": validate_typed_federated_replica_proof,
+    "federatedReplicaAttestationBindsObjectSetDigest": validate_typed_federated_replica_proof,
+    "remoteCopyRecordedOnlyAfterAttestationVerification": validate_typed_federated_replica_proof,
+    "federatedCopyDoesNotReduceLocalMinCommittedCopies": validate_typed_federated_replica_proof,
+    "federatedCopyDoesNotReduceLocalMinFailureDomains": validate_typed_federated_replica_proof,
+    "federatedCopyCannotAuthorizePrimaryPromotion": validate_typed_federated_replica_proof,
+    "federatedTransferNeverDeletesLocalReplica": validate_typed_federated_replica_proof,
+    "peerFailureDomainIsCheckedAgainstPinnedMetadata": validate_typed_federated_replica_proof,
+    "replayedIngressGrantFailsClosed": validate_typed_federated_replica_proof,
+    "tamperedReplicaAttestationFailsClosed": validate_typed_federated_replica_proof,
+    "objectSetV1WireFormatUnchanged": validate_federated_wire_compatibility_proof,
+    "fastCdcV3Unchanged": validate_federated_wire_compatibility_proof,
+    "randomizedAgeUnchanged": validate_federated_wire_compatibility_proof,
+    "federatedReplicaProofIsSemanticallyValidated": validate_typed_federated_replica_proof,
 }
 
 
