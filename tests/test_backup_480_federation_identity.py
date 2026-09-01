@@ -71,6 +71,7 @@ def _cross_certify_signer(
         "signerKeyId": source_certificate["signerKeyId"],
         "signerPublicKey": source_certificate["signerPublicKey"],
         "signatureAlgorithm": federation_identity.SIGNATURE_ALGORITHM,
+        "purposes": source_certificate["purposes"],
         "sequence": 1,
         "issuedAt": "2026-09-01T01:00:00Z",
         "notBefore": "2026-09-01T01:00:00Z",

@@ -39,6 +39,24 @@ ONLINE_SIGNER_PRIVATE_BUNDLE_SCHEMA = "fleet-federation-online-signer-private-v1
 PRIVATE_KEY_ENVELOPE_SCHEMA = "federation-private-key-envelope-v1"  # pragma: allowlist secret
 SIGNATURE_ALGORITHM = "Ed25519"
 
+PURPOSE_READINESS_ATTESTATION = "READINESS_ATTESTATION"
+PURPOSE_SESSION_AUTHENTICATION = "SESSION_AUTHENTICATION"
+PURPOSE_INGRESS_GRANT = "INGRESS_GRANT"
+PURPOSE_REPLICA_ATTESTATION = "REPLICA_ATTESTATION"
+PURPOSE_DR_ATTESTATION = "DR_ATTESTATION"
+PURPOSE_EVIDENCE = "EVIDENCE"
+ONLINE_SIGNER_PURPOSES = frozenset(
+    {
+        PURPOSE_READINESS_ATTESTATION,
+        PURPOSE_SESSION_AUTHENTICATION,
+        PURPOSE_INGRESS_GRANT,
+        PURPOSE_REPLICA_ATTESTATION,
+        PURPOSE_DR_ATTESTATION,
+        PURPOSE_EVIDENCE,
+    }
+)
+DEFAULT_ONLINE_SIGNER_PURPOSES = tuple(sorted(ONLINE_SIGNER_PURPOSES))
+
 _FLEET_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 _ROOT_KEY_PREFIX = "fed-root-"
 _SIGNER_KEY_PREFIX = "fed-signer-"
@@ -82,6 +100,34 @@ def _parse_timestamp(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         return None
     return parsed.astimezone(timezone.utc)
+
+
+def _normalize_issued_purposes(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple)) or isinstance(value, (str, bytes)) or not value:
+        raise FederationIdentityError("FEDERATION_SIGNER_PURPOSE_INVALID")
+    if any(type(purpose) is not str or purpose not in ONLINE_SIGNER_PURPOSES for purpose in value):
+        raise FederationIdentityError("FEDERATION_SIGNER_PURPOSE_INVALID")
+    return sorted(set(value))
+
+
+def _certificate_purpose_errors(certificate: dict[str, Any], required_purpose: str | None) -> list[str]:
+    raw_purposes = certificate.get("purposes")
+    normalized_purposes = raw_purposes if isinstance(raw_purposes, list) else []
+    purposes_valid = (
+        type(raw_purposes) is list
+        and bool(raw_purposes)
+        and all(type(purpose) is str and purpose in ONLINE_SIGNER_PURPOSES for purpose in raw_purposes)
+        and raw_purposes == sorted(set(raw_purposes))
+    )
+    errors: list[str] = []
+    if not purposes_valid:
+        errors.append("FEDERATION_SIGNER_CERTIFICATE_PURPOSES_INVALID")
+    if required_purpose is not None:
+        if type(required_purpose) is not str or required_purpose not in ONLINE_SIGNER_PURPOSES:
+            errors.append("FEDERATION_SIGNER_PURPOSE_INVALID")
+        elif purposes_valid and required_purpose not in normalized_purposes:
+            errors.append("FEDERATION_SIGNER_PURPOSE_NOT_ALLOWED")
+    return errors
 
 
 def _normalize_json_value(value: Any) -> Any:
@@ -493,6 +539,7 @@ def issue_online_signer(
     sequence: int,
     not_before: datetime,
     expires_at: datetime,
+    purposes: tuple[str, ...] | list[str] = DEFAULT_ONLINE_SIGNER_PURPOSES,
 ) -> dict[str, Any]:
     """Generate an online signer and root-sign its bounded certificate."""
 
@@ -501,6 +548,7 @@ def issue_online_signer(
         raise FederationIdentityError("FEDERATION_SIGNER_CERTIFICATE_SEQUENCE_INVALID")
     not_before_iso = _utc_iso(not_before)
     expires_at_iso = _utc_iso(expires_at)
+    normalized_purposes = _normalize_issued_purposes(purposes)
     if expires_at.astimezone(timezone.utc) <= not_before.astimezone(timezone.utc):
         raise FederationIdentityError("FEDERATION_SIGNER_CERTIFICATE_WINDOW_INVALID")
     identity, root_key = _load_root_key(Path(root_bundle_path), root_passphrase)
@@ -514,6 +562,7 @@ def issue_online_signer(
         "signerKeyId": _key_id(_SIGNER_KEY_PREFIX, signer_public),
         "signerPublicKey": _b64url_encode(signer_public),
         "signatureAlgorithm": SIGNATURE_ALGORITHM,
+        "purposes": normalized_purposes,
         "sequence": sequence,
         "issuedAt": not_before_iso,
         "notBefore": not_before_iso,
@@ -539,6 +588,7 @@ def validate_online_signer_certificate(
     *,
     now: datetime | None = None,
     max_future_skew_seconds: int = 0,
+    required_purpose: str | None = None,
 ) -> list[str]:
     """Return semantic/cryptographic errors for an untrusted signer certificate."""
 
@@ -570,6 +620,7 @@ def validate_online_signer_certificate(
         errors.append("FEDERATION_SIGNER_CERTIFICATE_ROOT_MISMATCH")
     if certificate.get("signatureAlgorithm") != SIGNATURE_ALGORITHM:
         errors.append("FEDERATION_SIGNER_CERTIFICATE_ALGORITHM_INVALID")
+    errors.extend(_certificate_purpose_errors(certificate, required_purpose))
     signer_public = _b64url_decode(certificate.get("signerPublicKey"), expected_length=32)
     if signer_public is None:
         errors.append("FEDERATION_SIGNER_CERTIFICATE_PUBLIC_KEY_INVALID")
@@ -628,8 +679,14 @@ def _require_valid_certificate(
     root_identity: Any,
     *,
     now: datetime | None,
+    required_purpose: str | None = None,
 ) -> dict[str, Any]:
-    errors = validate_online_signer_certificate(certificate, root_identity, now=now)
+    errors = validate_online_signer_certificate(
+        certificate,
+        root_identity,
+        now=now,
+        required_purpose=required_purpose,
+    )
     if errors:
         raise FederationIdentityError(errors[0])
     normalized = _normalize_json_value(certificate)
@@ -680,11 +737,20 @@ def load_online_signer(
     return OnlineFleetSigner(key, certificate)
 
 
-def sign_federation_document(signer: OnlineFleetSigner, document: dict[str, Any]) -> dict[str, Any]:
+def sign_federation_document(
+    signer: OnlineFleetSigner,
+    document: dict[str, Any],
+    *,
+    purpose: str | None = None,
+) -> dict[str, Any]:
     """Sign the entire canonical document with schema domain separation."""
 
     if type(document) is not dict:
         raise FederationIdentityError("FEDERATION_DOCUMENT_INVALID")
+    if purpose is not None:
+        purpose_errors = _certificate_purpose_errors(signer.certificate, purpose)
+        if purpose_errors:
+            raise FederationIdentityError(purpose_errors[0])
     normalized = _normalize_json_value(document)
     assert isinstance(normalized, dict)
     if any(field in normalized for field in ("signerKeyId", "signatureAlgorithm", "signature")):
@@ -711,10 +777,16 @@ def verify_federation_document(
     root_identity: dict[str, Any],
     expected_schema: str,
     now: datetime | None = None,
+    required_purpose: str | None = None,
 ) -> dict[str, Any]:
     """Verify root chain and every canonical field of an untrusted document."""
 
-    verified_certificate = _require_valid_certificate(certificate, root_identity, now=now)
+    verified_certificate = _require_valid_certificate(
+        certificate,
+        root_identity,
+        now=now,
+        required_purpose=required_purpose,
+    )
     if type(document) is not dict:
         raise FederationIdentityError("FEDERATION_DOCUMENT_INVALID")
     normalized = _normalize_json_value(document)

@@ -27,8 +27,8 @@
 - [ ] Prove federation keys differ from Age and Authority identities
 - [x] Add operator-pinned Peer Trust Registry without TOFU
 - [x] Add pinned provider/region/jurisdiction/siteClass metadata
-- [ ] Add online signer rotation certificates
-- [ ] Add signer/root revocation and explicit historical-proof semantics
+- [x] Add online signer rotation certificates
+- [x] Add signer/root revocation and explicit historical-proof semantics
 
 ## Signed readiness and sessions
 
