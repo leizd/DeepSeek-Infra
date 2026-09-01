@@ -83,6 +83,7 @@ def _issue(
     assert not fixture["stagingDir"].exists()
     capability = _capability(tmp_settings, fixture, monkeypatch)
     calls: list[Any] = []
+    restore_results: list[dict[str, Any]] = []
 
     def create_restore(**kwargs: Any) -> dict[str, Any]:
         calls.append(("create", kwargs))
@@ -93,7 +94,7 @@ def _issue(
         kind, secret = backup_crypto.consume_secret(value, expected_kind="age-identity")
         calls.append(("identity", kind, bytes(secret)))
         secret[:] = b"\x00" * len(secret)
-        return {
+        result = {
             "schemaVersion": 1,
             "restoreId": value,
             "result": "success",
@@ -109,6 +110,8 @@ def _issue(
             "logicalBytes": 32,
             "verifiedContributors": 1,
         }
+        restore_results.append(copy.deepcopy(result))
+        return result
 
     monkeypatch.setattr(backup_remote_restore, "create_restore_from_target", create_restore)
     monkeypatch.setattr(backup_recovery_drill, "run_recovery_drill", run_restore)
@@ -126,6 +129,8 @@ def _issue(
         client="receiver-client",
     )
     assert not backup_crypto.has_secret(restore_id)
+    fixture["custodyCapability"] = capability.get_peer("fleet-a")
+    fixture["productionRestoreResult"] = restore_results[0]
     return fixture, attestation, calls
 
 

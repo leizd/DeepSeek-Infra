@@ -1393,6 +1393,16 @@ def validate_typed_federated_replica_proof(evidence: dict[str, Any], check_name:
     return federated_replica_proof.validate_federated_replica_proof(evidence)
 
 
+def validate_typed_federated_dr_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    """Validate a federated-dr-proof-v1 payload inside the frozen v2 envelope."""
+
+    from deepseek_infra.infra.workspace import federated_dr_proof
+
+    if check_name not in federated_dr_proof.FEDERATED_DR_PROOF_CHECKS:
+        return [f"unsupported-federated-dr-proof-check:{check_name}"]
+    return federated_dr_proof.validate_federated_dr_proof(evidence)
+
+
 _FEDERATED_REPLICA_WIRE_CHECKS = frozenset(
     {
         "objectSetV1WireFormatUnchanged",
@@ -1585,6 +1595,16 @@ VALIDATORS: dict[str, CheckValidator] = {
     "fastCdcV3Unchanged": validate_federated_wire_compatibility_proof,
     "randomizedAgeUnchanged": validate_federated_wire_compatibility_proof,
     "federatedReplicaProofIsSemanticallyValidated": validate_typed_federated_replica_proof,
+    "coldCustodyCannotClaimRecoveryReady": validate_typed_federated_dr_proof,
+    "recoveryCapablePeerRequiresPreprovisionedAgeIdentity": validate_typed_federated_dr_proof,
+    "agePrivateIdentityNeverCrossesFederationBoundary": validate_typed_federated_dr_proof,
+    "federatedDrDrillUsesProductionRestore": validate_typed_federated_dr_proof,
+    "federatedDrProofBindsTransferId": validate_typed_federated_dr_proof,
+    "federatedDrProofBindsBackupId": validate_typed_federated_dr_proof,
+    "federatedDrProofBindsObjectSetDigest": validate_typed_federated_dr_proof,
+    "federatedDrProofBindsRemoteReceiptAndCommit": validate_typed_federated_dr_proof,
+    "federatedDrProofRequiresCleanupSuccess": validate_typed_federated_dr_proof,
+    "federatedDrProofIsSemanticallyValidated": validate_typed_federated_dr_proof,
 }
 
 
