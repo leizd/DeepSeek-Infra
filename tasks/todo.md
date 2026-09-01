@@ -32,10 +32,10 @@
 
 ## Signed readiness and sessions
 
-- [ ] Add `federation-readiness-attestation-v1`
-- [ ] Bind the complete canonical readiness snapshot
-- [ ] Persist and enforce per-peer readiness sequence high-water marks
-- [ ] Reject replay, expiry, excessive future skew, tamper, and wrong Fleet
+- [x] Add `federation-readiness-attestation-v1`
+- [x] Bind the complete canonical readiness snapshot
+- [x] Persist and enforce per-peer readiness sequence high-water marks
+- [x] Reject replay, expiry, excessive future skew, tamper, and wrong Fleet
 - [ ] Add bilateral challenge/response with durable single-use nonces
 - [ ] Reject reflection, replay, wrong Fleet, revoked peer, and invalid signer time
 

@@ -19,6 +19,7 @@ PEER_TRUST_DB = FEDERATION_DIR / "peer-trust.sqlite3"
 
 PEER_TRUST_RECORD_SCHEMA = "federation-peer-trust-record-v1"
 ONLINE_SIGNER_TRUST_RECORD_SCHEMA = "federation-online-signer-trust-record-v1"
+READINESS_SEQUENCE_RECORD_SCHEMA = "federation-readiness-sequence-v1"
 STATE_PENDING = "PENDING"
 STATE_VERIFIED = "VERIFIED"
 STATE_ACTIVE = "ACTIVE"
@@ -31,6 +32,7 @@ AUTHORIZATION_MODES = frozenset({AUTHORIZATION_CURRENT, AUTHORIZATION_HISTORICAL
 
 _FLEET_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 _SIGNER_KEY_ID_PATTERN = re.compile(r"^fed-signer-[0-9a-f]{24}$")
+_SHA256_DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REQUIRED_METADATA_FIELDS = frozenset({"provider", "region", "jurisdiction", "siteClass"})
 _MAX_AUDIT_TEXT_LENGTH = 256
 
@@ -125,6 +127,20 @@ CREATE INDEX IF NOT EXISTS idx_federation_online_signer_events_peer
 ON federation_online_signer_events(peer_fleet_id, event_sequence)
 """
 
+_CREATE_READINESS_SEQUENCES_SQL = """
+CREATE TABLE IF NOT EXISTS federation_readiness_sequences (
+    peer_fleet_id TEXT PRIMARY KEY,
+    high_sequence INTEGER NOT NULL CHECK(high_sequence >= 1),
+    signer_key_id TEXT NOT NULL,
+    attestation_digest TEXT NOT NULL,
+    accepted_at TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK(revision >= 1),
+    FOREIGN KEY(peer_fleet_id) REFERENCES federation_peer_trust(peer_fleet_id),
+    FOREIGN KEY(peer_fleet_id, signer_key_id)
+        REFERENCES federation_online_signers(peer_fleet_id, signer_key_id)
+)
+"""
+
 
 class FederationTrustError(RuntimeError):
     """Fail-closed trust-registry error with a stable machine-readable code."""
@@ -161,6 +177,12 @@ def _fleet_id(value: Any) -> str:
 def _signer_key_id(value: Any) -> str:
     if type(value) is not str or _SIGNER_KEY_ID_PATTERN.fullmatch(value) is None:
         raise FederationTrustError("FEDERATION_SIGNER_KEY_ID_INVALID")
+    return value
+
+
+def _sha256_digest(value: Any, *, code: str) -> str:
+    if type(value) is not str or _SHA256_DIGEST_PATTERN.fullmatch(value) is None:
+        raise FederationTrustError(code)
     return value
 
 
@@ -231,6 +253,7 @@ class PeerTrustRegistry:
             connection.execute(_CREATE_SIGNERS_SQL)
             connection.execute(_CREATE_SIGNER_EVENTS_SQL)
             connection.execute(_CREATE_SIGNER_EVENTS_INDEX_SQL)
+            connection.execute(_CREATE_READINESS_SEQUENCES_SQL)
 
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
@@ -314,6 +337,18 @@ class PeerTrustRegistry:
             "revokedAt": row["revoked_at"],
             "revokedBy": row["revoked_by"],
             "revocationReason": row["revocation_reason"],
+            "revision": int(row["revision"]),
+        }
+
+    @staticmethod
+    def _readiness_sequence_record(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "schema": READINESS_SEQUENCE_RECORD_SCHEMA,
+            "peerFleetId": str(row["peer_fleet_id"]),
+            "highSequence": int(row["high_sequence"]),
+            "signerKeyId": str(row["signer_key_id"]),
+            "attestationDigest": str(row["attestation_digest"]),
+            "acceptedAt": str(row["accepted_at"]),
             "revision": int(row["revision"]),
         }
 
@@ -899,6 +934,104 @@ class PeerTrustRegistry:
             }
             for row in rows
         ]
+
+    def record_readiness_sequence(
+        self,
+        peer_fleet_id: str,
+        *,
+        signer_key_id: str,
+        sequence: int,
+        attestation_digest: str,
+        accepted_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Atomically fence signed-readiness replay while rechecking current trust."""
+
+        peer = _fleet_id(peer_fleet_id)
+        signer = _signer_key_id(signer_key_id)
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise FederationTrustError("FEDERATION_READINESS_SEQUENCE_INVALID")
+        digest = _sha256_digest(
+            attestation_digest,
+            code="FEDERATION_READINESS_ATTESTATION_DIGEST_INVALID",
+        )
+        timestamp = _utc_iso(accepted_at)
+        validation_time = _stored_timestamp(timestamp, code="FEDERATION_TRUST_TIMESTAMP_INVALID")
+        with self._write() as connection:
+            peer_row = self._peer_row(connection, peer)
+            if peer_row is None:
+                raise FederationTrustError("FEDERATION_PEER_NOT_PINNED")
+            peer_state = str(peer_row["state"])
+            if peer_state == STATE_REVOKED:
+                raise FederationTrustError("FEDERATION_PEER_REVOKED")
+            if peer_state != STATE_ACTIVE:
+                raise FederationTrustError("FEDERATION_PEER_NOT_ACTIVE")
+            signer_row = self._signer_row(connection, peer, signer)
+            if signer_row is None:
+                raise FederationTrustError("FEDERATION_SIGNER_NOT_ACCEPTED")
+            revoked_at = (
+                None
+                if signer_row["revoked_at"] is None
+                else _stored_timestamp(
+                    signer_row["revoked_at"],
+                    code="FEDERATION_SIGNER_REVOCATION_TIMESTAMP_INVALID",
+                )
+            )
+            if revoked_at is not None and validation_time >= revoked_at:
+                raise FederationTrustError("FEDERATION_SIGNER_REVOKED")
+            certificate = json.loads(str(signer_row["certificate_json"]))
+            root_identity = json.loads(str(peer_row["identity_json"]))
+            certificate_errors = federation_identity.validate_online_signer_certificate(
+                certificate,
+                root_identity,
+                now=validation_time,
+                required_purpose=federation_identity.PURPOSE_READINESS_ATTESTATION,
+            )
+            if certificate_errors:
+                raise FederationTrustError(certificate_errors[0])
+
+            existing = connection.execute(
+                "SELECT * FROM federation_readiness_sequences WHERE peer_fleet_id = ?",
+                (peer,),
+            ).fetchone()
+            if existing is not None and sequence <= int(existing["high_sequence"]):
+                if sequence == int(existing["high_sequence"]) and digest != existing["attestation_digest"]:
+                    raise FederationTrustError("FEDERATION_READINESS_SEQUENCE_CONFLICT")
+                raise FederationTrustError("FEDERATION_READINESS_SEQUENCE_REPLAY")
+            if existing is None:
+                connection.execute(
+                    """
+                    INSERT INTO federation_readiness_sequences (
+                        peer_fleet_id, high_sequence, signer_key_id,
+                        attestation_digest, accepted_at, revision
+                    ) VALUES (?, ?, ?, ?, ?, 1)
+                    """,
+                    (peer, sequence, signer, digest, timestamp),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE federation_readiness_sequences
+                    SET high_sequence = ?, signer_key_id = ?, attestation_digest = ?,
+                        accepted_at = ?, revision = revision + 1
+                    WHERE peer_fleet_id = ? AND high_sequence < ?
+                    """,
+                    (sequence, signer, digest, timestamp, peer, sequence),
+                )
+            recorded = connection.execute(
+                "SELECT * FROM federation_readiness_sequences WHERE peer_fleet_id = ?",
+                (peer,),
+            ).fetchone()
+            assert recorded is not None
+            return self._readiness_sequence_record(recorded)
+
+    def get_readiness_high_water(self, peer_fleet_id: str) -> dict[str, Any] | None:
+        peer = _fleet_id(peer_fleet_id)
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM federation_readiness_sequences WHERE peer_fleet_id = ?",
+                (peer,),
+            ).fetchone()
+        return None if row is None else self._readiness_sequence_record(row)
 
     def get_peer(self, peer_fleet_id: str) -> dict[str, Any] | None:
         peer = _fleet_id(peer_fleet_id)
