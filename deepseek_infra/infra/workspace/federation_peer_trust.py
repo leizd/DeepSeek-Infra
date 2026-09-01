@@ -20,6 +20,7 @@ PEER_TRUST_DB = FEDERATION_DIR / "peer-trust.sqlite3"
 PEER_TRUST_RECORD_SCHEMA = "federation-peer-trust-record-v1"
 ONLINE_SIGNER_TRUST_RECORD_SCHEMA = "federation-online-signer-trust-record-v1"
 READINESS_SEQUENCE_RECORD_SCHEMA = "federation-readiness-sequence-v1"
+CHALLENGE_JOURNAL_RECORD_SCHEMA = "federation-challenge-journal-v1"
 STATE_PENDING = "PENDING"
 STATE_VERIFIED = "VERIFIED"
 STATE_ACTIVE = "ACTIVE"
@@ -29,6 +30,12 @@ PEER_STATES = frozenset({STATE_PENDING, STATE_VERIFIED, STATE_ACTIVE, STATE_SUSP
 AUTHORIZATION_CURRENT = "CURRENT"
 AUTHORIZATION_HISTORICAL_PROOF = "HISTORICAL_PROOF"
 AUTHORIZATION_MODES = frozenset({AUTHORIZATION_CURRENT, AUTHORIZATION_HISTORICAL_PROOF})
+CHALLENGE_DIRECTION_OUTBOUND = "OUTBOUND"
+CHALLENGE_DIRECTION_INBOUND = "INBOUND"
+CHALLENGE_DIRECTIONS = frozenset({CHALLENGE_DIRECTION_OUTBOUND, CHALLENGE_DIRECTION_INBOUND})
+CHALLENGE_STATE_PENDING = "PENDING"
+CHALLENGE_STATE_RESPONDED = "RESPONDED"
+CHALLENGE_STATE_CONSUMED = "CONSUMED"
 
 _FLEET_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 _SIGNER_KEY_ID_PATTERN = re.compile(r"^fed-signer-[0-9a-f]{24}$")
@@ -141,6 +148,34 @@ CREATE TABLE IF NOT EXISTS federation_readiness_sequences (
 )
 """
 
+_CREATE_CHALLENGE_JOURNAL_SQL = """
+CREATE TABLE IF NOT EXISTS federation_challenge_journal (
+    direction TEXT NOT NULL CHECK(direction IN ('OUTBOUND', 'INBOUND')),
+    nonce_digest TEXT NOT NULL,
+    peer_fleet_id TEXT NOT NULL,
+    source_fleet_id TEXT NOT NULL,
+    destination_fleet_id TEXT NOT NULL,
+    session_purpose TEXT NOT NULL,
+    challenge_digest TEXT NOT NULL,
+    challenge_json TEXT NOT NULL,
+    response_digest TEXT,
+    response_json TEXT,
+    state TEXT NOT NULL CHECK(state IN ('PENDING', 'RESPONDED', 'CONSUMED')),
+    issued_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    completed_at TEXT,
+    revision INTEGER NOT NULL CHECK(revision >= 1),
+    PRIMARY KEY(direction, nonce_digest),
+    FOREIGN KEY(peer_fleet_id) REFERENCES federation_peer_trust(peer_fleet_id)
+)
+"""
+
+_CREATE_CHALLENGE_NONCE_INDEX_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_federation_challenge_nonce
+ON federation_challenge_journal(nonce_digest)
+"""
+
 
 class FederationTrustError(RuntimeError):
     """Fail-closed trust-registry error with a stable machine-readable code."""
@@ -184,6 +219,22 @@ def _sha256_digest(value: Any, *, code: str) -> str:
     if type(value) is not str or _SHA256_DIGEST_PATTERN.fullmatch(value) is None:
         raise FederationTrustError(code)
     return value
+
+
+def _challenge_direction(value: Any) -> str:
+    if type(value) is not str or value not in CHALLENGE_DIRECTIONS:
+        raise FederationTrustError("FEDERATION_CHALLENGE_DIRECTION_INVALID")
+    return value
+
+
+def _challenge_nonce_digest(value: Any) -> str:
+    if type(value) is not str or not value:
+        raise FederationTrustError("FEDERATION_CHALLENGE_NONCE_INVALID")
+    try:
+        raw = value.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise FederationTrustError("FEDERATION_CHALLENGE_NONCE_INVALID") from exc
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
 def _stored_timestamp(value: Any, *, code: str) -> datetime:
@@ -235,6 +286,10 @@ class PeerTrustRegistry:
     def db_path(self) -> Path:
         return self._db_path
 
+    @property
+    def local_identity(self) -> dict[str, Any]:
+        return json.loads(_canonical_json(self._local_identity))
+
     def _connect(self) -> sqlite3.Connection:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self._db_path, timeout=30.0, isolation_level=None)
@@ -254,6 +309,8 @@ class PeerTrustRegistry:
             connection.execute(_CREATE_SIGNER_EVENTS_SQL)
             connection.execute(_CREATE_SIGNER_EVENTS_INDEX_SQL)
             connection.execute(_CREATE_READINESS_SEQUENCES_SQL)
+            connection.execute(_CREATE_CHALLENGE_JOURNAL_SQL)
+            connection.execute(_CREATE_CHALLENGE_NONCE_INDEX_SQL)
 
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
@@ -353,6 +410,28 @@ class PeerTrustRegistry:
         }
 
     @staticmethod
+    def _challenge_record(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "schema": CHALLENGE_JOURNAL_RECORD_SCHEMA,
+            "direction": str(row["direction"]),
+            "nonceDigest": str(row["nonce_digest"]),
+            "peerFleetId": str(row["peer_fleet_id"]),
+            "sourceFleetId": str(row["source_fleet_id"]),
+            "destinationFleetId": str(row["destination_fleet_id"]),
+            "sessionPurpose": str(row["session_purpose"]),
+            "challengeDigest": str(row["challenge_digest"]),
+            "challenge": json.loads(str(row["challenge_json"])),
+            "responseDigest": row["response_digest"],
+            "response": None if row["response_json"] is None else json.loads(str(row["response_json"])),
+            "state": str(row["state"]),
+            "issuedAt": str(row["issued_at"]),
+            "expiresAt": str(row["expires_at"]),
+            "recordedAt": str(row["recorded_at"]),
+            "completedAt": row["completed_at"],
+            "revision": int(row["revision"]),
+        }
+
+    @staticmethod
     def _peer_row(connection: sqlite3.Connection, peer_fleet_id: str) -> sqlite3.Row | None:
         return connection.execute(
             "SELECT * FROM federation_peer_trust WHERE peer_fleet_id = ?",
@@ -372,6 +451,71 @@ class PeerTrustRegistry:
             """,
             (peer_fleet_id, signer_key_id),
         ).fetchone()
+
+    def _require_active_signer_in_tx(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        peer_fleet_id: str,
+        signer_key_id: str,
+        validation_time: datetime,
+        required_purpose: str,
+    ) -> tuple[sqlite3.Row, sqlite3.Row]:
+        peer_row = self._peer_row(connection, peer_fleet_id)
+        if peer_row is None:
+            raise FederationTrustError("FEDERATION_PEER_NOT_PINNED")
+        peer_state = str(peer_row["state"])
+        if peer_state == STATE_REVOKED:
+            raise FederationTrustError("FEDERATION_PEER_REVOKED")
+        if peer_state != STATE_ACTIVE:
+            raise FederationTrustError("FEDERATION_PEER_NOT_ACTIVE")
+        signer_row = self._signer_row(connection, peer_fleet_id, signer_key_id)
+        if signer_row is None:
+            raise FederationTrustError("FEDERATION_SIGNER_NOT_ACCEPTED")
+        revoked_at = (
+            None
+            if signer_row["revoked_at"] is None
+            else _stored_timestamp(
+                signer_row["revoked_at"],
+                code="FEDERATION_SIGNER_REVOCATION_TIMESTAMP_INVALID",
+            )
+        )
+        if revoked_at is not None and validation_time >= revoked_at:
+            raise FederationTrustError("FEDERATION_SIGNER_REVOKED")
+        certificate = json.loads(str(signer_row["certificate_json"]))
+        root_identity = json.loads(str(peer_row["identity_json"]))
+        certificate_errors = federation_identity.validate_online_signer_certificate(
+            certificate,
+            root_identity,
+            now=validation_time,
+            required_purpose=required_purpose,
+        )
+        if certificate_errors:
+            raise FederationTrustError(certificate_errors[0])
+        return peer_row, signer_row
+
+    @staticmethod
+    def _verify_signed_document(
+        document: dict[str, Any],
+        *,
+        certificate: Any,
+        root_identity: dict[str, Any],
+        expected_schema: str,
+        validation_time: datetime,
+    ) -> dict[str, Any]:
+        if type(certificate) is not dict:
+            raise FederationTrustError("FEDERATION_CHALLENGE_SIGNER_CERTIFICATE_INVALID")
+        try:
+            return federation_identity.verify_federation_document(
+                document,
+                certificate=certificate,
+                root_identity=root_identity,
+                expected_schema=expected_schema,
+                now=validation_time,
+                required_purpose=federation_identity.PURPOSE_SESSION_AUTHENTICATION,
+            )
+        except federation_identity.FederationIdentityError as exc:
+            raise FederationTrustError(exc.code) from exc
 
     @staticmethod
     def _append_event(
@@ -957,38 +1101,13 @@ class PeerTrustRegistry:
         timestamp = _utc_iso(accepted_at)
         validation_time = _stored_timestamp(timestamp, code="FEDERATION_TRUST_TIMESTAMP_INVALID")
         with self._write() as connection:
-            peer_row = self._peer_row(connection, peer)
-            if peer_row is None:
-                raise FederationTrustError("FEDERATION_PEER_NOT_PINNED")
-            peer_state = str(peer_row["state"])
-            if peer_state == STATE_REVOKED:
-                raise FederationTrustError("FEDERATION_PEER_REVOKED")
-            if peer_state != STATE_ACTIVE:
-                raise FederationTrustError("FEDERATION_PEER_NOT_ACTIVE")
-            signer_row = self._signer_row(connection, peer, signer)
-            if signer_row is None:
-                raise FederationTrustError("FEDERATION_SIGNER_NOT_ACCEPTED")
-            revoked_at = (
-                None
-                if signer_row["revoked_at"] is None
-                else _stored_timestamp(
-                    signer_row["revoked_at"],
-                    code="FEDERATION_SIGNER_REVOCATION_TIMESTAMP_INVALID",
-                )
-            )
-            if revoked_at is not None and validation_time >= revoked_at:
-                raise FederationTrustError("FEDERATION_SIGNER_REVOKED")
-            certificate = json.loads(str(signer_row["certificate_json"]))
-            root_identity = json.loads(str(peer_row["identity_json"]))
-            certificate_errors = federation_identity.validate_online_signer_certificate(
-                certificate,
-                root_identity,
-                now=validation_time,
+            self._require_active_signer_in_tx(
+                connection,
+                peer_fleet_id=peer,
+                signer_key_id=signer,
+                validation_time=validation_time,
                 required_purpose=federation_identity.PURPOSE_READINESS_ATTESTATION,
             )
-            if certificate_errors:
-                raise FederationTrustError(certificate_errors[0])
-
             existing = connection.execute(
                 "SELECT * FROM federation_readiness_sequences WHERE peer_fleet_id = ?",
                 (peer,),
@@ -1032,6 +1151,302 @@ class PeerTrustRegistry:
                 (peer,),
             ).fetchone()
         return None if row is None else self._readiness_sequence_record(row)
+
+    def record_outbound_federation_challenge(
+        self,
+        peer_fleet_id: str,
+        *,
+        nonce_digest: str,
+        challenge_digest: str,
+        challenge: dict[str, Any],
+        session_purpose: str,
+        issued_at: datetime,
+        expires_at: datetime,
+    ) -> dict[str, Any]:
+        peer = _fleet_id(peer_fleet_id)
+        nonce = _sha256_digest(nonce_digest, code="FEDERATION_CHALLENGE_NONCE_DIGEST_INVALID")
+        digest = _sha256_digest(challenge_digest, code="FEDERATION_CHALLENGE_DIGEST_INVALID")
+        purpose = _audit_text(session_purpose, code="FEDERATION_CHALLENGE_PURPOSE_INVALID")
+        if type(challenge) is not dict:
+            raise FederationTrustError("FEDERATION_CHALLENGE_DOCUMENT_INVALID")
+        source = _fleet_id(challenge.get("sourceFleetId"))
+        destination = _fleet_id(challenge.get("destinationFleetId"))
+        if source != self._local_identity["fleetId"] or destination != peer:
+            raise FederationTrustError("FEDERATION_CHALLENGE_FLEET_BINDING_INVALID")
+        issued_at_iso = _utc_iso(issued_at)
+        expires_at_iso = _utc_iso(expires_at)
+        if _stored_timestamp(expires_at_iso, code="FEDERATION_CHALLENGE_TIMESTAMP_INVALID") <= _stored_timestamp(
+            issued_at_iso,
+            code="FEDERATION_CHALLENGE_TIMESTAMP_INVALID",
+        ):
+            raise FederationTrustError("FEDERATION_CHALLENGE_WINDOW_INVALID")
+        if (
+            challenge.get("fleetId") != source
+            or challenge.get("sessionPurpose") != purpose
+            or challenge.get("issuedAt") != issued_at_iso
+            or challenge.get("expiresAt") != expires_at_iso
+            or _digest(challenge) != digest
+            or _challenge_nonce_digest(challenge.get("nonce")) != nonce
+        ):
+            raise FederationTrustError("FEDERATION_CHALLENGE_IDENTITY_CONFLICT")
+        challenge_json = _canonical_json(challenge)
+        with self._write() as connection:
+            peer_row = self._peer_row(connection, peer)
+            if peer_row is None:
+                raise FederationTrustError("FEDERATION_PEER_NOT_PINNED")
+            if peer_row["state"] == STATE_REVOKED:
+                raise FederationTrustError("FEDERATION_PEER_REVOKED")
+            if peer_row["state"] != STATE_ACTIVE:
+                raise FederationTrustError("FEDERATION_PEER_NOT_ACTIVE")
+            self._verify_signed_document(
+                challenge,
+                certificate=challenge.get("signerCertificate"),
+                root_identity=self._local_identity,
+                expected_schema="federation-challenge-v1",
+                validation_time=_stored_timestamp(issued_at_iso, code="FEDERATION_CHALLENGE_TIMESTAMP_INVALID"),
+            )
+            duplicate = connection.execute(
+                "SELECT state FROM federation_challenge_journal WHERE nonce_digest = ?",
+                (nonce,),
+            ).fetchone()
+            if duplicate is not None:
+                raise FederationTrustError("FEDERATION_CHALLENGE_NONCE_REPLAY")
+            connection.execute(
+                """
+                INSERT INTO federation_challenge_journal (
+                    direction, nonce_digest, peer_fleet_id, source_fleet_id,
+                    destination_fleet_id, session_purpose, challenge_digest,
+                    challenge_json, state, issued_at, expires_at, recorded_at, revision
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                """,
+                (
+                    CHALLENGE_DIRECTION_OUTBOUND,
+                    nonce,
+                    peer,
+                    source,
+                    destination,
+                    purpose,
+                    digest,
+                    challenge_json,
+                    CHALLENGE_STATE_PENDING,
+                    issued_at_iso,
+                    expires_at_iso,
+                    issued_at_iso,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM federation_challenge_journal WHERE direction = ? AND nonce_digest = ?",
+                (CHALLENGE_DIRECTION_OUTBOUND, nonce),
+            ).fetchone()
+            assert row is not None
+            return self._challenge_record(row)
+
+    def record_inbound_federation_response(
+        self,
+        peer_fleet_id: str,
+        *,
+        peer_signer_key_id: str,
+        nonce_digest: str,
+        challenge_digest: str,
+        challenge: dict[str, Any],
+        response_digest: str,
+        response: dict[str, Any],
+        session_purpose: str,
+        issued_at: datetime,
+        expires_at: datetime,
+        responded_at: datetime,
+    ) -> dict[str, Any]:
+        peer = _fleet_id(peer_fleet_id)
+        signer = _signer_key_id(peer_signer_key_id)
+        nonce = _sha256_digest(nonce_digest, code="FEDERATION_CHALLENGE_NONCE_DIGEST_INVALID")
+        challenge_hash = _sha256_digest(challenge_digest, code="FEDERATION_CHALLENGE_DIGEST_INVALID")
+        response_hash = _sha256_digest(response_digest, code="FEDERATION_CHALLENGE_RESPONSE_DIGEST_INVALID")
+        purpose = _audit_text(session_purpose, code="FEDERATION_CHALLENGE_PURPOSE_INVALID")
+        if type(challenge) is not dict or type(response) is not dict:
+            raise FederationTrustError("FEDERATION_CHALLENGE_DOCUMENT_INVALID")
+        source = _fleet_id(challenge.get("sourceFleetId"))
+        destination = _fleet_id(challenge.get("destinationFleetId"))
+        if source != peer or destination != self._local_identity["fleetId"]:
+            raise FederationTrustError("FEDERATION_CHALLENGE_FLEET_BINDING_INVALID")
+        issued_at_iso = _utc_iso(issued_at)
+        expires_at_iso = _utc_iso(expires_at)
+        responded_at_iso = _utc_iso(responded_at)
+        validation_time = _stored_timestamp(responded_at_iso, code="FEDERATION_CHALLENGE_TIMESTAMP_INVALID")
+        issued_time = _stored_timestamp(issued_at_iso, code="FEDERATION_CHALLENGE_TIMESTAMP_INVALID")
+        expires_time = _stored_timestamp(expires_at_iso, code="FEDERATION_CHALLENGE_TIMESTAMP_INVALID")
+        if not (issued_time <= validation_time < expires_time):
+            raise FederationTrustError("FEDERATION_CHALLENGE_RESPONSE_WINDOW_INVALID")
+        if (
+            challenge.get("fleetId") != source
+            or challenge.get("sessionPurpose") != purpose
+            or challenge.get("issuedAt") != issued_at_iso
+            or challenge.get("expiresAt") != expires_at_iso
+            or _digest(challenge) != challenge_hash
+            or _challenge_nonce_digest(challenge.get("nonce")) != nonce
+            or response.get("fleetId") != destination
+            or response.get("sourceFleetId") != source
+            or response.get("destinationFleetId") != destination
+            or response.get("sessionPurpose") != purpose
+            or response.get("challengeDigest") != challenge_hash
+            or response.get("respondedAt") != responded_at_iso
+            or response.get("expiresAt") != expires_at_iso
+            or _digest(response) != response_hash
+            or _challenge_nonce_digest(response.get("nonce")) != nonce
+        ):
+            raise FederationTrustError("FEDERATION_CHALLENGE_IDENTITY_CONFLICT")
+        with self._write() as connection:
+            peer_row, _ = self._require_active_signer_in_tx(
+                connection,
+                peer_fleet_id=peer,
+                signer_key_id=signer,
+                validation_time=validation_time,
+                required_purpose=federation_identity.PURPOSE_SESSION_AUTHENTICATION,
+            )
+            peer_identity = json.loads(str(peer_row["identity_json"]))
+            self._verify_signed_document(
+                challenge,
+                certificate=challenge.get("signerCertificate"),
+                root_identity=peer_identity,
+                expected_schema="federation-challenge-v1",
+                validation_time=validation_time,
+            )
+            self._verify_signed_document(
+                response,
+                certificate=response.get("signerCertificate"),
+                root_identity=self._local_identity,
+                expected_schema="federation-challenge-response-v1",
+                validation_time=validation_time,
+            )
+            duplicate = connection.execute(
+                "SELECT state FROM federation_challenge_journal WHERE nonce_digest = ?",
+                (nonce,),
+            ).fetchone()
+            if duplicate is not None:
+                raise FederationTrustError("FEDERATION_CHALLENGE_NONCE_REPLAY")
+            connection.execute(
+                """
+                INSERT INTO federation_challenge_journal (
+                    direction, nonce_digest, peer_fleet_id, source_fleet_id,
+                    destination_fleet_id, session_purpose, challenge_digest,
+                    challenge_json, response_digest, response_json, state,
+                    issued_at, expires_at, recorded_at, completed_at, revision
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                """,
+                (
+                    CHALLENGE_DIRECTION_INBOUND,
+                    nonce,
+                    peer,
+                    source,
+                    destination,
+                    purpose,
+                    challenge_hash,
+                    _canonical_json(challenge),
+                    response_hash,
+                    _canonical_json(response),
+                    CHALLENGE_STATE_RESPONDED,
+                    issued_at_iso,
+                    expires_at_iso,
+                    responded_at_iso,
+                    responded_at_iso,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM federation_challenge_journal WHERE direction = ? AND nonce_digest = ?",
+                (CHALLENGE_DIRECTION_INBOUND, nonce),
+            ).fetchone()
+            assert row is not None
+            return self._challenge_record(row)
+
+    def consume_outbound_federation_response(
+        self,
+        peer_fleet_id: str,
+        *,
+        peer_signer_key_id: str,
+        nonce_digest: str,
+        challenge_digest: str,
+        response_digest: str,
+        response: dict[str, Any],
+        consumed_at: datetime,
+    ) -> dict[str, Any]:
+        peer = _fleet_id(peer_fleet_id)
+        signer = _signer_key_id(peer_signer_key_id)
+        nonce = _sha256_digest(nonce_digest, code="FEDERATION_CHALLENGE_NONCE_DIGEST_INVALID")
+        challenge_hash = _sha256_digest(challenge_digest, code="FEDERATION_CHALLENGE_DIGEST_INVALID")
+        response_hash = _sha256_digest(response_digest, code="FEDERATION_CHALLENGE_RESPONSE_DIGEST_INVALID")
+        if type(response) is not dict:
+            raise FederationTrustError("FEDERATION_CHALLENGE_DOCUMENT_INVALID")
+        consumed_at_iso = _utc_iso(consumed_at)
+        validation_time = _stored_timestamp(consumed_at_iso, code="FEDERATION_CHALLENGE_TIMESTAMP_INVALID")
+        with self._write() as connection:
+            peer_row, _ = self._require_active_signer_in_tx(
+                connection,
+                peer_fleet_id=peer,
+                signer_key_id=signer,
+                validation_time=validation_time,
+                required_purpose=federation_identity.PURPOSE_SESSION_AUTHENTICATION,
+            )
+            peer_identity = json.loads(str(peer_row["identity_json"]))
+            self._verify_signed_document(
+                response,
+                certificate=response.get("signerCertificate"),
+                root_identity=peer_identity,
+                expected_schema="federation-challenge-response-v1",
+                validation_time=validation_time,
+            )
+            row = connection.execute(
+                "SELECT * FROM federation_challenge_journal WHERE direction = ? AND nonce_digest = ?",
+                (CHALLENGE_DIRECTION_OUTBOUND, nonce),
+            ).fetchone()
+            if row is None:
+                raise FederationTrustError("FEDERATION_CHALLENGE_NONCE_UNKNOWN")
+            if row["state"] != CHALLENGE_STATE_PENDING:
+                raise FederationTrustError("FEDERATION_CHALLENGE_NONCE_REPLAY")
+            if (
+                row["peer_fleet_id"] != peer
+                or row["challenge_digest"] != challenge_hash
+                or response.get("fleetId") != row["destination_fleet_id"]
+                or response.get("sourceFleetId") != row["source_fleet_id"]
+                or response.get("destinationFleetId") != row["destination_fleet_id"]
+                or response.get("sessionPurpose") != row["session_purpose"]
+                or response.get("challengeDigest") != challenge_hash
+                or response.get("expiresAt") != row["expires_at"]
+                or _digest(response) != response_hash
+                or _challenge_nonce_digest(response.get("nonce")) != nonce
+            ):
+                raise FederationTrustError("FEDERATION_CHALLENGE_IDENTITY_CONFLICT")
+            connection.execute(
+                """
+                UPDATE federation_challenge_journal
+                SET response_digest = ?, response_json = ?, state = ?,
+                    completed_at = ?, revision = revision + 1
+                WHERE direction = ? AND nonce_digest = ? AND state = ?
+                """,
+                (
+                    response_hash,
+                    _canonical_json(response),
+                    CHALLENGE_STATE_CONSUMED,
+                    consumed_at_iso,
+                    CHALLENGE_DIRECTION_OUTBOUND,
+                    nonce,
+                    CHALLENGE_STATE_PENDING,
+                ),
+            )
+            updated = connection.execute(
+                "SELECT * FROM federation_challenge_journal WHERE direction = ? AND nonce_digest = ?",
+                (CHALLENGE_DIRECTION_OUTBOUND, nonce),
+            ).fetchone()
+            assert updated is not None
+            return self._challenge_record(updated)
+
+    def get_federation_challenge(self, direction: str, nonce_digest: str) -> dict[str, Any] | None:
+        normalized_direction = _challenge_direction(direction)
+        nonce = _sha256_digest(nonce_digest, code="FEDERATION_CHALLENGE_NONCE_DIGEST_INVALID")
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM federation_challenge_journal WHERE direction = ? AND nonce_digest = ?",
+                (normalized_direction, nonce),
+            ).fetchone()
+        return None if row is None else self._challenge_record(row)
 
     def get_peer(self, peer_fleet_id: str) -> dict[str, Any] | None:
         peer = _fleet_id(peer_fleet_id)

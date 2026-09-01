@@ -36,8 +36,8 @@
 - [x] Bind the complete canonical readiness snapshot
 - [x] Persist and enforce per-peer readiness sequence high-water marks
 - [x] Reject replay, expiry, excessive future skew, tamper, and wrong Fleet
-- [ ] Add bilateral challenge/response with durable single-use nonces
-- [ ] Reject reflection, replay, wrong Fleet, revoked peer, and invalid signer time
+- [x] Add bilateral challenge/response with durable single-use nonces
+- [x] Reject reflection, replay, wrong Fleet, revoked peer, and invalid signer time
 
 ## Receiver-controlled custody
 

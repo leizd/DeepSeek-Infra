@@ -439,6 +439,18 @@ def validate_fleet_identity(identity: Any) -> dict[str, Any]:
     return _require_valid_root_identity(identity)
 
 
+def normalize_federation_json(value: Any) -> Any:
+    """Return a strict JSON-model copy using the same rules as federation signatures."""
+
+    return _normalize_json_value(value)
+
+
+def canonical_federation_json(value: Any) -> str:
+    """Canonical UTF-8 JSON text used by federation signature domains."""
+
+    return _canonical_bytes(value).decode("utf-8")
+
+
 def create_fleet_root(
     fleet_id: str,
     *,
