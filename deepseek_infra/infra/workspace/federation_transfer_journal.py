@@ -20,6 +20,8 @@ TRANSFER_JOURNAL_RECORD_SCHEMA = "federated-transfer-journal-record-v1"
 TRANSFER_JOURNAL_EVENT_SCHEMA = "federated-transfer-journal-event-v1"
 TRANSFER_STATE_PAYLOAD_SCHEMA = "federated-transfer-state-v1"
 TRANSFER_IDENTITY_BINDING_SCHEMA = "federated-transfer-binding-v1"
+TRANSFER_IDENTITY_SCHEMA = "federated-transfer-identity-v1"
+TRANSFER_ID_DOMAIN = b"deepseek-infra:federated-transfer-identity-v1\x00"
 
 ROLE_SENDER = "SENDER"
 ROLE_RECEIVER = "RECEIVER"
@@ -234,6 +236,49 @@ def _identity_binding(
     return binding, _digest(binding)
 
 
+def transfer_identity_document(
+    *,
+    source_fleet_id: str,
+    destination_fleet_id: str,
+    backup_id: str,
+    object_set_digest: str,
+) -> dict[str, str]:
+    """Return the exact collision-safe fields bound by ``transferId``."""
+
+    source = _fleet_id(source_fleet_id)
+    destination = _fleet_id(destination_fleet_id)
+    if source == destination:
+        raise FederatedTransferJournalError("FEDERATION_TRANSFER_REFLECTION_REJECTED")
+    backup = _control_id(backup_id, code="FEDERATION_TRANSFER_BACKUP_ID_INVALID")
+    object_set = _object_set_digest(object_set_digest)
+    return {
+        "schema": TRANSFER_IDENTITY_SCHEMA,
+        "sourceFleetId": source,
+        "destinationFleetId": destination,
+        "backupId": backup,
+        "objectSetDigest": object_set,
+    }
+
+
+def derive_transfer_id(
+    *,
+    source_fleet_id: str,
+    destination_fleet_id: str,
+    backup_id: str,
+    object_set_digest: str,
+) -> str:
+    """Derive the domain-separated immutable transfer identity."""
+
+    identity = transfer_identity_document(
+        source_fleet_id=source_fleet_id,
+        destination_fleet_id=destination_fleet_id,
+        backup_id=backup_id,
+        object_set_digest=object_set_digest,
+    )
+    message = TRANSFER_ID_DOMAIN + _canonical_json(identity).encode("utf-8")
+    return "sha256:" + hashlib.sha256(message).hexdigest()
+
+
 class FederatedTransferJournal:
     """One Fleet's SQLite journal; never shared across Fleet sovereignty boundaries."""
 
@@ -375,6 +420,12 @@ class FederatedTransferJournal:
         backup = _control_id(backup_id, code="FEDERATION_TRANSFER_BACKUP_ID_INVALID")
         object_set = _object_set_digest(object_set_digest)
         timestamp = _utc_iso(now)
+        derived_transfer = derive_transfer_id(
+            source_fleet_id=source,
+            destination_fleet_id=destination,
+            backup_id=backup,
+            object_set_digest=object_set,
+        )
         _, identity_digest = _identity_binding(
             transfer_id=transfer,
             source_fleet_id=source,
@@ -405,7 +456,11 @@ class FederatedTransferJournal:
                     or existing["object_set_digest"] != object_set
                 ):
                     raise FederatedTransferJournalError("FEDERATION_TRANSFER_IDENTITY_CONFLICT")
+                if transfer != derived_transfer:
+                    raise FederatedTransferJournalError("FEDERATION_TRANSFER_ID_INVALID")
                 return self._record(existing)
+            if transfer != derived_transfer:
+                raise FederatedTransferJournalError("FEDERATION_TRANSFER_ID_INVALID")
             if local_fleet_id == source:
                 role = ROLE_SENDER
             elif local_fleet_id == destination:

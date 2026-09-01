@@ -13,12 +13,22 @@ from deepseek_infra.infra.workspace import federation_identity, federation_trans
 
 UTC = timezone.utc
 NOW = datetime(2026, 9, 1, 7, 0, tzinfo=UTC)
-TRANSFER_ID = "sha256:" + ("1" * 64)
-SECOND_TRANSFER_ID = "sha256:" + ("2" * 64)
 OBJECT_SET_DIGEST = "sha256:" + ("3" * 64)
 OTHER_OBJECT_SET_DIGEST = "sha256:" + ("4" * 64)
 POLICY_ID = "policy-offsite-custody"
 BACKUP_ID = "backup-20260901-002"
+TRANSFER_ID = federation_transfer_journal.derive_transfer_id(
+    source_fleet_id="fleet-a",
+    destination_fleet_id="fleet-b",
+    backup_id=BACKUP_ID,
+    object_set_digest=OBJECT_SET_DIGEST,
+)
+SECOND_TRANSFER_ID = federation_transfer_journal.derive_transfer_id(
+    source_fleet_id="fleet-a",
+    destination_fleet_id="fleet-b",
+    backup_id="backup-other",
+    object_set_digest=OBJECT_SET_DIGEST,
+)
 
 
 def _fixture(
@@ -112,8 +122,19 @@ def test_transfer_journal_rejects_identity_rebinding_and_wrong_local_fleet(tmp_p
         assert conflict.value.code == "FEDERATION_TRANSFER_IDENTITY_CONFLICT"
     assert journal_a.get_transfer(TRANSFER_ID) == original
 
+    unrelated_transfer_id = federation_transfer_journal.derive_transfer_id(
+        source_fleet_id="fleet-b",
+        destination_fleet_id="fleet-c",
+        backup_id=BACKUP_ID,
+        object_set_digest=OBJECT_SET_DIGEST,
+    )
     with pytest.raises(federation_transfer_journal.FederatedTransferJournalError) as unrelated:
-        _persist(journal_a, transfer_id=SECOND_TRANSFER_ID, source_fleet_id="fleet-b", destination_fleet_id="fleet-c")
+        _persist(
+            journal_a,
+            transfer_id=unrelated_transfer_id,
+            source_fleet_id="fleet-b",
+            destination_fleet_id="fleet-c",
+        )
     assert unrelated.value.code == "FEDERATION_TRANSFER_LOCAL_FLEET_NOT_PARTY"
     with pytest.raises(federation_transfer_journal.FederatedTransferJournalError) as reflection:
         _persist(journal_a, transfer_id=SECOND_TRANSFER_ID, destination_fleet_id="fleet-a")
@@ -266,6 +287,7 @@ def test_transfer_journal_binding_and_input_validation_fail_closed(tmp_path: Pat
 
     invalid_cases = (
         ({"transfer_id": "bad"}, "FEDERATION_TRANSFER_ID_INVALID"),
+        ({"transfer_id": "sha256:" + ("f" * 64)}, "FEDERATION_TRANSFER_ID_INVALID"),
         ({"source_fleet_id": "Fleet A"}, "FEDERATION_TRANSFER_FLEET_ID_INVALID"),
         ({"policy_id": "bad/policy"}, "FEDERATION_TRANSFER_POLICY_ID_INVALID"),
         ({"backup_id": "bad/backup"}, "FEDERATION_TRANSFER_BACKUP_ID_INVALID"),

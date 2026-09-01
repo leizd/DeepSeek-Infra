@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from deepseek_infra.core import config
-from deepseek_infra.infra.workspace import federation_identity
+from deepseek_infra.infra.workspace import federation_identity, federation_transfer_journal
 
 FEDERATION_DIR = config.ROOT / ".federation"
 PEER_TRUST_DB = FEDERATION_DIR / "peer-trust.sqlite3"
@@ -1634,6 +1634,17 @@ class PeerTrustRegistry:
             normalized.get("objectSetDigest"),
             code="FEDERATION_INGRESS_OBJECT_SET_DIGEST_INVALID",
         )
+        try:
+            derived_transfer = federation_transfer_journal.derive_transfer_id(
+                source_fleet_id=source,
+                destination_fleet_id=destination,
+                backup_id=backup,
+                object_set_digest=object_set,
+            )
+        except federation_transfer_journal.FederatedTransferJournalError as exc:
+            raise FederationTrustError(exc.code) from exc
+        if transfer != derived_transfer:
+            raise FederationTrustError("FEDERATION_TRANSFER_ID_INVALID")
         prefix = _object_prefix(normalized.get("allowedObjectPrefix"))
         max_bytes = normalized.get("maxBytes")
         if (

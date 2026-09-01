@@ -14,15 +14,21 @@ from deepseek_infra.infra.workspace import (
     federation_identity,
     federation_ingress_grant,
     federation_peer_trust,
+    federation_transfer,
 )
 
 
 UTC = timezone.utc
 NOW = datetime(2026, 9, 1, 6, 0, tzinfo=UTC)
-TRANSFER_ID = "sha256:" + ("1" * 64)
 OBJECT_SET_DIGEST = "sha256:" + ("2" * 64)
 POLICY_ID = "policy-federated-custody"
 BACKUP_ID = "backup-20260901-001"
+TRANSFER_ID = federation_transfer.derive_transfer_id(
+    source_fleet_id="fleet-a",
+    destination_fleet_id="fleet-b",
+    backup_id=BACKUP_ID,
+    object_set_digest=OBJECT_SET_DIGEST,
+)
 PREFIX = f"federation/fleet-a/{TRANSFER_ID}/"
 
 
@@ -467,6 +473,7 @@ def test_ingress_grant_issue_input_and_default_window_fail_closed(tmp_path: Path
         ({"source_fleet_id": "Fleet A"}, "FEDERATION_INGRESS_FLEET_ID_INVALID"),
         ({"session_nonce": "not-a-32-byte-nonce"}, "FEDERATION_CHALLENGE_NONCE_INVALID"),
         ({"transfer_id": "bad"}, "FEDERATION_INGRESS_TRANSFER_ID_INVALID"),
+        ({"transfer_id": "sha256:" + ("f" * 64)}, "FEDERATION_TRANSFER_ID_INVALID"),
         ({"policy_id": "bad/policy"}, "FEDERATION_INGRESS_POLICY_ID_INVALID"),
         ({"backup_id": "bad/backup"}, "FEDERATION_INGRESS_BACKUP_ID_INVALID"),
         ({"object_set_digest": "bad"}, "FEDERATION_INGRESS_OBJECT_SET_DIGEST_INVALID"),
@@ -577,6 +584,15 @@ def test_signed_ingress_grant_semantic_variants_fail_closed(tmp_path: Path) -> N
         with pytest.raises(federation_ingress_grant.FederationIngressGrantError) as rejected:
             _verify(registry_a, variant, **options)
         assert rejected.value.code == expected_code
+
+    wrong_derived_transfer = "sha256:" + ("f" * 64)
+    with pytest.raises(federation_ingress_grant.FederationIngressGrantError) as derived_identity_error:
+        _verify(
+            registry_a,
+            _resign(signer_b, grant, transferId=wrong_derived_transfer),
+            transfer_id=wrong_derived_transfer,
+        )
+    assert derived_identity_error.value.code == "FEDERATION_TRANSFER_ID_INVALID"
 
     expired = _resign(
         signer_b,
@@ -749,6 +765,23 @@ def test_ingress_document_parsers_and_session_limits_fail_closed(tmp_path: Path,
         )
     assert signer_window.value.code == "FEDERATION_INGRESS_SIGNER_WINDOW_INVALID"
 
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            registry_a,
+            "get_federation_challenge",
+            lambda _direction, _nonce: {
+                "state": federation_peer_trust.CHALLENGE_STATE_RESPONDED,
+                "peerFleetId": "fleet-b",
+                "sourceFleetId": "fleet-a",
+                "destinationFleetId": "fleet-b",
+                "sessionPurpose": federation_challenge.SESSION_PURPOSE_REMOTE_CUSTODY,
+                "expiresAt": str(grant["expiresAt"]),
+            },
+        )
+        with pytest.raises(federation_ingress_grant.FederationIngressGrantError) as invalid_session_state:
+            _verify(registry_a, grant)
+        assert invalid_session_state.value.code == "FEDERATION_INGRESS_SESSION_NOT_AUTHENTICATED"
+
     monkeypatch.setattr(registry_a, "get_peer", lambda _fleet_id: {"fleetIdentity": "invalid"})
     with pytest.raises(federation_ingress_grant.FederationIngressGrantError) as invalid_root:
         _verify(registry_a, grant)
@@ -905,7 +938,17 @@ def test_ingress_grant_journal_independently_revalidates_every_binding(tmp_path:
         registry_b.record_ingress_grant(grant, recorded_at=NOW + timedelta(seconds=2))
     assert session_replay.value.code == "FEDERATION_INGRESS_SESSION_REPLAY"
 
-    unknown_peer = _resign(signer_b, grant, sourceFleetId="fleet-c")
+    unknown_peer = _resign(
+        signer_b,
+        grant,
+        sourceFleetId="fleet-c",
+        transferId=federation_transfer.derive_transfer_id(
+            source_fleet_id="fleet-c",
+            destination_fleet_id="fleet-b",
+            backup_id=BACKUP_ID,
+            object_set_digest=OBJECT_SET_DIGEST,
+        ),
+    )
     with pytest.raises(federation_peer_trust.FederationTrustError) as unknown_peer_error:
         registry_b.record_ingress_grant(unknown_peer, recorded_at=NOW + timedelta(seconds=2))
     assert unknown_peer_error.value.code == "FEDERATION_PEER_NOT_PINNED"

@@ -8,7 +8,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from deepseek_infra.infra.workspace import federation_challenge, federation_identity, federation_peer_trust
+from deepseek_infra.infra.workspace import federation_challenge, federation_identity, federation_peer_trust, federation_transfer
 
 INGRESS_GRANT_SCHEMA = "federation-ingress-grant-v1"
 MAX_INGRESS_GRANT_LIFETIME_SECONDS = 300
@@ -231,20 +231,32 @@ def _grant_semantics(
         raise FederationIngressGrantError("FEDERATION_INGRESS_DESTINATION_FLEET_MISMATCH")
     if source == destination:
         raise FederationIngressGrantError("FEDERATION_INGRESS_REFLECTION_REJECTED")
-    if _sha256_digest(grant.get("transferId"), code="FEDERATION_INGRESS_TRANSFER_ID_INVALID") != expected_transfer_id:
+    transfer = _sha256_digest(grant.get("transferId"), code="FEDERATION_INGRESS_TRANSFER_ID_INVALID")
+    if transfer != expected_transfer_id:
         raise FederationIngressGrantError("FEDERATION_INGRESS_TRANSFER_ID_MISMATCH")
-    if _control_id(grant.get("policyId"), code="FEDERATION_INGRESS_POLICY_ID_INVALID") != expected_policy_id:
+    policy = _control_id(grant.get("policyId"), code="FEDERATION_INGRESS_POLICY_ID_INVALID")
+    if policy != expected_policy_id:
         raise FederationIngressGrantError("FEDERATION_INGRESS_POLICY_ID_MISMATCH")
-    if _control_id(grant.get("backupId"), code="FEDERATION_INGRESS_BACKUP_ID_INVALID") != expected_backup_id:
+    backup = _control_id(grant.get("backupId"), code="FEDERATION_INGRESS_BACKUP_ID_INVALID")
+    if backup != expected_backup_id:
         raise FederationIngressGrantError("FEDERATION_INGRESS_BACKUP_ID_MISMATCH")
-    if (
-        _sha256_digest(
-            grant.get("objectSetDigest"),
-            code="FEDERATION_INGRESS_OBJECT_SET_DIGEST_INVALID",
-        )
-        != expected_object_set_digest
-    ):
+    object_set = _sha256_digest(
+        grant.get("objectSetDigest"),
+        code="FEDERATION_INGRESS_OBJECT_SET_DIGEST_INVALID",
+    )
+    if object_set != expected_object_set_digest:
         raise FederationIngressGrantError("FEDERATION_INGRESS_OBJECT_SET_DIGEST_MISMATCH")
+    try:
+        derived_transfer = federation_transfer.derive_transfer_id(
+            source_fleet_id=source,
+            destination_fleet_id=destination,
+            backup_id=backup,
+            object_set_digest=object_set,
+        )
+    except federation_transfer.FederatedTransferError as exc:
+        raise FederationIngressGrantError(exc.code) from exc
+    if transfer != derived_transfer:
+        raise FederationIngressGrantError("FEDERATION_TRANSFER_ID_INVALID")
     _object_prefix(grant.get("allowedObjectPrefix"))
     _max_bytes(grant.get("maxBytes"))
     try:
@@ -315,6 +327,17 @@ def issue_ingress_grant(
     destination = str(local_identity["fleetId"])
     if source == destination:
         raise FederationIngressGrantError("FEDERATION_INGRESS_REFLECTION_REJECTED")
+    try:
+        derived_transfer = federation_transfer.derive_transfer_id(
+            source_fleet_id=source,
+            destination_fleet_id=destination,
+            backup_id=backup,
+            object_set_digest=object_set,
+        )
+    except federation_transfer.FederatedTransferError as exc:
+        raise FederationIngressGrantError(exc.code) from exc
+    if transfer != derived_transfer:
+        raise FederationIngressGrantError("FEDERATION_TRANSFER_ID_INVALID")
     session = peer_registry.get_federation_challenge(
         federation_peer_trust.CHALLENGE_DIRECTION_INBOUND,
         session_nonce_digest,

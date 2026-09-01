@@ -44,9 +44,9 @@
 - [x] Add signed `federation-ingress-grant-v1`
 - [x] Bind both Fleets, transfer, policy, backup, object set, prefix, bytes, and time
 - [x] Keep Receiver long-lived S3 credentials private
-- [ ] Add domain-separated immutable transfer identity
-- [ ] Add durable transfer journal and query/reconcile API
-- [ ] Make same transfer resume one effect and conflicting transfer fail closed
+- [x] Add domain-separated immutable transfer identity
+- [x] Add durable transfer journal and query/reconcile API
+- [x] Make same transfer resume one effect and conflicting transfer fail closed
 - [ ] Receive existing randomized-Age ciphertext and `object-set-v1`
 - [ ] Produce unchanged Receipt v4 and Commit v4 through production storage
 - [ ] Add `federated-replica-attestation-v1`
