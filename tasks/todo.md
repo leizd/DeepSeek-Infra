@@ -23,7 +23,7 @@
 
 ## Fleet identity and trust
 
-- [ ] Add dedicated Ed25519 Fleet federation root and online signer
+- [x] Add dedicated Ed25519 Fleet federation root and online signer
 - [ ] Prove federation keys differ from Age and Authority identities
 - [ ] Add operator-pinned Peer Trust Registry without TOFU
 - [ ] Add pinned provider/region/jurisdiction/siteClass metadata
