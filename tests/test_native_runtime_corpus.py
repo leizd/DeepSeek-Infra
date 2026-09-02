@@ -7,10 +7,18 @@ from deepseek_infra.infra.mcp.protocol_preparation import prepare_mcp_protocol_j
 from deepseek_infra.infra.workspace.federated_replica_attestation import REPLICA_ATTESTATION_FIELDS
 from deepseek_infra.infra.workspace.federated_replica_commit import COMMIT_V4_FIELDS, RECEIPT_V4_FIELDS
 from scripts import check_mcp_protocol_parity as mcp_parity
-from scripts.native_runtime_contract import validate_corpus
+from scripts.native_runtime_contract import sha256_file, validate_corpus
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_corpus_hash_is_stable_across_crlf_checkouts(tmp_path: Path) -> None:
+    lf = tmp_path / "lf.json"
+    crlf = tmp_path / "crlf.json"
+    lf.write_bytes(b'{"ok":true}\n')
+    crlf.write_bytes(b'{"ok":true}\r\n')
+    assert sha256_file(lf) == sha256_file(crlf)
 
 
 def test_canonical_corpora_match_frozen_digests() -> None:

@@ -290,7 +290,7 @@ def check_descriptor(path: Path = DESCRIPTOR_PATH) -> dict[str, Any]:
 
 
 def sha256_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 def validate_corpus(manifest_path: Path = CORPUS_MANIFEST) -> dict[str, Any]:

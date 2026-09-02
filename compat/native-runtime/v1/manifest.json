@@ -2,7 +2,7 @@
   "schema_version": 1,
   "source_version": "4.8.0",
   "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
-  "normalization": "raw bytes hashed; no secret redaction required for these public inventories",
+  "normalization": "LF-normalized SHA-256 of public inventory/fixture bytes",
   "corpora": [
     {
       "id": "mcp-protocol-preparation",
@@ -10,7 +10,7 @@
       "eventual_owner": "rust",
       "sensitivity": "public",
       "title": "MCP JSON-RPC protocol preparation corpus",
-      "sha256": "3b67de821105968207af7331c5721d12d08d2bf69dbc6d9fa93b54f967d83176"
+      "sha256": "bdbc2ca16ac178727d42a0c6dc39e9850ac37f7d36ea34dde4abe9a40e1ba9f5"
     },
     {
       "id": "gateway-request-preparation",
@@ -18,7 +18,7 @@
       "eventual_owner": "rust",
       "sensitivity": "public",
       "title": "OpenAI-compatible gateway request preparation corpus",
-      "sha256": "d1fd4e7d390eae1615582b03f4aaa25e7dd1105e6fbfdfbf5ed11efa48a66dbf"
+      "sha256": "d1d573d4306f2a42b96fa8c6f29c1c8a5946031be9a688a7e6450ef0d6ef3350"
     },
     {
       "id": "rag-parity",
@@ -26,7 +26,7 @@
       "eventual_owner": "rust",
       "sensitivity": "public",
       "title": "RAG scoring/normalization parity corpus",
-      "sha256": "10d6ffebcfa070cf85ce1cd70e1ef5cf361d0648c55f088610e51d811083de46"
+      "sha256": "5491f2f31fa331b572d769bc45ca1c264c54075ef0e7d325df1caa76583d90df"
     },
     {
       "id": "rag-document-preparation",
@@ -34,7 +34,7 @@
       "eventual_owner": "rust",
       "sensitivity": "public",
       "title": "RAG document preparation corpus",
-      "sha256": "33c108f02ab7beeedc7f8f16de66e8dfe9d37269c2b8fa60f42bdee1c7a7abe8"
+      "sha256": "11c1eebb63129334260cf3eaed9997b394a76534e4c180ed10185774ef42b7d7"
     },
     {
       "id": "http-rest-inventory",
