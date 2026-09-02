@@ -25,7 +25,7 @@ import sys
 import textwrap
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -116,6 +116,25 @@ def _kill_hard(process: subprocess.Popen[str]) -> int:
         process.kill()
         process.wait(timeout=10)
     return int(process.returncode if process.returncode is not None else -1)
+
+
+def _strictly_later_journal_tick(timestamp: str) -> datetime:
+    parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("journal timestamp must include a timezone")
+    return parsed.astimezone(timezone.utc).replace(microsecond=0) + timedelta(seconds=1)
+
+
+def test_strictly_later_journal_tick_advances_second_precision() -> None:
+    assert _strictly_later_journal_tick("2026-09-02T02:00:11Z") == datetime(
+        2026,
+        9,
+        2,
+        2,
+        0,
+        12,
+        tzinfo=timezone.utc,
+    )
 
 
 def _process_environment(root: Path) -> dict[str, str]:
@@ -754,6 +773,18 @@ def test_real_three_minio_autonomous_remediation_e2e(
         assert takeover_claim_schedule["status"] == resilience_wave_executor.SCHEDULE_RUNNING
         assert takeover_claim_wave["status"] == resilience_wave_executor.WAVE_EXECUTING
         assert takeover_claim_action["status"] == resilience_wave_executor.ACTION_CLAIMED
+        # Runner and settlement journals intentionally persist UTC timestamps at
+        # second precision. Keep Worker B paused until the next representable
+        # tick so strict claim -> settlement -> terminal ordering remains
+        # independently verifiable even when takeover completes very quickly.
+        claim_release_after = max(
+            _strictly_later_journal_tick(str(record["updatedAt"]))
+            for record in (takeover_claim_schedule, takeover_claim_wave, takeover_claim_action)
+        )
+        timestamp_deadline = time.monotonic() + 2
+        while datetime.now(tz=timezone.utc) < claim_release_after:
+            assert time.monotonic() < timestamp_deadline, "journal timestamp did not advance after takeover claim"
+            time.sleep(0.01)
         takeover_release_path.touch()
         stdout_b, stderr_b = process_b.communicate(timeout=180)
     except Exception:
