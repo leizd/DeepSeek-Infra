@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "status": "pinned",
+  "go": {
+    "version": "1.27.1",
+    "source": "https://go.dev/doc/devel/release",
+    "note": "go1.27.1 released 2026-09-01; current latest on the 1.27 line."
+  },
+  "protoc": {
+    "version_line": "36.x",
+    "source": "https://protobuf.dev/support/version-support/",
+    "syntax": "proto3",
+    "note": "protoc 36.x is the active compiler line. 4.8.1 freezes proto3 sources and a language-neutral descriptor JSON; checksum-pinned protoc bootstrap generates pb.go/prost bindings without hand edits."
+  },
+  "protobuf_language_runtimes": {
+    "python": "7.36.x",
+    "go_module": "google.golang.org/protobuf",
+    "source": "https://protobuf.dev/support/version-support/"
+  },
+  "ci": {
+    "go_setup": "1.27.1",
+    "gates": [
+      "gofmt",
+      "go vet",
+      "go test",
+      "go test -race",
+      "python scripts/native_runtime_contract.py --check",
+      "cargo fmt/clippy/test for new crates"
+    ]
+  }
+}

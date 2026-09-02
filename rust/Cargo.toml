@@ -7,6 +7,8 @@ members = [
     "crates/deepseek-mcp",
     "crates/deepseek-policy",
     "crates/deepseek-rag",
+    "crates/deepseek-protocol",
+    "crates/deepseek-worker",
 ]
 resolver = "3"
 

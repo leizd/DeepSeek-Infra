@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package deepseek.federation.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/leizd/DeepSeek-Infra/go/internal/protocol/federationv1;federationv1";
+
+message ExecuteFederatedTransferRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string transfer_id = 2;
+  string source_fleet_id = 3;
+  string destination_fleet_id = 4;
+  string backup_id = 5;
+  string object_set_digest = 6;
+}
+
+message SignReadinessRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string fleet_id = 2;
+  string payload_digest = 3;
+}
+
+message SignReadinessResponse {
+  deepseek.common.v1.ActionFence fence = 1;
+  bytes signature = 2;
+  string public_key_fingerprint = 3;
+}
+
+message FederationEffectResult {
+  deepseek.common.v1.ActionFence fence = 1;
+  deepseek.common.v1.EffectState state = 2;
+  string transfer_id = 3;
+  string receipt_digest = 4;
+  string commit_digest = 5;
+  string proof_digest = 6;
+}

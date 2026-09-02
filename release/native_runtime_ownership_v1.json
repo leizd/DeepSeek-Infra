@@ -1,0 +1,414 @@
+{
+  "schema_version": 1,
+  "status": "accepted",
+  "architecture": "rust_data_go_control_ownership_inversion",
+  "adr": "docs/adr/ADR-0049-native-runtime-ownership-inversion.md",
+  "specification": "docs/specs/5.0-native-rust-go-runtime.md",
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "foundation_version": "4.8.1",
+  "target_version": "5.0.0",
+  "current_production_authority": "python",
+  "approved_by": [
+    "leizd"
+  ],
+  "invariants": [
+    "one_table_one_authoritative_writer",
+    "action_id_and_execution_epoch_end_to_end",
+    "unknown_remote_effect_fail_closed",
+    "process_boundary_grpc_protobuf",
+    "no_cgo_ffi_primary_architecture",
+    "federation_private_keys_stay_in_rust",
+    "frozen_wire_semantics_unchanged"
+  ],
+  "forbidden": [
+    "shared_cross_language_sqlite_writes",
+    "cgo_ffi_primary_architecture",
+    "adhoc_json_rpc_for_new_boundaries",
+    "python_production_owner_at_5_0",
+    "permanent_python_fallback",
+    "big_bang_rewrite",
+    "go_fastcdc_or_crypto_hot_path",
+    "rust_scheduler_rewrite_for_language_share",
+    "frozen_contract_revision_for_migration"
+  ],
+  "durable_stores": {
+    "python_oracle": {
+      "writer": "python",
+      "role": "canonical_fixture_only",
+      "shared_with": []
+    },
+    "go_control": {
+      "writer": "go",
+      "role": "control_plane_state",
+      "shared_with": []
+    },
+    "rust_data": {
+      "writer": "rust",
+      "role": "data_plane_effect_and_checkpoint",
+      "shared_with": []
+    }
+  },
+  "frozen_contracts": [
+    "object-set-v1",
+    "Receipt v4",
+    "Commit v4",
+    "FastCDC v3",
+    "randomized Age",
+    "control-authority-v1",
+    "AuthorityCheckpoint v1",
+    "dr-readiness-proof-v1",
+    "evidence-proof-v2",
+    "predictive-planning-proof-v1",
+    "signed Federation 4.8.0"
+  ],
+  "domains": [
+    {
+      "id": "public_http_listener",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.2",
+      "durable_store": null
+    },
+    {
+      "id": "llm_gateway_sse",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.2",
+      "durable_store": null
+    },
+    {
+      "id": "chat_completions_fast_path",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.2",
+      "durable_store": null
+    },
+    {
+      "id": "mcp_jsonrpc",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.2",
+      "durable_store": null
+    },
+    {
+      "id": "rag_hot_path",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.2",
+      "durable_store": null
+    },
+    {
+      "id": "tool_sandbox",
+      "plane": "security",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.2",
+      "durable_store": null
+    },
+    {
+      "id": "url_path_capability_policy",
+      "plane": "security",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.2",
+      "durable_store": null
+    },
+    {
+      "id": "fastcdc_chunk_pipeline",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.1",
+      "durable_store": null
+    },
+    {
+      "id": "age_crypto",
+      "plane": "security",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.1",
+      "durable_store": null
+    },
+    {
+      "id": "s3_minio_streaming",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.1",
+      "durable_store": "rust_data"
+    },
+    {
+      "id": "object_set_validation",
+      "plane": "security",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.1",
+      "durable_store": null
+    },
+    {
+      "id": "receipt_commit_verification",
+      "plane": "security",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.1",
+      "durable_store": null
+    },
+    {
+      "id": "backup_restore_data_movement",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.1",
+      "durable_store": "rust_data"
+    },
+    {
+      "id": "federation_ciphertext_transfer",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.1",
+      "durable_store": "rust_data"
+    },
+    {
+      "id": "ed25519_sign_verify",
+      "plane": "security",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.1",
+      "durable_store": "rust_data"
+    },
+    {
+      "id": "evidence_crypto_verifier",
+      "plane": "security",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.1",
+      "durable_store": null
+    },
+    {
+      "id": "federation_private_key_custody",
+      "plane": "security",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.1",
+      "durable_store": "rust_data"
+    },
+    {
+      "id": "transfer_jobs",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.1",
+      "durable_store": "rust_data"
+    },
+    {
+      "id": "data_plane_effect_journal",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.1",
+      "durable_store": "rust_data"
+    },
+    {
+      "id": "worker_checkpoint",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.1",
+      "durable_store": "rust_data"
+    },
+    {
+      "id": "config_runtime_lifecycle",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.0",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "control_api",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "policy_crud",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "target_registry",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "backup_scheduler",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "agent_dag_scheduler",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "job_controller",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "lease_fencing",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "action_journal",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "wave_scheduler",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "risk_lifecycle",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "capacity_forecast",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "maintenance_controller",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "resilience_coordinator",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "federation_peer_registry",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "federation_session_lifecycle",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "ingress_grant_lifecycle",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "federated_transfer_journal",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "dr_orchestration",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
+      "id": "health_readiness",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.0",
+      "durable_store": null
+    },
+    {
+      "id": "offline_eval_oracle",
+      "plane": "reference",
+      "current_owner": "python",
+      "target_owner": "python",
+      "cutover": null,
+      "durable_store": "python_oracle",
+      "production": false
+    },
+    {
+      "id": "migration_release_tooling",
+      "plane": "reference",
+      "current_owner": "python",
+      "target_owner": "python",
+      "cutover": null,
+      "durable_store": null,
+      "production": false
+    },
+    {
+      "id": "browser_ui",
+      "plane": "client",
+      "current_owner": "typescript",
+      "target_owner": "typescript",
+      "cutover": null,
+      "durable_store": null,
+      "production": false
+    }
+  ]
+}
