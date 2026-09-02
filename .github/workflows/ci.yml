@@ -1202,6 +1202,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python scripts/native_runtime_contract.py --check
+      - run: python scripts/control_plane_shadow.py --check
 
   native-go:
     needs: release-version

@@ -26,6 +26,15 @@ Machine contract: `release/native_runtime_ownership_v1.json`.
    `DEEPSEEKD_PRODUCTION_STORE` is unset.
 4. Confirm Rust workers are not scheduled against production targets.
 
+## 4.8.2 control-plane shadow
+
+Go evaluates scheduler, risk, wave, and federation decisions only. Compare
+
+`pythonDecisionDigest == goDecisionDigest`
+
+via `python scripts/control_plane_shadow.py --check` and `go test ./internal/shadow`.
+Do not cut over mutation until that gate stays green.
+
 ## Shadow safety
 
 - Go shadow evaluation writes only decision digests. `ExecuteRepair` and every

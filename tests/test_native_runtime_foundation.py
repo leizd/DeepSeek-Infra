@@ -47,6 +47,11 @@ def test_ci_has_native_go_and_protocol_gates() -> None:
     assert "native-protocol:" in workflow
     assert "go-version: \"1.27.1\"" in workflow
     assert "python scripts/native_runtime_contract.py --check" in workflow
+    assert "python scripts/control_plane_shadow.py --check" in workflow
+    assert (ROOT / "go/internal/scheduler/scheduler.go").is_file()
+    assert (ROOT / "go/internal/resilience/risk.go").is_file()
+    assert (ROOT / "go/internal/federation/trust.go").is_file()
+    assert (ROOT / "go/pkg/protocol/canonical.go").is_file()
     assert (ROOT / "scripts/native_codegen.py").is_file()
     assert (ROOT / "scripts/check_native_contract_parity.py").is_file()
     assert "go test -race ./..." in workflow

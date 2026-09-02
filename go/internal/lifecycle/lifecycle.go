@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/leizd/DeepSeek-Infra/go/internal/api"
 	"github.com/leizd/DeepSeek-Infra/go/internal/config"
 )
 
@@ -35,6 +36,7 @@ func Listen(ctx context.Context, cfg config.Config) (string, error) {
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(StatusFrom(cfg))
 	})
+	api.Register(mux)
 	server := &http.Server{Handler: mux}
 	go func() {
 		<-ctx.Done()

@@ -33,6 +33,7 @@ def test_canonical_corpora_match_frozen_digests() -> None:
         "evidence-envelope",
         "state-legal-transitions",
         "http-rest-inventory",
+        "control-shadow-decisions",
     } <= ids
 
 

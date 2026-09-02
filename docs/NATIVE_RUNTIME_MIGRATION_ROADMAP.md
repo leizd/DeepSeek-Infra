@@ -55,6 +55,16 @@ production mutation authority.
 - Generated code is reproducible from the pinned toolchain.
 - No 4.8.0 behavior, frozen contract, or production owner changes.
 
+## 4.8.2: Go Control Plane Shadow Foundation
+
+Python remains production-authoritative. Go `deepseekd` evaluates scheduler,
+risk, wave, and federation decisions in an isolated shadow plane and CI requires
+`pythonDecisionDigest == goDecisionDigest`. Mutation RPCs stay denied. Package
+layout:
+
+`go/cmd/deepseekd`, `internal/{api,config,store,scheduler,action,resilience,federation,observability}`,
+`pkg/protocol`.
+
 ## 4.9.0: Go Control Plane Foundation
 
 ### Objective

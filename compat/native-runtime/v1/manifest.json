@@ -75,6 +75,14 @@
       "sensitivity": "public",
       "title": "Legal control-plane transition labels",
       "sha256": "59ebd3c8c9bde46ac6ebb1a3a793cdea6777802897cce04069d22d735beb7b5b"
+    },
+    {
+      "id": "control-shadow-decisions",
+      "path": "compat/native-runtime/v1/control/shadow_cases.json",
+      "eventual_owner": "go",
+      "sensitivity": "public",
+      "title": "Go/Python control-plane shadow decision digest corpus",
+      "sha256": "cb0a1a55db7ced805b9502da1e7f393ab03eab3971aa84b52bd6b089f2ea30ed"
     }
   ]
 }
