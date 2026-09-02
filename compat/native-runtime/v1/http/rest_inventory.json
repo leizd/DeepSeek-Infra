@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "source_version": "4.8.0",
+  "public_routes": [
+    ["GET", "/healthz"],
+    ["GET", "/metrics"],
+    ["POST", "/v1/chat/completions"],
+    ["GET", "/v1/models"],
+    ["POST", "/mcp"],
+    ["GET", "/.well-known/agent-card.json"],
+    ["POST", "/a2a"]
+  ],
+  "eventual_rust_owner": [
+    "/v1/chat/completions",
+    "/v1/models",
+    "/mcp",
+    "/healthz"
+  ],
+  "eventual_go_owner": [
+    "/api/*"
+  ]
+}

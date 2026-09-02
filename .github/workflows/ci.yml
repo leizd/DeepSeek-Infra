@@ -1193,6 +1193,33 @@ jobs:
       - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings
       - run: cargo test --manifest-path rust/Cargo.toml --all
 
+  native-protocol:
+    needs: release-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/native_runtime_contract.py --check
+
+  native-go:
+    needs: release-version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.1"
+          cache-dependency-path: go/go.mod
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go test -race ./...
+
   rust-coverage:
     needs:
       - evidence-context
@@ -1324,6 +1351,8 @@ jobs:
       - rag-vector-binary-parity
       - rust-coverage
       - rust-sidecar-performance
+      - native-protocol
+      - native-go
       - release-version
     runs-on: ubuntu-latest
     steps:

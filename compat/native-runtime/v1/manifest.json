@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "normalization": "LF-normalized SHA-256 of public inventory/fixture bytes",
+  "corpora": [
+    {
+      "id": "mcp-protocol-preparation",
+      "path": "fixtures/mcp/protocol_preparation_cases.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "MCP JSON-RPC protocol preparation corpus",
+      "sha256": "bdbc2ca16ac178727d42a0c6dc39e9850ac37f7d36ea34dde4abe9a40e1ba9f5"
+    },
+    {
+      "id": "gateway-request-preparation",
+      "path": "fixtures/gateway/request_preparation_cases.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "OpenAI-compatible gateway request preparation corpus",
+      "sha256": "d1d573d4306f2a42b96fa8c6f29c1c8a5946031be9a688a7e6450ef0d6ef3350"
+    },
+    {
+      "id": "rag-parity",
+      "path": "fixtures/rag/parity_cases.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "RAG scoring/normalization parity corpus",
+      "sha256": "5491f2f31fa331b572d769bc45ca1c264c54075ef0e7d325df1caa76583d90df"
+    },
+    {
+      "id": "rag-document-preparation",
+      "path": "fixtures/rag/document_preparation_cases.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "RAG document preparation corpus",
+      "sha256": "11c1eebb63129334260cf3eaed9997b394a76534e4c180ed10185774ef42b7d7"
+    },
+    {
+      "id": "http-rest-inventory",
+      "path": "compat/native-runtime/v1/http/rest_inventory.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Public REST route inventory",
+      "sha256": "3182ee5c21993d0228363d66c2e9dd5e3e4d96f548dc098a890d9019f3915939"
+    },
+    {
+      "id": "storage-wire-inventory",
+      "path": "compat/native-runtime/v1/storage/wire_inventory.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen object-set/Receipt v4/Commit v4 field inventory",
+      "sha256": "5a898bf312b2b1c2dac72fa9ca55f568172e6ec06ee11144ca3ef53b988f32c9"
+    },
+    {
+      "id": "federation-wire-inventory",
+      "path": "compat/native-runtime/v1/federation/wire_inventory.json",
+      "eventual_owner": "go",
+      "sensitivity": "public",
+      "title": "Frozen federation attestation field inventory",
+      "sha256": "ef9a97333d404e82aba768526bea9d356f8e60596a754a2875d5558b54d9350d"
+    },
+    {
+      "id": "evidence-envelope",
+      "path": "compat/native-runtime/v1/evidence/envelope.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen evidence envelope types",
+      "sha256": "ab542d379b9cacce9bc683157dda2337bfceb7cc8087db21169a290ecd3246f8"
+    },
+    {
+      "id": "state-legal-transitions",
+      "path": "compat/native-runtime/v1/state/legal_transitions.json",
+      "eventual_owner": "go",
+      "sensitivity": "public",
+      "title": "Legal control-plane transition labels",
+      "sha256": "59ebd3c8c9bde46ac6ebb1a3a793cdea6777802897cce04069d22d735beb7b5b"
+    }
+  ]
+}

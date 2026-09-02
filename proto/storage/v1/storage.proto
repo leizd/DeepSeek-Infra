@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package deepseek.storage.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/leizd/DeepSeek-Infra/go/internal/protocol/storagev1;storagev1";
+
+message ExecuteBackupRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string policy_id = 2;
+  string backup_id = 3;
+  string source_target_id = 4;
+  string destination_target_id = 5;
+  string object_set_digest = 6;
+}
+
+message ExecuteRestoreRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string policy_id = 2;
+  string backup_id = 3;
+  string source_target_id = 4;
+  string destination_target_id = 5;
+  string object_set_digest = 6;
+}
+
+message ExecuteRepairRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string policy_id = 2;
+  string backup_id = 3;
+  string source_target_id = 4;
+  string destination_target_id = 5;
+  string object_set_digest = 6;
+}
+
+message ExecuteRebalanceRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string policy_id = 2;
+  string backup_id = 3;
+  string source_target_id = 4;
+  string destination_target_id = 5;
+  string object_set_digest = 6;
+}
+
+message StorageEffectResult {
+  deepseek.common.v1.ActionFence fence = 1;
+  deepseek.common.v1.EffectState state = 2;
+  string effect_id = 3;
+  string receipt_digest = 4;
+  string commit_digest = 5;
+  string proof_digest = 6;
+  string object_set_digest = 7;
+}

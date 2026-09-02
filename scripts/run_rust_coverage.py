@@ -24,6 +24,8 @@ WORKSPACE_CRATES = (
     "deepseek-mcp",
     "deepseek-policy",
     "deepseek-rag",
+    "deepseek-protocol",
+    "deepseek-worker",
 )
 
 

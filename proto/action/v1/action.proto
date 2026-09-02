@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package deepseek.action.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1;actionv1";
+
+enum CommandKind {
+  COMMAND_KIND_UNSPECIFIED = 0;
+  COMMAND_KIND_EXECUTE_BACKUP = 1;
+  COMMAND_KIND_EXECUTE_RESTORE = 2;
+  COMMAND_KIND_EXECUTE_REPAIR = 3;
+  COMMAND_KIND_EXECUTE_REBALANCE = 4;
+  COMMAND_KIND_EXECUTE_FEDERATED_TRANSFER = 5;
+  COMMAND_KIND_SIGN_READINESS = 6;
+}
+
+enum AdmitStatus {
+  ADMIT_STATUS_UNSPECIFIED = 0;
+  ADMIT_STATUS_ADMITTED = 1;
+  ADMIT_STATUS_REJECTED = 2;
+}
+
+message AdmitCommandRequest {
+  CommandKind kind = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  uint64 live_epoch = 3;
+}
+
+message AdmitCommandResponse {
+  AdmitStatus status = 1;
+  deepseek.common.v1.EffectState state = 2;
+  deepseek.common.v1.ErrorDetail error = 3;
+}
+
+message QueryEffectRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+}
+
+message EffectResult {
+  deepseek.common.v1.ActionFence fence = 1;
+  deepseek.common.v1.EffectState state = 2;
+  string effect_id = 3;
+  string receipt_digest = 4;
+  string commit_digest = 5;
+  string proof_digest = 6;
+  deepseek.common.v1.ErrorDetail error = 7;
+}
+
+service Worker {
+  rpc AdmitCommand(AdmitCommandRequest) returns (AdmitCommandResponse);
+  rpc QueryEffect(QueryEffectRequest) returns (EffectResult);
+}

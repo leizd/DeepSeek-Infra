@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package deepseek.agent.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1;agentv1";
+
+message AgentTaskCommand {
+  deepseek.common.v1.ActionFence fence = 1;
+  string task_id = 2;
+  repeated string depends_on = 3;
+}
+
+message AgentTaskResult {
+  deepseek.common.v1.ActionFence fence = 1;
+  deepseek.common.v1.EffectState state = 2;
+  string task_id = 3;
+}

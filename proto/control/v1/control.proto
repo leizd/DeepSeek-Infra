@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package deepseek.control.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/leizd/DeepSeek-Infra/go/internal/protocol/controlv1;controlv1";
+
+enum RuntimeMode {
+  RUNTIME_MODE_UNSPECIFIED = 0;
+  RUNTIME_MODE_SHADOW_READONLY = 1;
+  RUNTIME_MODE_AUTHORITATIVE = 2;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool ok = 1;
+  RuntimeMode mode = 2;
+  string mutation_authority = 3;
+}
+
+message ShadowEvaluateRequest {
+  string domain = 1;
+  bytes canonical_input = 2;
+}
+
+message ShadowEvaluateResponse {
+  string decision_digest = 1;
+  bool mutation_denied = 2;
+}
+
+service ControlPlane {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc ShadowEvaluate(ShadowEvaluateRequest) returns (ShadowEvaluateResponse);
+}

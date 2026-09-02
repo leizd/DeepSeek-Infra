@@ -110,6 +110,10 @@ outputs/
 # Rust build artifacts
 rust/target/
 
+# Go build artifacts
+go/**/*.exe
+/go/bin/
+
 # Generated native backup encryption helper
 /bin/
 

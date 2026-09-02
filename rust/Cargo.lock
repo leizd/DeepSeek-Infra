@@ -453,6 +453,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "deepseek-protocol"
+version = "0.1.0"
+
+[[package]]
 name = "deepseek-rag"
 version = "0.1.0"
 dependencies = [
@@ -460,6 +464,13 @@ dependencies = [
  "deepseek-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "deepseek-worker"
+version = "0.1.0"
+dependencies = [
+ "deepseek-protocol",
 ]
 
 [[package]]
