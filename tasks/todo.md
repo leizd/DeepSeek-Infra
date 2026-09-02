@@ -1,29 +1,94 @@
-# 4.7.6 Todo — Production Predictive Control & Verifiable Simulation
+# 4.8.0 Todo — Signed Federation & Cross-Fleet Disaster Recovery
 
 <!-- docs-language-switcher:start -->
 [中文](../README.md) / [English](../README.en.md)
 <!-- docs-language-switcher:end -->
 
-- [x] Prepare 4.7.6 version surfaces and lock frozen protocols
-- [x] Build fail-closed production fresh-state bundle
-- [x] Remove caller-supplied Wave freshness and safety inputs
-- [x] Add fenced schedule/wave/action execution epochs and leases
-- [x] Run admitted actions through the production Action Journal
-- [x] Reconcile crash takeover without duplicate remote effects
-- [x] Persist terminal effect transfer telemetry
-- [x] Settle fair service exactly once from observed telemetry
-- [x] Add production capacity sampler to maintenance control loop
-- [x] Bind observations to target incarnation and capacity revision
-- [x] Persist 30/90-day Forecast Registry records
-- [x] Automatically backtest due forecasts from later observations
-- [x] Build optimizer present truth from authoritative sources
-- [x] Restrict What-If requests to hypothetical candidates
-- [x] Add write-deny simulation capability and attempted-write audit
-- [x] Measure and compare pre/post state digests for every mutation domain
-- [x] Add `predictive-planning-proof-v1` typed payload and validator
-- [x] Emit exact predictive proof artifact from the real runner
-- [x] Require report + autonomous proof + predictive proof in assembly
-- [x] Add real Three-MinIO predictive planning E2E
-- [x] Preserve read-only federation boundary
-- [x] Update runbook, ADR, architecture, and release notes
-- [ ] Run CI-equivalent verification with 95.0% coverage margin
+## Phase 0 — Baseline
+
+- [x] Verify exact PR #160 merge commit `a79c90d2`
+- [x] Create `codex/release-4.8.0-signed-federation` from exact merge
+- [x] Lock the dependency-ordered Gate matrix
+- [x] Prepare the 4.8.0 version surface
+- [x] Prove all frozen protocol identifiers remain unchanged
+
+## Gate A — Correctness closure before Federation writes
+
+- [x] Add canonical server-computed `scheduleDigest`
+- [x] Make same schedule ID and digest non-mutating/idempotent
+- [x] Reject same schedule ID with different digest as `SCHEDULE_IDENTITY_CONFLICT`
+- [x] Prevent running and terminal schedule rewrites
+- [x] Migrate legacy schedule rows without resetting state or epochs
+- [x] Add CAS renewal for schedule and wave leases
+- [x] Add bounded Wave Runner heartbeat and fence on lease loss
+- [x] Prove stale runner token/epoch cannot renew or commit
+- [x] Prove real Worker A SIGKILL and Worker B higher-epoch takeover
+- [x] Prove one real MinIO effect ID and no duplicate effect/settlement
+
+## Fleet identity and trust
+
+- [x] Add dedicated Ed25519 Fleet federation root and online signer
+- [x] Prove federation keys differ from Age and Authority identities
+- [x] Add operator-pinned Peer Trust Registry without TOFU
+- [x] Add pinned provider/region/jurisdiction/siteClass metadata
+- [x] Add online signer rotation certificates
+- [x] Add signer/root revocation and explicit historical-proof semantics
+
+## Signed readiness and sessions
+
+- [x] Add `federation-readiness-attestation-v1`
+- [x] Bind the complete canonical readiness snapshot
+- [x] Persist and enforce per-peer readiness sequence high-water marks
+- [x] Reject replay, expiry, excessive future skew, tamper, and wrong Fleet
+- [x] Add bilateral challenge/response with durable single-use nonces
+- [x] Reject reflection, replay, wrong Fleet, revoked peer, and invalid signer time
+
+## Receiver-controlled custody
+
+- [x] Add signed `federation-ingress-grant-v1`
+- [x] Bind both Fleets, transfer, policy, backup, object set, prefix, bytes, and time
+- [x] Keep Receiver long-lived S3 credentials private
+- [x] Add domain-separated immutable transfer identity
+- [x] Add durable transfer journal and query/reconcile API
+- [x] Make same transfer resume one effect and conflicting transfer fail closed
+- [x] Receive existing randomized-Age ciphertext and `object-set-v1`
+- [x] Produce unchanged Receipt v4 and Commit v4 through production storage
+- [x] Add `federated-replica-attestation-v1`
+- [x] Record `FEDERATED_COMMITTED` only after independent verification
+
+## Durability and federated DR
+
+- [x] Add independent federated durability objective fields
+- [x] Prove remote copies never reduce local copies or failure domains
+- [x] Prove remote copies cannot promote, mutate, prune, or delete
+- [x] Add COLD_CUSTODY and RECOVERY_CAPABLE modes
+- [x] Require independently preprovisioned Age identity for recovery-capable peers
+- [x] Prove Age private identity never crosses Federation boundaries
+- [x] Run production remote restore into an isolated workspace
+- [x] Add and semantically validate `federated-dr-drill-attestation-v1`
+- [x] Require successful cleanup before DR proof passes
+
+## Typed Evidence and real topology
+
+- [x] Add `federation-trust-proof-v1`
+- [x] Add `federated-replica-proof-v1`
+- [x] Add `federated-dr-proof-v1`
+- [x] Start two independent Fleet processes and MinIO A1/A2/B1/B2
+- [x] Prove receiver SIGKILL/restart resumes the same transfer ID
+- [x] Prove only one remote commit exists
+- [x] Reject replayed grants and tampered attestations
+- [x] Block new transfers after peer revocation
+- [x] Prove production federated DR restore and signed proof
+- [x] Require all three exact typed artifacts in Evidence Assembly
+
+## Release closure
+
+- [x] Document trust bootstrap, key rotation, revocation, partitions, and incidents
+- [x] Document cold custody and recovery-capable operational requirements
+- [x] Update ADR, architecture, API, Evidence index, release notes, and runbooks
+- [x] Run frontend, Ruff, Mypy, full 95.0% coverage, eval, security, and local release gates
+  - Local qualification: frontend 607 tests, Python 5244 tests at 95.10% coverage, offline smoke 23/23 stages, dependency/security gates, and Rust workspace gates all pass.
+  - `preflight_release.py` remains fail-closed on the intentionally unrefreshed exact-head 4.8.0 evidence paths; those artifacts belong to the CI item below.
+- [ ] Run real two-Fleet/four-MinIO exact Evidence producers and semantic assembly on the exact PR head and merge commit in CI
+- [x] Review intended paths and preserve unrelated worktree assets
+- [x] Do not merge automatically

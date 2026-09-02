@@ -582,6 +582,475 @@ def validate_crash_recovery_proof(evidence: dict[str, Any], check_name: str) -> 
     return errors
 
 
+def validate_wave_crash_recovery_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    """Validate real Wave Runner heartbeat and multi-epoch crash takeover evidence."""
+
+    errors = validate_crash_recovery_proof(evidence, check_name)
+    errors.extend(
+        _require_fields(
+            evidence,
+            (
+                "scheduleId",
+                "waveIndex",
+                "scheduleEpochA",
+                "scheduleEpochB",
+                "waveEpochA",
+                "waveEpochB",
+                "waveActionEpochA",
+                "waveActionEpochB",
+                "workerAScheduleLeaseUntil",
+                "workerAWaveLeaseUntil",
+                "workerAWaveActionLeaseUntil",
+                "firstRunnerLeaseUntil",
+                "renewedRunnerLeaseUntil",
+                "runnerLeaseObservations",
+                "journalStateAtCrash",
+                "runnerStateAtCrash",
+                "runnerStateAtTakeoverClaim",
+                "runnerStateAfterTakeover",
+                "settlementEvents",
+            ),
+        )
+    )
+    try:
+        schedule_epoch_a = int(str(evidence.get("scheduleEpochA")))
+        schedule_epoch_b = int(str(evidence.get("scheduleEpochB")))
+        wave_epoch_a = int(str(evidence.get("waveEpochA")))
+        wave_epoch_b = int(str(evidence.get("waveEpochB")))
+        wave_action_epoch_a = int(str(evidence.get("waveActionEpochA")))
+        wave_action_epoch_b = int(str(evidence.get("waveActionEpochB")))
+        journal_epoch_a = int(str(evidence.get("epochA")))
+        journal_epoch_b = int(str(evidence.get("epochB")))
+        wave_index = int(str(evidence.get("waveIndex")))
+        worker_a_pid = int(str(evidence.get("workerAPid")))
+        worker_b_pid = int(str(evidence.get("workerBPid")))
+    except (TypeError, ValueError):
+        return errors + ["invalid-wave-takeover-numeric-fields"]
+    if wave_index < 0:
+        errors.append("negative-wave-index")
+    if schedule_epoch_b <= schedule_epoch_a:
+        errors.append("schedule-execution-epoch-not-increased")
+    if wave_epoch_b <= wave_epoch_a:
+        errors.append("wave-execution-epoch-not-increased")
+    if wave_action_epoch_b <= wave_action_epoch_a:
+        errors.append("wave-action-execution-epoch-not-increased")
+
+    raw_crash_state = evidence.get("runnerStateAtCrash")
+    raw_claim_state = evidence.get("runnerStateAtTakeoverClaim")
+    raw_takeover_state = evidence.get("runnerStateAfterTakeover")
+    crash_state = raw_crash_state if isinstance(raw_crash_state, dict) else {}
+    claim_state = raw_claim_state if isinstance(raw_claim_state, dict) else {}
+    takeover_state = raw_takeover_state if isinstance(raw_takeover_state, dict) else {}
+    if not isinstance(raw_crash_state, dict):
+        errors.append("runner-state-at-crash-must-be-object")
+    if not isinstance(raw_claim_state, dict):
+        errors.append("runner-state-at-takeover-claim-must-be-object")
+    if not isinstance(raw_takeover_state, dict):
+        errors.append("runner-state-after-takeover-must-be-object")
+
+    def runner_record(snapshot: dict[str, Any], phase: str, record_name: str) -> dict[str, Any]:
+        raw_record = snapshot.get(record_name)
+        if not isinstance(raw_record, dict):
+            errors.append(f"runner-state-{phase}-{record_name}-must-be-object")
+            return {}
+        return raw_record
+
+    crash_schedule = runner_record(crash_state, "crash", "schedule")
+    crash_wave = runner_record(crash_state, "crash", "wave")
+    crash_action = runner_record(crash_state, "crash", "waveAction")
+    claim_schedule = runner_record(claim_state, "takeover-claim", "schedule")
+    claim_wave = runner_record(claim_state, "takeover-claim", "wave")
+    claim_action = runner_record(claim_state, "takeover-claim", "waveAction")
+    takeover_schedule = runner_record(takeover_state, "takeover", "schedule")
+    takeover_wave = runner_record(takeover_state, "takeover", "wave")
+    takeover_action = runner_record(takeover_state, "takeover", "waveAction")
+    schedule_id = str(evidence.get("scheduleId") or "")
+    action_id = str(evidence.get("actionId") or "")
+    for record in (
+        crash_schedule,
+        crash_wave,
+        crash_action,
+        claim_schedule,
+        claim_wave,
+        claim_action,
+        takeover_schedule,
+        takeover_wave,
+        takeover_action,
+    ):
+        if str(record.get("scheduleId") or "") != schedule_id:
+            errors.append("runner-state-schedule-id-binding-mismatch")
+    for record in (crash_action, claim_action, takeover_action):
+        if str(record.get("actionId") or "") != action_id:
+            errors.append("runner-state-action-id-binding-mismatch")
+
+    for record in (crash_wave, crash_action, claim_wave, claim_action, takeover_wave, takeover_action):
+        try:
+            record_wave_index = int(str(record.get("waveIndex")))
+        except (TypeError, ValueError):
+            errors.append("runner-state-invalid-wave-index")
+            continue
+        if record_wave_index != wave_index:
+            errors.append("runner-state-wave-index-binding-mismatch")
+
+    def runner_epoch(record: dict[str, Any], phase: str, field: str) -> int | None:
+        try:
+            return int(str(record.get(field)))
+        except (TypeError, ValueError):
+            errors.append(f"runner-state-{phase}-invalid-{field}")
+            return None
+
+    crash_schedule_epoch = runner_epoch(crash_schedule, "crash-schedule", "scheduleExecutionEpoch")
+    crash_wave_epoch = runner_epoch(crash_wave, "crash-wave", "waveExecutionEpoch")
+    crash_action_epoch = runner_epoch(crash_action, "crash-action", "actionExecutionEpoch")
+    crash_action_schedule_epoch = runner_epoch(crash_action, "crash-action", "scheduleExecutionEpoch")
+    crash_action_wave_epoch = runner_epoch(crash_action, "crash-action", "waveExecutionEpoch")
+    claim_schedule_epoch = runner_epoch(claim_schedule, "takeover-claim-schedule", "scheduleExecutionEpoch")
+    claim_wave_epoch = runner_epoch(claim_wave, "takeover-claim-wave", "waveExecutionEpoch")
+    claim_action_epoch = runner_epoch(claim_action, "takeover-claim-action", "actionExecutionEpoch")
+    claim_action_schedule_epoch = runner_epoch(claim_action, "takeover-claim-action", "scheduleExecutionEpoch")
+    claim_action_wave_epoch = runner_epoch(claim_action, "takeover-claim-action", "waveExecutionEpoch")
+    takeover_schedule_epoch = runner_epoch(takeover_schedule, "takeover-schedule", "scheduleExecutionEpoch")
+    takeover_wave_epoch = runner_epoch(takeover_wave, "takeover-wave", "waveExecutionEpoch")
+    takeover_action_epoch = runner_epoch(takeover_action, "takeover-action", "actionExecutionEpoch")
+    takeover_action_schedule_epoch = runner_epoch(takeover_action, "takeover-action", "scheduleExecutionEpoch")
+    takeover_action_wave_epoch = runner_epoch(takeover_action, "takeover-action", "waveExecutionEpoch")
+    takeover_journal_epoch = runner_epoch(takeover_action, "takeover-action", "journalExecutionEpoch")
+    if crash_schedule_epoch != schedule_epoch_a:
+        errors.append("runner-state-schedule-epoch-binding-mismatch")
+    if crash_wave_epoch != wave_epoch_a:
+        errors.append("runner-state-wave-epoch-binding-mismatch")
+    if (
+        crash_action_epoch != wave_action_epoch_a
+        or crash_action_schedule_epoch != schedule_epoch_a
+        or crash_action_wave_epoch != wave_epoch_a
+    ):
+        errors.append("runner-state-wave-action-epoch-binding-mismatch")
+    if claim_schedule_epoch != schedule_epoch_b:
+        errors.append("runner-state-takeover-claim-schedule-epoch-binding-mismatch")
+    if claim_wave_epoch != wave_epoch_b:
+        errors.append("runner-state-takeover-claim-wave-epoch-binding-mismatch")
+    if (
+        claim_action_epoch != wave_action_epoch_b
+        or claim_action_schedule_epoch != schedule_epoch_b
+        or claim_action_wave_epoch != wave_epoch_b
+    ):
+        errors.append("runner-state-takeover-claim-action-epoch-binding-mismatch")
+    if takeover_schedule_epoch != schedule_epoch_b:
+        errors.append("runner-state-takeover-schedule-epoch-binding-mismatch")
+    if takeover_wave_epoch != wave_epoch_b:
+        errors.append("runner-state-takeover-wave-epoch-binding-mismatch")
+    if (
+        takeover_action_epoch != wave_action_epoch_b
+        or takeover_action_schedule_epoch != schedule_epoch_b
+        or takeover_action_wave_epoch != wave_epoch_b
+        or takeover_journal_epoch != journal_epoch_b
+    ):
+        errors.append("runner-state-takeover-action-epoch-binding-mismatch")
+    if str(crash_schedule.get("leaseUntil") or "") != str(evidence.get("workerAScheduleLeaseUntil") or ""):
+        errors.append("runner-state-schedule-lease-binding-mismatch")
+    if str(crash_wave.get("leaseUntil") or "") != str(evidence.get("workerAWaveLeaseUntil") or ""):
+        errors.append("runner-state-wave-lease-binding-mismatch")
+    if str(crash_action.get("leaseUntil") or "") != str(evidence.get("workerAWaveActionLeaseUntil") or ""):
+        errors.append("runner-state-wave-action-lease-binding-mismatch")
+    expected_worker_a_owner = f"crash-worker-a-{worker_a_pid}"
+    if any(str(record.get("ownerInstanceId") or "") != expected_worker_a_owner for record in (crash_schedule, crash_wave, crash_action)):
+        errors.append("runner-state-worker-a-owner-binding-mismatch")
+    expected_worker_b_owner = f"takeover-worker-b-{worker_b_pid}"
+    if any(str(record.get("ownerInstanceId") or "") != expected_worker_b_owner for record in (claim_schedule, claim_wave, claim_action)):
+        errors.append("runner-state-worker-b-owner-binding-mismatch")
+    if str(crash_schedule.get("status") or "") != "RUNNING" or str(crash_wave.get("status") or "") != "EXECUTING":
+        errors.append("runner-state-crash-not-active")
+    if str(crash_action.get("status") or "") != "EXECUTING":
+        errors.append("runner-state-crash-action-not-executing")
+    if str(claim_schedule.get("status") or "") != "RUNNING" or str(claim_wave.get("status") or "") != "EXECUTING":
+        errors.append("runner-state-takeover-claim-not-active")
+    if str(claim_action.get("status") or "") != "CLAIMED":
+        errors.append("runner-state-takeover-claim-action-not-claimed")
+    if str(takeover_schedule.get("status") or "") != "COMPLETED" or str(takeover_wave.get("status") or "") != "COMPLETED":
+        errors.append("runner-state-takeover-not-completed")
+    if str(takeover_action.get("status") or "") != "VERIFIED_SUCCESS":
+        errors.append("runner-state-takeover-action-not-verified")
+    raw_takeover_handle = takeover_action.get("effectHandle")
+    takeover_handle = raw_takeover_handle if isinstance(raw_takeover_handle, dict) else {}
+    if str(takeover_handle.get("kind") or "") != "repair" or str(takeover_handle.get("repairId") or "") != str(evidence.get("repairId") or ""):
+        errors.append("runner-state-takeover-effect-binding-mismatch")
+
+    parsed_leases: dict[str, datetime] = {}
+    for field in (
+        "workerALeaseUntil",
+        "workerAScheduleLeaseUntil",
+        "workerAWaveLeaseUntil",
+        "workerAWaveActionLeaseUntil",
+        "firstRunnerLeaseUntil",
+        "renewedRunnerLeaseUntil",
+    ):
+        try:
+            parsed = datetime.fromisoformat(str(evidence.get(field) or "").replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                raise ValueError("timezone required")
+            parsed_leases[field] = parsed.astimezone(timezone.utc)
+        except ValueError:
+            errors.append(f"invalid-{field}")
+    first_lease = parsed_leases.get("firstRunnerLeaseUntil")
+    renewed_lease = parsed_leases.get("renewedRunnerLeaseUntil")
+    schedule_lease = parsed_leases.get("workerAScheduleLeaseUntil")
+    wave_lease = parsed_leases.get("workerAWaveLeaseUntil")
+    if first_lease is not None and renewed_lease is not None and renewed_lease <= first_lease:
+        errors.append("runner-lease-not-renewed")
+    if schedule_lease is not None and wave_lease is not None and schedule_lease != wave_lease:
+        errors.append("schedule-wave-lease-diverged")
+    if schedule_lease is not None and renewed_lease is not None and schedule_lease != renewed_lease:
+        errors.append("crashed-runner-lease-not-last-observed-renewal")
+
+    def parse_record_timestamp(record: dict[str, Any], field: str, error: str) -> datetime | None:
+        try:
+            parsed = datetime.fromisoformat(str(record.get(field) or "").replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                raise ValueError("timezone required")
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            errors.append(error)
+            return None
+
+    raw_observations = evidence.get("runnerLeaseObservations")
+    observation_leases: list[datetime] = []
+    observation_lease_values: list[str] = []
+    observation_update_times: list[datetime] = []
+    if not isinstance(raw_observations, list):
+        errors.append("runner-lease-observations-must-be-list")
+    else:
+        for index, raw_observation in enumerate(raw_observations):
+            if not isinstance(raw_observation, dict):
+                errors.append("runner-lease-observation-not-object")
+                continue
+            raw_schedule = raw_observation.get("schedule")
+            raw_wave = raw_observation.get("wave")
+            if not isinstance(raw_schedule, dict) or not isinstance(raw_wave, dict):
+                errors.append("runner-lease-observation-records-must-be-objects")
+                continue
+            if str(raw_schedule.get("scheduleId") or "") != schedule_id or str(raw_wave.get("scheduleId") or "") != schedule_id:
+                errors.append("runner-lease-observation-schedule-id-binding-mismatch")
+            try:
+                observation_wave_index = int(str(raw_wave.get("waveIndex")))
+                observation_schedule_epoch = int(str(raw_schedule.get("scheduleExecutionEpoch")))
+                observation_wave_epoch = int(str(raw_wave.get("waveExecutionEpoch")))
+            except (TypeError, ValueError):
+                errors.append("runner-lease-observation-invalid-numeric-fields")
+                continue
+            if observation_wave_index != wave_index:
+                errors.append("runner-lease-observation-wave-index-binding-mismatch")
+            if observation_schedule_epoch != schedule_epoch_a or observation_wave_epoch != wave_epoch_a:
+                errors.append("runner-lease-observation-epoch-binding-mismatch")
+            schedule_owner = str(raw_schedule.get("ownerInstanceId") or "")
+            wave_owner = str(raw_wave.get("ownerInstanceId") or "")
+            if schedule_owner != expected_worker_a_owner or wave_owner != expected_worker_a_owner:
+                errors.append("runner-lease-observation-worker-a-owner-binding-mismatch")
+            if str(raw_schedule.get("status") or "") != "RUNNING" or str(raw_wave.get("status") or "") not in {
+                "CLAIMING",
+                "RUNNING",
+                "EXECUTING",
+                "VERIFYING",
+            }:
+                errors.append("runner-lease-observation-not-active")
+            schedule_observed_lease = parse_record_timestamp(
+                raw_schedule,
+                "leaseUntil",
+                f"runner-lease-observation-{index}-invalid-schedule-lease",
+            )
+            wave_observed_lease = parse_record_timestamp(
+                raw_wave,
+                "leaseUntil",
+                f"runner-lease-observation-{index}-invalid-wave-lease",
+            )
+            schedule_updated_at = parse_record_timestamp(
+                raw_schedule,
+                "updatedAt",
+                f"runner-lease-observation-{index}-invalid-schedule-updated-at",
+            )
+            wave_updated_at = parse_record_timestamp(
+                raw_wave,
+                "updatedAt",
+                f"runner-lease-observation-{index}-invalid-wave-updated-at",
+            )
+            if schedule_observed_lease is not None and wave_observed_lease is not None:
+                if schedule_observed_lease != wave_observed_lease:
+                    errors.append("runner-lease-observation-schedule-wave-lease-diverged")
+                else:
+                    observation_leases.append(schedule_observed_lease)
+                    observation_lease_values.append(str(raw_schedule.get("leaseUntil") or ""))
+            if schedule_updated_at is not None and wave_updated_at is not None:
+                observation_update_times.append(max(schedule_updated_at, wave_updated_at))
+                if schedule_observed_lease is not None and schedule_observed_lease <= schedule_updated_at:
+                    errors.append("runner-lease-observation-schedule-lease-not-active")
+                if wave_observed_lease is not None and wave_observed_lease <= wave_updated_at:
+                    errors.append("runner-lease-observation-wave-lease-not-active")
+        if len(raw_observations) < 2 or len(observation_leases) < 2 or len(observation_update_times) < 2:
+            errors.append("runner-lease-observations-insufficient")
+        if any(current <= previous for previous, current in zip(observation_leases, observation_leases[1:])):
+            errors.append("runner-lease-observations-not-strictly-increasing")
+        if any(current <= previous for previous, current in zip(observation_update_times, observation_update_times[1:])):
+            errors.append("runner-lease-observation-updates-not-strictly-increasing")
+
+    if observation_lease_values:
+        if str(evidence.get("firstRunnerLeaseUntil") or "") != observation_lease_values[0]:
+            errors.append("first-runner-lease-not-bound-to-durable-observation")
+        if str(evidence.get("renewedRunnerLeaseUntil") or "") != observation_lease_values[-1]:
+            errors.append("renewed-runner-lease-not-bound-to-durable-observation")
+        if str(crash_schedule.get("leaseUntil") or "") != observation_lease_values[-1]:
+            errors.append("crash-schedule-lease-not-bound-to-last-observation")
+        if str(crash_wave.get("leaseUntil") or "") != observation_lease_values[-1]:
+            errors.append("crash-wave-lease-not-bound-to-last-observation")
+
+    raw_journal_crash = evidence.get("journalStateAtCrash")
+    journal_crash = raw_journal_crash if isinstance(raw_journal_crash, dict) else {}
+    if not isinstance(raw_journal_crash, dict):
+        errors.append("journal-state-at-crash-must-be-object")
+    if str(journal_crash.get("actionId") or "") != action_id:
+        errors.append("journal-state-at-crash-action-id-binding-mismatch")
+    try:
+        journal_crash_epoch = int(str(journal_crash.get("executionEpoch")))
+    except (TypeError, ValueError):
+        journal_crash_epoch = None
+        errors.append("journal-state-at-crash-invalid-execution-epoch")
+    if journal_crash_epoch != journal_epoch_a:
+        errors.append("journal-state-at-crash-epoch-binding-mismatch")
+    if str(journal_crash.get("ownerInstanceId") or "") != expected_worker_a_owner:
+        errors.append("journal-state-at-crash-owner-binding-mismatch")
+    if str(journal_crash.get("leaseUntil") or "") != str(evidence.get("workerALeaseUntil") or ""):
+        errors.append("journal-state-at-crash-lease-binding-mismatch")
+    if str(journal_crash.get("state") or "") != "EXECUTING":
+        errors.append("journal-state-at-crash-not-executing")
+    raw_journal_crash_handle = journal_crash.get("effectHandle")
+    journal_crash_handle = raw_journal_crash_handle if isinstance(raw_journal_crash_handle, dict) else {}
+    if (
+        str(journal_crash_handle.get("kind") or "") != "repair"
+        or str(journal_crash_handle.get("repairId") or "") != str(evidence.get("repairId") or "")
+    ):
+        errors.append("journal-state-at-crash-effect-binding-mismatch")
+
+    claim_records = (claim_schedule, claim_wave, claim_action)
+    claim_leases = [
+        parse_record_timestamp(record, "leaseUntil", "runner-state-takeover-claim-invalid-lease")
+        for record in claim_records
+    ]
+    if all(value is not None for value in claim_leases) and len(set(claim_leases)) != 1:
+        errors.append("runner-state-takeover-claim-lease-diverged")
+    claim_times = [
+        parse_record_timestamp(record, "updatedAt", "runner-state-takeover-claim-invalid-updated-at")
+        for record in claim_records
+    ]
+    for claim_lease, claim_time in zip(claim_leases, claim_times):
+        if claim_lease is not None and claim_time is not None and claim_lease <= claim_time:
+            errors.append("runner-state-takeover-claim-lease-not-active")
+
+    outer_lease_values = [
+        parsed_leases.get(field)
+        for field in (
+            "workerALeaseUntil",
+            "workerAScheduleLeaseUntil",
+            "workerAWaveLeaseUntil",
+            "workerAWaveActionLeaseUntil",
+        )
+    ]
+    max_outer_lease = max(value for value in outer_lease_values if value is not None) if all(
+        value is not None for value in outer_lease_values
+    ) else None
+    if max_outer_lease is not None and any(claim_time is not None and claim_time <= max_outer_lease for claim_time in claim_times):
+        errors.append("takeover-claim-occurred-before-all-worker-a-leases-expired")
+
+    terminal_times = [
+        parse_record_timestamp(record, "updatedAt", "runner-state-takeover-invalid-updated-at")
+        for record in (takeover_schedule, takeover_wave, takeover_action)
+    ]
+    latest_claim_time = max(value for value in claim_times if value is not None) if all(
+        value is not None for value in claim_times
+    ) else None
+    earliest_terminal_time = min(value for value in terminal_times if value is not None) if all(
+        value is not None for value in terminal_times
+    ) else None
+    if latest_claim_time is not None and earliest_terminal_time is not None and latest_claim_time >= earliest_terminal_time:
+        errors.append("takeover-claim-not-before-terminal-runner-state")
+
+    journal_takeover_at: datetime | None = None
+    raw_journal_events = evidence.get("journalEvents")
+    if isinstance(raw_journal_events, list):
+        for raw_event in raw_journal_events:
+            if not isinstance(raw_event, dict):
+                continue
+            raw_handle = raw_event.get("effectHandle")
+            event_handle = raw_handle if isinstance(raw_handle, dict) else {}
+            try:
+                event_epoch = int(str(raw_event.get("executionEpoch")))
+            except (TypeError, ValueError):
+                continue
+            if (
+                str(raw_event.get("eventType") or "") == "ACTION_TAKEOVER"
+                and str(raw_event.get("state") or "") == "RECONCILING"
+                and str(raw_event.get("actionId") or "") == action_id
+                and event_epoch == journal_epoch_b
+                and str(raw_event.get("ownerInstanceId") or "") == expected_worker_b_owner
+                and str(event_handle.get("kind") or "") == "repair"
+                and str(event_handle.get("repairId") or "") == str(evidence.get("repairId") or "")
+            ):
+                journal_takeover_at = parse_record_timestamp(
+                    raw_event,
+                    "createdAt",
+                    "runner-state-invalid-journal-takeover-created-at",
+                )
+    if journal_takeover_at is None:
+        errors.append("missing-action-bound-journal-takeover-event")
+    if max_outer_lease is not None and journal_takeover_at is not None and journal_takeover_at <= max_outer_lease:
+        errors.append("journal-takeover-occurred-before-all-worker-a-leases-expired")
+
+    settlement_events = evidence.get("settlementEvents")
+    if not isinstance(settlement_events, list):
+        return errors + ["settlement-events-must-be-list"]
+    consuming_indexes: list[int] = []
+    consumed_indexes: list[int] = []
+    settlement_times: list[datetime] = []
+    repair_id = str(evidence.get("repairId") or "")
+    for index, raw_event in enumerate(settlement_events):
+        if not isinstance(raw_event, dict):
+            errors.append("settlement-event-not-object")
+            continue
+        status = str(raw_event.get("toStatus") or "")
+        if status not in {"CONSUMING", "CONSUMED"}:
+            continue
+        if status == "CONSUMING":
+            consuming_indexes.append(index)
+        else:
+            consumed_indexes.append(index)
+        if str(raw_event.get("actionId") or "") != action_id:
+            errors.append("settlement-action-id-not-bound-to-action")
+        settlement_time = parse_record_timestamp(
+            raw_event,
+            "createdAt",
+            "invalid-settlement-created-at",
+        )
+        if settlement_time is not None:
+            settlement_times.append(settlement_time)
+        try:
+            settlement_epoch = int(str(raw_event.get("executionEpoch")))
+        except (TypeError, ValueError):
+            errors.append("invalid-settlement-execution-epoch")
+            continue
+        if settlement_epoch != journal_epoch_b:
+            errors.append("settlement-execution-epoch-not-bound-to-takeover")
+        raw_handle = raw_event.get("effectHandle")
+        effect_handle = raw_handle if isinstance(raw_handle, dict) else {}
+        if str(effect_handle.get("kind") or "") != "repair" or str(effect_handle.get("repairId") or "") != repair_id:
+            errors.append("settlement-effect-handle-not-bound-to-repair")
+    if len(consuming_indexes) != 1:
+        errors.append("settlement-consuming-count-not-exactly-one")
+    if len(consumed_indexes) != 1:
+        errors.append("settlement-consumed-count-not-exactly-one")
+    if consuming_indexes and consumed_indexes and consumed_indexes[0] <= consuming_indexes[0]:
+        errors.append("settlement-consumed-before-consuming")
+    if latest_claim_time is not None and settlement_times and latest_claim_time >= min(settlement_times):
+        errors.append("takeover-claim-not-before-settlement")
+    return errors
+
+
 def validate_blast_radius_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
     if not isinstance(evidence, dict):
         return ["not-a-dict"]
@@ -904,6 +1373,80 @@ def validate_typed_predictive_planning_proof(evidence: dict[str, Any], check_nam
     return resilience_predictive_proof.validate_predictive_planning_proof(evidence)
 
 
+def validate_typed_federation_trust_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    """Validate a federation-trust-proof-v1 payload inside the frozen v2 envelope."""
+
+    from deepseek_infra.infra.workspace import federation_trust_proof
+
+    if check_name not in federation_trust_proof.FEDERATION_TRUST_PROOF_CHECKS:
+        return [f"unsupported-federation-trust-proof-check:{check_name}"]
+    return federation_trust_proof.validate_federation_trust_proof(evidence)
+
+
+def validate_typed_federated_replica_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    """Validate a federated-replica-proof-v1 payload inside the frozen v2 envelope."""
+
+    from deepseek_infra.infra.workspace import federated_replica_proof
+
+    if check_name not in federated_replica_proof.FEDERATED_REPLICA_PROOF_CHECKS:
+        return [f"unsupported-federated-replica-proof-check:{check_name}"]
+    return federated_replica_proof.validate_federated_replica_proof(evidence)
+
+
+def validate_typed_federated_dr_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    """Validate a federated-dr-proof-v1 payload inside the frozen v2 envelope."""
+
+    from deepseek_infra.infra.workspace import federated_dr_proof
+
+    if check_name not in federated_dr_proof.FEDERATED_DR_PROOF_CHECKS:
+        return [f"unsupported-federated-dr-proof-check:{check_name}"]
+    return federated_dr_proof.validate_federated_dr_proof(evidence)
+
+
+def validate_typed_federation_runtime_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    """Validate process/topology evidence from the real federation E2E."""
+
+    from deepseek_infra.infra.workspace import federation_runtime_proof
+
+    if check_name not in federation_runtime_proof.FEDERATION_RUNTIME_PROOF_CHECKS:
+        return [f"unsupported-federation-runtime-proof-check:{check_name}"]
+    return federation_runtime_proof.validate_federation_runtime_proof(evidence)
+
+
+_FEDERATED_REPLICA_WIRE_CHECKS = frozenset(
+    {
+        "objectSetV1WireFormatUnchanged",
+        "receiptV4Unchanged",
+        "commitV4Unchanged",
+        "fastCdcV3Unchanged",
+        "randomizedAgeUnchanged",
+    }
+)
+_LEGACY_WIRE_EXPECTATIONS: dict[str, tuple[str, Any]] = {
+    "objectSetV1WireFormatUnchanged": ("objectSetVersion", "object-set-v1"),
+    "fastCdcV3Unchanged": ("cdcVersion", "fastcdc-v3"),
+    "randomizedAgeUnchanged": ("ageRandomized", True),
+}
+
+
+def validate_federated_wire_compatibility_proof(evidence: dict[str, Any], check_name: str) -> list[str]:
+    """Preserve earlier wire-proof payloads while accepting the typed replica proof."""
+
+    from deepseek_infra.infra.workspace import federated_replica_proof
+
+    if check_name not in _FEDERATED_REPLICA_WIRE_CHECKS:
+        return [f"unsupported-federated-wire-check:{check_name}"]
+    if evidence.get("schema") == federated_replica_proof.FEDERATED_REPLICA_PROOF_SCHEMA:
+        return validate_typed_federated_replica_proof(evidence, check_name)
+    if check_name in {"receiptV4Unchanged", "commitV4Unchanged"}:
+        return validate_autonomous_storage_bytes_proof(evidence, check_name)
+    errors = validate_predictive_planning_proof(evidence, check_name)
+    field, expected = _LEGACY_WIRE_EXPECTATIONS[check_name]
+    if field in evidence and evidence.get(field) != expected:
+        errors.append(f"frozen-wire-value-mismatch:{field}")
+    return errors
+
+
 VALIDATORS: dict[str, CheckValidator] = {
     "realPreDisasterBackupIsActuallyRestored": validate_restore_proof,
     "realFreshProcessRestoresPreDisasterBackup": validate_restore_proof,
@@ -939,8 +1482,8 @@ VALIDATORS: dict[str, CheckValidator] = {
     "receiptSha256MatchesCommitReceiptDigest": validate_autonomous_storage_bytes_proof,
     "proofObjectSetDigestMatchesCommit": validate_autonomous_storage_bytes_proof,
     "proofObjectKeysExistOnExpectedMinioEndpoint": validate_autonomous_storage_bytes_proof,
-    "receiptV4Unchanged": validate_autonomous_storage_bytes_proof,
-    "commitV4Unchanged": validate_autonomous_storage_bytes_proof,
+    "receiptV4Unchanged": validate_federated_wire_compatibility_proof,
+    "commitV4Unchanged": validate_federated_wire_compatibility_proof,
     "crashRecoveryObservedExistingEffect": validate_crash_recovery_proof,
     "leaseTakeoverUsedNewExecutionEpoch": validate_crash_recovery_proof,
     "realWorkerCrashOccursDuringRemoteRepair": validate_crash_recovery_proof,
@@ -949,6 +1492,11 @@ VALIDATORS: dict[str, CheckValidator] = {
     "takeoverEntersReconcilingBeforeMutation": validate_crash_recovery_proof,
     "takeoverFindsExistingRemoteEffect": validate_crash_recovery_proof,
     "takeoverDoesNotCreateSecondRepairJob": validate_crash_recovery_proof,
+    "longRunningWaveRenewsScheduleLease": validate_wave_crash_recovery_proof,
+    "longRunningWaveRenewsWaveLease": validate_wave_crash_recovery_proof,
+    "realProcessWaveSigkillTakeoverUsesHigherEpoch": validate_wave_crash_recovery_proof,
+    "realProcessWaveSigkillDoesNotDuplicateEffect": validate_wave_crash_recovery_proof,
+    "realProcessWaveSigkillSettlesExactlyOnce": validate_wave_crash_recovery_proof,
     "blastRadiusInvariantVerified": validate_blast_radius_proof,
     "degradedFleetCannotBeFurtherDegraded": validate_blast_radius_proof,
     "runningEffectsParticipateInBlastRadiusSimulation": validate_blast_radius_proof,
@@ -1012,6 +1560,66 @@ VALIDATORS: dict[str, CheckValidator] = {
     "predictiveProofBindsFreshStateBundle": validate_typed_predictive_planning_proof,
     "predictiveProofBindsPreAndPostState": validate_typed_predictive_planning_proof,
     "predictiveProofRejectsSelfReportedZeroMutation": validate_typed_predictive_planning_proof,
+    "fleetIdentityUsesDedicatedFederationSigningKey": validate_typed_federation_trust_proof,
+    "federationKeyIsDistinctFromAgeIdentity": validate_typed_federation_trust_proof,
+    "federationKeyIsDistinctFromAuthorityIdentity": validate_typed_federation_trust_proof,
+    "peerTrustRequiresPinnedRoot": validate_typed_federation_trust_proof,
+    "trustOnFirstUseIsRejected": validate_typed_federation_trust_proof,
+    "rotatedOnlineSignerRequiresPinnedRootCertificate": validate_typed_federation_trust_proof,
+    "revokedFederationSignerIsRejected": validate_typed_federation_trust_proof,
+    "federationReadinessSignatureIsVerified": validate_typed_federation_trust_proof,
+    "readinessAttestationBindsFullCanonicalPayload": validate_typed_federation_trust_proof,
+    "readinessSequenceReplayIsRejected": validate_typed_federation_trust_proof,
+    "expiredReadinessAttestationIsRejected": validate_typed_federation_trust_proof,
+    "futureReadinessAttestationBeyondSkewIsRejected": validate_typed_federation_trust_proof,
+    "challengeResponseBindsBothFleetIds": validate_typed_federation_trust_proof,
+    "challengeNonceReplayIsRejected": validate_typed_federation_trust_proof,
+    "federationTrustProofIsSemanticallyValidated": validate_typed_federation_trust_proof,
+    "ingressGrantIsReceiverSigned": validate_typed_federated_replica_proof,
+    "ingressGrantBindsSourceFleet": validate_typed_federated_replica_proof,
+    "ingressGrantBindsDestinationFleet": validate_typed_federated_replica_proof,
+    "ingressGrantBindsBackupId": validate_typed_federated_replica_proof,
+    "ingressGrantBindsObjectSetDigest": validate_typed_federated_replica_proof,
+    "ingressGrantBindsTransferId": validate_typed_federated_replica_proof,
+    "expiredIngressGrantCannotWrite": validate_typed_federated_replica_proof,
+    "ingressGrantCannotEscapeObjectPrefix": validate_typed_federated_replica_proof,
+    "ingressGrantCannotExceedMaxBytes": validate_typed_federated_replica_proof,
+    "sameTransferIdSameDigestIsIdempotent": validate_typed_federated_replica_proof,
+    "sameTransferIdDifferentDigestFailsClosed": validate_typed_federated_replica_proof,
+    "receiverRestartResumesExistingTransfer": validate_typed_federated_replica_proof,
+    "federatedReplicaUsesExistingObjectSetV1": validate_typed_federated_replica_proof,
+    "federatedReplicaCreatesReceiptV4": validate_typed_federated_replica_proof,
+    "federatedReplicaCreatesCommitV4": validate_typed_federated_replica_proof,
+    "federatedReplicaAttestationBindsReceiptDigest": validate_typed_federated_replica_proof,
+    "federatedReplicaAttestationBindsCommitDigest": validate_typed_federated_replica_proof,
+    "federatedReplicaAttestationBindsObjectSetDigest": validate_typed_federated_replica_proof,
+    "remoteCopyRecordedOnlyAfterAttestationVerification": validate_typed_federated_replica_proof,
+    "federatedCopyDoesNotReduceLocalMinCommittedCopies": validate_typed_federated_replica_proof,
+    "federatedCopyDoesNotReduceLocalMinFailureDomains": validate_typed_federated_replica_proof,
+    "federatedCopyCannotAuthorizePrimaryPromotion": validate_typed_federated_replica_proof,
+    "federatedTransferNeverDeletesLocalReplica": validate_typed_federated_replica_proof,
+    "peerFailureDomainIsCheckedAgainstPinnedMetadata": validate_typed_federated_replica_proof,
+    "replayedIngressGrantFailsClosed": validate_typed_federated_replica_proof,
+    "tamperedReplicaAttestationFailsClosed": validate_typed_federated_replica_proof,
+    "objectSetV1WireFormatUnchanged": validate_federated_wire_compatibility_proof,
+    "fastCdcV3Unchanged": validate_federated_wire_compatibility_proof,
+    "randomizedAgeUnchanged": validate_federated_wire_compatibility_proof,
+    "federatedReplicaProofIsSemanticallyValidated": validate_typed_federated_replica_proof,
+    "coldCustodyCannotClaimRecoveryReady": validate_typed_federated_dr_proof,
+    "recoveryCapablePeerRequiresPreprovisionedAgeIdentity": validate_typed_federated_dr_proof,
+    "agePrivateIdentityNeverCrossesFederationBoundary": validate_typed_federated_dr_proof,
+    "federatedDrDrillUsesProductionRestore": validate_typed_federated_dr_proof,
+    "federatedDrProofBindsTransferId": validate_typed_federated_dr_proof,
+    "federatedDrProofBindsBackupId": validate_typed_federated_dr_proof,
+    "federatedDrProofBindsObjectSetDigest": validate_typed_federated_dr_proof,
+    "federatedDrProofBindsRemoteReceiptAndCommit": validate_typed_federated_dr_proof,
+    "federatedDrProofRequiresCleanupSuccess": validate_typed_federated_dr_proof,
+    "federatedDrProofIsSemanticallyValidated": validate_typed_federated_dr_proof,
+    "realTwoFleetFourMinioReplicationE2E": validate_typed_federation_runtime_proof,
+    "realReceiverProcessSigkillResumesTransfer": validate_typed_federation_runtime_proof,
+    "realReceiverRestartDoesNotDuplicateCommit": validate_typed_federation_runtime_proof,
+    "revokedPeerCannotStartTransfer": validate_typed_federation_runtime_proof,
+    "fleetProcessesUseDistinctStorageCredentials": validate_typed_federation_runtime_proof,
 }
 
 

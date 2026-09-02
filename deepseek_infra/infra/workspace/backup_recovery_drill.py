@@ -207,6 +207,18 @@ def _work(session: dict[str, Any], materialized: dict[str, Any], inspected: dict
     }
 
 
+def _workspace_evidence(materialized: dict[str, Any]) -> dict[str, str]:
+    tree = Path(str(materialized.get("tree") or ""))
+    manifest = materialized.get("manifest")
+    source = manifest.get("source") if isinstance(manifest, dict) else None
+    revision = source.get("revision") if isinstance(source, dict) else None
+    source_revision = revision if isinstance(revision, str) and revision else "unknown"
+    return {
+        "workspaceDigest": "sha256:" + backups._tree_digest(tree),
+        "sourceRevision": source_revision,
+    }
+
+
 def _inspect_materialized(
     restore_id: str,
     materialized: dict[str, Any],
@@ -248,6 +260,14 @@ def _run_recovery_drill_locked(restore_id: str, *, client: Any | None = None) ->
     inspected: dict[str, Any] = {}
     try:
         if str(session.get("storageProtocol") or "") == backup_object_set.OBJECT_SET_V1:
+            if str(session.get("phase") or "") == "fetching-controls":
+                controls = backup_remote_restore.fetch_restore_session(restore_id, client=client)
+                if str(controls.get("phase") or "") != "controls-fetched":
+                    raise AppError(
+                        "Recovery Drill control fetch did not reach a verified terminal phase",
+                        code=ErrorCode.INVALID_REQUEST,
+                        status=409,
+                    )
             backup_remote_restore.preflight_restore_session(restore_id, client=client)
         fetched = backup_remote_restore.fetch_restore_session(restore_id, client=client)
         if str(fetched.get("phase") or "") not in {"fetched", "chain-fetched", "components-fetched"}:
@@ -275,6 +295,7 @@ def _run_recovery_drill_locked(restore_id: str, *, client: Any | None = None) ->
             "completedAt": _utc_iso(),
             "durationMs": max(0, int((time.monotonic() - started) * 1_000)),
             **_work(session, materialized, inspected),
+            **_workspace_evidence(materialized),
         }
     except BaseException as exc:
         failure = exc
@@ -302,6 +323,7 @@ def _run_recovery_drill_locked(restore_id: str, *, client: Any | None = None) ->
             cleanup_failed = True
         current = backup_remote_restore.read_restore_session(restore_id) or session
         latest_work = _work(current, materialized, inspected)
+        assert result is not None
         if cleanup_failed:
             result = {
                 "schemaVersion": SCHEMA_VERSION,
@@ -311,11 +333,13 @@ def _run_recovery_drill_locked(restore_id: str, *, client: Any | None = None) ->
                 "startedAt": started_at,
                 "completedAt": _utc_iso(),
                 "durationMs": max(0, int((time.monotonic() - started) * 1_000)),
+                "cleanupCompleted": False,
                 **latest_work,
             }
             if failure is None:
                 failure = AppError("Recovery Drill cleanup failed", code=ErrorCode.INTERNAL, status=500)
-        assert result is not None
+        else:
+            result["cleanupCompleted"] = True
         if result["result"] == "failed":
             result.update(latest_work)
         _atomic_write(root / RESULT_NAME, result)

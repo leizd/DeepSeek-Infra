@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
+
+import pytest
 
 from deepseek_infra.infra.workspace import backup_dr_ledger
 
@@ -16,6 +19,14 @@ def test_dr_ledger_schema_and_empty(tmp_settings: Path) -> None:
     assert backup_dr_ledger.list_target_evidence() == []
     assert backup_dr_ledger.list_stage_samples() == []
     assert backup_dr_ledger.get_latest_audit_evidence("target_1") is None
+
+
+def test_dr_ledger_connection_context_closes_database(tmp_settings: Path) -> None:
+    with backup_dr_ledger._get_connection() as connection:
+        assert connection.execute("SELECT 1").fetchone()[0] == 1
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        connection.execute("SELECT 1")
 
 
 def test_dr_ledger_recovery_points(tmp_settings: Path) -> None:

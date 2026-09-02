@@ -4,6 +4,44 @@
 [中文](README.md) / [English](README.en.md)
 <!-- docs-language-switcher:end -->
 
+## [4.8.0] - Signed Federation & Cross-Fleet Disaster Recovery (Release Candidate)
+
+### Candidate implementation
+
+- **Gate A closed first:** immutable Wave Schedule identity, renewable
+  schedule/wave leases, and real two-process SIGKILL takeover precede every
+  Federation write path and preserve one underlying MinIO effect.
+- **Sovereign Fleets:** Federation connects independent Authority, identity,
+  journal, HTTP, storage, and credential domains without shared Authority or
+  global consensus.
+- **Explicit cryptographic trust:** dedicated Ed25519 Fleet roots and rotatable
+  online signers remain separate from Age and Control Authority; operator-pinned
+  peer roots reject TOFU, replay, collision, and revoked signers.
+- **Receiver-controlled custody:** short-lived signed grants and immutable
+  transfer identity authorize only existing randomized-Age ciphertext. Unknown
+  outcomes reconcile by transfer ID before retry.
+- **Production remote commit:** Receiver uses the existing production object-set
+  path to create Receipt v4 and Commit v4, then returns a signed replica
+  attestation that Sender independently verifies.
+- **Independent durability and DR:** federated objectives never reduce local copy
+  or failure-domain requirements. Recovery-capable peers use an out-of-band Age
+  identity for production isolated restore and signed DR attestation.
+- **Typed real Evidence:** two independent Fleet processes and four logical MinIO
+  targets prove credential isolation, Receiver SIGKILL resume, one commit, replay/
+  tamper/revocation rejection, and production DR through three dedicated typed
+  `evidence-proof-v2` artifacts.
+- **Wire freeze unchanged:** `object-set-v1`, Receipt v4, Commit v4, FastCDC v3,
+  Projection semantics, randomized Age, `control-authority-v1`,
+  AuthorityCheckpoint v1, `dr-readiness-proof-v1`, the `evidence-proof-v2`
+  envelope, and `predictive-planning-proof-v1` remain unchanged. New Federation
+  attestations are control/evidence documents, not storage wire revisions.
+
+### Qualification status
+
+- The local real-MinIO scenario and semantic validators pass. Formal release PASS
+  remains pending the final PR head/merge SHA's complete CI, exact artifact
+  SHA-256/byte-size binding, and successful global Evidence Assembly.
+
 ## [4.7.6] - Production Predictive Control & Verifiable Simulation (2026-08-30)
 
 ### Production Predictive Control & Verifiable Simulation

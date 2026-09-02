@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -92,6 +93,148 @@ def _successful_action(action_id: str, *, epoch: int = 1) -> dict[str, Any]:
     }
 
 
+def test_wave_schedule_identity_is_create_once_and_idempotent(tmp_settings: Path) -> None:
+    created_at = datetime(2026, 8, 31, 8, 0, tzinfo=timezone.utc)
+    replayed_at = created_at + timedelta(minutes=5)
+    schedule = _schedule("immutable-schedule")
+    schedule_id = str(schedule["scheduleId"])
+
+    first = resilience_wave_executor.persist_planned_schedule(
+        schedule,
+        authority_head_digest=AUTHORITY_DIGEST,
+        now=created_at,
+    )
+    assert first["scheduleDigest"] == resilience_wave_executor.compute_schedule_digest(
+        schedule,
+        authority_head_digest=AUTHORITY_DIGEST,
+    )
+    assert len(first["scheduleDigest"]) == 64
+
+    lease_until = (created_at + timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
+    with sqlite3.connect(resilience_wave_executor.WAVE_EXECUTOR_DB) as conn:
+        conn.execute(
+            """
+            UPDATE resilience_wave_schedules
+            SET status = ?, execution_epoch = 7, owner_instance_id = ?,
+                lease_until = ?, runner_token = ?, updated_at = ?
+            WHERE schedule_id = ?
+            """,
+            (
+                resilience_wave_executor.SCHEDULE_RUNNING,
+                "worker-a",
+                lease_until,
+                "runner-a",
+                created_at.isoformat().replace("+00:00", "Z"),
+                schedule_id,
+            ),
+        )
+        conn.execute(
+            "UPDATE resilience_wave_states SET status = ?, execution_epoch = 5 WHERE schedule_id = ? AND wave_index = 0",
+            (resilience_wave_executor.WAVE_EXECUTING, schedule_id),
+        )
+        conn.execute(
+            "UPDATE resilience_wave_actions SET status = ?, execution_epoch = 3 WHERE schedule_id = ?",
+            (resilience_wave_executor.ACTION_EXECUTING, schedule_id),
+        )
+
+    before = resilience_wave_executor.get_schedule(schedule_id)
+    before_wave = resilience_wave_executor.list_waves(schedule_id)
+    before_actions = resilience_wave_executor.list_wave_actions(schedule_id)
+    replay = resilience_wave_executor.persist_planned_schedule(
+        dict(reversed(list(schedule.items()))),
+        authority_head_digest=AUTHORITY_DIGEST,
+        now=replayed_at,
+    )
+
+    assert replay == before
+    assert replay["status"] == resilience_wave_executor.SCHEDULE_RUNNING
+    assert replay["scheduleExecutionEpoch"] == 7
+    assert replay["ownerInstanceId"] == "worker-a"
+    assert replay["leaseUntil"] == lease_until
+    assert resilience_wave_executor.list_waves(schedule_id) == before_wave
+    assert resilience_wave_executor.list_wave_actions(schedule_id) == before_actions
+
+
+def test_same_schedule_id_with_different_digest_fails_closed(tmp_settings: Path) -> None:
+    schedule = _schedule("schedule-identity-conflict")
+    schedule_id = str(schedule["scheduleId"])
+    first = resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+    changed = _schedule(schedule_id)
+    changed["executionWaves"][0]["actions"][0]["parameters"]["backupId"] = "different-backup"
+
+    with pytest.raises(resilience_wave_executor.ScheduleIdentityConflictError) as exc_info:
+        resilience_wave_executor.persist_planned_schedule(changed, authority_head_digest=AUTHORITY_DIGEST)
+
+    assert exc_info.value.code == "SCHEDULE_IDENTITY_CONFLICT"
+    assert exc_info.value.schedule_id == schedule_id
+    assert exc_info.value.existing_digest == first["scheduleDigest"]
+    assert exc_info.value.incoming_digest != first["scheduleDigest"]
+    persisted = resilience_wave_executor.get_schedule(schedule_id)
+    assert persisted == first
+    assert persisted["schedule"]["executionWaves"][0]["actions"][0]["parameters"]["backupId"] == "backup-0"
+
+    changed["scheduleDigest"] = first["scheduleDigest"]
+    with pytest.raises(resilience_wave_executor.ScheduleIdentityConflictError):
+        resilience_wave_executor.persist_planned_schedule(changed, authority_head_digest=AUTHORITY_DIGEST)
+
+    with pytest.raises(resilience_wave_executor.ScheduleIdentityConflictError):
+        resilience_wave_executor.persist_planned_schedule(
+            schedule,
+            authority_head_digest="8" * 64,
+        )
+    assert resilience_wave_executor.get_schedule(schedule_id) == first
+
+
+def test_caller_declared_schedule_digest_must_match_server_computation(tmp_settings: Path) -> None:
+    schedule = _schedule("declared-digest-mismatch")
+    schedule["scheduleDigest"] = "f" * 64
+
+    with pytest.raises(ValueError, match="SCHEDULE_DIGEST_MISMATCH"):
+        resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+
+    assert resilience_wave_executor.get_schedule("declared-digest-mismatch") is None
+
+
+def test_terminal_schedule_cannot_be_rewritten(tmp_settings: Path) -> None:
+    completed_at = datetime(2026, 8, 31, 9, 0, tzinfo=timezone.utc)
+    schedule = _schedule("terminal-identity")
+    schedule_id = str(schedule["scheduleId"])
+    resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+    with sqlite3.connect(resilience_wave_executor.WAVE_EXECUTOR_DB) as conn:
+        conn.execute(
+            "UPDATE resilience_wave_schedules SET status = ?, execution_epoch = 11, updated_at = ? WHERE schedule_id = ?",
+            (
+                resilience_wave_executor.SCHEDULE_COMPLETED,
+                completed_at.isoformat().replace("+00:00", "Z"),
+                schedule_id,
+            ),
+        )
+        conn.execute(
+            "UPDATE resilience_wave_states SET status = ?, execution_epoch = 9, verified_at = ? WHERE schedule_id = ?",
+            (
+                resilience_wave_executor.WAVE_COMPLETED,
+                completed_at.isoformat().replace("+00:00", "Z"),
+                schedule_id,
+            ),
+        )
+        conn.execute(
+            "UPDATE resilience_wave_actions SET status = ?, execution_epoch = 8 WHERE schedule_id = ?",
+            (resilience_wave_executor.ACTION_VERIFIED_SUCCESS, schedule_id),
+        )
+
+    terminal = resilience_wave_executor.get_schedule(schedule_id)
+    assert resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST) == terminal
+
+    changed = _schedule(schedule_id)
+    changed["riskDigest"] = "9" * 64
+    with pytest.raises(resilience_wave_executor.ScheduleIdentityConflictError):
+        resilience_wave_executor.persist_planned_schedule(changed, authority_head_digest=AUTHORITY_DIGEST)
+
+    assert resilience_wave_executor.get_schedule(schedule_id) == terminal
+    assert resilience_wave_executor.list_waves(schedule_id)[0]["status"] == resilience_wave_executor.WAVE_COMPLETED
+    assert resilience_wave_executor.list_wave_actions(schedule_id)[0]["status"] == resilience_wave_executor.ACTION_VERIFIED_SUCCESS
+
+
 def test_production_wave_runner_executes_action_journal_effect(
     tmp_settings: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -153,8 +296,131 @@ def test_existing_475_wave_database_is_migrated_with_zero_epochs(tmp_settings: P
 
     assert migrated is not None
     assert migrated["scheduleExecutionEpoch"] == 0
+    assert migrated["status"] == resilience_wave_executor.SCHEDULE_PLANNED
     assert migrated["ownerInstanceId"] is None
     assert migrated["leaseUntil"] is None
+    assert migrated["createdAt"] == "2026-08-29T00:00:00Z"
+    assert migrated["updatedAt"] == "2026-08-29T00:00:00Z"
+    assert migrated["scheduleDigest"] == resilience_wave_executor.compute_schedule_digest(
+        migrated["schedule"],
+        authority_head_digest="legacy-authority",
+    )
+    assert len(migrated["scheduleDigest"]) == 64
+
+
+def test_existing_476_active_database_digest_migration_preserves_runner_state(tmp_settings: Path) -> None:
+    schedule = _schedule("legacy-476-active")
+    schedule_id = str(schedule["scheduleId"])
+    resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+    with sqlite3.connect(resilience_wave_executor.WAVE_EXECUTOR_DB) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            UPDATE resilience_wave_schedules
+            SET status = ?, stale_reason = ?, execution_epoch = 17,
+                owner_instance_id = ?, lease_until = ?, runner_token = ?, updated_at = ?
+            WHERE schedule_id = ?
+            """,
+            (
+                resilience_wave_executor.SCHEDULE_RUNNING,
+                "legacy-stale-reason",
+                "legacy-worker",
+                "2026-08-31T10:05:00Z",
+                "legacy-runner-token",
+                "2026-08-31T10:00:00Z",
+                schedule_id,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE resilience_wave_states
+            SET status = ?, revalidation_json = ?, admitted_at = ?, verified_at = ?,
+                execution_epoch = 13, owner_instance_id = ?, lease_until = ?,
+                runner_token = ?, updated_at = ?
+            WHERE schedule_id = ? AND wave_index = 0
+            """,
+            (
+                resilience_wave_executor.WAVE_EXECUTING,
+                '{"fresh":true}',
+                "2026-08-31T09:59:00Z",
+                "2026-08-31T09:59:30Z",
+                "legacy-worker",
+                "2026-08-31T10:05:00Z",
+                "legacy-runner-token",
+                "2026-08-31T10:00:00Z",
+                schedule_id,
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE resilience_wave_actions
+            SET status = ?, outcome = ?, execution_epoch = 11,
+                schedule_execution_epoch = 17, wave_execution_epoch = 13,
+                owner_instance_id = ?, lease_until = ?, runner_token = ?,
+                journal_execution_epoch = 19, effect_handle_json = ?,
+                terminal_json = ?, updated_at = ?
+            WHERE schedule_id = ?
+            """,
+            (
+                resilience_wave_executor.ACTION_EXECUTING,
+                "REMOTE_EFFECT_RUNNING",
+                "legacy-worker",
+                "2026-08-31T10:05:00Z",
+                "legacy-runner-token",
+                '{"repairId":"repair-existing"}',
+                '{"state":"EXECUTING"}',
+                "2026-08-31T10:00:00Z",
+                schedule_id,
+            ),
+        )
+        conn.execute("ALTER TABLE resilience_wave_schedules RENAME TO resilience_wave_schedules_with_digest")
+        conn.execute(
+            """
+            CREATE TABLE resilience_wave_schedules (
+                schedule_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                risk_digest TEXT NOT NULL,
+                authority_head_digest TEXT,
+                schedule_json TEXT NOT NULL,
+                stale_reason TEXT,
+                execution_epoch INTEGER NOT NULL DEFAULT 0,
+                owner_instance_id TEXT,
+                lease_until TEXT,
+                runner_token TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        legacy_columns = (
+            "schedule_id, status, risk_digest, authority_head_digest, schedule_json, stale_reason, "
+            "execution_epoch, owner_instance_id, lease_until, runner_token, created_at, updated_at"
+        )
+        conn.execute(
+            f"INSERT INTO resilience_wave_schedules ({legacy_columns}) "
+            f"SELECT {legacy_columns} FROM resilience_wave_schedules_with_digest"
+        )
+        conn.execute("DROP TABLE resilience_wave_schedules_with_digest")
+        schedule_before = dict(conn.execute("SELECT * FROM resilience_wave_schedules WHERE schedule_id = ?", (schedule_id,)).fetchone())
+        wave_before = dict(conn.execute("SELECT * FROM resilience_wave_states WHERE schedule_id = ?", (schedule_id,)).fetchone())
+        action_before = dict(conn.execute("SELECT * FROM resilience_wave_actions WHERE schedule_id = ?", (schedule_id,)).fetchone())
+
+    migrated = resilience_wave_executor.get_schedule(schedule_id)
+    assert migrated is not None
+    with sqlite3.connect(resilience_wave_executor.WAVE_EXECUTOR_DB) as conn:
+        conn.row_factory = sqlite3.Row
+        schedule_after = dict(conn.execute("SELECT * FROM resilience_wave_schedules WHERE schedule_id = ?", (schedule_id,)).fetchone())
+        wave_after = dict(conn.execute("SELECT * FROM resilience_wave_states WHERE schedule_id = ?", (schedule_id,)).fetchone())
+        action_after = dict(conn.execute("SELECT * FROM resilience_wave_actions WHERE schedule_id = ?", (schedule_id,)).fetchone())
+
+    schedule_digest = str(schedule_after.pop("schedule_digest"))
+    assert schedule_after == schedule_before
+    assert wave_after == wave_before
+    assert action_after == action_before
+    assert schedule_digest == resilience_wave_executor.compute_schedule_digest(
+        migrated["schedule"],
+        authority_head_digest=AUTHORITY_DIGEST,
+    )
 
 
 def test_wave_one_waits_for_real_wave_zero_outcome(
@@ -463,6 +729,376 @@ def test_stale_runner_cannot_commit_after_higher_epoch_takeover(
 
     assert committed is False
     assert resilience_wave_executor.list_waves(schedule_id)[0]["status"] != "COMPLETED"
+
+
+def test_schedule_and_wave_runner_leases_renew_atomically(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_fresh_state(monkeypatch)
+    now = datetime(2026, 8, 31, 11, 0, tzinfo=timezone.utc)
+    schedule = _schedule("renew-runner-leases")
+    schedule_id = str(schedule["scheduleId"])
+    resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST, now=now)
+    assert resilience_wave_executor.admit_wave(schedule_id, 0, now=now)["admitted"] is True
+    claim = resilience_wave_executor._claim_runner_epochs(  # noqa: SLF001 - explicit renewal contract
+        schedule_id,
+        0,
+        instance_id="worker-a",
+        lease_seconds=30,
+        now=now,
+    )
+    assert claim["claimed"] is True
+
+    renewed_at = now + timedelta(seconds=10)
+    assert resilience_wave_executor.renew_runner_leases(
+        schedule_id,
+        0,
+        instance_id="worker-a",
+        schedule_execution_epoch=int(claim["scheduleExecutionEpoch"]),
+        wave_execution_epoch=int(claim["waveExecutionEpoch"]),
+        runner_token=str(claim["runnerToken"]),
+        lease_seconds=90,
+        now=renewed_at,
+    )
+
+    expected_lease = "2026-08-31T11:01:40Z"
+    schedule_state = resilience_wave_executor.get_schedule(schedule_id)
+    wave_state = resilience_wave_executor.list_waves(schedule_id)[0]
+    assert schedule_state is not None
+    assert schedule_state["leaseUntil"] == expected_lease
+    assert wave_state["leaseUntil"] == expected_lease
+    assert schedule_state["scheduleExecutionEpoch"] == claim["scheduleExecutionEpoch"]
+    assert wave_state["waveExecutionEpoch"] == claim["waveExecutionEpoch"]
+    assert schedule_state["ownerInstanceId"] == "worker-a"
+    assert wave_state["ownerInstanceId"] == "worker-a"
+
+    before_failed_renewal = (dict(schedule_state), dict(wave_state))
+    assert not resilience_wave_executor.renew_runner_leases(
+        schedule_id,
+        0,
+        instance_id="worker-a",
+        schedule_execution_epoch=int(claim["scheduleExecutionEpoch"]),
+        wave_execution_epoch=int(claim["waveExecutionEpoch"]) + 1,
+        runner_token=str(claim["runnerToken"]),
+        lease_seconds=300,
+        now=renewed_at + timedelta(seconds=1),
+    )
+    assert resilience_wave_executor.get_schedule(schedule_id) == before_failed_renewal[0]
+    assert resilience_wave_executor.list_waves(schedule_id)[0] == before_failed_renewal[1]
+
+
+def test_stale_or_expired_runner_cannot_renew_or_commit(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_fresh_state(monkeypatch)
+    now = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+    schedule = _schedule("expired-runner-renewal")
+    schedule_id = str(schedule["scheduleId"])
+    action_id = f"{schedule_id}-repair-0"
+    resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST, now=now)
+    assert resilience_wave_executor.admit_wave(schedule_id, 0, now=now)["admitted"] is True
+    claim = resilience_wave_executor._claim_runner_epochs(  # noqa: SLF001 - explicit renewal contract
+        schedule_id,
+        0,
+        instance_id="worker-a",
+        lease_seconds=1,
+        now=now,
+    )
+    action_claim = resilience_wave_executor._claim_wave_action(  # noqa: SLF001 - explicit renewal contract
+        schedule_id,
+        0,
+        action_id,
+        instance_id="worker-a",
+        lease_until=str(claim["leaseUntil"]),
+        schedule_execution_epoch=int(claim["scheduleExecutionEpoch"]),
+        wave_execution_epoch=int(claim["waveExecutionEpoch"]),
+        runner_token=str(claim["runnerToken"]),
+        now=now,
+    )
+    assert action_claim["claimed"] is True
+    expired_at = now + timedelta(seconds=2)
+
+    assert not resilience_wave_executor.renew_runner_leases(
+        schedule_id,
+        0,
+        instance_id="worker-a",
+        schedule_execution_epoch=int(claim["scheduleExecutionEpoch"]),
+        wave_execution_epoch=int(claim["waveExecutionEpoch"]),
+        runner_token=str(claim["runnerToken"]),
+        lease_seconds=30,
+        now=expired_at,
+    )
+    assert not resilience_wave_executor.renew_runner_leases(
+        schedule_id,
+        0,
+        instance_id="worker-a",
+        schedule_execution_epoch=int(claim["scheduleExecutionEpoch"]),
+        wave_execution_epoch=int(claim["waveExecutionEpoch"]),
+        runner_token="stale-token",
+        lease_seconds=30,
+        now=now,
+    )
+    assert not resilience_wave_executor._set_wave_state_with_fence(  # noqa: SLF001 - explicit expiry fence
+        schedule_id,
+        0,
+        status=resilience_wave_executor.WAVE_EXECUTING,
+        schedule_execution_epoch=int(claim["scheduleExecutionEpoch"]),
+        wave_execution_epoch=int(claim["waveExecutionEpoch"]),
+        runner_token=str(claim["runnerToken"]),
+        now=expired_at,
+    )
+    assert not resilience_wave_executor._set_action_state_with_fence(  # noqa: SLF001 - explicit expiry fence
+        schedule_id,
+        0,
+        action_id,
+        status=resilience_wave_executor.ACTION_VERIFIED_SUCCESS,
+        action_execution_epoch=int(action_claim["actionExecutionEpoch"]),
+        schedule_execution_epoch=int(claim["scheduleExecutionEpoch"]),
+        wave_execution_epoch=int(claim["waveExecutionEpoch"]),
+        runner_token=str(claim["runnerToken"]),
+        journal_action=_successful_action(action_id),
+        terminal=True,
+        now=expired_at,
+    )
+
+
+def test_long_running_wave_renews_schedule_and_wave_leases(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fresh_state(monkeypatch)
+    schedule = _schedule("long-running-wave-heartbeat")
+    schedule_id = str(schedule["scheduleId"])
+    resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+    original_renew = resilience_wave_executor.renew_runner_leases
+    observed_leases: list[tuple[str, str]] = []
+    observed_lock = threading.Lock()
+    lease_extended = threading.Event()
+
+    def renew(*args: Any, **kwargs: Any) -> bool:
+        result = original_renew(*args, **kwargs)
+        if result:
+            schedule_state = resilience_wave_executor.get_schedule(schedule_id)
+            wave_state = resilience_wave_executor.list_waves(schedule_id)[0]
+            assert schedule_state is not None
+            pair = (str(schedule_state["leaseUntil"]), str(wave_state["leaseUntil"]))
+            with observed_lock:
+                observed_leases.append(pair)
+                if len({item[0] for item in observed_leases}) >= 2:
+                    lease_extended.set()
+        return result
+
+    def execute(action_id: str, *, instance_id: str, lease_seconds: int) -> dict[str, Any]:
+        del instance_id, lease_seconds
+        assert lease_extended.wait(3.0), observed_leases
+        return _successful_action(action_id)
+
+    monkeypatch.setattr(resilience_wave_executor, "renew_runner_leases", renew)
+    monkeypatch.setattr(resilience_action_journal, "execute_autonomous_action", execute)
+
+    result = resilience_wave_executor.run_next_wave(
+        schedule_id,
+        instance_id="heartbeat-worker",
+        lease_seconds=2,
+        heartbeat_interval_seconds=0.05,
+    )
+
+    assert result["status"] == resilience_wave_executor.WAVE_COMPLETED
+    assert len(observed_leases) >= 2
+    assert all(schedule_lease == wave_lease for schedule_lease, wave_lease in observed_leases)
+
+
+def test_wave_heartbeat_loss_fences_remote_result_before_settlement(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fresh_state(monkeypatch)
+    schedule = _schedule("wave-heartbeat-loss")
+    schedule_id = str(schedule["scheduleId"])
+    action_id = f"{schedule_id}-repair-0"
+    resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+    heartbeat_failed = threading.Event()
+    settlement_calls: list[str] = []
+
+    def renew(*args: Any, **kwargs: Any) -> bool:
+        del args, kwargs
+        if threading.current_thread().name.startswith("resilience-wave-lease-"):
+            heartbeat_failed.set()
+            return False
+        return True
+
+    def execute(current_action_id: str, *, instance_id: str, lease_seconds: int) -> dict[str, Any]:
+        del instance_id, lease_seconds
+        assert heartbeat_failed.wait(2.0)
+        return _successful_action(current_action_id)
+
+    def settle(current_action_id: str, *, consumed_at: datetime | None = None) -> dict[str, Any]:
+        del consumed_at
+        settlement_calls.append(current_action_id)
+        return {"status": "CONSUMED"}
+
+    monkeypatch.setattr(resilience_wave_executor, "renew_runner_leases", renew)
+    monkeypatch.setattr(resilience_action_journal, "execute_autonomous_action", execute)
+    monkeypatch.setattr(resilience_scheduler_service, "settle_action_from_effect", settle)
+
+    result = resilience_wave_executor.run_next_wave(
+        schedule_id,
+        instance_id="losing-worker",
+        lease_seconds=30,
+        heartbeat_interval_seconds=0.01,
+    )
+
+    assert result["status"] == "RUNNER_FENCED_OUT"
+    assert result["reason"] == "RUNNER_LEASE_HEARTBEAT_LOST"
+    assert settlement_calls == []
+    action = resilience_wave_executor.list_wave_actions(schedule_id)[0]
+    assert action["actionId"] == action_id
+    assert action["status"] != resilience_wave_executor.ACTION_VERIFIED_SUCCESS
+
+
+@pytest.mark.parametrize(
+    "failure_mode",
+    ["initial-false", "initial-exception", "heartbeat-exception", "final-false", "final-exception"],
+)
+def test_runner_lease_heartbeat_helper_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_mode: str,
+) -> None:
+    heartbeat_failed = threading.Event()
+    main_calls = 0
+    operation_calls = 0
+
+    def renew(*args: Any, **kwargs: Any) -> bool:
+        nonlocal main_calls
+        del args, kwargs
+        in_heartbeat = threading.current_thread().name.startswith("resilience-wave-lease-")
+        if failure_mode == "heartbeat-exception" and in_heartbeat:
+            heartbeat_failed.set()
+            raise sqlite3.OperationalError("heartbeat database unavailable")
+        if in_heartbeat:
+            return True
+        main_calls += 1
+        if failure_mode == "initial-false" and main_calls == 1:
+            return False
+        if failure_mode == "initial-exception" and main_calls == 1:
+            raise sqlite3.OperationalError("initial database unavailable")
+        if failure_mode == "final-false" and main_calls == 2:
+            return False
+        if failure_mode == "final-exception" and main_calls == 2:
+            raise sqlite3.OperationalError("final database unavailable")
+        return True
+
+    def operation() -> dict[str, bool]:
+        nonlocal operation_calls
+        operation_calls += 1
+        if failure_mode == "heartbeat-exception":
+            assert heartbeat_failed.wait(2.0)
+        return {"completed": True}
+
+    monkeypatch.setattr(resilience_wave_executor, "renew_runner_leases", renew)
+    with pytest.raises(resilience_wave_executor.RunnerLeaseLostError):
+        resilience_wave_executor._run_with_runner_lease_heartbeat(  # noqa: SLF001 - heartbeat contract
+            schedule_id=f"helper-{failure_mode}",
+            wave_index=0,
+            instance_id="worker",
+            schedule_execution_epoch=1,
+            wave_execution_epoch=1,
+            runner_token="token",
+            lease_seconds=30,
+            heartbeat_interval_seconds=0.01 if failure_mode == "heartbeat-exception" else 1.0,
+            clock=lambda: datetime(2026, 8, 31, 13, 0, tzinfo=timezone.utc),
+            operation=operation,
+        )
+
+    assert operation_calls == (0 if failure_mode.startswith("initial-") else 1)
+
+
+def test_runner_lease_heartbeat_arguments_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ValueError, match="lease_seconds must be positive"):
+        resilience_wave_executor.renew_runner_leases(
+            "schedule",
+            0,
+            instance_id="worker",
+            schedule_execution_epoch=1,
+            wave_execution_epoch=1,
+            runner_token="token",
+            lease_seconds=0,
+        )
+    monkeypatch.setattr(resilience_wave_executor, "renew_runner_leases", lambda *args, **kwargs: True)
+    with pytest.raises(ValueError, match="heartbeat_interval_seconds must be positive"):
+        resilience_wave_executor._run_with_runner_lease_heartbeat(  # noqa: SLF001 - heartbeat contract
+            schedule_id="schedule",
+            wave_index=0,
+            instance_id="worker",
+            schedule_execution_epoch=1,
+            wave_execution_epoch=1,
+            runner_token="token",
+            lease_seconds=30,
+            heartbeat_interval_seconds=0,
+            clock=lambda: datetime(2026, 8, 31, 13, 0, tzinfo=timezone.utc),
+            operation=lambda: pytest.fail("invalid heartbeat interval must fail before operation"),
+        )
+
+
+def test_runner_lease_checkpoint_exception_fences_before_effect(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fresh_state(monkeypatch)
+    schedule = _schedule("wave-checkpoint-exception")
+    schedule_id = str(schedule["scheduleId"])
+    resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+    monkeypatch.setattr(
+        resilience_wave_executor,
+        "renew_runner_leases",
+        lambda *args, **kwargs: (_ for _ in ()).throw(sqlite3.OperationalError("database is busy")),
+    )
+    monkeypatch.setattr(
+        resilience_action_journal,
+        "record_action_intent",
+        lambda *args, **kwargs: pytest.fail("action intent must not be recorded after runner lease uncertainty"),
+    )
+
+    result = resilience_wave_executor.run_next_wave(schedule_id, instance_id="uncertain-worker")
+
+    assert result["status"] == "RUNNER_FENCED_OUT"
+    assert result["reason"] == "RUNNER_LEASE_HEARTBEAT_LOST"
+
+
+@pytest.mark.parametrize("journal_state", ["failure", "active"])
+def test_fenced_journal_projection_does_not_report_or_release(
+    tmp_settings: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    journal_state: str,
+) -> None:
+    _install_fresh_state(monkeypatch)
+    schedule = _schedule(f"fenced-journal-{journal_state}")
+    schedule_id = str(schedule["scheduleId"])
+    resilience_wave_executor.persist_planned_schedule(schedule, authority_head_digest=AUTHORITY_DIGEST)
+    released: list[tuple[str, str]] = []
+    if journal_state == "failure":
+        journal_action = {"state": "FAILED_BEFORE_EFFECT", "executionEpoch": 1}
+        monkeypatch.setattr(resilience_wave_executor, "_fail_action_with_fence", lambda *args, **kwargs: False)
+    else:
+        journal_action = {
+            "state": "EXECUTING",
+            "executionEpoch": 1,
+            "leaseUntil": "2099-01-01T00:00:00Z",
+            "effectHandle": {"kind": "repair", "repairId": "existing"},
+        }
+        monkeypatch.setattr(resilience_wave_executor, "_set_action_state_with_fence", lambda *args, **kwargs: False)
+    monkeypatch.setattr(resilience_action_journal, "record_action_intent", lambda *args, **kwargs: journal_action)
+    monkeypatch.setattr(
+        resilience_scheduler_service,
+        "release_action_reservation",
+        lambda action_id, **kwargs: released.append(("action", action_id)),
+    )
+    monkeypatch.setattr(
+        resilience_scheduler_service,
+        "release_schedule_reservations",
+        lambda current_schedule_id, **kwargs: released.append(("schedule", current_schedule_id)),
+    )
+
+    result = resilience_wave_executor.run_next_wave(schedule_id)
+
+    assert result["status"] == "RUNNER_FENCED_OUT"
+    assert released == []
 
 
 def test_wave_revalidation_and_runner_claims_fail_closed(

@@ -192,6 +192,14 @@ def test_target_health_and_retention_run_recording(tmp_settings: Path) -> None:
     backup_scheduler.record_retention_run("rr_1", policy_id="p", target_id="t", status="applied")
 
 
+def test_scheduler_connection_context_closes_database(tmp_settings: Path) -> None:
+    with backup_scheduler._connect() as connection:
+        assert connection.execute("SELECT 1").fetchone()[0] == 1
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        connection.execute("SELECT 1")
+
+
 def _slot_statuses(policy: dict[str, object]) -> list[str]:
     with sqlite3.connect(Path(str(backup_scheduler.BACKUP_SCHEDULER_DIR)) / "scheduler.db") as connection:
         rows = connection.execute(

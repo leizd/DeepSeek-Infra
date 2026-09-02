@@ -1520,7 +1520,7 @@ def list_action_events(action_id: str) -> list[dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT event_id, event_type, state, owner_instance_id, execution_epoch,
+            SELECT event_id, action_id, event_type, state, owner_instance_id, execution_epoch,
                    claim_token_sha256, effect_handle_json, created_at
             FROM resilience_action_events
             WHERE action_id = ?
@@ -1531,13 +1531,14 @@ def list_action_events(action_id: str) -> list[dict[str, Any]]:
     return [
         {
             "eventId": int(row[0]),
-            "eventType": str(row[1]),
-            "state": str(row[2]),
-            "ownerInstanceId": row[3],
-            "executionEpoch": int(row[4]),
-            "claimTokenSha256": row[5],
-            "effectHandle": json.loads(row[6]) if row[6] else None,
-            "createdAt": str(row[7]),
+            "actionId": str(row[1]),
+            "eventType": str(row[2]),
+            "state": str(row[3]),
+            "ownerInstanceId": row[4],
+            "executionEpoch": int(row[5]),
+            "claimTokenSha256": row[6],
+            "effectHandle": json.loads(row[7]) if row[7] else None,
+            "createdAt": str(row[8]),
         }
         for row in rows
     ]

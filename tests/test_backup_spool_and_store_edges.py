@@ -131,7 +131,7 @@ def test_memory_store_failures_and_pagination() -> None:
 
 
 def test_init_s3_target_with_fake_client(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from test_backup_target_s3_adapter import FakeS3Client
+    from tests.test_backup_target_s3_adapter import FakeS3Client
 
     client = FakeS3Client()
     record = backup_targets.init_s3_target(

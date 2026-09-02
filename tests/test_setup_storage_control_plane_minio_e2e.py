@@ -27,6 +27,12 @@ def test_evidence_env_and_shell_export_shapes() -> None:
     assert env["DEEPSEEK_REQUIRE_REAL_STORAGE_CONTROL_E2E"] == "1"
     assert env["DEEPSEEK_TEST_S3_ENDPOINT_A"] == "http://127.0.0.1:9000"
     assert env["DEEPSEEK_TEST_MINIO_CONTAINER_C"] == "deepseek-minio-control-c"
+    assert env["DEEPSEEK_TEST_S3_ENDPOINT_D"] == "http://127.0.0.1:9003"
+    assert env["DEEPSEEK_TEST_MINIO_CONTAINER_D"] == "deepseek-minio-control-d"
+    assert env["DEEPSEEK_TEST_S3_ENDPOINT_E"] == "http://127.0.0.1:9004"
+    assert env["DEEPSEEK_TEST_MINIO_CONTAINER_E"] == "deepseek-minio-control-e"
+    assert env["DEEPSEEK_TEST_FEDERATION_ACCESS_KEY_ID"] != env["AWS_ACCESS_KEY_ID"]
+    assert env["DEEPSEEK_TEST_FEDERATION_SECRET_ACCESS_KEY"] != env["AWS_SECRET_ACCESS_KEY"]
     pwsh = mod.format_env_export(env, shell="pwsh")
     assert "$env:AWS_ACCESS_KEY_ID = 'u'" in pwsh
     bash = mod.format_env_export(env, shell="bash")
@@ -66,7 +72,7 @@ def test_wait_for_minio_success_and_timeout(monkeypatch: Any) -> None:
 
     monkeypatch.setattr(mod, "endpoint_healthy", lambda *_a, **_k: False)
     pending = mod.wait_for_minio(attempts=2, sleep_seconds=0)
-    assert len(pending) == 3
+    assert len(pending) == 5
 
 
 def test_cli_env_and_doctor(monkeypatch: Any, capsys: Any) -> None:

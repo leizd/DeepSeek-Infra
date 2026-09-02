@@ -21,13 +21,27 @@ from deepseek_infra.infra.diagnostics.evidence_inventory import (
     evidence_specs,
 )
 from deepseek_infra.infra.diagnostics.evidence_manifest import sha256_of, validate_manifest_checksum
+from deepseek_infra.infra.workspace import backup_control, federation_runtime_proof
 from scripts import generate_release_evidence
 from scripts.verify_release_package import verify_release_package
-from test_backup_476_predictive_proof import _valid_proof
+from .test_backup_476_predictive_proof import _valid_proof
+from .test_backup_480_federated_dr_proof import _proof_fixture as _valid_federated_dr_proof
+from .test_backup_480_federated_replica_proof import _proof_fixture as _valid_federated_replica_proof
+from .test_backup_480_federation_trust_proof import _trust_proof_fixture as _valid_federation_trust_proof
+from .test_backup_480_federation_runtime_proof import _valid_proof as _valid_federation_runtime_proof
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 REVISION = "a" * 40
+
+
+@pytest.fixture(autouse=True)
+def _isolate_evidence_assembly_state(tmp_settings: Path) -> None:
+    del tmp_settings
+
+
+def test_evidence_assembly_uses_isolated_control_state(tmp_path: Path) -> None:
+    assert backup_control.CONTROL_DB == tmp_path / ".backup-control" / "control.sqlite3"
 
 
 def _context() -> dict[str, object]:
@@ -63,19 +77,43 @@ def _payload(*, revision: str = REVISION, ci_revision: str = REVISION) -> dict[s
 def _producer_downloads(tmp_path: Path) -> tuple[Path, Path]:
     source = tmp_path / "source"
     downloads = tmp_path / "downloads"
+    replica_patcher = pytest.MonkeyPatch()
+    try:
+        replica_proof = _valid_federated_replica_proof(
+            tmp_path / "proof-fixtures" / "replica",
+            replica_patcher,
+        )["proof"]
+    finally:
+        replica_patcher.undo()
+    dr_patcher = pytest.MonkeyPatch()
+    try:
+        dr_proof = _valid_federated_dr_proof(tmp_path / "proof-fixtures" / "dr", dr_patcher)["proof"]
+    finally:
+        dr_patcher.undo()
+    federation_proofs = {
+        "real-two-fleet-four-minio-signed-federation-trust": _valid_federation_trust_proof(
+            tmp_path / "proof-fixtures" / "trust"
+        )["proof"],
+        "real-two-fleet-four-minio-signed-federation-replica": replica_proof,
+        "real-two-fleet-four-minio-signed-federation-dr": dr_proof,
+    }
     for spec in evidence_specs():
         path = source / spec.path(VERSION)
         path.parent.mkdir(parents=True, exist_ok=True)
         if spec.payload_kind == "proof":
             if spec.required_checks:
-                typed = _valid_proof()
+                typed = federation_proofs[spec.scenario] if spec.scenario is not None and spec.scenario in federation_proofs else _valid_proof()
                 checks = {
                     name: {
                         "status": "PASS",
                         "evidence": (
                             {"endpoints": ["http://minio-a", "http://minio-b", "http://minio-c"]}
                             if name == "realThreeMinioPredictivePlanningE2E"
-                            else typed
+                            else (
+                                _valid_federation_runtime_proof()
+                                if name in federation_runtime_proof.FEDERATION_RUNTIME_PROOF_CHECKS
+                                else typed
+                            )
                         ),
                     }
                     for name in spec.required_checks

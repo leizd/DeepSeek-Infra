@@ -121,3 +121,4 @@ rust/target/
 .resilience-capacity/
 .resilience-cost/
 .resilience-optimizer/
+.federation/

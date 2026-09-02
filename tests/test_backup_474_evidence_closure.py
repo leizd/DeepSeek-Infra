@@ -177,6 +177,11 @@ def test_474_required_check_names_are_locked_to_proof_or_explicit_scenarios() ->
         "proofObjectKeysExistOnExpectedMinioEndpoint",
         "degradedFleetCannotBeFurtherDegraded",
         "runningEffectsParticipateInBlastRadiusSimulation",
+        "longRunningWaveRenewsScheduleLease",
+        "longRunningWaveRenewsWaveLease",
+        "realProcessWaveSigkillTakeoverUsesHigherEpoch",
+        "realProcessWaveSigkillDoesNotDuplicateEffect",
+        "realProcessWaveSigkillSettlesExactlyOnce",
         "receiptV4Unchanged",
         "commitV4Unchanged",
     }
@@ -311,6 +316,9 @@ def test_validate_evidence_proof_cli_fails_when_freshness_cannot_persist(
 def test_autonomous_storage_validator_reports_malformed_bytes_and_provider_bindings() -> None:
     not_a_dict: Any = []
     assert evidence_proof.validate_autonomous_storage_bytes_proof(not_a_dict, "proof") == ["not-a-dict"]
+    actual = _actual_copy_evidence()
+    assert evidence_proof.validate_federated_wire_compatibility_proof(actual, "receiptV4Unchanged") == []
+    assert evidence_proof.validate_federated_wire_compatibility_proof(actual, "commitV4Unchanged") == []
 
     malformed = _actual_copy_evidence()
     malformed.update(

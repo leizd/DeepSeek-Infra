@@ -443,7 +443,7 @@ def test_governance_adopt_register_new(tmp_settings: Path, monkeypatch: pytest.M
 
 
 def test_governance_api_new_routes(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from test_backup_target_s3_adapter import FakeS3Client
+    from tests.test_backup_target_s3_adapter import FakeS3Client
     from deepseek_infra.web.routes import backup_governance
 
     monkeypatch.setattr(backup_governance, "require_api_auth", lambda _request: None)

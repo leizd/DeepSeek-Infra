@@ -58,7 +58,12 @@ def _real_prerequisites() -> tuple[list[str], list[str]]:
     return endpoints, containers
 
 
-def _client(endpoint: str) -> Any:
+def _client(
+    endpoint: str,
+    *,
+    access_key: str | None = None,
+    secret_key: str | None = None,
+) -> Any:
     import boto3
     from botocore import config as config_module
 
@@ -66,8 +71,8 @@ def _client(endpoint: str) -> Any:
         "s3",
         endpoint_url=endpoint,
         region_name="us-east-1",
-        aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+        aws_access_key_id=access_key or os.environ["AWS_ACCESS_KEY_ID"],
+        aws_secret_access_key=secret_key or os.environ["AWS_SECRET_ACCESS_KEY"],
         config=config_module.Config(s3={"addressing_style": "path"}, retries={"max_attempts": 3, "mode": "standard"}),
     )
 
