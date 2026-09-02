@@ -324,3 +324,13 @@ def test_ci_runs_five_minio_harness_with_isolated_four_minio_federation() -> Non
     assert "federated-dr-proof-v${{ env.RELEASE_VERSION }}.json" in workflow
     assert workflow.count("      - storage-control-plane-minio-e2e\n") == 2
     assert "RC_CI_STORAGE_CONTROL_PLANE_MINIO_E2E" in workflow
+
+
+def test_evidence_assembly_ci_installs_runtime_dependencies_before_validation() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    evidence_job = workflow.split("  evidence-assembly:\n", 1)[1].split("\n  release-package:", 1)[0]
+    dependency_install = "python -m pip install -r requirements.txt"
+    assembly = "python scripts/assemble_release_evidence.py"
+
+    assert dependency_install in evidence_job
+    assert evidence_job.index(dependency_install) < evidence_job.index(assembly)
