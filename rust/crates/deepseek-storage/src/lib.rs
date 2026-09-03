@@ -2,6 +2,12 @@ use deepseek_protocol::{
     ActionFence, AdmitError, CommandKind, admit_command, is_storage_command, validate_fence,
 };
 
+pub mod object_set;
+pub mod receipt;
+
+pub use object_set::{ChunkRef, OBJECT_SET_SCHEMA, ObjectSet, StoredObject};
+pub use receipt::{CommitV4, ReceiptV4};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageRequest {
     pub kind: CommandKind,

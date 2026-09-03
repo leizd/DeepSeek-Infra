@@ -420,6 +420,9 @@ name = "deepseek-federation"
 version = "0.1.0"
 dependencies = [
  "deepseek-protocol",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -464,6 +467,9 @@ name = "deepseek-proof"
 version = "0.1.0"
 dependencies = [
  "deepseek-protocol",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -485,6 +491,9 @@ name = "deepseek-storage"
 version = "0.1.0"
 dependencies = [
  "deepseek-protocol",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -492,6 +501,9 @@ name = "deepseek-transfer"
 version = "0.1.0"
 dependencies = [
  "deepseek-protocol",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]

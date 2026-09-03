@@ -2,6 +2,9 @@ use deepseek_protocol::{
     ActionFence, AdmitError, CommandKind, admit_command, is_transfer_command, validate_fence,
 };
 
+pub mod job;
+pub use job::{TRANSFER_JOB_SCHEMA, TransferCheckpoint};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferRequest {
     pub kind: CommandKind,

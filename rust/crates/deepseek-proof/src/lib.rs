@@ -1,5 +1,11 @@
 use deepseek_protocol::{ActionFence, AdmitError, admit_command, validate_fence};
 
+pub mod envelope;
+pub use envelope::{
+    DR_READINESS_PROOF_SCHEMA, EVIDENCE_ENVELOPE_SCHEMA, EvidenceProofEnvelope,
+    PREDICTIVE_PLANNING_PROOF_SCHEMA,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProofRequest {
     pub fence: ActionFence,

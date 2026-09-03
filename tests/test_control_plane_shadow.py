@@ -83,10 +83,15 @@ def test_dual_track_verifier_detects_match_and_mismatch(tmp_path: Path) -> None:
         digest_to_return = expected_digest
 
         def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length", 0))
+            if length:
+                self.rfile.read(length)
+            payload = json.dumps({"digest": self.digest_to_return}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
-            self.wfile.write(json.dumps({"digest": self.digest_to_return}).encode("utf-8"))
+            self.wfile.write(payload)
 
         def log_message(self, format: str, *args: Any) -> None:
             pass

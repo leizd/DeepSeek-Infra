@@ -2,6 +2,9 @@ use deepseek_protocol::{
     ActionFence, AdmitError, CommandKind, admit_command, is_federation_command, validate_fence,
 };
 
+pub mod attestation;
+pub use attestation::{FailureDomainMetadata, ReplicaAttestation};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignRequest {
     pub kind: CommandKind,
