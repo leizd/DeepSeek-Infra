@@ -1202,7 +1202,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python scripts/native_runtime_contract.py --check
-      - run: python scripts/control_plane_shadow.py --check
+      - run: python scripts/control_plane_shadow.py --check --export-report artifacts/control-shadow-report.json
 
   native-go:
     needs: release-version
@@ -1212,6 +1212,9 @@ jobs:
         working-directory: go
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: actions/setup-go@v5
         with:
           go-version: "1.27.1"
@@ -1220,6 +1223,8 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - run: go test -race ./...
+      - name: Go coverage
+        run: python ../scripts/check_go_coverage.py --dir . --min 95.0
 
   rust-coverage:
     needs:

@@ -14,6 +14,7 @@ OWNERSHIP_PATH = ROOT / "release" / "native_runtime_ownership_v1.json"
 TOOLCHAIN_PATH = ROOT / "release" / "native_runtime_toolchain_v1.json"
 DESCRIPTOR_PATH = ROOT / "proto" / "generated" / "descriptor.v1.json"
 CORPUS_MANIFEST = ROOT / "compat" / "native-runtime" / "v1" / "manifest.json"
+COMMAND_CODES_PATH = ROOT / "release" / "native_runtime_command_codes_v1.json"
 PROTO_ROOT = ROOT / "proto"
 
 SECRET_FIELD_FRAGMENTS = (
@@ -335,17 +336,70 @@ def validate_toolchain(path: Path = TOOLCHAIN_PATH) -> dict[str, Any]:
     return data
 
 
+def validate_command_codes(path: Path = COMMAND_CODES_PATH) -> dict[str, Any]:
+    data = _load_json(path)
+    codes = data.get("codes")
+    if not isinstance(codes, list) or not codes:
+        raise ContractError("command codes must be a non-empty list")
+    go = (ROOT / "go/internal/protocol/fence.go").read_text(encoding="utf-8")
+    rust = (ROOT / "rust/crates/deepseek-protocol/src/lib.rs").read_text(encoding="utf-8")
+    for code in codes:
+        name = str(code)
+        if name not in go or name not in rust:
+            raise ContractError(f"command code {name} missing from Go or Rust protocol")
+    commands = data.get("commands")
+    if not isinstance(commands, dict) or not commands:
+        raise ContractError("command map must be a non-empty object")
+    for name, code in commands.items():
+        if str(code) not in codes:
+            raise ContractError(f"command {name} uses unknown code {code}")
+    action = (ROOT / "go/internal/action/action.go").read_text(encoding="utf-8")
+    production_code = str(data.get("production_code") or "")
+    if production_code != "MUTATION_DENIED":
+        raise ContractError("production_code must be MUTATION_DENIED")
+    if production_code not in go:
+        raise ContractError("production_code missing from Go protocol")
+    executes = data.get("production_execute")
+    if not isinstance(executes, list) or not executes:
+        raise ContractError("production_execute must be a non-empty list")
+    for name in executes:
+        if f"func {name}(" not in action:
+            raise ContractError(f"missing production execute {name}")
+        if "DenyMutation()" not in action:
+            raise ContractError("production execute path must deny mutation")
+    if "func Dispatch(" not in action or "PlanNative(" not in action:
+        raise ContractError("native dispatch must call PlanNative")
+    if "func VerifyProof(" not in action:
+        raise ContractError("missing VerifyProof")
+    crates = data.get("rust_crates")
+    if not isinstance(crates, list) or not crates:
+        raise ContractError("rust_crates must be a non-empty list")
+    cargo = (ROOT / "rust/Cargo.toml").read_text(encoding="utf-8")
+    worker = (ROOT / "rust/crates/deepseek-worker/src/lib.rs").read_text(encoding="utf-8")
+    for crate in crates:
+        name = str(crate)
+        if f"crates/{name}" not in cargo:
+            raise ContractError(f"missing rust workspace crate {name}")
+        if not (ROOT / "rust/crates" / name / "src/lib.rs").is_file():
+            raise ContractError(f"missing rust crate sources {name}")
+    if "fn execute(" not in worker or "fn verify_proof(" not in worker:
+        raise ContractError("rust worker must expose execute and verify_proof")
+    return data
+
+
 def check_all() -> dict[str, Any]:
     ownership = load_ownership()
     validate_ownership(ownership)
     toolchain = validate_toolchain()
     descriptor = check_descriptor()
     corpus = validate_corpus()
+    command_codes = validate_command_codes()
     return {
         "ok": True,
         "domains": len(ownership["domains"]),
         "proto_files": len(descriptor["files"]),
         "corpora": len(corpus["corpora"]),
+        "command_codes": len(command_codes["codes"]),
         "go": toolchain["go"]["version"],
     }
 

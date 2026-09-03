@@ -113,6 +113,10 @@ rust/target/
 # Go build artifacts
 go/**/*.exe
 /go/bin/
+go/*.out
+go/coverage*
+go/cov-*
+go/$out
 
 # Generated native backup encryption helper
 /bin/
