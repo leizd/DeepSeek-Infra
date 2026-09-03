@@ -1,16 +1,47 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActionFence {
-    pub action_id: String,
-    pub execution_epoch: u64,
+pub mod generated {
+    pub mod deepseek {
+        pub mod common {
+            pub mod v1 {
+                tonic::include_proto!("deepseek.common.v1");
+            }
+        }
+        pub mod action {
+            pub mod v1 {
+                tonic::include_proto!("deepseek.action.v1");
+            }
+        }
+        pub mod agent {
+            pub mod v1 {
+                tonic::include_proto!("deepseek.agent.v1");
+            }
+        }
+        pub mod control {
+            pub mod v1 {
+                tonic::include_proto!("deepseek.control.v1");
+            }
+        }
+        pub mod evidence {
+            pub mod v1 {
+                tonic::include_proto!("deepseek.evidence.v1");
+            }
+        }
+        pub mod federation {
+            pub mod v1 {
+                tonic::include_proto!("deepseek.federation.v1");
+            }
+        }
+        pub mod storage {
+            pub mod v1 {
+                tonic::include_proto!("deepseek.storage.v1");
+            }
+        }
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EffectState {
-    Unspecified = 0,
-    NotApplied = 1,
-    Applied = 2,
-    Unknown = 3,
-}
+pub use generated::deepseek::action::v1::CommandKind;
+pub use generated::deepseek::common::v1::{ActionFence, EffectState};
+
+pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("deepseek.native.v1");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdmitError {
@@ -37,17 +68,6 @@ impl AdmitError {
             Self::ProofNotAuthoritative => "PROOF_NOT_AUTHORITATIVE",
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandKind {
-    Unspecified = 0,
-    ExecuteBackup = 1,
-    ExecuteRestore = 2,
-    ExecuteRepair = 3,
-    ExecuteRebalance = 4,
-    ExecuteFederatedTransfer = 5,
-    SignReadiness = 6,
 }
 
 pub fn is_storage_command(kind: CommandKind) -> bool {
@@ -96,6 +116,22 @@ pub fn interpret_remote_outcome(state: EffectState) -> Result<EffectState, Admit
 #[cfg(test)]
 mod tests {
     use super::*;
+    use prost::Message;
+
+    #[test]
+    fn generated_action_fence_has_stable_wire_bytes() {
+        let fence = ActionFence {
+            action_id: "act-1".to_string(),
+            execution_epoch: 7,
+        };
+        let encoded = fence.encode_to_vec();
+        assert_eq!(encoded, b"\x0a\x05act-1\x10\x07");
+        assert_eq!(ActionFence::decode(encoded.as_slice()).unwrap(), fence);
+        assert_eq!(
+            FILE_DESCRIPTOR_SET,
+            include_bytes!("../../../../proto/generated/descriptor.pb")
+        );
+    }
 
     #[test]
     fn empty_action_id_is_rejected() {

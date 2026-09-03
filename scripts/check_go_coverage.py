@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 import tempfile
@@ -17,12 +18,45 @@ def _run(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     return result
 
 
+_GENERATED_GO_MARKER = re.compile(r"^// Code generated .* DO NOT EDIT\.$", re.MULTILINE)
+
+
+def is_generated_only_package(package_dir: Path, go_files: list[str]) -> bool:
+    """Return true only when every build input is machine-generated Go source."""
+
+    if not go_files:
+        return False
+    for filename in go_files:
+        if not filename.endswith(".pb.go"):
+            return False
+        path = package_dir / filename
+        try:
+            prefix = path.read_text(encoding="utf-8")[:4096]
+        except (OSError, UnicodeDecodeError):
+            return False
+        if _GENERATED_GO_MARKER.search(prefix) is None:
+            return False
+    return True
+
+
 def collect_profiles(go_dir: Path, dest: Path) -> None:
-    listed = _run(["go", "list", "./internal/...", "./pkg/..."], go_dir).stdout.split()
+    template = '{{.ImportPath}}\t{{.Dir}}\t{{join .GoFiles ","}}'
+    listed = _run(["go", "list", "-f", template, "./internal/...", "./pkg/..."], go_dir).stdout.splitlines()
+    packages: list[str] = []
+    for row in listed:
+        try:
+            import_path, directory, filenames = row.split("\t", 2)
+        except ValueError as exc:
+            raise RuntimeError(f"unexpected go list output: {row!r}") from exc
+        go_files = [filename for filename in filenames.split(",") if filename]
+        if not is_generated_only_package(Path(directory), go_files):
+            packages.append(import_path)
+    if not packages:
+        raise RuntimeError("go coverage package inventory is empty after generated-source filtering")
     parts: list[str] = []
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        for index, pkg in enumerate(listed):
+        for index, pkg in enumerate(packages):
             pkg_profile = tmp_path / f"{index}.out"
             _run(
                 ["go", "test", pkg, "-count=1", "-covermode=set", f"-coverprofile={pkg_profile}"],

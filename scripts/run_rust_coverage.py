@@ -31,6 +31,9 @@ WORKSPACE_CRATES = (
     "deepseek-federation",
     "deepseek-proof",
 )
+GENERATED_PROTO_COVERAGE_OMIT = (
+    r"[/\\]target[/\\].*[/\\]build[/\\]deepseek-protocol-[^/\\]+[/\\]out[/\\]deepseek\.[^/\\]+\.v1\.rs$"
+)
 
 
 def _run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
@@ -58,6 +61,7 @@ def _test_count() -> int:
         [
             "cargo",
             "test",
+            "--locked",
             "--manifest-path",
             "rust/Cargo.toml",
             "--workspace",
@@ -120,10 +124,13 @@ def main(argv: list[str] | None = None) -> int:
     coverage_command = [
         "cargo",
         "llvm-cov",
+        "--locked",
         "--manifest-path",
         "rust/Cargo.toml",
         "--workspace",
         "--all-features",
+        "--ignore-filename-regex",
+        GENERATED_PROTO_COVERAGE_OMIT,
         "--json",
         "--summary-only",
         "--output-path",
@@ -142,8 +149,11 @@ def main(argv: list[str] | None = None) -> int:
         "cargo",
         "llvm-cov",
         "report",
+        "--locked",
         "--manifest-path",
         "rust/Cargo.toml",
+        "--ignore-filename-regex",
+        GENERATED_PROTO_COVERAGE_OMIT,
         "--lcov",
         "--output-path",
         str(lcov_out),
@@ -169,12 +179,12 @@ def main(argv: list[str] | None = None) -> int:
         },
         "rustTestCount": test_count,
         "coreCrateExclusions": [],
-        "coverageOmit": [],
+        "coverageOmit": [GENERATED_PROTO_COVERAGE_OMIT],
         "tool": _tool_version(),
         "commands": {
             "measure": coverage_command,
             "lcov": lcov_command,
-            "testInventory": "cargo test --manifest-path rust/Cargo.toml --workspace --all-features -- --list --format terse",
+            "testInventory": "cargo test --locked --manifest-path rust/Cargo.toml --workspace --all-features -- --list --format terse",
         },
         "artifacts": {
             "summary": str(artifact_out.relative_to(ROOT)).replace("\\", "/"),
@@ -185,10 +195,7 @@ def main(argv: list[str] | None = None) -> int:
     artifact_out.write_text(rendered, encoding="utf-8")
     evidence_out.write_text(rendered, encoding="utf-8")
     raw_out.unlink(missing_ok=True)
-    print(
-        f"Rust line coverage: {float(line_metric['percent']):.2f}% "
-        f"({line_metric['covered']}/{line_metric['count']}); {test_count} tests"
-    )
+    print(f"Rust line coverage: {float(line_metric['percent']):.2f}% ({line_metric['covered']}/{line_metric['count']}); {test_count} tests")
     return 0 if passed else 1
 
 

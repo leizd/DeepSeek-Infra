@@ -88,7 +88,7 @@ func dispatchAdmitted(id string, epoch uint64, actionType string) error {
 	if !ok {
 		return nil
 	}
-	err := internalprotocol.PlanNative(kind, internalprotocol.ActionFence{ActionID: id, ExecutionEpoch: epoch}, 0)
+	err := internalprotocol.PlanNative(kind, &internalprotocol.ActionFence{ActionId: id, ExecutionEpoch: epoch}, 0)
 	if err == nil || nativeNotAuthoritative(err) {
 		return nil
 	}

@@ -1,24 +1,38 @@
 package protocol
 
-import "testing"
+import (
+	"testing"
+
+	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
+	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+)
+
+var (
+	_ func(*commonv1.ActionFence) error                               = ValidateFence
+	_ func(actionv1.CommandKind, *commonv1.ActionFence, uint64) error = PlanNative
+	_ func(commonv1.EffectState) (commonv1.EffectState, error)        = InterpretRemoteOutcome
+)
 
 func TestValidateFenceRejectsEmptyAndZero(t *testing.T) {
-	if err := ValidateFence(ActionFence{ActionID: "", ExecutionEpoch: 1}); err != ErrEmptyActionID {
+	if err := ValidateFence(nil); err != ErrEmptyActionID {
+		t.Fatalf("missing fence: %v", err)
+	}
+	if err := ValidateFence(&ActionFence{ActionId: "", ExecutionEpoch: 1}); err != ErrEmptyActionID {
 		t.Fatalf("empty id: %v", err)
 	}
-	if err := ValidateFence(ActionFence{ActionID: "act-1", ExecutionEpoch: 0}); err != ErrZeroEpoch {
+	if err := ValidateFence(&ActionFence{ActionId: "act-1", ExecutionEpoch: 0}); err != ErrZeroEpoch {
 		t.Fatalf("zero epoch: %v", err)
 	}
 }
 
 func TestAdmitCommandRejectsInvalidFence(t *testing.T) {
-	if err := AdmitCommand(ActionFence{ActionID: "", ExecutionEpoch: 1}, 1); err != ErrEmptyActionID {
+	if err := AdmitCommand(&ActionFence{ActionId: "", ExecutionEpoch: 1}, 1); err != ErrEmptyActionID {
 		t.Fatalf("empty: %v", err)
 	}
 }
 
 func TestAdmitCommandRejectsStaleEpoch(t *testing.T) {
-	fence := ActionFence{ActionID: "act-1", ExecutionEpoch: 3}
+	fence := &ActionFence{ActionId: "act-1", ExecutionEpoch: 3}
 	if err := AdmitCommand(fence, 4); err != ErrStaleEpoch {
 		t.Fatalf("stale: %v", err)
 	}
@@ -48,7 +62,7 @@ func TestMutationDenied(t *testing.T) {
 }
 
 func TestPlanNativeMatchesRustAuthorityCodes(t *testing.T) {
-	fence := ActionFence{ActionID: "act-1", ExecutionEpoch: 1}
+	fence := &ActionFence{ActionId: "act-1", ExecutionEpoch: 1}
 	if err := PlanNative(CommandExecuteBackup, fence, 0); err != ErrStorageNotAuthoritative {
 		t.Fatalf("backup: %v", err)
 	}
@@ -61,7 +75,7 @@ func TestPlanNativeMatchesRustAuthorityCodes(t *testing.T) {
 	if err := PlanNative(CommandUnspecified, fence, 0); err != ErrUnknownEffect {
 		t.Fatalf("unspecified: %v", err)
 	}
-	if err := PlanNative(CommandExecuteRepair, ActionFence{ActionID: "act-1", ExecutionEpoch: 1}, 4); err != ErrStaleEpoch {
+	if err := PlanNative(CommandExecuteRepair, &ActionFence{ActionId: "act-1", ExecutionEpoch: 1}, 4); err != ErrStaleEpoch {
 		t.Fatalf("stale: %v", err)
 	}
 	if !IsStorageCommand(CommandExecuteRestore) || IsStorageCommand(CommandExecuteFederatedTransfer) {

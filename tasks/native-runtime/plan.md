@@ -95,7 +95,7 @@ focused test, ADR link (at most 4 files).
 
 **Acceptance criteria:**
 
-- Go 1.27.x, protoc 36.x, Go/Rust plugins, and checksums are locked.
+- Go 1.27.1, protoc 36.1, Go/Rust plugins, and Windows/Linux checksums are locked.
 - Bootstrap/check logic is Windows/Linux compatible and never mutates on
   `--check`.
 - Missing, wrong, or tampered tools fail with a stable diagnostic.
@@ -166,7 +166,15 @@ breaking/drift check passes.
 
 - Clean-checkout generation is deterministic on Windows and CI Linux.
 - Generated Go and Rust bindings compile against locked runtimes.
-- CI/check mode fails on source/generated descriptor drift.
+- CI/check mode fails on source/generated descriptor drift, Rust/protoc descriptor
+  byte inequality, or a breaking change against the immutable v1 baseline.
+- Contract/security checks consume the complete binary `FileDescriptorSet` through
+  a checksum-pinned validator; no source-text regex parser can hide fields, options,
+  oneof membership, presence, or streaming RPCs.
+- Production Go protocol helpers consume the generated message and enum types;
+  no parallel handwritten wire DTO remains.
+- Coverage excludes only standard-marked compiler output, never handwritten
+  packages or native business logic.
 
 **Verification:** generate, clean diff, Go compile/test, Cargo compile/test.
 

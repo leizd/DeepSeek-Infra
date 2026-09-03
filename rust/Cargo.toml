@@ -35,6 +35,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 age = { version = "0.12.1", default-features = false }
 sha2 = "0.10"
+prost = "=0.13.5"
+tonic = "=0.12.3"
+protox = "=0.8.0"
+tonic-build = "=0.12.3"
 
 [profile.release]
 lto = true

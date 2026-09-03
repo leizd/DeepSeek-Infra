@@ -17,6 +17,7 @@ def test_native_contract_check_passes() -> None:
     assert report["ok"] is True
     assert report["go"] == "1.27.1"
     assert report["proto_files"] == 7
+    assert report["generated_outputs"] == 10
 
 
 def test_go_shadow_process_cannot_mutate() -> None:
@@ -45,8 +46,17 @@ def test_ci_has_native_go_and_protocol_gates() -> None:
     workflow = _read(".github/workflows/ci.yml")
     assert "native-go:" in workflow
     assert "native-protocol:" in workflow
-    assert "go-version: \"1.27.1\"" in workflow
+    assert workflow.count("https://go.dev/dl/go1.27.1.linux-amd64.tar.gz") == 2
+    assert workflow.count("63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445") == 2
+    assert workflow.count("GOTOOLCHAIN: local") >= 2
+    assert "python scripts/native_codegen.py --check" in workflow
+    assert "--require-hashes" in workflow
+    assert "-r requirements-native-protocol.txt" in workflow
+    assert "protoc-36.1-linux-x86_64.zip" in workflow
+    assert "protoc-gen-go@v1.36.11" in workflow
+    assert "protoc-gen-go-grpc@v1.6.2" in workflow
     assert "python scripts/native_runtime_contract.py --check" in workflow
+    assert "python scripts/native_runtime_evidence.py" in workflow
     assert "python scripts/control_plane_shadow.py --check --export-report artifacts/control-shadow-report.json" in workflow
     assert (ROOT / "go/internal/store/control.go").is_file()
     assert (ROOT / "release/native_runtime_go_control_store_v1.json").is_file()

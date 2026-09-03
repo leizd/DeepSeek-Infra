@@ -15,13 +15,16 @@ Status: in progress on `codex/native-runtime-4.8.1`.
 
 ## Phase 1 — Protocol foundation
 
-- [x] Pin Go 1.27.x, protoc 36.x, generators/runtimes, and checksums.
+- [x] Pin Go 1.27.1, protoc 36.1, generators/runtimes, and Windows/Linux checksums.
 - [x] Add deterministic tool bootstrap/check path.
 - [x] Define `common/v1` and `action/v1`.
 - [x] Define `storage/v1` and `federation/v1`.
 - [x] Define `control/v1`, `evidence/v1`, and `agent/v1`.
-- [x] Generate language-neutral descriptor JSON; Go/Rust typed foundations match the contract.
+- [x] Generate hashed Go bindings, Rust Prost/Tonic types, and a binary descriptor from the proto contract.
 - [x] Add descriptor compatibility and generated-code drift gates.
+- [x] Bind Go admission/dispatch helpers to generated types and require Rust's descriptor to equal protoc bytes.
+- [x] Freeze an immutable v1 semantic baseline and compare it against the complete binary descriptor, including oneof/presence/options/RPC streaming metadata.
+- [x] Keep generated Go/Rust code out of business-logic coverage without lowering thresholds.
 
 ## Phase 2 — Non-authoritative native processes
 

@@ -31,7 +31,7 @@ func TestExecutePathsRemainDenied(t *testing.T) {
 	if !ShadowOnly(map[string]any{"mode": "shadow"}) || ShadowOnly(map[string]any{"mode": "authoritative"}) {
 		t.Fatal("shadow only")
 	}
-	fence := internalprotocol.ActionFence{ActionID: "act-1", ExecutionEpoch: 1}
+	fence := &internalprotocol.ActionFence{ActionId: "act-1", ExecutionEpoch: 1}
 	if err := Dispatch(internalprotocol.CommandExecuteBackup, fence); err != internalprotocol.ErrStorageNotAuthoritative {
 		t.Fatalf("dispatch: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestExecutePathsRemainDenied(t *testing.T) {
 	if err := VerifyProof(fence, "sha256:receipt-v4", "sha256:commit-v4"); err != internalprotocol.ErrProofNotAuthoritative {
 		t.Fatalf("proof: %v", err)
 	}
-	if err := VerifyProof(internalprotocol.ActionFence{}, "x", "y"); err == nil {
+	if err := VerifyProof(&internalprotocol.ActionFence{}, "x", "y"); err == nil {
 		t.Fatal("empty proof fence")
 	}
 }

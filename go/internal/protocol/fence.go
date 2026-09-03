@@ -1,6 +1,11 @@
 package protocol
 
-import "errors"
+import (
+	"errors"
+
+	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
+	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+)
 
 var (
 	ErrEmptyActionID              = errors.New("EMPTY_ACTION_ID")
@@ -15,16 +20,16 @@ var (
 	ErrProofNotAuthoritative      = errors.New("PROOF_NOT_AUTHORITATIVE")
 )
 
-type CommandKind int
+type CommandKind = actionv1.CommandKind
 
 const (
-	CommandUnspecified CommandKind = iota
-	CommandExecuteBackup
-	CommandExecuteRestore
-	CommandExecuteRepair
-	CommandExecuteRebalance
-	CommandExecuteFederatedTransfer
-	CommandSignReadiness
+	CommandUnspecified              = actionv1.CommandKind_COMMAND_KIND_UNSPECIFIED
+	CommandExecuteBackup            = actionv1.CommandKind_COMMAND_KIND_EXECUTE_BACKUP
+	CommandExecuteRestore           = actionv1.CommandKind_COMMAND_KIND_EXECUTE_RESTORE
+	CommandExecuteRepair            = actionv1.CommandKind_COMMAND_KIND_EXECUTE_REPAIR
+	CommandExecuteRebalance         = actionv1.CommandKind_COMMAND_KIND_EXECUTE_REBALANCE
+	CommandExecuteFederatedTransfer = actionv1.CommandKind_COMMAND_KIND_EXECUTE_FEDERATED_TRANSFER
+	CommandSignReadiness            = actionv1.CommandKind_COMMAND_KIND_SIGN_READINESS
 )
 
 func IsStorageCommand(kind CommandKind) bool {
@@ -58,7 +63,7 @@ func KindFromName(name string) (CommandKind, bool) {
 	}
 }
 
-func PlanNative(kind CommandKind, fence ActionFence, liveEpoch uint64) error {
+func PlanNative(kind CommandKind, fence *ActionFence, liveEpoch uint64) error {
 	if err := AdmitCommand(fence, liveEpoch); err != nil {
 		return err
 	}
@@ -74,22 +79,19 @@ func PlanNative(kind CommandKind, fence ActionFence, liveEpoch uint64) error {
 	}
 }
 
-type EffectState int
+type EffectState = commonv1.EffectState
 
 const (
-	EffectUnspecified EffectState = iota
-	EffectNotApplied
-	EffectApplied
-	EffectUnknown
+	EffectUnspecified = commonv1.EffectState_EFFECT_STATE_UNSPECIFIED
+	EffectNotApplied  = commonv1.EffectState_EFFECT_STATE_NOT_APPLIED
+	EffectApplied     = commonv1.EffectState_EFFECT_STATE_APPLIED
+	EffectUnknown     = commonv1.EffectState_EFFECT_STATE_UNKNOWN
 )
 
-type ActionFence struct {
-	ActionID       string
-	ExecutionEpoch uint64
-}
+type ActionFence = commonv1.ActionFence
 
-func ValidateFence(fence ActionFence) error {
-	if fence.ActionID == "" {
+func ValidateFence(fence *ActionFence) error {
+	if fence == nil || fence.ActionId == "" {
 		return ErrEmptyActionID
 	}
 	if fence.ExecutionEpoch == 0 {
@@ -98,7 +100,7 @@ func ValidateFence(fence ActionFence) error {
 	return nil
 }
 
-func AdmitCommand(fence ActionFence, liveEpoch uint64) error {
+func AdmitCommand(fence *ActionFence, liveEpoch uint64) error {
 	if err := ValidateFence(fence); err != nil {
 		return err
 	}

@@ -87,7 +87,7 @@ func dispatch(writer http.ResponseWriter, request *http.Request) {
 		_ = json.NewEncoder(writer).Encode(map[string]string{"error": internalprotocol.ErrUnknownEffect.Error()})
 		return
 	}
-	err := internalprotocol.PlanNative(kind, internalprotocol.ActionFence{ActionID: body.ActionID, ExecutionEpoch: body.ExecutionEpoch}, 0)
+	err := internalprotocol.PlanNative(kind, &internalprotocol.ActionFence{ActionId: body.ActionID, ExecutionEpoch: body.ExecutionEpoch}, 0)
 	writer.Header().Set("Content-Type", "application/json")
 	status := http.StatusConflict
 	if err == internalprotocol.ErrEmptyActionID || err == internalprotocol.ErrZeroEpoch || err == internalprotocol.ErrUnknownEffect {

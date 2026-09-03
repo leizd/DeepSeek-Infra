@@ -6,7 +6,7 @@ import (
 )
 
 func BindFence(actionID string, epoch uint64) error {
-	return internalprotocol.ValidateFence(internalprotocol.ActionFence{ActionID: actionID, ExecutionEpoch: epoch})
+	return internalprotocol.ValidateFence(&internalprotocol.ActionFence{ActionId: actionID, ExecutionEpoch: epoch})
 }
 
 func ExecuteBackup(_ map[string]any) error {
@@ -33,11 +33,11 @@ func SignReadiness(_ map[string]any) error {
 	return internalprotocol.DenyMutation()
 }
 
-func Dispatch(kind internalprotocol.CommandKind, fence internalprotocol.ActionFence) error {
+func Dispatch(kind internalprotocol.CommandKind, fence *internalprotocol.ActionFence) error {
 	return internalprotocol.PlanNative(kind, fence, 0)
 }
 
-func VerifyProof(fence internalprotocol.ActionFence, receiptDigest, commitDigest string) error {
+func VerifyProof(fence *internalprotocol.ActionFence, receiptDigest, commitDigest string) error {
 	if err := internalprotocol.AdmitCommand(fence, 0); err != nil {
 		return err
 	}

@@ -1,0 +1,84 @@
+{
+  "go_module": "github.com/leizd/DeepSeek-Infra/go",
+  "outputs": [
+    {
+      "path": "go/internal/protocol/actionv1/action.pb.go",
+      "sha256": "0c5eb35c91db7e57647387d9c6a635614b34a2623e57fa315ab47651016f698f"
+    },
+    {
+      "path": "go/internal/protocol/actionv1/action_grpc.pb.go",
+      "sha256": "059a094bceb8123dc716891f9902b25ec0d9c09f0c7ece559b0e18e1b5368451"
+    },
+    {
+      "path": "go/internal/protocol/agentv1/agent.pb.go",
+      "sha256": "7568fcf73c000e67aeea6db0a00ee5ea6cad56ada757e95fdb7c1fc69aad08e0"
+    },
+    {
+      "path": "go/internal/protocol/commonv1/common.pb.go",
+      "sha256": "de8437f1584a7ff3cafe041c032082b717d82e187be88d95a3c5536062b0df43"
+    },
+    {
+      "path": "go/internal/protocol/controlv1/control.pb.go",
+      "sha256": "41ddc7bcc9898923981c714908b1ea3ef2b576084e7f4df89b134b4ae18fbc18"
+    },
+    {
+      "path": "go/internal/protocol/controlv1/control_grpc.pb.go",
+      "sha256": "9b9530c7fe211abb1406d7ec8e763593a7ecdcca1189e0b6fde01fa90d00ff63"
+    },
+    {
+      "path": "go/internal/protocol/evidencev1/evidence.pb.go",
+      "sha256": "341f4b2b587792525525639963bb5c0313304e8613ad56b3c0b0d3c68f8115d0"
+    },
+    {
+      "path": "go/internal/protocol/federationv1/federation.pb.go",
+      "sha256": "9f3b9c013e328bf0804cbcda9e2b95c434b9dbcab6d172d783720f59ac692a0a"
+    },
+    {
+      "path": "go/internal/protocol/storagev1/storage.pb.go",
+      "sha256": "d5c08e206c3c0d1856f9a7295ac12fa4cfeed24fd959e78cf133811a42139d8e"
+    },
+    {
+      "path": "proto/generated/descriptor.pb",
+      "sha256": "d12bbb34ec8f7559749412750e0adb956d78b37355cfcb49f3314e8cde36dfe2"
+    }
+  ],
+  "schema_version": 1,
+  "sources": [
+    {
+      "path": "proto/action/v1/action.proto",
+      "sha256": "a896d61270e81d9b4c8603e2c16e31d0e581fe3b0b4a604d4cff77b635f6c358"
+    },
+    {
+      "path": "proto/agent/v1/agent.proto",
+      "sha256": "b2517b4161356470b9b6bb9ccf86e04f8c512aa7dc2d388595367cdf7cde0aeb"
+    },
+    {
+      "path": "proto/common/v1/common.proto",
+      "sha256": "c441a8e6f3e4559a7e30723be920a7521ef921985a02311de3b6f7edc9912164"
+    },
+    {
+      "path": "proto/control/v1/control.proto",
+      "sha256": "c3c0b8215a317449d9fdbe95f6d5c9d27585b643f62c2771a44ea3367c81a33a"
+    },
+    {
+      "path": "proto/evidence/v1/evidence.proto",
+      "sha256": "f7c7fe4100754571961fd610bb3799e28821e3bf5d4eb816c5842c322fd57f22"
+    },
+    {
+      "path": "proto/federation/v1/federation.proto",
+      "sha256": "24c52e6132a5b186cb27312deedabf348e31b6a652c1baa50c3ea68ef507f32d"
+    },
+    {
+      "path": "proto/storage/v1/storage.proto",
+      "sha256": "d13e073da078fa3947ce430dec6b7a71a7710879500c5fbe0c22d2a121fd3fb9"
+    }
+  ],
+  "toolchain": {
+    "prost": "0.13.5",
+    "protoc": "36.1",
+    "protoc_gen_go": "1.36.11",
+    "protoc_gen_go_grpc": "1.6.2",
+    "protox": "0.8.0",
+    "tonic_build": "0.12.3"
+  }
+}
