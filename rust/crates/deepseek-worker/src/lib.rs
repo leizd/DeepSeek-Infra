@@ -9,6 +9,10 @@ use deepseek_protocol::{
 use deepseek_storage::{StorageRequest, plan as plan_storage};
 use deepseek_transfer::{TransferRequest, plan as plan_transfer};
 
+mod service;
+
+pub use service::WorkerRpcService;
+
 #[derive(Debug, Default)]
 pub struct Worker {
     live_epochs: HashMap<String, u64>,
@@ -34,6 +38,7 @@ impl Worker {
     }
 
     pub fn query_effect(&self, fence: &ActionFence) -> Result<EffectState, AdmitError> {
+        deepseek_protocol::validate_fence(fence)?;
         match self
             .effects
             .get(&(fence.action_id.clone(), fence.execution_epoch))
@@ -125,6 +130,18 @@ mod tests {
         assert_eq!(
             worker.query_effect(&fence(1)),
             Err(AdmitError::UnknownEffect)
+        );
+    }
+
+    #[test]
+    fn invalid_fence_cannot_query_effect_state() {
+        let worker = Worker::new();
+        assert_eq!(
+            worker.query_effect(&ActionFence {
+                action_id: String::new(),
+                execution_epoch: 1,
+            }),
+            Err(AdmitError::EmptyActionId)
         );
     }
 

@@ -561,6 +561,8 @@ dependencies = [
  "deepseek-protocol",
  "deepseek-storage",
  "deepseek-transfer",
+ "tokio",
+ "tonic",
 ]
 
 [[package]]
