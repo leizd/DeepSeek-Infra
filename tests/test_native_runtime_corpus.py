@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from deepseek_infra.infra.mcp.protocol_preparation import prepare_mcp_protocol_json
+from deepseek_infra.infra.workspace import backup_control_authority
 from deepseek_infra.infra.workspace.federated_replica_attestation import REPLICA_ATTESTATION_FIELDS
 from deepseek_infra.infra.workspace.federated_replica_commit import COMMIT_V4_FIELDS, RECEIPT_V4_FIELDS
 from scripts import check_mcp_protocol_parity as mcp_parity
@@ -34,7 +35,28 @@ def test_canonical_corpora_match_frozen_digests() -> None:
         "state-legal-transitions",
         "http-rest-inventory",
         "control-shadow-decisions",
+        "control-authority-checkpoints",
     } <= ids
+
+
+def test_control_authority_corpus_matches_frozen_python_v1_bytes() -> None:
+    manifest = validate_corpus()
+    path = next(
+        item["path"]
+        for item in manifest["corpora"]
+        if item["id"] == "control-authority-checkpoints"
+    )
+    corpus = json.loads((ROOT / path).read_text(encoding="utf-8"))
+    assert corpus["schema_version"] == 1
+    assert corpus["source_version"] == "4.8.0"
+    assert corpus["source_commit"] == "a37735c68398fc8f795babaa269e2de6a5acd567"
+    checkpoints = corpus["checkpoints"]
+    assert len(checkpoints) == 2
+    for checkpoint in checkpoints:
+        backup_control_authority.verify_authority_checkpoint_integrity(checkpoint)
+        assert checkpoint["payloadDigest"] == backup_control_authority.compute_payload_digest(checkpoint)
+        assert checkpoint["digest"] == backup_control_authority.compute_checkpoint_digest(checkpoint)
+    backup_control_authority.verify_authority_chain(checkpoints)
 
 
 def test_storage_inventory_matches_python_4_8_0_field_sets() -> None:
