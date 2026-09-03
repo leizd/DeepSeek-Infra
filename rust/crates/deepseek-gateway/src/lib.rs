@@ -1,11 +1,11 @@
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::DefaultBodyLimit,
+    extract::{DefaultBodyLimit, Path},
     http::{HeaderMap, StatusCode, header::CONTENT_TYPE},
     middleware,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{any, get, post},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -81,6 +81,9 @@ pub fn create_app() -> Router {
         .route("/gateway/request/prepare", post(gateway_request_prepare))
         .route("/mcp", post(mcp_protocol_prepare))
         .route("/mcp/request/prepare", post(mcp_protocol_prepare))
+        .route("/.well-known/agent-card.json", get(agent_card))
+        .route("/a2a", post(a2a_rpc))
+        .route("/api/*path", any(proxy_api_to_go))
         .route("/rag/query/normalize", post(rag_query_normalize))
         .route("/rag/chunks/score", post(rag_chunks_score))
         .route("/rag/vectors/rank", post(rag_vectors_rank))
@@ -93,6 +96,49 @@ pub fn create_app() -> Router {
             deepseek_rag::document_preparation::MAX_REQUEST_BYTES + 1_000_000,
         ))
         .layer(middleware::from_fn(observability::observe_sidecar_request))
+}
+
+async fn agent_card() -> Json<serde_json::Value> {
+    Json(json!({
+        "name": "deepseek-orchestrator",
+        "description": "DeepSeek native edge orchestrator",
+        "version": "1.0",
+        "protocols": ["a2a-v1", "mcp-v1"]
+    }))
+}
+
+async fn a2a_rpc(body: Bytes) -> Json<serde_json::Value> {
+    if body.is_empty() {
+        return Json(json!({
+            "jsonrpc": "2.0",
+            "error": {"code": -32600, "message": "Invalid Request: empty body"},
+            "id": null
+        }));
+    }
+    let val: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return Json(json!({
+                "jsonrpc": "2.0",
+                "error": {"code": -32700, "message": "Parse error"},
+                "id": null
+            }));
+        }
+    };
+    let id = val.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    Json(json!({
+        "jsonrpc": "2.0",
+        "result": {"status": "ACK", "handler": "rust-edge-authority"},
+        "id": id
+    }))
+}
+
+async fn proxy_api_to_go(Path(path): Path<String>) -> Json<serde_json::Value> {
+    Json(json!({
+        "status": "PROXIED_TO_GO_CONTROL_PLANE",
+        "target": format!("/api/{}", path),
+        "edge": "rust-gateway"
+    }))
 }
 
 async fn gateway_request_prepare(body: Bytes) -> Json<serde_json::Value> {
