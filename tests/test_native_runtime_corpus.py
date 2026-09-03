@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 from deepseek_infra.infra.mcp.protocol_preparation import prepare_mcp_protocol_json
-from deepseek_infra.infra.workspace import backup_control_authority
+from deepseek_infra.infra.workspace import backup_control_authority, backup_object_set, backup_publish, backup_target_store
 from deepseek_infra.infra.workspace.federated_replica_attestation import REPLICA_ATTESTATION_FIELDS
 from deepseek_infra.infra.workspace.federated_replica_commit import COMMIT_V4_FIELDS, RECEIPT_V4_FIELDS
 from scripts import check_mcp_protocol_parity as mcp_parity
-from scripts.native_runtime_contract import sha256_file, validate_corpus
+from scripts.native_runtime_contract import sha256_file, validate_corpora, validate_corpus
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +38,35 @@ def test_canonical_corpora_match_frozen_digests() -> None:
         "control-shadow-decisions",
         "control-authority-checkpoints",
     } <= ids
+
+    manifests = validate_corpora()
+    assert len(manifests) == 2
+    assert manifests[1]["compatibility_reason"]
+
+
+def test_storage_v2_semantic_vector_matches_python_4_8_0_bytes() -> None:
+    manifest_path = ROOT / "compat" / "native-runtime" / "v2" / "manifest.json"
+    manifest = validate_corpus(manifest_path)
+    path = next(
+        item["path"]
+        for item in manifest["corpora"]
+        if item["id"] == "storage-receipt-commit-semantics-v2"
+    )
+    corpus = json.loads((ROOT / path).read_text(encoding="utf-8"))
+    case = corpus["cases"][0]
+
+    assert backup_object_set.object_inventory_digest(case["objects"]) == case["object_set_digest"]
+    normalized = sorted(case["objects"], key=lambda item: (item["digest"], item["size"]))
+    commitment = "".join(f"{item['digest']}:{item['size']}\n" for item in normalized)
+    assert commitment == case["commitment"]
+
+    receipt_bytes = (json.dumps(case["receipt"], ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    assert hashlib.sha256(receipt_bytes).hexdigest() == case["receipt_digest"]
+    assert backup_object_set.committed_object_inventory(case["receipt"]) == normalized
+
+    commit = case["commit"]
+    assert backup_target_store.commit_slot_digest(commit["scheduleSlot"]) == commit["slotDigest"]
+    assert backup_publish._commit_hash(commit) == commit["commitHash"]
 
 
 def test_control_authority_corpus_matches_frozen_python_v1_bytes() -> None:

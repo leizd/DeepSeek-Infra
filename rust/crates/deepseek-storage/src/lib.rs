@@ -5,8 +5,13 @@ use deepseek_protocol::{
 pub mod object_set;
 pub mod receipt;
 
-pub use object_set::{ChunkRef, OBJECT_SET_SCHEMA, ObjectSet, StoredObject};
-pub use receipt::{CommitV4, ReceiptV4};
+pub use object_set::{
+    OBJECT_SET_SCHEMA, ObjectInventoryEntry, ObjectSet, ObjectSetError, object_inventory_digest,
+};
+pub use receipt::{
+    COMMIT_SCHEMA_VERSION, CommitError, CommitV4, DocumentError, GENESIS_COMMIT_HASH,
+    RECEIPT_SCHEMA_VERSION, ReceiptError, ReceiptV4, slot_digest, validate_committed_documents,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageRequest {

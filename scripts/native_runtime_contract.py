@@ -16,6 +16,10 @@ DESCRIPTOR_PATH = ROOT / "proto" / "generated" / "descriptor.v1.json"
 BINARY_DESCRIPTOR_PATH = ROOT / "proto" / "generated" / "descriptor.pb"
 CODEGEN_MANIFEST_PATH = ROOT / "proto" / "generated" / "codegen-manifest.v1.json"
 CORPUS_MANIFEST = ROOT / "compat" / "native-runtime" / "v1" / "manifest.json"
+CORPUS_MANIFESTS = (
+    CORPUS_MANIFEST,
+    ROOT / "compat" / "native-runtime" / "v2" / "manifest.json",
+)
 COMMAND_CODES_PATH = ROOT / "release" / "native_runtime_command_codes_v1.json"
 PROTO_ROOT = ROOT / "proto"
 FROZEN_DESCRIPTOR_SHA256 = "088cc0348e01d40bcde8dcda8dbaeaeae53a5282aebaa66b84be4627ca5086f4"
@@ -579,7 +583,7 @@ def validate_corpus(manifest_path: Path = CORPUS_MANIFEST) -> dict[str, Any]:
         if not corpus_id or corpus_id in seen:
             raise ContractError(f"invalid corpus id {corpus_id!r}")
         seen.add(corpus_id)
-        path = ROOT / rel
+        path = _checked_repo_path(rel)
         if not path.is_file():
             raise ContractError(f"corpus file missing: {rel}")
         digest = sha256_file(path)
@@ -588,6 +592,16 @@ def validate_corpus(manifest_path: Path = CORPUS_MANIFEST) -> dict[str, Any]:
         if item.get("sensitivity") not in {"public", "redacted"}:
             raise ContractError(f"{corpus_id} sensitivity must be public or redacted")
     return manifest
+
+
+def validate_corpora(manifest_paths: tuple[Path, ...] = CORPUS_MANIFESTS) -> list[dict[str, Any]]:
+    manifests: list[dict[str, Any]] = []
+    for index, path in enumerate(manifest_paths):
+        manifest = validate_corpus(path)
+        if index > 0 and not str(manifest.get("compatibility_reason") or "").strip():
+            raise ContractError(f"additive corpus manifest must explain compatibility: {path}")
+        manifests.append(manifest)
+    return manifests
 
 
 def validate_toolchain(path: Path = TOOLCHAIN_PATH) -> dict[str, Any]:
@@ -793,14 +807,15 @@ def check_all() -> dict[str, Any]:
     validate_toolchain_consumers()
     descriptor = check_descriptor()
     codegen = validate_codegen_manifest()
-    corpus = validate_corpus()
+    corpora = validate_corpora()
     command_codes = validate_command_codes()
     return {
         "ok": True,
         "domains": len(ownership["domains"]),
         "proto_files": len(descriptor["files"]),
         "generated_outputs": len(codegen["outputs"]),
-        "corpora": len(corpus["corpora"]),
+        "corpora": sum(len(corpus["corpora"]) for corpus in corpora),
+        "corpus_versions": len(corpora),
         "command_codes": len(command_codes["codes"]),
         "go": toolchain["go"]["version"],
     }
