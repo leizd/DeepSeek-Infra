@@ -6,20 +6,27 @@ import (
 
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
 	"github.com/leizd/DeepSeek-Infra/go/internal/shadow"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 )
 
-func Register(mux *http.ServeMux) {
-	mux.HandleFunc("/internal/shadow/evaluate", evaluate)
+func Register(mux *http.ServeMux, control *store.Control) {
+	mux.HandleFunc("/internal/shadow/evaluate", func(writer http.ResponseWriter, request *http.Request) {
+		evaluate(writer, request, control)
+	})
+	mux.HandleFunc("/internal/shadow/snapshot", func(writer http.ResponseWriter, request *http.Request) {
+		snapshot(writer, request, control)
+	})
 	mux.HandleFunc("/internal/action/execute", deny)
+	mux.HandleFunc("/internal/action/dispatch", dispatch)
 }
 
 func Handler() http.Handler {
 	mux := http.NewServeMux()
-	Register(mux)
+	Register(mux, nil)
 	return mux
 }
 
-func evaluate(writer http.ResponseWriter, request *http.Request) {
+func evaluate(writer http.ResponseWriter, request *http.Request, control *store.Control) {
 	if request.Method != http.MethodPost {
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -34,8 +41,60 @@ func evaluate(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	if err := shadow.Persist(control, snapshot, decision); err != nil {
+		writer.WriteHeader(http.StatusConflict)
+		return
+	}
 	writer.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(writer).Encode(decision)
+}
+
+func snapshot(writer http.ResponseWriter, request *http.Request, control *store.Control) {
+	if request.Method != http.MethodGet {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if control == nil {
+		writer.WriteHeader(http.StatusNotFound)
+		return
+	}
+	report, err := control.ExportSnapshot()
+	if err != nil {
+		writer.WriteHeader(http.StatusConflict)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(report)
+}
+
+func dispatch(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Kind           string `json:"kind"`
+		ActionID       string `json:"actionId"`
+		ExecutionEpoch uint64 `json:"executionEpoch"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		writer.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	kind, ok := internalprotocol.KindFromName(body.Kind)
+	if !ok {
+		writer.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(writer).Encode(map[string]string{"error": internalprotocol.ErrUnknownEffect.Error()})
+		return
+	}
+	err := internalprotocol.PlanNative(kind, internalprotocol.ActionFence{ActionID: body.ActionID, ExecutionEpoch: body.ExecutionEpoch}, 0)
+	writer.Header().Set("Content-Type", "application/json")
+	status := http.StatusConflict
+	if err == internalprotocol.ErrEmptyActionID || err == internalprotocol.ErrZeroEpoch || err == internalprotocol.ErrUnknownEffect {
+		status = http.StatusBadRequest
+	}
+	writer.WriteHeader(status)
+	_ = json.NewEncoder(writer).Encode(map[string]string{"error": err.Error()})
 }
 
 func deny(writer http.ResponseWriter, _ *http.Request) {

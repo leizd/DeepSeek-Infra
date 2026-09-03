@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "runtime": "go",
+  "mode": "shadow",
+  "unique_writer": {
+    "table": "writer.json",
+    "fencing": "fencingToken",
+    "lease": "leaseUntil",
+    "runtime_field": "go"
+  },
+  "database": "isolated-directory",
+  "filename": "go-control/",
+  "migrations": [
+    {
+      "version": 1,
+      "up": "create domain table directories and go-only manifest",
+      "down": "drop domain table directories; schemaVersion=0"
+    }
+  ],
+  "tables": [
+    {"name": "policies", "domain": "policy", "ownership_ids": ["policy_crud"]},
+    {"name": "targets", "domain": "target", "ownership_ids": ["target_registry"]},
+    {"name": "scheduler_runs", "domain": "scheduler_run", "ownership_ids": ["backup_scheduler", "job_controller"]},
+    {"name": "action_journal", "domain": "action", "ownership_ids": ["action_journal", "resilience_coordinator", "dr_orchestration"]},
+    {"name": "risk_observations", "domain": "risk", "ownership_ids": ["risk_lifecycle"]},
+    {"name": "wave_schedules", "domain": "wave", "ownership_ids": ["wave_scheduler"]},
+    {"name": "federation_peers", "domain": "peer", "ownership_ids": ["federation_peer_registry"]},
+    {"name": "federation_grants", "domain": "grant", "ownership_ids": ["ingress_grant_lifecycle"]},
+    {"name": "federation_sessions", "domain": "session", "ownership_ids": ["federation_session_lifecycle"]},
+    {"name": "federation_transfers", "domain": "transfer", "ownership_ids": ["federated_transfer_journal"]},
+    {"name": "forecasts", "domain": "forecast", "ownership_ids": ["capacity_forecast"]},
+    {"name": "agent_runs", "domain": "agent_run", "ownership_ids": ["agent_dag_scheduler"]}
+  ],
+  "writer_plan": {
+    "lease_fencing": "writer.json",
+    "maintenance_controller": "writer.json",
+    "config_runtime_lifecycle": "manifest",
+    "control_api": "manifest"
+  },
+  "forbidden_python_path_components": [
+    ".backup-control",
+    ".backup-scheduler",
+    ".backup-policies",
+    ".backup-targets",
+    ".resilience-journal",
+    ".resilience-risk",
+    ".resilience-waves",
+    ".resilience-scheduler",
+    ".resilience-capacity",
+    ".federation"
+  ]
+}

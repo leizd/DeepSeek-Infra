@@ -249,6 +249,25 @@ def load_fixture(path: Path = DEFAULT_FIXTURE) -> list[dict[str, Any]]:
     return cases
 
 
+def export_report(out: Path, fixture: Path = DEFAULT_FIXTURE) -> dict[str, Any]:
+    cases = load_fixture(fixture)
+    rows = []
+    for case in cases:
+        snapshot = case.get("snapshot")
+        if not isinstance(snapshot, dict):
+            raise ShadowError(f"invalid shadow case {case.get('name')!r}")
+        decision = evaluate(snapshot)
+        rows.append({"name": str(case.get("name") or ""), "digest": decision["digest"]})
+    payload = {
+        "kernel": "control-shadow-decision-v1",
+        "mutationDenied": True,
+        "cases": rows,
+    }
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return payload
+
+
 def check_fixture(path: Path = DEFAULT_FIXTURE) -> dict[str, Any]:
     cases = load_fixture(path)
     passed = 0
@@ -279,9 +298,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Python control-plane shadow oracle")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--write-expect", action="store_true")
+    parser.add_argument("--export-report", type=Path)
     parser.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
     args = parser.parse_args(argv)
     try:
+        if args.export_report:
+            print(json.dumps(export_report(args.export_report, args.fixture), indent=2, sort_keys=True))
         if args.write_expect:
             cases = load_fixture(args.fixture)
             rendered = []

@@ -29,7 +29,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(lifecycle.StatusFrom(cfg))
+	payload, err := json.Marshal(lifecycle.StatusFrom(cfg, cfg.ShadowStoreDir != ""))
 	if err != nil {
 		return err
 	}

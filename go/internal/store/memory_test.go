@@ -13,6 +13,10 @@ func TestOpenRejectsProductionPath(t *testing.T) {
 	if err := store.MutateProduction("policy", map[string]any{"id": "p1"}); err == nil {
 		t.Fatal("production mutate must be denied")
 	}
+	var missing *Memory
+	if err := missing.PutShadow("x", map[string]any{"a": 1}); err != ErrShadowOnly {
+		t.Fatalf("nil store: %v", err)
+	}
 	if err := store.PutShadow("decision", map[string]any{"digest": "abc"}); err != nil {
 		t.Fatal(err)
 	}
