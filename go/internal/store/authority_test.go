@@ -193,6 +193,82 @@ func TestAuthorityChainRejectsUnsafeHistories(t *testing.T) {
 	}
 }
 
+func TestAuthorityHeadTransitionMatchesFrozenPythonCASRules(t *testing.T) {
+	genesis := frozenCheckpoint(t, 0)
+	second := frozenCheckpoint(t, 1)
+
+	advance, err := VerifyAuthorityHeadTransition(nil, genesis)
+	if err != nil || !advance {
+		t.Fatalf("genesis transition = (%v, %v), want advance", advance, err)
+	}
+	advance, err = VerifyAuthorityHeadTransition(&AuthorityHead{}, genesis)
+	if err != nil || !advance {
+		t.Fatalf("zero-head genesis transition = (%v, %v), want advance", advance, err)
+	}
+	advance, err = VerifyAuthorityHeadTransition(
+		&AuthorityHead{Generation: genesis.AuthorityGeneration, Digest: genesis.Digest},
+		genesis,
+	)
+	if err != nil || advance {
+		t.Fatalf("idempotent transition = (%v, %v), want no-op", advance, err)
+	}
+	advance, err = VerifyAuthorityHeadTransition(
+		&AuthorityHead{Generation: genesis.AuthorityGeneration, Digest: genesis.Digest},
+		second,
+	)
+	if err != nil || !advance {
+		t.Fatalf("next transition = (%v, %v), want advance", advance, err)
+	}
+}
+
+func TestAuthorityHeadTransitionRejectsUnsafeCAS(t *testing.T) {
+	genesis := frozenCheckpoint(t, 0)
+	second := frozenCheckpoint(t, 1)
+	wrongDigest := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	fork := *genesis
+	fork.CreatedAt = "2026-09-03T00:00:09Z"
+	resealCheckpoint(t, &fork)
+
+	gap := *second
+	gap.AuthorityGeneration = 3
+	resealCheckpoint(t, &gap)
+
+	broken := *second
+	broken.PreviousDigest = &wrongDigest
+	resealCheckpoint(t, &broken)
+
+	tampered := *second
+	tampered.CreatedAt = "2026-09-03T00:00:10Z"
+
+	tests := []struct {
+		name      string
+		current   *AuthorityHead
+		candidate *AuthorityCheckpoint
+		want      error
+	}{
+		{name: "invalid current generation", current: &AuthorityHead{Generation: -1, Digest: wrongDigest}, candidate: genesis, want: ErrInvalidAuthorityHead},
+		{name: "invalid zero head", current: &AuthorityHead{Digest: wrongDigest}, candidate: genesis, want: ErrInvalidAuthorityHead},
+		{name: "invalid current digest", current: &AuthorityHead{Generation: 1, Digest: "not-a-digest"}, candidate: second, want: ErrInvalidAuthorityHead},
+		{name: "uppercase current digest", current: &AuthorityHead{Generation: 1, Digest: strings.ToUpper(genesis.Digest)}, candidate: second, want: ErrInvalidAuthorityHead},
+		{name: "generation exhausted", current: &AuthorityHead{Generation: 1<<63 - 1, Digest: genesis.Digest}, candidate: second, want: ErrStaleAuthorityWriter},
+		{name: "non-genesis first", candidate: second, want: ErrStaleAuthorityWriter},
+		{name: "same generation fork", current: &AuthorityHead{Generation: 1, Digest: genesis.Digest}, candidate: &fork, want: ErrAuthorityFork},
+		{name: "stale generation", current: &AuthorityHead{Generation: 2, Digest: second.Digest}, candidate: genesis, want: ErrStaleAuthorityWriter},
+		{name: "future gap", current: &AuthorityHead{Generation: 1, Digest: genesis.Digest}, candidate: &gap, want: ErrStaleAuthorityWriter},
+		{name: "broken previous", current: &AuthorityHead{Generation: 1, Digest: genesis.Digest}, candidate: &broken, want: ErrAuthorityBrokenChain},
+		{name: "tampered candidate", current: &AuthorityHead{Generation: 1, Digest: genesis.Digest}, candidate: &tampered, want: ErrAuthorityPayloadDigestMismatch},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			advance, err := VerifyAuthorityHeadTransition(test.current, test.candidate)
+			if advance || !errors.Is(err, test.want) {
+				t.Fatalf("transition = (%v, %v), want false and %v", advance, err, test.want)
+			}
+		})
+	}
+}
+
 func TestAuthorityCheckpointRoundTripPreservesAdditiveFields(t *testing.T) {
 	checkpoint := frozenCheckpoint(t, 0)
 	checkpoint.AdditionalFields = map[string]any{

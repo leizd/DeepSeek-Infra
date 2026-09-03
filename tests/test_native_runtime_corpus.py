@@ -57,6 +57,16 @@ def test_control_authority_corpus_matches_frozen_python_v1_bytes() -> None:
         assert checkpoint["payloadDigest"] == backup_control_authority.compute_payload_digest(checkpoint)
         assert checkpoint["digest"] == backup_control_authority.compute_checkpoint_digest(checkpoint)
     backup_control_authority.verify_authority_chain(checkpoints)
+    backup_control_authority.assert_logical_head_transition(
+        current_generation=None,
+        current_digest=None,
+        candidate=checkpoints[0],
+    )
+    backup_control_authority.assert_logical_head_transition(
+        current_generation=checkpoints[0]["authorityGeneration"],
+        current_digest=checkpoints[0]["digest"],
+        candidate=checkpoints[1],
+    )
 
 
 def test_storage_inventory_matches_python_4_8_0_field_sets() -> None:

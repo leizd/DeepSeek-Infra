@@ -30,6 +30,8 @@ var (
 	ErrAuthorityGenerationGap         = errors.New("AUTHORITY_GENERATION_GAP")
 	ErrAuthorityBrokenChain           = errors.New("AUTHORITY_BROKEN_CHAIN")
 	ErrAuthorityFork                  = errors.New("AUTHORITY_FORK")
+	ErrInvalidAuthorityHead           = errors.New("INVALID_AUTHORITY_HEAD")
+	ErrStaleAuthorityWriter           = errors.New("STALE_AUTHORITY_WRITER")
 )
 
 var (
@@ -69,6 +71,11 @@ type AuthorityCheckpoint struct {
 	PayloadDigest              string           `json:"payloadDigest,omitempty"`
 	Digest                     string           `json:"digest,omitempty"`
 	AdditionalFields           map[string]any   `json:"-"`
+}
+
+type AuthorityHead struct {
+	Generation int64  `json:"authorityGeneration"`
+	Digest     string `json:"digest"`
 }
 
 // UnmarshalJSON preserves JSON number identity and additive control-authority-v1
@@ -246,6 +253,58 @@ func VerifyAuthorityChain(checkpoints []*AuthorityCheckpoint) error {
 		previousGeneration = generation
 	}
 	return nil
+}
+
+// VerifyAuthorityHeadTransition implements the monotonic logical CAS used by
+// the frozen Python authority writer. The bool is true only when the head must
+// advance; an exact replay of the current tip returns false with no error.
+func VerifyAuthorityHeadTransition(current *AuthorityHead, candidate *AuthorityCheckpoint) (bool, error) {
+	if err := VerifyAuthorityCheckpointIntegrity(candidate); err != nil {
+		return false, err
+	}
+	if current == nil || current.Generation == 0 {
+		if current != nil && current.Digest != "" {
+			return false, ErrInvalidAuthorityHead
+		}
+		if candidate.AuthorityGeneration != 1 ||
+			candidate.PreviousDigest != nil && *candidate.PreviousDigest != "" {
+			return false, ErrStaleAuthorityWriter
+		}
+		return true, nil
+	}
+	if current.Generation < 1 || !isLowerSHA256(current.Digest) {
+		return false, ErrInvalidAuthorityHead
+	}
+	if candidate.AuthorityGeneration == current.Generation {
+		if candidate.Digest == current.Digest {
+			return false, nil
+		}
+		return false, fmt.Errorf("%w: generation %d", ErrAuthorityFork, current.Generation)
+	}
+	if current.Generation == 1<<63-1 {
+		return false, fmt.Errorf("%w: generation exhausted", ErrStaleAuthorityWriter)
+	}
+	expectedGeneration := current.Generation + 1
+	if candidate.AuthorityGeneration != expectedGeneration {
+		return false, fmt.Errorf(
+			"%w: expected generation %d, got %d",
+			ErrStaleAuthorityWriter,
+			expectedGeneration,
+			candidate.AuthorityGeneration,
+		)
+	}
+	if candidate.PreviousDigest == nil || *candidate.PreviousDigest != current.Digest {
+		return false, fmt.Errorf("%w: generation %d", ErrAuthorityBrokenChain, candidate.AuthorityGeneration)
+	}
+	return true, nil
+}
+
+func isLowerSHA256(value string) bool {
+	if len(value) != sha256.Size*2 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func checkpointDocument(cp *AuthorityCheckpoint) (map[string]any, error) {
