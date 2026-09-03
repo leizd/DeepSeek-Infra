@@ -51,7 +51,7 @@ Status: in progress on `codex/native-runtime-4.8.1`.
 - [x] Extend Rust workspace to protocol/worker crates.
 - [x] Add protocol generation and native contract gates.
 - [x] Add native migration/rollback/unknown-effect runbook.
-- [ ] Run existing frontend/Python/Rust/eval/security/release gates.
+- [x] Run existing frontend/Python/Rust/eval/security/release gates.
 - [ ] Run exact-head CI and Evidence Assembly.
 - [x] Verify no production owner or frozen contract changed.
 - [ ] Qualify 4.8.1 without skips, mocks, or synthetic Evidence.
