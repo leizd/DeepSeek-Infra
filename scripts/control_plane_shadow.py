@@ -294,16 +294,47 @@ def check_fixture(path: Path = DEFAULT_FIXTURE) -> dict[str, Any]:
     return {"ok": True, "passed": passed, "total": len(cases)}
 
 
+def verify_against_go(go_url: str, path: Path = DEFAULT_FIXTURE) -> dict[str, Any]:
+    import urllib.request
+
+    cases = load_fixture(path)
+    passed = 0
+    endpoint = f"{go_url.rstrip('/')}/internal/shadow/evaluate"
+    for case in cases:
+        name = str(case.get("name") or "")
+        snapshot = case.get("snapshot")
+        if not name or not isinstance(snapshot, dict):
+            continue
+        py_decision = evaluate(snapshot)
+        req = urllib.request.Request(
+            endpoint,
+            data=json.dumps(snapshot).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            go_data = json.loads(resp.read().decode("utf-8"))
+        if py_decision["digest"] != go_data.get("digest"):
+            raise ShadowError(
+                f"Dual-track parity failure for {name}: python={py_decision['digest']} vs go={go_data.get('digest')}"
+            )
+        passed += 1
+    return {"ok": True, "dual_track_verified": passed, "total": len(cases)}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Python control-plane shadow oracle")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--write-expect", action="store_true")
     parser.add_argument("--export-report", type=Path)
+    parser.add_argument("--go-url", type=str, help="Verify dual-track decision parity against running deepseekd")
     parser.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
     args = parser.parse_args(argv)
     try:
         if args.export_report:
             print(json.dumps(export_report(args.export_report, args.fixture), indent=2, sort_keys=True))
+        if args.go_url:
+            print(json.dumps(verify_against_go(args.go_url, args.fixture), indent=2, sort_keys=True))
         if args.write_expect:
             cases = load_fixture(args.fixture)
             rendered = []

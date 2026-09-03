@@ -51,3 +51,60 @@ def test_pending_to_active_is_not_tofu() -> None:
         }
     )
     assert decision["federation"]["transitions"][0]["code"] == "FEDERATION_PEER_NOT_VERIFIED"
+
+
+def test_dual_track_verifier_detects_match_and_mismatch(tmp_path: Path) -> None:
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from typing import Any
+    from scripts.control_plane_shadow import ShadowError, evaluate, verify_against_go
+
+    dummy_fixture = tmp_path / "cases.json"
+    dummy_fixture.write_text(
+        json.dumps(
+            {
+                "cases": [
+                    {
+                        "name": "case-1",
+                        "snapshot": {"nowUnix": 10, "nowMinute": 0, "actions": [], "capacityTargets": [], "federationTransitions": []},
+                        "expect": {},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    py_decision = evaluate({"nowUnix": 10, "nowMinute": 0, "actions": [], "capacityTargets": [], "federationTransitions": []})
+    expected_digest = py_decision["digest"]
+
+    class MockGoHandler(BaseHTTPRequestHandler):
+        digest_to_return = expected_digest
+
+        def do_POST(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"digest": self.digest_to_return}).encode("utf-8"))
+
+        def log_message(self, format: str, *args: Any) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), MockGoHandler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        res = verify_against_go(f"http://127.0.0.1:{port}", dummy_fixture)
+        assert res["ok"] is True
+        assert res["dual_track_verified"] == 1
+
+        MockGoHandler.digest_to_return = "tampered_digest_123"
+        try:
+            verify_against_go(f"http://127.0.0.1:{port}", dummy_fixture)
+            assert False, "should fail on mismatch"
+        except ShadowError as exc:
+            assert "Dual-track parity failure" in str(exc)
+    finally:
+        server.shutdown()
