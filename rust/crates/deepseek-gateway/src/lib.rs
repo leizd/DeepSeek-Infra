@@ -9,10 +9,12 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::{io, path::Path as FsPath};
 
 pub mod observability;
 pub mod policy_routes;
 pub mod request_preparation;
+pub mod static_files;
 
 pub fn gateway_version() -> &'static str {
     deepseek_core::version_info().version
@@ -41,6 +43,10 @@ pub struct ChatMessage {
 }
 
 pub fn create_app() -> Router {
+    apply_gateway_layers(create_routes())
+}
+
+fn create_routes() -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/metrics", get(observability::metrics))
@@ -60,10 +66,24 @@ pub fn create_app() -> Router {
         .route("/rag/index/validate", post(rag_index_validate))
         .route("/rag/documents/prepare", post(rag_document_prepare))
         .merge(policy_routes::router())
+}
+
+fn apply_gateway_layers(router: Router) -> Router {
+    router
         .layer(DefaultBodyLimit::max(
             deepseek_rag::document_preparation::MAX_REQUEST_BYTES + 1_000_000,
         ))
         .layer(middleware::from_fn(observability::observe_sidecar_request))
+}
+
+pub fn create_production_app(static_root: impl AsRef<FsPath>) -> io::Result<Router> {
+    let static_files = static_files::StaticFiles::load(static_root)?;
+    Ok(apply_gateway_layers(create_routes().fallback(
+        move |request: axum::extract::Request| {
+            let static_files = static_files.clone();
+            async move { static_files.serve(request).await }
+        },
+    )))
 }
 
 fn unavailable(code: &'static str, message: &'static str) -> (StatusCode, Json<serde_json::Value>) {
@@ -446,7 +466,9 @@ fn validate_chat_request(
 mod tests {
     use super::*;
     use axum::body::{Body, to_bytes};
-    use axum::http::Request;
+    use axum::http::{Request, header};
+    use std::fs;
+    use std::path::Path as FsPath;
     use tower::ServiceExt;
 
     async fn send_request(
@@ -490,6 +512,186 @@ mod tests {
             .to_string();
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         (status, content_type, bytes.to_vec())
+    }
+
+    fn write_frontend_fixture(root: &FsPath) {
+        fs::create_dir_all(root.join("ui/assets")).unwrap();
+        fs::create_dir_all(root.join("icons")).unwrap();
+        fs::write(
+            root.join("ui/index.html"),
+            "<!doctype html><main>native ui</main>",
+        )
+        .unwrap();
+        fs::write(
+            root.join("ui/assets/app-0123456789abcdef.js"),
+            "globalThis.__nativeUi = true;",
+        )
+        .unwrap();
+        fs::write(root.join("icons/app.svg"), "<svg></svg>").unwrap();
+        fs::write(
+            root.join("ui/manifest-root.webmanifest"),
+            r#"{"name":"DeepSeek Infra"}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("ui/sw-root-0123456789abcdef.js"),
+            "self.__nativeWorker = true;",
+        )
+        .unwrap();
+    }
+
+    async fn get_response(app: Router, uri: &str) -> Response {
+        app.oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn response_body(response: Response) -> String {
+        String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn production_app_rejects_a_missing_frontend_build() {
+        let temp = tempfile::tempdir().unwrap();
+        let error = create_production_app(temp.path()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert!(error.to_string().contains("static/ui/index.html"));
+    }
+
+    #[tokio::test]
+    async fn production_app_serves_index_and_spa_routes_with_security_headers() {
+        let temp = tempfile::tempdir().unwrap();
+        write_frontend_fixture(temp.path());
+        let app = create_production_app(temp.path()).unwrap();
+
+        for uri in ["/", "/ui", "/conversations/conv-1"] {
+            let response = get_response(app.clone(), uri).await;
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            assert_eq!(
+                response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+                "nosniff"
+            );
+            assert_eq!(response.headers()[header::X_FRAME_OPTIONS], "DENY");
+            assert!(response.headers().contains_key("x-deepseek-request-id"));
+            assert!(
+                response.headers()[header::CONTENT_TYPE]
+                    .to_str()
+                    .unwrap()
+                    .starts_with("text/html")
+            );
+            assert!(response_body(response).await.contains("native ui"));
+        }
+    }
+
+    #[tokio::test]
+    async fn production_app_serves_assets_with_the_frozen_cache_contract() {
+        let temp = tempfile::tempdir().unwrap();
+        write_frontend_fixture(temp.path());
+        let app = create_production_app(temp.path()).unwrap();
+
+        let hashed = get_response(app.clone(), "/ui/assets/app-0123456789abcdef.js").await;
+        assert_eq!(hashed.status(), StatusCode::OK);
+        assert_eq!(
+            hashed.headers()[header::CACHE_CONTROL],
+            "public, max-age=31536000, immutable"
+        );
+        assert!(response_body(hashed).await.contains("__nativeUi"));
+
+        let ordinary = get_response(app, "/icons/app.svg").await;
+        assert_eq!(ordinary.status(), StatusCode::OK);
+        assert_eq!(ordinary.headers()[header::CACHE_CONTROL], "no-cache");
+        assert_eq!(ordinary.headers()[header::CONTENT_TYPE], "image/svg+xml");
+    }
+
+    #[tokio::test]
+    async fn production_app_preserves_root_pwa_aliases() {
+        let temp = tempfile::tempdir().unwrap();
+        write_frontend_fixture(temp.path());
+        let app = create_production_app(temp.path()).unwrap();
+
+        let manifest = get_response(app.clone(), "/manifest.webmanifest").await;
+        assert_eq!(manifest.status(), StatusCode::OK);
+        assert_eq!(manifest.headers()[header::CACHE_CONTROL], "no-cache");
+        assert_eq!(
+            manifest.headers()[header::CONTENT_TYPE],
+            "application/manifest+json"
+        );
+
+        let worker = get_response(app, "/sw-0123456789abcdef.js").await;
+        assert_eq!(worker.status(), StatusCode::OK);
+        assert_eq!(
+            worker.headers()[header::CACHE_CONTROL],
+            "public, max-age=31536000, immutable"
+        );
+        assert!(response_body(worker).await.contains("__nativeWorker"));
+    }
+
+    #[tokio::test]
+    async fn production_app_never_turns_missing_assets_or_traversal_into_spa_success() {
+        let temp = tempfile::tempdir().unwrap();
+        write_frontend_fixture(temp.path());
+        fs::write(
+            temp.path().parent().unwrap().join("outside-secret"),
+            "secret",
+        )
+        .unwrap();
+        let app = create_production_app(temp.path()).unwrap();
+
+        for uri in [
+            "/ui/assets/missing.js",
+            "/icons",
+            "/%2e%2e/outside-secret",
+            "/ui/%2e%2e/%2e%2e/outside-secret",
+            "/%5coutside-secret",
+            "/legacy",
+        ] {
+            let response = get_response(app.clone(), uri).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+            assert!(
+                !response_body(response).await.contains("native ui"),
+                "{uri}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn production_routes_take_precedence_and_static_post_is_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        write_frontend_fixture(temp.path());
+        let app = create_production_app(temp.path()).unwrap();
+
+        let api = get_response(app.clone(), "/api/policies").await;
+        assert_eq!(api.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&response_body(api).await).unwrap()["error"]
+                ["code"],
+            "GO_CONTROL_PROXY_NOT_READY"
+        );
+
+        let post = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/conversations/conv-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(post.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
     #[test]

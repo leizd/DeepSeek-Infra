@@ -1,3 +1,12 @@
+FROM node:24-bookworm-slim AS frontend-builder
+
+WORKDIR /build/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend ./
+RUN npm run build
+RUN test -f /build/static/ui/index.html
+
 FROM rust:1.85-bookworm AS builder
 
 WORKDIR /app
@@ -22,11 +31,17 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --no-create-home deepseek
 
+WORKDIR /app
+
 COPY --from=builder \
     /app/rust/target/release/deepseek-gateway \
     /usr/local/bin/deepseek-gateway
+COPY static ./static
+COPY --from=frontend-builder /build/static/ui ./static/ui
+RUN test -f /app/static/ui/index.html
 
-ENV GATEWAY_BIND_ADDR=0.0.0.0:8787
+ENV GATEWAY_BIND_ADDR=0.0.0.0:8787 \
+    DEEPSEEK_INFRA_STATIC_DIR=/app/static
 
 USER deepseek
 

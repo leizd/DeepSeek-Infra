@@ -28,6 +28,7 @@ def _request_json(
     *,
     payload: dict[str, Any] | None = None,
     timeout: float = 5.0,
+    expected_status: int = 200,
 ) -> dict[str, Any]:
     url = f"{base_url.rstrip('/')}{path}"
     data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -40,13 +41,13 @@ def _request_json(
             status = response.status
             raw = response.read().decode("utf-8")
     except HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise SmokeFailure(f"{method} {path} returned HTTP {exc.code}: {body}") from exc
+        status = exc.code
+        raw = exc.read().decode("utf-8", errors="replace")
     except (URLError, TimeoutError, OSError) as exc:
         raise SmokeFailure(f"{method} {path} failed: {exc}") from exc
 
-    if status != 200:
-        raise SmokeFailure(f"{method} {path} returned HTTP {status}")
+    if status != expected_status:
+        raise SmokeFailure(f"{method} {path} returned HTTP {status}, expected {expected_status}: {raw}")
     try:
         value = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -54,6 +55,23 @@ def _request_json(
     if not isinstance(value, dict):
         raise SmokeFailure(f"{method} {path} returned a non-object JSON value")
     return value
+
+
+def _request_frontend(base_url: str, *, timeout: float = 5.0) -> tuple[str, dict[str, str]]:
+    request = Request(f"{base_url.rstrip('/')}/", method="GET", headers={"Accept": "text/html"})
+    try:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310 - target URL is operator supplied
+            status = response.status
+            raw = response.read().decode("utf-8")
+            headers = {key.lower(): value for key, value in response.headers.items()}
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise SmokeFailure(f"GET / returned HTTP {exc.code}: {body}") from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise SmokeFailure(f"GET / failed: {exc}") from exc
+    if status != 200:
+        raise SmokeFailure(f"GET / returned HTTP {status}")
+    return raw, headers
 
 
 def _request_text(base_url: str, path: str, *, timeout: float = 5.0) -> str:
@@ -131,11 +149,20 @@ def run_smoke(base_url: str, *, wait_seconds: float = 60.0, timeout: float = 5.0
         _require(metric in metrics, f"metrics response is missing {metric}")
     checks.append(CheckResult("metrics", "GET /metrics"))
 
-    models = _request_json(base_url, "GET", "/v1/models", timeout=timeout)
-    model_data = models.get("data")
-    _require(models.get("object") == "list", "models response is not an OpenAI-compatible list")
-    _require(isinstance(model_data, list) and bool(model_data), "models response has no model entries")
-    checks.append(CheckResult("models", "GET /v1/models"))
+    frontend, frontend_headers = _request_frontend(base_url, timeout=timeout)
+    _require("<!doctype html" in frontend.lower(), "frontend root did not return the built HTML document")
+    _require(frontend_headers.get("cache-control") == "no-store", "frontend HTML does not use no-store")
+    _require(frontend_headers.get("x-content-type-options") == "nosniff", "frontend HTML is missing nosniff")
+    checks.append(CheckResult("frontend", "GET /"))
+
+    models = _request_json(base_url, "GET", "/v1/models", timeout=timeout, expected_status=503)
+    model_error = models.get("error")
+    _require(
+        isinstance(model_error, dict) and model_error.get("code") == "NATIVE_MODELS_NOT_READY",
+        "unwired model catalog did not fail closed with NATIVE_MODELS_NOT_READY",
+    )
+    _require("data" not in models, "unwired model catalog returned fabricated model data")
+    checks.append(CheckResult("models_fail_closed", "GET /v1/models -> 503"))
 
     chat = _request_json(
         base_url,
@@ -147,15 +174,15 @@ def run_smoke(base_url: str, *, wait_seconds: float = 60.0, timeout: float = 5.0
             "stream": False,
         },
         timeout=timeout,
+        expected_status=503,
     )
-    choices = chat.get("choices")
-    _require(chat.get("object") == "chat.completion", "chat response has the wrong object type")
-    if not isinstance(choices, list) or not choices:
-        raise SmokeFailure("chat response has no choices")
-    first_choice = choices[0]
-    first_message = first_choice.get("message") if isinstance(first_choice, dict) else None
-    _require(isinstance(first_message, dict) and first_message.get("role") == "assistant", "chat response has no assistant message")
-    checks.append(CheckResult("chat", "POST /v1/chat/completions"))
+    chat_error = chat.get("error")
+    _require(
+        isinstance(chat_error, dict) and chat_error.get("code") == "NATIVE_CHAT_NOT_READY",
+        "unwired chat execution did not fail closed with NATIVE_CHAT_NOT_READY",
+    )
+    _require("choices" not in chat, "unwired chat execution returned a fabricated completion")
+    checks.append(CheckResult("chat_fail_closed", "POST /v1/chat/completions -> 503"))
 
     mcp_request = {
         "jsonrpc": "2.0",

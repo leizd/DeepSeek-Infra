@@ -1,4 +1,4 @@
-# 构建上下文只需要 app.py / deepseek_infra / static / requirements*
+# Shared build context for the legacy Python image and native Rust/Go image stages.
 .git
 .claude
 .idea
