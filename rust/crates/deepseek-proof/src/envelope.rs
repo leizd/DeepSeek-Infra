@@ -45,8 +45,14 @@ mod tests {
         );
         let val = serde_json::to_value(&env).unwrap();
         let map = val.as_object().unwrap();
-        assert_eq!(map.get("schema").unwrap().as_str().unwrap(), "evidence-proof-v2");
-        assert_eq!(map.get("proofType").unwrap().as_str().unwrap(), "dr-readiness-proof-v1");
+        assert_eq!(
+            map.get("schema").unwrap().as_str().unwrap(),
+            "evidence-proof-v2"
+        );
+        assert_eq!(
+            map.get("proofType").unwrap().as_str().unwrap(),
+            "dr-readiness-proof-v1"
+        );
         assert!(map.contains_key("signerKeyId"));
     }
 }

@@ -42,14 +42,14 @@ mod tests {
 
     #[test]
     fn storage_plan_never_moves_payload_bytes() {
-        assert_eq!(plan(&backup(), 0), Err(AdmitError::StorageNotAuthoritative));
+        assert_eq!(plan(&backup(), 1), Err(AdmitError::StorageNotAuthoritative));
         assert_eq!(
             plan(
                 &StorageRequest {
                     kind: CommandKind::ExecuteRepair,
                     ..backup()
                 },
-                0
+                1
             ),
             Err(AdmitError::StorageNotAuthoritative)
         );
@@ -63,7 +63,7 @@ mod tests {
                     kind: CommandKind::SignReadiness,
                     ..backup()
                 },
-                0
+                1
             ),
             Err(AdmitError::UnknownEffect)
         );

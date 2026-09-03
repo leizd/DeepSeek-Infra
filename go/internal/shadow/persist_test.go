@@ -1,32 +1,52 @@
 package shadow
 
 import (
+	"encoding/json"
 	"testing"
 
+	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 )
 
 func TestDispatchAdmittedSwallowsNativeNotAuthoritative(t *testing.T) {
-	if err := dispatchAdmitted("act-repair", 1, "CREATE_REPAIR_JOB"); err != nil {
+	control := openStore(t)
+	for _, id := range []string{"act-repair", "act-backup", "act-restore", "act-rebalance", "act-xfer"} {
+		if err := control.Put(store.Record{Domain: "action", ID: id, Revision: 1, ExecutionEpoch: 1, State: "PENDING", Payload: json.RawMessage(`{}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := dispatchAdmitted(control, "action", "act-repair", 1, "CREATE_REPAIR_JOB"); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
-	if err := dispatchAdmitted("act-backup", 1, "EXECUTE_BACKUP"); err != nil {
+	if err := dispatchAdmitted(control, "action", "act-backup", 1, "EXECUTE_BACKUP"); err != nil {
 		t.Fatalf("backup: %v", err)
 	}
-	if err := dispatchAdmitted("act-restore", 1, "CREATE_RESTORE_JOB"); err != nil {
+	if err := dispatchAdmitted(control, "action", "act-restore", 1, "CREATE_RESTORE_JOB"); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	if err := dispatchAdmitted("act-rebalance", 1, "CREATE_REBALANCE_JOB"); err != nil {
+	if err := dispatchAdmitted(control, "action", "act-rebalance", 1, "CREATE_REBALANCE_JOB"); err != nil {
 		t.Fatalf("rebalance: %v", err)
 	}
-	if err := dispatchAdmitted("act-xfer", 1, "EXECUTE_FEDERATED_TRANSFER"); err != nil {
+	if err := dispatchAdmitted(control, "action", "act-xfer", 1, "EXECUTE_FEDERATED_TRANSFER"); err != nil {
 		t.Fatalf("transfer: %v", err)
 	}
-	if err := dispatchAdmitted("act-other", 1, "START_DR_DRILL"); err != nil {
+	if err := dispatchAdmitted(control, "action", "act-other", 1, "START_DR_DRILL"); err != nil {
 		t.Fatalf("unknown type: %v", err)
 	}
-	if err := dispatchAdmitted("", 1, "CREATE_BACKUP_JOB"); err == nil {
-		t.Fatal("empty id")
+	if err := dispatchAdmitted(control, "action", "", 1, "CREATE_BACKUP_JOB"); err != internalprotocol.ErrEmptyActionID {
+		t.Fatalf("empty id: %v", err)
+	}
+	if err := dispatchAdmitted(control, "action", "act-repair", 2, "CREATE_REPAIR_JOB"); err != internalprotocol.ErrFenceMismatch {
+		t.Fatalf("future epoch: %v", err)
+	}
+	if err := dispatchAdmitted(control, "action", "act-missing", 1, "CREATE_REPAIR_JOB"); err != internalprotocol.ErrFenceMismatch {
+		t.Fatalf("missing authority: %v", err)
+	}
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatchAdmitted(control, "action", "act-repair", 1, "CREATE_REPAIR_JOB"); err != store.ErrWriterFenceHeld {
+		t.Fatalf("unreadable authority: %v", err)
 	}
 }
 

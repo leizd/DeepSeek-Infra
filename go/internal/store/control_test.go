@@ -105,6 +105,9 @@ func TestFencedDomainsRejectZeroEpochAndStale(t *testing.T) {
 	if err := store.Put(Record{Domain: "action", ID: "act-1", Revision: 2, ExecutionEpoch: 3, State: "CLAIMED", Payload: json.RawMessage(`{}`)}); err != internalprotocol.ErrStaleEpoch {
 		t.Fatalf("stale: %v", err)
 	}
+	if err := store.Put(Record{Domain: "action", ID: "act-1", Revision: 2, ExecutionEpoch: 5, State: "CLAIMED", Payload: json.RawMessage(`{}`)}); err != nil {
+		t.Fatalf("authoritative advance: %v", err)
+	}
 }
 
 func TestProductionMutationDeniedAndPythonDbRejected(t *testing.T) {

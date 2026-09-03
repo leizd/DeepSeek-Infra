@@ -10,7 +10,7 @@ import (
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 )
 
-func TestActionDispatchIsNotAuthoritative(t *testing.T) {
+func TestActionDispatchFailsClosedWithoutAuthority(t *testing.T) {
 	server := httptest.NewServer(Handler())
 	defer server.Close()
 	post := func(body string) *http.Response {
@@ -29,7 +29,7 @@ func TestActionDispatchIsNotAuthoritative(t *testing.T) {
 	if err := json.NewDecoder(backup.Body).Decode(&payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["error"] != "STORAGE_NOT_AUTHORITATIVE" {
+	if payload["error"] != "FENCE_MISMATCH" {
 		t.Fatalf("backup error %v", payload)
 	}
 	xfer := post(`{"kind":"ExecuteFederatedTransfer","actionId":"act-1","executionEpoch":1}`)
@@ -64,6 +64,67 @@ func TestActionDispatchIsNotAuthoritative(t *testing.T) {
 	defer get.Body.Close()
 	if get.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("get %d", get.StatusCode)
+	}
+}
+
+func TestActionDispatchUsesLocallyStoredEpoch(t *testing.T) {
+	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "owner-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	if err := control.Put(store.Record{
+		Domain:         "action",
+		ID:             "act-1",
+		Revision:       1,
+		ExecutionEpoch: 2,
+		State:          "PENDING",
+		Payload:        json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	Register(mux, control)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	post := func(actionID string, epoch uint64) map[string]string {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{"kind": "ExecuteBackup", "actionId": actionID, "executionEpoch": epoch})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := http.Post(server.URL+"/internal/action/dispatch", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusConflict {
+			t.Fatalf("status %d", response.StatusCode)
+		}
+		var payload map[string]string
+		if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+	if payload := post("act-1", 2); payload["error"] != "STORAGE_NOT_AUTHORITATIVE" {
+		t.Fatalf("matching epoch %v", payload)
+	}
+	if payload := post("act-1", 3); payload["error"] != "FENCE_MISMATCH" {
+		t.Fatalf("future epoch %v", payload)
+	}
+	if payload := post("act-1", 1); payload["error"] != "STALE_EXECUTION_EPOCH" {
+		t.Fatalf("stale epoch %v", payload)
+	}
+	if payload := post("missing", 1); payload["error"] != "FENCE_MISMATCH" {
+		t.Fatalf("missing authority %v", payload)
+	}
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if payload := post("act-1", 2); payload["error"] != "FENCE_MISMATCH" {
+		t.Fatalf("unreadable authority %v", payload)
 	}
 }
 

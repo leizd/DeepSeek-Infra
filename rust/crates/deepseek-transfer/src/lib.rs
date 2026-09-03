@@ -40,7 +40,7 @@ mod tests {
     #[test]
     fn transfer_plan_never_moves_payload_bytes() {
         assert_eq!(
-            plan(&transfer(), 0),
+            plan(&transfer(), 1),
             Err(AdmitError::TransferNotAuthoritative)
         );
     }
@@ -53,7 +53,7 @@ mod tests {
                     kind: CommandKind::ExecuteBackup,
                     ..transfer()
                 },
-                0
+                1
             ),
             Err(AdmitError::UnknownEffect)
         );

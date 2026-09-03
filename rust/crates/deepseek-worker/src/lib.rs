@@ -4,7 +4,7 @@ use deepseek_federation::{SignRequest, plan as plan_federation};
 use deepseek_proof::{ProofRequest, plan as plan_proof};
 use deepseek_protocol::{
     ActionFence, AdmitError, CommandKind, EffectState, admit_command, interpret_remote_outcome,
-    is_federation_command, is_transfer_command,
+    is_federation_command, is_transfer_command, validate_authoritative_epoch_update,
 };
 use deepseek_storage::{StorageRequest, plan as plan_storage};
 use deepseek_transfer::{TransferRequest, plan as plan_transfer};
@@ -20,12 +20,17 @@ impl Worker {
         Self::default()
     }
 
-    pub fn admit(&mut self, fence: &ActionFence) -> Result<(), AdmitError> {
+    pub fn install_authoritative_epoch(&mut self, fence: &ActionFence) -> Result<(), AdmitError> {
         let live = self.live_epochs.get(&fence.action_id).copied().unwrap_or(0);
-        admit_command(fence, live)?;
+        validate_authoritative_epoch_update(fence, live)?;
         self.live_epochs
             .insert(fence.action_id.clone(), fence.execution_epoch);
         Ok(())
+    }
+
+    pub fn admit(&self, fence: &ActionFence) -> Result<(), AdmitError> {
+        let live = self.live_epochs.get(&fence.action_id).copied().unwrap_or(0);
+        admit_command(fence, live)
     }
 
     pub fn query_effect(&self, fence: &ActionFence) -> Result<EffectState, AdmitError> {
@@ -124,9 +129,25 @@ mod tests {
     }
 
     #[test]
+    fn effect_cannot_establish_its_own_epoch() {
+        let mut worker = Worker::new();
+        assert_eq!(
+            worker
+                .record_effect(&fence(1), EffectState::Applied)
+                .unwrap_err()
+                .code(),
+            "FENCE_MISMATCH"
+        );
+        assert_eq!(
+            worker.query_effect(&fence(1)),
+            Err(AdmitError::UnknownEffect)
+        );
+    }
+
+    #[test]
     fn stale_epoch_cannot_commit() {
         let mut worker = Worker::new();
-        worker.admit(&fence(4)).unwrap();
+        worker.install_authoritative_epoch(&fence(4)).unwrap();
         assert_eq!(
             worker.record_effect(&fence(3), EffectState::Applied),
             Err(AdmitError::StaleEpoch)
@@ -136,6 +157,7 @@ mod tests {
     #[test]
     fn applied_effect_round_trips() {
         let mut worker = Worker::new();
+        worker.install_authoritative_epoch(&fence(1)).unwrap();
         worker
             .record_effect(&fence(1), EffectState::Applied)
             .unwrap();
@@ -145,6 +167,7 @@ mod tests {
     #[test]
     fn storage_commands_admit_but_do_not_move_bytes() {
         let mut worker = Worker::new();
+        worker.install_authoritative_epoch(&fence(1)).unwrap();
         assert_eq!(
             worker.execute(CommandKind::ExecuteBackup, &fence(1)),
             Err(AdmitError::StorageNotAuthoritative)
@@ -157,10 +180,12 @@ mod tests {
             worker.query_effect(&fence(1)),
             Err(AdmitError::UnknownEffect)
         );
+        worker.install_authoritative_epoch(&fence(2)).unwrap();
         assert_eq!(
             worker.execute(CommandKind::SignReadiness, &fence(2)),
             Err(AdmitError::FederationNotAuthoritative)
         );
+        worker.install_authoritative_epoch(&fence(3)).unwrap();
         assert_eq!(
             worker.execute(CommandKind::ExecuteFederatedTransfer, &fence(3)),
             Err(AdmitError::TransferNotAuthoritative)
@@ -170,6 +195,7 @@ mod tests {
     #[test]
     fn proof_commands_do_not_claim_verification() {
         let mut worker = Worker::new();
+        worker.install_authoritative_epoch(&fence(1)).unwrap();
         assert_eq!(
             worker.verify_proof(
                 &fence(1),
@@ -187,9 +213,24 @@ mod tests {
     #[test]
     fn unknown_recorded_state_is_rejected() {
         let mut worker = Worker::new();
+        worker.install_authoritative_epoch(&fence(1)).unwrap();
         assert_eq!(
             worker.record_effect(&fence(1), EffectState::Unknown),
             Err(AdmitError::UnknownEffect)
         );
+    }
+
+    #[test]
+    fn future_effect_epoch_cannot_advance_worker_authority() {
+        let mut worker = Worker::new();
+        worker.install_authoritative_epoch(&fence(2)).unwrap();
+        assert_eq!(
+            worker.record_effect(&fence(3), EffectState::Applied),
+            Err(AdmitError::FenceMismatch)
+        );
+        worker
+            .record_effect(&fence(2), EffectState::Applied)
+            .unwrap();
+        assert_eq!(worker.query_effect(&fence(2)), Ok(EffectState::Applied));
     }
 }

@@ -231,8 +231,9 @@ generated output exceeds review size.
 **Acceptance criteria:**
 
 - Rust consumes generated contracts through a dedicated protocol crate.
-- Worker admission rejects empty IDs, zero/stale epochs, unsupported versions,
-  and invalid digest bindings before side effects.
+- Worker admission rejects empty IDs, zero/stale/missing/future epochs,
+  unsupported versions, and invalid digest bindings before side effects; only
+  the separate authoritative control path may establish or advance an epoch.
 - Unknown outcomes remain typed UNKNOWN and cannot be retried as NOT_APPLIED.
 
 **Verification:** RED/GREEN Rust tests, fmt, clippy `-D warnings`, test.
@@ -247,7 +248,7 @@ generated output exceeds review size.
 ### Checkpoint C: Non-authoritative native processes
 
 - Go shadow and Rust worker foundations compile and pass race/clippy tests.
-- Mutation-denial and stale-epoch tests are green.
+- Mutation-denial and exact-epoch fence tests are green.
 - Production Python authority remains unchanged.
 
 ### Phase 3: Canonical corpus and replay

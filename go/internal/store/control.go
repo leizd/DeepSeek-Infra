@@ -210,7 +210,7 @@ func (store *Control) Put(record Record) error {
 			return ErrRevisionConflict
 		}
 		if fencedDomains[record.Domain] {
-			if err := internalprotocol.AdmitCommand(&internalprotocol.ActionFence{ActionId: record.ID, ExecutionEpoch: record.ExecutionEpoch}, existing.ExecutionEpoch); err != nil {
+			if err := internalprotocol.ValidateAuthoritativeEpochUpdate(&internalprotocol.ActionFence{ActionId: record.ID, ExecutionEpoch: record.ExecutionEpoch}, existing.ExecutionEpoch); err != nil {
 				return err
 			}
 		}

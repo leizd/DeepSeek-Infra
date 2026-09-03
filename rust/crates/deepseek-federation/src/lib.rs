@@ -40,7 +40,7 @@ mod tests {
     #[test]
     fn sign_plan_never_accepts_private_keys_or_signs() {
         assert_eq!(
-            plan(&sign(), 0),
+            plan(&sign(), 1),
             Err(AdmitError::FederationNotAuthoritative)
         );
         assert!(!format!("{:?}", sign()).contains("private"));
@@ -54,7 +54,7 @@ mod tests {
                     kind: CommandKind::ExecuteBackup,
                     ..sign()
                 },
-                0
+                1
             ),
             Err(AdmitError::UnknownEffect)
         );

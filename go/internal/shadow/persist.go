@@ -59,7 +59,7 @@ func persistActions(control *store.Control, snapshot map[string]any, decision ma
 		if err := remember(control, "action", id, "PENDING", epoch, admission); err != nil {
 			return err
 		}
-		if err := dispatchAdmitted(id, epoch, types[id]); err != nil {
+		if err := dispatchAdmitted(control, "action", id, epoch, types[id]); err != nil {
 			return err
 		}
 	}
@@ -83,12 +83,23 @@ func commandKindFromType(actionType string) (internalprotocol.CommandKind, bool)
 	}
 }
 
-func dispatchAdmitted(id string, epoch uint64, actionType string) error {
+func dispatchAdmitted(control *store.Control, domain, id string, epoch uint64, actionType string) error {
 	kind, ok := commandKindFromType(actionType)
 	if !ok {
 		return nil
 	}
-	err := internalprotocol.PlanNative(kind, &internalprotocol.ActionFence{ActionId: id, ExecutionEpoch: epoch}, 0)
+	fence := &internalprotocol.ActionFence{ActionId: id, ExecutionEpoch: epoch}
+	if err := internalprotocol.ValidateFence(fence); err != nil {
+		return err
+	}
+	record, exists, err := control.Get(domain, id)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return internalprotocol.ErrFenceMismatch
+	}
+	err = internalprotocol.PlanNative(kind, fence, record.ExecutionEpoch)
 	if err == nil || nativeNotAuthoritative(err) {
 		return nil
 	}
@@ -180,7 +191,7 @@ func persistInventory(control *store.Control, snapshot map[string]any) error {
 				return err
 			}
 			if item.domain == "transfer" {
-				if err := dispatchAdmitted(id, epoch, "EXECUTE_FEDERATED_TRANSFER"); err != nil {
+				if err := dispatchAdmitted(control, "transfer", id, epoch, "EXECUTE_FEDERATED_TRANSFER"); err != nil {
 					return err
 				}
 			}

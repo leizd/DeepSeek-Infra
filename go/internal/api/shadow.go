@@ -17,7 +17,9 @@ func Register(mux *http.ServeMux, control *store.Control) {
 		snapshot(writer, request, control)
 	})
 	mux.HandleFunc("/internal/action/execute", deny)
-	mux.HandleFunc("/internal/action/dispatch", dispatch)
+	mux.HandleFunc("/internal/action/dispatch", func(writer http.ResponseWriter, request *http.Request) {
+		dispatch(writer, request, control)
+	})
 }
 
 func Handler() http.Handler {
@@ -67,7 +69,7 @@ func snapshot(writer http.ResponseWriter, request *http.Request, control *store.
 	_ = json.NewEncoder(writer).Encode(report)
 }
 
-func dispatch(writer http.ResponseWriter, request *http.Request) {
+func dispatch(writer http.ResponseWriter, request *http.Request, control *store.Control) {
 	if request.Method != http.MethodPost {
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -87,7 +89,20 @@ func dispatch(writer http.ResponseWriter, request *http.Request) {
 		_ = json.NewEncoder(writer).Encode(map[string]string{"error": internalprotocol.ErrUnknownEffect.Error()})
 		return
 	}
-	err := internalprotocol.PlanNative(kind, &internalprotocol.ActionFence{ActionId: body.ActionID, ExecutionEpoch: body.ExecutionEpoch}, 0)
+	liveEpoch := uint64(0)
+	if control != nil && body.ActionID != "" {
+		record, exists, lookupErr := control.Get("action", body.ActionID)
+		if lookupErr != nil {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(writer).Encode(map[string]string{"error": internalprotocol.ErrFenceMismatch.Error()})
+			return
+		}
+		if exists {
+			liveEpoch = record.ExecutionEpoch
+		}
+	}
+	err := internalprotocol.PlanNative(kind, &internalprotocol.ActionFence{ActionId: body.ActionID, ExecutionEpoch: body.ExecutionEpoch}, liveEpoch)
 	writer.Header().Set("Content-Type", "application/json")
 	status := http.StatusConflict
 	if err == internalprotocol.ErrEmptyActionID || err == internalprotocol.ErrZeroEpoch || err == internalprotocol.ErrUnknownEffect {

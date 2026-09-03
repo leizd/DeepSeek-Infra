@@ -33,7 +33,7 @@ Status: in progress on `codex/native-runtime-4.8.1`.
 - [x] Add isolated deterministic Go shadow envelopes.
 - [x] Add Rust protocol crate.
 - [x] Add Rust worker admission/result foundation.
-- [x] Prove empty/zero/stale action fences are rejected before effects.
+- [x] Prove empty/zero/stale/missing/future action fences are rejected before effects, with epoch advance isolated to the authority path.
 - [x] Prove unknown effects cannot be treated as not-applied.
 
 ## Phase 3 — Canonical corpus

@@ -49,11 +49,16 @@ If a Rust worker or remote provider result is missing, malformed, or
 as `NOT_APPLIED` and never retry a replacement side effect until the original
 `actionId + executionEpoch` is reconciled.
 
-## Stale fence
+## Execution fence
 
-Rust admission rejects `execution_epoch == 0`, empty `action_id`, and any
-command whose epoch is lower than the live epoch for that action. Lost Go
-leases do not authorize a late Rust commit.
+Rust and Go effect admission reject `execution_epoch == 0`, empty `action_id`,
+and any command whose epoch is not exactly the locally resolved live epoch. A
+lower command epoch returns `STALE_EXECUTION_EPOCH`; a missing authority record
+or a command that attempts to advance itself returns `FENCE_MISMATCH`. Only the
+Go claim/takeover transaction may establish or advance authority, after which a
+Rust worker installs that authenticated epoch through its separate authority
+update path. Never derive authority from the command's own `live_epoch` field.
+Lost Go leases do not authorize a late Rust commit.
 
 ## Corpus correction
 

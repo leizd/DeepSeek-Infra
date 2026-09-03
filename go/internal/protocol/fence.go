@@ -107,6 +107,21 @@ func AdmitCommand(fence *ActionFence, liveEpoch uint64) error {
 	if fence.ExecutionEpoch < liveEpoch {
 		return ErrStaleEpoch
 	}
+	if liveEpoch == 0 || fence.ExecutionEpoch != liveEpoch {
+		return ErrFenceMismatch
+	}
+	return nil
+}
+
+// ValidateAuthoritativeEpochUpdate is reserved for the control-plane owner that
+// establishes or advances the live epoch. Effect admission must use AdmitCommand.
+func ValidateAuthoritativeEpochUpdate(fence *ActionFence, liveEpoch uint64) error {
+	if err := ValidateFence(fence); err != nil {
+		return err
+	}
+	if liveEpoch != 0 && fence.ExecutionEpoch < liveEpoch {
+		return ErrStaleEpoch
+	}
 	return nil
 }
 

@@ -33,12 +33,12 @@ func SignReadiness(_ map[string]any) error {
 	return internalprotocol.DenyMutation()
 }
 
-func Dispatch(kind internalprotocol.CommandKind, fence *internalprotocol.ActionFence) error {
-	return internalprotocol.PlanNative(kind, fence, 0)
+func Dispatch(kind internalprotocol.CommandKind, fence *internalprotocol.ActionFence, liveEpoch uint64) error {
+	return internalprotocol.PlanNative(kind, fence, liveEpoch)
 }
 
-func VerifyProof(fence *internalprotocol.ActionFence, receiptDigest, commitDigest string) error {
-	if err := internalprotocol.AdmitCommand(fence, 0); err != nil {
+func VerifyProof(fence *internalprotocol.ActionFence, liveEpoch uint64, receiptDigest, commitDigest string) error {
+	if err := internalprotocol.AdmitCommand(fence, liveEpoch); err != nil {
 		return err
 	}
 	_, _ = receiptDigest, commitDigest

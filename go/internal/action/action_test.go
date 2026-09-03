@@ -32,19 +32,22 @@ func TestExecutePathsRemainDenied(t *testing.T) {
 		t.Fatal("shadow only")
 	}
 	fence := &internalprotocol.ActionFence{ActionId: "act-1", ExecutionEpoch: 1}
-	if err := Dispatch(internalprotocol.CommandExecuteBackup, fence); err != internalprotocol.ErrStorageNotAuthoritative {
+	if err := Dispatch(internalprotocol.CommandExecuteBackup, fence, 1); err != internalprotocol.ErrStorageNotAuthoritative {
 		t.Fatalf("dispatch: %v", err)
 	}
-	if err := Dispatch(internalprotocol.CommandExecuteFederatedTransfer, fence); err != internalprotocol.ErrTransferNotAuthoritative {
+	if err := Dispatch(internalprotocol.CommandExecuteFederatedTransfer, fence, 1); err != internalprotocol.ErrTransferNotAuthoritative {
 		t.Fatalf("dispatch transfer: %v", err)
 	}
-	if err := Dispatch(internalprotocol.CommandSignReadiness, fence); err != internalprotocol.ErrFederationNotAuthoritative {
+	if err := Dispatch(internalprotocol.CommandSignReadiness, fence, 1); err != internalprotocol.ErrFederationNotAuthoritative {
 		t.Fatalf("dispatch sign: %v", err)
 	}
-	if err := VerifyProof(fence, "sha256:receipt-v4", "sha256:commit-v4"); err != internalprotocol.ErrProofNotAuthoritative {
+	if err := Dispatch(internalprotocol.CommandExecuteBackup, fence, 0); err != internalprotocol.ErrFenceMismatch {
+		t.Fatalf("dispatch without authority: %v", err)
+	}
+	if err := VerifyProof(fence, 1, "sha256:receipt-v4", "sha256:commit-v4"); err != internalprotocol.ErrProofNotAuthoritative {
 		t.Fatalf("proof: %v", err)
 	}
-	if err := VerifyProof(&internalprotocol.ActionFence{}, "x", "y"); err == nil {
+	if err := VerifyProof(&internalprotocol.ActionFence{}, 0, "x", "y"); err == nil {
 		t.Fatal("empty proof fence")
 	}
 }

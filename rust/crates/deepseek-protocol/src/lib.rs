@@ -48,6 +48,7 @@ pub enum AdmitError {
     EmptyActionId,
     ZeroEpoch,
     StaleEpoch,
+    FenceMismatch,
     UnknownEffect,
     StorageNotAuthoritative,
     TransferNotAuthoritative,
@@ -61,6 +62,7 @@ impl AdmitError {
             Self::EmptyActionId => "EMPTY_ACTION_ID",
             Self::ZeroEpoch => "ZERO_EXECUTION_EPOCH",
             Self::StaleEpoch => "STALE_EXECUTION_EPOCH",
+            Self::FenceMismatch => "FENCE_MISMATCH",
             Self::UnknownEffect => "EFFECT_UNKNOWN",
             Self::StorageNotAuthoritative => "STORAGE_NOT_AUTHORITATIVE",
             Self::TransferNotAuthoritative => "TRANSFER_NOT_AUTHORITATIVE",
@@ -101,6 +103,22 @@ pub fn validate_fence(fence: &ActionFence) -> Result<(), AdmitError> {
 pub fn admit_command(fence: &ActionFence, live_epoch: u64) -> Result<(), AdmitError> {
     validate_fence(fence)?;
     if fence.execution_epoch < live_epoch {
+        return Err(AdmitError::StaleEpoch);
+    }
+    if live_epoch == 0 || fence.execution_epoch != live_epoch {
+        return Err(AdmitError::FenceMismatch);
+    }
+    Ok(())
+}
+
+/// Validates an epoch supplied by the authoritative control-plane update path.
+/// Effect admission must use [`admit_command`] and cannot advance live authority.
+pub fn validate_authoritative_epoch_update(
+    fence: &ActionFence,
+    live_epoch: u64,
+) -> Result<(), AdmitError> {
+    validate_fence(fence)?;
+    if live_epoch != 0 && fence.execution_epoch < live_epoch {
         return Err(AdmitError::StaleEpoch);
     }
     Ok(())
@@ -159,6 +177,30 @@ mod tests {
         };
         assert_eq!(admit_command(&fence, 4), Err(AdmitError::StaleEpoch));
         assert_eq!(admit_command(&fence, 3), Ok(()));
+    }
+
+    #[test]
+    fn command_epoch_must_match_established_authority() {
+        let fence = ActionFence {
+            action_id: "act-1".to_string(),
+            execution_epoch: 3,
+        };
+        assert_eq!(admit_command(&fence, 0), Err(AdmitError::FenceMismatch));
+        assert_eq!(admit_command(&fence, 2), Err(AdmitError::FenceMismatch));
+    }
+
+    #[test]
+    fn authoritative_epoch_update_is_the_only_advance_path() {
+        let fence = ActionFence {
+            action_id: "act-1".to_string(),
+            execution_epoch: 3,
+        };
+        assert_eq!(validate_authoritative_epoch_update(&fence, 0), Ok(()));
+        assert_eq!(validate_authoritative_epoch_update(&fence, 2), Ok(()));
+        assert_eq!(
+            validate_authoritative_epoch_update(&fence, 4),
+            Err(AdmitError::StaleEpoch)
+        );
     }
 
     #[test]

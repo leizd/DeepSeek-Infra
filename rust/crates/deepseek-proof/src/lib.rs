@@ -40,7 +40,7 @@ mod tests {
 
     #[test]
     fn proof_plan_does_not_claim_production_verification() {
-        assert_eq!(plan(&proof(), 0), Err(AdmitError::ProofNotAuthoritative));
+        assert_eq!(plan(&proof(), 1), Err(AdmitError::ProofNotAuthoritative));
     }
 
     #[test]

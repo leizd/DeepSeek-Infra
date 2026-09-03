@@ -41,6 +41,32 @@ func TestAdmitCommandRejectsStaleEpoch(t *testing.T) {
 	}
 }
 
+func TestAdmitCommandRequiresExactAuthoritativeEpoch(t *testing.T) {
+	fence := &ActionFence{ActionId: "act-1", ExecutionEpoch: 3}
+	if err := AdmitCommand(fence, 0); err != ErrFenceMismatch {
+		t.Fatalf("missing live epoch: %v", err)
+	}
+	if err := AdmitCommand(fence, 2); err != ErrFenceMismatch {
+		t.Fatalf("future command epoch: %v", err)
+	}
+}
+
+func TestAuthoritativeEpochUpdateIsTheOnlyAdvancePath(t *testing.T) {
+	fence := &ActionFence{ActionId: "act-1", ExecutionEpoch: 3}
+	if err := ValidateAuthoritativeEpochUpdate(&ActionFence{}, 0); err != ErrEmptyActionID {
+		t.Fatalf("invalid authority update: %v", err)
+	}
+	if err := ValidateAuthoritativeEpochUpdate(fence, 0); err != nil {
+		t.Fatalf("establish epoch: %v", err)
+	}
+	if err := ValidateAuthoritativeEpochUpdate(fence, 2); err != nil {
+		t.Fatalf("advance epoch: %v", err)
+	}
+	if err := ValidateAuthoritativeEpochUpdate(fence, 4); err != ErrStaleEpoch {
+		t.Fatalf("rollback epoch: %v", err)
+	}
+}
+
 func TestUnknownEffectIsNotNotApplied(t *testing.T) {
 	state, err := InterpretRemoteOutcome(EffectUnknown)
 	if err != ErrUnknownEffect || state != EffectUnknown {
@@ -63,17 +89,20 @@ func TestMutationDenied(t *testing.T) {
 
 func TestPlanNativeMatchesRustAuthorityCodes(t *testing.T) {
 	fence := &ActionFence{ActionId: "act-1", ExecutionEpoch: 1}
-	if err := PlanNative(CommandExecuteBackup, fence, 0); err != ErrStorageNotAuthoritative {
+	if err := PlanNative(CommandExecuteBackup, fence, 1); err != ErrStorageNotAuthoritative {
 		t.Fatalf("backup: %v", err)
 	}
-	if err := PlanNative(CommandExecuteFederatedTransfer, fence, 0); err != ErrTransferNotAuthoritative {
+	if err := PlanNative(CommandExecuteFederatedTransfer, fence, 1); err != ErrTransferNotAuthoritative {
 		t.Fatalf("transfer: %v", err)
 	}
-	if err := PlanNative(CommandSignReadiness, fence, 0); err != ErrFederationNotAuthoritative {
+	if err := PlanNative(CommandSignReadiness, fence, 1); err != ErrFederationNotAuthoritative {
 		t.Fatalf("sign: %v", err)
 	}
-	if err := PlanNative(CommandUnspecified, fence, 0); err != ErrUnknownEffect {
+	if err := PlanNative(CommandUnspecified, fence, 1); err != ErrUnknownEffect {
 		t.Fatalf("unspecified: %v", err)
+	}
+	if err := PlanNative(CommandExecuteBackup, fence, 0); err != ErrFenceMismatch {
+		t.Fatalf("missing authority: %v", err)
 	}
 	if err := PlanNative(CommandExecuteRepair, &ActionFence{ActionId: "act-1", ExecutionEpoch: 1}, 4); err != ErrStaleEpoch {
 		t.Fatalf("stale: %v", err)
@@ -96,6 +125,7 @@ func TestPlanNativeMatchesRustAuthorityCodes(t *testing.T) {
 		ErrProofNotAuthoritative:      "PROOF_NOT_AUTHORITATIVE",
 		ErrUnknownEffect:              "EFFECT_UNKNOWN",
 		ErrStaleEpoch:                 "STALE_EXECUTION_EPOCH",
+		ErrFenceMismatch:              "FENCE_MISMATCH",
 	}
 	for err, want := range codes {
 		if err.Error() != want {
