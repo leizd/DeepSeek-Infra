@@ -40,38 +40,6 @@ pub struct ChatMessage {
     pub content: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ChatCompletionResponse {
-    pub id: String,
-    pub object: String,
-    pub created: i64,
-    pub model: String,
-    pub choices: Vec<ChatChoice>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ChatChoice {
-    pub index: u32,
-    pub message: ChatMessage,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub finish_reason: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ModelListResponse {
-    pub object: String,
-    pub data: Vec<ModelDescriptor>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ModelDescriptor {
-    pub id: String,
-    pub object: String,
-    pub created: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub owned_by: Option<String>,
-}
-
 pub fn create_app() -> Router {
     Router::new()
         .route("/healthz", get(healthz))
@@ -79,7 +47,7 @@ pub fn create_app() -> Router {
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/gateway/request/prepare", post(gateway_request_prepare))
-        .route("/mcp", post(mcp_protocol_prepare))
+        .route("/mcp", post(mcp_rpc))
         .route("/mcp/request/prepare", post(mcp_protocol_prepare))
         .route("/.well-known/agent-card.json", get(agent_card))
         .route("/a2a", post(a2a_rpc))
@@ -98,16 +66,26 @@ pub fn create_app() -> Router {
         .layer(middleware::from_fn(observability::observe_sidecar_request))
 }
 
-async fn agent_card() -> Json<serde_json::Value> {
-    Json(json!({
-        "name": "deepseek-orchestrator",
-        "description": "DeepSeek native edge orchestrator",
-        "version": "1.0",
-        "protocols": ["a2a-v1", "mcp-v1"]
-    }))
+fn unavailable(code: &'static str, message: &'static str) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "error": {
+                "code": code,
+                "message": message,
+            }
+        })),
+    )
 }
 
-async fn a2a_rpc(body: Bytes) -> Json<serde_json::Value> {
+async fn agent_card() -> (StatusCode, Json<serde_json::Value>) {
+    unavailable(
+        "NATIVE_AGENT_CARD_NOT_READY",
+        "native agent discovery is not wired",
+    )
+}
+
+fn jsonrpc_not_ready(body: &Bytes, message: &'static str) -> Json<serde_json::Value> {
     if body.is_empty() {
         return Json(json!({
             "jsonrpc": "2.0",
@@ -115,7 +93,7 @@ async fn a2a_rpc(body: Bytes) -> Json<serde_json::Value> {
             "id": null
         }));
     }
-    let val: serde_json::Value = match serde_json::from_slice(&body) {
+    let val: serde_json::Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(_) => {
             return Json(json!({
@@ -125,20 +103,36 @@ async fn a2a_rpc(body: Bytes) -> Json<serde_json::Value> {
             }));
         }
     };
+    if !val.is_object() {
+        return Json(json!({
+            "jsonrpc": "2.0",
+            "error": {"code": -32600, "message": "Invalid Request"},
+            "id": null
+        }));
+    }
     let id = val.get("id").cloned().unwrap_or(serde_json::Value::Null);
     Json(json!({
         "jsonrpc": "2.0",
-        "result": {"status": "ACK", "handler": "rust-edge-authority"},
+        "error": {"code": -32601, "message": message},
         "id": id
     }))
 }
 
-async fn proxy_api_to_go(Path(path): Path<String>) -> Json<serde_json::Value> {
-    Json(json!({
-        "status": "PROXIED_TO_GO_CONTROL_PLANE",
-        "target": format!("/api/{}", path),
-        "edge": "rust-gateway"
-    }))
+async fn mcp_rpc(body: Bytes) -> Json<serde_json::Value> {
+    jsonrpc_not_ready(&body, "native MCP execution is not wired")
+}
+
+async fn a2a_rpc(body: Bytes) -> Json<serde_json::Value> {
+    jsonrpc_not_ready(&body, "native A2A execution is not wired")
+}
+
+async fn proxy_api_to_go(Path(path): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
+    let (status, Json(mut payload)) = unavailable(
+        "GO_CONTROL_PROXY_NOT_READY",
+        "Go control-plane proxy is not wired",
+    );
+    payload["error"]["target"] = json!(format!("/api/{path}"));
+    (status, Json(payload))
 }
 
 async fn gateway_request_prepare(body: Bytes) -> Json<serde_json::Value> {
@@ -389,38 +383,21 @@ async fn healthz() -> Json<HealthzResponse> {
     })
 }
 
-async fn models() -> Json<ModelListResponse> {
-    Json(ModelListResponse {
-        object: "list".to_string(),
-        data: vec![ModelDescriptor {
-            id: "deepseek-v4-pro".to_string(),
-            object: "model".to_string(),
-            created: 1_700_000_000,
-            owned_by: Some("deepseek".to_string()),
-        }],
-    })
+async fn models() -> (StatusCode, Json<serde_json::Value>) {
+    unavailable(
+        "NATIVE_MODELS_NOT_READY",
+        "native model catalog is not wired",
+    )
 }
 
 async fn chat_completions(
     Json(req): Json<ChatCompletionRequest>,
-) -> Result<Json<ChatCompletionResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     validate_chat_request(&req)?;
-
-    Ok(Json(ChatCompletionResponse {
-        id: "chatcmpl-stub".to_string(),
-        object: "chat.completion".to_string(),
-        created: 1_700_000_000,
-        model: req.model,
-        choices: vec![ChatChoice {
-            index: 0,
-            message: ChatMessage {
-                role: "assistant".to_string(),
-                content: "This is a deterministic stub response from deepseek-gateway-rs."
-                    .to_string(),
-            },
-            finish_reason: Some("stop".to_string()),
-        }],
-    }))
+    Ok(unavailable(
+        "NATIVE_CHAT_NOT_READY",
+        "native chat execution is not wired",
+    ))
 }
 
 fn validate_chat_request(
@@ -531,16 +508,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn models_returns_openai_compatible_shape() {
+    async fn models_fail_closed_until_native_catalog_is_wired() {
         let app = create_app();
         let (status, body) = send_request(app, "GET", "/v1/models", None).await;
-        assert_eq!(status, StatusCode::OK);
-        let list: ModelListResponse = serde_json::from_str(&body).unwrap();
-        assert_eq!(list.object, "list");
-        assert!(!list.data.is_empty());
-        let model = &list.data[0];
-        assert_eq!(model.object, "model");
-        assert!(!model.id.is_empty());
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(response["error"]["code"], "NATIVE_MODELS_NOT_READY");
     }
 
     #[tokio::test]
@@ -562,17 +535,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chat_accepts_minimal_non_stream_request() {
+    async fn chat_never_returns_a_stubbed_success() {
         let app = create_app();
         let body = r#"{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}]}"#;
         let (status, response_body) =
             send_request(app, "POST", "/v1/chat/completions", Some(body.to_string())).await;
-        assert_eq!(status, StatusCode::OK);
-        let response: ChatCompletionResponse = serde_json::from_str(&response_body).unwrap();
-        assert_eq!(response.object, "chat.completion");
-        assert_eq!(response.model, "deepseek-v4-pro");
-        assert_eq!(response.choices.len(), 1);
-        assert_eq!(response.choices[0].message.role, "assistant");
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let response: serde_json::Value = serde_json::from_str(&response_body).unwrap();
+        assert_eq!(response["error"]["code"], "NATIVE_CHAT_NOT_READY");
+        assert!(!response_body.contains("chatcmpl-stub"));
     }
 
     #[tokio::test]
@@ -679,9 +650,37 @@ mod tests {
         let (alias_status, alias_response) =
             send_request(app, "POST", "/mcp", Some(alias_body)).await;
         assert_eq!(alias_status, StatusCode::OK);
+        let alias_response = serde_json::from_str::<serde_json::Value>(&alias_response).unwrap();
+        assert_eq!(alias_response["error"]["code"], -32601);
+        assert_eq!(alias_response["id"], 1);
+        assert!(alias_response.get("result").is_none());
+    }
+
+    #[tokio::test]
+    async fn unimplemented_public_routes_never_claim_native_success() {
+        let app = create_app();
+        let (card_status, card_body) =
+            send_request(app.clone(), "GET", "/.well-known/agent-card.json", None).await;
+        assert_eq!(card_status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&alias_response).unwrap()["routing"]["owner"],
-            "python"
+            serde_json::from_str::<serde_json::Value>(&card_body).unwrap()["error"]["code"],
+            "NATIVE_AGENT_CARD_NOT_READY"
+        );
+
+        let a2a_body = json!({"jsonrpc":"2.0","id":"a2a-1","method":"message/send"});
+        let (a2a_status, a2a_response) =
+            send_request(app.clone(), "POST", "/a2a", Some(a2a_body.to_string())).await;
+        assert_eq!(a2a_status, StatusCode::OK);
+        let a2a_response = serde_json::from_str::<serde_json::Value>(&a2a_response).unwrap();
+        assert_eq!(a2a_response["error"]["code"], -32601);
+        assert_eq!(a2a_response["id"], "a2a-1");
+        assert!(a2a_response.get("result").is_none());
+
+        let (proxy_status, proxy_body) = send_request(app, "GET", "/api/policies", None).await;
+        assert_eq!(proxy_status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&proxy_body).unwrap()["error"]["code"],
+            "GO_CONTROL_PROXY_NOT_READY"
         );
     }
 
