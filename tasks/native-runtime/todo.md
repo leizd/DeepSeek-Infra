@@ -37,6 +37,7 @@ Status: in progress on `codex/native-runtime-4.8.1`.
 - [x] Prove unknown effects cannot be treated as not-applied.
 - [x] Add a loopback-only Rust Tonic worker process and a typed Go client that never forwards caller-controlled `live_epoch`.
 - [x] Prove with a real Go-to-Rust process test that an authority-uninitialized worker returns exact `FENCE_MISMATCH`.
+- [x] Make Go-to-Rust effect queries require an exact returned fence and keep missing or unproven effects fail-closed.
 
 ## Phase 3 — Canonical corpus
 

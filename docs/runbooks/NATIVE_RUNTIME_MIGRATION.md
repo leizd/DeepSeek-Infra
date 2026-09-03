@@ -52,7 +52,10 @@ Do not cut over mutation until that gate stays green.
 - The Go client never populates request `live_epoch`; that field is not an
   authority input. It validates the action fence and command family locally,
   accepts only the frozen rejection-code set, and treats nil, malformed, or
-  unknown responses as `WORKER_RESPONSE_INVALID`.
+  unknown responses as `WORKER_RESPONSE_INVALID`. `QueryEffect` additionally
+  requires the returned fence to match exactly and currently exposes only
+  `UNKNOWN` with `EFFECT_UNKNOWN` or `PROOF_NOT_AUTHORITATIVE`; unvalidated
+  positive or negative effect claims fail closed.
 - The checked-in worker process starts with authority uninitialized and has no
   production authority-synchronization channel yet. It therefore rejects
   command admission with `FENCE_MISMATCH`. The cross-process integration test

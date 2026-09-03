@@ -84,6 +84,35 @@ func (client *Client) Admit(ctx context.Context, kind actionv1.CommandKind, fenc
 	}
 }
 
+func (client *Client) QueryEffect(ctx context.Context, fence *commonv1.ActionFence) (commonv1.EffectState, error) {
+	if err := internalprotocol.ValidateFence(fence); err != nil {
+		return commonv1.EffectState_EFFECT_STATE_UNKNOWN, err
+	}
+	if client == nil || client.rpc == nil {
+		return commonv1.EffectState_EFFECT_STATE_UNKNOWN, ErrInvalidWorkerResponse
+	}
+	response, err := client.rpc.QueryEffect(ctx, &actionv1.QueryEffectRequest{Fence: fence})
+	if err != nil {
+		return commonv1.EffectState_EFFECT_STATE_UNKNOWN, fmt.Errorf("worker effect query transport: %w", err)
+	}
+	if response == nil || response.Fence == nil ||
+		response.Fence.ActionId != fence.ActionId ||
+		response.Fence.ExecutionEpoch != fence.ExecutionEpoch ||
+		response.State != commonv1.EffectState_EFFECT_STATE_UNKNOWN ||
+		response.Error == nil ||
+		response.EffectId != "" ||
+		response.ReceiptDigest != "" ||
+		response.CommitDigest != "" ||
+		response.ProofDigest != "" {
+		return commonv1.EffectState_EFFECT_STATE_UNKNOWN, ErrInvalidWorkerResponse
+	}
+	rejection := knownRejection(response.Error.Code)
+	if rejection != internalprotocol.ErrUnknownEffect && rejection != internalprotocol.ErrProofNotAuthoritative {
+		return commonv1.EffectState_EFFECT_STATE_UNKNOWN, ErrInvalidWorkerResponse
+	}
+	return commonv1.EffectState_EFFECT_STATE_UNKNOWN, rejection
+}
+
 func ValidatePlaintextTarget(target string) error {
 	host, port, err := net.SplitHostPort(target)
 	if err != nil || host == "" || port == "" {

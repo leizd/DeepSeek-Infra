@@ -12,9 +12,12 @@ import (
 )
 
 type fakeWorkerRPC struct {
-	request  *actionv1.AdmitCommandRequest
-	response *actionv1.AdmitCommandResponse
-	err      error
+	request       *actionv1.AdmitCommandRequest
+	response      *actionv1.AdmitCommandResponse
+	err           error
+	queryRequest  *actionv1.QueryEffectRequest
+	queryResponse *actionv1.EffectResult
+	queryErr      error
 }
 
 func (fake *fakeWorkerRPC) AdmitCommand(_ context.Context, request *actionv1.AdmitCommandRequest, _ ...grpc.CallOption) (*actionv1.AdmitCommandResponse, error) {
@@ -22,8 +25,9 @@ func (fake *fakeWorkerRPC) AdmitCommand(_ context.Context, request *actionv1.Adm
 	return fake.response, fake.err
 }
 
-func (fake *fakeWorkerRPC) QueryEffect(_ context.Context, _ *actionv1.QueryEffectRequest, _ ...grpc.CallOption) (*actionv1.EffectResult, error) {
-	return nil, errors.New("not used")
+func (fake *fakeWorkerRPC) QueryEffect(_ context.Context, request *actionv1.QueryEffectRequest, _ ...grpc.CallOption) (*actionv1.EffectResult, error) {
+	fake.queryRequest = request
+	return fake.queryResponse, fake.queryErr
 }
 
 func TestAdmitNeverForwardsCallerControlledLiveEpoch(t *testing.T) {
@@ -113,6 +117,72 @@ func TestAdmitRejectsInvalidFenceBeforeRPCAndPreservesTransportFailure(t *testin
 	var nilClient *Client
 	if err := nilClient.Admit(context.Background(), actionv1.CommandKind_COMMAND_KIND_EXECUTE_BACKUP, valid); err != ErrInvalidWorkerResponse {
 		t.Fatalf("nil client: %v", err)
+	}
+}
+
+func TestQueryEffectPreservesUnknownAndFrozenRejection(t *testing.T) {
+	fence := &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 7}
+	for _, test := range []struct {
+		code string
+		want error
+	}{
+		{code: "EFFECT_UNKNOWN", want: internalprotocol.ErrUnknownEffect},
+		{code: "PROOF_NOT_AUTHORITATIVE", want: internalprotocol.ErrProofNotAuthoritative},
+	} {
+		rpc := &fakeWorkerRPC{queryResponse: &actionv1.EffectResult{
+			Fence: &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 7},
+			State: commonv1.EffectState_EFFECT_STATE_UNKNOWN,
+			Error: &commonv1.ErrorDetail{Code: test.code},
+		}}
+		state, err := New(rpc).QueryEffect(context.Background(), fence)
+		if state != commonv1.EffectState_EFFECT_STATE_UNKNOWN || err != test.want {
+			t.Fatalf("%s: %v %v", test.code, state, err)
+		}
+		if rpc.queryRequest == nil || rpc.queryRequest.Fence != fence {
+			t.Fatalf("query fence not forwarded: %+v", rpc.queryRequest)
+		}
+	}
+}
+
+func TestQueryEffectRejectsUnboundOrMalformedOutcome(t *testing.T) {
+	fence := &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 7}
+	for _, response := range []*actionv1.EffectResult{
+		nil,
+		{},
+		{Fence: &commonv1.ActionFence{ActionId: "other", ExecutionEpoch: 7}, State: commonv1.EffectState_EFFECT_STATE_UNKNOWN, Error: &commonv1.ErrorDetail{Code: "EFFECT_UNKNOWN"}},
+		{Fence: &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 8}, State: commonv1.EffectState_EFFECT_STATE_UNKNOWN, Error: &commonv1.ErrorDetail{Code: "EFFECT_UNKNOWN"}},
+		{Fence: fence, State: commonv1.EffectState_EFFECT_STATE_UNSPECIFIED, Error: &commonv1.ErrorDetail{Code: "EFFECT_UNKNOWN"}},
+		{Fence: fence, State: commonv1.EffectState_EFFECT_STATE_UNKNOWN},
+		{Fence: fence, State: commonv1.EffectState_EFFECT_STATE_UNKNOWN, Error: &commonv1.ErrorDetail{Code: "FENCE_MISMATCH"}},
+		{Fence: fence, State: commonv1.EffectState_EFFECT_STATE_UNKNOWN, Error: &commonv1.ErrorDetail{Code: "MADE_UP"}},
+		{Fence: fence, State: commonv1.EffectState_EFFECT_STATE_UNKNOWN, EffectId: "ambiguous", Error: &commonv1.ErrorDetail{Code: "EFFECT_UNKNOWN"}},
+		{Fence: fence, State: commonv1.EffectState_EFFECT_STATE_APPLIED, EffectId: "unverified", ReceiptDigest: "sha256:receipt", CommitDigest: "sha256:commit", ProofDigest: "sha256:proof"},
+		{Fence: fence, State: commonv1.EffectState_EFFECT_STATE_NOT_APPLIED},
+	} {
+		rpc := &fakeWorkerRPC{queryResponse: response}
+		state, err := New(rpc).QueryEffect(context.Background(), fence)
+		if state != commonv1.EffectState_EFFECT_STATE_UNKNOWN || err != ErrInvalidWorkerResponse {
+			t.Fatalf("response %+v: %v %v", response, state, err)
+		}
+	}
+}
+
+func TestQueryEffectValidatesFenceAndPreservesTransportFailure(t *testing.T) {
+	rpc := &fakeWorkerRPC{queryErr: context.DeadlineExceeded}
+	client := New(rpc)
+	state, err := client.QueryEffect(context.Background(), &commonv1.ActionFence{})
+	if state != commonv1.EffectState_EFFECT_STATE_UNKNOWN || err != internalprotocol.ErrEmptyActionID || rpc.queryRequest != nil {
+		t.Fatalf("invalid fence: %v %v %+v", state, err, rpc.queryRequest)
+	}
+	fence := &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 1}
+	state, err = client.QueryEffect(context.Background(), fence)
+	if state != commonv1.EffectState_EFFECT_STATE_UNKNOWN || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("transport failure: %v %v", state, err)
+	}
+	var nilClient *Client
+	state, err = nilClient.QueryEffect(context.Background(), fence)
+	if state != commonv1.EffectState_EFFECT_STATE_UNKNOWN || err != ErrInvalidWorkerResponse {
+		t.Fatalf("nil client: %v %v", state, err)
 	}
 }
 
