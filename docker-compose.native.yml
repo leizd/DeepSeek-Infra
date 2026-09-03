@@ -1,0 +1,43 @@
+# DeepSeek Infra 5.0 Native Runtime Topology
+# Services: deepseek-edge (Rust), deepseekd (Go), deepseek-worker (Rust).
+services:
+  deepseek-edge:
+    build:
+      context: .
+      dockerfile: rust/Dockerfile
+    image: deepseek-edge:5.0.0
+    environment:
+      GATEWAY_BIND_ADDR: 0.0.0.0:8000
+      GO_CONTROL_ADDR: http://deepseekd:8090
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      - deepseekd
+    restart: unless-stopped
+
+  deepseekd:
+    build:
+      context: ./go
+      dockerfile: Dockerfile
+    image: deepseekd:5.0.0
+    environment:
+      CONTROL_BIND_ADDR: 0.0.0.0:8090
+      CONTROL_MODE: authoritative
+    volumes:
+      - deepseek-control:/data/go-control
+    restart: unless-stopped
+
+  deepseek-worker:
+    build:
+      context: .
+      dockerfile: rust/Dockerfile
+    image: deepseek-worker:5.0.0
+    environment:
+      WORKER_ROLE: storage-transfer-proof
+    volumes:
+      - deepseek-data:/data/rust-data
+    restart: unless-stopped
+
+volumes:
+  deepseek-control:
+  deepseek-data:
