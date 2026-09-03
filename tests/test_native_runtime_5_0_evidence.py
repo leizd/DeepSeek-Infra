@@ -13,10 +13,14 @@ def test_5_0_evidence_invariants() -> None:
 
     assert evidence["schema_version"] == 1
     assert evidence["release"] == "5.0.0"
-    assert evidence["status"] == "DELIVERED"
+    assert evidence["status"] == "NOT_READY"
+    assert evidence["blockers"]
+    assert evidence["measurements"] == {}
+    assert evidence["gates"] == {}
 
-    # Invariants verification
-    invariants = evidence["invariants"]
+    # These are release requirements, not measurements or delivery claims.
+    assert "invariants" not in evidence
+    invariants = evidence["required_invariants"]
     assert invariants["pythonProductionHttpRequests"] == 0
     assert invariants["pythonProductionMutations"] == 0
     assert invariants["pythonProductionSchedulerRuns"] == 0
@@ -25,16 +29,10 @@ def test_5_0_evidence_invariants() -> None:
     assert invariants["sharedDatabaseWrites"] == 0
     assert invariants["crossLanguageCgoAllocations"] == 0
 
-    # Topology verification
-    topology = evidence["topology"]
+    # The topology is explicitly a target until provider-backed gates pass.
+    assert "topology" not in evidence
+    topology = evidence["target_topology"]
     assert topology["public_listener"]["runtime"] == "rust"
     assert topology["control_plane"]["runtime"] == "go"
     assert topology["control_plane"]["cgo_enabled"] is False
     assert topology["worker_plane"]["runtime"] == "rust"
-
-    # Contract coverage verification
-    contracts = evidence["contracts"]
-    assert contracts["frozen_corpora"] == 10
-    assert contracts["command_codes"] == 8
-    assert contracts["domains"] == 43
-    assert contracts["mechanical_denial_enforced"] is True

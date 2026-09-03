@@ -10,6 +10,11 @@ It does not replace the historical [Rust Core Migration Roadmap](RUST_MIGRATION_
 which records the Python-first 3.x/4.0 hybrid path. This document starts the
 ownership-inversion line.
 
+> **Current implementation status:** not ready for any 4.9.x/5.0 cutover.
+> The native packages currently in the repository are foundations and shadow
+> scaffolding. `release/native_runtime_5_0_evidence_v1.json` is a fail-closed
+> readiness assessment; it is not proof that the target topology is delivered.
+
 ## Governing invariants
 
 - Go decides what should happen; Rust decides how bytes and security-sensitive

@@ -1,9 +1,16 @@
 {
   "schema_version": 1,
   "release": "5.0.0",
-  "status": "DELIVERED",
-  "title": "DeepSeek Infra 5.0 Native Rust/Go Runtime Evidence",
-  "topology": {
+  "status": "NOT_READY",
+  "title": "DeepSeek Infra 5.0 Native Rust/Go Runtime Readiness Assessment",
+  "assessment_scope": "Repository snapshot only; this file is not release evidence.",
+  "provenance": {
+    "foundation_head": "b0656629643c146c2d593b9a39eb5706143d89a1",
+    "exact_head": null,
+    "source_version": "4.8.0",
+    "source_merge": "a37735c68398fc8f795babaa269e2de6a5acd567"
+  },
+  "target_topology": {
     "public_listener": {
       "service": "deepseek-edge",
       "runtime": "rust",
@@ -27,7 +34,7 @@
       "type": "static assets (React + TypeScript + Vite)"
     }
   },
-  "invariants": {
+  "required_invariants": {
     "pythonProductionHttpRequests": 0,
     "pythonProductionMutations": 0,
     "pythonProductionSchedulerRuns": 0,
@@ -36,12 +43,48 @@
     "sharedDatabaseWrites": 0,
     "crossLanguageCgoAllocations": 0
   },
-  "contracts": {
-    "frozen_corpora": 10,
-    "command_codes": 8,
-    "domains": 43,
-    "rest_routes_covered": 7,
-    "storage_wire_parity": "100%",
-    "mechanical_denial_enforced": true
-  }
+  "measurements": {},
+  "gates": {},
+  "blockers": [
+    {
+      "code": "PUBLIC_EDGE_NOT_AUTHORITATIVE",
+      "detail": "Chat completions are stubbed, SSE is unsupported, and /api/* is not proxied to Go."
+    },
+    {
+      "code": "GO_CONTROL_SHADOW_ONLY",
+      "detail": "deepseekd exposes shadow foundations, not the complete production /api/* control plane."
+    },
+    {
+      "code": "RUST_DATA_PLANE_NOT_AUTHORITATIVE",
+      "detail": "Storage, transfer, federation, proof, and worker effects remain non-authoritative foundations."
+    },
+    {
+      "code": "FROZEN_WIRE_PARITY_UNPROVEN",
+      "detail": "Current Rust DTOs do not establish byte/semantic parity for object-set-v1, Receipt v4, Commit v4, federation, or evidence-proof-v2."
+    },
+    {
+      "code": "GENERATED_GRPC_BINDINGS_MISSING",
+      "detail": "The repository has no reproducible protoc-generated Go and Rust gRPC bindings wired into the native services."
+    },
+    {
+      "code": "PRODUCTION_ARTIFACTS_STILL_PYTHON",
+      "detail": "The canonical server, desktop, and Android production paths still package or start Python."
+    },
+    {
+      "code": "NATIVE_TOPOLOGY_NOT_QUALIFIED",
+      "detail": "The declared Compose topology is not a verified edge/control/worker production topology."
+    },
+    {
+      "code": "PROVIDER_EVIDENCE_MISSING",
+      "detail": "Native Three-MinIO, two-Fleet/four-MinIO, and SIGKILL/takeover evidence has not been produced."
+    },
+    {
+      "code": "EXACT_HEAD_CI_MISSING",
+      "detail": "No exact-head CI and Evidence Assembly artifacts qualify this native runtime snapshot."
+    },
+    {
+      "code": "ZERO_PYTHON_MEASUREMENTS_MISSING",
+      "detail": "Zero-Python and unique-writer invariants have targets but no non-vacuous measured artifacts."
+    }
+  ]
 }
