@@ -416,6 +416,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "deepseek-federation"
+version = "0.1.0"
+dependencies = [
+ "deepseek-protocol",
+]
+
+[[package]]
 name = "deepseek-gateway"
 version = "0.1.0"
 dependencies = [
@@ -453,6 +460,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "deepseek-proof"
+version = "0.1.0"
+dependencies = [
+ "deepseek-protocol",
+]
+
+[[package]]
 name = "deepseek-protocol"
 version = "0.1.0"
 
@@ -467,10 +481,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "deepseek-worker"
+name = "deepseek-storage"
 version = "0.1.0"
 dependencies = [
  "deepseek-protocol",
+]
+
+[[package]]
+name = "deepseek-transfer"
+version = "0.1.0"
+dependencies = [
+ "deepseek-protocol",
+]
+
+[[package]]
+name = "deepseek-worker"
+version = "0.1.0"
+dependencies = [
+ "deepseek-federation",
+ "deepseek-proof",
+ "deepseek-protocol",
+ "deepseek-storage",
+ "deepseek-transfer",
 ]
 
 [[package]]

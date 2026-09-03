@@ -18,6 +18,10 @@ pub enum AdmitError {
     ZeroEpoch,
     StaleEpoch,
     UnknownEffect,
+    StorageNotAuthoritative,
+    TransferNotAuthoritative,
+    FederationNotAuthoritative,
+    ProofNotAuthoritative,
 }
 
 impl AdmitError {
@@ -27,8 +31,41 @@ impl AdmitError {
             Self::ZeroEpoch => "ZERO_EXECUTION_EPOCH",
             Self::StaleEpoch => "STALE_EXECUTION_EPOCH",
             Self::UnknownEffect => "EFFECT_UNKNOWN",
+            Self::StorageNotAuthoritative => "STORAGE_NOT_AUTHORITATIVE",
+            Self::TransferNotAuthoritative => "TRANSFER_NOT_AUTHORITATIVE",
+            Self::FederationNotAuthoritative => "FEDERATION_NOT_AUTHORITATIVE",
+            Self::ProofNotAuthoritative => "PROOF_NOT_AUTHORITATIVE",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandKind {
+    Unspecified = 0,
+    ExecuteBackup = 1,
+    ExecuteRestore = 2,
+    ExecuteRepair = 3,
+    ExecuteRebalance = 4,
+    ExecuteFederatedTransfer = 5,
+    SignReadiness = 6,
+}
+
+pub fn is_storage_command(kind: CommandKind) -> bool {
+    matches!(
+        kind,
+        CommandKind::ExecuteBackup
+            | CommandKind::ExecuteRestore
+            | CommandKind::ExecuteRepair
+            | CommandKind::ExecuteRebalance
+    )
+}
+
+pub fn is_transfer_command(kind: CommandKind) -> bool {
+    matches!(kind, CommandKind::ExecuteFederatedTransfer)
+}
+
+pub fn is_federation_command(kind: CommandKind) -> bool {
+    matches!(kind, CommandKind::SignReadiness)
 }
 
 pub fn validate_fence(fence: &ActionFence) -> Result<(), AdmitError> {
@@ -103,5 +140,28 @@ mod tests {
             Ok(EffectState::NotApplied)
         );
         assert_eq!(AdmitError::UnknownEffect.code(), "EFFECT_UNKNOWN");
+        assert_eq!(
+            AdmitError::StorageNotAuthoritative.code(),
+            "STORAGE_NOT_AUTHORITATIVE"
+        );
+        assert!(is_storage_command(CommandKind::ExecuteBackup));
+        assert!(!is_storage_command(CommandKind::ExecuteFederatedTransfer));
+        assert!(is_transfer_command(CommandKind::ExecuteFederatedTransfer));
+        assert!(!is_storage_command(CommandKind::SignReadiness));
+        assert!(!is_storage_command(CommandKind::Unspecified));
+        assert_eq!(
+            AdmitError::TransferNotAuthoritative.code(),
+            "TRANSFER_NOT_AUTHORITATIVE"
+        );
+        assert!(is_federation_command(CommandKind::SignReadiness));
+        assert!(!is_federation_command(CommandKind::ExecuteBackup));
+        assert_eq!(
+            AdmitError::FederationNotAuthoritative.code(),
+            "FEDERATION_NOT_AUTHORITATIVE"
+        );
+        assert_eq!(
+            AdmitError::ProofNotAuthoritative.code(),
+            "PROOF_NOT_AUTHORITATIVE"
+        );
     }
 }

@@ -9,6 +9,10 @@ members = [
     "crates/deepseek-rag",
     "crates/deepseek-protocol",
     "crates/deepseek-worker",
+    "crates/deepseek-storage",
+    "crates/deepseek-transfer",
+    "crates/deepseek-federation",
+    "crates/deepseek-proof",
 ]
 resolver = "3"
 

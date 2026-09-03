@@ -17,6 +17,34 @@ func ExecuteRepair(_ map[string]any) error {
 	return internalprotocol.DenyMutation()
 }
 
+func ExecuteRestore(_ map[string]any) error {
+	return internalprotocol.DenyMutation()
+}
+
+func ExecuteRebalance(_ map[string]any) error {
+	return internalprotocol.DenyMutation()
+}
+
+func ExecuteFederatedTransfer(_ map[string]any) error {
+	return internalprotocol.DenyMutation()
+}
+
+func SignReadiness(_ map[string]any) error {
+	return internalprotocol.DenyMutation()
+}
+
+func Dispatch(kind internalprotocol.CommandKind, fence internalprotocol.ActionFence) error {
+	return internalprotocol.PlanNative(kind, fence, 0)
+}
+
+func VerifyProof(fence internalprotocol.ActionFence, receiptDigest, commitDigest string) error {
+	if err := internalprotocol.AdmitCommand(fence, 0); err != nil {
+		return err
+	}
+	_, _ = receiptDigest, commitDigest
+	return internalprotocol.ErrProofNotAuthoritative
+}
+
 func ShadowOnly(snapshot map[string]any) bool {
 	return protocol.AsString(snapshot["mode"]) != "authoritative"
 }

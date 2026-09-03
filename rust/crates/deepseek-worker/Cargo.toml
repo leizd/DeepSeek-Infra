@@ -8,3 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 deepseek-protocol = { path = "../deepseek-protocol" }
+deepseek-storage = { path = "../deepseek-storage" }
+deepseek-transfer = { path = "../deepseek-transfer" }
+deepseek-federation = { path = "../deepseek-federation" }
+deepseek-proof = { path = "../deepseek-proof" }

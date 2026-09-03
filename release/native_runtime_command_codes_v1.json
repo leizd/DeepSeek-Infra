@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "codes": [
+    "EMPTY_ACTION_ID",
+    "ZERO_EXECUTION_EPOCH",
+    "STALE_EXECUTION_EPOCH",
+    "EFFECT_UNKNOWN",
+    "STORAGE_NOT_AUTHORITATIVE",
+    "TRANSFER_NOT_AUTHORITATIVE",
+    "FEDERATION_NOT_AUTHORITATIVE",
+    "PROOF_NOT_AUTHORITATIVE"
+  ],
+  "commands": {
+    "ExecuteBackup": "STORAGE_NOT_AUTHORITATIVE",
+    "ExecuteRestore": "STORAGE_NOT_AUTHORITATIVE",
+    "ExecuteRepair": "STORAGE_NOT_AUTHORITATIVE",
+    "ExecuteRebalance": "STORAGE_NOT_AUTHORITATIVE",
+    "ExecuteFederatedTransfer": "TRANSFER_NOT_AUTHORITATIVE",
+    "SignReadiness": "FEDERATION_NOT_AUTHORITATIVE",
+    "VerifyProof": "PROOF_NOT_AUTHORITATIVE"
+  },
+  "production_code": "MUTATION_DENIED",
+  "production_execute": [
+    "ExecuteBackup",
+    "ExecuteRestore",
+    "ExecuteRepair",
+    "ExecuteRebalance",
+    "ExecuteFederatedTransfer",
+    "SignReadiness"
+  ],
+  "rust_crates": [
+    "deepseek-protocol",
+    "deepseek-worker",
+    "deepseek-storage",
+    "deepseek-transfer",
+    "deepseek-federation",
+    "deepseek-proof"
+  ]
+}

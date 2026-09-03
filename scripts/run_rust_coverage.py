@@ -26,6 +26,10 @@ WORKSPACE_CRATES = (
     "deepseek-rag",
     "deepseek-protocol",
     "deepseek-worker",
+    "deepseek-storage",
+    "deepseek-transfer",
+    "deepseek-federation",
+    "deepseek-proof",
 )
 
 
