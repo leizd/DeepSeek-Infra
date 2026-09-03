@@ -42,6 +42,26 @@ Do not cut over mutation until that gate stays green.
 - Shadow mode rejects a configured production store path.
 - Do not point Go or Rust at Python SQLite files.
 
+## Current Go-to-Rust worker boundary
+
+- `deepseek-worker` exposes the generated Tonic `Worker` service on
+  `DEEPSEEK_WORKER_LISTEN` (default `127.0.0.1:50052`). While transport is
+  plaintext, both the Rust listener and Go client accept only IP-literal
+  loopback addresses with a nonzero port. Public, wildcard, and hostname
+  targets fail before any RPC is attempted.
+- The Go client never populates request `live_epoch`; that field is not an
+  authority input. It validates the action fence and command family locally,
+  accepts only the frozen rejection-code set, and treats nil, malformed, or
+  unknown responses as `WORKER_RESPONSE_INVALID`.
+- The checked-in worker process starts with authority uninitialized and has no
+  production authority-synchronization channel yet. It therefore rejects
+  command admission with `FENCE_MISMATCH`. The cross-process integration test
+  proves this fail-closed state only; it is not evidence of a successful native
+  mutation path.
+- Do not expose this plaintext listener beyond loopback. Authenticated authority
+  synchronization, production transport security, durable effect reconciliation,
+  and proof-bound execution remain prerequisites for any cutover.
+
 ## Unknown effect
 
 If a Rust worker or remote provider result is missing, malformed, or
