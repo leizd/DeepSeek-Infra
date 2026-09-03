@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
@@ -122,6 +123,93 @@ func TestProductionMutationDeniedAndPythonDbRejected(t *testing.T) {
 	}
 	if _, err := OpenControl(OpenOptions{Path: foreign, Owner: "owner-a"}); err != ErrForeignRuntimeStore {
 		t.Fatalf("foreign: %v", err)
+	}
+}
+
+func TestWriteJSONAtomicMarshalFailurePreservesExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	want := []byte(`{"revision":1}`)
+	if err := os.WriteFile(path, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeJSONAtomic(path, make(chan int)); err == nil {
+		t.Fatal("unsupported JSON value must fail")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("existing file changed after marshal failure: got %q want %q", got, want)
+	}
+	assertNoAtomicWriteTemps(t, dir, filepath.Base(path))
+}
+
+func TestWriteJSONAtomicCreateTempFailureIsReported(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "state.json")
+	if err := writeJSONAtomic(path, map[string]int{"revision": 1}); err == nil {
+		t.Fatal("missing destination directory must fail")
+	}
+}
+
+func TestWriteJSONAtomicReplacesExistingFileWithoutTempResidue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(path, []byte(`{"revision":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]int{"revision": 2}
+	if err := writeJSONAtomic(path, want); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]int
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("replacement is not valid JSON: %v", err)
+	}
+	if got["revision"] != want["revision"] {
+		t.Fatalf("replacement: got %v want %v", got, want)
+	}
+	assertNoAtomicWriteTemps(t, dir, filepath.Base(path))
+}
+
+func TestWriteJSONAtomicReplacementFailureCleansTemp(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeJSONAtomic(path, map[string]int{"revision": 2}); err == nil {
+		t.Fatal("replacing a directory must fail")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() {
+		t.Fatal("failed replacement changed destination directory")
+	}
+	assertNoAtomicWriteTemps(t, dir, filepath.Base(path))
+}
+
+func assertNoAtomicWriteTemps(t *testing.T, dir, base string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := "." + base + ".tmp-"
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), prefix) {
+			t.Fatalf("temporary file leaked: %s", entry.Name())
+		}
 	}
 }
 

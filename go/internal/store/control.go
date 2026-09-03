@@ -2,6 +2,8 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -433,7 +435,47 @@ func readWriter(path string) (WriterLease, bool, error) {
 	return writer, true, nil
 }
 
-func writeJSONAtomic(path string, value any) error {
-	raw, _ := json.Marshal(value)
-	return os.WriteFile(path, raw, 0o600)
+func writeJSONAtomic(path string, value any) (resultErr error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("marshal JSON for %q: %w", path, err)
+	}
+
+	dir := filepath.Dir(path)
+	temp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temporary JSON file for %q: %w", path, err)
+	}
+	tempPath := temp.Name()
+	tempOpen := true
+	defer func() {
+		if tempOpen {
+			if closeErr := temp.Close(); closeErr != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("close temporary JSON file %q: %w", tempPath, closeErr))
+			}
+		}
+		if tempPath != "" {
+			if removeErr := os.Remove(tempPath); removeErr != nil && !os.IsNotExist(removeErr) {
+				resultErr = errors.Join(resultErr, fmt.Errorf("remove temporary JSON file %q: %w", tempPath, removeErr))
+			}
+		}
+	}()
+
+	if _, err := temp.Write(raw); err != nil {
+		return fmt.Errorf("write temporary JSON file for %q: %w", path, err)
+	}
+	if err := temp.Sync(); err != nil {
+		return fmt.Errorf("sync temporary JSON file for %q: %w", path, err)
+	}
+	if err := temp.Close(); err != nil {
+		tempOpen = false
+		return fmt.Errorf("close temporary JSON file for %q: %w", path, err)
+	}
+	tempOpen = false
+
+	if err := replaceFile(tempPath, path); err != nil {
+		return fmt.Errorf("replace JSON file %q: %w", path, err)
+	}
+	tempPath = ""
+	return nil
 }
