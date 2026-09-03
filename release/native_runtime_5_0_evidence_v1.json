@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "release": "5.0.0",
+  "status": "DELIVERED",
+  "title": "DeepSeek Infra 5.0 Native Rust/Go Runtime Evidence",
+  "topology": {
+    "public_listener": {
+      "service": "deepseek-edge",
+      "runtime": "rust",
+      "port": 8000,
+      "protocol": "HTTP/SSE"
+    },
+    "control_plane": {
+      "service": "deepseekd",
+      "runtime": "go",
+      "port": 8090,
+      "cgo_enabled": false,
+      "durable_store": "go-control/"
+    },
+    "worker_plane": {
+      "service": "deepseek-worker",
+      "runtime": "rust",
+      "roles": ["storage", "transfer", "crypto", "proof", "sandbox"]
+    },
+    "user_interface": {
+      "service": "frontend",
+      "type": "static assets (React + TypeScript + Vite)"
+    }
+  },
+  "invariants": {
+    "pythonProductionHttpRequests": 0,
+    "pythonProductionMutations": 0,
+    "pythonProductionSchedulerRuns": 0,
+    "pythonProductionStorageWrites": 0,
+    "pythonProductionFederationSigns": 0,
+    "sharedDatabaseWrites": 0,
+    "crossLanguageCgoAllocations": 0
+  },
+  "contracts": {
+    "frozen_corpora": 10,
+    "command_codes": 8,
+    "domains": 43,
+    "rest_routes_covered": 7,
+    "storage_wire_parity": "100%",
+    "mechanical_denial_enforced": true
+  }
+}
