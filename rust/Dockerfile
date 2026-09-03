@@ -16,15 +16,15 @@ RUN cargo build \
     --locked \
     --manifest-path rust/Cargo.toml \
     --release \
-    -p deepseek-gateway
+    -p deepseek-gateway \
+    -p deepseek-worker
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS runtime
 
 ARG VCS_REF=unknown
-LABEL org.opencontainers.image.title="DeepSeek Infra Rust Sidecar" \
-      org.opencontainers.image.version="4.8.0" \
+LABEL org.opencontainers.image.version="4.8.0" \
       org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.description="Optional DeepSeek Infra hybrid runtime sidecar"
+      org.opencontainers.image.description="DeepSeek Infra native Rust runtime binaries"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
@@ -32,6 +32,24 @@ RUN apt-get update \
     && useradd --system --uid 10001 --no-create-home deepseek
 
 WORKDIR /app
+
+FROM runtime AS worker
+
+LABEL org.opencontainers.image.title="DeepSeek Infra Rust Worker"
+
+COPY --from=builder \
+    /app/rust/target/release/deepseek-worker \
+    /usr/local/bin/deepseek-worker
+
+ENV DEEPSEEK_WORKER_LISTEN=127.0.0.1:50052
+
+USER deepseek
+
+CMD ["deepseek-worker"]
+
+FROM runtime AS gateway
+
+LABEL org.opencontainers.image.title="DeepSeek Infra Rust Gateway"
 
 COPY --from=builder \
     /app/rust/target/release/deepseek-gateway \

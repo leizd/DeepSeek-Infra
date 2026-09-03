@@ -33,6 +33,7 @@ def test_rust_dockerfile_is_multistage_locked_and_non_root() -> None:
     assert "cargo build" in dockerfile
     assert "--locked" in dockerfile
     assert "-p deepseek-gateway" in dockerfile
+    assert "-p deepseek-worker" in dockerfile
     assert "FROM debian:bookworm-slim" in dockerfile
     assert "COPY rust ./rust" in dockerfile
     assert "COPY static ./static" in dockerfile
@@ -47,6 +48,17 @@ def test_rust_dockerfile_is_multistage_locked_and_non_root() -> None:
     assert "requirements.txt" not in dockerfile
     assert "COPY deepseek_infra" not in dockerfile
     assert "DEEPSEEK_RUST_BIND" not in dockerfile
+
+
+def test_rust_dockerfile_has_distinct_gateway_and_worker_targets() -> None:
+    dockerfile = _read("rust/Dockerfile")
+
+    assert "AS worker" in dockerfile
+    assert "/app/rust/target/release/deepseek-worker" in dockerfile
+    assert "DEEPSEEK_WORKER_LISTEN=127.0.0.1:50052" in dockerfile
+    assert 'CMD ["deepseek-worker"]' in dockerfile
+    assert "AS gateway" in dockerfile
+    assert dockerfile.rfind("AS gateway") > dockerfile.rfind("AS worker")
 
 
 def test_optional_compose_does_not_change_default_python_deployment() -> None:
