@@ -70,6 +70,23 @@ def test_ci_has_native_go_and_protocol_gates() -> None:
     assert "scripts/check_go_coverage.py" in workflow
 
 
+def test_ci_runs_real_go_to_rust_worker_boundary() -> None:
+    workflow = _read(".github/workflows/ci.yml")
+    native_go = workflow.split("  native-go:\n", 1)[1].split("  rust-coverage:\n", 1)[0]
+    for required in (
+        "dtolnay/rust-toolchain@1.85.0",
+        "cargo build --locked --manifest-path ../rust/Cargo.toml -p deepseek-worker",
+        "../rust/target/debug/deepseek-worker",
+        "DEEPSEEK_WORKER_LISTEN: 127.0.0.1:50052",
+        "DEEPSEEK_TEST_RUST_WORKER_TARGET: 127.0.0.1:50052",
+        "TestRustWorkerWithoutAuthorityFailsClosedAndKeepsMissingEffectUnknown",
+        "trap cleanup EXIT",
+        'kill -INT "$worker_pid"',
+        'kill -TERM "$worker_pid"',
+    ):
+        assert required in native_go
+
+
 def test_workspace_includes_native_crates() -> None:
     cargo = _read("rust/Cargo.toml")
     assert "crates/deepseek-protocol" in cargo

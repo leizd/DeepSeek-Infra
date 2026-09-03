@@ -54,6 +54,7 @@ Status: in progress on `codex/native-runtime-4.8.1`.
 ## Phase 4 — CI, operations, release
 
 - [x] Add Go fmt/vet/test/race gates.
+- [x] Run the real Go-to-Rust admission and effect-query boundary in the `native-go` CI gate with exact worker cleanup.
 - [x] Extend Rust workspace to protocol/worker crates.
 - [x] Add protocol generation and native contract gates.
 - [x] Add native migration/rollback/unknown-effect runbook.

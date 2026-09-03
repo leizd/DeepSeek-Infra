@@ -59,8 +59,8 @@ Do not cut over mutation until that gate stays green.
 - The checked-in worker process starts with authority uninitialized and has no
   production authority-synchronization channel yet. It therefore rejects
   command admission with `FENCE_MISMATCH`. The cross-process integration test
-  proves this fail-closed state only; it is not evidence of a successful native
-  mutation path.
+  in the `native-go` CI job proves this fail-closed state only; it is not
+  evidence of a successful native mutation path.
 - Do not expose this plaintext listener beyond loopback. Authenticated authority
   synchronization, production transport security, durable effect reconciliation,
   and proof-bound execution remain prerequisites for any cutover.

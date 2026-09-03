@@ -1265,6 +1265,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.85.0
       - name: Install checksum-pinned Go 1.27.1
         shell: bash
         run: |
@@ -1285,6 +1286,59 @@ jobs:
       - run: go test -race ./...
       - name: Go coverage
         run: python ../scripts/check_go_coverage.py --dir . --min 95.0
+      - name: Build fail-closed Rust worker boundary
+        run: cargo build --locked --manifest-path ../rust/Cargo.toml -p deepseek-worker
+      - name: Run real Go-to-Rust worker boundary
+        shell: bash
+        env:
+          DEEPSEEK_WORKER_LISTEN: 127.0.0.1:50052
+          DEEPSEEK_TEST_RUST_WORKER_TARGET: 127.0.0.1:50052
+        run: |
+          set -euo pipefail
+          worker_log="$RUNNER_TEMP/deepseek-worker.log"
+          ../rust/target/debug/deepseek-worker >"$worker_log" 2>&1 &
+          worker_pid=$!
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if kill -0 "$worker_pid" 2>/dev/null; then
+              kill -INT "$worker_pid" 2>/dev/null || true
+              for _ in {1..50}; do
+                if ! kill -0 "$worker_pid" 2>/dev/null; then
+                  break
+                fi
+                sleep 0.1
+              done
+              if kill -0 "$worker_pid" 2>/dev/null; then
+                kill -TERM "$worker_pid" 2>/dev/null || true
+              fi
+            fi
+            wait "$worker_pid" 2>/dev/null || true
+            if [ "$status" -ne 0 ]; then
+              cat "$worker_log"
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          ready=0
+          for _ in {1..50}; do
+            if ! kill -0 "$worker_pid" 2>/dev/null; then
+              break
+            fi
+            if { exec 3<>/dev/tcp/127.0.0.1/50052; } 2>/dev/null; then
+              exec 3>&-
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Rust worker did not become ready" >&2
+            exit 1
+          fi
+          go test -tags=integration ./internal/worker \
+            -run '^TestRustWorkerWithoutAuthorityFailsClosedAndKeepsMissingEffectUnknown$' \
+            -count=1 -timeout=30s
 
   rust-coverage:
     needs:
