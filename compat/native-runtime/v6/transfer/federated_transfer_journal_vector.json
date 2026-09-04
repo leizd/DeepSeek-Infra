@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "sender_identity": {
+    "schema": "fleet-identity-v1",
+    "fleetId": "fleet-a",
+    "rootKeyId": "fed-root-02d449a31fbb267c8f352e99",
+    "rootPublicKey": "ERERERERERERERERERERERERERERERERERERERERERE",
+    "rootFingerprint": "sha256:02d449a31fbb267c8f352e9968a79e3e5fc95c1bbeaa502fd6454ebde5a4bedc",
+    "signatureAlgorithm": "Ed25519",
+    "createdAt": "2026-09-01T06:00:00Z"
+  },
+  "receiver_identity": {
+    "schema": "fleet-identity-v1",
+    "fleetId": "fleet-b",
+    "rootKeyId": "fed-root-9f72ea0cf49536e3c66c787f",
+    "rootPublicKey": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI",
+    "rootFingerprint": "sha256:9f72ea0cf49536e3c66c787f705186df9a4378083753ae9536d65b3ad7fcddc4",
+    "signatureAlgorithm": "Ed25519",
+    "createdAt": "2026-09-01T06:00:00Z"
+  },
+  "proposed": {
+    "transferId": "sha256:6d5c985826b41ed205f38e3dccd43cc7afe6bb09bbb9f7fe98c2790d3d27e6fb",
+    "sourceFleetId": "fleet-a",
+    "destinationFleetId": "fleet-b",
+    "policyId": "policy-offsite-custody",
+    "backupId": "backup-20260901-002",
+    "objectSetDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "identity_digest": "sha256:ac66be693947086b4683450bf2caf8638b3acd375740dd27137b21c65430fb5b",
+  "steps": [
+    {
+      "state": "PROPOSED",
+      "at": "2026-09-01T07:00:00Z",
+      "details": {
+        "identityDigest": "sha256:ac66be693947086b4683450bf2caf8638b3acd375740dd27137b21c65430fb5b"
+      },
+      "state_payload_digest": "sha256:e665f2a71b341122806fccc3ff21567dbc8d9d17fc2d20357fd35727a0481ea0"
+    },
+    {
+      "state": "GRANT_REQUESTED",
+      "at": "2026-09-01T07:00:01Z",
+      "details": {
+        "requestDigest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+      },
+      "state_payload_digest": "sha256:bfa7cb247cb5e6ccbdb53893ced96b4043f4e9b2921a0eae8127ec412965fa4c"
+    },
+    {
+      "state": "GRANT_VERIFIED",
+      "at": "2026-09-01T07:00:02Z",
+      "details": {
+        "grantDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+        "grantId": "grant-66666666666666666666666666666666"
+      },
+      "state_payload_digest": "sha256:1dbeb6863ad5ea4ab24f4ebfddfc6819e66b83545d2616bc05c0290765e9080e"
+    },
+    {
+      "state": "TRANSFERRING",
+      "at": "2026-09-01T07:00:03Z",
+      "details": {
+        "bytesTransferred": 4096
+      },
+      "state_payload_digest": "sha256:224070aeade9596533790f283f982aee53001a7eef31dff7dfd1a1eb9788a9b5"
+    },
+    {
+      "state": "REMOTE_VERIFYING",
+      "at": "2026-09-01T07:00:04Z",
+      "details": {
+        "objectCount": 7
+      },
+      "state_payload_digest": "sha256:ca64eb7e9dfceac9a01de1e6386fc028daea5a9b0ab85282c5c186ceb727a729"
+    },
+    {
+      "state": "REMOTE_COMMITTED",
+      "at": "2026-09-01T07:00:05Z",
+      "details": {
+        "remoteCommitDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "remoteReceiptDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+      },
+      "state_payload_digest": "sha256:20b7e745acb75668d7245edf27a21f79ac971e668a88e526ddb8908779a2f904"
+    },
+    {
+      "state": "LOCAL_RECORDED",
+      "at": "2026-09-01T07:00:06Z",
+      "details": {
+        "attestationDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "state_payload_digest": "sha256:8ff109a50475a7d466f654a28e21285e7e3a139b40e049b65d5311356d80aa7b"
+    },
+    {
+      "state": "SUCCEEDED",
+      "at": "2026-09-01T07:00:07Z",
+      "details": {
+        "outcome": "FEDERATED_COMMITTED"
+      },
+      "state_payload_digest": "sha256:f63de13f16f903610ec546930ff74176391078259958b4f50ef768ca6308a004"
+    }
+  ],
+  "expected_errors": {
+    "identity_conflict": "FEDERATION_TRANSFER_JOURNAL_IDENTITY_CONFLICT",
+    "revision_conflict": "FEDERATION_TRANSFER_REVISION_CONFLICT",
+    "sensitive_state": "FEDERATION_TRANSFER_SENSITIVE_STATE_REJECTED",
+    "state_conflict": "FEDERATION_TRANSFER_STATE_CONFLICT",
+    "transition_invalid": "FEDERATION_TRANSFER_STATE_TRANSITION_INVALID"
+  }
+}

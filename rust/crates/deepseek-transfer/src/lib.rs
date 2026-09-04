@@ -2,8 +2,13 @@ use deepseek_protocol::{
     ActionFence, AdmitError, CommandKind, admit_command, is_transfer_command, validate_fence,
 };
 
-pub mod job;
-pub use job::{TRANSFER_JOB_SCHEMA, TransferCheckpoint};
+pub mod journal;
+pub use journal::{
+    FEDERATED_TRANSFER_IDENTITY_SCHEMA, FederatedTransferJournal, FederatedTransferJournalError,
+    ProposedTransfer, TRANSFER_ID_DOMAIN, TRANSFER_JOURNAL_EVENT_SCHEMA,
+    TRANSFER_JOURNAL_RECORD_SCHEMA, TRANSFER_STATE_PAYLOAD_SCHEMA, TransferEvent, TransferRecord,
+    TransferRole, TransferState, derive_transfer_id, transfer_identity_document,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferRequest {

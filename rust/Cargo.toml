@@ -42,6 +42,7 @@ prost = "=0.13.5"
 tonic = "=0.12.3"
 protox = "=0.8.0"
 tonic-build = "=0.12.3"
+rusqlite = { version = "=0.37.0", features = ["bundled"] }
 
 [profile.release]
 lto = true

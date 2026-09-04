@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from deepseek_infra.infra.mcp.protocol_preparation import prepare_mcp_protocol_json
@@ -16,6 +16,7 @@ from deepseek_infra.infra.workspace import (
     federated_replica_attestation,
     federation_runtime_proof,
     federation_identity,
+    federation_transfer_journal,
 )
 from deepseek_infra.infra.workspace.federated_replica_attestation import REPLICA_ATTESTATION_FIELDS
 from deepseek_infra.infra.workspace.federated_replica_commit import COMMIT_V4_FIELDS, RECEIPT_V4_FIELDS
@@ -51,11 +52,12 @@ def test_canonical_corpora_match_frozen_digests() -> None:
     } <= ids
 
     manifests = validate_corpora()
-    assert len(manifests) == 5
+    assert len(manifests) == 6
     assert manifests[1]["compatibility_reason"]
     assert manifests[2]["compatibility_reason"]
     assert manifests[3]["compatibility_reason"]
     assert manifests[4]["compatibility_reason"]
+    assert manifests[5]["compatibility_reason"]
 
 
 def test_storage_v2_semantic_vector_matches_python_4_8_0_bytes() -> None:
@@ -170,6 +172,82 @@ def test_federation_runtime_v5_semantic_vector_matches_python_4_8_0_validator() 
         else:
             target[leaf] = invalid["replacement"]
         assert federation_runtime_proof.validate_federation_runtime_proof(mutated) == invalid["expected_errors"]
+
+
+def test_transfer_journal_v6_semantic_vector_matches_python_4_8_0_state_machine(tmp_path: Path) -> None:
+    manifest_path = ROOT / "compat" / "native-runtime" / "v6" / "manifest.json"
+    manifest = validate_corpus(manifest_path)
+    path = next(
+        item["path"]
+        for item in manifest["corpora"]
+        if item["id"] == "federated-transfer-journal-semantics-v6"
+    )
+    fixture = json.loads((ROOT / path).read_text(encoding="utf-8"))
+    proposed = fixture["proposed"]
+    steps = fixture["steps"]
+    assert federation_transfer_journal.derive_transfer_id(
+        source_fleet_id=proposed["sourceFleetId"],
+        destination_fleet_id=proposed["destinationFleetId"],
+        backup_id=proposed["backupId"],
+        object_set_digest=proposed["objectSetDigest"],
+    ) == proposed["transferId"]
+
+    sender = federation_transfer_journal.FederatedTransferJournal(
+        tmp_path / "sender.sqlite3",
+        fixture["sender_identity"],
+    )
+    receiver = federation_transfer_journal.FederatedTransferJournal(
+        tmp_path / "receiver.sqlite3",
+        fixture["receiver_identity"],
+    )
+    now = datetime(2026, 9, 1, 7, 0, tzinfo=timezone.utc)
+    record = sender.persist_proposed_transfer(
+        transfer_id=proposed["transferId"],
+        source_fleet_id=proposed["sourceFleetId"],
+        destination_fleet_id=proposed["destinationFleetId"],
+        policy_id=proposed["policyId"],
+        backup_id=proposed["backupId"],
+        object_set_digest=proposed["objectSetDigest"],
+        now=now,
+    )
+    assert record["role"] == "SENDER"
+    assert record["identityDigest"] == fixture["identity_digest"]
+    for index, step in enumerate(steps):
+        if index:
+            record = sender.advance_transfer(
+                proposed["transferId"],
+                expected_revision=index,
+                next_state=step["state"],
+                details=step["details"],
+                now=now + timedelta(seconds=index),
+            )
+        assert record["state"] == step["state"]
+        assert record["stateDetails"] == step["details"]
+        assert record["statePayloadDigest"] == step["state_payload_digest"]
+        assert record["revision"] == index + 1
+        assert record["updatedAt"] == step["at"]
+
+    events = sender.list_transfer_events(proposed["transferId"])
+    assert len(events) == len(steps)
+    for index, (event, step) in enumerate(zip(events, steps, strict=True)):
+        assert event["sequence"] == index + 1
+        assert event["previousState"] == (steps[index - 1]["state"] if index else None)
+        assert event["nextState"] == step["state"]
+        assert event["stateDetails"] == step["details"]
+        assert event["statePayloadDigest"] == step["state_payload_digest"]
+        assert event["occurredAt"] == step["at"]
+
+    receiver_record = receiver.persist_proposed_transfer(
+        transfer_id=proposed["transferId"],
+        source_fleet_id=proposed["sourceFleetId"],
+        destination_fleet_id=proposed["destinationFleetId"],
+        policy_id=proposed["policyId"],
+        backup_id=proposed["backupId"],
+        object_set_digest=proposed["objectSetDigest"],
+        now=now,
+    )
+    assert receiver_record["role"] == "RECEIVER"
+    assert receiver_record["statePayloadDigest"] == steps[0]["state_payload_digest"]
 
 
 def test_control_authority_corpus_matches_frozen_python_v1_bytes() -> None:
