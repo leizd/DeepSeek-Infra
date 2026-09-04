@@ -11,7 +11,9 @@ use serde_json::{Map, Value};
 const FLEET_IDENTITY_SCHEMA: &str = "fleet-identity-v1";
 const ONLINE_SIGNER_CERTIFICATE_SCHEMA: &str = "federation-online-signer-certificate-v1";
 const SIGNATURE_ALGORITHM: &str = "Ed25519";
-const REPLICA_ATTESTATION_PURPOSE: &str = "REPLICA_ATTESTATION";
+pub const PURPOSE_DR_ATTESTATION: &str = "DR_ATTESTATION";
+pub const PURPOSE_INGRESS_GRANT: &str = "INGRESS_GRANT";
+pub const PURPOSE_REPLICA_ATTESTATION: &str = "REPLICA_ATTESTATION";
 const CERTIFICATE_DOMAIN: &[u8] = b"deepseek-infra:federation-online-signer-certificate-v1\0";
 const DOCUMENT_DOMAIN_PREFIX: &[u8] = b"deepseek-infra:federation-document\0";
 const ONLINE_SIGNER_PURPOSES: &[&str] = &[
@@ -45,8 +47,13 @@ pub(crate) fn verify_attestation_signature(
     assert_secret_free(root_identity)?;
     assert_secret_free(&attestation.signer_certificate)?;
     let root = verify_root_identity(root_identity)?;
-    let (signer, verifying_key, certificate_digest) =
-        verify_certificate(&attestation.signer_certificate, &root, authorization, now)?;
+    let (signer, verifying_key, certificate_digest) = verify_certificate(
+        &attestation.signer_certificate,
+        &root,
+        now,
+        PURPOSE_REPLICA_ATTESTATION,
+    )?;
+    verify_authorization(authorization, &signer, &certificate_digest)?;
 
     if attestation.schema != REPLICA_ATTESTATION_SCHEMA {
         return Err(error("FEDERATION_DOCUMENT_SCHEMA_INVALID"));
@@ -105,6 +112,78 @@ pub(crate) fn verify_attestation_signature(
     Ok(signer)
 }
 
+pub fn validate_fleet_identity(identity: &Value) -> Result<(), AttestationError> {
+    if !identity.is_object() {
+        return Err(error("FEDERATION_ROOT_IDENTITY_INVALID"));
+    }
+    verify_root_identity(identity).map(|_| ())
+}
+
+pub fn verify_federation_document(
+    document: &Value,
+    certificate: &Map<String, Value>,
+    root_identity: &Value,
+    expected_schema: &str,
+    now: &str,
+    required_purpose: &str,
+) -> Result<Value, AttestationError> {
+    let root = verify_root_identity(root_identity)?;
+    let now = parse_timestamp(now)
+        .ok_or_else(|| error("FEDERATION_CERTIFICATE_VALIDATION_TIME_INVALID"))?;
+    let (signer, verifying_key, certificate_digest) =
+        verify_certificate(certificate, &root, now, required_purpose)?;
+    assert_secret_free(document)?;
+    let fields = object(document).ok_or_else(|| error("FEDERATION_DOCUMENT_INVALID"))?;
+    let schema = string_field(fields, "schema")
+        .filter(|schema| *schema == expected_schema)
+        .ok_or_else(|| error("FEDERATION_DOCUMENT_SCHEMA_INVALID"))?;
+    if string_field(fields, "signerKeyId") != Some(signer.signer_key_id.as_str()) {
+        return Err(error("FEDERATION_DOCUMENT_SIGNER_MISMATCH"));
+    }
+    if string_field(fields, "signatureAlgorithm") != Some(SIGNATURE_ALGORITHM) {
+        return Err(error("FEDERATION_DOCUMENT_ALGORITHM_INVALID"));
+    }
+    let fleet_id = string_field(fields, "fleetId")
+        .filter(|fleet_id| !fleet_id.is_empty())
+        .ok_or_else(|| error("FEDERATION_DOCUMENT_FLEET_ID_REQUIRED"))?;
+    if fleet_id != root.fleet_id {
+        return Err(error("FEDERATION_DOCUMENT_FLEET_MISMATCH"));
+    }
+
+    let mut payload = fields.clone();
+    let signature = payload
+        .remove("signature")
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .and_then(|value| decode_fixed::<64>(&value))
+        .ok_or_else(|| error("FEDERATION_DOCUMENT_SIGNATURE_INVALID"))?;
+    let mut certificate_context = Map::new();
+    certificate_context.insert("fleetId".to_string(), Value::String(root.fleet_id));
+    certificate_context.insert("rootKeyId".to_string(), Value::String(root.root_key_id));
+    certificate_context.insert(
+        "rootFingerprint".to_string(),
+        Value::String(root.root_fingerprint),
+    );
+    certificate_context.insert(
+        "signerKeyId".to_string(),
+        Value::String(signer.signer_key_id),
+    );
+    certificate_context.insert(
+        "certificateDigest".to_string(),
+        Value::String(certificate_digest),
+    );
+    let message_document = serde_json::json!({
+        "schema": schema,
+        "certificateContext": certificate_context,
+        "document": payload,
+    });
+    let mut message = DOCUMENT_DOMAIN_PREFIX.to_vec();
+    message.extend(canonical_bytes(&message_document)?);
+    verifying_key
+        .verify_strict(&message, &Signature::from_bytes(&signature))
+        .map_err(|_| error("FEDERATION_DOCUMENT_SIGNATURE_INVALID"))?;
+    Ok(document.clone())
+}
+
 fn verify_root_identity(identity: &Value) -> Result<VerifiedRoot, AttestationError> {
     let identity = object(identity).ok_or_else(|| error("FEDERATION_PEER_IDENTITY_INVALID"))?;
     if string_field(identity, "schema") != Some(FLEET_IDENTITY_SCHEMA) {
@@ -144,8 +223,8 @@ fn verify_root_identity(identity: &Value) -> Result<VerifiedRoot, AttestationErr
 fn verify_certificate(
     certificate: &Map<String, Value>,
     root: &VerifiedRoot,
-    authorization: &CurrentSignerAuthorization,
     now: i64,
+    required_purpose: &str,
 ) -> Result<(VerifiedSigner, VerifyingKey, String), AttestationError> {
     if string_field(certificate, "schema") != Some(ONLINE_SIGNER_CERTIFICATE_SCHEMA) {
         return Err(error("FEDERATION_SIGNER_CERTIFICATE_SCHEMA_INVALID"));
@@ -161,7 +240,7 @@ fn verify_certificate(
     if string_field(certificate, "signatureAlgorithm") != Some(SIGNATURE_ALGORITHM) {
         return Err(error("FEDERATION_SIGNER_CERTIFICATE_ALGORITHM_INVALID"));
     }
-    verify_purposes(certificate)?;
+    verify_purposes(certificate, required_purpose)?;
     let signer_public = string_field(certificate, "signerPublicKey")
         .and_then(decode_fixed::<32>)
         .ok_or_else(|| error("FEDERATION_SIGNER_CERTIFICATE_PUBLIC_KEY_INVALID"))?;
@@ -202,15 +281,6 @@ fn verify_certificate(
         .map_err(|_| error("FEDERATION_SIGNER_CERTIFICATE_SIGNATURE_INVALID"))?;
 
     let certificate_digest = typed_sha256(&canonical_bytes(&Value::Object(certificate.clone()))?);
-    if authorization.signer_key_id != signer_key_id {
-        return Err(error("FEDERATION_SIGNER_NOT_ACCEPTED"));
-    }
-    if authorization.certificate_digest != certificate_digest {
-        return Err(error("FEDERATION_SIGNER_CERTIFICATE_CONFLICT"));
-    }
-    if !authorization.active {
-        return Err(error("FEDERATION_SIGNER_REVOKED"));
-    }
     let verifying_key = VerifyingKey::from_bytes(&signer_public)
         .map_err(|_| error("FEDERATION_SIGNER_CERTIFICATE_PUBLIC_KEY_INVALID"))?;
     Ok((
@@ -224,14 +294,37 @@ fn verify_certificate(
     ))
 }
 
-fn verify_purposes(certificate: &Map<String, Value>) -> Result<(), AttestationError> {
+fn verify_authorization(
+    authorization: &CurrentSignerAuthorization,
+    signer: &VerifiedSigner,
+    certificate_digest: &str,
+) -> Result<(), AttestationError> {
+    if authorization.signer_key_id != signer.signer_key_id {
+        return Err(error("FEDERATION_SIGNER_NOT_ACCEPTED"));
+    }
+    if authorization.certificate_digest != certificate_digest {
+        return Err(error("FEDERATION_SIGNER_CERTIFICATE_CONFLICT"));
+    }
+    if !authorization.active {
+        return Err(error("FEDERATION_SIGNER_REVOKED"));
+    }
+    Ok(())
+}
+
+fn verify_purposes(
+    certificate: &Map<String, Value>,
+    required_purpose: &str,
+) -> Result<(), AttestationError> {
     let purposes = certificate
         .get("purposes")
         .and_then(Value::as_array)
         .filter(|purposes| !purposes.is_empty())
         .ok_or_else(|| error("FEDERATION_SIGNER_CERTIFICATE_PURPOSES_INVALID"))?;
     let mut previous: Option<&str> = None;
-    let mut permits_replica_attestation = false;
+    if !ONLINE_SIGNER_PURPOSES.contains(&required_purpose) {
+        return Err(error("FEDERATION_SIGNER_PURPOSE_INVALID"));
+    }
+    let mut permits_required_purpose = false;
     for purpose in purposes {
         let purpose = purpose
             .as_str()
@@ -240,10 +333,10 @@ fn verify_purposes(certificate: &Map<String, Value>) -> Result<(), AttestationEr
         if previous.is_some_and(|item| item >= purpose) {
             return Err(error("FEDERATION_SIGNER_CERTIFICATE_PURPOSES_INVALID"));
         }
-        permits_replica_attestation |= purpose == REPLICA_ATTESTATION_PURPOSE;
+        permits_required_purpose |= purpose == required_purpose;
         previous = Some(purpose);
     }
-    if !permits_replica_attestation {
+    if !permits_required_purpose {
         return Err(error("FEDERATION_SIGNER_PURPOSE_NOT_ALLOWED"));
     }
     Ok(())

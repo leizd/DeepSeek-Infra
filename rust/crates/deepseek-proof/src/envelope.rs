@@ -3,6 +3,7 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::federated_replica::{FEDERATED_REPLICA_PROOF_CHECKS, validate_federated_replica_check};
 use crate::predictive::{PREDICTIVE_PROOF_CHECKS, validate_predictive_planning_proof};
 use crate::runtime::{FEDERATION_RUNTIME_PROOF_CHECKS, validate_federation_runtime_proof};
 use crate::storage_evidence::{
@@ -178,6 +179,9 @@ pub fn validate_check(check_name: &str, item: &Value) -> Vec<String> {
     }
     if AUTONOMOUS_STORAGE_BYTES_CHECKS.contains(&check_name) {
         return validate_autonomous_storage_bytes_proof(&Value::Object(evidence.clone()));
+    }
+    if FEDERATED_REPLICA_PROOF_CHECKS.contains(&check_name) {
+        return validate_federated_replica_check(check_name, &Value::Object(evidence.clone()));
     }
     vec![format!("unsupported-check:{check_name}")]
 }

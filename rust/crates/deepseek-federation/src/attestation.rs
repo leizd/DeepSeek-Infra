@@ -2,7 +2,10 @@ use crate::canonical::{
     assert_secret_free, canonical_bytes, is_failure_domain, is_typed_sha256, parse_timestamp,
     sha256_hex, typed_sha256, validate_control_id, validate_fleet_id,
 };
-use crate::identity::{VerifiedSigner, verify_attestation_signature};
+use crate::identity::{
+    PURPOSE_REPLICA_ATTESTATION, VerifiedSigner, verify_attestation_signature,
+    verify_federation_document,
+};
 use deepseek_storage::{DocumentError, ReceiptError, ReceiptV4, validate_committed_documents};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -233,6 +236,51 @@ pub fn verify_replica_attestation(
     verify_semantics(attestation, context, &signer, now)?;
     verify_remote_documents(attestation, context)?;
     Ok(())
+}
+
+pub fn verify_replica_attestation_for_proof(
+    attestation: &ReplicaAttestation,
+    context: &ReplicaVerificationContext<'_>,
+) -> Result<(), AttestationError> {
+    assert_secret_free(attestation)?;
+    if canonical_bytes(attestation)?.len() > MAX_REPLICA_ATTESTATION_BYTES {
+        return Err(error("FEDERATION_REPLICA_ATTESTATION_TOO_LARGE"));
+    }
+    let now = parse_timestamp(context.now)
+        .ok_or_else(|| error("FEDERATION_REPLICA_ATTESTATION_TIMESTAMP_INVALID"))?;
+    let document = serde_json::to_value(attestation)
+        .map_err(|_| error("FEDERATION_REPLICA_ATTESTATION_CANONICAL_PAYLOAD_INVALID"))?;
+    verify_federation_document(
+        &document,
+        &attestation.signer_certificate,
+        context.root_identity,
+        REPLICA_ATTESTATION_SCHEMA,
+        context.now,
+        PURPOSE_REPLICA_ATTESTATION,
+    )?;
+    let signer = VerifiedSigner {
+        signer_key_id: attestation.signer_key_id.clone(),
+        not_before: attestation
+            .signer_certificate
+            .get("notBefore")
+            .and_then(Value::as_str)
+            .and_then(parse_timestamp)
+            .ok_or_else(|| error("FEDERATION_SIGNER_CERTIFICATE_TIMESTAMP_INVALID"))?,
+        expires_at: attestation
+            .signer_certificate
+            .get("expiresAt")
+            .and_then(Value::as_str)
+            .and_then(parse_timestamp)
+            .ok_or_else(|| error("FEDERATION_SIGNER_CERTIFICATE_TIMESTAMP_INVALID"))?,
+    };
+    verify_semantics(attestation, context, &signer, now)
+}
+
+pub fn verify_replica_remote_documents(
+    attestation: &ReplicaAttestation,
+    context: &ReplicaVerificationContext<'_>,
+) -> Result<(), AttestationError> {
+    verify_remote_documents(attestation, context)
 }
 
 fn verify_semantics(

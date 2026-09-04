@@ -529,7 +529,9 @@ name = "deepseek-proof"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "deepseek-federation",
  "deepseek-protocol",
+ "deepseek-storage",
  "serde",
  "serde_json",
  "sha2 0.10.9",

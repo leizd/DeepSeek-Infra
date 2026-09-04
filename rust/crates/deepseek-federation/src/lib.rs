@@ -11,6 +11,11 @@ pub use attestation::{
     MAX_REPLICA_ATTESTATION_LIFETIME_SECONDS, REPLICA_ATTESTATION_SCHEMA, ReplicaAttestation,
     ReplicaTransferBinding, ReplicaVerificationContext, attestation_digest, derive_transfer_id,
     failure_domain_from_metadata, verify_replica_attestation, verify_replica_attestation_document,
+    verify_replica_attestation_for_proof, verify_replica_remote_documents,
+};
+pub use identity::{
+    PURPOSE_DR_ATTESTATION, PURPOSE_INGRESS_GRANT, PURPOSE_REPLICA_ATTESTATION,
+    validate_fleet_identity, verify_federation_document,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

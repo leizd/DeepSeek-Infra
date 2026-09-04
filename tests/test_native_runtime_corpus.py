@@ -5,6 +5,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from deepseek_infra.infra.mcp.protocol_preparation import prepare_mcp_protocol_json
 from deepseek_infra.infra.workspace import (
@@ -13,6 +14,7 @@ from deepseek_infra.infra.workspace import (
     backup_publish,
     backup_target_store,
     evidence_proof,
+    federated_replica_proof,
     federated_replica_attestation,
     federation_runtime_proof,
     federation_identity,
@@ -52,7 +54,7 @@ def test_canonical_corpora_match_frozen_digests() -> None:
     } <= ids
 
     manifests = validate_corpora()
-    assert len(manifests) == 9
+    assert len(manifests) == 10
     assert manifests[1]["compatibility_reason"]
     assert manifests[2]["compatibility_reason"]
     assert manifests[3]["compatibility_reason"]
@@ -61,6 +63,55 @@ def test_canonical_corpora_match_frozen_digests() -> None:
     assert manifests[6]["compatibility_reason"]
     assert manifests[7]["compatibility_reason"]
     assert manifests[8]["compatibility_reason"]
+    assert manifests[9]["compatibility_reason"]
+
+
+def _apply_frozen_mutation(value: Any, *, op: str, pointer: str, replacement: Any) -> None:
+    parts = pointer.lstrip("/").split("/")
+    target = value
+    for part in parts[:-1]:
+        target = target[int(part)] if isinstance(target, list) else target[part]
+    leaf = parts[-1]
+    if op in {"add", "replace"}:
+        if isinstance(target, list):
+            target[int(leaf)] = copy.deepcopy(replacement)
+        else:
+            target[leaf] = copy.deepcopy(replacement)
+        return
+    if op == "remove":
+        if isinstance(target, list):
+            target.pop(int(leaf))
+        else:
+            target.pop(leaf)
+        return
+    raise AssertionError(f"unsupported frozen mutation operation: {op}")
+
+
+def test_federated_replica_v10_semantic_vector_matches_python_4_8_0_validator() -> None:
+    manifest_path = ROOT / "compat" / "native-runtime" / "v10" / "manifest.json"
+    manifest = validate_corpus(manifest_path)
+    path = next(
+        item["path"]
+        for item in manifest["corpora"]
+        if item["id"] == "federated-replica-proof-semantics-v10"
+    )
+    fixture = json.loads((ROOT / path).read_text(encoding="utf-8"))
+    proof = fixture["valid_proof"]
+    assert fixture["check_names"] == list(federated_replica_proof.FEDERATED_REPLICA_PROOF_CHECKS)
+    assert federated_replica_proof.validate_federated_replica_proof(proof) == []
+    assert federated_replica_proof.validate_federated_replica_proof([]) == fixture["non_object_errors"]
+    assert federated_replica_proof.validate_federated_replica_proof({}) == fixture["empty_object_errors"]
+    for mutation in fixture["mutation_cases"]:
+        candidate = copy.deepcopy(proof)
+        _apply_frozen_mutation(
+            candidate,
+            op=mutation["op"],
+            pointer=mutation["pointer"],
+            replacement=mutation["value"],
+        )
+        if mutation["rebind_proof"]:
+            candidate["proofDigest"] = federated_replica_proof.proof_digest(candidate)
+        assert federated_replica_proof.validate_federated_replica_proof(candidate) == mutation["expected_errors"], mutation["name"]
 
 
 def test_storage_v2_semantic_vector_matches_python_4_8_0_bytes() -> None:
