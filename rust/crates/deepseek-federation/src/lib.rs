@@ -3,7 +3,15 @@ use deepseek_protocol::{
 };
 
 pub mod attestation;
-pub use attestation::{FailureDomainMetadata, ReplicaAttestation};
+mod canonical;
+mod identity;
+pub use attestation::{
+    AttestationError, CurrentSignerAuthorization, FailureDomainMetadata, MAX_REMOTE_COMMIT_BYTES,
+    MAX_REMOTE_RECEIPT_BYTES, MAX_REPLICA_ATTESTATION_BYTES,
+    MAX_REPLICA_ATTESTATION_LIFETIME_SECONDS, REPLICA_ATTESTATION_SCHEMA, ReplicaAttestation,
+    ReplicaTransferBinding, ReplicaVerificationContext, attestation_digest, derive_transfer_id,
+    failure_domain_from_metadata, verify_replica_attestation, verify_replica_attestation_document,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignRequest {

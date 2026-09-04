@@ -1,0 +1,151 @@
+{
+  "attestation": {
+    "backupId": "backup-1",
+    "committedAt": "2026-09-03T00:00:20Z",
+    "destinationFleetId": "fleet-b",
+    "expiresAt": "2026-09-03T00:05:30Z",
+    "failureDomain": "federation-peer-domain:sha256:551cc7d4afd831263e06f9dc4370ba4ffddd81dc2ecac9fa9242969b9bcc4fc1",
+    "fleetId": "fleet-b",
+    "objectSetDigest": "sha256:f614451c79d5e86fe321ce7dc562fe1a7622d693315edf43fd7f6c6659528564",
+    "remoteCommitDigest": "sha256:2094cbce0f82c0e5587a070632ad3d8e2af9862f510d5ff43434c06277a5ea05",
+    "remoteReceiptDigest": "sha256:a4e88ea3f6840f389179474d60179ac023497c5813b8c77adee02e5b5e66b03c",
+    "remoteTargetId": "target-b",
+    "schema": "federated-replica-attestation-v1",
+    "sequence": 1,
+    "signature": "eF5TrZtCL3QsQ3C4ftFxJFQ7_Vh737OeQ24PlY2YUo3AUdqJAYdvIFUufX3xqhsz22lAx73QgCwhoxjYCiUoDA",
+    "signatureAlgorithm": "Ed25519",
+    "signedAt": "2026-09-03T00:00:30Z",
+    "signerCertificate": {
+      "expiresAt": "2026-09-04T00:00:00Z",
+      "fleetId": "fleet-b",
+      "issuedAt": "2026-09-03T00:00:00Z",
+      "notBefore": "2026-09-03T00:00:00Z",
+      "purposes": [
+        "REPLICA_ATTESTATION"
+      ],
+      "rootFingerprint": "sha256:65b60673d6ed884bf01c2c222d82ada0740f29ac3355d6a925c81f17f47a27b8",
+      "rootKeyId": "fed-root-65b60673d6ed884bf01c2c22",
+      "rootSignature": "B_IEdie8qvPvOcqmMkEbiEwjrr0Xtn_BFvq4f0ky4TVynSNQiC8_10bx9_M3VZVt5UaHXQ2slhtFYJqF0Ey1BA",
+      "schema": "federation-online-signer-certificate-v1",
+      "sequence": 1,
+      "signatureAlgorithm": "Ed25519",
+      "signerKeyId": "fed-signer-c945cbf2a5602002141e2fb9",
+      "signerPublicKey": "5_FioQvsVZr-oZXk3OhLaVaNXSywlj60RsBoXisX8vA"
+    },
+    "signerKeyId": "fed-signer-c945cbf2a5602002141e2fb9",
+    "sourceFleetId": "fleet-a",
+    "transferId": "sha256:5843bf92d738fd63146ebf0d719d004948c355602b8ca38a6ef04c9eb23ff2e4"
+  },
+  "attestation_digest": "sha256:5090bda55840115fbd6d78c39cae29b47511b2bdc018ef051c5c5c2908321fd2",
+  "max_future_skew_seconds": 30,
+  "now": "2026-09-03T00:00:40Z",
+  "pinned_metadata": {
+    "jurisdiction": "cn",
+    "provider": "minio",
+    "region": "cn-south-1",
+    "siteClass": "region"
+  },
+  "remote_commit": {
+    "backupId": "backup-1",
+    "commitHash": "f32e5a583811416d1a8fd22ffa84084fc9693c1e1786eabf79bcb01c8fa11a8a",
+    "controlObjectDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "fencingToken": 7,
+    "objectSetDigest": "f614451c79d5e86fe321ce7dc562fe1a7622d693315edf43fd7f6c6659528564",
+    "policyId": "policy-1",
+    "previousCommitHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "receiptDigest": "a4e88ea3f6840f389179474d60179ac023497c5813b8c77adee02e5b5e66b03c",
+    "runId": "fed-replica-5843bf92d738fd63146ebf0d719d004948c355602b8ca38a6ef04c9eb23ff2e4",
+    "scheduleSlot": "federation/replica/sha256:5843bf92d738fd63146ebf0d719d004948c355602b8ca38a6ef04c9eb23ff2e4",
+    "schemaVersion": 4,
+    "slotDigest": "081805ac57c19f7bce9e1db3b661dbd62bb927393e353a6fc5f68ff265655776",
+    "storageProtocol": "object-set-v1",
+    "targetGeneration": 1
+  },
+  "remote_receipt": {
+    "backupId": "backup-1",
+    "baseBackupId": null,
+    "chainDepth": 0,
+    "chunkProtocol": "fastcdc-v3",
+    "controlObjectDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "createdAt": "2026-09-03T00:00:10Z",
+    "creationVerified": true,
+    "lineageId": null,
+    "objectSetDigest": "f614451c79d5e86fe321ce7dc562fe1a7622d693315edf43fd7f6c6659528564",
+    "objects": [
+      {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "size": 11
+      },
+      {
+        "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "size": 2
+      }
+    ],
+    "parentBackupId": null,
+    "pinned": false,
+    "policyId": "policy-1",
+    "runId": "fed-replica-5843bf92d738fd63146ebf0d719d004948c355602b8ca38a6ef04c9eb23ff2e4",
+    "scheduleSlot": "federation/replica/sha256:5843bf92d738fd63146ebf0d719d004948c355602b8ca38a6ef04c9eb23ff2e4",
+    "schemaVersion": 4,
+    "size": 13,
+    "snapshotKind": "full",
+    "storageProtocol": "object-set-v1",
+    "targetId": "target-b"
+  },
+  "root_identity": {
+    "createdAt": "2026-09-03T00:00:00Z",
+    "fleetId": "fleet-b",
+    "rootFingerprint": "sha256:65b60673d6ed884bf01c2c222d82ada0740f29ac3355d6a925c81f17f47a27b8",
+    "rootKeyId": "fed-root-65b60673d6ed884bf01c2c22",
+    "rootPublicKey": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
+    "schema": "fleet-identity-v1",
+    "signatureAlgorithm": "Ed25519"
+  },
+  "signer_authorization": {
+    "active": true,
+    "certificateDigest": "sha256:43b8968667327cb9b04b490cd3fc038f5a2e1ea6cd23893fe68293307a4226ec",
+    "signerKeyId": "fed-signer-c945cbf2a5602002141e2fb9"
+  },
+  "schema_version": 1,
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "source_receipt": {
+    "backupId": "backup-1",
+    "baseBackupId": null,
+    "chainDepth": 0,
+    "chunkProtocol": "fastcdc-v3",
+    "controlObjectDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "createdAt": "2026-09-03T00:00:00Z",
+    "creationVerified": true,
+    "lineageId": null,
+    "objectSetDigest": "f614451c79d5e86fe321ce7dc562fe1a7622d693315edf43fd7f6c6659528564",
+    "objects": [
+      {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "size": 11
+      },
+      {
+        "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "size": 2
+      }
+    ],
+    "parentBackupId": null,
+    "pinned": false,
+    "policyId": "policy-1",
+    "runId": "source-run-1",
+    "scheduleSlot": "source-slot-1",
+    "schemaVersion": 4,
+    "size": 13,
+    "snapshotKind": "full",
+    "storageProtocol": "object-set-v1",
+    "targetId": "source-target"
+  },
+  "source_version": "4.8.0",
+  "transfer": {
+    "backupId": "backup-1",
+    "destinationFleetId": "fleet-b",
+    "objectSetDigest": "sha256:f614451c79d5e86fe321ce7dc562fe1a7622d693315edf43fd7f6c6659528564",
+    "policyId": "policy-1",
+    "sourceFleetId": "fleet-a",
+    "transferId": "sha256:5843bf92d738fd63146ebf0d719d004948c355602b8ca38a6ef04c9eb23ff2e4"
+  }
+}
