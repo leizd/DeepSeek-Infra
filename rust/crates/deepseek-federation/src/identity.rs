@@ -13,7 +13,9 @@ const ONLINE_SIGNER_CERTIFICATE_SCHEMA: &str = "federation-online-signer-certifi
 const SIGNATURE_ALGORITHM: &str = "Ed25519";
 pub const PURPOSE_DR_ATTESTATION: &str = "DR_ATTESTATION";
 pub const PURPOSE_INGRESS_GRANT: &str = "INGRESS_GRANT";
+pub const PURPOSE_READINESS_ATTESTATION: &str = "READINESS_ATTESTATION";
 pub const PURPOSE_REPLICA_ATTESTATION: &str = "REPLICA_ATTESTATION";
+pub const PURPOSE_SESSION_AUTHENTICATION: &str = "SESSION_AUTHENTICATION";
 const CERTIFICATE_DOMAIN: &[u8] = b"deepseek-infra:federation-online-signer-certificate-v1\0";
 const DOCUMENT_DOMAIN_PREFIX: &[u8] = b"deepseek-infra:federation-document\0";
 const ONLINE_SIGNER_PURPOSES: &[&str] = &[
@@ -117,6 +119,129 @@ pub fn validate_fleet_identity(identity: &Value) -> Result<(), AttestationError>
         return Err(error("FEDERATION_ROOT_IDENTITY_INVALID"));
     }
     verify_root_identity(identity).map(|_| ())
+}
+
+/// Diagnose an untrusted public online-signer certificate without accepting it
+/// into a trust registry or exposing any signing capability.
+pub fn validate_online_signer_certificate(
+    certificate: &Value,
+    root_identity: &Value,
+    now: &str,
+    required_purpose: Option<&str>,
+) -> Vec<String> {
+    let root_errors = root_identity_errors(root_identity);
+    if !root_errors.is_empty() {
+        return root_errors;
+    }
+    let Some(root_fields) = root_identity.as_object() else {
+        return vec!["FEDERATION_ROOT_IDENTITY_INVALID".to_string()];
+    };
+    let Some(certificate) = certificate.as_object() else {
+        return vec!["FEDERATION_SIGNER_CERTIFICATE_INVALID".to_string()];
+    };
+    let mut errors = Vec::new();
+    if string_field(certificate, "schema") != Some(ONLINE_SIGNER_CERTIFICATE_SCHEMA) {
+        errors.push("FEDERATION_SIGNER_CERTIFICATE_SCHEMA_INVALID".to_string());
+    }
+    if string_field(certificate, "fleetId") != string_field(root_fields, "fleetId") {
+        errors.push("FEDERATION_SIGNER_CERTIFICATE_FLEET_MISMATCH".to_string());
+    }
+    if string_field(certificate, "rootKeyId") != string_field(root_fields, "rootKeyId")
+        || string_field(certificate, "rootFingerprint")
+            != string_field(root_fields, "rootFingerprint")
+    {
+        errors.push("FEDERATION_SIGNER_CERTIFICATE_ROOT_MISMATCH".to_string());
+    }
+    if string_field(certificate, "signatureAlgorithm") != Some(SIGNATURE_ALGORITHM) {
+        errors.push("FEDERATION_SIGNER_CERTIFICATE_ALGORITHM_INVALID".to_string());
+    }
+
+    let purposes_valid = certificate_purposes_valid(certificate);
+    if !purposes_valid {
+        errors.push("FEDERATION_SIGNER_CERTIFICATE_PURPOSES_INVALID".to_string());
+    }
+    if let Some(required_purpose) = required_purpose {
+        if !ONLINE_SIGNER_PURPOSES.contains(&required_purpose) {
+            errors.push("FEDERATION_SIGNER_PURPOSE_INVALID".to_string());
+        } else if purposes_valid
+            && !certificate
+                .get("purposes")
+                .and_then(Value::as_array)
+                .is_some_and(|purposes| {
+                    purposes
+                        .iter()
+                        .any(|purpose| purpose.as_str() == Some(required_purpose))
+                })
+        {
+            errors.push("FEDERATION_SIGNER_PURPOSE_NOT_ALLOWED".to_string());
+        }
+    }
+
+    let signer_public = string_field(certificate, "signerPublicKey").and_then(decode_fixed::<32>);
+    if signer_public.is_none() {
+        errors.push("FEDERATION_SIGNER_CERTIFICATE_PUBLIC_KEY_INVALID".to_string());
+    } else {
+        let expected = format!(
+            "fed-signer-{}",
+            &sha256_hex(&signer_public.unwrap_or_default())[..24]
+        );
+        if string_field(certificate, "signerKeyId") != Some(expected.as_str()) {
+            errors.push("FEDERATION_SIGNER_CERTIFICATE_SIGNER_KEY_ID_INVALID".to_string());
+        }
+    }
+    if positive_u64_field(certificate, "sequence").is_none() {
+        errors.push("FEDERATION_SIGNER_CERTIFICATE_SEQUENCE_INVALID".to_string());
+    }
+
+    let issued_at = string_field(certificate, "issuedAt").and_then(parse_timestamp);
+    let not_before = string_field(certificate, "notBefore").and_then(parse_timestamp);
+    let expires_at = string_field(certificate, "expiresAt").and_then(parse_timestamp);
+    if issued_at.is_none() || not_before.is_none() || expires_at.is_none() {
+        errors.push("FEDERATION_SIGNER_CERTIFICATE_TIMESTAMP_INVALID".to_string());
+    } else {
+        let issued_at = issued_at.unwrap_or_default();
+        let not_before = not_before.unwrap_or_default();
+        let expires_at = expires_at.unwrap_or_default();
+        if issued_at > not_before || not_before >= expires_at {
+            errors.push("FEDERATION_SIGNER_CERTIFICATE_WINDOW_INVALID".to_string());
+        } else if let Some(now) = parse_timestamp(now) {
+            if issued_at > now {
+                errors.push("FEDERATION_SIGNER_CERTIFICATE_ISSUED_IN_FUTURE".to_string());
+            }
+            if not_before > now {
+                errors.push("FEDERATION_SIGNER_CERTIFICATE_NOT_YET_VALID".to_string());
+            }
+            if now >= expires_at {
+                errors.push("FEDERATION_SIGNER_CERTIFICATE_EXPIRED".to_string());
+            }
+        } else {
+            errors.push("FEDERATION_CERTIFICATE_VALIDATION_TIME_INVALID".to_string());
+        }
+    }
+
+    let root_public = string_field(root_fields, "rootPublicKey").and_then(decode_fixed::<32>);
+    let root_signature = string_field(certificate, "rootSignature").and_then(decode_fixed::<64>);
+    let signature_valid = root_public
+        .zip(root_signature)
+        .is_some_and(|(public, signature)| {
+            let Ok(verifying_key) = VerifyingKey::from_bytes(&public) else {
+                return false;
+            };
+            let mut payload = certificate.clone();
+            payload.remove("rootSignature");
+            let Ok(bytes) = canonical_bytes(&Value::Object(payload)) else {
+                return false;
+            };
+            let mut message = CERTIFICATE_DOMAIN.to_vec();
+            message.extend(bytes);
+            verifying_key
+                .verify_strict(&message, &Signature::from_bytes(&signature))
+                .is_ok()
+        });
+    if !signature_valid {
+        errors.push("FEDERATION_SIGNER_CERTIFICATE_SIGNATURE_INVALID".to_string());
+    }
+    dedupe_codes(errors)
 }
 
 pub fn verify_federation_document(
@@ -340,6 +465,79 @@ fn verify_purposes(
         return Err(error("FEDERATION_SIGNER_PURPOSE_NOT_ALLOWED"));
     }
     Ok(())
+}
+
+fn certificate_purposes_valid(certificate: &Map<String, Value>) -> bool {
+    let Some(purposes) = certificate.get("purposes").and_then(Value::as_array) else {
+        return false;
+    };
+    if purposes.is_empty() {
+        return false;
+    }
+    let mut previous: Option<&str> = None;
+    for purpose in purposes {
+        let Some(purpose) = purpose
+            .as_str()
+            .filter(|purpose| ONLINE_SIGNER_PURPOSES.contains(purpose))
+        else {
+            return false;
+        };
+        if previous.is_some_and(|previous| previous >= purpose) {
+            return false;
+        }
+        previous = Some(purpose);
+    }
+    true
+}
+
+fn root_identity_errors(identity: &Value) -> Vec<String> {
+    let Some(identity) = identity.as_object() else {
+        return vec!["FEDERATION_ROOT_IDENTITY_INVALID".to_string()];
+    };
+    let mut errors = Vec::new();
+    if string_field(identity, "schema") != Some(FLEET_IDENTITY_SCHEMA) {
+        errors.push("FEDERATION_ROOT_IDENTITY_SCHEMA_INVALID".to_string());
+    }
+    let fleet_valid = string_field(identity, "fleetId").is_some_and(validate_fleet_id);
+    if !fleet_valid {
+        errors.push("FEDERATION_FLEET_ID_INVALID".to_string());
+    }
+    if string_field(identity, "signatureAlgorithm") != Some(SIGNATURE_ALGORITHM) {
+        errors.push("FEDERATION_ROOT_IDENTITY_ALGORITHM_INVALID".to_string());
+    }
+    let public = string_field(identity, "rootPublicKey").and_then(decode_fixed::<32>);
+    if let Some(public) = public {
+        let expected_key_id = format!("fed-root-{}", &sha256_hex(&public)[..24]);
+        if string_field(identity, "rootKeyId") != Some(expected_key_id.as_str()) {
+            errors.push("FEDERATION_ROOT_KEY_ID_INVALID".to_string());
+        }
+        let expected_fingerprint = typed_sha256(&public);
+        if string_field(identity, "rootFingerprint") != Some(expected_fingerprint.as_str()) {
+            errors.push("FEDERATION_ROOT_FINGERPRINT_INVALID".to_string());
+        }
+    } else {
+        errors.push("FEDERATION_ROOT_PUBLIC_KEY_INVALID".to_string());
+    }
+    if string_field(identity, "createdAt")
+        .and_then(parse_timestamp)
+        .is_none()
+    {
+        errors.push("FEDERATION_ROOT_IDENTITY_TIMESTAMP_INVALID".to_string());
+    }
+    if !fleet_valid {
+        errors.push("FEDERATION_ROOT_IDENTITY_INVALID".to_string());
+    }
+    dedupe_codes(errors)
+}
+
+fn dedupe_codes(errors: Vec<String>) -> Vec<String> {
+    let mut unique = Vec::new();
+    for error in errors {
+        if !unique.contains(&error) {
+            unique.push(error);
+        }
+    }
+    unique
 }
 
 fn certificate_timestamp(

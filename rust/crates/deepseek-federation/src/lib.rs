@@ -15,8 +15,9 @@ pub use attestation::{
     verify_replica_attestation_for_proof, verify_replica_remote_documents,
 };
 pub use identity::{
-    PURPOSE_DR_ATTESTATION, PURPOSE_INGRESS_GRANT, PURPOSE_REPLICA_ATTESTATION,
-    validate_fleet_identity, verify_federation_document,
+    PURPOSE_DR_ATTESTATION, PURPOSE_INGRESS_GRANT, PURPOSE_READINESS_ATTESTATION,
+    PURPOSE_REPLICA_ATTESTATION, PURPOSE_SESSION_AUTHENTICATION, validate_fleet_identity,
+    validate_online_signer_certificate, verify_federation_document,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

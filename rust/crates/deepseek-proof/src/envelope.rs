@@ -5,6 +5,7 @@ use std::fmt;
 
 use crate::federated_dr::{FEDERATED_DR_PROOF_CHECKS, validate_federated_dr_proof};
 use crate::federated_replica::{FEDERATED_REPLICA_PROOF_CHECKS, validate_federated_replica_check};
+use crate::federation_trust::{FEDERATION_TRUST_PROOF_CHECKS, validate_federation_trust_proof};
 use crate::predictive::{PREDICTIVE_PROOF_CHECKS, validate_predictive_planning_proof};
 use crate::runtime::{FEDERATION_RUNTIME_PROOF_CHECKS, validate_federation_runtime_proof};
 use crate::storage_evidence::{
@@ -186,6 +187,9 @@ pub fn validate_check(check_name: &str, item: &Value) -> Vec<String> {
     }
     if FEDERATED_DR_PROOF_CHECKS.contains(&check_name) {
         return validate_federated_dr_proof(&Value::Object(evidence.clone()));
+    }
+    if FEDERATION_TRUST_PROOF_CHECKS.contains(&check_name) {
+        return validate_federation_trust_proof(&Value::Object(evidence.clone()));
     }
     vec![format!("unsupported-check:{check_name}")]
 }

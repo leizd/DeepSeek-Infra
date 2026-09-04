@@ -19,6 +19,7 @@ from deepseek_infra.infra.workspace import (
     federated_replica_attestation,
     federation_runtime_proof,
     federation_identity,
+    federation_trust_proof,
     federation_transfer_journal,
 )
 from deepseek_infra.infra.workspace.federated_replica_attestation import REPLICA_ATTESTATION_FIELDS
@@ -55,7 +56,7 @@ def test_canonical_corpora_match_frozen_digests() -> None:
     } <= ids
 
     manifests = validate_corpora()
-    assert len(manifests) == 11
+    assert len(manifests) == 12
     assert manifests[1]["compatibility_reason"]
     assert manifests[2]["compatibility_reason"]
     assert manifests[3]["compatibility_reason"]
@@ -66,6 +67,7 @@ def test_canonical_corpora_match_frozen_digests() -> None:
     assert manifests[8]["compatibility_reason"]
     assert manifests[9]["compatibility_reason"]
     assert manifests[10]["compatibility_reason"]
+    assert manifests[11]["compatibility_reason"]
 
 
 def _apply_frozen_mutation(value: Any, *, op: str, pointer: str, replacement: Any) -> None:
@@ -141,6 +143,34 @@ def test_federated_dr_v11_semantic_vector_matches_python_4_8_0_validator() -> No
         if mutation["rebind_proof"]:
             candidate["proofDigest"] = federated_dr_proof.proof_digest(candidate)
         assert federated_dr_proof.validate_federated_dr_proof(candidate) == mutation["expected_errors"], mutation["name"]
+
+
+def test_federation_trust_v12_semantic_vector_matches_python_4_8_0_validator() -> None:
+    manifest_path = ROOT / "compat" / "native-runtime" / "v12" / "manifest.json"
+    manifest = validate_corpus(manifest_path)
+    path = next(
+        item["path"]
+        for item in manifest["corpora"]
+        if item["id"] == "federation-trust-proof-semantics-v12"
+    )
+    fixture = json.loads((ROOT / path).read_text(encoding="utf-8"))
+    proof = fixture["valid_proof"]
+    assert fixture["check_names"] == list(federation_trust_proof.FEDERATION_TRUST_PROOF_CHECKS)
+    assert federation_trust_proof.validate_federation_trust_proof(proof) == []
+    assert federation_trust_proof.validate_federation_trust_proof([]) == fixture["non_object_errors"]
+    assert federation_trust_proof.validate_federation_trust_proof({}) == fixture["empty_object_errors"]
+    for mutation in fixture["mutation_cases"]:
+        candidate = copy.deepcopy(proof)
+        for operation in mutation["operations"]:
+            _apply_frozen_mutation(
+                candidate,
+                op=operation["op"],
+                pointer=operation["pointer"],
+                replacement=operation["value"],
+            )
+        if mutation["rebind_proof"]:
+            candidate["proofDigest"] = federation_trust_proof.proof_digest(candidate)
+        assert federation_trust_proof.validate_federation_trust_proof(candidate) == mutation["expected_errors"], mutation["name"]
 
 
 def test_storage_v2_semantic_vector_matches_python_4_8_0_bytes() -> None:
