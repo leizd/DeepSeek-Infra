@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Correct the fictional Rust proof envelope and freeze the real evidence-proof-v2 plus dr-readiness-proof-v1 semantics.",
+  "normalization": "LF-normalized SHA-256 of public inventory/fixture bytes",
+  "corpora": [
+    {
+      "id": "evidence-proof-v2-dr-readiness-semantics-v4",
+      "path": "compat/native-runtime/v4/evidence/evidence_proof_v2_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen evidence-proof-v2 envelope and DR readiness semantics",
+      "sha256": "00c20306be11cfb759dd977248e5bc79edc7249b2debc2e7bd8b4d5e619e2b9f"
+    }
+  ]
+}

@@ -11,6 +11,7 @@ from deepseek_infra.infra.workspace import (
     backup_object_set,
     backup_publish,
     backup_target_store,
+    evidence_proof,
     federated_replica_attestation,
     federation_identity,
 )
@@ -48,9 +49,10 @@ def test_canonical_corpora_match_frozen_digests() -> None:
     } <= ids
 
     manifests = validate_corpora()
-    assert len(manifests) == 3
+    assert len(manifests) == 4
     assert manifests[1]["compatibility_reason"]
     assert manifests[2]["compatibility_reason"]
+    assert manifests[3]["compatibility_reason"]
 
 
 def test_storage_v2_semantic_vector_matches_python_4_8_0_bytes() -> None:
@@ -117,6 +119,25 @@ def test_federation_v3_semantic_vector_matches_python_4_8_0_verifier() -> None:
         attestation=verified,
     )
     assert federated_replica_attestation.attestation_digest(verified) == fixture["attestation_digest"]
+
+
+def test_evidence_v4_semantic_vector_matches_python_4_8_0_validator() -> None:
+    manifest_path = ROOT / "compat" / "native-runtime" / "v4" / "manifest.json"
+    manifest = validate_corpus(manifest_path)
+    path = next(
+        item["path"]
+        for item in manifest["corpora"]
+        if item["id"] == "evidence-proof-v2-dr-readiness-semantics-v4"
+    )
+    fixture = json.loads((ROOT / path).read_text(encoding="utf-8"))
+    envelope = fixture["valid_envelope"]
+    assert envelope["schema"] == evidence_proof.EVIDENCE_PROOF_SCHEMA
+    assert envelope["scenario"] == "native-evidence-proof-parity"
+    assert envelope["checks"]
+    for check_name, item in envelope["checks"].items():
+        assert evidence_proof.validate_check(check_name, item) == []
+    for invalid in fixture["invalid_checks"]:
+        assert evidence_proof.validate_check(invalid["check_name"], invalid["item"]) == invalid["expected_errors"]
 
 
 def test_control_authority_corpus_matches_frozen_python_v1_bytes() -> None:
