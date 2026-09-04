@@ -528,6 +528,7 @@ dependencies = [
 name = "deepseek-proof"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "deepseek-protocol",
  "serde",
  "serde_json",

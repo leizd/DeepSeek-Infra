@@ -5,6 +5,9 @@ use std::fmt;
 
 use crate::predictive::{PREDICTIVE_PROOF_CHECKS, validate_predictive_planning_proof};
 use crate::runtime::{FEDERATION_RUNTIME_PROOF_CHECKS, validate_federation_runtime_proof};
+use crate::storage_evidence::{
+    AUTONOMOUS_STORAGE_BYTES_CHECKS, validate_autonomous_storage_bytes_proof,
+};
 
 pub const EVIDENCE_ENVELOPE_SCHEMA: &str = "evidence-proof-v2";
 pub const DR_READINESS_PROOF_SCHEMA: &str = "dr-readiness-proof-v1";
@@ -172,6 +175,9 @@ pub fn validate_check(check_name: &str, item: &Value) -> Vec<String> {
     }
     if PREDICTIVE_PROOF_CHECKS.contains(&check_name) {
         return validate_predictive_planning_proof(&Value::Object(evidence.clone()));
+    }
+    if AUTONOMOUS_STORAGE_BYTES_CHECKS.contains(&check_name) {
+        return validate_autonomous_storage_bytes_proof(&Value::Object(evidence.clone()));
     }
     vec![format!("unsupported-check:{check_name}")]
 }

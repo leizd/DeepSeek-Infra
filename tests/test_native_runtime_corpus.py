@@ -52,7 +52,7 @@ def test_canonical_corpora_match_frozen_digests() -> None:
     } <= ids
 
     manifests = validate_corpora()
-    assert len(manifests) == 8
+    assert len(manifests) == 9
     assert manifests[1]["compatibility_reason"]
     assert manifests[2]["compatibility_reason"]
     assert manifests[3]["compatibility_reason"]
@@ -60,6 +60,7 @@ def test_canonical_corpora_match_frozen_digests() -> None:
     assert manifests[5]["compatibility_reason"]
     assert manifests[6]["compatibility_reason"]
     assert manifests[7]["compatibility_reason"]
+    assert manifests[8]["compatibility_reason"]
 
 
 def test_storage_v2_semantic_vector_matches_python_4_8_0_bytes() -> None:

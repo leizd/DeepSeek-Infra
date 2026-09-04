@@ -3,6 +3,7 @@ use deepseek_protocol::{ActionFence, AdmitError, admit_command, validate_fence};
 pub mod envelope;
 pub mod predictive;
 pub mod runtime;
+pub mod storage_evidence;
 pub use envelope::{
     DR_READINESS_PROOF_SCHEMA, EVIDENCE_ENVELOPE_SCHEMA, EvidenceProofEnvelope, EvidenceProofError,
     MAX_EVIDENCE_PROOF_BYTES, PREDICTIVE_PLANNING_PROOF_SCHEMA, parse_evidence_proof_document,
@@ -15,6 +16,9 @@ pub use predictive::{
 pub use runtime::{
     FEDERATION_RUNTIME_PROOF_CHECKS, FEDERATION_RUNTIME_PROOF_SCHEMA,
     federation_runtime_proof_digest, validate_federation_runtime_proof,
+};
+pub use storage_evidence::{
+    AUTONOMOUS_STORAGE_BYTES_CHECKS, validate_autonomous_storage_bytes_proof,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
