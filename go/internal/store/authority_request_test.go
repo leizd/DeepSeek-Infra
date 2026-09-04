@@ -1,6 +1,9 @@
 package store
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -235,5 +238,96 @@ func TestAuthorityRequestHelpersFailClosed(t *testing.T) {
 	negativeSkew.MaxFutureSkewSeconds = -1
 	if _, err := VerifyAuthorityRequestDocument([]byte(fixture.CanonicalRequest), negativeSkew); err != nil {
 		t.Fatalf("negative skew on a past issuedAt must still verify: %v", err)
+	}
+}
+
+func rfc8032PrivateKey(t *testing.T) (ed25519.PrivateKey, string) {
+	t.Helper()
+	// RFC 8032 Ed25519 test vector 1 seed. Public test key only; not a production secret.
+	seed, err := hex.DecodeString("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := ed25519.NewKeyFromSeed(seed)
+	return private, base64.RawURLEncoding.EncodeToString(private.Public().(ed25519.PublicKey))
+}
+
+func TestSignAuthorityRequestMatchesFrozenVector(t *testing.T) {
+	fixture := loadAuthorityRequestFixture(t)
+	private, public := rfc8032PrivateKey(t)
+	if public != fixture.SignerPublicKey {
+		t.Fatalf("public key %s want %s", public, fixture.SignerPublicKey)
+	}
+	keyID, err := SignerKeyIDForPublicKey(public)
+	if err != nil || keyID != fixture.SignerKeyID {
+		t.Fatalf("signer key id: %s %v", keyID, err)
+	}
+	unsigned := map[string]any{
+		"schema":         AuthorityRequestSchema,
+		"schemaVersion":  1,
+		"domain":         "action",
+		"operation":      "install-epoch",
+		"actionId":       "act-1",
+		"executionEpoch": 4,
+		"fencingToken":   4,
+		"revision":       1,
+		"requestId":      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"nonce":          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"issuedAt":       "2026-09-04T00:00:30Z",
+		"expiresAt":      "2026-09-04T00:05:30Z",
+		"runtime":        RuntimeGo,
+		"mode":           ModeShadow,
+		"fleetId":        "fleet-a",
+		"environment":    "test",
+		"role":           "control-plane",
+		"payload":        map[string]any{},
+	}
+	_, raw, err := SignAuthorityRequest(unsigned, private, public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != fixture.CanonicalRequest {
+		t.Fatalf("canonical bytes drifted")
+	}
+	if _, err := VerifyAuthorityRequestDocument(raw, testAuthorityRequestContext(t, fixture, nil)); err != nil {
+		t.Fatal(err)
+	}
+	fence, err := FenceFromAuthorityRequest(raw)
+	if err != nil || fence.ActionId != "act-1" || fence.ExecutionEpoch != 4 {
+		t.Fatalf("fence: %+v %v", fence, err)
+	}
+}
+
+func TestSignAuthorityRequestFailsClosed(t *testing.T) {
+	private, public := rfc8032PrivateKey(t)
+	if _, _, err := SignAuthorityRequest(nil, private, public); !errors.Is(err, ErrAuthorityRequestInvalid) {
+		t.Fatalf("nil: %v", err)
+	}
+	if _, _, err := SignAuthorityRequest(map[string]any{"signature": "x", "payload": map[string]any{}}, private, public); !errors.Is(err, ErrAuthorityRequestInvalid) {
+		t.Fatalf("pre-signed: %v", err)
+	}
+	if _, _, err := SignAuthorityRequest(map[string]any{"payload": "x"}, private, public); !errors.Is(err, ErrAuthorityRequestInvalid) {
+		t.Fatalf("payload: %v", err)
+	}
+	if _, err := SignerKeyIDForPublicKey("not-a-key"); !errors.Is(err, ErrAuthorityRequestSignerMismatch) {
+		t.Fatalf("key id: %v", err)
+	}
+	if _, err := FenceFromAuthorityRequest(nil); !errors.Is(err, ErrAuthorityRequestInvalid) {
+		t.Fatalf("empty fence parse: %v", err)
+	}
+	if _, err := FenceFromAuthorityRequest([]byte("{")); !errors.Is(err, ErrAuthorityRequestInvalid) {
+		t.Fatalf("malformed: %v", err)
+	}
+	if _, _, err := SignAuthorityRequest(map[string]any{"payload": map[string]any{}}, ed25519.PrivateKey{}, public); !errors.Is(err, ErrAuthorityRequestSignatureInvalid) {
+		t.Fatalf("short key: %v", err)
+	}
+	if _, err := FenceFromAuthorityRequest(make([]byte, MaxAuthorityRequestBytes+1)); !errors.Is(err, ErrAuthorityRequestTooLarge) {
+		t.Fatalf("oversized fence parse: %v", err)
+	}
+	if _, err := FenceFromAuthorityRequest([]byte(`{"actionId":"","executionEpoch":1}`)); !errors.Is(err, internalprotocol.ErrEmptyActionID) {
+		t.Fatalf("empty action: %v", err)
+	}
+	if _, err := FenceFromAuthorityRequest([]byte(`{"actionId":"act-1","executionEpoch":0}`)); !errors.Is(err, internalprotocol.ErrZeroEpoch) {
+		t.Fatalf("zero epoch: %v", err)
 	}
 }

@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from deepseek_infra.infra.native_runtime import authority_request as authority
-from scripts.native_runtime_contract import sha256_file, validate_corpus
+from scripts.native_runtime_contract import check_descriptor, sha256_file, validate_corpus
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -123,6 +123,25 @@ def test_authority_request_fail_closed_vectors_match_frozen_corpus() -> None:
         with pytest.raises(authority.AuthorityRequestError) as raised:
             authority.verify_authority_request_document(raw, _context(**context_overrides))
         assert raised.value.code == case["error"], case["name"]
+
+
+def test_worker_rpc_exposes_authenticated_epoch_install_without_control_mutation() -> None:
+    current = check_descriptor()
+    action = next(item for item in current["files"] if item["package"] == "deepseek.action.v1")
+    worker = next(item for item in action["services"] if item["name"] == "Worker")
+    assert {rpc["name"] for rpc in worker["rpcs"]} == {
+        "AdmitCommand",
+        "QueryEffect",
+        "InstallAuthoritativeEpoch",
+    }
+    install = next(rpc for rpc in worker["rpcs"] if rpc["name"] == "InstallAuthoritativeEpoch")
+    assert install["request"] == "InstallAuthoritativeEpochRequest"
+    assert install["response"] == "InstallAuthoritativeEpochResponse"
+    assert install["client_streaming"] is False
+    assert install["server_streaming"] is False
+    control = next(item for item in current["files"] if item["package"] == "deepseek.control.v1")
+    control_rpcs = {rpc["name"] for service in control["services"] for rpc in service["rpcs"]}
+    assert control_rpcs == {"Health", "ShadowEvaluate"}
 
 
 def test_v7_corpus_digest_is_pinned() -> None:

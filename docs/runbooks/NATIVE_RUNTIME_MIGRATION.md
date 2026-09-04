@@ -56,14 +56,17 @@ Do not cut over mutation until that gate stays green.
   requires the returned fence to match exactly and currently exposes only
   `UNKNOWN` with `EFFECT_UNKNOWN` or `PROOF_NOT_AUTHORITATIVE`; unvalidated
   positive or negative effect claims fail closed.
-- The checked-in worker process starts with authority uninitialized and has no
-  production authority-synchronization channel yet. It therefore rejects
-  command admission with `FENCE_MISMATCH`. The cross-process integration test
-  in the `native-go` CI job proves this fail-closed state only; it is not
-  evidence of a successful native mutation path.
-- Do not expose this plaintext listener beyond loopback. Authenticated authority
-  synchronization, production transport security, durable effect reconciliation,
-  and proof-bound execution remain prerequisites for any cutover.
+- The checked-in worker process starts with authority uninitialized unless the
+  dedicated `DEEPSEEK_WORKER_AUTHORITY_*` public signer/fleet/environment/fencing
+  configuration is complete. Unconfigured workers reject command admission with
+  `FENCE_MISMATCH` and reject `InstallAuthoritativeEpoch` with
+  `AUTHORITY_REQUEST_SIGNER_MISMATCH`. A valid signed `control-authority-request-v1`
+  document is required before a live epoch can be installed. That channel does
+  not authorize production mutation, durable effect execution, or leaving
+  shadow mode.
+- Do not expose this plaintext listener beyond loopback. Production transport
+  security, durable replay journals, effect reconciliation, and proof-bound
+  execution remain prerequisites for any cutover.
 
 ## Unknown effect
 

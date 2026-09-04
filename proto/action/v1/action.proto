@@ -48,7 +48,19 @@ message EffectResult {
   deepseek.common.v1.ErrorDetail error = 7;
 }
 
+message InstallAuthoritativeEpochRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  bytes canonical_request = 2;
+}
+
+message InstallAuthoritativeEpochResponse {
+  AdmitStatus status = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  deepseek.common.v1.ErrorDetail error = 3;
+}
+
 service Worker {
   rpc AdmitCommand(AdmitCommandRequest) returns (AdmitCommandResponse);
   rpc QueryEffect(QueryEffectRequest) returns (EffectResult);
+  rpc InstallAuthoritativeEpoch(InstallAuthoritativeEpochRequest) returns (InstallAuthoritativeEpochResponse);
 }

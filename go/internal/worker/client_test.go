@@ -2,22 +2,30 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"google.golang.org/grpc"
 )
 
 type fakeWorkerRPC struct {
-	request       *actionv1.AdmitCommandRequest
-	response      *actionv1.AdmitCommandResponse
-	err           error
-	queryRequest  *actionv1.QueryEffectRequest
-	queryResponse *actionv1.EffectResult
-	queryErr      error
+	request        *actionv1.AdmitCommandRequest
+	response       *actionv1.AdmitCommandResponse
+	err            error
+	queryRequest   *actionv1.QueryEffectRequest
+	queryResponse  *actionv1.EffectResult
+	queryErr       error
+	installRequest *actionv1.InstallAuthoritativeEpochRequest
+	installResp    *actionv1.InstallAuthoritativeEpochResponse
+	installErr     error
 }
 
 func (fake *fakeWorkerRPC) AdmitCommand(_ context.Context, request *actionv1.AdmitCommandRequest, _ ...grpc.CallOption) (*actionv1.AdmitCommandResponse, error) {
@@ -28,6 +36,11 @@ func (fake *fakeWorkerRPC) AdmitCommand(_ context.Context, request *actionv1.Adm
 func (fake *fakeWorkerRPC) QueryEffect(_ context.Context, request *actionv1.QueryEffectRequest, _ ...grpc.CallOption) (*actionv1.EffectResult, error) {
 	fake.queryRequest = request
 	return fake.queryResponse, fake.queryErr
+}
+
+func (fake *fakeWorkerRPC) InstallAuthoritativeEpoch(_ context.Context, request *actionv1.InstallAuthoritativeEpochRequest, _ ...grpc.CallOption) (*actionv1.InstallAuthoritativeEpochResponse, error) {
+	fake.installRequest = request
+	return fake.installResp, fake.installErr
 }
 
 func TestAdmitNeverForwardsCallerControlledLiveEpoch(t *testing.T) {
@@ -219,5 +232,140 @@ func TestDialPlaintextLoopbackCreatesOnlyLoopbackClientAndCloseIsSafe(t *testing
 	var nilClient *Client
 	if err := nilClient.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func frozenAuthorityRequest(t *testing.T) ([]byte, *commonv1.ActionFence) {
+	t.Helper()
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve worker test source")
+	}
+	path := filepath.Join(filepath.Dir(source), "..", "..", "..", "compat", "native-runtime", "v7", "control", "authority_request_vector.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		CanonicalRequest string `json:"canonical_request"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	canonical := []byte(fixture.CanonicalRequest)
+	fence, err := store.FenceFromAuthorityRequest(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical, fence
+}
+
+func TestInstallAuthoritativeEpochAcceptsMatchingSignedDocument(t *testing.T) {
+	canonical, fence := frozenAuthorityRequest(t)
+	rpc := &fakeWorkerRPC{installResp: &actionv1.InstallAuthoritativeEpochResponse{
+		Status: actionv1.AdmitStatus_ADMIT_STATUS_ADMITTED,
+		Fence:  fence,
+	}}
+	if err := New(rpc).InstallAuthoritativeEpoch(context.Background(), fence, canonical); err != nil {
+		t.Fatal(err)
+	}
+	if rpc.installRequest == nil || rpc.installRequest.Fence != fence || string(rpc.installRequest.CanonicalRequest) != string(canonical) {
+		t.Fatalf("install request: %+v", rpc.installRequest)
+	}
+}
+
+func TestInstallAuthoritativeEpochRejectsLocalMismatchesBeforeRPC(t *testing.T) {
+	canonical, fence := frozenAuthorityRequest(t)
+	rpc := &fakeWorkerRPC{}
+	client := New(rpc)
+	if err := client.InstallAuthoritativeEpoch(context.Background(), &commonv1.ActionFence{}, canonical); err != internalprotocol.ErrEmptyActionID {
+		t.Fatalf("invalid fence: %v", err)
+	}
+	if err := client.InstallAuthoritativeEpoch(context.Background(), fence, nil); err != store.ErrAuthorityRequestInvalid {
+		t.Fatalf("empty document: %v", err)
+	}
+	if err := client.InstallAuthoritativeEpoch(context.Background(), &commonv1.ActionFence{ActionId: "other", ExecutionEpoch: 4}, canonical); err != internalprotocol.ErrFenceMismatch {
+		t.Fatalf("mismatched envelope: %v", err)
+	}
+	if rpc.installRequest != nil {
+		t.Fatal("invalid install reached RPC")
+	}
+	oversized := make([]byte, store.MaxAuthorityRequestBytes+1)
+	if err := client.InstallAuthoritativeEpoch(context.Background(), fence, oversized); err != store.ErrAuthorityRequestTooLarge {
+		t.Fatalf("oversized: %v", err)
+	}
+}
+
+func TestInstallAuthoritativeEpochMapsRejectionAndFailsClosed(t *testing.T) {
+	canonical, fence := frozenAuthorityRequest(t)
+	rpc := &fakeWorkerRPC{installResp: &actionv1.InstallAuthoritativeEpochResponse{
+		Status: actionv1.AdmitStatus_ADMIT_STATUS_REJECTED,
+		Error:  &commonv1.ErrorDetail{Code: "AUTHORITY_REQUEST_SIGNER_MISMATCH"},
+	}}
+	if err := New(rpc).InstallAuthoritativeEpoch(context.Background(), fence, canonical); err != store.ErrAuthorityRequestSignerMismatch {
+		t.Fatalf("signer: %v", err)
+	}
+	for _, response := range []*actionv1.InstallAuthoritativeEpochResponse{
+		nil,
+		{},
+		{Status: actionv1.AdmitStatus_ADMIT_STATUS_ADMITTED},
+		{Status: actionv1.AdmitStatus_ADMIT_STATUS_ADMITTED, Fence: fence, Error: &commonv1.ErrorDetail{Code: "AUTHORITY_REQUEST_REPLAY"}},
+		{Status: actionv1.AdmitStatus_ADMIT_STATUS_REJECTED, Fence: fence, Error: &commonv1.ErrorDetail{Code: "AUTHORITY_REQUEST_REPLAY"}},
+		{Status: actionv1.AdmitStatus_ADMIT_STATUS_REJECTED, Error: &commonv1.ErrorDetail{Code: "MADE_UP"}},
+	} {
+		rpc.installResp = response
+		if err := New(rpc).InstallAuthoritativeEpoch(context.Background(), fence, canonical); err != ErrInvalidWorkerResponse {
+			t.Fatalf("response %+v: %v", response, err)
+		}
+	}
+	rpc.installResp = nil
+	rpc.installErr = context.DeadlineExceeded
+	if err := New(rpc).InstallAuthoritativeEpoch(context.Background(), fence, canonical); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("transport: %v", err)
+	}
+	var nilClient *Client
+	if err := nilClient.InstallAuthoritativeEpoch(context.Background(), fence, canonical); err != ErrInvalidWorkerResponse {
+		t.Fatalf("nil client: %v", err)
+	}
+}
+
+func TestInstallAuthoritativeEpochMapsFrozenAuthorityCodes(t *testing.T) {
+	canonical, fence := frozenAuthorityRequest(t)
+	cases := map[string]error{
+		"AUTHORITY_REQUEST_INVALID":                 store.ErrAuthorityRequestInvalid,
+		"AUTHORITY_REQUEST_TOO_LARGE":               store.ErrAuthorityRequestTooLarge,
+		"AUTHORITY_REQUEST_SCHEMA_INVALID":          store.ErrAuthorityRequestSchemaInvalid,
+		"AUTHORITY_REQUEST_FIELDS_INVALID":          store.ErrAuthorityRequestFieldsInvalid,
+		"AUTHORITY_REQUEST_CANONICAL_MISMATCH":      store.ErrAuthorityRequestCanonicalMismatch,
+		"AUTHORITY_REQUEST_DIGEST_MISMATCH":         store.ErrAuthorityRequestDigestMismatch,
+		"AUTHORITY_REQUEST_PAYLOAD_DIGEST_MISMATCH": store.ErrAuthorityRequestPayloadDigestMismatch,
+		"AUTHORITY_REQUEST_SIGNATURE_INVALID":       store.ErrAuthorityRequestSignatureInvalid,
+		"AUTHORITY_REQUEST_EXPIRED":                 store.ErrAuthorityRequestExpired,
+		"AUTHORITY_REQUEST_FUTURE_SKEW":             store.ErrAuthorityRequestFutureSkew,
+		"AUTHORITY_REQUEST_REPLAY":                  store.ErrAuthorityRequestReplay,
+		"AUTHORITY_REQUEST_NONCE_REUSE":             store.ErrAuthorityRequestNonceReuse,
+		"AUTHORITY_REQUEST_DOMAIN_MISMATCH":         store.ErrAuthorityRequestDomainMismatch,
+		"AUTHORITY_REQUEST_FLEET_MISMATCH":          store.ErrAuthorityRequestFleetMismatch,
+		"AUTHORITY_REQUEST_ENVIRONMENT_MISMATCH":    store.ErrAuthorityRequestEnvironmentMismatch,
+		"AUTHORITY_REQUEST_ROLE_MISMATCH":           store.ErrAuthorityRequestRoleMismatch,
+		"AUTHORITY_REQUEST_RUNTIME_MISMATCH":        store.ErrAuthorityRequestRuntimeMismatch,
+		"AUTHORITY_REQUEST_MODE_MISMATCH":           store.ErrAuthorityRequestModeMismatch,
+		"AUTHORITY_REQUEST_OPERATION_INVALID":       store.ErrAuthorityRequestOperationInvalid,
+		"AUTHORITY_REQUEST_STALE_FENCING_TOKEN":     store.ErrAuthorityRequestStaleFencingToken,
+		"AUTHORITY_REQUEST_SIGNER_MISMATCH":         store.ErrAuthorityRequestSignerMismatch,
+		"AUTHORITY_REQUEST_SECRET_DETECTED":         store.ErrAuthorityRequestSecretDetected,
+		"STALE_EXECUTION_EPOCH":                     internalprotocol.ErrStaleEpoch,
+		"FENCE_MISMATCH":                            internalprotocol.ErrFenceMismatch,
+		"EMPTY_ACTION_ID":                           internalprotocol.ErrEmptyActionID,
+		"ZERO_EXECUTION_EPOCH":                      internalprotocol.ErrZeroEpoch,
+	}
+	for code, want := range cases {
+		rpc := &fakeWorkerRPC{installResp: &actionv1.InstallAuthoritativeEpochResponse{
+			Status: actionv1.AdmitStatus_ADMIT_STATUS_REJECTED,
+			Error:  &commonv1.ErrorDetail{Code: code},
+		}}
+		if err := New(rpc).InstallAuthoritativeEpoch(context.Background(), fence, canonical); err != want {
+			t.Fatalf("%s: %v", code, err)
+		}
 	}
 }

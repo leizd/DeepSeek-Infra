@@ -6,8 +6,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashSet};
 
 pub const AUTHORITY_REQUEST_SCHEMA: &str = "control-authority-request-v1";
+pub const MAX_AUTHORITY_REQUEST_BYTES: usize = 16 * 1024;
 const SIGNATURE_DOMAIN: &[u8] = b"deepseek-infra:control-authority-request-v1\x00";
-const MAX_AUTHORITY_REQUEST_BYTES: usize = 16 * 1024;
 const MAX_LIFETIME_SECONDS: i64 = 300;
 const AUTHORITY_REQUEST_FIELDS: &[&str] = &[
     "actionId",
@@ -41,9 +41,23 @@ pub struct AuthorityRequestError {
 }
 
 impl AuthorityRequestError {
-    fn new(code: &'static str) -> Self {
+    pub(crate) fn new(code: &'static str) -> Self {
         Self { code }
     }
+}
+
+impl From<deepseek_protocol::AdmitError> for AuthorityRequestError {
+    fn from(error: deepseek_protocol::AdmitError) -> Self {
+        Self { code: error.code() }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorityInstallFields {
+    pub action_id: String,
+    pub execution_epoch: u64,
+    pub request_id: String,
+    pub nonce: String,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +113,89 @@ pub fn verify_authority_request_document(
     verify_envelope(object, context)?;
     verify_signature(object, context)?;
     Ok(document)
+}
+
+pub fn signer_key_id_for_public_key(public_key: &str) -> Result<String, AuthorityRequestError> {
+    let raw = decode_fixed(public_key, 32)
+        .map_err(|_| AuthorityRequestError::new("AUTHORITY_REQUEST_SIGNER_MISMATCH"))?;
+    Ok(format!("ctrl-signer-{}", &sha256_hex(&raw)[..16]))
+}
+
+pub fn authority_request_install_fields(
+    document: &Value,
+) -> Result<AuthorityInstallFields, AuthorityRequestError> {
+    let object = document
+        .as_object()
+        .ok_or_else(|| AuthorityRequestError::new("AUTHORITY_REQUEST_INVALID"))?;
+    let action_id = string_field(object, "actionId").unwrap_or("").to_string();
+    if !valid_control_id(&action_id) {
+        return Err(AuthorityRequestError::new("EMPTY_ACTION_ID"));
+    }
+    let epoch = integer_field(object, "executionEpoch")?;
+    if epoch < 1 {
+        return Err(AuthorityRequestError::new("ZERO_EXECUTION_EPOCH"));
+    }
+    let request_id = string_field(object, "requestId").unwrap_or("").to_string();
+    let nonce = string_field(object, "nonce").unwrap_or("").to_string();
+    if !valid_hex64(&request_id) || !valid_hex64(&nonce) {
+        return Err(AuthorityRequestError::new("AUTHORITY_REQUEST_INVALID"));
+    }
+    Ok(AuthorityInstallFields {
+        action_id,
+        execution_epoch: epoch as u64,
+        request_id,
+        nonce,
+    })
+}
+
+pub fn utc_z_now() -> Result<String, AuthorityRequestError> {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| AuthorityRequestError::new("AUTHORITY_REQUEST_INVALID"))?
+        .as_secs();
+    format_utc_z(seconds as i64)
+}
+
+pub(crate) fn parse_utc_z_str(value: &str) -> Result<i64, AuthorityRequestError> {
+    parse_utc_z(value)
+}
+
+pub(crate) fn valid_fleet_id_str(value: &str) -> bool {
+    valid_fleet_id(value)
+}
+
+fn format_utc_z(seconds: i64) -> Result<String, AuthorityRequestError> {
+    if seconds < 0 {
+        return Err(AuthorityRequestError::new("AUTHORITY_REQUEST_INVALID"));
+    }
+    let days = seconds / 86400;
+    let remainder = (seconds % 86400) as u32;
+    let (year, month, day) = civil_from_days(days);
+    let hour = remainder / 3600;
+    let minute = (remainder % 3600) / 60;
+    let second = remainder % 60;
+    Ok(format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"
+    ))
+}
+
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let day_of_era = z - era * 146097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = if month_prime < 10 {
+        month_prime + 3
+    } else {
+        month_prime - 9
+    };
+    let year = if month <= 2 { year + 1 } else { year };
+    (year, month as u32, day as u32)
 }
 
 fn verify_envelope(
@@ -475,4 +572,19 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     let day_of_year = (153 * month + 2) / 5 + i64::from(day) - 1;
     let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
     era * 146097 + day_of_era - 719468
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utc_format_round_trips_frozen_timestamp() {
+        let seconds = parse_utc_z("2026-09-04T00:00:40Z").unwrap();
+        assert_eq!(format_utc_z(seconds).unwrap(), "2026-09-04T00:00:40Z");
+        assert_eq!(
+            signer_key_id_for_public_key("11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo").unwrap(),
+            "ctrl-signer-21fe31dfa154a261"
+        );
+    }
 }

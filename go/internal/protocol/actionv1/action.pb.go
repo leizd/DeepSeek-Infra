@@ -388,6 +388,118 @@ func (x *EffectResult) GetError() *commonv1.ErrorDetail {
 	return nil
 }
 
+type InstallAuthoritativeEpochRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Fence            *commonv1.ActionFence  `protobuf:"bytes,1,opt,name=fence,proto3" json:"fence,omitempty"`
+	CanonicalRequest []byte                 `protobuf:"bytes,2,opt,name=canonical_request,json=canonicalRequest,proto3" json:"canonical_request,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *InstallAuthoritativeEpochRequest) Reset() {
+	*x = InstallAuthoritativeEpochRequest{}
+	mi := &file_action_v1_action_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InstallAuthoritativeEpochRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InstallAuthoritativeEpochRequest) ProtoMessage() {}
+
+func (x *InstallAuthoritativeEpochRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InstallAuthoritativeEpochRequest.ProtoReflect.Descriptor instead.
+func (*InstallAuthoritativeEpochRequest) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *InstallAuthoritativeEpochRequest) GetFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *InstallAuthoritativeEpochRequest) GetCanonicalRequest() []byte {
+	if x != nil {
+		return x.CanonicalRequest
+	}
+	return nil
+}
+
+type InstallAuthoritativeEpochResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Status        AdmitStatus            `protobuf:"varint,1,opt,name=status,proto3,enum=deepseek.action.v1.AdmitStatus" json:"status,omitempty"`
+	Fence         *commonv1.ActionFence  `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
+	Error         *commonv1.ErrorDetail  `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InstallAuthoritativeEpochResponse) Reset() {
+	*x = InstallAuthoritativeEpochResponse{}
+	mi := &file_action_v1_action_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InstallAuthoritativeEpochResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InstallAuthoritativeEpochResponse) ProtoMessage() {}
+
+func (x *InstallAuthoritativeEpochResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InstallAuthoritativeEpochResponse.ProtoReflect.Descriptor instead.
+func (*InstallAuthoritativeEpochResponse) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *InstallAuthoritativeEpochResponse) GetStatus() AdmitStatus {
+	if x != nil {
+		return x.Status
+	}
+	return AdmitStatus_ADMIT_STATUS_UNSPECIFIED
+}
+
+func (x *InstallAuthoritativeEpochResponse) GetFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *InstallAuthoritativeEpochResponse) GetError() *commonv1.ErrorDetail {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
 var File_action_v1_action_proto protoreflect.FileDescriptor
 
 const file_action_v1_action_proto_rawDesc = "" +
@@ -411,7 +523,14 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\x0ereceipt_digest\x18\x04 \x01(\tR\rreceiptDigest\x12#\n" +
 	"\rcommit_digest\x18\x05 \x01(\tR\fcommitDigest\x12!\n" +
 	"\fproof_digest\x18\x06 \x01(\tR\vproofDigest\x125\n" +
-	"\x05error\x18\a \x01(\v2\x1f.deepseek.common.v1.ErrorDetailR\x05error*\x81\x02\n" +
+	"\x05error\x18\a \x01(\v2\x1f.deepseek.common.v1.ErrorDetailR\x05error\"\x86\x01\n" +
+	" InstallAuthoritativeEpochRequest\x125\n" +
+	"\x05fence\x18\x01 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12+\n" +
+	"\x11canonical_request\x18\x02 \x01(\fR\x10canonicalRequest\"\xca\x01\n" +
+	"!InstallAuthoritativeEpochResponse\x127\n" +
+	"\x06status\x18\x01 \x01(\x0e2\x1f.deepseek.action.v1.AdmitStatusR\x06status\x125\n" +
+	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x125\n" +
+	"\x05error\x18\x03 \x01(\v2\x1f.deepseek.common.v1.ErrorDetailR\x05error*\x81\x02\n" +
 	"\vCommandKind\x12\x1c\n" +
 	"\x18COMMAND_KIND_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bCOMMAND_KIND_EXECUTE_BACKUP\x10\x01\x12 \n" +
@@ -423,10 +542,11 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\vAdmitStatus\x12\x1c\n" +
 	"\x18ADMIT_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15ADMIT_STATUS_ADMITTED\x10\x01\x12\x19\n" +
-	"\x15ADMIT_STATUS_REJECTED\x10\x022\xc4\x01\n" +
+	"\x15ADMIT_STATUS_REJECTED\x10\x022\xcf\x02\n" +
 	"\x06Worker\x12a\n" +
 	"\fAdmitCommand\x12'.deepseek.action.v1.AdmitCommandRequest\x1a(.deepseek.action.v1.AdmitCommandResponse\x12W\n" +
-	"\vQueryEffect\x12&.deepseek.action.v1.QueryEffectRequest\x1a .deepseek.action.v1.EffectResultBHZFgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1;actionv1b\x06proto3"
+	"\vQueryEffect\x12&.deepseek.action.v1.QueryEffectRequest\x1a .deepseek.action.v1.EffectResult\x12\x88\x01\n" +
+	"\x19InstallAuthoritativeEpoch\x124.deepseek.action.v1.InstallAuthoritativeEpochRequest\x1a5.deepseek.action.v1.InstallAuthoritativeEpochResponseBHZFgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1;actionv1b\x06proto3"
 
 var (
 	file_action_v1_action_proto_rawDescOnce sync.Once
@@ -441,37 +561,45 @@ func file_action_v1_action_proto_rawDescGZIP() []byte {
 }
 
 var file_action_v1_action_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_action_v1_action_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_action_v1_action_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_action_v1_action_proto_goTypes = []any{
-	(CommandKind)(0),             // 0: deepseek.action.v1.CommandKind
-	(AdmitStatus)(0),             // 1: deepseek.action.v1.AdmitStatus
-	(*AdmitCommandRequest)(nil),  // 2: deepseek.action.v1.AdmitCommandRequest
-	(*AdmitCommandResponse)(nil), // 3: deepseek.action.v1.AdmitCommandResponse
-	(*QueryEffectRequest)(nil),   // 4: deepseek.action.v1.QueryEffectRequest
-	(*EffectResult)(nil),         // 5: deepseek.action.v1.EffectResult
-	(*commonv1.ActionFence)(nil), // 6: deepseek.common.v1.ActionFence
-	(commonv1.EffectState)(0),    // 7: deepseek.common.v1.EffectState
-	(*commonv1.ErrorDetail)(nil), // 8: deepseek.common.v1.ErrorDetail
+	(CommandKind)(0),                          // 0: deepseek.action.v1.CommandKind
+	(AdmitStatus)(0),                          // 1: deepseek.action.v1.AdmitStatus
+	(*AdmitCommandRequest)(nil),               // 2: deepseek.action.v1.AdmitCommandRequest
+	(*AdmitCommandResponse)(nil),              // 3: deepseek.action.v1.AdmitCommandResponse
+	(*QueryEffectRequest)(nil),                // 4: deepseek.action.v1.QueryEffectRequest
+	(*EffectResult)(nil),                      // 5: deepseek.action.v1.EffectResult
+	(*InstallAuthoritativeEpochRequest)(nil),  // 6: deepseek.action.v1.InstallAuthoritativeEpochRequest
+	(*InstallAuthoritativeEpochResponse)(nil), // 7: deepseek.action.v1.InstallAuthoritativeEpochResponse
+	(*commonv1.ActionFence)(nil),              // 8: deepseek.common.v1.ActionFence
+	(commonv1.EffectState)(0),                 // 9: deepseek.common.v1.EffectState
+	(*commonv1.ErrorDetail)(nil),              // 10: deepseek.common.v1.ErrorDetail
 }
 var file_action_v1_action_proto_depIdxs = []int32{
 	0,  // 0: deepseek.action.v1.AdmitCommandRequest.kind:type_name -> deepseek.action.v1.CommandKind
-	6,  // 1: deepseek.action.v1.AdmitCommandRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	8,  // 1: deepseek.action.v1.AdmitCommandRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	1,  // 2: deepseek.action.v1.AdmitCommandResponse.status:type_name -> deepseek.action.v1.AdmitStatus
-	7,  // 3: deepseek.action.v1.AdmitCommandResponse.state:type_name -> deepseek.common.v1.EffectState
-	8,  // 4: deepseek.action.v1.AdmitCommandResponse.error:type_name -> deepseek.common.v1.ErrorDetail
-	6,  // 5: deepseek.action.v1.QueryEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	6,  // 6: deepseek.action.v1.EffectResult.fence:type_name -> deepseek.common.v1.ActionFence
-	7,  // 7: deepseek.action.v1.EffectResult.state:type_name -> deepseek.common.v1.EffectState
-	8,  // 8: deepseek.action.v1.EffectResult.error:type_name -> deepseek.common.v1.ErrorDetail
-	2,  // 9: deepseek.action.v1.Worker.AdmitCommand:input_type -> deepseek.action.v1.AdmitCommandRequest
-	4,  // 10: deepseek.action.v1.Worker.QueryEffect:input_type -> deepseek.action.v1.QueryEffectRequest
-	3,  // 11: deepseek.action.v1.Worker.AdmitCommand:output_type -> deepseek.action.v1.AdmitCommandResponse
-	5,  // 12: deepseek.action.v1.Worker.QueryEffect:output_type -> deepseek.action.v1.EffectResult
-	11, // [11:13] is the sub-list for method output_type
-	9,  // [9:11] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	9,  // 3: deepseek.action.v1.AdmitCommandResponse.state:type_name -> deepseek.common.v1.EffectState
+	10, // 4: deepseek.action.v1.AdmitCommandResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	8,  // 5: deepseek.action.v1.QueryEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	8,  // 6: deepseek.action.v1.EffectResult.fence:type_name -> deepseek.common.v1.ActionFence
+	9,  // 7: deepseek.action.v1.EffectResult.state:type_name -> deepseek.common.v1.EffectState
+	10, // 8: deepseek.action.v1.EffectResult.error:type_name -> deepseek.common.v1.ErrorDetail
+	8,  // 9: deepseek.action.v1.InstallAuthoritativeEpochRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	1,  // 10: deepseek.action.v1.InstallAuthoritativeEpochResponse.status:type_name -> deepseek.action.v1.AdmitStatus
+	8,  // 11: deepseek.action.v1.InstallAuthoritativeEpochResponse.fence:type_name -> deepseek.common.v1.ActionFence
+	10, // 12: deepseek.action.v1.InstallAuthoritativeEpochResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	2,  // 13: deepseek.action.v1.Worker.AdmitCommand:input_type -> deepseek.action.v1.AdmitCommandRequest
+	4,  // 14: deepseek.action.v1.Worker.QueryEffect:input_type -> deepseek.action.v1.QueryEffectRequest
+	6,  // 15: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:input_type -> deepseek.action.v1.InstallAuthoritativeEpochRequest
+	3,  // 16: deepseek.action.v1.Worker.AdmitCommand:output_type -> deepseek.action.v1.AdmitCommandResponse
+	5,  // 17: deepseek.action.v1.Worker.QueryEffect:output_type -> deepseek.action.v1.EffectResult
+	7,  // 18: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:output_type -> deepseek.action.v1.InstallAuthoritativeEpochResponse
+	16, // [16:19] is the sub-list for method output_type
+	13, // [13:16] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_action_v1_action_proto_init() }
@@ -485,7 +613,7 @@ func file_action_v1_action_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_action_v1_action_proto_rawDesc), len(file_action_v1_action_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -19,7 +19,8 @@ const (
 	AuthorityRequestSchema        = "control-authority-request-v1"
 	AuthorityRequestSchemaVersion = 1
 	authorityRequestAlgorithm     = "Ed25519"
-	maxAuthorityRequestBytes      = 16 * 1024
+	MaxAuthorityRequestBytes      = 16 * 1024
+	maxAuthorityRequestBytes      = MaxAuthorityRequestBytes
 	maxAuthorityRequestLifetime   = 300
 	DefaultAuthorityRequestSkew   = 30
 )
@@ -83,6 +84,80 @@ type AuthorityRequestContext struct {
 	SeenRequestIDs       map[string]bool
 	SeenNonces           map[string]bool
 	MaxFutureSkewSeconds int64
+}
+
+func SignerKeyIDForPublicKey(publicKey string) (string, error) {
+	raw, err := decodeFixedBase64(publicKey, ed25519.PublicKeySize)
+	if err != nil {
+		return "", ErrAuthorityRequestSignerMismatch
+	}
+	sum := sha256.Sum256(raw)
+	return "ctrl-signer-" + hex.EncodeToString(sum[:])[:16], nil
+}
+
+func SignAuthorityRequest(unsigned map[string]any, privateKey ed25519.PrivateKey, publicKey string) (map[string]any, []byte, error) {
+	if unsigned == nil {
+		return nil, nil, ErrAuthorityRequestInvalid
+	}
+	if _, exists := unsigned["signature"]; exists {
+		return nil, nil, ErrAuthorityRequestInvalid
+	}
+	if len(privateKey) != ed25519.PrivateKeySize {
+		return nil, nil, ErrAuthorityRequestSignatureInvalid
+	}
+	payload := copyWithout(unsigned)
+	if _, ok := payload["payload"].(map[string]any); !ok {
+		return nil, nil, ErrAuthorityRequestInvalid
+	}
+	signerKeyID, err := SignerKeyIDForPublicKey(publicKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	payload["signerKeyId"] = signerKeyID
+	payload["signatureAlgorithm"] = authorityRequestAlgorithm
+	payloadDigest, err := typedDigest(payload["payload"])
+	if err != nil {
+		return nil, nil, err
+	}
+	payload["payloadDigest"] = payloadDigest
+	digest, err := authorityRequestDigest(payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	payload["digest"] = digest
+	canonical, err := canonicalAuthorityJSON(payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	message := append(append([]byte{}, authorityRequestDomain...), canonical...)
+	payload["signature"] = base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, message))
+	raw, err := canonicalAuthorityJSON(payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	return payload, raw, nil
+}
+
+func FenceFromAuthorityRequest(raw []byte) (*internalprotocol.ActionFence, error) {
+	if len(raw) == 0 {
+		return nil, ErrAuthorityRequestInvalid
+	}
+	if len(raw) > MaxAuthorityRequestBytes {
+		return nil, ErrAuthorityRequestTooLarge
+	}
+	var document map[string]any
+	if err := decodeSingleJSON(raw, &document); err != nil || document == nil {
+		return nil, ErrAuthorityRequestInvalid
+	}
+	actionID := asString(document["actionId"])
+	if actionID == "" {
+		return nil, internalprotocol.ErrEmptyActionID
+	}
+	epoch := asInt(document["executionEpoch"])
+	if epoch < 1 {
+		return nil, internalprotocol.ErrZeroEpoch
+	}
+	return &internalprotocol.ActionFence{ActionId: actionID, ExecutionEpoch: uint64(epoch)}, nil
 }
 
 func VerifyAuthorityRequestDocument(raw []byte, context AuthorityRequestContext) (map[string]any, error) {

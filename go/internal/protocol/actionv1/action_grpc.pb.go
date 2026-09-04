@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Worker_AdmitCommand_FullMethodName = "/deepseek.action.v1.Worker/AdmitCommand"
-	Worker_QueryEffect_FullMethodName  = "/deepseek.action.v1.Worker/QueryEffect"
+	Worker_AdmitCommand_FullMethodName              = "/deepseek.action.v1.Worker/AdmitCommand"
+	Worker_QueryEffect_FullMethodName               = "/deepseek.action.v1.Worker/QueryEffect"
+	Worker_InstallAuthoritativeEpoch_FullMethodName = "/deepseek.action.v1.Worker/InstallAuthoritativeEpoch"
 )
 
 // WorkerClient is the client API for Worker service.
@@ -29,6 +30,7 @@ const (
 type WorkerClient interface {
 	AdmitCommand(ctx context.Context, in *AdmitCommandRequest, opts ...grpc.CallOption) (*AdmitCommandResponse, error)
 	QueryEffect(ctx context.Context, in *QueryEffectRequest, opts ...grpc.CallOption) (*EffectResult, error)
+	InstallAuthoritativeEpoch(ctx context.Context, in *InstallAuthoritativeEpochRequest, opts ...grpc.CallOption) (*InstallAuthoritativeEpochResponse, error)
 }
 
 type workerClient struct {
@@ -59,12 +61,23 @@ func (c *workerClient) QueryEffect(ctx context.Context, in *QueryEffectRequest, 
 	return out, nil
 }
 
+func (c *workerClient) InstallAuthoritativeEpoch(ctx context.Context, in *InstallAuthoritativeEpochRequest, opts ...grpc.CallOption) (*InstallAuthoritativeEpochResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InstallAuthoritativeEpochResponse)
+	err := c.cc.Invoke(ctx, Worker_InstallAuthoritativeEpoch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WorkerServer is the server API for Worker service.
 // All implementations must embed UnimplementedWorkerServer
 // for forward compatibility.
 type WorkerServer interface {
 	AdmitCommand(context.Context, *AdmitCommandRequest) (*AdmitCommandResponse, error)
 	QueryEffect(context.Context, *QueryEffectRequest) (*EffectResult, error)
+	InstallAuthoritativeEpoch(context.Context, *InstallAuthoritativeEpochRequest) (*InstallAuthoritativeEpochResponse, error)
 	mustEmbedUnimplementedWorkerServer()
 }
 
@@ -80,6 +93,9 @@ func (UnimplementedWorkerServer) AdmitCommand(context.Context, *AdmitCommandRequ
 }
 func (UnimplementedWorkerServer) QueryEffect(context.Context, *QueryEffectRequest) (*EffectResult, error) {
 	return nil, status.Error(codes.Unimplemented, "method QueryEffect not implemented")
+}
+func (UnimplementedWorkerServer) InstallAuthoritativeEpoch(context.Context, *InstallAuthoritativeEpochRequest) (*InstallAuthoritativeEpochResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InstallAuthoritativeEpoch not implemented")
 }
 func (UnimplementedWorkerServer) mustEmbedUnimplementedWorkerServer() {}
 func (UnimplementedWorkerServer) testEmbeddedByValue()                {}
@@ -138,6 +154,24 @@ func _Worker_QueryEffect_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Worker_InstallAuthoritativeEpoch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InstallAuthoritativeEpochRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServer).InstallAuthoritativeEpoch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Worker_InstallAuthoritativeEpoch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServer).InstallAuthoritativeEpoch(ctx, req.(*InstallAuthoritativeEpochRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Worker_ServiceDesc is the grpc.ServiceDesc for Worker service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -152,6 +186,10 @@ var Worker_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "QueryEffect",
 			Handler:    _Worker_QueryEffect_Handler,
+		},
+		{
+			MethodName: "InstallAuthoritativeEpoch",
+			Handler:    _Worker_InstallAuthoritativeEpoch_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -2,7 +2,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use deepseek_protocol::generated::deepseek::action::v1::{
     AdmitCommandRequest, AdmitCommandResponse, AdmitStatus, CommandKind, EffectResult,
-    QueryEffectRequest, worker_server::Worker as WorkerRpc,
+    InstallAuthoritativeEpochRequest, InstallAuthoritativeEpochResponse, QueryEffectRequest,
+    worker_server::Worker as WorkerRpc,
 };
 use deepseek_protocol::generated::deepseek::common::v1::{EffectState, ErrorDetail};
 use deepseek_protocol::{
@@ -67,6 +68,27 @@ fn rejected(error: AdmitError) -> AdmitCommandResponse {
     }
 }
 
+fn authority_detail(code: &'static str) -> ErrorDetail {
+    let category = if code.starts_with("AUTHORITY_REQUEST_") {
+        "AUTHORITY"
+    } else {
+        "FENCE"
+    };
+    ErrorDetail {
+        code: code.to_string(),
+        category: category.to_string(),
+        message: "command rejected".to_string(),
+    }
+}
+
+fn install_rejected(code: &'static str) -> InstallAuthoritativeEpochResponse {
+    InstallAuthoritativeEpochResponse {
+        status: AdmitStatus::Rejected as i32,
+        fence: None,
+        error: Some(authority_detail(code)),
+    }
+}
+
 #[tonic::async_trait]
 impl WorkerRpc for WorkerRpcService {
     async fn admit_command(
@@ -122,6 +144,28 @@ impl WorkerRpc for WorkerRpcService {
                 error: Some(detail(error)),
                 ..EffectResult::default()
             })),
+        }
+    }
+
+    async fn install_authoritative_epoch(
+        &self,
+        request: Request<InstallAuthoritativeEpochRequest>,
+    ) -> Result<Response<InstallAuthoritativeEpochResponse>, Status> {
+        let input = request.into_inner();
+        let fence = match input.fence.as_ref() {
+            Some(fence) => fence,
+            None => return Ok(Response::new(install_rejected("EMPTY_ACTION_ID"))),
+        };
+        match self
+            .lock()?
+            .install_signed_epoch(fence, &input.canonical_request)
+        {
+            Ok(installed) => Ok(Response::new(InstallAuthoritativeEpochResponse {
+                status: AdmitStatus::Admitted as i32,
+                fence: Some(installed),
+                error: None,
+            })),
+            Err(error) => Ok(Response::new(install_rejected(error.code))),
         }
     }
 }

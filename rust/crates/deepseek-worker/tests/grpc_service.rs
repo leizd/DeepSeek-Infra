@@ -1,9 +1,9 @@
 use deepseek_protocol::generated::deepseek::action::v1::{
-    AdmitCommandRequest, AdmitStatus, CommandKind, QueryEffectRequest,
-    worker_server::Worker as WorkerRpc,
+    AdmitCommandRequest, AdmitStatus, CommandKind, InstallAuthoritativeEpochRequest,
+    QueryEffectRequest, worker_server::Worker as WorkerRpc,
 };
 use deepseek_protocol::generated::deepseek::common::v1::{ActionFence, EffectState};
-use deepseek_worker::{Worker, WorkerRpcService};
+use deepseek_worker::{Worker, WorkerAuthorityConfig, WorkerRpcService};
 use tonic::Request;
 
 fn fence(epoch: u64) -> ActionFence {
@@ -124,4 +124,111 @@ async fn rpc_never_exposes_unbound_applied_state_as_verified() {
     assert!(queried.receipt_digest.is_empty());
     assert!(queried.commit_digest.is_empty());
     assert!(queried.proof_digest.is_empty());
+}
+
+fn frozen_authority() -> (WorkerAuthorityConfig, Vec<u8>, ActionFence) {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../compat/native-runtime/v7/control/authority_request_vector.json"
+    )))
+    .unwrap();
+    (
+        WorkerAuthorityConfig {
+            signer_public_key: fixture["signer_public_key"].as_str().unwrap().to_string(),
+            fleet_id: "fleet-a".to_string(),
+            environment: "test".to_string(),
+            fencing_token: 4,
+            now: Some(fixture["now"].as_str().unwrap().to_string()),
+        },
+        fixture["canonical_request"]
+            .as_str()
+            .unwrap()
+            .as_bytes()
+            .to_vec(),
+        fence(4),
+    )
+}
+
+async fn install(
+    service: &WorkerRpcService,
+    fence: ActionFence,
+    canonical_request: Vec<u8>,
+) -> deepseek_protocol::generated::deepseek::action::v1::InstallAuthoritativeEpochResponse {
+    WorkerRpc::install_authoritative_epoch(
+        service,
+        Request::new(InstallAuthoritativeEpochRequest {
+            fence: Some(fence),
+            canonical_request,
+        }),
+    )
+    .await
+    .unwrap()
+    .into_inner()
+}
+
+#[tokio::test]
+async fn rpc_installs_epoch_only_from_signed_authority_request() {
+    let (config, canonical, installed) = frozen_authority();
+    let unconfigured = WorkerRpcService::new(Worker::new());
+    let denied = install(&unconfigured, installed.clone(), canonical.clone()).await;
+    assert_eq!(denied.status(), AdmitStatus::Rejected);
+    assert!(denied.fence.is_none());
+    assert_eq!(
+        denied.error.unwrap().code,
+        "AUTHORITY_REQUEST_SIGNER_MISMATCH"
+    );
+
+    let mut worker = Worker::new();
+    worker.configure_authority(config).unwrap();
+    let service = WorkerRpcService::new(worker);
+    let mismatched = install(
+        &service,
+        ActionFence {
+            action_id: "other".to_string(),
+            execution_epoch: 4,
+        },
+        canonical.clone(),
+    )
+    .await;
+    assert_eq!(mismatched.status(), AdmitStatus::Rejected);
+    assert_eq!(mismatched.error.unwrap().code, "FENCE_MISMATCH");
+
+    let accepted = install(&service, installed.clone(), canonical.clone()).await;
+    assert_eq!(accepted.status(), AdmitStatus::Admitted);
+    assert_eq!(accepted.fence.as_ref(), Some(&installed));
+    assert!(accepted.error.is_none());
+
+    let admitted = admit(&service, installed.clone(), u64::MAX).await;
+    assert_eq!(admitted.status(), AdmitStatus::Admitted);
+
+    let replayed = install(&service, installed.clone(), canonical).await;
+    assert_eq!(replayed.status(), AdmitStatus::Rejected);
+    assert!(replayed.fence.is_none());
+    assert_eq!(replayed.error.unwrap().code, "STALE_EXECUTION_EPOCH");
+}
+
+#[tokio::test]
+async fn rpc_install_rejects_missing_fence_and_tampered_bytes() {
+    let (config, mut canonical, installed) = frozen_authority();
+    let mut worker = Worker::new();
+    worker.configure_authority(config).unwrap();
+    let service = WorkerRpcService::new(worker);
+
+    let missing = WorkerRpc::install_authoritative_epoch(
+        &service,
+        Request::new(InstallAuthoritativeEpochRequest {
+            fence: None,
+            canonical_request: canonical.clone(),
+        }),
+    )
+    .await
+    .unwrap()
+    .into_inner();
+    assert_eq!(missing.status(), AdmitStatus::Rejected);
+    assert_eq!(missing.error.unwrap().code, "EMPTY_ACTION_ID");
+
+    canonical.push(b'0');
+    let tampered = install(&service, installed, canonical).await;
+    assert_eq!(tampered.status(), AdmitStatus::Rejected);
+    assert_eq!(tampered.error.unwrap().code, "AUTHORITY_REQUEST_INVALID");
 }

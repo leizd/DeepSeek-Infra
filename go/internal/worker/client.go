@@ -10,6 +10,7 @@ import (
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -84,6 +85,54 @@ func (client *Client) Admit(ctx context.Context, kind actionv1.CommandKind, fenc
 	}
 }
 
+func (client *Client) InstallAuthoritativeEpoch(ctx context.Context, fence *commonv1.ActionFence, canonical []byte) error {
+	if err := internalprotocol.ValidateFence(fence); err != nil {
+		return err
+	}
+	if len(canonical) == 0 {
+		return store.ErrAuthorityRequestInvalid
+	}
+	if len(canonical) > store.MaxAuthorityRequestBytes {
+		return store.ErrAuthorityRequestTooLarge
+	}
+	parsed, err := store.FenceFromAuthorityRequest(canonical)
+	if err != nil {
+		return err
+	}
+	if parsed.ActionId != fence.ActionId || parsed.ExecutionEpoch != fence.ExecutionEpoch {
+		return internalprotocol.ErrFenceMismatch
+	}
+	if client == nil || client.rpc == nil {
+		return ErrInvalidWorkerResponse
+	}
+	response, err := client.rpc.InstallAuthoritativeEpoch(ctx, &actionv1.InstallAuthoritativeEpochRequest{
+		Fence:            fence,
+		CanonicalRequest: canonical,
+	})
+	if err != nil {
+		return fmt.Errorf("worker authority transport: %w", err)
+	}
+	if response == nil {
+		return ErrInvalidWorkerResponse
+	}
+	switch response.Status {
+	case actionv1.AdmitStatus_ADMIT_STATUS_ADMITTED:
+		if response.Error != nil || response.Fence == nil ||
+			response.Fence.ActionId != fence.ActionId ||
+			response.Fence.ExecutionEpoch != fence.ExecutionEpoch {
+			return ErrInvalidWorkerResponse
+		}
+		return nil
+	case actionv1.AdmitStatus_ADMIT_STATUS_REJECTED:
+		if response.Fence != nil || response.Error == nil {
+			return ErrInvalidWorkerResponse
+		}
+		return knownAuthorityRejection(response.Error.Code)
+	default:
+		return ErrInvalidWorkerResponse
+	}
+}
+
 func (client *Client) QueryEffect(ctx context.Context, fence *commonv1.ActionFence) (commonv1.EffectState, error) {
 	if err := internalprotocol.ValidateFence(fence); err != nil {
 		return commonv1.EffectState_EFFECT_STATE_UNKNOWN, err
@@ -149,6 +198,65 @@ func knownRejection(code string) error {
 		return internalprotocol.ErrFederationNotAuthoritative
 	case internalprotocol.ErrProofNotAuthoritative.Error():
 		return internalprotocol.ErrProofNotAuthoritative
+	default:
+		return ErrInvalidWorkerResponse
+	}
+}
+
+func knownAuthorityRejection(code string) error {
+	switch code {
+	case store.ErrAuthorityRequestInvalid.Error():
+		return store.ErrAuthorityRequestInvalid
+	case store.ErrAuthorityRequestTooLarge.Error():
+		return store.ErrAuthorityRequestTooLarge
+	case store.ErrAuthorityRequestSchemaInvalid.Error():
+		return store.ErrAuthorityRequestSchemaInvalid
+	case store.ErrAuthorityRequestFieldsInvalid.Error():
+		return store.ErrAuthorityRequestFieldsInvalid
+	case store.ErrAuthorityRequestCanonicalMismatch.Error():
+		return store.ErrAuthorityRequestCanonicalMismatch
+	case store.ErrAuthorityRequestDigestMismatch.Error():
+		return store.ErrAuthorityRequestDigestMismatch
+	case store.ErrAuthorityRequestPayloadDigestMismatch.Error():
+		return store.ErrAuthorityRequestPayloadDigestMismatch
+	case store.ErrAuthorityRequestSignatureInvalid.Error():
+		return store.ErrAuthorityRequestSignatureInvalid
+	case store.ErrAuthorityRequestExpired.Error():
+		return store.ErrAuthorityRequestExpired
+	case store.ErrAuthorityRequestFutureSkew.Error():
+		return store.ErrAuthorityRequestFutureSkew
+	case store.ErrAuthorityRequestReplay.Error():
+		return store.ErrAuthorityRequestReplay
+	case store.ErrAuthorityRequestNonceReuse.Error():
+		return store.ErrAuthorityRequestNonceReuse
+	case store.ErrAuthorityRequestDomainMismatch.Error():
+		return store.ErrAuthorityRequestDomainMismatch
+	case store.ErrAuthorityRequestFleetMismatch.Error():
+		return store.ErrAuthorityRequestFleetMismatch
+	case store.ErrAuthorityRequestEnvironmentMismatch.Error():
+		return store.ErrAuthorityRequestEnvironmentMismatch
+	case store.ErrAuthorityRequestRoleMismatch.Error():
+		return store.ErrAuthorityRequestRoleMismatch
+	case store.ErrAuthorityRequestRuntimeMismatch.Error():
+		return store.ErrAuthorityRequestRuntimeMismatch
+	case store.ErrAuthorityRequestModeMismatch.Error():
+		return store.ErrAuthorityRequestModeMismatch
+	case store.ErrAuthorityRequestOperationInvalid.Error():
+		return store.ErrAuthorityRequestOperationInvalid
+	case store.ErrAuthorityRequestStaleFencingToken.Error():
+		return store.ErrAuthorityRequestStaleFencingToken
+	case store.ErrAuthorityRequestSignerMismatch.Error():
+		return store.ErrAuthorityRequestSignerMismatch
+	case store.ErrAuthorityRequestSecretDetected.Error():
+		return store.ErrAuthorityRequestSecretDetected
+	case internalprotocol.ErrEmptyActionID.Error():
+		return internalprotocol.ErrEmptyActionID
+	case internalprotocol.ErrZeroEpoch.Error():
+		return internalprotocol.ErrZeroEpoch
+	case internalprotocol.ErrStaleEpoch.Error():
+		return internalprotocol.ErrStaleEpoch
+	case internalprotocol.ErrFenceMismatch.Error():
+		return internalprotocol.ErrFenceMismatch
 	default:
 		return ErrInvalidWorkerResponse
 	}

@@ -2,7 +2,7 @@ use std::io;
 use std::net::SocketAddr;
 
 use deepseek_protocol::generated::deepseek::action::v1::worker_server::WorkerServer;
-use deepseek_worker::{Worker, WorkerRpcService};
+use deepseek_worker::{Worker, WorkerRpcService, authority_config_from_env};
 use tonic::transport::Server;
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:50052";
@@ -45,11 +45,37 @@ fn configured_listen_addr(
     parse_listen_addr(raw.trim())
 }
 
+fn configured_worker() -> io::Result<Worker> {
+    let mut worker = Worker::new();
+    match authority_config_from_env(|name| std::env::var(name)) {
+        Ok(Some(config)) => worker.configure_authority(config).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("worker authority configuration rejected: {}", error.code),
+            )
+        })?,
+        Ok(None) => {}
+        Err(error) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("worker authority configuration rejected: {}", error.code),
+            ));
+        }
+    }
+    Ok(worker)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address = configured_listen_addr(std::env::var("DEEPSEEK_WORKER_LISTEN"))?;
-    let service = WorkerRpcService::new(Worker::new());
-    println!("deepseek-worker listening on {address} authority=uninitialized mutation=denied");
+    let worker = configured_worker()?;
+    let authority = if worker.authority_configured() {
+        "configured"
+    } else {
+        "uninitialized"
+    };
+    let service = WorkerRpcService::new(worker);
+    println!("deepseek-worker listening on {address} authority={authority} mutation=denied");
     Server::builder()
         .add_service(WorkerServer::new(service))
         .serve_with_shutdown(address, async {
@@ -94,5 +120,11 @@ mod tests {
             .kind(),
             io::ErrorKind::InvalidData
         );
+    }
+
+    #[test]
+    fn worker_starts_unconfigured_without_authority_env() {
+        let worker = configured_worker().expect("unconfigured worker");
+        assert!(!worker.authority_configured());
     }
 }
