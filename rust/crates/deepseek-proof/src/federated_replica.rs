@@ -2,10 +2,10 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use deepseek_federation::{
     CurrentSignerAuthorization, FailureDomainMetadata, PURPOSE_INGRESS_GRANT,
-    PURPOSE_REPLICA_ATTESTATION, ReplicaAttestation, ReplicaTransferBinding,
-    ReplicaVerificationContext, derive_transfer_id, failure_domain_from_metadata,
-    validate_fleet_identity, verify_federation_document, verify_replica_attestation_for_proof,
-    verify_replica_remote_documents,
+    PURPOSE_REPLICA_ATTESTATION, ReplicaAttestation, ReplicaProofVerificationContext,
+    ReplicaTransferBinding, ReplicaVerificationContext, derive_transfer_id,
+    failure_domain_from_metadata, validate_fleet_identity, verify_federation_document,
+    verify_replica_attestation_for_proof, verify_replica_remote_documents,
 };
 use deepseek_storage::ReceiptV4;
 use serde_json::{Map, Value, json};
@@ -389,9 +389,6 @@ pub fn validate_federated_replica_proof(value: &Value) -> Vec<String> {
             &identity,
             &sender,
             &pinned_metadata,
-            &source_receipt,
-            &receipt_bytes,
-            &commit_bytes,
             &validated_at_text,
             &mut errors,
         );
@@ -448,7 +445,7 @@ pub fn validate_federated_replica_proof(value: &Value) -> Vec<String> {
     dedupe(errors)
 }
 
-fn validate_peer_record(
+pub(crate) fn validate_peer_record(
     value: Option<&Value>,
     identity: &Map<String, Value>,
     errors: &mut Vec<String>,
@@ -507,7 +504,7 @@ fn validate_peer_record(
     (peer, metadata)
 }
 
-fn validate_transfer_record(
+pub(crate) fn validate_transfer_record(
     record: &Map<String, Value>,
     expected_role: &str,
     errors: &mut Vec<String>,
@@ -805,14 +802,11 @@ fn validate_storage(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn validate_attestation(
+pub(crate) fn validate_attestation(
     attestation: &Map<String, Value>,
     identity: &Map<String, Value>,
     transfer: &Map<String, Value>,
     pinned_metadata: &Map<String, Value>,
-    source_receipt: &Map<String, Value>,
-    receipt_bytes: &[u8],
-    commit_bytes: &[u8],
     validated_at: &str,
     errors: &mut Vec<String>,
 ) {
@@ -824,29 +818,17 @@ fn validate_attestation(
     if certificate.is_empty() {
         return;
     }
-    let result = replica_context_parts_with(
-        source_receipt,
-        transfer,
-        attestation,
-        pinned_metadata,
-        identity,
-    )
-    .and_then(
-        |(source, replica, metadata, binding, authorization, root)| {
-            let context = ReplicaVerificationContext {
+    let result = replica_proof_context_parts(transfer, attestation, pinned_metadata, identity)
+        .and_then(|(replica, metadata, binding, root)| {
+            let context = ReplicaProofVerificationContext {
                 root_identity: &root,
-                signer_authorization: &authorization,
                 pinned_metadata: &metadata,
                 transfer: &binding,
-                source_receipt: &source,
-                remote_receipt_bytes: receipt_bytes,
-                remote_commit_bytes: commit_bytes,
                 now: validated_at,
                 max_future_skew_seconds: 30,
             };
             verify_replica_attestation_for_proof(&replica, &context).map_err(|error| error.code())
-        },
-    );
+        });
     match result {
         Ok(()) => {}
         Err(code) => {
@@ -1175,6 +1157,35 @@ type ReplicaParts = (
     Value,
 );
 
+type ReplicaProofParts = (
+    ReplicaAttestation,
+    FailureDomainMetadata,
+    ReplicaTransferBinding,
+    Value,
+);
+
+fn replica_proof_context_parts(
+    transfer: &Map<String, Value>,
+    attestation: &Map<String, Value>,
+    pinned_metadata: &Map<String, Value>,
+    identity: &Map<String, Value>,
+) -> Result<ReplicaProofParts, &'static str> {
+    let replica: ReplicaAttestation = serde_json::from_value(Value::Object(attestation.clone()))
+        .map_err(|_| "FEDERATION_REPLICA_ATTESTATION_INVALID")?;
+    let metadata: FailureDomainMetadata =
+        serde_json::from_value(Value::Object(pinned_metadata.clone()))
+            .map_err(|_| "FEDERATION_REPLICA_ATTESTATION_FAILURE_DOMAIN_METADATA_INVALID")?;
+    let binding = ReplicaTransferBinding {
+        backup_id: string(transfer, "backupId").to_string(),
+        destination_fleet_id: string(transfer, "destinationFleetId").to_string(),
+        object_set_digest: string(transfer, "objectSetDigest").to_string(),
+        policy_id: string(transfer, "policyId").to_string(),
+        source_fleet_id: string(transfer, "sourceFleetId").to_string(),
+        transfer_id: string(transfer, "transferId").to_string(),
+    };
+    Ok((replica, metadata, binding, Value::Object(identity.clone())))
+}
+
 fn replica_context_parts(
     source_receipt: &Map<String, Value>,
     transfer: &Map<String, Value>,
@@ -1267,7 +1278,11 @@ fn validate_legacy_wire_value(evidence: &Value, field: &str, expected: &Value) -
     errors
 }
 
-fn object_copy(value: Option<&Value>, field: &str, errors: &mut Vec<String>) -> Map<String, Value> {
+pub(crate) fn object_copy(
+    value: Option<&Value>,
+    field: &str,
+    errors: &mut Vec<String>,
+) -> Map<String, Value> {
     match value.and_then(Value::as_object) {
         Some(value) => value.clone(),
         None => {
@@ -1277,15 +1292,15 @@ fn object_copy(value: Option<&Value>, field: &str, errors: &mut Vec<String>) -> 
     }
 }
 
-fn exact_fields(fields: &Map<String, Value>, expected: &[&str]) -> bool {
+pub(crate) fn exact_fields(fields: &Map<String, Value>, expected: &[&str]) -> bool {
     fields.len() == expected.len() && expected.iter().all(|field| fields.contains_key(*field))
 }
 
-fn string<'a>(fields: &'a Map<String, Value>, field: &str) -> &'a str {
+pub(crate) fn string<'a>(fields: &'a Map<String, Value>, field: &str) -> &'a str {
     fields.get(field).and_then(Value::as_str).unwrap_or("")
 }
 
-fn python_text(value: Option<&Value>) -> String {
+pub(crate) fn python_text(value: Option<&Value>) -> String {
     match value {
         None | Some(Value::Null) => String::new(),
         Some(Value::String(value)) => value.clone(),
@@ -1303,14 +1318,14 @@ fn canonical_bytes(value: &Value) -> Result<Vec<u8>, String> {
     serde_json::to_vec(&normalized).map_err(|error| error.to_string())
 }
 
-fn digest(value: &Value) -> Result<String, String> {
+pub(crate) fn digest(value: &Value) -> Result<String, String> {
     Ok(format!(
         "sha256:{:x}",
         Sha256::digest(canonical_bytes(value)?)
     ))
 }
 
-fn typed_digest(value: Option<&Value>, field: &str, errors: &mut Vec<String>) -> String {
+pub(crate) fn typed_digest(value: Option<&Value>, field: &str, errors: &mut Vec<String>) -> String {
     match value
         .and_then(Value::as_str)
         .filter(|value| is_typed_digest(value))
@@ -1323,7 +1338,7 @@ fn typed_digest(value: Option<&Value>, field: &str, errors: &mut Vec<String>) ->
     }
 }
 
-fn is_typed_digest(value: &str) -> bool {
+pub(crate) fn is_typed_digest(value: &str) -> bool {
     value.strip_prefix("sha256:").is_some_and(|digest| {
         digest.len() == 64
             && digest
@@ -1350,13 +1365,13 @@ fn decode_document(value: Option<&Value>, field: &str, errors: &mut Vec<String>)
     }
 }
 
-fn positive_integer(value: Option<&Value>) -> bool {
+pub(crate) fn positive_integer(value: Option<&Value>) -> bool {
     value
         .and_then(Value::as_u64)
         .is_some_and(|value| value >= 1)
 }
 
-fn exact_integer(value: Option<&Value>) -> Option<i128> {
+pub(crate) fn exact_integer(value: Option<&Value>) -> Option<i128> {
     value.and_then(|value| {
         value
             .as_i64()
@@ -1472,7 +1487,7 @@ fn contains_sensitive_state(value: &Value) -> bool {
     }
 }
 
-fn contains_secret(value: &Value) -> bool {
+pub(crate) fn contains_secret(value: &Value) -> bool {
     match value {
         Value::Object(fields) => fields.iter().any(|(key, value)| {
             let normalized: String = key
@@ -1493,7 +1508,7 @@ fn contains_secret(value: &Value) -> bool {
     }
 }
 
-fn parse_timestamp(value: &str) -> Option<i64> {
+pub(crate) fn parse_timestamp(value: &str) -> Option<i64> {
     let bytes = value.as_bytes();
     if bytes.len() != 20
         || bytes[4] != b'-'
@@ -1544,7 +1559,7 @@ fn decimal(bytes: &[u8], start: usize, length: usize) -> Option<u32> {
         })
 }
 
-fn dedupe(errors: Vec<String>) -> Vec<String> {
+pub(crate) fn dedupe(errors: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
     errors
         .into_iter()

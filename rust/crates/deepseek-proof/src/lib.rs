@@ -1,6 +1,7 @@
 use deepseek_protocol::{ActionFence, AdmitError, admit_command, validate_fence};
 
 pub mod envelope;
+pub mod federated_dr;
 pub mod federated_replica;
 pub mod predictive;
 pub mod runtime;
@@ -10,6 +11,10 @@ pub use envelope::{
     MAX_EVIDENCE_PROOF_BYTES, PREDICTIVE_PLANNING_PROOF_SCHEMA, parse_evidence_proof_document,
     validate_check, validate_dr_readiness_proof, validate_evidence_proof,
     verify_evidence_proof_document,
+};
+pub use federated_dr::{
+    FEDERATED_DR_PROOF_CHECKS, FEDERATED_DR_PROOF_SCHEMA, federated_dr_proof_digest,
+    validate_federated_dr_proof,
 };
 pub use federated_replica::{
     FEDERATED_REPLICA_PROOF_CHECKS, FEDERATED_REPLICA_PROOF_SCHEMA, federated_replica_proof_digest,

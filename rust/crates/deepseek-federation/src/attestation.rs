@@ -105,6 +105,16 @@ pub struct ReplicaVerificationContext<'a> {
     pub max_future_skew_seconds: u64,
 }
 
+/// Public, read-only inputs required to verify a replica attestation's signed
+/// semantics without re-reading the Receipt v4 / Commit v4 documents.
+pub struct ReplicaProofVerificationContext<'a> {
+    pub root_identity: &'a Value,
+    pub pinned_metadata: &'a FailureDomainMetadata,
+    pub transfer: &'a ReplicaTransferBinding,
+    pub now: &'a str,
+    pub max_future_skew_seconds: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttestationError {
     code: &'static str,
@@ -233,14 +243,21 @@ pub fn verify_replica_attestation(
         context.signer_authorization,
         now,
     )?;
-    verify_semantics(attestation, context, &signer, now)?;
+    let proof_context = ReplicaProofVerificationContext {
+        root_identity: context.root_identity,
+        pinned_metadata: context.pinned_metadata,
+        transfer: context.transfer,
+        now: context.now,
+        max_future_skew_seconds: context.max_future_skew_seconds,
+    };
+    verify_semantics(attestation, &proof_context, &signer, now)?;
     verify_remote_documents(attestation, context)?;
     Ok(())
 }
 
 pub fn verify_replica_attestation_for_proof(
     attestation: &ReplicaAttestation,
-    context: &ReplicaVerificationContext<'_>,
+    context: &ReplicaProofVerificationContext<'_>,
 ) -> Result<(), AttestationError> {
     assert_secret_free(attestation)?;
     if canonical_bytes(attestation)?.len() > MAX_REPLICA_ATTESTATION_BYTES {
@@ -285,7 +302,7 @@ pub fn verify_replica_remote_documents(
 
 fn verify_semantics(
     attestation: &ReplicaAttestation,
-    context: &ReplicaVerificationContext<'_>,
+    context: &ReplicaProofVerificationContext<'_>,
     signer: &VerifiedSigner,
     now: i64,
 ) -> Result<(), AttestationError> {

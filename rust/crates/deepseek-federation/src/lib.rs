@@ -9,8 +9,9 @@ pub use attestation::{
     AttestationError, CurrentSignerAuthorization, FailureDomainMetadata, MAX_REMOTE_COMMIT_BYTES,
     MAX_REMOTE_RECEIPT_BYTES, MAX_REPLICA_ATTESTATION_BYTES,
     MAX_REPLICA_ATTESTATION_LIFETIME_SECONDS, REPLICA_ATTESTATION_SCHEMA, ReplicaAttestation,
-    ReplicaTransferBinding, ReplicaVerificationContext, attestation_digest, derive_transfer_id,
-    failure_domain_from_metadata, verify_replica_attestation, verify_replica_attestation_document,
+    ReplicaProofVerificationContext, ReplicaTransferBinding, ReplicaVerificationContext,
+    attestation_digest, derive_transfer_id, failure_domain_from_metadata,
+    verify_replica_attestation, verify_replica_attestation_document,
     verify_replica_attestation_for_proof, verify_replica_remote_documents,
 };
 pub use identity::{
