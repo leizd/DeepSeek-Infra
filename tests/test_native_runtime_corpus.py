@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from datetime import datetime
@@ -13,6 +14,7 @@ from deepseek_infra.infra.workspace import (
     backup_target_store,
     evidence_proof,
     federated_replica_attestation,
+    federation_runtime_proof,
     federation_identity,
 )
 from deepseek_infra.infra.workspace.federated_replica_attestation import REPLICA_ATTESTATION_FIELDS
@@ -49,10 +51,11 @@ def test_canonical_corpora_match_frozen_digests() -> None:
     } <= ids
 
     manifests = validate_corpora()
-    assert len(manifests) == 4
+    assert len(manifests) == 5
     assert manifests[1]["compatibility_reason"]
     assert manifests[2]["compatibility_reason"]
     assert manifests[3]["compatibility_reason"]
+    assert manifests[4]["compatibility_reason"]
 
 
 def test_storage_v2_semantic_vector_matches_python_4_8_0_bytes() -> None:
@@ -138,6 +141,35 @@ def test_evidence_v4_semantic_vector_matches_python_4_8_0_validator() -> None:
         assert evidence_proof.validate_check(check_name, item) == []
     for invalid in fixture["invalid_checks"]:
         assert evidence_proof.validate_check(invalid["check_name"], invalid["item"]) == invalid["expected_errors"]
+
+
+def test_federation_runtime_v5_semantic_vector_matches_python_4_8_0_validator() -> None:
+    manifest_path = ROOT / "compat" / "native-runtime" / "v5" / "manifest.json"
+    manifest = validate_corpus(manifest_path)
+    path = next(
+        item["path"]
+        for item in manifest["corpora"]
+        if item["id"] == "federation-runtime-e2e-proof-semantics-v5"
+    )
+    fixture = json.loads((ROOT / path).read_text(encoding="utf-8"))
+    proof = fixture["valid_proof"]
+    assert federation_runtime_proof.validate_federation_runtime_proof(proof) == []
+    assert federation_runtime_proof.proof_digest(proof) == proof["proofDigest"]
+    for check_name in federation_runtime_proof.FEDERATION_RUNTIME_PROOF_CHECKS:
+        assert evidence_proof.validate_check(check_name, {"status": "PASS", "evidence": proof}) == []
+
+    for invalid in fixture["invalid_cases"]:
+        mutated = copy.deepcopy(proof)
+        parts = invalid["path"].lstrip("/").split("/")
+        target = mutated
+        for part in parts[:-1]:
+            target = target[int(part)] if isinstance(target, list) else target[part]
+        leaf = parts[-1]
+        if isinstance(target, list):
+            target[int(leaf)] = invalid["replacement"]
+        else:
+            target[leaf] = invalid["replacement"]
+        assert federation_runtime_proof.validate_federation_runtime_proof(mutated) == invalid["expected_errors"]
 
 
 def test_control_authority_corpus_matches_frozen_python_v1_bytes() -> None:

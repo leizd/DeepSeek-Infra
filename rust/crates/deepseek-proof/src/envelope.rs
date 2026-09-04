@@ -3,6 +3,8 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::runtime::{FEDERATION_RUNTIME_PROOF_CHECKS, validate_federation_runtime_proof};
+
 pub const EVIDENCE_ENVELOPE_SCHEMA: &str = "evidence-proof-v2";
 pub const DR_READINESS_PROOF_SCHEMA: &str = "dr-readiness-proof-v1";
 pub const PREDICTIVE_PLANNING_PROOF_SCHEMA: &str = "predictive-planning-proof-v1";
@@ -163,6 +165,9 @@ pub fn validate_check(check_name: &str, item: &Value) -> Vec<String> {
     };
     if DR_READINESS_CHECKS.contains(&check_name) {
         return validate_dr_readiness_proof(evidence);
+    }
+    if FEDERATION_RUNTIME_PROOF_CHECKS.contains(&check_name) {
+        return validate_federation_runtime_proof(&Value::Object(evidence.clone()));
     }
     vec![format!("unsupported-check:{check_name}")]
 }
