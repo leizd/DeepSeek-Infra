@@ -1,12 +1,16 @@
 use deepseek_protocol::{ActionFence, AdmitError, admit_command, validate_fence};
 
 pub mod envelope;
+pub mod predictive;
 pub mod runtime;
 pub use envelope::{
     DR_READINESS_PROOF_SCHEMA, EVIDENCE_ENVELOPE_SCHEMA, EvidenceProofEnvelope, EvidenceProofError,
     MAX_EVIDENCE_PROOF_BYTES, PREDICTIVE_PLANNING_PROOF_SCHEMA, parse_evidence_proof_document,
     validate_check, validate_dr_readiness_proof, validate_evidence_proof,
     verify_evidence_proof_document,
+};
+pub use predictive::{
+    PREDICTIVE_PROOF_CHECKS, predictive_planning_proof_digest, validate_predictive_planning_proof,
 };
 pub use runtime::{
     FEDERATION_RUNTIME_PROOF_CHECKS, FEDERATION_RUNTIME_PROOF_SCHEMA,
