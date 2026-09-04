@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,22 @@ func TestOpenControlRejectsEmptyAndPythonPaths(t *testing.T) {
 	pythonFile := filepath.Join(root, "control.sqlite3")
 	if _, err := OpenControl(OpenOptions{Path: pythonFile, Owner: "owner-a"}); err != ErrPythonStorePath {
 		t.Fatalf("python file: %v", err)
+	}
+	hidden := filepath.Join(root, ".backup-control")
+	if err := os.MkdirAll(hidden, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(hidden)
+	if _, err := OpenControl(OpenOptions{Path: "shadow", Owner: "owner-a"}); err != ErrPythonStorePath {
+		t.Fatalf("absolute python path: %v", err)
+	}
+}
+
+func TestOpenControlRejectsNegativeClock(t *testing.T) {
+	if _, err := OpenControl(OpenOptions{
+		Path: t.TempDir(), Owner: "owner-a", Now: func() int64 { return -1 },
+	}); !errors.Is(err, ErrWriterFenceHeld) {
+		t.Fatalf("negative clock: %v", err)
 	}
 }
 
@@ -94,6 +111,16 @@ func TestControlRecordsCasAndTransitions(t *testing.T) {
 	}
 }
 
+func TestNewRecordMustStartAtRevisionOne(t *testing.T) {
+	store := openShadow(t)
+	defer store.Close()
+	if err := store.Put(Record{
+		Domain: "policy", ID: "p2", Revision: 2, State: "ACTIVE", Payload: json.RawMessage(`{}`),
+	}); err != ErrRevisionConflict {
+		t.Fatalf("initial revision: %v", err)
+	}
+}
+
 func TestFencedDomainsRejectZeroEpochAndStale(t *testing.T) {
 	store := openShadow(t)
 	defer store.Close()
@@ -118,98 +145,11 @@ func TestProductionMutationDeniedAndPythonDbRejected(t *testing.T) {
 		t.Fatalf("mutate: %v", err)
 	}
 	foreign := t.TempDir()
-	if err := writeJSONAtomic(filepath.Join(foreign, "manifest.json"), map[string]any{"runtime": "python", "mode": "authoritative", "schemaVersion": 1}); err != nil {
+	if err := os.WriteFile(filepath.Join(foreign, "manifest.json"), []byte(`{"runtime":"python"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenControl(OpenOptions{Path: foreign, Owner: "owner-a"}); err != ErrForeignRuntimeStore {
-		t.Fatalf("foreign: %v", err)
-	}
-}
-
-func TestWriteJSONAtomicMarshalFailurePreservesExistingFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "state.json")
-	want := []byte(`{"revision":1}`)
-	if err := os.WriteFile(path, want, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := writeJSONAtomic(path, make(chan int)); err == nil {
-		t.Fatal("unsupported JSON value must fail")
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(want) {
-		t.Fatalf("existing file changed after marshal failure: got %q want %q", got, want)
-	}
-	assertNoAtomicWriteTemps(t, dir, filepath.Base(path))
-}
-
-func TestWriteJSONAtomicCreateTempFailureIsReported(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "missing", "state.json")
-	if err := writeJSONAtomic(path, map[string]int{"revision": 1}); err == nil {
-		t.Fatal("missing destination directory must fail")
-	}
-}
-
-func TestWriteJSONAtomicReplacesExistingFileWithoutTempResidue(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "state.json")
-	if err := os.WriteFile(path, []byte(`{"revision":1}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	want := map[string]int{"revision": 2}
-	if err := writeJSONAtomic(path, want); err != nil {
-		t.Fatal(err)
-	}
-	var got map[string]int
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatalf("replacement is not valid JSON: %v", err)
-	}
-	if got["revision"] != want["revision"] {
-		t.Fatalf("replacement: got %v want %v", got, want)
-	}
-	assertNoAtomicWriteTemps(t, dir, filepath.Base(path))
-}
-
-func TestWriteJSONAtomicReplacementFailureCleansTemp(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "state.json")
-	if err := os.Mkdir(path, 0o700); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := writeJSONAtomic(path, map[string]int{"revision": 2}); err == nil {
-		t.Fatal("replacing a directory must fail")
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !info.IsDir() {
-		t.Fatal("failed replacement changed destination directory")
-	}
-	assertNoAtomicWriteTemps(t, dir, filepath.Base(path))
-}
-
-func assertNoAtomicWriteTemps(t *testing.T, dir, base string) {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prefix := "." + base + ".tmp-"
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), prefix) {
-			t.Fatalf("temporary file leaked: %s", entry.Name())
-		}
+	if _, err := OpenControl(OpenOptions{Path: foreign, Owner: "owner-a"}); err == nil || !errors.Is(err, ErrLegacyFileStore) {
+		t.Fatalf("legacy store: %v", err)
 	}
 }
 
@@ -227,11 +167,11 @@ func TestPutFailsWhenLeaseExpires(t *testing.T) {
 	}
 	live := openShadow(t)
 	defer live.Close()
-	if err := os.WriteFile(filepath.Join(live.path, "writer.json"), []byte("{"), 0o600); err != nil {
+	if _, err := live.db.Exec("UPDATE control_writer SET owner_instance_id = 'other' WHERE singleton = 1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := live.Put(Record{Domain: "policy", ID: "p2", Revision: 1, State: "ACTIVE", Payload: json.RawMessage(`{}`)}); err == nil {
-		t.Fatal("corrupt writer put")
+	if err := live.Put(Record{Domain: "policy", ID: "p2", Revision: 1, State: "ACTIVE", Payload: json.RawMessage(`{}`)}); err != ErrWriterFenceHeld {
+		t.Fatalf("lost writer put: %v", err)
 	}
 }
 
@@ -284,36 +224,48 @@ func TestEveryDomainInitialAndNextTransition(t *testing.T) {
 }
 
 func TestOpenControlRejectsForeignWriterAndSchema(t *testing.T) {
-	future := t.TempDir()
-	if err := writeJSONAtomic(filepath.Join(future, "writer.json"), WriterLease{Runtime: RuntimeGo, Mode: ModeShadow, OwnerInstanceID: "other", FencingToken: 1, LeaseUntil: 4000000000}); err != nil {
+	foreignSchema := openShadow(t)
+	if _, err := foreignSchema.db.Exec("PRAGMA user_version = 2"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenControl(OpenOptions{Path: future, Owner: "owner-a"}); err != ErrWriterFenceHeld {
-		t.Fatalf("future lease: %v", err)
-	}
-	foreign := t.TempDir()
-	if err := writeJSONAtomic(filepath.Join(foreign, "manifest.json"), manifestFile{Runtime: RuntimeGo, Mode: ModeShadow, SchemaVersion: 2, UniqueWriter: RuntimeGo}); err != nil {
+	foreignSchemaPath := foreignSchema.path
+	if err := foreignSchema.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenControl(OpenOptions{Path: foreign, Owner: "owner-a"}); err != ErrForeignRuntimeStore {
+	if _, err := OpenControl(OpenOptions{Path: foreignSchemaPath, Owner: "owner-a"}); err != ErrForeignRuntimeStore {
 		t.Fatalf("schema: %v", err)
 	}
-	pythonWriter := t.TempDir()
-	if err := writeJSONAtomic(filepath.Join(pythonWriter, "writer.json"), WriterLease{Runtime: "python", Mode: ModeShadow, OwnerInstanceID: "x", FencingToken: 1, LeaseUntil: 0}); err != nil {
+
+	pythonWriter := openShadow(t)
+	if _, err := pythonWriter.db.Exec("UPDATE control_writer SET runtime = 'python' WHERE singleton = 1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenControl(OpenOptions{Path: pythonWriter, Owner: "owner-a"}); err != ErrForeignRuntimeStore {
+	pythonWriterPath := pythonWriter.path
+	if err := pythonWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenControl(OpenOptions{Path: pythonWriterPath, Owner: "owner-a"}); err != ErrForeignRuntimeStore {
 		t.Fatalf("python writer: %v", err)
 	}
 }
 
-func TestCorruptManifestAndWriterAreRejected(t *testing.T) {
+func TestLegacyManifestAndWriterAreRejectedWithoutDeletion(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenControl(OpenOptions{Path: dir, Owner: "owner-a"}); err == nil {
-		t.Fatal("corrupt manifest")
+	if _, err := OpenControl(OpenOptions{Path: dir, Owner: "owner-a"}); err == nil || !errors.Is(err, ErrLegacyFileStore) {
+		t.Fatalf("legacy manifest: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "manifest.json")); err != nil {
+		t.Fatalf("legacy data was removed: %v", err)
+	}
+	legacyDirectory := t.TempDir()
+	if err := os.Mkdir(filepath.Join(legacyDirectory, "policies"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenControl(OpenOptions{Path: legacyDirectory, Owner: "owner-a"}); !errors.Is(err, ErrLegacyFileStore) {
+		t.Fatalf("legacy table directory: %v", err)
 	}
 }
 
@@ -331,6 +283,12 @@ func TestClosedStoreAndEmptyOwnerAreRejected(t *testing.T) {
 	if _, err := store.ExportSnapshot(); err != ErrWriterFenceHeld {
 		t.Fatalf("closed export: %v", err)
 	}
+	if err := store.Put(Record{Domain: "policy", ID: "p1", Revision: 1, State: "ACTIVE"}); err != ErrWriterFenceHeld {
+		t.Fatalf("closed put: %v", err)
+	}
+	if err := store.Rollback(0); err != ErrWriterFenceHeld {
+		t.Fatalf("closed rollback: %v", err)
+	}
 	_ = store.Writer()
 	_ = store.Tables()
 }
@@ -347,6 +305,9 @@ func TestUnknownDomainAndEmptyIDAreRejected(t *testing.T) {
 	if _, _, err := store.Get("nope", "x"); err != ErrUnknownDomain {
 		t.Fatalf("get domain: %v", err)
 	}
+	if _, ok, err := store.Get("policy", ""); err != nil || ok {
+		t.Fatalf("empty get: ok=%v err=%v", ok, err)
+	}
 }
 
 func TestRecordIDTraversalAndCorruptJSONAreRejected(t *testing.T) {
@@ -355,18 +316,23 @@ func TestRecordIDTraversalAndCorruptJSONAreRejected(t *testing.T) {
 	if err := store.Put(Record{Domain: "policy", ID: `..\writer`, Revision: 1, State: "ACTIVE", Payload: json.RawMessage(`{}`)}); err != ErrEmptyRecordID {
 		t.Fatalf("traversal: %v", err)
 	}
-	corrupt := filepath.Join(store.path, "policies", "p1.json")
-	if err := os.WriteFile(corrupt, []byte("{"), 0o600); err != nil {
+	if err := store.Put(Record{Domain: "policy", ID: "p1", Revision: 1, State: "ACTIVE", Payload: json.RawMessage(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.Get("policy", "p1"); err == nil {
-		t.Fatal("corrupt json must fail")
+	if _, err := store.db.Exec("UPDATE policies SET record_digest = ? WHERE id = 'p1'", strings.Repeat("0", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Get("policy", "p1"); !errors.Is(err, ErrCorruptRecord) {
+		t.Fatalf("corrupt record must fail closed: %v", err)
 	}
 }
 
 func TestExportSnapshotIsStableAndRollbackDropsRecords(t *testing.T) {
 	store := openShadow(t)
 	if err := store.Put(Record{Domain: "peer", ID: "fleet-b", Revision: 1, State: "PENDING", Payload: json.RawMessage(`{"peer":"fleet-b"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(Record{Domain: "peer", ID: "fleet-a", Revision: 1, State: "PENDING", Payload: json.RawMessage(`{"peer":"fleet-a"}`)}); err != nil {
 		t.Fatal(err)
 	}
 	first, err := store.ExportSnapshot()
@@ -377,7 +343,7 @@ func TestExportSnapshotIsStableAndRollbackDropsRecords(t *testing.T) {
 	if err != nil || first.Digest == "" || first.Digest != second.Digest {
 		t.Fatalf("digest: %q %q %v", first.Digest, second.Digest, err)
 	}
-	junk := filepath.Join(store.path, "policies", "ignore.txt")
+	junk := filepath.Join(store.path, "ignore.txt")
 	if err := os.WriteFile(junk, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +351,7 @@ func TestExportSnapshotIsStableAndRollbackDropsRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	third, err := store.ExportSnapshot()
-	if err != nil || len(third.Records) != 2 {
+	if err != nil || len(third.Records) != 3 {
 		t.Fatalf("export records %+v %v", third, err)
 	}
 	if err := store.Rollback(2); err != ErrSchemaInactive {

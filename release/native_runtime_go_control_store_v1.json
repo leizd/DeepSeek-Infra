@@ -3,18 +3,37 @@
   "runtime": "go",
   "mode": "shadow",
   "unique_writer": {
-    "table": "writer.json",
-    "fencing": "fencingToken",
-    "lease": "leaseUntil",
+    "table": "control_writer",
+    "fencing": "fencing_token",
+    "lease": "lease_until",
     "runtime_field": "go"
   },
-  "database": "isolated-directory",
-  "filename": "go-control/",
+  "database": "sqlite",
+  "filename": "go-control/control.sqlite3",
+  "sqlite": {
+    "driver": "modernc.org/sqlite@v1.58.0",
+    "journal_mode": "WAL",
+    "synchronous": "FULL",
+    "foreign_keys": true,
+    "transaction_lock": "IMMEDIATE",
+    "defensive": true,
+    "double_quoted_strings": false,
+    "trusted_schema": false,
+    "max_open_connections": 1,
+    "maximum_payload_bytes": 1048576,
+    "record_digest": "sha256-canonical-json",
+    "event_journal": "control_events",
+    "event_mutation": "insert-only",
+    "legacy_file_store": "reject-and-preserve",
+    "unknown_user_objects": "reject-before-write-connection",
+    "identity_open": "immutable-read-only",
+    "secret_material": "reject passwords, tokens, credentials, and private keys; persist references and digests only"
+  },
   "migrations": [
     {
       "version": 1,
-      "up": "create domain table directories and go-only manifest",
-      "down": "drop domain table directories; schemaVersion=0"
+      "up": "create strict domain tables, append-only event journal, and fenced writer metadata in one transaction",
+      "down": "drop domain tables and event journal; retain writer fencing metadata; set schema_version and user_version to 0"
     }
   ],
   "tables": [
@@ -32,10 +51,10 @@
     {"name": "agent_runs", "domain": "agent_run", "ownership_ids": ["agent_dag_scheduler"]}
   ],
   "writer_plan": {
-    "lease_fencing": "writer.json",
-    "maintenance_controller": "writer.json",
-    "config_runtime_lifecycle": "manifest",
-    "control_api": "manifest"
+    "lease_fencing": "control_writer",
+    "maintenance_controller": "control_writer",
+    "config_runtime_lifecycle": "control_store_meta",
+    "control_api": "control_store_meta"
   },
   "forbidden_python_path_components": [
     ".backup-control",

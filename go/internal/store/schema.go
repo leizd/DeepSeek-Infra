@@ -16,6 +16,10 @@ var (
 	ErrForeignRuntimeStore = errors.New("FOREIGN_RUNTIME_STORE")
 	ErrSchemaInactive      = errors.New("SCHEMA_INACTIVE")
 	ErrEmptyRecordID       = errors.New("EMPTY_RECORD_ID")
+	ErrInvalidPayload      = errors.New("INVALID_PAYLOAD")
+	ErrCorruptRecord       = errors.New("CORRUPT_RECORD")
+	ErrEpochOutOfRange     = errors.New("EPOCH_OUT_OF_RANGE")
+	ErrLegacyFileStore     = errors.New("LEGACY_FILE_STORE")
 )
 
 const (
@@ -24,7 +28,7 @@ const (
 	SchemaV1   = 1
 )
 
-var TableNames = []string{
+var controlTableNames = [...]string{
 	"policies",
 	"targets",
 	"scheduler_runs",
@@ -39,6 +43,11 @@ var TableNames = []string{
 	"agent_runs",
 }
 
+// TableNames is retained as a compatibility catalog. Database statements use
+// the private fixed array and tableForDomain so callers cannot redirect SQL by
+// mutating this exported slice.
+var TableNames = append([]string(nil), controlTableNames[:]...)
+
 var DomainTable = map[string]string{
 	"policy":        "policies",
 	"target":        "targets",
@@ -52,6 +61,37 @@ var DomainTable = map[string]string{
 	"transfer":      "federation_transfers",
 	"forecast":      "forecasts",
 	"agent_run":     "agent_runs",
+}
+
+func tableForDomain(domain string) (string, bool) {
+	switch domain {
+	case "policy":
+		return "policies", true
+	case "target":
+		return "targets", true
+	case "scheduler_run":
+		return "scheduler_runs", true
+	case "action":
+		return "action_journal", true
+	case "risk":
+		return "risk_observations", true
+	case "wave":
+		return "wave_schedules", true
+	case "peer":
+		return "federation_peers", true
+	case "grant":
+		return "federation_grants", true
+	case "session":
+		return "federation_sessions", true
+	case "transfer":
+		return "federation_transfers", true
+	case "forecast":
+		return "forecasts", true
+	case "agent_run":
+		return "agent_runs", true
+	default:
+		return "", false
+	}
 }
 
 var fencedDomains = map[string]bool{

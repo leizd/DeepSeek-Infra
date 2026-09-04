@@ -1,11 +1,15 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -13,7 +17,28 @@ import (
 
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
 	"github.com/leizd/DeepSeek-Infra/go/pkg/protocol"
+	modernsqlite "modernc.org/sqlite"
 )
+
+const (
+	ControlDatabaseFilename = "control.sqlite3"
+	maximumPayloadBytes     = 1 << 20
+)
+
+var controlDomainOrder = [...]string{
+	"policy",
+	"target",
+	"scheduler_run",
+	"action",
+	"risk",
+	"wave",
+	"peer",
+	"grant",
+	"session",
+	"transfer",
+	"forecast",
+	"agent_run",
+}
 
 type OpenOptions struct {
 	Path         string
@@ -48,28 +73,28 @@ type Snapshot struct {
 	Digest        string      `json:"digest"`
 }
 
-type manifestFile struct {
-	Runtime       string `json:"runtime"`
-	Mode          string `json:"mode"`
-	SchemaVersion int    `json:"schemaVersion"`
-	UniqueWriter  string `json:"uniqueWriter"`
-}
-
 type Control struct {
 	mu           sync.Mutex
 	path         string
+	databasePath string
 	owner        string
 	token        int64
+	leaseUntil   int64
 	leaseSeconds int64
 	now          func() int64
 	schema       int
+	db           *sql.DB
 	closed       bool
 }
 
-var (
-	registryMu sync.Mutex
-	live       = map[string]*Control{}
-)
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+type storedRecordMetadata struct {
+	writerToken int64
+	timestamp   int64
+}
 
 func OpenControl(opts OpenOptions) (*Control, error) {
 	if strings.TrimSpace(opts.Owner) == "" {
@@ -85,56 +110,560 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 	if err := RejectPythonPath(abs); err != nil {
 		return nil, err
 	}
-	if parent, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
-		abs = filepath.Join(parent, filepath.Base(abs))
-		if err := RejectPythonPath(abs); err != nil {
+	if err := os.MkdirAll(abs, 0o700); err != nil {
+		return nil, err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return nil, err
+	}
+	if err := RejectPythonPath(resolved); err != nil {
+		return nil, err
+	}
+	if err := rejectLegacyFileStore(resolved); err != nil {
+		return nil, err
+	}
+
+	databasePath := filepath.Join(resolved, ControlDatabaseFilename)
+	info, statErr := os.Lstat(databasePath)
+	databaseExisted := statErr == nil && info.Size() > 0
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return nil, statErr
+	}
+	if statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%w: database file must not be a symbolic link", ErrForeignRuntimeStore)
+	}
+	if statErr == nil && info.IsDir() {
+		return nil, fmt.Errorf("%w: database path is a directory", ErrForeignRuntimeStore)
+	}
+	if databaseExisted {
+		initialized, err := validateExistingControlMarker(databasePath)
+		if err != nil {
+			return nil, err
+		}
+		databaseExisted = initialized
+	} else if statErr != nil {
+		file, err := os.OpenFile(databasePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+		if err != nil {
+			return nil, err
+		}
+		if err := file.Close(); err != nil {
 			return nil, err
 		}
 	}
+
+	connector, err := modernsqlite.NewConnector(controlDatabaseDSN(databasePath))
+	if err != nil {
+		return nil, err
+	}
+	db := sql.OpenDB(connector)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := os.Chmod(databasePath, 0o600); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
 	nowFn := opts.Now
 	if nowFn == nil {
 		nowFn = func() int64 { return time.Now().Unix() }
 	}
-	lease := opts.LeaseSeconds
-	if lease <= 0 {
-		lease = 30
+	leaseSeconds := opts.LeaseSeconds
+	if leaseSeconds <= 0 {
+		leaseSeconds = 30
 	}
-	registryMu.Lock()
-	defer registryMu.Unlock()
-	writerPath := filepath.Join(abs, "writer.json")
-	if existing := live[abs]; existing != nil {
-		writer, ok, err := readWriter(writerPath)
-		if err != nil {
-			return nil, err
-		}
-		if ok && nowFn() < writer.LeaseUntil {
-			return nil, ErrWriterFenceHeld
-		}
-		delete(live, abs)
-	} else {
-		writer, ok, err := readWriter(writerPath)
-		if err != nil {
-			return nil, err
-		}
-		if ok && nowFn() < writer.LeaseUntil {
-			return nil, ErrWriterFenceHeld
-		}
+	store := &Control{
+		path:         resolved,
+		databasePath: databasePath,
+		owner:        opts.Owner,
+		leaseSeconds: leaseSeconds,
+		now:          nowFn,
+		db:           db,
 	}
-	if err := os.MkdirAll(abs, 0o700); err != nil {
+	if err := store.bootstrapAndClaim(databaseExisted); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
-	store := &Control{path: abs, owner: opts.Owner, leaseSeconds: lease, now: nowFn}
-	if err := store.loadOrInitManifest(); err != nil {
-		return nil, err
-	}
-	if err := store.claimWriter(); err != nil {
-		return nil, err
-	}
-	if err := store.migrate(); err != nil {
-		return nil, err
-	}
-	live[abs] = store
 	return store, nil
+}
+
+func controlDatabaseDSN(databasePath string) string {
+	query := hardenedControlQuery()
+	query.Set("_foreign_keys", "1")
+	query.Set("_journal_mode", "WAL")
+	query.Set("_synchronous", "FULL")
+	query.Set("_txlock", "immediate")
+	return controlDatabaseURL(databasePath, query)
+}
+
+func readOnlyControlDatabaseDSN(databasePath string) string {
+	query := hardenedControlQuery()
+	query.Set("_query_only", "1")
+	query.Set("mode", "ro")
+	query.Set("immutable", "1")
+	return controlDatabaseURL(databasePath, query)
+}
+
+func hardenedControlQuery() url.Values {
+	query := url.Values{}
+	query.Set("_busy_timeout", "30000")
+	query.Set("_defensive", "1")
+	query.Set("_dqs", "0")
+	query.Set("_pragma", "trusted_schema(OFF)")
+	return query
+}
+
+func controlDatabaseURL(databasePath string, query url.Values) string {
+	path := filepath.ToSlash(databasePath)
+	if runtime.GOOS == "windows" && len(path) >= 2 && path[1] == ':' {
+		path = "/" + path
+	}
+	return (&url.URL{Scheme: "file", Path: path, RawQuery: query.Encode()}).String()
+}
+
+func validateExistingControlMarker(databasePath string) (bool, error) {
+	// Identity checks stay on a read-only connection so a foreign database cannot
+	// be mutated by WAL or writer-lease side effects before it is rejected.
+	connector, err := modernsqlite.NewConnector(readOnlyControlDatabaseDSN(databasePath))
+	if err != nil {
+		return false, err
+	}
+	db := sql.OpenDB(connector)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	var objectCount int
+	queryErr := db.QueryRow(
+		"SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+	).Scan(&objectCount)
+	if queryErr == nil && objectCount == 0 {
+		closeErr := db.Close()
+		if closeErr != nil {
+			return false, closeErr
+		}
+		return false, nil
+	}
+	var markerCount int
+	if queryErr == nil {
+		queryErr = db.QueryRow(
+			`SELECT COUNT(*) FROM sqlite_schema
+		 WHERE type = 'table'
+		   AND name IN ('control_store_meta', 'control_writer', 'schema_migrations')`,
+		).Scan(&markerCount)
+	}
+	if queryErr == nil && markerCount != len(bootstrapSchemaStatements) {
+		queryErr = ErrForeignRuntimeStore
+	}
+	var runtimeName, mode, uniqueWriter string
+	var schema int
+	if queryErr == nil {
+		queryErr = db.QueryRow(
+			"SELECT runtime, mode, schema_version, unique_writer FROM control_store_meta WHERE singleton = 1",
+		).Scan(&runtimeName, &mode, &schema, &uniqueWriter)
+	}
+	if queryErr == nil && (runtimeName != RuntimeGo || mode != ModeShadow ||
+		uniqueWriter != RuntimeGo || schema < 0 || schema > SchemaV1) {
+		queryErr = ErrForeignRuntimeStore
+	}
+	var userVersion, migrationCount int
+	if queryErr == nil {
+		queryErr = db.QueryRow("PRAGMA user_version").Scan(&userVersion)
+	}
+	if queryErr == nil {
+		queryErr = db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount)
+	}
+	if queryErr == nil && (userVersion != schema || migrationCount != schema) {
+		queryErr = ErrForeignRuntimeStore
+	}
+	if queryErr == nil {
+		queryErr = validateControlUserObjects(db, schema)
+	}
+	closeErr := db.Close()
+	if errors.Is(queryErr, sql.ErrNoRows) {
+		queryErr = ErrForeignRuntimeStore
+	}
+	if queryErr != nil {
+		if !errors.Is(queryErr, ErrForeignRuntimeStore) {
+			queryErr = fmt.Errorf("%w: read database marker: %v", ErrForeignRuntimeStore, queryErr)
+		}
+		if closeErr != nil {
+			return false, errors.Join(queryErr, closeErr)
+		}
+		return false, queryErr
+	}
+	if closeErr != nil {
+		return false, closeErr
+	}
+	return true, nil
+}
+
+type sqliteQuerier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+func expectedControlUserObjects(schema int) map[string]string {
+	objects := map[string]string{
+		"control_store_meta": "table",
+		"control_writer":     "table",
+		"schema_migrations":  "table",
+	}
+	if schema != SchemaV1 {
+		return objects
+	}
+	for _, table := range controlTableNames {
+		objects[table] = "table"
+	}
+	objects["control_events"] = "table"
+	objects["control_events_no_update"] = "trigger"
+	objects["control_events_no_delete"] = "trigger"
+	return objects
+}
+
+func validateControlUserObjects(querier sqliteQuerier, schema int) error {
+	expected := expectedControlUserObjects(schema)
+	rows, err := querier.Query("SELECT name, type FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'")
+	if err != nil {
+		return fmt.Errorf("%w: list sqlite objects: %v", ErrForeignRuntimeStore, err)
+	}
+	defer rows.Close()
+	seen := make(map[string]string, len(expected))
+	for rows.Next() {
+		var name, objectType string
+		if err := rows.Scan(&name, &objectType); err != nil {
+			return fmt.Errorf("%w: read sqlite object: %v", ErrForeignRuntimeStore, err)
+		}
+		wantType, ok := expected[name]
+		if !ok {
+			return fmt.Errorf("%w: unexpected sqlite %s %q", ErrForeignRuntimeStore, objectType, name)
+		}
+		if wantType != objectType {
+			return fmt.Errorf("%w: sqlite object %q type %s", ErrForeignRuntimeStore, name, objectType)
+		}
+		seen[name] = objectType
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("%w: iterate sqlite objects: %v", ErrForeignRuntimeStore, err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("%w: close sqlite object cursor: %v", ErrForeignRuntimeStore, err)
+	}
+	if len(seen) != len(expected) {
+		return fmt.Errorf("%w: incomplete sqlite object set", ErrForeignRuntimeStore)
+	}
+	return nil
+}
+
+func rejectLegacyFileStore(path string) error {
+	legacyNames := append([]string{"manifest.json", "writer.json"}, controlTableNames[:]...)
+	for _, name := range legacyNames {
+		_, err := os.Lstat(filepath.Join(path, name))
+		if err == nil {
+			return fmt.Errorf("%w: %s", ErrLegacyFileStore, name)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
+func (store *Control) bootstrapAndClaim(databaseExisted bool) error {
+	tx, err := store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if databaseExisted {
+		var marker int
+		err := tx.QueryRow(
+			"SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'control_store_meta'",
+		).Scan(&marker)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrForeignRuntimeStore
+		}
+		if err != nil {
+			return fmt.Errorf("%w: read database marker: %v", ErrForeignRuntimeStore, err)
+		}
+	}
+	for _, statement := range bootstrapSchemaStatements {
+		if _, err := tx.Exec(statement); err != nil {
+			return fmt.Errorf("%w: bootstrap schema: %v", ErrForeignRuntimeStore, err)
+		}
+	}
+
+	var metaCount int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM control_store_meta").Scan(&metaCount); err != nil {
+		return fmt.Errorf("%w: read store metadata: %v", ErrForeignRuntimeStore, err)
+	}
+	if metaCount == 0 {
+		if databaseExisted {
+			return ErrForeignRuntimeStore
+		}
+		if _, err := tx.Exec(
+			"INSERT INTO control_store_meta(singleton, runtime, mode, schema_version, unique_writer) VALUES(1, ?, ?, 0, ?)",
+			RuntimeGo,
+			ModeShadow,
+			RuntimeGo,
+		); err != nil {
+			return err
+		}
+	} else if metaCount != 1 {
+		return ErrForeignRuntimeStore
+	}
+
+	var runtimeName, mode, uniqueWriter string
+	if err := tx.QueryRow(
+		"SELECT runtime, mode, schema_version, unique_writer FROM control_store_meta WHERE singleton = 1",
+	).Scan(&runtimeName, &mode, &store.schema, &uniqueWriter); err != nil {
+		return fmt.Errorf("%w: invalid store metadata: %v", ErrForeignRuntimeStore, err)
+	}
+	if runtimeName != RuntimeGo || mode != ModeShadow || uniqueWriter != RuntimeGo ||
+		store.schema < 0 || store.schema > SchemaV1 {
+		return ErrForeignRuntimeStore
+	}
+	var userVersion, migrationCount int
+	if err := tx.QueryRow("PRAGMA user_version").Scan(&userVersion); err != nil {
+		return fmt.Errorf("%w: read user_version: %v", ErrForeignRuntimeStore, err)
+	}
+	if err := tx.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil {
+		return fmt.Errorf("%w: read schema_migrations: %v", ErrForeignRuntimeStore, err)
+	}
+	if userVersion != store.schema || migrationCount != store.schema {
+		return ErrForeignRuntimeStore
+	}
+	if err := validateControlUserObjects(tx, store.schema); err != nil {
+		return err
+	}
+
+	if err := store.claimWriterTx(tx); err != nil {
+		return err
+	}
+	if err := store.migrateTx(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
+}
+
+var bootstrapSchemaStatements = [...]string{
+	`CREATE TABLE IF NOT EXISTS control_store_meta (
+		singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+		runtime TEXT NOT NULL,
+		mode TEXT NOT NULL,
+		schema_version INTEGER NOT NULL CHECK(schema_version BETWEEN 0 AND 1),
+		unique_writer TEXT NOT NULL
+	) STRICT`,
+	`CREATE TABLE IF NOT EXISTS control_writer (
+		singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+		runtime TEXT NOT NULL,
+		mode TEXT NOT NULL,
+		owner_instance_id TEXT NOT NULL CHECK(length(owner_instance_id) > 0),
+		fencing_token INTEGER NOT NULL CHECK(fencing_token > 0),
+		lease_until INTEGER NOT NULL CHECK(lease_until >= 0)
+	) STRICT`,
+	`CREATE TABLE IF NOT EXISTS schema_migrations (
+		version INTEGER PRIMARY KEY CHECK(version > 0),
+		applied_at INTEGER NOT NULL CHECK(applied_at >= 0),
+		description TEXT NOT NULL CHECK(length(description) > 0)
+	) STRICT`,
+}
+
+func (store *Control) claimWriterTx(tx *sql.Tx) error {
+	now := store.now()
+	leaseUntil, err := store.nextLeaseUntil(now)
+	if err != nil {
+		return err
+	}
+	var runtimeName, mode, owner string
+	var token, currentLeaseUntil int64
+	err = tx.QueryRow(
+		"SELECT runtime, mode, owner_instance_id, fencing_token, lease_until FROM control_writer WHERE singleton = 1",
+	).Scan(&runtimeName, &mode, &owner, &token, &currentLeaseUntil)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		store.token = 1
+	case err != nil:
+		return fmt.Errorf("%w: invalid writer row: %v", ErrForeignRuntimeStore, err)
+	default:
+		if runtimeName != RuntimeGo || mode != ModeShadow || owner == "" || token <= 0 || currentLeaseUntil < 0 {
+			return ErrForeignRuntimeStore
+		}
+		if now < currentLeaseUntil {
+			return ErrWriterFenceHeld
+		}
+		if token == math.MaxInt64 {
+			return ErrWriterFenceHeld
+		}
+		store.token = token + 1
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO control_writer(singleton, runtime, mode, owner_instance_id, fencing_token, lease_until)
+		 VALUES(1, ?, ?, ?, ?, ?)
+		 ON CONFLICT(singleton) DO UPDATE SET
+			runtime = excluded.runtime,
+			mode = excluded.mode,
+			owner_instance_id = excluded.owner_instance_id,
+			fencing_token = excluded.fencing_token,
+			lease_until = excluded.lease_until`,
+		RuntimeGo,
+		ModeShadow,
+		store.owner,
+		store.token,
+		leaseUntil,
+	); err != nil {
+		return err
+	}
+	store.leaseUntil = leaseUntil
+	return nil
+}
+
+func (store *Control) migrateTx(tx *sql.Tx) error {
+	if store.schema > SchemaV1 || store.schema < 0 {
+		return ErrForeignRuntimeStore
+	}
+	if store.schema == 0 {
+		for _, table := range controlTableNames {
+			if _, err := tx.Exec(createDomainTableSQL(table)); err != nil {
+				return fmt.Errorf("create control table %s: %w", table, err)
+			}
+		}
+		if _, err := tx.Exec(controlEventsSchema); err != nil {
+			return fmt.Errorf("create control event journal: %w", err)
+		}
+		for _, statement := range controlEventImmutabilityTriggers {
+			if _, err := tx.Exec(statement); err != nil {
+				return fmt.Errorf("create control event immutability trigger: %w", err)
+			}
+		}
+		if _, err := tx.Exec(
+			"INSERT INTO schema_migrations(version, applied_at, description) VALUES(1, ?, ?)",
+			store.now(),
+			"create strict domain tables, append-only event journal, and fenced writer metadata",
+		); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("UPDATE control_store_meta SET schema_version = 1 WHERE singleton = 1"); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("PRAGMA user_version = 1"); err != nil {
+			return err
+		}
+		store.schema = SchemaV1
+	}
+	return verifySchemaTx(tx, store.schema)
+}
+
+func createDomainTableSQL(table string) string {
+	return fmt.Sprintf(`CREATE TABLE %s (
+		id TEXT PRIMARY KEY CHECK(length(id) > 0),
+		revision INTEGER NOT NULL CHECK(revision > 0),
+		execution_epoch INTEGER NOT NULL CHECK(execution_epoch >= 0),
+		state TEXT NOT NULL CHECK(length(state) > 0),
+		payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),
+		record_digest TEXT NOT NULL CHECK(length(record_digest) = 64 AND record_digest = lower(record_digest)),
+		writer_fencing_token INTEGER NOT NULL CHECK(writer_fencing_token > 0),
+		updated_at INTEGER NOT NULL CHECK(updated_at >= 0)
+	) STRICT`, table)
+}
+
+const controlEventsSchema = `CREATE TABLE control_events (
+	event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+	domain TEXT NOT NULL CHECK(domain IN (
+		'policy', 'target', 'scheduler_run', 'action', 'risk', 'wave',
+		'peer', 'grant', 'session', 'transfer', 'forecast', 'agent_run'
+	)),
+	record_id TEXT NOT NULL CHECK(length(record_id) > 0),
+	revision INTEGER NOT NULL CHECK(revision > 0),
+	execution_epoch INTEGER NOT NULL CHECK(execution_epoch >= 0),
+	state TEXT NOT NULL CHECK(length(state) > 0),
+	payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),
+	record_digest TEXT NOT NULL CHECK(length(record_digest) = 64 AND record_digest = lower(record_digest)),
+	writer_fencing_token INTEGER NOT NULL CHECK(writer_fencing_token > 0),
+	recorded_at INTEGER NOT NULL CHECK(recorded_at >= 0),
+	UNIQUE(domain, record_id, revision)
+) STRICT`
+
+var controlEventImmutabilityTriggers = [...]string{
+	`CREATE TRIGGER control_events_no_update
+	BEFORE UPDATE ON control_events
+	BEGIN
+		SELECT RAISE(ABORT, 'CONTROL_EVENT_IMMUTABLE');
+	END`,
+	`CREATE TRIGGER control_events_no_delete
+	BEFORE DELETE ON control_events
+	BEGIN
+		SELECT RAISE(ABORT, 'CONTROL_EVENT_IMMUTABLE');
+	END`,
+}
+
+func verifySchemaTx(tx *sql.Tx, schema int) error {
+	if schema != SchemaV1 {
+		return nil
+	}
+	for _, table := range append(append([]string(nil), controlTableNames[:]...), "control_events") {
+		var marker int
+		if err := tx.QueryRow(
+			"SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?",
+			table,
+		).Scan(&marker); err != nil {
+			return fmt.Errorf("%w: missing table %s", ErrForeignRuntimeStore, table)
+		}
+	}
+	var runtimeName, mode, uniqueWriter string
+	var storedSchema, metaCount int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM control_store_meta").Scan(&metaCount); err != nil {
+		return err
+	}
+	if err := tx.QueryRow(
+		"SELECT runtime, mode, schema_version, unique_writer FROM control_store_meta WHERE singleton = 1",
+	).Scan(&runtimeName, &mode, &storedSchema, &uniqueWriter); err != nil {
+		return err
+	}
+	if metaCount != 1 || runtimeName != RuntimeGo || mode != ModeShadow ||
+		storedSchema != schema || uniqueWriter != RuntimeGo {
+		return ErrForeignRuntimeStore
+	}
+	var writerRuntime, writerMode, writerOwner string
+	var writerToken, writerLease int64
+	if err := tx.QueryRow(
+		"SELECT runtime, mode, owner_instance_id, fencing_token, lease_until FROM control_writer WHERE singleton = 1",
+	).Scan(&writerRuntime, &writerMode, &writerOwner, &writerToken, &writerLease); err != nil {
+		return err
+	}
+	if writerRuntime != RuntimeGo || writerMode != ModeShadow || writerOwner == "" ||
+		writerToken < 1 || writerLease < 0 {
+		return ErrForeignRuntimeStore
+	}
+	var migrationCount, maximumMigration, userVersion int
+	if err := tx.QueryRow(
+		"SELECT COUNT(*), COALESCE(MAX(version), 0) FROM schema_migrations",
+	).Scan(&migrationCount, &maximumMigration); err != nil {
+		return err
+	}
+	if err := tx.QueryRow("PRAGMA user_version").Scan(&userVersion); err != nil {
+		return err
+	}
+	if migrationCount != 1 || maximumMigration != SchemaV1 || userVersion != SchemaV1 {
+		return ErrForeignRuntimeStore
+	}
+	var triggerCount int
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_schema
+		 WHERE type = 'trigger' AND name IN ('control_events_no_update', 'control_events_no_delete')`,
+	).Scan(&triggerCount); err != nil {
+		return err
+	}
+	if triggerCount != len(controlEventImmutabilityTriggers) {
+		return fmt.Errorf("%w: missing control event immutability trigger", ErrForeignRuntimeStore)
+	}
+	return nil
 }
 
 func (store *Control) Close() error {
@@ -144,34 +673,39 @@ func (store *Control) Close() error {
 		return nil
 	}
 	store.closed = true
-	current, ok, err := readWriter(store.writerPath())
-	if err != nil {
-		return err
+	now := store.now()
+	if now < 0 {
+		now = 0
 	}
-	if !ok || current.FencingToken == store.token {
-		writer := WriterLease{Runtime: RuntimeGo, Mode: ModeShadow, OwnerInstanceID: store.owner, FencingToken: store.token, LeaseUntil: store.now()}
-		if err := writeJSONAtomic(store.writerPath(), writer); err != nil {
-			return err
-		}
-	}
-	registryMu.Lock()
-	if live[store.path] == store {
-		delete(live, store.path)
-	}
-	registryMu.Unlock()
-	return nil
+	_, releaseErr := store.db.Exec(
+		`UPDATE control_writer
+		 SET lease_until = ?
+		 WHERE singleton = 1 AND runtime = ? AND mode = ?
+		   AND owner_instance_id = ? AND fencing_token = ?`,
+		now,
+		RuntimeGo,
+		ModeShadow,
+		store.owner,
+		store.token,
+	)
+	closeErr := store.db.Close()
+	return errors.Join(releaseErr, closeErr)
 }
 
 func (store *Control) Writer() WriterLease {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	return WriterLease{Runtime: RuntimeGo, Mode: ModeShadow, OwnerInstanceID: store.owner, FencingToken: store.token, LeaseUntil: store.now() + store.leaseSeconds}
+	return WriterLease{
+		Runtime:         RuntimeGo,
+		Mode:            ModeShadow,
+		OwnerInstanceID: store.owner,
+		FencingToken:    store.token,
+		LeaseUntil:      store.leaseUntil,
+	}
 }
 
 func (store *Control) Tables() []string {
-	copied := make([]string, len(TableNames))
-	copy(copied, TableNames)
-	return copied
+	return append([]string(nil), controlTableNames[:]...)
 }
 
 func (store *Control) SchemaVersion() int {
@@ -180,24 +714,65 @@ func (store *Control) SchemaVersion() int {
 	return store.schema
 }
 
+func (store *Control) DatabasePath() string {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.databasePath
+}
+
 func (store *Control) Put(record Record) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if err := store.assertWriter(); err != nil {
+	if store.closed {
+		return ErrWriterFenceHeld
+	}
+	if !ValidRecordID(record.ID) {
+		return ErrEmptyRecordID
+	}
+	table, ok := tableForDomain(record.Domain)
+	if !ok {
+		return ErrUnknownDomain
+	}
+	if record.ExecutionEpoch > math.MaxInt64 {
+		return ErrEpochOutOfRange
+	}
+	payload, err := canonicalControlPayload(record.Payload)
+	if err != nil {
+		return err
+	}
+	record.Payload = payload
+
+	tx, err := store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := store.now()
+	leaseUntil, err := store.assertWriterTx(tx, now)
+	if err != nil {
 		return err
 	}
 	if store.schema != SchemaV1 {
 		return ErrSchemaInactive
 	}
-	if !ValidRecordID(record.ID) {
-		return ErrEmptyRecordID
+	if err := verifySchemaTx(tx, store.schema); err != nil {
+		return err
 	}
-	table, ok := DomainTable[record.Domain]
-	if !ok {
-		return ErrUnknownDomain
-	}
-	existing, exists, err := readRecord(store.recordPath(table, record.ID))
+	existing, exists, err := readControlRecord(tx.QueryRow(
+		fmt.Sprintf(
+			"SELECT id, revision, execution_epoch, state, payload_json, record_digest, writer_fencing_token, updated_at FROM %s WHERE id = ?",
+			table,
+		),
+		record.ID,
+	), record.Domain)
 	if err != nil {
+		return err
+	}
+	if exists {
+		if err := validateControlHistory(tx, existing); err != nil {
+			return err
+		}
+	} else if err := validateNoControlHistory(tx, record.Domain, record.ID); err != nil {
 		return err
 	}
 	from := ""
@@ -212,7 +787,10 @@ func (store *Control) Put(record Record) error {
 			return ErrRevisionConflict
 		}
 		if fencedDomains[record.Domain] {
-			if err := internalprotocol.ValidateAuthoritativeEpochUpdate(&internalprotocol.ActionFence{ActionId: record.ID, ExecutionEpoch: record.ExecutionEpoch}, existing.ExecutionEpoch); err != nil {
+			if err := internalprotocol.ValidateAuthoritativeEpochUpdate(
+				&internalprotocol.ActionFence{ActionId: record.ID, ExecutionEpoch: record.ExecutionEpoch},
+				existing.ExecutionEpoch,
+			); err != nil {
 				return err
 			}
 		}
@@ -221,15 +799,83 @@ func (store *Control) Put(record Record) error {
 			return ErrRevisionConflict
 		}
 		if fencedDomains[record.Domain] {
-			if err := internalprotocol.ValidateFence(&internalprotocol.ActionFence{ActionId: record.ID, ExecutionEpoch: record.ExecutionEpoch}); err != nil {
+			if err := internalprotocol.ValidateFence(
+				&internalprotocol.ActionFence{ActionId: record.ID, ExecutionEpoch: record.ExecutionEpoch},
+			); err != nil {
 				return err
 			}
 		}
 	}
-	if record.Payload == nil {
-		record.Payload = json.RawMessage(`{}`)
+	digest, err := protocol.Digest(record)
+	if err != nil {
+		return err
 	}
-	return writeJSONAtomic(store.recordPath(table, record.ID), record)
+	if exists {
+		result, err := tx.Exec(
+			fmt.Sprintf(`UPDATE %s
+			 SET revision = ?, execution_epoch = ?, state = ?, payload_json = ?,
+			     record_digest = ?, writer_fencing_token = ?, updated_at = ?
+			 WHERE id = ? AND revision = ?`, table),
+			record.Revision,
+			int64(record.ExecutionEpoch),
+			record.State,
+			string(record.Payload),
+			digest,
+			store.token,
+			now,
+			record.ID,
+			existing.Revision,
+		)
+		if err != nil {
+			return err
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if changed != 1 {
+			return ErrRevisionConflict
+		}
+	} else {
+		if _, err := tx.Exec(
+			fmt.Sprintf(`INSERT INTO %s(
+				id, revision, execution_epoch, state, payload_json,
+				record_digest, writer_fencing_token, updated_at
+			) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`, table),
+			record.ID,
+			record.Revision,
+			int64(record.ExecutionEpoch),
+			record.State,
+			string(record.Payload),
+			digest,
+			store.token,
+			now,
+		); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO control_events(
+			domain, record_id, revision, execution_epoch, state, payload_json,
+			record_digest, writer_fencing_token, recorded_at
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		record.Domain,
+		record.ID,
+		record.Revision,
+		int64(record.ExecutionEpoch),
+		record.State,
+		string(record.Payload),
+		digest,
+		store.token,
+		now,
+	); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	store.leaseUntil = leaseUntil
+	return nil
 }
 
 func (store *Control) Get(domain, id string) (Record, bool, error) {
@@ -238,11 +884,343 @@ func (store *Control) Get(domain, id string) (Record, bool, error) {
 	if store.closed {
 		return Record{}, false, ErrWriterFenceHeld
 	}
-	table, ok := DomainTable[domain]
+	table, ok := tableForDomain(domain)
 	if !ok {
 		return Record{}, false, ErrUnknownDomain
 	}
-	return readRecord(store.recordPath(table, id))
+	if !ValidRecordID(id) {
+		return Record{}, false, nil
+	}
+	if store.schema == 0 {
+		return Record{}, false, nil
+	}
+	tx, err := store.db.Begin()
+	if err != nil {
+		return Record{}, false, err
+	}
+	defer tx.Rollback()
+	if err := verifySchemaTx(tx, store.schema); err != nil {
+		return Record{}, false, err
+	}
+	record, exists, err := readControlRecord(tx.QueryRow(
+		fmt.Sprintf(
+			"SELECT id, revision, execution_epoch, state, payload_json, record_digest, writer_fencing_token, updated_at FROM %s WHERE id = ?",
+			table,
+		),
+		id,
+	), domain)
+	if err != nil {
+		return Record{}, false, err
+	}
+	if exists {
+		if err := validateControlHistory(tx, record); err != nil {
+			return Record{}, false, err
+		}
+	} else if err := validateNoControlHistory(tx, domain, id); err != nil {
+		return Record{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Record{}, false, err
+	}
+	return record, exists, nil
+}
+
+func readControlRecord(row rowScanner, domain string) (Record, bool, error) {
+	record, _, exists, err := scanControlRecord(row, domain)
+	return record, exists, err
+}
+
+func scanControlRecord(row rowScanner, domain string) (Record, storedRecordMetadata, bool, error) {
+	var record Record
+	var executionEpoch, writerToken, updatedAt int64
+	var payload, digest string
+	err := row.Scan(
+		&record.ID,
+		&record.Revision,
+		&executionEpoch,
+		&record.State,
+		&payload,
+		&digest,
+		&writerToken,
+		&updatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Record{}, storedRecordMetadata{}, false, nil
+	}
+	if err != nil {
+		return Record{}, storedRecordMetadata{}, false, err
+	}
+	if !ValidRecordID(record.ID) || record.Revision < 1 || executionEpoch < 0 ||
+		record.State == "" || writerToken < 1 || updatedAt < 0 || !isLowerSHA256(digest) {
+		return Record{}, storedRecordMetadata{}, false, ErrCorruptRecord
+	}
+	canonical, err := canonicalControlPayload(json.RawMessage(payload))
+	if err != nil || string(canonical) != payload {
+		return Record{}, storedRecordMetadata{}, false, fmt.Errorf("%w: invalid canonical payload", ErrCorruptRecord)
+	}
+	record.Domain = domain
+	record.ExecutionEpoch = uint64(executionEpoch)
+	record.Payload = canonical
+	expectedDigest, err := protocol.Digest(record)
+	if err != nil || digest != expectedDigest {
+		return Record{}, storedRecordMetadata{}, false, fmt.Errorf("%w: record digest mismatch", ErrCorruptRecord)
+	}
+	if !knownState(domain, record.State) {
+		return Record{}, storedRecordMetadata{}, false, fmt.Errorf("%w: unknown state", ErrCorruptRecord)
+	}
+	return record, storedRecordMetadata{writerToken: writerToken, timestamp: updatedAt}, true, nil
+}
+
+func validateNoControlHistory(tx *sql.Tx, domain, id string) error {
+	var count int
+	if err := tx.QueryRow(
+		"SELECT COUNT(*) FROM control_events WHERE domain = ? AND record_id = ?",
+		domain,
+		id,
+	).Scan(&count); err != nil {
+		return err
+	}
+	if count != 0 {
+		return fmt.Errorf("%w: orphaned control events", ErrCorruptRecord)
+	}
+	return nil
+}
+
+func validateControlHistory(tx *sql.Tx, latest Record) error {
+	rows, err := tx.Query(
+		`SELECT record_id, revision, execution_epoch, state, payload_json,
+		        record_digest, writer_fencing_token, recorded_at
+		 FROM control_events
+		 WHERE domain = ? AND record_id = ?
+		 ORDER BY revision`,
+		latest.Domain,
+		latest.ID,
+	)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	expectedRevision := int64(1)
+	previousState := ""
+	var previousEpoch uint64
+	var previousWriterToken, previousTimestamp int64
+	var final Record
+	for rows.Next() {
+		event, metadata, exists, err := scanControlRecord(rows, latest.Domain)
+		if err != nil {
+			return err
+		}
+		if !exists || event.Revision != expectedRevision ||
+			!LegalTransition(latest.Domain, previousState, event.State) {
+			return fmt.Errorf("%w: invalid control event sequence", ErrCorruptRecord)
+		}
+		if expectedRevision > 1 &&
+			(metadata.writerToken < previousWriterToken || metadata.timestamp < previousTimestamp) {
+			return fmt.Errorf("%w: regressing control event metadata", ErrCorruptRecord)
+		}
+		if fencedDomains[latest.Domain] {
+			fence := &internalprotocol.ActionFence{ActionId: event.ID, ExecutionEpoch: event.ExecutionEpoch}
+			if expectedRevision == 1 {
+				if err := internalprotocol.ValidateFence(fence); err != nil {
+					return fmt.Errorf("%w: invalid event fence", ErrCorruptRecord)
+				}
+			} else if err := internalprotocol.ValidateAuthoritativeEpochUpdate(fence, previousEpoch); err != nil {
+				return fmt.Errorf("%w: regressing event fence", ErrCorruptRecord)
+			}
+		}
+		final = event
+		previousState = event.State
+		previousEpoch = event.ExecutionEpoch
+		previousWriterToken = metadata.writerToken
+		previousTimestamp = metadata.timestamp
+		expectedRevision++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if expectedRevision-1 != latest.Revision || !sameControlRecord(final, latest) {
+		return fmt.Errorf("%w: latest record does not match event history", ErrCorruptRecord)
+	}
+	table, ok := tableForDomain(latest.Domain)
+	if !ok {
+		return ErrCorruptRecord
+	}
+	var latestWriterToken, latestTimestamp int64
+	if err := tx.QueryRow(
+		fmt.Sprintf("SELECT writer_fencing_token, updated_at FROM %s WHERE id = ?", table),
+		latest.ID,
+	).Scan(&latestWriterToken, &latestTimestamp); err != nil {
+		return err
+	}
+	if latestWriterToken != previousWriterToken || latestTimestamp != previousTimestamp {
+		return fmt.Errorf("%w: latest record metadata does not match event history", ErrCorruptRecord)
+	}
+	return nil
+}
+
+func sameControlRecord(left, right Record) bool {
+	return left.Domain == right.Domain &&
+		left.ID == right.ID &&
+		left.Revision == right.Revision &&
+		left.ExecutionEpoch == right.ExecutionEpoch &&
+		left.State == right.State &&
+		string(left.Payload) == string(right.Payload)
+}
+
+func canonicalControlPayload(raw json.RawMessage) (json.RawMessage, error) {
+	if raw == nil {
+		raw = json.RawMessage(`{}`)
+	}
+	if len(raw) > maximumPayloadBytes {
+		return nil, fmt.Errorf("%w: payload exceeds %d bytes", ErrInvalidPayload, maximumPayloadBytes)
+	}
+	var value any
+	if err := decodeSingleJSON(raw, &value); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidPayload, err)
+	}
+	if err := rejectControlSecretMaterial(value, 0); err != nil {
+		return nil, err
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidPayload, err)
+	}
+	if len(canonical) > maximumPayloadBytes {
+		return nil, fmt.Errorf("%w: canonical payload exceeds %d bytes", ErrInvalidPayload, maximumPayloadBytes)
+	}
+	return json.RawMessage(canonical), nil
+}
+
+func rejectControlSecretMaterial(value any, depth int) error {
+	if depth > 128 {
+		return fmt.Errorf("%w: payload nesting exceeds 128", ErrInvalidPayload)
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, nested := range typed {
+			if secretBearingControlKey(key) {
+				return ErrSecretDetected
+			}
+			if err := rejectControlSecretMaterial(nested, depth+1); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, nested := range typed {
+			if err := rejectControlSecretMaterial(nested, depth+1); err != nil {
+				return err
+			}
+		}
+	case string:
+		lower := strings.ToLower(typed)
+		if strings.Contains(lower, "age-secret-key-") ||
+			strings.Contains(lower, "-----begin") && strings.Contains(lower, "private key") {
+			return ErrSecretDetected
+		}
+	}
+	return nil
+}
+
+func secretBearingControlKey(key string) bool {
+	var normalized strings.Builder
+	for _, character := range strings.ToLower(key) {
+		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' {
+			normalized.WriteRune(character)
+		}
+	}
+	name := normalized.String()
+	if name == "fencingtoken" {
+		return false
+	}
+	for _, safeSuffix := range []string{"digest", "reference", "ref", "id", "type", "provider"} {
+		if strings.HasSuffix(name, safeSuffix) {
+			return false
+		}
+	}
+	for _, fragment := range []string{
+		"password", "passwd", "privatekey", "ageidentity", "apikey",
+		"accesskey", "secretkey", "token", "credential", "oauth", "bearer",
+	} {
+		if strings.Contains(name, fragment) {
+			return true
+		}
+	}
+	return strings.HasSuffix(name, "secret")
+}
+
+func knownState(domain, state string) bool {
+	edges, ok := transitions[domain]
+	if !ok {
+		return false
+	}
+	for from, next := range edges {
+		if from == state {
+			return true
+		}
+		for _, candidate := range next {
+			if candidate == state {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (store *Control) assertWriterTx(tx *sql.Tx, now int64) (int64, error) {
+	if store.closed {
+		return 0, ErrWriterFenceHeld
+	}
+	leaseUntil, err := store.nextLeaseUntil(now)
+	if err != nil {
+		return 0, err
+	}
+	var runtimeName, mode, owner string
+	var token, currentLeaseUntil int64
+	if err := tx.QueryRow(
+		"SELECT runtime, mode, owner_instance_id, fencing_token, lease_until FROM control_writer WHERE singleton = 1",
+	).Scan(&runtimeName, &mode, &owner, &token, &currentLeaseUntil); err != nil {
+		return 0, fmt.Errorf("%w: writer row unavailable", ErrWriterFenceHeld)
+	}
+	if runtimeName != RuntimeGo || mode != ModeShadow || owner != store.owner ||
+		token != store.token || currentLeaseUntil < 0 || now >= currentLeaseUntil {
+		return 0, ErrWriterFenceHeld
+	}
+	result, err := tx.Exec(
+		`UPDATE control_writer SET lease_until = ?
+		 WHERE singleton = 1 AND runtime = ? AND mode = ?
+		   AND owner_instance_id = ? AND fencing_token = ? AND lease_until > ?`,
+		leaseUntil,
+		RuntimeGo,
+		ModeShadow,
+		store.owner,
+		store.token,
+		now,
+	)
+	if err != nil {
+		return 0, err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if changed != 1 {
+		return 0, ErrWriterFenceHeld
+	}
+	return leaseUntil, nil
+}
+
+func (store *Control) nextLeaseUntil(now int64) (int64, error) {
+	if now < 0 {
+		return 0, ErrWriterFenceHeld
+	}
+	if store.leaseSeconds > math.MaxInt64-now {
+		return math.MaxInt64, nil
+	}
+	return now + store.leaseSeconds, nil
 }
 
 func (store *Control) MutateProduction(_ string, _ map[string]any) error {
@@ -255,227 +1233,122 @@ func (store *Control) ExportSnapshot() (Snapshot, error) {
 	if store.closed {
 		return Snapshot{}, ErrWriterFenceHeld
 	}
-	snap := Snapshot{
+	snapshot := Snapshot{
 		SchemaVersion: store.schema,
 		Runtime:       RuntimeGo,
 		Mode:          ModeShadow,
-		Writer:        WriterLease{Runtime: RuntimeGo, Mode: ModeShadow, OwnerInstanceID: store.owner, FencingToken: store.token, LeaseUntil: store.now() + store.leaseSeconds},
+		Writer: WriterLease{
+			Runtime:         RuntimeGo,
+			Mode:            ModeShadow,
+			OwnerInstanceID: store.owner,
+			FencingToken:    store.token,
+			LeaseUntil:      store.leaseUntil,
+		},
 	}
-	for _, table := range TableNames {
-		entries, err := os.ReadDir(filepath.Join(store.path, table))
+	if store.schema == SchemaV1 {
+		tx, err := store.db.Begin()
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
 			return Snapshot{}, err
 		}
-		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-				continue
-			}
-			record, ok, err := readRecord(filepath.Join(store.path, table, entry.Name()))
+		defer tx.Rollback()
+		if err := verifySchemaTx(tx, store.schema); err != nil {
+			return Snapshot{}, err
+		}
+		for _, domain := range controlDomainOrder {
+			table, _ := tableForDomain(domain)
+			rows, err := tx.Query(fmt.Sprintf(
+				"SELECT id, revision, execution_epoch, state, payload_json, record_digest, writer_fencing_token, updated_at FROM %s",
+				table,
+			))
 			if err != nil {
 				return Snapshot{}, err
 			}
-			if ok {
-				snap.Records = append(snap.Records, record)
+			for rows.Next() {
+				record, ok, err := readControlRecord(rows, domain)
+				if err != nil {
+					_ = rows.Close()
+					return Snapshot{}, err
+				}
+				if ok {
+					snapshot.Records = append(snapshot.Records, record)
+				}
+			}
+			if err := rows.Err(); err != nil {
+				_ = rows.Close()
+				return Snapshot{}, err
+			}
+			if err := rows.Close(); err != nil {
+				return Snapshot{}, err
 			}
 		}
-	}
-	sort.Slice(snap.Records, func(i, j int) bool {
-		left := snap.Records[i]
-		right := snap.Records[j]
-		if left.Domain != right.Domain {
-			return left.Domain < right.Domain
+		for _, record := range snapshot.Records {
+			if err := validateControlHistory(tx, record); err != nil {
+				return Snapshot{}, err
+			}
 		}
-		return left.ID < right.ID
+		if err := tx.Commit(); err != nil {
+			return Snapshot{}, err
+		}
+	}
+	sort.Slice(snapshot.Records, func(left, right int) bool {
+		if snapshot.Records[left].Domain != snapshot.Records[right].Domain {
+			return snapshot.Records[left].Domain < snapshot.Records[right].Domain
+		}
+		return snapshot.Records[left].ID < snapshot.Records[right].ID
 	})
 	digest, err := protocol.Digest(map[string]any{
-		"schemaVersion": snap.SchemaVersion,
-		"runtime":       snap.Runtime,
-		"mode":          snap.Mode,
-		"records":       snap.Records,
+		"schemaVersion": snapshot.SchemaVersion,
+		"runtime":       snapshot.Runtime,
+		"mode":          snapshot.Mode,
+		"records":       snapshot.Records,
 	})
 	if err != nil {
 		return Snapshot{}, err
 	}
-	snap.Digest = digest
-	return snap, nil
+	snapshot.Digest = digest
+	return snapshot, nil
 }
 
 func (store *Control) Rollback(version int) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if err := store.assertWriter(); err != nil {
-		return err
+	if store.closed {
+		return ErrWriterFenceHeld
 	}
 	if version != 0 {
 		return ErrSchemaInactive
 	}
-	for _, table := range TableNames {
-		if err := os.RemoveAll(filepath.Join(store.path, table)); err != nil {
+	tx, err := store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := store.now()
+	leaseUntil, err := store.assertWriterTx(tx, now)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DROP TABLE IF EXISTS control_events"); err != nil {
+		return err
+	}
+	for _, table := range controlTableNames {
+		if _, err := tx.Exec("DROP TABLE IF EXISTS " + table); err != nil {
 			return err
 		}
+	}
+	if _, err := tx.Exec("DELETE FROM schema_migrations"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("UPDATE control_store_meta SET schema_version = 0 WHERE singleton = 1"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("PRAGMA user_version = 0"); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	store.schema = 0
-	return writeJSONAtomic(store.manifestPath(), manifestFile{Runtime: RuntimeGo, Mode: ModeShadow, SchemaVersion: 0, UniqueWriter: RuntimeGo})
-}
-
-func (store *Control) loadOrInitManifest() error {
-	path := store.manifestPath()
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			store.schema = 0
-			return writeJSONAtomic(path, manifestFile{Runtime: RuntimeGo, Mode: ModeShadow, SchemaVersion: 0, UniqueWriter: RuntimeGo})
-		}
-		return err
-	}
-	var manifest manifestFile
-	if err := json.Unmarshal(raw, &manifest); err != nil {
-		return err
-	}
-	if manifest.Runtime != RuntimeGo || manifest.Mode != ModeShadow {
-		return ErrForeignRuntimeStore
-	}
-	store.schema = manifest.SchemaVersion
-	return nil
-}
-
-func (store *Control) assertWriter() error {
-	if store.closed {
-		return ErrWriterFenceHeld
-	}
-	current, ok, err := readWriter(store.writerPath())
-	if err != nil {
-		return err
-	}
-	if !ok || current.FencingToken != store.token || store.now() >= current.LeaseUntil {
-		return ErrWriterFenceHeld
-	}
-	current.LeaseUntil = store.now() + store.leaseSeconds
-	return writeJSONAtomic(store.writerPath(), current)
-}
-
-func (store *Control) claimWriter() error {
-	now := store.now()
-	current, ok, err := readWriter(store.writerPath())
-	if err != nil {
-		return err
-	}
-	if ok {
-		if current.Runtime != RuntimeGo || current.Mode != ModeShadow {
-			return ErrForeignRuntimeStore
-		}
-		if now < current.LeaseUntil {
-			return ErrWriterFenceHeld
-		}
-		store.token = current.FencingToken + 1
-	} else {
-		store.token = 1
-	}
-	return writeJSONAtomic(store.writerPath(), WriterLease{
-		Runtime:         RuntimeGo,
-		Mode:            ModeShadow,
-		OwnerInstanceID: store.owner,
-		FencingToken:    store.token,
-		LeaseUntil:      now + store.leaseSeconds,
-	})
-}
-
-func (store *Control) migrate() error {
-	if store.schema > SchemaV1 {
-		return ErrForeignRuntimeStore
-	}
-	if store.schema == SchemaV1 {
-		return nil
-	}
-	for _, table := range TableNames {
-		if err := os.MkdirAll(filepath.Join(store.path, table), 0o700); err != nil {
-			return err
-		}
-	}
-	store.schema = SchemaV1
-	return writeJSONAtomic(store.manifestPath(), manifestFile{Runtime: RuntimeGo, Mode: ModeShadow, SchemaVersion: SchemaV1, UniqueWriter: RuntimeGo})
-}
-
-func (store *Control) manifestPath() string { return filepath.Join(store.path, "manifest.json") }
-func (store *Control) writerPath() string   { return filepath.Join(store.path, "writer.json") }
-func (store *Control) recordPath(table, id string) string {
-	return filepath.Join(store.path, table, id+".json")
-}
-
-func readRecord(path string) (Record, bool, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return Record{}, false, nil
-		}
-		return Record{}, false, err
-	}
-	var record Record
-	if err := json.Unmarshal(raw, &record); err != nil {
-		return Record{}, false, err
-	}
-	return record, true, nil
-}
-
-func readWriter(path string) (WriterLease, bool, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return WriterLease{}, false, nil
-		}
-		return WriterLease{}, false, err
-	}
-	var writer WriterLease
-	if err := json.Unmarshal(raw, &writer); err != nil {
-		return WriterLease{}, false, err
-	}
-	return writer, true, nil
-}
-
-func writeJSONAtomic(path string, value any) (resultErr error) {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return fmt.Errorf("marshal JSON for %q: %w", path, err)
-	}
-
-	dir := filepath.Dir(path)
-	temp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temporary JSON file for %q: %w", path, err)
-	}
-	tempPath := temp.Name()
-	tempOpen := true
-	defer func() {
-		if tempOpen {
-			if closeErr := temp.Close(); closeErr != nil {
-				resultErr = errors.Join(resultErr, fmt.Errorf("close temporary JSON file %q: %w", tempPath, closeErr))
-			}
-		}
-		if tempPath != "" {
-			if removeErr := os.Remove(tempPath); removeErr != nil && !os.IsNotExist(removeErr) {
-				resultErr = errors.Join(resultErr, fmt.Errorf("remove temporary JSON file %q: %w", tempPath, removeErr))
-			}
-		}
-	}()
-
-	if _, err := temp.Write(raw); err != nil {
-		return fmt.Errorf("write temporary JSON file for %q: %w", path, err)
-	}
-	if err := temp.Sync(); err != nil {
-		return fmt.Errorf("sync temporary JSON file for %q: %w", path, err)
-	}
-	if err := temp.Close(); err != nil {
-		tempOpen = false
-		return fmt.Errorf("close temporary JSON file for %q: %w", path, err)
-	}
-	tempOpen = false
-
-	if err := replaceFile(tempPath, path); err != nil {
-		return fmt.Errorf("replace JSON file %q: %w", path, err)
-	}
-	tempPath = ""
+	store.leaseUntil = leaseUntil
 	return nil
 }
