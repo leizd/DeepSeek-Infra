@@ -9,8 +9,13 @@ use deepseek_protocol::{
 use deepseek_storage::{StorageRequest, plan as plan_storage};
 use deepseek_transfer::{TransferRequest, plan as plan_transfer};
 
+mod authority_request;
 mod service;
 
+pub use authority_request::{
+    AUTHORITY_REQUEST_SCHEMA, AuthorityRequestContext, AuthorityRequestError,
+    verify_authority_request_document,
+};
 pub use service::WorkerRpcService;
 
 #[derive(Debug, Default)]

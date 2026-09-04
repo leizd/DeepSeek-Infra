@@ -12,5 +12,15 @@ deepseek-storage = { path = "../deepseek-storage" }
 deepseek-transfer = { path = "../deepseek-transfer" }
 deepseek-federation = { path = "../deepseek-federation" }
 deepseek-proof = { path = "../deepseek-proof" }
+base64.workspace = true
+ed25519-dalek.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 tonic.workspace = true
+
+[dev-dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true

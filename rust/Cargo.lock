@@ -581,11 +581,16 @@ dependencies = [
 name = "deepseek-worker"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "deepseek-federation",
  "deepseek-proof",
  "deepseek-protocol",
  "deepseek-storage",
  "deepseek-transfer",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tonic",
 ]
