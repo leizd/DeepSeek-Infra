@@ -3,6 +3,10 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::control_storage_evidence::{
+    CONTROL_STORAGE_EVIDENCE_CHECKS, validate_control_storage_evidence_check,
+};
+
 use crate::federated_dr::{FEDERATED_DR_PROOF_CHECKS, validate_federated_dr_proof};
 use crate::federated_replica::{FEDERATED_REPLICA_PROOF_CHECKS, validate_federated_replica_check};
 use crate::federation_trust::{FEDERATION_TRUST_PROOF_CHECKS, validate_federation_trust_proof};
@@ -173,6 +177,12 @@ pub fn validate_check(check_name: &str, item: &Value) -> Vec<String> {
     };
     if RECOVERY_EVIDENCE_CHECKS.contains(&check_name) {
         return validate_recovery_evidence_check(check_name, &Value::Object(evidence.clone()));
+    }
+    if CONTROL_STORAGE_EVIDENCE_CHECKS.contains(&check_name) {
+        return validate_control_storage_evidence_check(
+            check_name,
+            &Value::Object(evidence.clone()),
+        );
     }
     if DR_READINESS_CHECKS.contains(&check_name) {
         return validate_dr_readiness_proof(evidence);

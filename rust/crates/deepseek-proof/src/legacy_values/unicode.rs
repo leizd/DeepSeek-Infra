@@ -16,7 +16,7 @@ pub(super) fn decimal_digit(character: char) -> Option<char> {
     let digit = codepoint - ZERO_POINTS[index];
     (digit < 10).then(|| char::from(b'0' + digit as u8))
 }
-pub(super) fn casefold(value: &str) -> String {
+pub(crate) fn casefold(value: &str) -> String {
     let mut folded = String::with_capacity(value.len());
     for character in value.chars() {
         match character {

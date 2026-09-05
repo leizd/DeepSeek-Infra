@@ -1,13 +1,20 @@
 use deepseek_protocol::{ActionFence, AdmitError, admit_command, validate_fence};
 
+pub mod control_storage_evidence;
 pub mod envelope;
 pub mod federated_dr;
 pub mod federated_replica;
 pub mod federation_trust;
+mod legacy_values;
 pub mod predictive;
 pub mod recovery_evidence;
 pub mod runtime;
 pub mod storage_evidence;
+pub use control_storage_evidence::{
+    CONTROL_STORAGE_EVIDENCE_CHECKS, validate_autonomous_rebalance_proof,
+    validate_autonomous_repair_proof, validate_control_storage_evidence_check,
+    validate_decision_proof, validate_resilience_proof, validate_retention_safety_proof,
+};
 pub use envelope::{
     DR_READINESS_PROOF_SCHEMA, EVIDENCE_ENVELOPE_SCHEMA, EvidenceProofEnvelope, EvidenceProofError,
     MAX_EVIDENCE_PROOF_BYTES, PREDICTIVE_PLANNING_PROOF_SCHEMA, parse_evidence_proof_document,

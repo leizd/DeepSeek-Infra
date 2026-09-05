@@ -3,13 +3,14 @@
 //! These functions validate a producer's structured observations. They do not run a restore,
 //! contact MinIO, inspect a process, or make provider execution authoritative.
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-mod coercion;
-mod unicode;
-use coercion::{PythonInteger, python_text, python_truthy, value_or_empty_text};
+use crate::legacy_values::{
+    PythonInteger, casefold, is_plain_sha256, missing, python_text, python_truthy, require_fields,
+    value_or_empty_text,
+};
 
 pub const RESTORE_PROOF_CHECKS: &[&str] = &[
     "realPreDisasterBackupIsActuallyRestored",
@@ -123,7 +124,7 @@ pub fn validate_restore_proof(evidence: &Value) -> Vec<String> {
         .into_iter()
         .flatten()
         .find(|value| python_truthy(value));
-    let phase = unicode::casefold(&value_or_empty_text(phase_value));
+    let phase = casefold(&value_or_empty_text(phase_value));
     if !phase.is_empty()
         && !matches!(
             phase.as_str(),
@@ -244,30 +245,6 @@ pub fn validate_pass_with_schema_only(evidence: &Value) -> Vec<String> {
         return vec!["empty-evidence".to_string()];
     }
     Vec::new()
-}
-
-fn require_fields(evidence: &Map<String, Value>, fields: &[&str]) -> Vec<String> {
-    fields
-        .iter()
-        .filter(|field| missing(evidence.get(**field)))
-        .map(|field| format!("missing-field:{field}"))
-        .collect()
-}
-
-fn missing(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::Null) => true,
-        Some(Value::String(value)) => value.is_empty(),
-        _ => false,
-    }
-}
-
-fn is_plain_sha256(value: Option<&Value>) -> bool {
-    let value = value_or_empty_text(value);
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn python_integer(value: Option<&Value>) -> Option<PythonInteger> {

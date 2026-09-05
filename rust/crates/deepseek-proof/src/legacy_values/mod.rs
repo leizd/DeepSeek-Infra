@@ -1,10 +1,37 @@
 //! The legacy validators call Python `str`, `repr`, and `int` on JSON values.
 //! Keep those conversions here so malformed evidence follows the same decision path.
 
-use super::unicode::decimal_digit;
-use serde_json::{Number, Value};
+use serde_json::{Map, Number, Value};
 use std::cmp::Ordering;
 use std::fmt::Write;
+
+mod unicode;
+pub(crate) use unicode::casefold;
+use unicode::decimal_digit;
+
+pub(crate) fn require_fields(evidence: &Map<String, Value>, fields: &[&str]) -> Vec<String> {
+    fields
+        .iter()
+        .filter(|field| missing(evidence.get(**field)))
+        .map(|field| format!("missing-field:{field}"))
+        .collect()
+}
+
+pub(crate) fn missing(value: Option<&Value>) -> bool {
+    match value {
+        None | Some(Value::Null) => true,
+        Some(Value::String(value)) => value.is_empty(),
+        _ => false,
+    }
+}
+
+pub(crate) fn is_plain_sha256(value: Option<&Value>) -> bool {
+    let value = value_or_empty_text(value);
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
 
 pub(super) fn value_or_empty_text(value: Option<&Value>) -> String {
     value
