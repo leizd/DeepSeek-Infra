@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze replica-repair multipart resume checkpoints: ListParts adoption, content-bound ETag/checksum matching, offset CAS, and fail-closed quarantine. This does not move payload bytes or contact MinIO.",
+  "normalization": "LF-normalized SHA-256 of public validator fixture bytes",
+  "corpora": [
+    {
+      "id": "repair-multipart-checkpoint-semantics-v21",
+      "path": "compat/native-runtime/v21/transfer/multipart_checkpoint_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen resumable multipart transfer checkpoint semantics",
+      "sha256": "e1ceb33afe5c6b85b0d946af34219cc4ef0a4b563af6381c27c7dc25fa1437fc"
+    }
+  ]
+}

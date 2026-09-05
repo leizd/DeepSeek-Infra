@@ -2,7 +2,9 @@ use deepseek_protocol::{
     ActionFence, AdmitError, CommandKind, admit_command, is_transfer_command, validate_fence,
 };
 
+pub mod checkpoint;
 pub mod journal;
+pub use checkpoint::{MultipartCheckpoint, reconcile_multipart_checkpoint};
 pub use journal::{
     FEDERATED_TRANSFER_IDENTITY_SCHEMA, FederatedTransferJournal, FederatedTransferJournalError,
     ProposedTransfer, TRANSFER_ID_DOMAIN, TRANSFER_JOURNAL_EVENT_SCHEMA,

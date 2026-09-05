@@ -1,0 +1,1409 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "scope": "validator-parity-only-not-provider-execution-evidence",
+  "now": "2026-09-05T15:00:00Z",
+  "upload_id": "upload-frozen-1",
+  "ast_matches_source_commit": {
+    "_part_number": true,
+    "_normalized_etag": true,
+    "_part_matches_source": true,
+    "_canonical_progress_part": true,
+    "_quarantine_multipart_progress": true
+  },
+  "cases": [
+    {
+      "name": "remote-matches-local-two-parts",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        },
+        {
+          "number": 2,
+          "etag": "2daaae9bc371a1a0512c785d0b918f45",
+          "size": 18,
+          "checksumSha256": "8ba41997e3d467a2a1c5964b72a499b8b50fe7b709689bb854d046153f8dcb5c"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        },
+        {
+          "partNumber": 2,
+          "etag": "2daaae9bc371a1a0512c785d0b918f45",
+          "size": 18
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164",
+        "6368756e6b2d74776f2d7061796c6f616421"
+      ],
+      "next_offset": 35,
+      "upload_missing": false,
+      "expected_outcome": "adopt",
+      "expected_error": null,
+      "expected_progress": {
+        "multipartUploadId": "upload-frozen-1",
+        "parts": [
+          {
+            "number": 1,
+            "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+            "size": 17,
+            "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+          },
+          {
+            "number": 2,
+            "etag": "2daaae9bc371a1a0512c785d0b918f45",
+            "size": 18,
+            "checksumSha256": "8ba41997e3d467a2a1c5964b72a499b8b50fe7b709689bb854d046153f8dcb5c"
+          }
+        ],
+        "nextOffset": 35,
+        "multipartReconciliation": {
+          "status": "remote-matches-local",
+          "uploadId": "upload-frozen-1",
+          "localPartCount": 2,
+          "remotePartCount": 2,
+          "reconciledAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "remote-ahead-adopted",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        },
+        {
+          "partNumber": 2,
+          "etag": "2daaae9bc371a1a0512c785d0b918f45",
+          "size": 18
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164",
+        "6368756e6b2d74776f2d7061796c6f616421"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "adopt",
+      "expected_error": null,
+      "expected_progress": {
+        "multipartUploadId": "upload-frozen-1",
+        "parts": [
+          {
+            "number": 1,
+            "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+            "size": 17,
+            "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+          },
+          {
+            "number": 2,
+            "etag": "2daaae9bc371a1a0512c785d0b918f45",
+            "size": 18,
+            "checksumSha256": "8ba41997e3d467a2a1c5964b72a499b8b50fe7b709689bb854d046153f8dcb5c"
+          }
+        ],
+        "nextOffset": 35,
+        "multipartReconciliation": {
+          "status": "remote-ahead-adopted",
+          "uploadId": "upload-frozen-1",
+          "localPartCount": 1,
+          "remotePartCount": 2,
+          "reconciledAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "empty-local-empty-remote",
+      "local_parts": [],
+      "remote_parts": [],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164",
+        "6368756e6b2d74776f2d7061796c6f616421"
+      ],
+      "next_offset": 0,
+      "upload_missing": false,
+      "expected_outcome": "adopt",
+      "expected_error": null,
+      "expected_progress": {
+        "multipartUploadId": "upload-frozen-1",
+        "parts": [],
+        "nextOffset": 0,
+        "multipartReconciliation": {
+          "status": "remote-matches-local",
+          "uploadId": "upload-frozen-1",
+          "localPartCount": 0,
+          "remotePartCount": 0,
+          "reconciledAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "upload-missing-restarts",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": true,
+      "expected_outcome": "restart",
+      "expected_error": null,
+      "expected_progress": {
+        "parts": [],
+        "nextOffset": 0,
+        "multipartRestart": {
+          "previousUploadId": "upload-frozen-1",
+          "reason": "provider-upload-not-found",
+          "restartedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "remote-behind",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        },
+        {
+          "number": 2,
+          "etag": "2daaae9bc371a1a0512c785d0b918f45",
+          "size": 18,
+          "checksumSha256": "8ba41997e3d467a2a1c5964b72a499b8b50fe7b709689bb854d046153f8dcb5c"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164",
+        "6368756e6b2d74776f2d7061796c6f616421"
+      ],
+      "next_offset": 35,
+      "upload_missing": false,
+      "expected_outcome": "conflict",
+      "expected_error": "multipart-reconciliation-conflict:remote-part-count-behind:1<2",
+      "expected_progress": {
+        "parts": [],
+        "nextOffset": 0,
+        "multipartQuarantine": {
+          "uploadId": "upload-frozen-1",
+          "reason": "remote-part-count-behind:1<2",
+          "localParts": [
+            {
+              "number": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17,
+              "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+            },
+            {
+              "number": 2,
+              "etag": "2daaae9bc371a1a0512c785d0b918f45",
+              "size": 18,
+              "checksumSha256": "8ba41997e3d467a2a1c5964b72a499b8b50fe7b709689bb854d046153f8dcb5c"
+            }
+          ],
+          "remoteParts": [
+            {
+              "partNumber": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17
+            }
+          ],
+          "quarantinedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "non-contiguous-remote",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        },
+        {
+          "partNumber": 3,
+          "etag": "a43baa2cb9d91e59a2e997b1b425c8c4",
+          "size": 16
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164",
+        "6368756e6b2d74687265652d7a7a7a7a"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "conflict",
+      "expected_error": "multipart-reconciliation-conflict:non-contiguous-remote-part:3",
+      "expected_progress": {
+        "parts": [],
+        "nextOffset": 0,
+        "multipartQuarantine": {
+          "uploadId": "upload-frozen-1",
+          "reason": "non-contiguous-remote-part:3",
+          "localParts": [
+            {
+              "number": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17,
+              "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+            }
+          ],
+          "remoteParts": [
+            {
+              "partNumber": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17
+            },
+            {
+              "partNumber": 3,
+              "etag": "a43baa2cb9d91e59a2e997b1b425c8c4",
+              "size": 16
+            }
+          ],
+          "quarantinedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "remote-parts-exceed-source",
+      "local_parts": [],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        },
+        {
+          "partNumber": 2,
+          "etag": "2daaae9bc371a1a0512c785d0b918f45",
+          "size": 18
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 0,
+      "upload_missing": false,
+      "expected_outcome": "conflict",
+      "expected_error": "multipart-reconciliation-conflict:remote-parts-exceed-source",
+      "expected_progress": {
+        "parts": [],
+        "nextOffset": 0,
+        "multipartQuarantine": {
+          "uploadId": "upload-frozen-1",
+          "reason": "remote-parts-exceed-source",
+          "localParts": [],
+          "remoteParts": [
+            {
+              "partNumber": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17
+            },
+            {
+              "partNumber": 2,
+              "etag": "2daaae9bc371a1a0512c785d0b918f45",
+              "size": 18
+            }
+          ],
+          "quarantinedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "remote-size-mismatch",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 1
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "conflict",
+      "expected_error": "multipart-reconciliation-conflict:remote-part-1-size-mismatch:1!=17",
+      "expected_progress": {
+        "parts": [],
+        "nextOffset": 0,
+        "multipartQuarantine": {
+          "uploadId": "upload-frozen-1",
+          "reason": "remote-part-1-size-mismatch:1!=17",
+          "localParts": [
+            {
+              "number": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17,
+              "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+            }
+          ],
+          "remoteParts": [
+            {
+              "partNumber": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 1
+            }
+          ],
+          "quarantinedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "remote-etag-mismatch",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "deadbeefdeadbeefdeadbeefdeadbeef",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "conflict",
+      "expected_error": "multipart-reconciliation-conflict:remote-part-1-etag-unverifiable-or-mismatch",
+      "expected_progress": {
+        "parts": [],
+        "nextOffset": 0,
+        "multipartQuarantine": {
+          "uploadId": "upload-frozen-1",
+          "reason": "remote-part-1-etag-unverifiable-or-mismatch",
+          "localParts": [
+            {
+              "number": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17,
+              "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+            }
+          ],
+          "remoteParts": [
+            {
+              "partNumber": 1,
+              "etag": "deadbeefdeadbeefdeadbeefdeadbeef",
+              "size": 17
+            }
+          ],
+          "quarantinedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "remote-provider-checksum-ok",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "ignored",
+          "size": 17,
+          "checksumSHA256": "ykJHaZ6lkmLFQOJ+0KYDjk6hgEAJ4U36pq/AFJ5uwtc="
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "conflict",
+      "expected_error": "multipart-reconciliation-conflict:part-1-local-remote-etag-conflict",
+      "expected_progress": {
+        "parts": [],
+        "nextOffset": 0,
+        "multipartQuarantine": {
+          "uploadId": "upload-frozen-1",
+          "reason": "part-1-local-remote-etag-conflict",
+          "localParts": [
+            {
+              "number": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17,
+              "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+            }
+          ],
+          "remoteParts": [
+            {
+              "partNumber": 1,
+              "etag": "ignored",
+              "size": 17,
+              "checksumSHA256": "ykJHaZ6lkmLFQOJ+0KYDjk6hgEAJ4U36pq/AFJ5uwtc="
+            }
+          ],
+          "quarantinedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "remote-provider-checksum-mismatch",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSHA256": "i6QZl+PUZ6KhxZZLcqSZuLUP57cJaJu4VNBGFT+Ny1w="
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "conflict",
+      "expected_error": "multipart-reconciliation-conflict:remote-part-1-checksum-mismatch",
+      "expected_progress": {
+        "parts": [],
+        "nextOffset": 0,
+        "multipartQuarantine": {
+          "uploadId": "upload-frozen-1",
+          "reason": "remote-part-1-checksum-mismatch",
+          "localParts": [
+            {
+              "number": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17,
+              "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+            }
+          ],
+          "remoteParts": [
+            {
+              "partNumber": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17,
+              "checksumSHA256": "i6QZl+PUZ6KhxZZLcqSZuLUP57cJaJu4VNBGFT+Ny1w="
+            }
+          ],
+          "quarantinedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "quoted-md5-etag",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "\"57eb99dc3865ea4c35487ab505bf2fa2\"",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "\"57EB99DC3865EA4C35487AB505BF2FA2\"",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "adopt",
+      "expected_error": null,
+      "expected_progress": {
+        "multipartUploadId": "upload-frozen-1",
+        "parts": [
+          {
+            "number": 1,
+            "etag": "\"57EB99DC3865EA4C35487AB505BF2FA2\"",
+            "size": 17,
+            "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+          }
+        ],
+        "nextOffset": 17,
+        "multipartReconciliation": {
+          "status": "remote-matches-local",
+          "uploadId": "upload-frozen-1",
+          "localPartCount": 1,
+          "remotePartCount": 1,
+          "reconciledAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "sha256-etag-ok",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "adopt",
+      "expected_error": null,
+      "expected_progress": {
+        "multipartUploadId": "upload-frozen-1",
+        "parts": [
+          {
+            "number": 1,
+            "etag": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7",
+            "size": 17,
+            "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+          }
+        ],
+        "nextOffset": 17,
+        "multipartReconciliation": {
+          "status": "remote-matches-local",
+          "uploadId": "upload-frozen-1",
+          "localPartCount": 1,
+          "remotePartCount": 1,
+          "reconciledAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "local-remote-size-conflict",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 1,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "conflict",
+      "expected_error": "multipart-reconciliation-conflict:part-1-local-remote-size-conflict",
+      "expected_progress": {
+        "parts": [],
+        "nextOffset": 0,
+        "multipartQuarantine": {
+          "uploadId": "upload-frozen-1",
+          "reason": "part-1-local-remote-size-conflict",
+          "localParts": [
+            {
+              "number": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 1,
+              "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+            }
+          ],
+          "remoteParts": [
+            {
+              "partNumber": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17
+            }
+          ],
+          "quarantinedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "local-remote-etag-conflict",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "2daaae9bc371a1a0512c785d0b918f45",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "conflict",
+      "expected_error": "multipart-reconciliation-conflict:part-1-local-remote-etag-conflict",
+      "expected_progress": {
+        "parts": [],
+        "nextOffset": 0,
+        "multipartQuarantine": {
+          "uploadId": "upload-frozen-1",
+          "reason": "part-1-local-remote-etag-conflict",
+          "localParts": [
+            {
+              "number": 1,
+              "etag": "2daaae9bc371a1a0512c785d0b918f45",
+              "size": 17,
+              "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+            }
+          ],
+          "remoteParts": [
+            {
+              "partNumber": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17
+            }
+          ],
+          "quarantinedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "local-checksum-conflict",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSha256": "8ba41997e3d467a2a1c5964b72a499b8b50fe7b709689bb854d046153f8dcb5c"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "conflict",
+      "expected_error": "multipart-reconciliation-conflict:part-1-local-checksum-conflict",
+      "expected_progress": {
+        "parts": [],
+        "nextOffset": 0,
+        "multipartQuarantine": {
+          "uploadId": "upload-frozen-1",
+          "reason": "part-1-local-checksum-conflict",
+          "localParts": [
+            {
+              "number": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17,
+              "checksumSha256": "8ba41997e3d467a2a1c5964b72a499b8b50fe7b709689bb854d046153f8dcb5c"
+            }
+          ],
+          "remoteParts": [
+            {
+              "partNumber": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17
+            }
+          ],
+          "quarantinedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "non-contiguous-local",
+      "local_parts": [
+        {
+          "number": 2,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "conflict",
+      "expected_error": "multipart-reconciliation-conflict:non-contiguous-local-part:2",
+      "expected_progress": {
+        "parts": [],
+        "nextOffset": 0,
+        "multipartQuarantine": {
+          "uploadId": "upload-frozen-1",
+          "reason": "non-contiguous-local-part:2",
+          "localParts": [
+            {
+              "number": 2,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17,
+              "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+            }
+          ],
+          "remoteParts": [
+            {
+              "partNumber": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17
+            }
+          ],
+          "quarantinedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "local-offset-conflict",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 0,
+      "upload_missing": false,
+      "expected_outcome": "conflict",
+      "expected_error": "multipart-reconciliation-conflict:local-offset-conflict:0!=17",
+      "expected_progress": {
+        "parts": [],
+        "nextOffset": 0,
+        "multipartQuarantine": {
+          "uploadId": "upload-frozen-1",
+          "reason": "local-offset-conflict:0!=17",
+          "localParts": [
+            {
+              "number": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17,
+              "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+            }
+          ],
+          "remoteParts": [
+            {
+              "partNumber": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17
+            }
+          ],
+          "quarantinedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "number-field-alias",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "adopt",
+      "expected_error": null,
+      "expected_progress": {
+        "multipartUploadId": "upload-frozen-1",
+        "parts": [
+          {
+            "number": 1,
+            "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+            "size": 17,
+            "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+          }
+        ],
+        "nextOffset": 17,
+        "multipartReconciliation": {
+          "status": "remote-matches-local",
+          "uploadId": "upload-frozen-1",
+          "localPartCount": 1,
+          "remotePartCount": 1,
+          "reconciledAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "bool-remote-size",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": true
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "conflict",
+      "expected_error": "multipart-reconciliation-conflict:remote-part-1-size-mismatch:1!=17",
+      "expected_progress": {
+        "parts": [],
+        "nextOffset": 0,
+        "multipartQuarantine": {
+          "uploadId": "upload-frozen-1",
+          "reason": "remote-part-1-size-mismatch:1!=17",
+          "localParts": [
+            {
+              "number": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17,
+              "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+            }
+          ],
+          "remoteParts": [
+            {
+              "partNumber": 1,
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": true
+            }
+          ],
+          "quarantinedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "null-etag",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": null,
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "adopt",
+      "expected_error": null,
+      "expected_progress": {
+        "multipartUploadId": "upload-frozen-1",
+        "parts": [
+          {
+            "number": 1,
+            "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+            "size": 17,
+            "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+          }
+        ],
+        "nextOffset": 17,
+        "multipartReconciliation": {
+          "status": "remote-matches-local",
+          "uploadId": "upload-frozen-1",
+          "localPartCount": 1,
+          "remotePartCount": 1,
+          "reconciledAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "empty-etag",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "adopt",
+      "expected_error": null,
+      "expected_progress": {
+        "multipartUploadId": "upload-frozen-1",
+        "parts": [
+          {
+            "number": 1,
+            "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+            "size": 17,
+            "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+          }
+        ],
+        "nextOffset": 17,
+        "multipartReconciliation": {
+          "status": "remote-matches-local",
+          "uploadId": "upload-frozen-1",
+          "localPartCount": 1,
+          "remotePartCount": 1,
+          "reconciledAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "three-part-match",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        },
+        {
+          "number": 2,
+          "etag": "2daaae9bc371a1a0512c785d0b918f45",
+          "size": 18,
+          "checksumSha256": "8ba41997e3d467a2a1c5964b72a499b8b50fe7b709689bb854d046153f8dcb5c"
+        },
+        {
+          "number": 3,
+          "etag": "a43baa2cb9d91e59a2e997b1b425c8c4",
+          "size": 16,
+          "checksumSha256": "f12a09cfba9dafb58670ddb39817d95cee57349162bcdb0183a9324630854234"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        },
+        {
+          "partNumber": 2,
+          "etag": "2daaae9bc371a1a0512c785d0b918f45",
+          "size": 18
+        },
+        {
+          "partNumber": 3,
+          "etag": "a43baa2cb9d91e59a2e997b1b425c8c4",
+          "size": 16
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164",
+        "6368756e6b2d74776f2d7061796c6f616421",
+        "6368756e6b2d74687265652d7a7a7a7a"
+      ],
+      "next_offset": 51,
+      "upload_missing": false,
+      "expected_outcome": "adopt",
+      "expected_error": null,
+      "expected_progress": {
+        "multipartUploadId": "upload-frozen-1",
+        "parts": [
+          {
+            "number": 1,
+            "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+            "size": 17,
+            "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+          },
+          {
+            "number": 2,
+            "etag": "2daaae9bc371a1a0512c785d0b918f45",
+            "size": 18,
+            "checksumSha256": "8ba41997e3d467a2a1c5964b72a499b8b50fe7b709689bb854d046153f8dcb5c"
+          },
+          {
+            "number": 3,
+            "etag": "a43baa2cb9d91e59a2e997b1b425c8c4",
+            "size": 16,
+            "checksumSha256": "f12a09cfba9dafb58670ddb39817d95cee57349162bcdb0183a9324630854234"
+          }
+        ],
+        "nextOffset": 51,
+        "multipartReconciliation": {
+          "status": "remote-matches-local",
+          "uploadId": "upload-frozen-1",
+          "localPartCount": 3,
+          "remotePartCount": 3,
+          "reconciledAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "ahead-by-two",
+      "local_parts": [],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        },
+        {
+          "partNumber": 2,
+          "etag": "2daaae9bc371a1a0512c785d0b918f45",
+          "size": 18
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164",
+        "6368756e6b2d74776f2d7061796c6f616421",
+        "6368756e6b2d74687265652d7a7a7a7a"
+      ],
+      "next_offset": 0,
+      "upload_missing": false,
+      "expected_outcome": "adopt",
+      "expected_error": null,
+      "expected_progress": {
+        "multipartUploadId": "upload-frozen-1",
+        "parts": [
+          {
+            "number": 1,
+            "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+            "size": 17,
+            "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+          },
+          {
+            "number": 2,
+            "etag": "2daaae9bc371a1a0512c785d0b918f45",
+            "size": 18,
+            "checksumSha256": "8ba41997e3d467a2a1c5964b72a499b8b50fe7b709689bb854d046153f8dcb5c"
+          }
+        ],
+        "nextOffset": 35,
+        "multipartReconciliation": {
+          "status": "remote-ahead-adopted",
+          "uploadId": "upload-frozen-1",
+          "localPartCount": 0,
+          "remotePartCount": 2,
+          "reconciledAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "unicode-etag",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "调度",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "adopt",
+      "expected_error": null,
+      "expected_progress": {
+        "multipartUploadId": "upload-frozen-1",
+        "parts": [
+          {
+            "number": 1,
+            "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+            "size": 17,
+            "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+          }
+        ],
+        "nextOffset": 17,
+        "multipartReconciliation": {
+          "status": "remote-matches-local",
+          "uploadId": "upload-frozen-1",
+          "localPartCount": 1,
+          "remotePartCount": 1,
+          "reconciledAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "missing-part-number",
+      "local_parts": [],
+      "remote_parts": [
+        {
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 0,
+      "upload_missing": false,
+      "expected_outcome": "conflict",
+      "expected_error": "multipart-reconciliation-conflict:non-contiguous-remote-part:0",
+      "expected_progress": {
+        "parts": [],
+        "nextOffset": 0,
+        "multipartQuarantine": {
+          "uploadId": "upload-frozen-1",
+          "reason": "non-contiguous-remote-part:0",
+          "localParts": [],
+          "remoteParts": [
+            {
+              "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+              "size": 17
+            }
+          ],
+          "quarantinedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "zero-size-empty-chunk",
+      "local_parts": [
+        {
+          "number": 1,
+          "etag": "d41d8cd98f00b204e9800998ecf8427e",
+          "size": 0,
+          "checksumSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "d41d8cd98f00b204e9800998ecf8427e",
+          "size": 0
+        }
+      ],
+      "source_chunks": [
+        ""
+      ],
+      "next_offset": 0,
+      "upload_missing": false,
+      "expected_outcome": "adopt",
+      "expected_error": null,
+      "expected_progress": {
+        "multipartUploadId": "upload-frozen-1",
+        "parts": [
+          {
+            "number": 1,
+            "etag": "d41d8cd98f00b204e9800998ecf8427e",
+            "size": 0,
+            "checksumSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "nextOffset": 0,
+        "multipartReconciliation": {
+          "status": "remote-matches-local",
+          "uploadId": "upload-frozen-1",
+          "localPartCount": 1,
+          "remotePartCount": 1,
+          "reconciledAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "ignore-non-object-local",
+      "local_parts": [
+        "bad",
+        {
+          "number": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17,
+          "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+        }
+      ],
+      "remote_parts": [
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 17,
+      "upload_missing": false,
+      "expected_outcome": "adopt",
+      "expected_error": null,
+      "expected_progress": {
+        "multipartUploadId": "upload-frozen-1",
+        "parts": [
+          {
+            "number": 1,
+            "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+            "size": 17,
+            "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+          }
+        ],
+        "nextOffset": 17,
+        "multipartReconciliation": {
+          "status": "remote-matches-local",
+          "uploadId": "upload-frozen-1",
+          "localPartCount": 1,
+          "remotePartCount": 1,
+          "reconciledAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "ignore-non-object-remote",
+      "local_parts": [],
+      "remote_parts": [
+        "bad",
+        {
+          "partNumber": 1,
+          "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+          "size": 17
+        }
+      ],
+      "source_chunks": [
+        "6368756e6b2d6f6e652d7061796c6f6164"
+      ],
+      "next_offset": 0,
+      "upload_missing": false,
+      "expected_outcome": "adopt",
+      "expected_error": null,
+      "expected_progress": {
+        "multipartUploadId": "upload-frozen-1",
+        "parts": [
+          {
+            "number": 1,
+            "etag": "57eb99dc3865ea4c35487ab505bf2fa2",
+            "size": 17,
+            "checksumSha256": "ca4247699ea59262c540e27ed0a6038e4ea1804009e14dfaa6afc0149e6ec2d7"
+          }
+        ],
+        "nextOffset": 17,
+        "multipartReconciliation": {
+          "status": "remote-ahead-adopted",
+          "uploadId": "upload-frozen-1",
+          "localPartCount": 0,
+          "remotePartCount": 1,
+          "reconciledAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    }
+  ]
+}
