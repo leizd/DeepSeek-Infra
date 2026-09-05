@@ -13,6 +13,7 @@ pub mod recovery_evidence;
 pub mod runtime;
 pub mod safety_admission;
 pub mod storage_evidence;
+pub mod wave_crash;
 pub use control_storage_evidence::{
     CONTROL_STORAGE_EVIDENCE_CHECKS, validate_autonomous_rebalance_proof,
     validate_autonomous_repair_proof, validate_control_storage_evidence_check,
@@ -60,6 +61,7 @@ pub use safety_admission::{
 pub use storage_evidence::{
     AUTONOMOUS_STORAGE_BYTES_CHECKS, validate_autonomous_storage_bytes_proof,
 };
+pub use wave_crash::{WAVE_CRASH_PROOF_CHECKS, validate_wave_crash_recovery_proof};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProofRequest {

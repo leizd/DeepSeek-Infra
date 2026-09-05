@@ -19,6 +19,7 @@ use crate::safety_admission::{SAFETY_ADMISSION_PROOF_CHECKS, validate_safety_adm
 use crate::storage_evidence::{
     AUTONOMOUS_STORAGE_BYTES_CHECKS, validate_autonomous_storage_bytes_proof,
 };
+use crate::wave_crash::{WAVE_CRASH_PROOF_CHECKS, validate_wave_crash_recovery_proof};
 
 pub const EVIDENCE_ENVELOPE_SCHEMA: &str = "evidence-proof-v2";
 pub const DR_READINESS_PROOF_SCHEMA: &str = "dr-readiness-proof-v1";
@@ -216,6 +217,9 @@ pub fn validate_check(check_name: &str, item: &Value) -> Vec<String> {
     }
     if FEDERATION_TRUST_PROOF_CHECKS.contains(&check_name) {
         return validate_federation_trust_proof(&Value::Object(evidence.clone()));
+    }
+    if WAVE_CRASH_PROOF_CHECKS.contains(&check_name) {
+        return validate_wave_crash_recovery_proof(&Value::Object(evidence.clone()));
     }
     vec![format!("unsupported-check:{check_name}")]
 }
