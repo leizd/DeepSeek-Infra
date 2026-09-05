@@ -213,7 +213,9 @@ fn authenticate_bytes(
 fn commit_hash(commit: &Map<String, Value>) -> String {
     let mut body = commit.clone();
     body.remove("commitHash");
-    let bytes = serde_json::to_vec(&Value::Object(body)).unwrap_or_default();
+    let mut value = Value::Object(body);
+    value.sort_all_objects();
+    let bytes = serde_json::to_vec(&value).unwrap_or_default();
     sha256_hex(&bytes)
 }
 

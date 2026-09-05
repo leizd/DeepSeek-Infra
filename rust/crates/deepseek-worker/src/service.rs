@@ -25,6 +25,7 @@ impl WorkerRpcService {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     fn lock(&self) -> Result<MutexGuard<'_, Worker>, Status> {
         self.worker
             .lock()
