@@ -5,7 +5,9 @@ use serde_json::{Map, Number, Value};
 use std::cmp::Ordering;
 use std::fmt::Write;
 
+mod timestamp;
 mod unicode;
+pub(crate) use timestamp::{ParsedTimestamp, parse_timestamp};
 pub(crate) use unicode::casefold;
 use unicode::decimal_digit;
 
@@ -155,6 +157,10 @@ pub(super) struct PythonInteger {
     magnitude: String,
 }
 
+pub(crate) fn python_integer(value: Option<&Value>) -> Option<PythonInteger> {
+    PythonInteger::parse(&python_text(value))
+}
+
 impl PythonInteger {
     pub(super) fn parse(value: &str) -> Option<Self> {
         // The supported Python reference interpreters use the default 4300-digit limit.
@@ -210,6 +216,18 @@ impl PythonInteger {
 
     pub(super) fn is_zero(&self) -> bool {
         self.magnitude == "0"
+    }
+
+    pub(super) fn is_one(&self) -> bool {
+        !self.negative && self.magnitude == "1"
+    }
+
+    pub(super) fn canonical_text(&self) -> String {
+        if self.negative {
+            format!("-{}", self.magnitude)
+        } else {
+            self.magnitude.clone()
+        }
     }
 
     pub(super) fn is_positive(&self) -> bool {

@@ -8,7 +8,7 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 
 use crate::legacy_values::{
-    PythonInteger, casefold, is_plain_sha256, missing, python_text, python_truthy, require_fields,
+    casefold, is_plain_sha256, missing, python_integer, python_text, python_truthy, require_fields,
     value_or_empty_text,
 };
 
@@ -245,8 +245,4 @@ pub fn validate_pass_with_schema_only(evidence: &Value) -> Vec<String> {
         return vec!["empty-evidence".to_string()];
     }
     Vec::new()
-}
-
-fn python_integer(value: Option<&Value>) -> Option<PythonInteger> {
-    PythonInteger::parse(&python_text(value))
 }

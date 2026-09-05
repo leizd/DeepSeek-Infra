@@ -1,6 +1,7 @@
 use deepseek_protocol::{ActionFence, AdmitError, admit_command, validate_fence};
 
 pub mod control_storage_evidence;
+pub mod crash_recovery;
 pub mod envelope;
 pub mod federated_dr;
 pub mod federated_replica;
@@ -15,6 +16,7 @@ pub use control_storage_evidence::{
     validate_autonomous_repair_proof, validate_control_storage_evidence_check,
     validate_decision_proof, validate_resilience_proof, validate_retention_safety_proof,
 };
+pub use crash_recovery::{CRASH_RECOVERY_PROOF_CHECKS, validate_crash_recovery_proof};
 pub use envelope::{
     DR_READINESS_PROOF_SCHEMA, EVIDENCE_ENVELOPE_SCHEMA, EvidenceProofEnvelope, EvidenceProofError,
     MAX_EVIDENCE_PROOF_BYTES, PREDICTIVE_PLANNING_PROOF_SCHEMA, parse_evidence_proof_document,
