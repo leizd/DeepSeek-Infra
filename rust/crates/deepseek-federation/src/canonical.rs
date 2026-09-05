@@ -123,6 +123,10 @@ pub(crate) fn decode_fixed<const N: usize>(value: &str) -> Option<[u8; N]> {
     decoded.try_into().ok()
 }
 
+pub(crate) fn encode_b64url(value: &[u8]) -> String {
+    URL_SAFE_NO_PAD.encode(value)
+}
+
 pub(crate) fn object(value: &Value) -> Option<&Map<String, Value>> {
     value.as_object()
 }

@@ -16,8 +16,9 @@ pub const PURPOSE_INGRESS_GRANT: &str = "INGRESS_GRANT";
 pub const PURPOSE_READINESS_ATTESTATION: &str = "READINESS_ATTESTATION";
 pub const PURPOSE_REPLICA_ATTESTATION: &str = "REPLICA_ATTESTATION";
 pub const PURPOSE_SESSION_AUTHENTICATION: &str = "SESSION_AUTHENTICATION";
-const CERTIFICATE_DOMAIN: &[u8] = b"deepseek-infra:federation-online-signer-certificate-v1\0";
-const DOCUMENT_DOMAIN_PREFIX: &[u8] = b"deepseek-infra:federation-document\0";
+pub(crate) const CERTIFICATE_DOMAIN: &[u8] =
+    b"deepseek-infra:federation-online-signer-certificate-v1\0";
+pub(crate) const DOCUMENT_DOMAIN_PREFIX: &[u8] = b"deepseek-infra:federation-document\0";
 const ONLINE_SIGNER_PURPOSES: &[&str] = &[
     "DR_ATTESTATION",
     "EVIDENCE",

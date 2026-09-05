@@ -4,6 +4,7 @@ use deepseek_protocol::{
 
 pub mod attestation;
 mod canonical;
+mod custody;
 mod identity;
 pub use attestation::{
     AttestationError, CurrentSignerAuthorization, FailureDomainMetadata, MAX_REMOTE_COMMIT_BYTES,
@@ -13,6 +14,10 @@ pub use attestation::{
     attestation_digest, derive_transfer_id, failure_domain_from_metadata,
     verify_replica_attestation, verify_replica_attestation_document,
     verify_replica_attestation_for_proof, verify_replica_remote_documents,
+};
+pub use custody::{
+    FederationIdentityError, OnlineFleetSigner, load_online_signer, sign_federation_document,
+    unlock_private_key_envelope,
 };
 pub use identity::{
     PURPOSE_DR_ATTESTATION, PURPOSE_INGRESS_GRANT, PURPOSE_READINESS_ATTESTATION,
