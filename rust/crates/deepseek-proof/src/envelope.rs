@@ -7,6 +7,7 @@ use crate::federated_dr::{FEDERATED_DR_PROOF_CHECKS, validate_federated_dr_proof
 use crate::federated_replica::{FEDERATED_REPLICA_PROOF_CHECKS, validate_federated_replica_check};
 use crate::federation_trust::{FEDERATION_TRUST_PROOF_CHECKS, validate_federation_trust_proof};
 use crate::predictive::{PREDICTIVE_PROOF_CHECKS, validate_predictive_planning_proof};
+use crate::recovery_evidence::{RECOVERY_EVIDENCE_CHECKS, validate_recovery_evidence_check};
 use crate::runtime::{FEDERATION_RUNTIME_PROOF_CHECKS, validate_federation_runtime_proof};
 use crate::storage_evidence::{
     AUTONOMOUS_STORAGE_BYTES_CHECKS, validate_autonomous_storage_bytes_proof,
@@ -170,6 +171,9 @@ pub fn validate_check(check_name: &str, item: &Value) -> Vec<String> {
     let Some(evidence) = item.get("evidence").and_then(Value::as_object) else {
         return vec!["evidence-must-be-object".to_string()];
     };
+    if RECOVERY_EVIDENCE_CHECKS.contains(&check_name) {
+        return validate_recovery_evidence_check(check_name, &Value::Object(evidence.clone()));
+    }
     if DR_READINESS_CHECKS.contains(&check_name) {
         return validate_dr_readiness_proof(evidence);
     }

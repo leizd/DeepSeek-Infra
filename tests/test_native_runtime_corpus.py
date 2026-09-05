@@ -56,7 +56,7 @@ def test_canonical_corpora_match_frozen_digests() -> None:
     } <= ids
 
     manifests = validate_corpora()
-    assert len(manifests) == 12
+    assert len(manifests) == 13
     assert manifests[1]["compatibility_reason"]
     assert manifests[2]["compatibility_reason"]
     assert manifests[3]["compatibility_reason"]
@@ -68,6 +68,7 @@ def test_canonical_corpora_match_frozen_digests() -> None:
     assert manifests[9]["compatibility_reason"]
     assert manifests[10]["compatibility_reason"]
     assert manifests[11]["compatibility_reason"]
+    assert manifests[12]["compatibility_reason"]
 
 
 def _apply_frozen_mutation(value: Any, *, op: str, pointer: str, replacement: Any) -> None:
@@ -171,6 +172,70 @@ def test_federation_trust_v12_semantic_vector_matches_python_4_8_0_validator() -
         if mutation["rebind_proof"]:
             candidate["proofDigest"] = federation_trust_proof.proof_digest(candidate)
         assert federation_trust_proof.validate_federation_trust_proof(candidate) == mutation["expected_errors"], mutation["name"]
+
+
+def test_recovery_evidence_v13_semantic_vector_matches_python_4_8_0_validators() -> None:
+    manifest_path = ROOT / "compat" / "native-runtime" / "v13" / "manifest.json"
+    manifest = validate_corpus(manifest_path)
+    path = next(
+        item["path"]
+        for item in manifest["corpora"]
+        if item["id"] == "recovery-evidence-semantics-v13"
+    )
+    fixture = json.loads((ROOT / path).read_text(encoding="utf-8"))
+    assert fixture["scope"] == "validator-parity-only-not-provider-execution-evidence"
+
+    validators = {
+        "restore": evidence_proof.validate_restore_proof,
+        "backup_commit": evidence_proof.validate_backup_commit_proof,
+        "distinct_pid": evidence_proof.validate_distinct_pid_proof,
+        "sigkill": evidence_proof.validate_sigkill_proof,
+        "epoch_increase": evidence_proof.validate_epoch_increase_proof,
+        "minio_endpoints": evidence_proof.validate_minio_endpoints_proof,
+        "schema_only": evidence_proof.validate_pass_with_schema_only,
+    }
+    expected_checks = {
+        "realPreDisasterBackupIsActuallyRestored",
+        "realFreshProcessRestoresPreDisasterBackup",
+        "restoredWorkspaceDigestMatchesPreDisasterDigest",
+        "realPostRecoveryBackupHasValidCommit",
+        "realFreshProcessCreatesPostRecoveryBackup",
+        "realPostRecoveryBackupHasValidReceiptBinding",
+        "freshProcessAAndBHaveDifferentPids",
+        "processAIsDeadBeforeProcessBStarts",
+        "processAExitedBySigkill",
+        "realFreshProcessBootEpochStrictlyIncreases",
+        "realThreeMinioProcessReplacementE2E",
+        "realThreeMinioFreshProcessAuthorityRecoveryE2E",
+        "realThreeMinioAutonomousRepairE2E",
+        "realThreeMinioAutonomousRebalanceE2E",
+        "realThreeMinioPredictivePlanningE2E",
+        "evidenceCheckCannotPassWithoutStructuredProof",
+    }
+    observed_checks: set[str] = set()
+    for group in fixture["groups"]:
+        validator = validators[group["validator"]]
+        valid_evidence = next(case["evidence"] for case in group["cases"] if not case["expected_errors"])
+        for case in group["cases"]:
+            assert validator(case["evidence"], "frozen-v13") == case["expected_errors"], case["name"]
+        for check_name in group["check_names"]:
+            observed_checks.add(check_name)
+            assert evidence_proof.VALIDATORS[check_name] is validator
+            assert evidence_proof.validate_check(
+                check_name,
+                {"status": "PASS", "evidence": valid_evidence},
+            ) == []
+    assert observed_checks == expected_checks
+
+
+def test_recovery_coercions_v13_match_python_on_parsed_documents() -> None:
+    path = ROOT / "compat" / "native-runtime" / "v13" / "evidence" / "recovery_coercions_vector.json"
+    fixture = json.loads(path.read_text(encoding="utf-8"))
+    assert fixture["source_commit"] == "a37735c68398fc8f795babaa269e2de6a5acd567"
+    for case in fixture["cases"]:
+        document = json.loads(case["document"])
+        check_name = case["check_name"]
+        assert evidence_proof.validate_check(check_name, document["checks"][check_name]) == case["expected_errors"], case["name"]
 
 
 def test_storage_v2_semantic_vector_matches_python_4_8_0_bytes() -> None:

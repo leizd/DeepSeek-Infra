@@ -5,6 +5,7 @@ pub mod federated_dr;
 pub mod federated_replica;
 pub mod federation_trust;
 pub mod predictive;
+pub mod recovery_evidence;
 pub mod runtime;
 pub mod storage_evidence;
 pub use envelope::{
@@ -27,6 +28,14 @@ pub use federation_trust::{
 };
 pub use predictive::{
     PREDICTIVE_PROOF_CHECKS, predictive_planning_proof_digest, validate_predictive_planning_proof,
+};
+pub use recovery_evidence::{
+    BACKUP_COMMIT_PROOF_CHECKS, DISTINCT_PID_PROOF_CHECKS, EPOCH_INCREASE_PROOF_CHECKS,
+    MINIO_ENDPOINTS_PROOF_CHECKS, RECOVERY_EVIDENCE_CHECKS, RESTORE_PROOF_CHECKS,
+    SCHEMA_ONLY_PROOF_CHECKS, SIGKILL_PROOF_CHECKS, validate_backup_commit_proof,
+    validate_distinct_pid_proof, validate_epoch_increase_proof, validate_minio_endpoints_proof,
+    validate_pass_with_schema_only, validate_recovery_evidence_check, validate_restore_proof,
+    validate_sigkill_proof,
 };
 pub use runtime::{
     FEDERATION_RUNTIME_PROOF_CHECKS, FEDERATION_RUNTIME_PROOF_SCHEMA,

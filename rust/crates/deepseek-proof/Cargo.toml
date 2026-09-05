@@ -12,5 +12,7 @@ deepseek-federation = { path = "../deepseek-federation" }
 deepseek-protocol = { path = "../deepseek-protocol" }
 deepseek-storage = { path = "../deepseek-storage" }
 serde = { workspace = true }
-serde_json = { workspace = true }
+# Legacy proof diagnostics stringify nested values and arbitrary-size JSON integers.
+# Preserve them when decoding; cryptographic canonicalizers explicitly sort their own copies.
+serde_json = { workspace = true, features = ["preserve_order", "arbitrary_precision"] }
 sha2 = { workspace = true }
