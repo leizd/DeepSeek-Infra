@@ -6,6 +6,7 @@ pub mod envelope;
 pub mod federated_dr;
 pub mod federated_replica;
 pub mod federation_trust;
+pub mod legacy_planning;
 mod legacy_values;
 pub mod predictive;
 pub mod recovery_evidence;
@@ -36,6 +37,7 @@ pub use federation_trust::{
     FEDERATION_TRUST_PROOF_CHECKS, FEDERATION_TRUST_PROOF_SCHEMA, federation_trust_proof_digest,
     validate_federation_trust_proof,
 };
+pub use legacy_planning::{LEGACY_PLANNING_PROOF_CHECKS, validate_legacy_planning_check};
 pub use predictive::{
     PREDICTIVE_PROOF_CHECKS, predictive_planning_proof_digest, validate_predictive_planning_proof,
 };

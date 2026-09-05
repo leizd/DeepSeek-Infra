@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze the 30 unpromoted planning Evidence checks without replacing typed predictive proofs. Retain presence-only and strict-subset quirks; four marked Python TypeError cases require deterministic native rejection.",
+  "normalization": "LF-normalized SHA-256 of public validator fixture bytes",
+  "corpora": [
+    {
+      "id": "legacy-planning-evidence-semantics-v18",
+      "path": "compat/native-runtime/v18/evidence/legacy_planning_evidence_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen unpromoted risk, fairness, SLO, forecast and federation planning Evidence semantics",
+      "sha256": "11d15463ebe1ddfcbd9e25f1fb83d450375c609f145b83b89eafa37ce988554f"
+    }
+  ]
+}

@@ -6,9 +6,11 @@ use std::cmp::Ordering;
 use std::fmt::Write;
 
 mod equality;
+mod printable;
 mod timestamp;
 mod unicode;
 pub(crate) use equality::python_equal;
+use printable::is_printable;
 pub(crate) use timestamp::{ParsedTimestamp, parse_timestamp};
 pub(crate) use unicode::casefold;
 use unicode::decimal_digit;
@@ -120,7 +122,7 @@ fn append_string_repr(value: &str, result: &mut String) {
                 result.push(character);
             }
             '\'' | '"' => result.push(character),
-            character if character.escape_debug().count() == 1 => result.push(character),
+            character if is_printable(character) => result.push(character),
             character => {
                 let codepoint = u32::from(character);
                 if codepoint <= 0xff {
@@ -154,7 +156,7 @@ fn number_text(number: &Number) -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PythonInteger {
+pub(crate) struct PythonInteger {
     negative: bool,
     magnitude: String,
 }

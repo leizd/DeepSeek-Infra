@@ -17,13 +17,12 @@ BINARY_DESCRIPTOR_PATH = ROOT / "proto" / "generated" / "descriptor.pb"
 CODEGEN_MANIFEST_PATH = ROOT / "proto" / "generated" / "codegen-manifest.v1.json"
 CORPUS_MANIFEST = ROOT / "compat" / "native-runtime" / "v1" / "manifest.json"
 CORPUS_MANIFESTS = (
-    CORPUS_MANIFEST,
+    ROOT / "compat" / "native-runtime" / "v1" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v2" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v3" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v4" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v5" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v6" / "manifest.json",
-    ROOT / "compat" / "native-runtime" / "v7" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v8" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v9" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v10" / "manifest.json",
@@ -34,6 +33,7 @@ CORPUS_MANIFESTS = (
     ROOT / "compat" / "native-runtime" / "v15" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v16" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v17" / "manifest.json",
+    ROOT / "compat" / "native-runtime" / "v18" / "manifest.json",
 )
 COMMAND_CODES_PATH = ROOT / "release" / "native_runtime_command_codes_v1.json"
 PROTO_ROOT = ROOT / "proto"
