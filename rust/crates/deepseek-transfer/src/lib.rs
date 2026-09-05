@@ -8,10 +8,12 @@ mod pycompat;
 pub mod rebalance;
 pub mod repair_job;
 pub mod replication_job;
+pub mod writer_lease;
 pub use checkpoint::{MultipartCheckpoint, reconcile_multipart_checkpoint};
 pub use rebalance::replay_rebalance_hold_case;
 pub use repair_job::replay_repair_phase_case;
 pub use replication_job::replay_replication_phase_case;
+pub use writer_lease::replay_writer_lease_case;
 pub use journal::{
     FEDERATED_TRANSFER_IDENTITY_SCHEMA, FederatedTransferJournal, FederatedTransferJournalError,
     ProposedTransfer, TRANSFER_ID_DOMAIN, TRANSFER_JOURNAL_EVENT_SCHEMA,

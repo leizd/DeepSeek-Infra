@@ -1,0 +1,759 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "scope": "validator-parity-only-not-provider-execution-evidence",
+  "now": "2026-09-05T15:00:00Z",
+  "lease_seconds": 300,
+  "clock_skew_safety_seconds": 30,
+  "ast_matches_source_commit": {
+    "TARGET_WRITER_LEASE_SECONDS": true,
+    "CLOCK_SKEW_SAFETY_SECONDS": true,
+    "active_writer_lease": true,
+    "_payload": true,
+    "_expired": true,
+    "_same_run_takeover_allowed": true,
+    "_assert_payload_owned": true,
+    "assert_owned": true,
+    "acquire": true
+  },
+  "cases": [
+    {
+      "name": "payload-default-300s",
+      "op": "payload",
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 2,
+      "expected": {
+        "payload": {
+          "schemaVersion": 1,
+          "targetId": "target-a",
+          "ownerRunId": "run-frozen-1",
+          "ownerInstanceId": "worker-a",
+          "fencingToken": 2,
+          "acquiredAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T15:05:00Z"
+        }
+      }
+    },
+    {
+      "name": "payload-custom-lease",
+      "op": "payload",
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 2,
+      "lease_seconds": 60,
+      "expected": {
+        "payload": {
+          "schemaVersion": 1,
+          "targetId": "target-a",
+          "ownerRunId": "run-frozen-1",
+          "ownerInstanceId": "worker-a",
+          "fencingToken": 2,
+          "acquiredAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T15:01:00Z"
+        }
+      }
+    },
+    {
+      "name": "expired-past",
+      "op": "expired",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T14:59:59Z"
+      },
+      "expected": {
+        "expired": true
+      }
+    },
+    {
+      "name": "expired-equal-now-not-expired",
+      "op": "expired",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:00:00Z"
+      },
+      "expected": {
+        "expired": false
+      }
+    },
+    {
+      "name": "expired-future",
+      "op": "expired",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:00:01Z"
+      },
+      "expected": {
+        "expired": false
+      }
+    },
+    {
+      "name": "expired-missing-falsy",
+      "op": "expired",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": null
+      },
+      "expected": {
+        "expired": true
+      }
+    },
+    {
+      "name": "expired-false-falsy",
+      "op": "expired",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": false
+      },
+      "expected": {
+        "expired": true
+      }
+    },
+    {
+      "name": "expired-true-string-compare",
+      "op": "expired",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": true
+      },
+      "expected": {
+        "expired": false
+      }
+    },
+    {
+      "name": "expired-malformed-zzz",
+      "op": "expired",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "zzz"
+      },
+      "expected": {
+        "expired": false
+      }
+    },
+    {
+      "name": "active-missing-payload-fail-closed",
+      "op": "active",
+      "payload": null,
+      "expected": {
+        "active": true
+      }
+    },
+    {
+      "name": "active-non-object-fail-closed",
+      "op": "active",
+      "payload": [
+        "x"
+      ],
+      "expected": {
+        "active": true
+      }
+    },
+    {
+      "name": "active-non-string-expiry-fail-closed",
+      "op": "active",
+      "payload": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": 1
+      },
+      "expected": {
+        "active": true
+      }
+    },
+    {
+      "name": "active-malformed-fail-closed",
+      "op": "active",
+      "payload": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "zzz"
+      },
+      "expected": {
+        "active": true
+      }
+    },
+    {
+      "name": "active-past",
+      "op": "active",
+      "payload": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T14:59:59Z"
+      },
+      "expected": {
+        "active": false
+      }
+    },
+    {
+      "name": "active-equal-now-not-active",
+      "op": "active",
+      "payload": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:00:00Z"
+      },
+      "expected": {
+        "active": false
+      }
+    },
+    {
+      "name": "active-future",
+      "op": "active",
+      "payload": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:00:01Z"
+      },
+      "expected": {
+        "active": true
+      }
+    },
+    {
+      "name": "takeover-same-run-higher-token",
+      "op": "same-run-takeover",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:05:00Z"
+      },
+      "owner_run_id": "run-frozen-1",
+      "fencing_token": 2,
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "takeover-same-run-equal-token",
+      "op": "same-run-takeover",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 2,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:05:00Z"
+      },
+      "owner_run_id": "run-frozen-1",
+      "fencing_token": 2,
+      "expected": {
+        "allowed": false
+      }
+    },
+    {
+      "name": "takeover-other-run",
+      "op": "same-run-takeover",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-other",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:05:00Z"
+      },
+      "owner_run_id": "run-frozen-1",
+      "fencing_token": 2,
+      "expected": {
+        "allowed": false
+      }
+    },
+    {
+      "name": "takeover-missing-token-uses-minus-one",
+      "op": "same-run-takeover",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": null,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:05:00Z"
+      },
+      "owner_run_id": "run-frozen-1",
+      "fencing_token": 1,
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "acquire-missing-creates",
+      "op": "acquire",
+      "existing": null,
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 2,
+      "expected": {
+        "decision": "create",
+        "payload": {
+          "schemaVersion": 1,
+          "targetId": "target-a",
+          "ownerRunId": "run-frozen-1",
+          "ownerInstanceId": "worker-a",
+          "fencingToken": 2,
+          "acquiredAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T15:05:00Z"
+        }
+      }
+    },
+    {
+      "name": "acquire-busy-other-unexpired",
+      "op": "acquire",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-other",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:05:00Z"
+      },
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 2,
+      "expected": {
+        "decision": "busy",
+        "error": "Target writer is busy with another run"
+      }
+    },
+    {
+      "name": "acquire-preempt-expired-lower-token",
+      "op": "acquire",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-other",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T14:59:59Z"
+      },
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 2,
+      "expected": {
+        "decision": "preempt",
+        "payload": {
+          "schemaVersion": 1,
+          "targetId": "target-a",
+          "ownerRunId": "run-frozen-1",
+          "ownerInstanceId": "worker-a",
+          "fencingToken": 2,
+          "acquiredAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T15:05:00Z"
+        }
+      }
+    },
+    {
+      "name": "acquire-newer-token-even-if-expired",
+      "op": "acquire",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-other",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 3,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T14:59:59Z"
+      },
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 2,
+      "expected": {
+        "decision": "newer-token",
+        "error": "Target writer is held by a newer or equal fencing token"
+      }
+    },
+    {
+      "name": "acquire-same-run-takeover-unexpired",
+      "op": "acquire",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:05:00Z"
+      },
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 2,
+      "expected": {
+        "decision": "preempt",
+        "payload": {
+          "schemaVersion": 1,
+          "targetId": "target-a",
+          "ownerRunId": "run-frozen-1",
+          "ownerInstanceId": "worker-a",
+          "fencingToken": 2,
+          "acquiredAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T15:05:00Z"
+        }
+      }
+    },
+    {
+      "name": "acquire-same-run-equal-token-busy",
+      "op": "acquire",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 2,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:05:00Z"
+      },
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 2,
+      "expected": {
+        "decision": "busy",
+        "error": "Target writer is busy with another run"
+      }
+    },
+    {
+      "name": "acquire-missing-token-or-zero-vs-minus-one",
+      "op": "acquire",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": null,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T14:59:59Z"
+      },
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 0,
+      "expected": {
+        "decision": "newer-token",
+        "error": "Target writer is held by a newer or equal fencing token"
+      }
+    },
+    {
+      "name": "type-acquire-token-object",
+      "op": "acquire",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": {
+          "n": 1
+        },
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T14:59:59Z"
+      },
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 2,
+      "expected": {
+        "status": "error",
+        "oracle_exception": "TypeError"
+      }
+    },
+    {
+      "name": "assert-ok",
+      "op": "assert-owned",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:05:00Z"
+      },
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 1,
+      "expected": {
+        "status": "ok"
+      }
+    },
+    {
+      "name": "assert-missing",
+      "op": "assert-owned",
+      "existing": null,
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 1,
+      "expected": {
+        "status": "error",
+        "error": "missing"
+      }
+    },
+    {
+      "name": "assert-stolen-run",
+      "op": "assert-owned",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-other",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:05:00Z"
+      },
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 1,
+      "expected": {
+        "status": "error",
+        "error": "stolen"
+      }
+    },
+    {
+      "name": "assert-stolen-instance",
+      "op": "assert-owned",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-b",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:05:00Z"
+      },
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 1,
+      "expected": {
+        "status": "error",
+        "error": "stolen"
+      }
+    },
+    {
+      "name": "assert-stolen-token",
+      "op": "assert-owned",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 9,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:05:00Z"
+      },
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 1,
+      "expected": {
+        "status": "error",
+        "error": "stolen"
+      }
+    },
+    {
+      "name": "assert-expired",
+      "op": "assert-owned",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T14:59:59Z"
+      },
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 1,
+      "expected": {
+        "status": "error",
+        "error": "expired"
+      }
+    },
+    {
+      "name": "assert-equal-now-ok",
+      "op": "assert-owned",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:00:00Z"
+      },
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 1,
+      "expected": {
+        "status": "ok"
+      }
+    },
+    {
+      "name": "release-owner-match",
+      "op": "release-allowed",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:05:00Z"
+      },
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 1,
+      "expected": {
+        "delete": true
+      }
+    },
+    {
+      "name": "release-token-mismatch",
+      "op": "release-allowed",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": 9,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:05:00Z"
+      },
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 1,
+      "expected": {
+        "delete": false
+      }
+    },
+    {
+      "name": "release-missing",
+      "op": "release-allowed",
+      "existing": null,
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 1,
+      "expected": {
+        "delete": false
+      }
+    },
+    {
+      "name": "release-does-not-require-instance",
+      "op": "release-allowed",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "other-worker",
+        "fencingToken": 1,
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:05:00Z"
+      },
+      "target_id": "target-a",
+      "owner_run_id": "run-frozen-1",
+      "owner_instance_id": "worker-a",
+      "fencing_token": 1,
+      "expected": {
+        "delete": true
+      }
+    },
+    {
+      "name": "type-same-run-token-array",
+      "op": "same-run-takeover",
+      "existing": {
+        "schemaVersion": 1,
+        "targetId": "target-a",
+        "ownerRunId": "run-frozen-1",
+        "ownerInstanceId": "worker-a",
+        "fencingToken": [
+          1
+        ],
+        "acquiredAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T15:05:00Z"
+      },
+      "owner_run_id": "run-frozen-1",
+      "fencing_token": 2,
+      "expected": {
+        "status": "error",
+        "oracle_exception": "TypeError"
+      }
+    }
+  ]
+}
