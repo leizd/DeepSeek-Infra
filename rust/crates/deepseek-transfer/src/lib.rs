@@ -4,7 +4,10 @@ use deepseek_protocol::{
 
 pub mod checkpoint;
 pub mod journal;
+mod pycompat;
+pub mod repair_job;
 pub use checkpoint::{MultipartCheckpoint, reconcile_multipart_checkpoint};
+pub use repair_job::replay_repair_phase_case;
 pub use journal::{
     FEDERATED_TRANSFER_IDENTITY_SCHEMA, FederatedTransferJournal, FederatedTransferJournalError,
     ProposedTransfer, TRANSFER_ID_DOMAIN, TRANSFER_JOURNAL_EVENT_SCHEMA,

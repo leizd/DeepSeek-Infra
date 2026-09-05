@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze replica-repair durable phase-machine semantics: create/cancel, unguarded phase writes, execute claim/terminal/max-attempts, pending drain classification, backoff, and exception routing. Rebalance cancel-before-effect is included. This does not move payload bytes or contact MinIO.",
+  "normalization": "LF-normalized SHA-256 of public validator fixture bytes",
+  "corpora": [
+    {
+      "id": "repair-job-phase-semantics-v22",
+      "path": "compat/native-runtime/v22/transfer/repair_job_phase_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen replica-repair durable phase and cancel-before-effect semantics",
+      "sha256": "e92d251b2afd20402c85d62a1c616c1552f529c2136d8dca2e00bebba544830b"
+    }
+  ]
+}
