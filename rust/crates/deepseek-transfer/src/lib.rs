@@ -5,9 +5,11 @@ use deepseek_protocol::{
 pub mod checkpoint;
 pub mod journal;
 mod pycompat;
+pub mod rebalance;
 pub mod repair_job;
 pub mod replication_job;
 pub use checkpoint::{MultipartCheckpoint, reconcile_multipart_checkpoint};
+pub use rebalance::replay_rebalance_hold_case;
 pub use repair_job::replay_repair_phase_case;
 pub use replication_job::replay_replication_phase_case;
 pub use journal::{

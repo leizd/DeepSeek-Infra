@@ -1,0 +1,1579 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "scope": "validator-parity-only-not-provider-execution-evidence",
+  "now": "2026-09-05T15:00:00Z",
+  "ast_matches_source_commit": {
+    "execute_rebalance_job": true,
+    "process_pending_rebalances": true,
+    "is_source_held": true,
+    "has_source_holds_for_target": true,
+    "simulate_copy_removal": true,
+    "to_dict": true,
+    "renew": true
+  },
+  "cases": [
+    {
+      "name": "hold-document-default-3600",
+      "op": "hold-document",
+      "fields": {
+        "holderId": "repair_frozen_1",
+        "holdId": "hold_frozen_1",
+        "targetId": "target-a",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "objectSetDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "hold": {
+          "holderKind": "replica-repair",
+          "holderId": "repair_frozen_1",
+          "holdId": "hold_frozen_1",
+          "targetId": "target-a",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "objectSetDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "createdAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T16:00:00Z",
+          "generation": 1,
+          "etag": null
+        }
+      }
+    },
+    {
+      "name": "hold-document-custom-seconds",
+      "op": "hold-document",
+      "fields": {
+        "holderId": "repair_frozen_1",
+        "holdId": "hold_frozen_2",
+        "targetId": "target-a",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "holdSeconds": 120
+      },
+      "expected": {
+        "hold": {
+          "holderKind": "replica-repair",
+          "holderId": "repair_frozen_1",
+          "holdId": "hold_frozen_2",
+          "targetId": "target-a",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "objectSetDigest": null,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T15:02:00Z",
+          "generation": 1,
+          "etag": null
+        }
+      }
+    },
+    {
+      "name": "hold-renew-generation",
+      "op": "hold-renew",
+      "hold": {
+        "holderKind": "replica-repair",
+        "holderId": "repair_frozen_1",
+        "holdId": "hold_frozen_1",
+        "targetId": "target-a",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "objectSetDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "createdAt": "2026-09-05T15:00:00Z",
+        "expiresAt": "2026-09-05T16:00:00Z",
+        "generation": 1,
+        "etag": null
+      },
+      "durationSeconds": 1800,
+      "expected": {
+        "hold": {
+          "holderKind": "replica-repair",
+          "holderId": "repair_frozen_1",
+          "holdId": "hold_frozen_1",
+          "targetId": "target-a",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "objectSetDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "createdAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T15:30:00Z",
+          "generation": 2,
+          "etag": null
+        }
+      }
+    },
+    {
+      "name": "is-held-match",
+      "op": "is-source-held",
+      "target_id": "target-a",
+      "policy_id": "policy-frozen-1",
+      "backup_id": "backup-frozen-1",
+      "holds": [
+        {
+          "holderKind": "replica-repair",
+          "holderId": "repair_frozen_1",
+          "holdId": "hold_frozen_1",
+          "targetId": "target-a",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "objectSetDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "createdAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T16:00:00Z",
+          "generation": 1,
+          "etag": null
+        }
+      ],
+      "expected": {
+        "held": true
+      }
+    },
+    {
+      "name": "is-held-expired",
+      "op": "is-source-held",
+      "target_id": "target-a",
+      "policy_id": "policy-frozen-1",
+      "backup_id": "backup-frozen-1",
+      "holds": [
+        {
+          "holderKind": "replica-repair",
+          "holderId": "repair_frozen_1",
+          "holdId": "hold_frozen_1",
+          "targetId": "target-a",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "objectSetDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "createdAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T14:59:59Z",
+          "generation": 1,
+          "etag": null
+        }
+      ],
+      "expected": {
+        "held": false
+      }
+    },
+    {
+      "name": "is-held-equal-now-still-held",
+      "op": "is-source-held",
+      "target_id": "target-a",
+      "policy_id": "policy-frozen-1",
+      "backup_id": "backup-frozen-1",
+      "holds": [
+        {
+          "holderKind": "replica-repair",
+          "holderId": "repair_frozen_1",
+          "holdId": "hold_frozen_1",
+          "targetId": "target-a",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "objectSetDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "createdAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T15:00:00Z",
+          "generation": 1,
+          "etag": null
+        }
+      ],
+      "expected": {
+        "held": true
+      }
+    },
+    {
+      "name": "is-held-unparseable-expiry-fail-closed",
+      "op": "is-source-held",
+      "target_id": "target-a",
+      "policy_id": "policy-frozen-1",
+      "backup_id": "backup-frozen-1",
+      "holds": [
+        {
+          "holderKind": "replica-repair",
+          "holderId": "repair_frozen_1",
+          "holdId": "hold_frozen_1",
+          "targetId": "target-a",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "objectSetDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "createdAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "not-a-time",
+          "generation": 1,
+          "etag": null
+        }
+      ],
+      "expected": {
+        "held": true
+      }
+    },
+    {
+      "name": "is-held-target-mismatch",
+      "op": "is-source-held",
+      "target_id": "target-b",
+      "policy_id": "policy-frozen-1",
+      "backup_id": "backup-frozen-1",
+      "holds": [
+        {
+          "holderKind": "replica-repair",
+          "holderId": "repair_frozen_1",
+          "holdId": "hold_frozen_1",
+          "targetId": "target-a",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "objectSetDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "createdAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T16:00:00Z",
+          "generation": 1,
+          "etag": null
+        }
+      ],
+      "expected": {
+        "held": false
+      }
+    },
+    {
+      "name": "is-held-none-target-matches-string-None",
+      "op": "is-source-held",
+      "target_id": "None",
+      "policy_id": "policy-frozen-1",
+      "backup_id": "backup-frozen-1",
+      "holds": [
+        {
+          "holderKind": "replica-repair",
+          "holderId": "repair_frozen_1",
+          "holdId": "hold_frozen_1",
+          "targetId": null,
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "objectSetDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "createdAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T16:00:00Z",
+          "generation": 1,
+          "etag": null
+        }
+      ],
+      "expected": {
+        "held": true
+      }
+    },
+    {
+      "name": "is-held-decode-error-skipped",
+      "op": "is-source-held",
+      "target_id": "target-a",
+      "policy_id": "policy-frozen-1",
+      "backup_id": "backup-frozen-1",
+      "holds": [
+        {
+          "decode_error": true
+        },
+        {
+          "holderKind": "replica-repair",
+          "holderId": "repair_frozen_1",
+          "holdId": "hold_frozen_1",
+          "targetId": "target-a",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "objectSetDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "createdAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T16:00:00Z",
+          "generation": 1,
+          "etag": null
+        }
+      ],
+      "expected": {
+        "held": true
+      }
+    },
+    {
+      "name": "has-holds-or-empty-target",
+      "op": "has-source-holds",
+      "target_id": "target-a",
+      "holds": [
+        {
+          "holderKind": "replica-repair",
+          "holderId": "repair_frozen_1",
+          "holdId": "hold_frozen_1",
+          "targetId": "target-a",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "objectSetDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "createdAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T16:00:00Z",
+          "generation": 1,
+          "etag": null
+        }
+      ],
+      "expected": {
+        "held": true
+      }
+    },
+    {
+      "name": "has-holds-missing-target-not-None-string",
+      "op": "has-source-holds",
+      "target_id": "None",
+      "holds": [
+        {
+          "holderKind": "replica-repair",
+          "holderId": "repair_frozen_1",
+          "holdId": "hold_frozen_1",
+          "targetId": null,
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "objectSetDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "createdAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T16:00:00Z",
+          "generation": 1,
+          "etag": null
+        }
+      ],
+      "expected": {
+        "held": false
+      }
+    },
+    {
+      "name": "has-holds-decode-error-true",
+      "op": "has-source-holds",
+      "target_id": "target-a",
+      "holds": [
+        {
+          "decode_error": true
+        }
+      ],
+      "expected": {
+        "held": true
+      }
+    },
+    {
+      "name": "has-holds-expired-false",
+      "op": "has-source-holds",
+      "target_id": "target-a",
+      "holds": [
+        {
+          "holderKind": "replica-repair",
+          "holderId": "repair_frozen_1",
+          "holdId": "hold_frozen_1",
+          "targetId": "target-a",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "objectSetDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "createdAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T14:59:59Z",
+          "generation": 1,
+          "etag": null
+        }
+      ],
+      "expected": {
+        "held": false
+      }
+    },
+    {
+      "name": "simulate-remove-b-not-safe-min-fd",
+      "op": "simulate-removal",
+      "target_id": "target-b",
+      "backup_id": "backup-frozen-1",
+      "policy_id": "policy-frozen-1",
+      "policy": {
+        "replication": {
+          "minCommittedCopies": 2,
+          "minFailureDomains": 2,
+          "minRegions": 2
+        },
+        "placement": {}
+      },
+      "copies": [
+        {
+          "targetId": "target-a",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-b",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-c",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "targets": [
+        {
+          "targetId": "target-a",
+          "failureDomain": "fd-1",
+          "region": "r1"
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-2",
+          "region": "r2"
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-1",
+          "region": "r1"
+        }
+      ],
+      "holds": [],
+      "expected": {
+        "healthyCopiesBefore": 3,
+        "healthyCopiesAfter": 2,
+        "failureDomainsBefore": 2,
+        "failureDomainsAfter": 1,
+        "regionsBefore": 2,
+        "regionsAfter": 1,
+        "copiesInEachDomainAfter": {
+          "fd-1": 2
+        },
+        "policySafe": false,
+        "protectedByHold": false,
+        "targetId": "target-b",
+        "backupId": "backup-frozen-1"
+      }
+    },
+    {
+      "name": "simulate-remove-c-keeps-two-domains",
+      "op": "simulate-removal",
+      "target_id": "target-c",
+      "backup_id": "backup-frozen-1",
+      "policy_id": "policy-frozen-1",
+      "policy": {
+        "replication": {
+          "minCommittedCopies": 2,
+          "minFailureDomains": 2,
+          "minRegions": 2
+        },
+        "placement": {}
+      },
+      "copies": [
+        {
+          "targetId": "target-a",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-b",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-c",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "targets": [
+        {
+          "targetId": "target-a",
+          "failureDomain": "fd-1",
+          "region": "r1"
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-2",
+          "region": "r2"
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-1",
+          "region": "r1"
+        }
+      ],
+      "holds": [],
+      "expected": {
+        "healthyCopiesBefore": 3,
+        "healthyCopiesAfter": 2,
+        "failureDomainsBefore": 2,
+        "failureDomainsAfter": 2,
+        "regionsBefore": 2,
+        "regionsAfter": 2,
+        "copiesInEachDomainAfter": {
+          "fd-1": 1,
+          "fd-2": 1
+        },
+        "policySafe": true,
+        "protectedByHold": false,
+        "targetId": "target-c",
+        "backupId": "backup-frozen-1"
+      }
+    },
+    {
+      "name": "simulate-held-not-safe",
+      "op": "simulate-removal",
+      "target_id": "target-c",
+      "backup_id": "backup-frozen-1",
+      "policy_id": "policy-frozen-1",
+      "policy": {
+        "replication": {
+          "minCommittedCopies": 2,
+          "minFailureDomains": 2,
+          "minRegions": 2
+        },
+        "placement": {}
+      },
+      "copies": [
+        {
+          "targetId": "target-a",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-b",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-c",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "targets": [
+        {
+          "targetId": "target-a",
+          "failureDomain": "fd-1",
+          "region": "r1"
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-2",
+          "region": "r2"
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-1",
+          "region": "r1"
+        }
+      ],
+      "holds": [
+        {
+          "holderKind": "replica-repair",
+          "holderId": "repair_frozen_1",
+          "holdId": "hold_frozen_1",
+          "targetId": "target-c",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "objectSetDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "createdAt": "2026-09-05T15:00:00Z",
+          "expiresAt": "2026-09-05T16:00:00Z",
+          "generation": 1,
+          "etag": null
+        }
+      ],
+      "expected": {
+        "healthyCopiesBefore": 3,
+        "healthyCopiesAfter": 2,
+        "failureDomainsBefore": 2,
+        "failureDomainsAfter": 2,
+        "regionsBefore": 2,
+        "regionsAfter": 2,
+        "copiesInEachDomainAfter": {
+          "fd-1": 1,
+          "fd-2": 1
+        },
+        "policySafe": false,
+        "protectedByHold": true,
+        "targetId": "target-c",
+        "backupId": "backup-frozen-1"
+      }
+    },
+    {
+      "name": "simulate-unhealthy-ignored",
+      "op": "simulate-removal",
+      "target_id": "target-b",
+      "backup_id": "backup-frozen-1",
+      "policy_id": "policy-frozen-1",
+      "policy": {
+        "replication": {
+          "minCommittedCopies": 1,
+          "minFailureDomains": 1,
+          "minRegions": 1
+        }
+      },
+      "copies": [
+        {
+          "targetId": "target-a",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-b",
+          "recoverable": false,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-c",
+          "recoverable": true,
+          "state": "degraded"
+        }
+      ],
+      "targets": [
+        {
+          "targetId": "target-a",
+          "failureDomain": "fd-1",
+          "region": "r1"
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-2",
+          "region": "r2"
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-1",
+          "region": "r1"
+        }
+      ],
+      "holds": [],
+      "expected": {
+        "healthyCopiesBefore": 1,
+        "healthyCopiesAfter": 1,
+        "failureDomainsBefore": 1,
+        "failureDomainsAfter": 1,
+        "regionsBefore": 1,
+        "regionsAfter": 1,
+        "copiesInEachDomainAfter": {
+          "fd-1": 1
+        },
+        "policySafe": true,
+        "protectedByHold": false,
+        "targetId": "target-b",
+        "backupId": "backup-frozen-1"
+      }
+    },
+    {
+      "name": "simulate-unknown-target-default-fd",
+      "op": "simulate-removal",
+      "target_id": "target-z",
+      "backup_id": "backup-frozen-1",
+      "policy_id": "policy-frozen-1",
+      "policy": {
+        "replication": {
+          "minCommittedCopies": 1,
+          "minFailureDomains": 1,
+          "minRegions": 1
+        }
+      },
+      "copies": [
+        {
+          "targetId": "target-orphan",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "targets": [],
+      "holds": [],
+      "expected": {
+        "healthyCopiesBefore": 1,
+        "healthyCopiesAfter": 1,
+        "failureDomainsBefore": 1,
+        "failureDomainsAfter": 1,
+        "regionsBefore": 1,
+        "regionsAfter": 1,
+        "copiesInEachDomainAfter": {
+          "default": 1
+        },
+        "policySafe": true,
+        "protectedByHold": false,
+        "targetId": "target-z",
+        "backupId": "backup-frozen-1"
+      }
+    },
+    {
+      "name": "simulate-max-copies-per-fd",
+      "op": "simulate-removal",
+      "target_id": "target-b",
+      "backup_id": "backup-frozen-1",
+      "policy_id": "policy-frozen-1",
+      "policy": {
+        "replication": {
+          "minCommittedCopies": 1,
+          "minFailureDomains": 1,
+          "minRegions": 1
+        },
+        "placement": {
+          "maxCopiesPerFailureDomain": 1
+        }
+      },
+      "copies": [
+        {
+          "targetId": "target-a",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-b",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-c",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "targets": [
+        {
+          "targetId": "target-a",
+          "failureDomain": "fd-1",
+          "region": "r1"
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-2",
+          "region": "r2"
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-1",
+          "region": "r1"
+        }
+      ],
+      "holds": [],
+      "expected": {
+        "healthyCopiesBefore": 3,
+        "healthyCopiesAfter": 2,
+        "failureDomainsBefore": 2,
+        "failureDomainsAfter": 1,
+        "regionsBefore": 2,
+        "regionsAfter": 1,
+        "copiesInEachDomainAfter": {
+          "fd-1": 2
+        },
+        "policySafe": false,
+        "protectedByHold": false,
+        "targetId": "target-b",
+        "backupId": "backup-frozen-1"
+      }
+    },
+    {
+      "name": "simulate-max-zero-unlimited",
+      "op": "simulate-removal",
+      "target_id": "target-b",
+      "backup_id": "backup-frozen-1",
+      "policy_id": "policy-frozen-1",
+      "policy": {
+        "replication": {
+          "minCommittedCopies": 1,
+          "minFailureDomains": 1,
+          "minRegions": 1,
+          "maxCopiesPerFailureDomain": 0
+        },
+        "placement": {}
+      },
+      "copies": [
+        {
+          "targetId": "target-a",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-b",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-c",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "targets": [
+        {
+          "targetId": "target-a",
+          "failureDomain": "fd-1",
+          "region": "r1"
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-2",
+          "region": "r2"
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-1",
+          "region": "r1"
+        }
+      ],
+      "holds": [],
+      "expected": {
+        "healthyCopiesBefore": 3,
+        "healthyCopiesAfter": 2,
+        "failureDomainsBefore": 2,
+        "failureDomainsAfter": 1,
+        "regionsBefore": 2,
+        "regionsAfter": 1,
+        "copiesInEachDomainAfter": {
+          "fd-1": 2
+        },
+        "policySafe": true,
+        "protectedByHold": false,
+        "targetId": "target-b",
+        "backupId": "backup-frozen-1"
+      }
+    },
+    {
+      "name": "simulate-min-copies-zero-falsy-fallback",
+      "op": "simulate-removal",
+      "target_id": "target-a",
+      "backup_id": "backup-frozen-1",
+      "policy_id": "policy-frozen-1",
+      "policy": {
+        "replication": {
+          "minCommittedCopies": 0,
+          "minFailureDomains": 1,
+          "minRegions": 1
+        }
+      },
+      "copies": [
+        {
+          "targetId": "target-a",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "targets": [
+        {
+          "targetId": "target-a",
+          "failureDomain": "fd-1",
+          "region": "r1"
+        }
+      ],
+      "holds": [],
+      "expected": {
+        "healthyCopiesBefore": 1,
+        "healthyCopiesAfter": 0,
+        "failureDomainsBefore": 1,
+        "failureDomainsAfter": 0,
+        "regionsBefore": 1,
+        "regionsAfter": 0,
+        "copiesInEachDomainAfter": {},
+        "policySafe": false,
+        "protectedByHold": false,
+        "targetId": "target-a",
+        "backupId": "backup-frozen-1"
+      }
+    },
+    {
+      "name": "type-simulate-min-copies-object",
+      "op": "simulate-removal",
+      "target_id": "target-a",
+      "backup_id": "backup-frozen-1",
+      "policy_id": "policy-frozen-1",
+      "policy": {
+        "replication": {
+          "minCommittedCopies": {
+            "n": 1
+          }
+        }
+      },
+      "copies": [
+        {
+          "targetId": "target-a",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-b",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-c",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "targets": [
+        {
+          "targetId": "target-a",
+          "failureDomain": "fd-1",
+          "region": "r1"
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-2",
+          "region": "r2"
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-1",
+          "region": "r1"
+        }
+      ],
+      "holds": [],
+      "expected": {
+        "status": "error",
+        "oracle_exception": "TypeError"
+      }
+    },
+    {
+      "name": "claim-rebalance-missing",
+      "op": "claim-rebalance",
+      "job_id": "rebalance_missing",
+      "job": null,
+      "expected": {
+        "status": "error",
+        "error": "not-found",
+        "jobId": "rebalance_missing"
+      }
+    },
+    {
+      "name": "claim-rebalance-pending",
+      "op": "claim-rebalance",
+      "job_id": "rebalance_frozen_1",
+      "job": {
+        "schemaVersion": 1,
+        "jobId": "rebalance_frozen_1",
+        "resilienceActionId": "action-frozen-1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "sourceTargetId": "target-a",
+        "destTargetId": "target-c",
+        "reason": "failure-domain-rebalance",
+        "pruneSourceAfter": false,
+        "phase": "pending",
+        "bytesTransferred": 0,
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z"
+      },
+      "expected": {
+        "status": "claimed",
+        "jobId": "rebalance_frozen_1",
+        "job": {
+          "schemaVersion": 1,
+          "jobId": "rebalance_frozen_1",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "transferring",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "claim-rebalance-cancelled",
+      "op": "claim-rebalance",
+      "job_id": "rebalance_frozen_1",
+      "job": {
+        "schemaVersion": 1,
+        "jobId": "rebalance_frozen_1",
+        "resilienceActionId": "action-frozen-1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "sourceTargetId": "target-a",
+        "destTargetId": "target-c",
+        "reason": "failure-domain-rebalance",
+        "pruneSourceAfter": false,
+        "phase": "cancelled",
+        "bytesTransferred": 0,
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z"
+      },
+      "expected": {
+        "status": "cancelled",
+        "jobId": "rebalance_frozen_1",
+        "job": {
+          "schemaVersion": 1,
+          "jobId": "rebalance_frozen_1",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "cancelled",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "claim-rebalance-complete",
+      "op": "claim-rebalance",
+      "job_id": "rebalance_frozen_1",
+      "job": {
+        "schemaVersion": 1,
+        "jobId": "rebalance_frozen_1",
+        "resilienceActionId": "action-frozen-1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "sourceTargetId": "target-a",
+        "destTargetId": "target-c",
+        "reason": "failure-domain-rebalance",
+        "pruneSourceAfter": false,
+        "phase": "complete",
+        "bytesTransferred": 0,
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z"
+      },
+      "expected": {
+        "status": "success",
+        "jobId": "rebalance_frozen_1",
+        "job": {
+          "schemaVersion": 1,
+          "jobId": "rebalance_frozen_1",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "complete",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "claim-rebalance-failed-reclaims",
+      "op": "claim-rebalance",
+      "job_id": "rebalance_frozen_1",
+      "job": {
+        "schemaVersion": 1,
+        "jobId": "rebalance_frozen_1",
+        "resilienceActionId": "action-frozen-1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "sourceTargetId": "target-a",
+        "destTargetId": "target-c",
+        "reason": "failure-domain-rebalance",
+        "pruneSourceAfter": false,
+        "phase": "failed",
+        "bytesTransferred": 0,
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": "old"
+      },
+      "expected": {
+        "status": "claimed",
+        "jobId": "rebalance_frozen_1",
+        "job": {
+          "schemaVersion": 1,
+          "jobId": "rebalance_frozen_1",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "transferring",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": "old"
+        }
+      }
+    },
+    {
+      "name": "claim-rebalance-transferring-reclaims",
+      "op": "claim-rebalance",
+      "job_id": "rebalance_frozen_1",
+      "job": {
+        "schemaVersion": 1,
+        "jobId": "rebalance_frozen_1",
+        "resilienceActionId": "action-frozen-1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "sourceTargetId": "target-a",
+        "destTargetId": "target-c",
+        "reason": "failure-domain-rebalance",
+        "pruneSourceAfter": false,
+        "phase": "transferring",
+        "bytesTransferred": 0,
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z"
+      },
+      "expected": {
+        "status": "claimed",
+        "jobId": "rebalance_frozen_1",
+        "job": {
+          "schemaVersion": 1,
+          "jobId": "rebalance_frozen_1",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "transferring",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "type-claim-rebalance-phase-false",
+      "op": "claim-rebalance",
+      "job_id": "rebalance_frozen_1",
+      "job": {
+        "schemaVersion": 1,
+        "jobId": "rebalance_frozen_1",
+        "resilienceActionId": "action-frozen-1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "sourceTargetId": "target-a",
+        "destTargetId": "target-c",
+        "reason": "failure-domain-rebalance",
+        "pruneSourceAfter": false,
+        "phase": false,
+        "bytesTransferred": 0,
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z"
+      },
+      "expected": {
+        "status": "claimed",
+        "jobId": "rebalance_frozen_1",
+        "job": {
+          "schemaVersion": 1,
+          "jobId": "rebalance_frozen_1",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "transferring",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "fail-rebalance-message",
+      "op": "fail-rebalance",
+      "job_id": "rebalance_frozen_1",
+      "job": {
+        "schemaVersion": 1,
+        "jobId": "rebalance_frozen_1",
+        "resilienceActionId": "action-frozen-1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "sourceTargetId": "target-a",
+        "destTargetId": "target-c",
+        "reason": "failure-domain-rebalance",
+        "pruneSourceAfter": false,
+        "phase": "transferring",
+        "bytesTransferred": 0,
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z"
+      },
+      "error": "Rebalance transfer failed: None",
+      "expected": {
+        "status": "failed",
+        "jobId": "rebalance_frozen_1",
+        "error": "Rebalance transfer failed: None",
+        "job": {
+          "schemaVersion": 1,
+          "jobId": "rebalance_frozen_1",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "failed",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": "Rebalance transfer failed: None"
+        }
+      }
+    },
+    {
+      "name": "fail-rebalance-no-truncate",
+      "op": "fail-rebalance",
+      "job_id": "rebalance_frozen_1",
+      "job": {
+        "schemaVersion": 1,
+        "jobId": "rebalance_frozen_1",
+        "resilienceActionId": "action-frozen-1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "sourceTargetId": "target-a",
+        "destTargetId": "target-c",
+        "reason": "failure-domain-rebalance",
+        "pruneSourceAfter": false,
+        "phase": "transferring",
+        "bytesTransferred": 0,
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z"
+      },
+      "error": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "expected": {
+        "status": "failed",
+        "jobId": "rebalance_frozen_1",
+        "error": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "job": {
+          "schemaVersion": 1,
+          "jobId": "rebalance_frozen_1",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "failed",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      }
+    },
+    {
+      "name": "classify-rebalance-pending",
+      "op": "classify-pending-rebalance",
+      "job": {
+        "schemaVersion": 1,
+        "jobId": "rebalance_frozen_1",
+        "resilienceActionId": "action-frozen-1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "sourceTargetId": "target-a",
+        "destTargetId": "target-c",
+        "reason": "failure-domain-rebalance",
+        "pruneSourceAfter": false,
+        "phase": "pending",
+        "bytesTransferred": 0,
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z"
+      },
+      "expected": {
+        "decision": "pending",
+        "job": {
+          "schemaVersion": 1,
+          "jobId": "rebalance_frozen_1",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "pending",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "classify-rebalance-transferring",
+      "op": "classify-pending-rebalance",
+      "job": {
+        "schemaVersion": 1,
+        "jobId": "rebalance_frozen_1",
+        "resilienceActionId": "action-frozen-1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "sourceTargetId": "target-a",
+        "destTargetId": "target-c",
+        "reason": "failure-domain-rebalance",
+        "pruneSourceAfter": false,
+        "phase": "transferring",
+        "bytesTransferred": 0,
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z"
+      },
+      "expected": {
+        "decision": "skip",
+        "job": {
+          "schemaVersion": 1,
+          "jobId": "rebalance_frozen_1",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "transferring",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "classify-rebalance-failed",
+      "op": "classify-pending-rebalance",
+      "job": {
+        "schemaVersion": 1,
+        "jobId": "rebalance_frozen_1",
+        "resilienceActionId": "action-frozen-1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "sourceTargetId": "target-a",
+        "destTargetId": "target-c",
+        "reason": "failure-domain-rebalance",
+        "pruneSourceAfter": false,
+        "phase": "failed",
+        "bytesTransferred": 0,
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z"
+      },
+      "expected": {
+        "decision": "skip",
+        "job": {
+          "schemaVersion": 1,
+          "jobId": "rebalance_frozen_1",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "failed",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "drain-limit-zero-still-one",
+      "op": "drain-limit",
+      "limit": 0,
+      "jobs": [
+        {
+          "schemaVersion": 1,
+          "jobId": "a",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "pending",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "schemaVersion": 1,
+          "jobId": "b",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "pending",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "schemaVersion": 1,
+          "jobId": "c",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "complete",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        }
+      ],
+      "expected": {
+        "selected": [
+          "a"
+        ],
+        "pendingCount": 2
+      }
+    },
+    {
+      "name": "drain-limit-two",
+      "op": "drain-limit",
+      "limit": 2,
+      "jobs": [
+        {
+          "schemaVersion": 1,
+          "jobId": "a",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "pending",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "schemaVersion": 1,
+          "jobId": "b",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "pending",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "schemaVersion": 1,
+          "jobId": "c",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "pending",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        }
+      ],
+      "expected": {
+        "selected": [
+          "a",
+          "b"
+        ],
+        "pendingCount": 3
+      }
+    },
+    {
+      "name": "drain-limit-false-still-one",
+      "op": "drain-limit",
+      "limit": false,
+      "jobs": [
+        {
+          "schemaVersion": 1,
+          "jobId": "a",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "pending",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "schemaVersion": 1,
+          "jobId": "b",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "pending",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        }
+      ],
+      "expected": {
+        "selected": [
+          "a"
+        ],
+        "pendingCount": 2
+      }
+    },
+    {
+      "name": "type-drain-limit-object",
+      "op": "drain-limit",
+      "limit": {
+        "n": 1
+      },
+      "jobs": [
+        {
+          "schemaVersion": 1,
+          "jobId": "rebalance_frozen_1",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "pending",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "error",
+        "oracle_exception": "TypeError"
+      }
+    },
+    {
+      "name": "drain-only-pending",
+      "op": "drain-limit",
+      "limit": 5,
+      "jobs": [
+        {
+          "schemaVersion": 1,
+          "jobId": "x",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "failed",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "schemaVersion": 1,
+          "jobId": "y",
+          "resilienceActionId": "action-frozen-1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "sourceTargetId": "target-a",
+          "destTargetId": "target-c",
+          "reason": "failure-domain-rebalance",
+          "pruneSourceAfter": false,
+          "phase": "pending",
+          "bytesTransferred": 0,
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z"
+        }
+      ],
+      "expected": {
+        "selected": [
+          "y"
+        ],
+        "pendingCount": 1
+      }
+    }
+  ]
+}
