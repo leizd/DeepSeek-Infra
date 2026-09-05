@@ -266,7 +266,7 @@ func validateExistingControlMarker(databasePath string) (bool, error) {
 		).Scan(&runtimeName, &mode, &schema, &uniqueWriter)
 	}
 	if queryErr == nil && (runtimeName != RuntimeGo || mode != ModeShadow ||
-		uniqueWriter != RuntimeGo || schema < 0 || schema > SchemaV1) {
+		uniqueWriter != RuntimeGo || schema < 0 || schema > SchemaV2) {
 		queryErr = ErrForeignRuntimeStore
 	}
 	var userVersion, migrationCount int
@@ -311,7 +311,7 @@ func expectedControlUserObjects(schema int) map[string]string {
 		"control_writer":     "table",
 		"schema_migrations":  "table",
 	}
-	if schema != SchemaV1 {
+	if schema < SchemaV1 {
 		return objects
 	}
 	for _, table := range controlTableNames {
@@ -320,6 +320,14 @@ func expectedControlUserObjects(schema int) map[string]string {
 	objects["control_events"] = "table"
 	objects["control_events_no_update"] = "trigger"
 	objects["control_events_no_delete"] = "trigger"
+	if schema < SchemaV2 {
+		return objects
+	}
+	objects["control_cutover"] = "table"
+	objects["control_cutover_events"] = "table"
+	objects["control_cutover_no_delete"] = "trigger"
+	objects["control_cutover_events_no_update"] = "trigger"
+	objects["control_cutover_events_no_delete"] = "trigger"
 	return objects
 }
 
@@ -423,7 +431,7 @@ func (store *Control) bootstrapAndClaim(databaseExisted bool) error {
 		return fmt.Errorf("%w: invalid store metadata: %v", ErrForeignRuntimeStore, err)
 	}
 	if runtimeName != RuntimeGo || mode != ModeShadow || uniqueWriter != RuntimeGo ||
-		store.schema < 0 || store.schema > SchemaV1 {
+		store.schema < 0 || store.schema > SchemaV2 {
 		return ErrForeignRuntimeStore
 	}
 	var userVersion, migrationCount int
@@ -457,7 +465,7 @@ var bootstrapSchemaStatements = [...]string{
 		singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
 		runtime TEXT NOT NULL,
 		mode TEXT NOT NULL,
-		schema_version INTEGER NOT NULL CHECK(schema_version BETWEEN 0 AND 1),
+		schema_version INTEGER NOT NULL CHECK(schema_version BETWEEN 0 AND 2),
 		unique_writer TEXT NOT NULL
 	) STRICT`,
 	`CREATE TABLE IF NOT EXISTS control_writer (
@@ -525,39 +533,140 @@ func (store *Control) claimWriterTx(tx *sql.Tx) error {
 }
 
 func (store *Control) migrateTx(tx *sql.Tx) error {
-	if store.schema > SchemaV1 || store.schema < 0 {
+	if store.schema > SchemaV2 || store.schema < 0 {
 		return ErrForeignRuntimeStore
 	}
 	if store.schema == 0 {
-		for _, table := range controlTableNames {
-			if _, err := tx.Exec(createDomainTableSQL(table)); err != nil {
-				return fmt.Errorf("create control table %s: %w", table, err)
-			}
-		}
-		if _, err := tx.Exec(controlEventsSchema); err != nil {
-			return fmt.Errorf("create control event journal: %w", err)
-		}
-		for _, statement := range controlEventImmutabilityTriggers {
-			if _, err := tx.Exec(statement); err != nil {
-				return fmt.Errorf("create control event immutability trigger: %w", err)
-			}
-		}
-		if _, err := tx.Exec(
-			"INSERT INTO schema_migrations(version, applied_at, description) VALUES(1, ?, ?)",
-			store.now(),
-			"create strict domain tables, append-only event journal, and fenced writer metadata",
-		); err != nil {
+		if err := store.migrateToV1Tx(tx); err != nil {
 			return err
 		}
-		if _, err := tx.Exec("UPDATE control_store_meta SET schema_version = 1 WHERE singleton = 1"); err != nil {
+	}
+	if store.schema == SchemaV1 {
+		if err := store.migrateToV2Tx(tx); err != nil {
 			return err
 		}
-		if _, err := tx.Exec("PRAGMA user_version = 1"); err != nil {
-			return err
-		}
-		store.schema = SchemaV1
 	}
 	return verifySchemaTx(tx, store.schema)
+}
+
+func (store *Control) migrateToV1Tx(tx *sql.Tx) error {
+	for _, table := range controlTableNames {
+		if _, err := tx.Exec(createDomainTableSQL(table)); err != nil {
+			return fmt.Errorf("create control table %s: %w", table, err)
+		}
+	}
+	if _, err := tx.Exec(controlEventsSchema); err != nil {
+		return fmt.Errorf("create control event journal: %w", err)
+	}
+	for _, statement := range controlEventImmutabilityTriggers {
+		if _, err := tx.Exec(statement); err != nil {
+			return fmt.Errorf("create control event immutability trigger: %w", err)
+		}
+	}
+	if _, err := tx.Exec(
+		"INSERT INTO schema_migrations(version, applied_at, description) VALUES(1, ?, ?)",
+		store.now(),
+		"create strict domain tables, append-only event journal, and fenced writer metadata",
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("UPDATE control_store_meta SET schema_version = 1 WHERE singleton = 1"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("PRAGMA user_version = 1"); err != nil {
+		return err
+	}
+	store.schema = SchemaV1
+	return verifySchemaTx(tx, store.schema)
+}
+
+func (store *Control) migrateToV2Tx(tx *sql.Tx) error {
+	if _, err := tx.Exec(`CREATE TABLE control_store_meta_v2 (
+		singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+		runtime TEXT NOT NULL,
+		mode TEXT NOT NULL,
+		schema_version INTEGER NOT NULL CHECK(schema_version BETWEEN 0 AND 2),
+		unique_writer TEXT NOT NULL
+	) STRICT`); err != nil {
+		return fmt.Errorf("create control store metadata v2: %w", err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO control_store_meta_v2(singleton, runtime, mode, schema_version, unique_writer)
+		 SELECT singleton, runtime, mode, schema_version, unique_writer FROM control_store_meta`,
+	); err != nil {
+		return fmt.Errorf("copy control store metadata: %w", err)
+	}
+	if _, err := tx.Exec("DROP TABLE control_store_meta"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("ALTER TABLE control_store_meta_v2 RENAME TO control_store_meta"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(controlCutoverSchema); err != nil {
+		return fmt.Errorf("create control cutover table: %w", err)
+	}
+	if _, err := tx.Exec(controlCutoverEventsSchema); err != nil {
+		return fmt.Errorf("create control cutover journal: %w", err)
+	}
+	for _, statement := range controlCutoverImmutabilityTriggers {
+		if _, err := tx.Exec(statement); err != nil {
+			return fmt.Errorf("create control cutover immutability trigger: %w", err)
+		}
+	}
+	now := store.now()
+	if now < 0 {
+		return ErrWriterFenceHeld
+	}
+	for _, domain := range controlDomainOrder {
+		if _, err := tx.Exec(
+			`INSERT INTO control_cutover(
+				domain, state, revision, epoch, fencing_token, previous_owner, owner,
+				transfer_id, writer_fencing_token, updated_at
+			) VALUES(?, ?, 1, 1, ?, ?, ?, ?, ?, ?)`,
+			domain,
+			string(CutoverShadow),
+			store.token,
+			OwnerPython,
+			OwnerPython,
+			CutoverGenesisTransferID,
+			store.token,
+			now,
+		); err != nil {
+			return fmt.Errorf("seed cutover %s: %w", domain, err)
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO control_cutover_events(
+				domain, transfer_id, previous_state, state, previous_revision, revision,
+				previous_epoch, epoch, previous_fencing_token, fencing_token,
+				previous_owner, owner, writer_fencing_token, recorded_at
+			) VALUES(?, ?, '', ?, 0, 1, 0, 1, 0, ?, ?, ?, ?, ?)`,
+			domain,
+			CutoverGenesisTransferID,
+			string(CutoverShadow),
+			store.token,
+			OwnerPython,
+			OwnerPython,
+			store.token,
+			now,
+		); err != nil {
+			return fmt.Errorf("seed cutover event %s: %w", domain, err)
+		}
+	}
+	if _, err := tx.Exec(
+		"INSERT INTO schema_migrations(version, applied_at, description) VALUES(2, ?, ?)",
+		now,
+		"create per-domain cutover state and append-only cutover journal",
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("UPDATE control_store_meta SET schema_version = 2 WHERE singleton = 1"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("PRAGMA user_version = 2"); err != nil {
+		return err
+	}
+	store.schema = SchemaV2
+	return nil
 }
 
 func createDomainTableSQL(table string) string {
@@ -603,11 +712,79 @@ var controlEventImmutabilityTriggers = [...]string{
 	END`,
 }
 
+const controlCutoverSchema = `CREATE TABLE control_cutover (
+	domain TEXT PRIMARY KEY CHECK(domain IN (
+		'policy', 'target', 'scheduler_run', 'action', 'risk', 'wave',
+		'peer', 'grant', 'session', 'transfer', 'forecast', 'agent_run'
+	)),
+	state TEXT NOT NULL CHECK(state IN (
+		'shadow', 'dual_evaluate', 'go_authoritative', 'python_shadow', 'python_disabled'
+	)),
+	revision INTEGER NOT NULL CHECK(revision > 0),
+	epoch INTEGER NOT NULL CHECK(epoch > 0),
+	fencing_token INTEGER NOT NULL CHECK(fencing_token > 0),
+	previous_owner TEXT NOT NULL CHECK(previous_owner IN ('python', 'go')),
+	owner TEXT NOT NULL CHECK(owner IN ('python', 'go')),
+	transfer_id TEXT NOT NULL CHECK(length(transfer_id) > 0),
+	writer_fencing_token INTEGER NOT NULL CHECK(writer_fencing_token > 0),
+	updated_at INTEGER NOT NULL CHECK(updated_at >= 0)
+) STRICT`
+
+const controlCutoverEventsSchema = `CREATE TABLE control_cutover_events (
+	event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+	domain TEXT NOT NULL CHECK(domain IN (
+		'policy', 'target', 'scheduler_run', 'action', 'risk', 'wave',
+		'peer', 'grant', 'session', 'transfer', 'forecast', 'agent_run'
+	)),
+	transfer_id TEXT NOT NULL CHECK(length(transfer_id) > 0),
+	previous_state TEXT NOT NULL,
+	state TEXT NOT NULL CHECK(state IN (
+		'shadow', 'dual_evaluate', 'go_authoritative', 'python_shadow', 'python_disabled'
+	)),
+	previous_revision INTEGER NOT NULL CHECK(previous_revision >= 0),
+	revision INTEGER NOT NULL CHECK(revision > 0),
+	previous_epoch INTEGER NOT NULL CHECK(previous_epoch >= 0),
+	epoch INTEGER NOT NULL CHECK(epoch > 0),
+	previous_fencing_token INTEGER NOT NULL CHECK(previous_fencing_token >= 0),
+	fencing_token INTEGER NOT NULL CHECK(fencing_token > 0),
+	previous_owner TEXT NOT NULL CHECK(previous_owner IN ('python', 'go')),
+	owner TEXT NOT NULL CHECK(owner IN ('python', 'go')),
+	writer_fencing_token INTEGER NOT NULL CHECK(writer_fencing_token > 0),
+	recorded_at INTEGER NOT NULL CHECK(recorded_at >= 0),
+	UNIQUE(domain, revision),
+	UNIQUE(domain, transfer_id)
+) STRICT`
+
+var controlCutoverImmutabilityTriggers = [...]string{
+	`CREATE TRIGGER control_cutover_no_delete
+	BEFORE DELETE ON control_cutover
+	BEGIN
+		SELECT RAISE(ABORT, 'CONTROL_CUTOVER_IMMUTABLE');
+	END`,
+	`CREATE TRIGGER control_cutover_events_no_update
+	BEFORE UPDATE ON control_cutover_events
+	BEGIN
+		SELECT RAISE(ABORT, 'CONTROL_CUTOVER_EVENT_IMMUTABLE');
+	END`,
+	`CREATE TRIGGER control_cutover_events_no_delete
+	BEFORE DELETE ON control_cutover_events
+	BEGIN
+		SELECT RAISE(ABORT, 'CONTROL_CUTOVER_EVENT_IMMUTABLE');
+	END`,
+}
+
 func verifySchemaTx(tx *sql.Tx, schema int) error {
-	if schema != SchemaV1 {
+	if schema == 0 {
 		return nil
 	}
-	for _, table := range append(append([]string(nil), controlTableNames[:]...), "control_events") {
+	if schema != SchemaV1 && schema != SchemaV2 {
+		return ErrForeignRuntimeStore
+	}
+	tables := append(append([]string(nil), controlTableNames[:]...), "control_events")
+	if schema >= SchemaV2 {
+		tables = append(tables, "control_cutover", "control_cutover_events")
+	}
+	for _, table := range tables {
 		var marker int
 		if err := tx.QueryRow(
 			"SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?",
@@ -650,7 +827,7 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 	if err := tx.QueryRow("PRAGMA user_version").Scan(&userVersion); err != nil {
 		return err
 	}
-	if migrationCount != 1 || maximumMigration != SchemaV1 || userVersion != SchemaV1 {
+	if migrationCount != schema || maximumMigration != schema || userVersion != schema {
 		return ErrForeignRuntimeStore
 	}
 	var triggerCount int
@@ -662,6 +839,28 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 	}
 	if triggerCount != len(controlEventImmutabilityTriggers) {
 		return fmt.Errorf("%w: missing control event immutability trigger", ErrForeignRuntimeStore)
+	}
+	if schema >= SchemaV2 {
+		var cutoverTriggerCount, cutoverRows int
+		if err := tx.QueryRow(
+			`SELECT COUNT(*) FROM sqlite_schema
+			 WHERE type = 'trigger' AND name IN (
+				'control_cutover_no_delete',
+				'control_cutover_events_no_update',
+				'control_cutover_events_no_delete'
+			 )`,
+		).Scan(&cutoverTriggerCount); err != nil {
+			return err
+		}
+		if cutoverTriggerCount != len(controlCutoverImmutabilityTriggers) {
+			return fmt.Errorf("%w: missing control cutover immutability trigger", ErrForeignRuntimeStore)
+		}
+		if err := tx.QueryRow("SELECT COUNT(*) FROM control_cutover").Scan(&cutoverRows); err != nil {
+			return err
+		}
+		if cutoverRows != len(controlDomainOrder) {
+			return fmt.Errorf("%w: incomplete control cutover rows", ErrForeignRuntimeStore)
+		}
 	}
 	return nil
 }
@@ -752,7 +951,7 @@ func (store *Control) Put(record Record) error {
 	if err != nil {
 		return err
 	}
-	if store.schema != SchemaV1 {
+	if store.schema != SchemaV2 {
 		return ErrSchemaInactive
 	}
 	if err := verifySchemaTx(tx, store.schema); err != nil {
@@ -1245,7 +1444,7 @@ func (store *Control) ExportSnapshot() (Snapshot, error) {
 			LeaseUntil:      store.leaseUntil,
 		},
 	}
-	if store.schema == SchemaV1 {
+	if store.schema >= SchemaV1 {
 		tx, err := store.db.Begin()
 		if err != nil {
 			return Snapshot{}, err
@@ -1326,6 +1525,12 @@ func (store *Control) Rollback(version int) error {
 	now := store.now()
 	leaseUntil, err := store.assertWriterTx(tx, now)
 	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DROP TABLE IF EXISTS control_cutover_events"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DROP TABLE IF EXISTS control_cutover"); err != nil {
 		return err
 	}
 	if _, err := tx.Exec("DROP TABLE IF EXISTS control_events"); err != nil {

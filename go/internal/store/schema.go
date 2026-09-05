@@ -7,25 +7,32 @@ import (
 )
 
 var (
-	ErrEmptyStorePath      = errors.New("EMPTY_STORE_PATH")
-	ErrPythonStorePath     = errors.New("PYTHON_STORE_PATH")
-	ErrWriterFenceHeld     = errors.New("WRITER_FENCE_HELD")
-	ErrUnknownDomain       = errors.New("UNKNOWN_DOMAIN")
-	ErrRevisionConflict    = errors.New("REVISION_CONFLICT")
-	ErrIllegalTransition   = errors.New("ILLEGAL_TRANSITION")
-	ErrForeignRuntimeStore = errors.New("FOREIGN_RUNTIME_STORE")
-	ErrSchemaInactive      = errors.New("SCHEMA_INACTIVE")
-	ErrEmptyRecordID       = errors.New("EMPTY_RECORD_ID")
-	ErrInvalidPayload      = errors.New("INVALID_PAYLOAD")
-	ErrCorruptRecord       = errors.New("CORRUPT_RECORD")
-	ErrEpochOutOfRange     = errors.New("EPOCH_OUT_OF_RANGE")
-	ErrLegacyFileStore     = errors.New("LEGACY_FILE_STORE")
+	ErrEmptyStorePath         = errors.New("EMPTY_STORE_PATH")
+	ErrPythonStorePath        = errors.New("PYTHON_STORE_PATH")
+	ErrWriterFenceHeld        = errors.New("WRITER_FENCE_HELD")
+	ErrUnknownDomain          = errors.New("UNKNOWN_DOMAIN")
+	ErrDomainNotAuthoritative = errors.New("DOMAIN_NOT_AUTHORITATIVE")
+	ErrIllegalCutover         = errors.New("ILLEGAL_CUTOVER_TRANSITION")
+	ErrCutoverNotAuthorized   = errors.New("CUTOVER_NOT_AUTHORIZED")
+	ErrStaleCutoverFence      = errors.New("STALE_CUTOVER_FENCE")
+	ErrCutoverReplayConflict  = errors.New("CUTOVER_REPLAY_CONFLICT")
+	ErrRevisionConflict       = errors.New("REVISION_CONFLICT")
+	ErrIllegalTransition      = errors.New("ILLEGAL_TRANSITION")
+	ErrForeignRuntimeStore    = errors.New("FOREIGN_RUNTIME_STORE")
+	ErrSchemaInactive         = errors.New("SCHEMA_INACTIVE")
+	ErrEmptyRecordID          = errors.New("EMPTY_RECORD_ID")
+	ErrInvalidPayload         = errors.New("INVALID_PAYLOAD")
+	ErrCorruptRecord          = errors.New("CORRUPT_RECORD")
+	ErrEpochOutOfRange        = errors.New("EPOCH_OUT_OF_RANGE")
+	ErrLegacyFileStore        = errors.New("LEGACY_FILE_STORE")
 )
 
 const (
-	RuntimeGo  = "go"
-	ModeShadow = "shadow"
-	SchemaV1   = 1
+	RuntimeGo   = "go"
+	OwnerPython = "python"
+	ModeShadow  = "shadow"
+	SchemaV1    = 1
+	SchemaV2    = 2
 )
 
 var controlTableNames = [...]string{

@@ -34,6 +34,11 @@
       "version": 1,
       "up": "create strict domain tables, append-only event journal, and fenced writer metadata in one transaction",
       "down": "drop domain tables and event journal; retain writer fencing metadata; set schema_version and user_version to 0"
+    },
+    {
+      "version": 2,
+      "up": "create per-domain cutover rows and append-only cutover journal; widen schema_version bound to 2",
+      "down": "drop cutover tables and journal together with domain tables during rollback to schema 0"
     }
   ],
   "tables": [
@@ -50,6 +55,20 @@
     {"name": "forecasts", "domain": "forecast", "ownership_ids": ["capacity_forecast"]},
     {"name": "agent_runs", "domain": "agent_run", "ownership_ids": ["agent_dag_scheduler"]}
   ],
+  "cutover": {
+    "table": "control_cutover",
+    "events": "control_cutover_events",
+    "default_state": "shadow",
+    "first_candidate_domain": "policy",
+    "go_authoritative": "cutover-not-authorized",
+    "states": [
+      "shadow",
+      "dual_evaluate",
+      "go_authoritative",
+      "python_shadow",
+      "python_disabled"
+    ]
+  },
   "writer_plan": {
     "lease_fencing": "control_writer",
     "maintenance_controller": "control_writer",

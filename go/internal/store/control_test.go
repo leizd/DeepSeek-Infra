@@ -225,7 +225,7 @@ func TestEveryDomainInitialAndNextTransition(t *testing.T) {
 
 func TestOpenControlRejectsForeignWriterAndSchema(t *testing.T) {
 	foreignSchema := openShadow(t)
-	if _, err := foreignSchema.db.Exec("PRAGMA user_version = 2"); err != nil {
+	if _, err := foreignSchema.db.Exec("PRAGMA user_version = 3"); err != nil {
 		t.Fatal(err)
 	}
 	foreignSchemaPath := foreignSchema.path
@@ -279,6 +279,14 @@ func TestClosedStoreAndEmptyOwnerAreRejected(t *testing.T) {
 	}
 	if _, _, err := store.Get("policy", "p1"); err != ErrWriterFenceHeld {
 		t.Fatalf("closed get: %v", err)
+	}
+	if _, err := store.GetCutover("policy"); err != ErrWriterFenceHeld {
+		t.Fatalf("closed cutover: %v", err)
+	}
+	if _, err := store.TransitionCutover(CutoverTransition{
+		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: 1, ExpectedEpoch: 1, FencingToken: 1, TransferID: "closed",
+	}); err != ErrWriterFenceHeld {
+		t.Fatalf("closed transition: %v", err)
 	}
 	if _, err := store.ExportSnapshot(); err != ErrWriterFenceHeld {
 		t.Fatalf("closed export: %v", err)
@@ -372,6 +380,9 @@ func TestExportSnapshotIsStableAndRollbackDropsRecords(t *testing.T) {
 	if err := store.Put(Record{Domain: "peer", ID: "fleet-b", Revision: 1, State: "PENDING", Payload: json.RawMessage(`{}`)}); err != ErrSchemaInactive {
 		t.Fatalf("inactive: %v", err)
 	}
+	if _, err := store.GetCutover("policy"); err != ErrSchemaInactive {
+		t.Fatalf("inactive cutover: %v", err)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +391,7 @@ func TestExportSnapshotIsStableAndRollbackDropsRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if reopened.SchemaVersion() != 1 {
+	if reopened.SchemaVersion() != SchemaV2 {
 		t.Fatalf("migrated: %d", reopened.SchemaVersion())
 	}
 }

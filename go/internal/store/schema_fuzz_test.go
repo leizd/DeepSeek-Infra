@@ -11,6 +11,15 @@ func FuzzLegalTransition(f *testing.F) {
 	})
 }
 
+func FuzzLegalCutoverTransition(f *testing.F) {
+	f.Add("shadow", "dual_evaluate")
+	f.Add("shadow", "go_authoritative")
+	f.Add("dual_evaluate", "shadow")
+	f.Fuzz(func(t *testing.T, from, to string) {
+		_ = LegalCutoverTransition(CutoverState(from), CutoverState(to))
+	})
+}
+
 func FuzzValidRecordID(f *testing.F) {
 	f.Add("act-1")
 	f.Add(`..\writer`)

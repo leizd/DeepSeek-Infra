@@ -27,6 +27,12 @@ def test_go_control_tables_cover_go_owned_stores() -> None:
     assert catalog["sqlite"]["secret_material"].startswith("reject")
     assert catalog["sqlite"]["unknown_user_objects"] == "reject-before-write-connection"
     assert catalog["sqlite"]["identity_open"] == "immutable-read-only"
+    assert catalog["cutover"]["table"] == "control_cutover"
+    assert catalog["cutover"]["events"] == "control_cutover_events"
+    assert catalog["cutover"]["default_state"] == "shadow"
+    assert catalog["cutover"]["first_candidate_domain"] == "policy"
+    assert catalog["cutover"]["go_authoritative"] == "cutover-not-authorized"
+    assert catalog["migrations"][-1]["version"] == 2
     covered: set[str] = set()
     for table in catalog["tables"]:
         covered.update(table["ownership_ids"])
@@ -55,6 +61,9 @@ def test_go_schema_matches_catalog_and_rejects_python_paths() -> None:
     assert "writeJSONAtomic" not in control
     assert "ControlDatabaseFilename" in control
     assert "control_events" in control
+    assert "control_cutover" in control
+    assert "CUTOVER_NOT_AUTHORIZED" in schema
+    assert catalog["cutover"]["table"] in control
     for part in catalog["forbidden_python_path_components"]:
         assert part in schema
 

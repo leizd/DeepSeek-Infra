@@ -45,17 +45,20 @@ func TestControlUsesOneHardenedSQLiteDatabase(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range append([]string{"control_store_meta", "control_writer", "schema_migrations", "control_events"}, TableNames...) {
+	for _, table := range append([]string{"control_store_meta", "control_writer", "schema_migrations", "control_events", "control_cutover", "control_cutover_events"}, TableNames...) {
 		if !tables[table] {
 			t.Fatalf("missing SQL table %q: %v", table, tables)
 		}
 	}
-	var userVersion, migrationCount int
-	if err := control.db.QueryRow("PRAGMA user_version").Scan(&userVersion); err != nil || userVersion != SchemaV1 {
+	var userVersion, migrationCount, cutoverCount int
+	if err := control.db.QueryRow("PRAGMA user_version").Scan(&userVersion); err != nil || userVersion != SchemaV2 {
 		t.Fatalf("user_version=%d err=%v", userVersion, err)
 	}
-	if err := control.db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = 1").Scan(&migrationCount); err != nil || migrationCount != 1 {
+	if err := control.db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil || migrationCount != SchemaV2 {
 		t.Fatalf("migration count=%d err=%v", migrationCount, err)
+	}
+	if err := control.db.QueryRow("SELECT COUNT(*) FROM control_cutover").Scan(&cutoverCount); err != nil || cutoverCount != len(controlDomainOrder) {
+		t.Fatalf("cutover count=%d err=%v", cutoverCount, err)
 	}
 
 	var journalMode string
@@ -343,7 +346,7 @@ func TestUnknownSQLiteUserObjectsAreRejectedBeforeWriteSideEffects(t *testing.T)
 	t.Run("extra migration row", func(t *testing.T) {
 		assertCopiedForeignDatabaseUntouched(t, func(control *Control) error {
 			_, err := control.db.Exec(
-				"INSERT INTO schema_migrations(version, applied_at, description) VALUES(2, 1, 'foreign')",
+				"INSERT INTO schema_migrations(version, applied_at, description) VALUES(3, 1, 'foreign')",
 			)
 			return err
 		})
