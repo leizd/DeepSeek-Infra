@@ -91,7 +91,7 @@ pub fn verify_authority_request_document(
     }
     let document: Value = serde_json::from_slice(raw)
         .map_err(|_| AuthorityRequestError::new("AUTHORITY_REQUEST_INVALID"))?;
-    if canonical_bytes(&document)? != raw {
+    if canonical_json_bytes(&document)? != raw {
         return Err(AuthorityRequestError::new(
             "AUTHORITY_REQUEST_CANONICAL_MISMATCH",
         ));
@@ -341,7 +341,7 @@ fn verify_signature(
     let mut unsigned = document.clone();
     unsigned.remove("signature");
     let mut message = SIGNATURE_DOMAIN.to_vec();
-    message.extend(canonical_bytes(&Value::Object(unsigned))?);
+    message.extend(canonical_json_bytes(&Value::Object(unsigned))?);
     let verifying_key = VerifyingKey::from_bytes(
         public_key
             .as_slice()
@@ -371,10 +371,13 @@ fn authority_request_digest(
 }
 
 fn typed_digest(value: &Value) -> Result<String, AuthorityRequestError> {
-    Ok(format!("sha256:{}", sha256_hex(&canonical_bytes(value)?)))
+    Ok(format!(
+        "sha256:{}",
+        sha256_hex(&canonical_json_bytes(value)?)
+    ))
 }
 
-fn canonical_bytes(value: &Value) -> Result<Vec<u8>, AuthorityRequestError> {
+pub(crate) fn canonical_json_bytes(value: &Value) -> Result<Vec<u8>, AuthorityRequestError> {
     serde_json::to_vec(&sorted(value)?)
         .map_err(|_| AuthorityRequestError::new("AUTHORITY_REQUEST_INVALID"))
 }

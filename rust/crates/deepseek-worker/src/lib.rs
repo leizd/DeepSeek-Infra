@@ -12,11 +12,16 @@ use deepseek_storage::{StorageRequest, plan as plan_storage};
 use deepseek_transfer::{TransferRequest, plan as plan_transfer};
 
 mod authority_request;
+mod mutation_request;
 mod service;
 
 pub use authority_request::{
     AUTHORITY_REQUEST_SCHEMA, AuthorityRequestContext, AuthorityRequestError,
     MAX_AUTHORITY_REQUEST_BYTES, verify_authority_request_document,
+};
+pub use mutation_request::{
+    MAX_MUTATION_REQUEST_BYTES, MUTATION_REQUEST_SCHEMA, MutationRequestContext,
+    MutationRequestError, verify_mutation_request_document,
 };
 pub use service::WorkerRpcService;
 
