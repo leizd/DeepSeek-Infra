@@ -14,6 +14,7 @@ use crate::federation_trust::{FEDERATION_TRUST_PROOF_CHECKS, validate_federation
 use crate::predictive::{PREDICTIVE_PROOF_CHECKS, validate_predictive_planning_proof};
 use crate::recovery_evidence::{RECOVERY_EVIDENCE_CHECKS, validate_recovery_evidence_check};
 use crate::runtime::{FEDERATION_RUNTIME_PROOF_CHECKS, validate_federation_runtime_proof};
+use crate::safety_admission::{SAFETY_ADMISSION_PROOF_CHECKS, validate_safety_admission_check};
 use crate::storage_evidence::{
     AUTONOMOUS_STORAGE_BYTES_CHECKS, validate_autonomous_storage_bytes_proof,
 };
@@ -181,6 +182,9 @@ pub fn validate_check(check_name: &str, item: &Value) -> Vec<String> {
     }
     if CRASH_RECOVERY_PROOF_CHECKS.contains(&check_name) {
         return validate_crash_recovery_proof(&Value::Object(evidence.clone()));
+    }
+    if SAFETY_ADMISSION_PROOF_CHECKS.contains(&check_name) {
+        return validate_safety_admission_check(check_name, &Value::Object(evidence.clone()));
     }
     if CONTROL_STORAGE_EVIDENCE_CHECKS.contains(&check_name) {
         return validate_control_storage_evidence_check(

@@ -10,6 +10,7 @@ mod legacy_values;
 pub mod predictive;
 pub mod recovery_evidence;
 pub mod runtime;
+pub mod safety_admission;
 pub mod storage_evidence;
 pub use control_storage_evidence::{
     CONTROL_STORAGE_EVIDENCE_CHECKS, validate_autonomous_rebalance_proof,
@@ -49,6 +50,10 @@ pub use recovery_evidence::{
 pub use runtime::{
     FEDERATION_RUNTIME_PROOF_CHECKS, FEDERATION_RUNTIME_PROOF_SCHEMA,
     federation_runtime_proof_digest, validate_federation_runtime_proof,
+};
+pub use safety_admission::{
+    SAFETY_ADMISSION_PROOF_CHECKS, validate_atomic_budget_proof, validate_blast_radius_proof,
+    validate_safety_admission_check,
 };
 pub use storage_evidence::{
     AUTONOMOUS_STORAGE_BYTES_CHECKS, validate_autonomous_storage_bytes_proof,
