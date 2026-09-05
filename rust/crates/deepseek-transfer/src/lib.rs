@@ -2,6 +2,7 @@ use deepseek_protocol::{
     ActionFence, AdmitError, CommandKind, admit_command, is_transfer_command, validate_fence,
 };
 
+pub mod authenticate;
 pub mod checkpoint;
 pub mod journal;
 mod pycompat;
@@ -9,6 +10,7 @@ pub mod rebalance;
 pub mod repair_job;
 pub mod replication_job;
 pub mod writer_lease;
+pub use authenticate::replay_recovery_authenticate_case;
 pub use checkpoint::{MultipartCheckpoint, reconcile_multipart_checkpoint};
 pub use rebalance::replay_rebalance_hold_case;
 pub use repair_job::replay_repair_phase_case;
