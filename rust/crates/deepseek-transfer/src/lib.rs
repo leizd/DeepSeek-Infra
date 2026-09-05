@@ -10,6 +10,7 @@ mod pycompat;
 pub mod qos;
 pub mod rebalance;
 pub mod repair_job;
+pub mod replica_plan;
 pub mod replication_job;
 pub mod writer_lease;
 pub use authenticate::replay_recovery_authenticate_case;
@@ -18,6 +19,7 @@ pub use compliance::replay_replica_compliance_case;
 pub use qos::replay_transfer_qos_case;
 pub use rebalance::replay_rebalance_hold_case;
 pub use repair_job::replay_repair_phase_case;
+pub use replica_plan::replay_replica_planner_case;
 pub use replication_job::replay_replication_phase_case;
 pub use writer_lease::replay_writer_lease_case;
 pub use journal::{

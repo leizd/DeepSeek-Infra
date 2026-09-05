@@ -1,0 +1,3058 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "scope": "validator-parity-only-not-provider-execution-evidence",
+  "now": "2026-09-05T15:00:00Z",
+  "ast_matches_source_commit": {
+    "reconcile_policy_replicas": true,
+    "rebalance_policy_replicas": true,
+    "is_inside_maintenance_window": true
+  },
+  "cases": [
+    {
+      "name": "reconcile-disabled",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": false,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        }
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "skipped",
+        "reason": "replication-disabled",
+        "policyId": "pol-1"
+      }
+    },
+    {
+      "name": "reconcile-missing-replication",
+      "op": "reconcile-plan",
+      "policy": {
+        "policyId": "p1"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "skipped",
+        "reason": "replication-disabled",
+        "policyId": "pol-1"
+      }
+    },
+    {
+      "name": "reconcile-empty-targets-noop",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": []
+        }
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "noop",
+        "policyId": "pol-1"
+      }
+    },
+    {
+      "name": "reconcile-missing-targets-noop",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true
+        }
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "noop",
+        "policyId": "pol-1"
+      }
+    },
+    {
+      "name": "reconcile-healthy-no-repair",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 1,
+        "repairsTriggered": 0,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T14:00:00Z",
+        "afterLogicalId": "bk-1",
+        "plannedRepairs": []
+      }
+    },
+    {
+      "name": "reconcile-missing-dest-needs-repair",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            },
+            {
+              "targetId": "target-c"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 1,
+        "repairsTriggered": 1,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T14:00:00Z",
+        "afterLogicalId": "bk-1",
+        "plannedRepairs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-c",
+            "sourceTargetId": "managed-local"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reconcile-unrecoverable-dest",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": false,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 1,
+        "repairsTriggered": 1,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T14:00:00Z",
+        "afterLogicalId": "bk-1",
+        "plannedRepairs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-b",
+            "sourceTargetId": "managed-local"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reconcile-unhealthy-state-dest",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "degraded",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 1,
+        "repairsTriggered": 1,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T14:00:00Z",
+        "afterLogicalId": "bk-1",
+        "plannedRepairs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-b",
+            "sourceTargetId": "managed-local"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reconcile-no-healthy-source-scans",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": false,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "degraded",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 1,
+        "repairsTriggered": 0,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T14:00:00Z",
+        "afterLogicalId": "bk-1",
+        "plannedRepairs": []
+      }
+    },
+    {
+      "name": "reconcile-retired-skips-without-scan",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-3",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-3",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "retired": [
+        "bk-1",
+        "bk-2"
+      ],
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 1,
+        "repairsTriggered": 0,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T14:00:00Z",
+        "afterLogicalId": "bk-3",
+        "plannedRepairs": []
+      }
+    },
+    {
+      "name": "reconcile-all-retired-no-cursor",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "retired": [
+        "bk-1"
+      ],
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 0,
+        "repairsTriggered": 0,
+        "wrappedAround": false,
+        "cursorWritten": false,
+        "afterCommittedAt": null,
+        "afterLogicalId": null,
+        "plannedRepairs": []
+      }
+    },
+    {
+      "name": "reconcile-primary-appended",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 1,
+        "repairsTriggered": 1,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T14:00:00Z",
+        "afterLogicalId": "bk-1",
+        "plannedRepairs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "managed-local",
+            "sourceTargetId": "target-b"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reconcile-primary-already-present",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 1,
+        "repairsTriggered": 1,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T14:00:00Z",
+        "afterLogicalId": "bk-1",
+        "plannedRepairs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-b",
+            "sourceTargetId": "managed-local"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reconcile-primary-falls-back-to-targetId",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": 0,
+        "targetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 1,
+        "repairsTriggered": 1,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T14:00:00Z",
+        "afterLogicalId": "bk-1",
+        "plannedRepairs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "managed-local",
+            "sourceTargetId": "target-b"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reconcile-primary-default-managed-local",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "target-b"
+            }
+          ]
+        }
+      },
+      "copies": [
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 1,
+        "repairsTriggered": 1,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T14:00:00Z",
+        "afterLogicalId": "bk-1",
+        "plannedRepairs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "managed-local",
+            "sourceTargetId": "target-b"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reconcile-falsy-targetId-filtered",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": 0
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 1,
+        "repairsTriggered": 1,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T14:00:00Z",
+        "afterLogicalId": "bk-1",
+        "plannedRepairs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-b",
+            "sourceTargetId": "managed-local"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reconcile-cursor-filters-after",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-3",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-3",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "after_committed_at": "2026-09-05T10:00:00Z",
+      "after_logical_id": "bk-1",
+      "max_points": 10,
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 2,
+        "repairsTriggered": 0,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T14:00:00Z",
+        "afterLogicalId": "bk-3",
+        "plannedRepairs": []
+      }
+    },
+    {
+      "name": "reconcile-cursor-wraps-past-end",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-3",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-3",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "after_committed_at": "2026-09-05T14:00:00Z",
+      "after_logical_id": "bk-3",
+      "max_points": 1,
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 1,
+        "repairsTriggered": 0,
+        "wrappedAround": true,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T10:00:00Z",
+        "afterLogicalId": "bk-1",
+        "plannedRepairs": []
+      }
+    },
+    {
+      "name": "reconcile-cursor-empty-copies-no-wrap",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [],
+      "after_committed_at": "2026-09-05T14:00:00Z",
+      "after_logical_id": "bk-3",
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 0,
+        "repairsTriggered": 0,
+        "wrappedAround": false,
+        "cursorWritten": false,
+        "afterCommittedAt": null,
+        "afterLogicalId": null,
+        "plannedRepairs": []
+      }
+    },
+    {
+      "name": "reconcile-after-committed-at-zero-falsy-no-filter",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-3",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-3",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "after_committed_at": 0,
+      "after_logical_id": "",
+      "max_points": 1,
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 1,
+        "repairsTriggered": 0,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T10:00:00Z",
+        "afterLogicalId": "bk-1",
+        "plannedRepairs": []
+      }
+    },
+    {
+      "name": "reconcile-after-logical-id-without-time-does-not-filter-iso",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-3",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-3",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "after_logical_id": "zz",
+      "max_points": 10,
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 3,
+        "repairsTriggered": 0,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T14:00:00Z",
+        "afterLogicalId": "bk-3",
+        "plannedRepairs": []
+      }
+    },
+    {
+      "name": "reconcile-sort-min-committed-then-backup-id",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-b",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-b",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-a",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T11:00:00Z"
+        }
+      ],
+      "max_points": 10,
+      "max_repairs": 0,
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 2,
+        "repairsTriggered": 0,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T11:00:00Z",
+        "afterLogicalId": "bk-a",
+        "plannedRepairs": []
+      }
+    },
+    {
+      "name": "reconcile-last-scanned-uses-first-append-not-min",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        }
+      ],
+      "max_repairs": 0,
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 1,
+        "repairsTriggered": 0,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T12:00:00Z",
+        "afterLogicalId": "bk-1",
+        "plannedRepairs": []
+      }
+    },
+    {
+      "name": "reconcile-max-points-stops-outer",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            },
+            {
+              "targetId": "target-c"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-3",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-3",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "max_points": 1,
+      "max_repairs": 10,
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 1,
+        "repairsTriggered": 1,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T10:00:00Z",
+        "afterLogicalId": "bk-1",
+        "plannedRepairs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-c",
+            "sourceTargetId": "managed-local"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reconcile-max-repairs-breaks-inner-only",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            },
+            {
+              "targetId": "target-c"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-3",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "max_points": 10,
+      "max_repairs": 1,
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 3,
+        "repairsTriggered": 1,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T14:00:00Z",
+        "afterLogicalId": "bk-3",
+        "plannedRepairs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-b",
+            "sourceTargetId": "managed-local"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reconcile-max-points-zero-scans-nothing",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T12:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-3",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-3",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "max_points": 0,
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 0,
+        "repairsTriggered": 0,
+        "wrappedAround": false,
+        "cursorWritten": false,
+        "afterCommittedAt": null,
+        "afterLogicalId": null,
+        "plannedRepairs": []
+      }
+    },
+    {
+      "name": "reconcile-duplicate-target-last-wins",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": false,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "policyId": "pol-1",
+        "scannedPoints": 1,
+        "repairsTriggered": 0,
+        "wrappedAround": false,
+        "cursorWritten": true,
+        "afterCommittedAt": "2026-09-05T14:00:00Z",
+        "afterLogicalId": "bk-1",
+        "plannedRepairs": []
+      }
+    },
+    {
+      "name": "type-reconcile-missing-backupId",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "error",
+        "oracle_exception": "KeyError"
+      }
+    },
+    {
+      "name": "type-reconcile-missing-targetId-on-copy",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "error",
+        "oracle_exception": "KeyError"
+      }
+    },
+    {
+      "name": "type-reconcile-max-points-object",
+      "op": "reconcile-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            }
+          ]
+        },
+        "primaryTargetId": "managed-local"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "max_points": {
+        "n": 1
+      },
+      "expected": {
+        "status": "error",
+        "oracle_exception": "TypeError"
+      }
+    },
+    {
+      "name": "rebalance-disabled",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": false,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ]
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-c",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "skipped",
+        "reason": "replication-disabled"
+      }
+    },
+    {
+      "name": "rebalance-outside-window",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            },
+            {
+              "targetId": "target-c"
+            }
+          ],
+          "minFailureDomains": 2
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "16:00",
+            "end": "18:00"
+          }
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-c",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "expected": {
+        "status": "skipped",
+        "reason": "outside-maintenance-window"
+      }
+    },
+    {
+      "name": "rebalance-fd-diversity",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            },
+            {
+              "targetId": "target-c"
+            }
+          ],
+          "minFailureDomains": 2
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-c",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 1,
+        "plannedJobs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-b",
+            "sourceTargetId": "managed-local",
+            "reason": "failure-domain-diversity",
+            "pruneSourceAfter": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "rebalance-same-fd-candidate-skipped-without-drain-or-capacity",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ],
+          "minFailureDomains": 2
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 0,
+        "plannedJobs": []
+      }
+    },
+    {
+      "name": "rebalance-drain-reason-wins",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            },
+            {
+              "targetId": "target-c"
+            }
+          ],
+          "minFailureDomains": 1
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          },
+          "softWatermarkPercent": 80.0
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "drainState": "draining",
+          "freePercent": 10
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-c",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 1,
+        "plannedJobs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-b",
+            "sourceTargetId": "managed-local",
+            "reason": "drain-migration",
+            "pruneSourceAfter": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "rebalance-capacity-reason",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            },
+            {
+              "targetId": "target-c"
+            }
+          ],
+          "minFailureDomains": 1
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          },
+          "softWatermarkPercent": 80.0
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 10
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-c",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 1,
+        "plannedJobs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-b",
+            "sourceTargetId": "managed-local",
+            "reason": "proactive-capacity-rebalance",
+            "pruneSourceAfter": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "rebalance-watermark-equal-is-pressure",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ],
+          "minFailureDomains": 1
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          },
+          "softWatermarkPercent": 80.0
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 20
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 1,
+        "plannedJobs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-b",
+            "sourceTargetId": "managed-local",
+            "reason": "proactive-capacity-rebalance",
+            "pruneSourceAfter": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "rebalance-candidate-over-watermark-skipped",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ],
+          "minFailureDomains": 2
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          },
+          "softWatermarkPercent": 80.0
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 10
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 0,
+        "plannedJobs": []
+      }
+    },
+    {
+      "name": "rebalance-skip-candidate-already-healthy",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ],
+          "minFailureDomains": 2
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 0,
+        "plannedJobs": []
+      }
+    },
+    {
+      "name": "rebalance-max-copies-per-fd-blocks-candidate",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            },
+            {
+              "targetId": "target-c"
+            }
+          ],
+          "minFailureDomains": 2
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          },
+          "maxCopiesPerFailureDomain": 1
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-c",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 1,
+        "plannedJobs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-c",
+            "sourceTargetId": "managed-local",
+            "reason": "failure-domain-diversity",
+            "pruneSourceAfter": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "rebalance-constrained-source-first-pressured-target",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            },
+            {
+              "targetId": "target-c"
+            }
+          ],
+          "minFailureDomains": 1
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          },
+          "softWatermarkPercent": 80.0
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 5
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-c",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 1,
+        "plannedJobs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-c",
+            "sourceTargetId": "target-b",
+            "reason": "proactive-capacity-rebalance",
+            "pruneSourceAfter": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "rebalance-source-falls-back-to-first-healthy",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            },
+            {
+              "targetId": "target-c"
+            }
+          ],
+          "minFailureDomains": 2
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-c",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": false,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 1,
+        "plannedJobs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "managed-local",
+            "sourceTargetId": "target-b",
+            "reason": "failure-domain-diversity",
+            "pruneSourceAfter": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "rebalance-draining-excluded-from-active-dest",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            },
+            {
+              "targetId": "target-c"
+            }
+          ],
+          "minFailureDomains": 2
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "drainState": "draining",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-c",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 1,
+        "plannedJobs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-c",
+            "sourceTargetId": "managed-local",
+            "reason": "failure-domain-diversity",
+            "pruneSourceAfter": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "rebalance-max-jobs-caps-plans",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            },
+            {
+              "targetId": "target-c"
+            }
+          ],
+          "minFailureDomains": 2
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-c",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-3",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "max_jobs": 1,
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 1,
+        "plannedJobs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-b",
+            "sourceTargetId": "managed-local",
+            "reason": "failure-domain-diversity",
+            "pruneSourceAfter": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "rebalance-no-healthy-copies-skip-backup",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ],
+          "minFailureDomains": 2
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": false,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 0,
+        "plannedJobs": []
+      }
+    },
+    {
+      "name": "rebalance-insertion-order-by-backup",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            },
+            {
+              "targetId": "target-c"
+            }
+          ],
+          "minFailureDomains": 2
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-c",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-z",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-a",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "max_jobs": 2,
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 2,
+        "plannedJobs": [
+          {
+            "backupId": "bk-z",
+            "destTargetId": "target-b",
+            "sourceTargetId": "managed-local",
+            "reason": "failure-domain-diversity",
+            "pruneSourceAfter": false
+          },
+          {
+            "backupId": "bk-a",
+            "destTargetId": "target-b",
+            "sourceTargetId": "managed-local",
+            "reason": "failure-domain-diversity",
+            "pruneSourceAfter": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "rebalance-min-fd-zero-falsy-fallback-1",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ],
+          "minFailureDomains": 0
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 0,
+        "plannedJobs": []
+      }
+    },
+    {
+      "name": "rebalance-watermark-zero-falsy-fallback-80",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ],
+          "minFailureDomains": 1
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          },
+          "softWatermarkPercent": 0
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 10
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 1,
+        "plannedJobs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-b",
+            "sourceTargetId": "managed-local",
+            "reason": "proactive-capacity-rebalance",
+            "pruneSourceAfter": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "rebalance-window-three-part-fail-open",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            },
+            {
+              "targetId": "target-c"
+            }
+          ],
+          "minFailureDomains": 2
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-c",
+          "failureDomain": "fd-c",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 1,
+        "plannedJobs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-b",
+            "sourceTargetId": "managed-local",
+            "reason": "failure-domain-diversity",
+            "pruneSourceAfter": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "rebalance-freePercent-none-skips-capacity",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ],
+          "minFailureDomains": 1
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          },
+          "softWatermarkPercent": 80.0
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a"
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 0,
+        "plannedJobs": []
+      }
+    },
+    {
+      "name": "rebalance-numeric-record-id-misses-str-lookup",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ],
+          "minFailureDomains": 2
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "targets": [
+        {
+          "targetId": 1,
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "1",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 1,
+        "plannedJobs": [
+          {
+            "backupId": "bk-1",
+            "destTargetId": "target-b",
+            "sourceTargetId": "1",
+            "reason": "failure-domain-diversity",
+            "pruneSourceAfter": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "rebalance-max-copies-false-falls-through-to-replication",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ],
+          "minFailureDomains": 2,
+          "maxCopiesPerFailureDomain": 1
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          },
+          "maxCopiesPerFailureDomain": false
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "completed",
+        "jobsCreated": 0,
+        "plannedJobs": []
+      }
+    },
+    {
+      "name": "type-rebalance-placement-string",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ],
+          "minFailureDomains": 2
+        },
+        "placement": "always"
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "error",
+        "oracle_exception": "AttributeError"
+      }
+    },
+    {
+      "name": "type-rebalance-min-fd-object",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ],
+          "minFailureDomains": {
+            "n": 2
+          }
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "error",
+        "oracle_exception": "TypeError"
+      }
+    },
+    {
+      "name": "type-rebalance-missing-backupId",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ],
+          "minFailureDomains": 2
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "targets": [
+        {
+          "targetId": "managed-local",
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        },
+        {
+          "targetId": "target-b",
+          "failureDomain": "fd-b",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "error",
+        "oracle_exception": "KeyError"
+      }
+    },
+    {
+      "name": "type-rebalance-missing-targetId-on-record",
+      "op": "rebalance-plan",
+      "policy": {
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "managed-local"
+            },
+            {
+              "targetId": "target-b"
+            }
+          ],
+          "minFailureDomains": 2
+        },
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "targets": [
+        {
+          "failureDomain": "fd-a",
+          "freePercent": 50
+        }
+      ],
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "expected": {
+        "status": "error",
+        "oracle_exception": "KeyError"
+      }
+    }
+  ]
+}
