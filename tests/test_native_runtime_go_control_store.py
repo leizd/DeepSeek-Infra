@@ -32,7 +32,14 @@ def test_go_control_tables_cover_go_owned_stores() -> None:
     assert catalog["cutover"]["default_state"] == "shadow"
     assert catalog["cutover"]["first_candidate_domain"] == "policy"
     assert catalog["cutover"]["go_authoritative"] == "cutover-not-authorized"
-    assert catalog["migrations"][-1]["version"] == 2
+    assert catalog["sqlite"]["operation_journal"] == "control_operations"
+    assert catalog["sqlite"]["operation_mutation"] == "insert-only"
+    assert catalog["operations"]["table"] == "control_operations"
+    assert catalog["operations"]["mutation"] == "insert-only"
+    assert catalog["operations"]["result_status"] == "PROPOSED"
+    assert catalog["operations"]["production_apply"] == "denied"
+    assert catalog["operations"]["first_candidate_domain"] == "policy"
+    assert catalog["migrations"][-1]["version"] == 3
     covered: set[str] = set()
     for table in catalog["tables"]:
         covered.update(table["ownership_ids"])
@@ -62,6 +69,8 @@ def test_go_schema_matches_catalog_and_rejects_python_paths() -> None:
     assert "ControlDatabaseFilename" in control
     assert "control_events" in control
     assert "control_cutover" in control
+    assert "control_operations" in control
+    assert "SchemaV3" in schema
     assert "CUTOVER_NOT_AUTHORIZED" in schema
     assert catalog["cutover"]["table"] in control
     for part in catalog["forbidden_python_path_components"]:

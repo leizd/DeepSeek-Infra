@@ -24,6 +24,8 @@
     "record_digest": "sha256-canonical-json",
     "event_journal": "control_events",
     "event_mutation": "insert-only",
+    "operation_journal": "control_operations",
+    "operation_mutation": "insert-only",
     "legacy_file_store": "reject-and-preserve",
     "unknown_user_objects": "reject-before-write-connection",
     "identity_open": "immutable-read-only",
@@ -39,6 +41,11 @@
       "version": 2,
       "up": "create per-domain cutover rows and append-only cutover journal; widen schema_version bound to 2",
       "down": "drop cutover tables and journal together with domain tables during rollback to schema 0"
+    },
+    {
+      "version": 3,
+      "up": "create append-only replay-safe control operation journal; widen schema_version bound to 3",
+      "down": "drop operation journal together with domain and cutover tables during rollback to schema 0"
     }
   ],
   "tables": [
@@ -68,6 +75,14 @@
       "python_shadow",
       "python_disabled"
     ]
+  },
+  "operations": {
+    "table": "control_operations",
+    "mutation": "insert-only",
+    "result_status": "PROPOSED",
+    "already_applied": "computed-on-accept-retry",
+    "production_apply": "denied",
+    "first_candidate_domain": "policy"
   },
   "writer_plan": {
     "lease_fencing": "control_writer",

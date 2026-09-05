@@ -383,4 +383,44 @@ func TestMutationRequestEnvelopeAndSignatureFailClosed(t *testing.T) {
 	if _, err := VerifyMutationRequestDocument([]byte(fixture.CanonicalRequest), validContext); !errors.Is(err, ErrMutationRequestSignatureInvalid) {
 		t.Fatalf("wrong public key: %v", err)
 	}
+
+	mustFail(t, func(document map[string]any) {
+		delete(document, "actionId")
+		document["actionID"] = "pol-1"
+	}, false, ErrMutationRequestFieldsInvalid)
+	mustFail(t, func(document map[string]any) {
+		payload := document["payload"].(map[string]any)
+		delete(payload, "state")
+		payload["status"] = "ACTIVE"
+	}, false, ErrMutationRequestInvalid)
+	mustFail(t, func(document map[string]any) {
+		document["expiresAt"] = "2026-09-05T00:05:30"
+	}, true, ErrMutationRequestInvalid)
+}
+
+func TestSignMutationRequestRejectsUnmarshalableValues(t *testing.T) {
+	private := make(ed25519.PrivateKey, ed25519.PrivateKeySize)
+	public := base64.RawURLEncoding.EncodeToString(make([]byte, ed25519.PublicKeySize))
+	if _, _, err := SignMutationRequest(map[string]any{
+		"payload": map[string]any{"bad": make(chan int)},
+	}, private, public); err == nil {
+		t.Fatal("unmarshalable payload must fail signing")
+	}
+	if _, _, err := SignMutationRequest(map[string]any{
+		"payload": map[string]any{"intent": MutationIntentShadowCompare},
+		"bad":     make(chan int),
+	}, private, public); err == nil {
+		t.Fatal("unmarshalable envelope must fail signing")
+	}
+	if err := verifyMutationRequestSignature(map[string]any{
+		"signatureAlgorithm": authorityRequestAlgorithm,
+		"signerKeyId":        "ctrl-signer-aaaaaaaaaaaaaaaa",
+		"signature":          base64.RawURLEncoding.EncodeToString(make([]byte, ed25519.SignatureSize)),
+		"bad":                make(chan int),
+	}, MutationRequestContext{
+		SignerPublicKey: public,
+		SignerKeyID:     "ctrl-signer-aaaaaaaaaaaaaaaa",
+	}); !errors.Is(err, ErrMutationRequestInvalid) && !errors.Is(err, ErrMutationRequestSignerMismatch) {
+		t.Fatalf("unmarshalable signature payload: %v", err)
+	}
 }

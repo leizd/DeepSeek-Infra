@@ -33,6 +33,7 @@ const (
 	ModeShadow  = "shadow"
 	SchemaV1    = 1
 	SchemaV2    = 2
+	SchemaV3    = 3
 )
 
 var controlTableNames = [...]string{

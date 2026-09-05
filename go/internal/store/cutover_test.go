@@ -105,7 +105,7 @@ func TestIsDomainGoAuthoritative(t *testing.T) {
 func TestOpenControlSeedsShadowCutoverWithoutProductionAuthority(t *testing.T) {
 	store := openShadow(t)
 	defer store.Close()
-	if store.SchemaVersion() != SchemaV2 {
+	if store.SchemaVersion() != SchemaV3 {
 		t.Fatalf("schema: %d", store.SchemaVersion())
 	}
 	for _, domain := range controlDomainOrder {
@@ -358,9 +358,10 @@ func TestCutoverJournalRejectsMutationAndControlMigratesFromV1(t *testing.T) {
 	}
 	db := sql.OpenDB(connector)
 	for _, statement := range []string{
+		"DROP TABLE control_operations",
 		"DROP TABLE control_cutover_events",
 		"DROP TABLE control_cutover",
-		"DELETE FROM schema_migrations WHERE version = 2",
+		"DELETE FROM schema_migrations WHERE version IN (2, 3)",
 		"UPDATE control_store_meta SET schema_version = 1 WHERE singleton = 1",
 		"PRAGMA user_version = 1",
 	} {
@@ -380,7 +381,7 @@ func TestCutoverJournalRejectsMutationAndControlMigratesFromV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if reopened.SchemaVersion() != SchemaV2 {
+	if reopened.SchemaVersion() != SchemaV3 {
 		t.Fatalf("migrated schema: %d", reopened.SchemaVersion())
 	}
 	got, err := reopened.GetCutover("policy")
@@ -495,6 +496,13 @@ func TestCutoverHelpersAndCorruptRowsFailClosed(t *testing.T) {
 	}
 }
 
+func prepareV2MigrationReplay(t *testing.T, tx *sql.Tx) {
+	t.Helper()
+	if _, err := tx.Exec("UPDATE control_store_meta SET schema_version = 2 WHERE singleton = 1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMigrateToV2FailsClosedWithoutPartialAuthority(t *testing.T) {
 	store := openShadow(t)
 	defer store.Close()
@@ -502,6 +510,7 @@ func TestMigrateToV2FailsClosedWithoutPartialAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	prepareV2MigrationReplay(t, tx)
 	if err := store.migrateToV2Tx(tx); err == nil {
 		t.Fatal("rebuilding an existing v2 cutover schema must fail")
 	}
@@ -536,6 +545,7 @@ func TestMigrateToV2FailsClosedWithoutPartialAuthority(t *testing.T) {
 	if _, err := tx.Exec("DROP TABLE control_cutover"); err != nil {
 		t.Fatal(err)
 	}
+	prepareV2MigrationReplay(t, tx)
 	if err := negative.migrateToV2Tx(tx); !errors.Is(err, ErrWriterFenceHeld) {
 		t.Fatalf("negative clock: %v", err)
 	}
@@ -571,6 +581,7 @@ func TestMigrateToV2FailsClosedWithoutPartialAuthority(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
+	prepareV2MigrationReplay(t, tx)
 	if err := seedFail.migrateToV2Tx(tx); err == nil {
 		t.Fatal("seed failure must abort migration")
 	}
@@ -634,7 +645,7 @@ func TestCutoverRemainingFailClosedBranches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := verifySchemaTx(tx, 3); !errors.Is(err, ErrForeignRuntimeStore) {
+	if err := verifySchemaTx(tx, 4); !errors.Is(err, ErrForeignRuntimeStore) {
 		t.Fatalf("future schema verify: %v", err)
 	}
 	v1.schema = SchemaV1
@@ -666,6 +677,7 @@ func TestCutoverRemainingFailClosedBranches(t *testing.T) {
 	if _, err := tx.Exec("DROP TABLE control_cutover"); err != nil {
 		t.Fatal(err)
 	}
+	prepareV2MigrationReplay(t, tx)
 	seedToken.token = 0
 	if err := seedToken.migrateToV2Tx(tx); err == nil {
 		t.Fatal("zero fencing token must fail cutover seed")
@@ -689,6 +701,7 @@ func TestCutoverRemainingFailClosedBranches(t *testing.T) {
 	if _, err := tx.Exec("CREATE VIEW control_cutover_events AS SELECT 1 AS event_id"); err != nil {
 		t.Fatal(err)
 	}
+	prepareV2MigrationReplay(t, tx)
 	if err := eventsView.migrateToV2Tx(tx); err == nil {
 		t.Fatal("cutover event view must fail migration")
 	}
@@ -717,6 +730,7 @@ func TestCutoverRemainingFailClosedBranches(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
+	prepareV2MigrationReplay(t, tx)
 	if err := dupTrigger.migrateToV2Tx(tx); err == nil {
 		t.Fatal("duplicate cutover trigger must fail migration")
 	}
@@ -803,6 +817,7 @@ func TestCutoverRemainingFailClosedBranches(t *testing.T) {
 	if _, err := tx.Exec("DROP TABLE control_cutover"); err != nil {
 		t.Fatal(err)
 	}
+	prepareV2MigrationReplay(t, tx)
 	if err := dupMigration.migrateToV2Tx(tx); err == nil {
 		t.Fatal("duplicate schema v2 ledger row must fail migration")
 	}

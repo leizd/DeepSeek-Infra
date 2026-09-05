@@ -266,7 +266,7 @@ func validateExistingControlMarker(databasePath string) (bool, error) {
 		).Scan(&runtimeName, &mode, &schema, &uniqueWriter)
 	}
 	if queryErr == nil && (runtimeName != RuntimeGo || mode != ModeShadow ||
-		uniqueWriter != RuntimeGo || schema < 0 || schema > SchemaV2) {
+		uniqueWriter != RuntimeGo || schema < 0 || schema > SchemaV3) {
 		queryErr = ErrForeignRuntimeStore
 	}
 	var userVersion, migrationCount int
@@ -328,6 +328,12 @@ func expectedControlUserObjects(schema int) map[string]string {
 	objects["control_cutover_no_delete"] = "trigger"
 	objects["control_cutover_events_no_update"] = "trigger"
 	objects["control_cutover_events_no_delete"] = "trigger"
+	if schema < SchemaV3 {
+		return objects
+	}
+	objects["control_operations"] = "table"
+	objects["control_operations_no_update"] = "trigger"
+	objects["control_operations_no_delete"] = "trigger"
 	return objects
 }
 
@@ -431,7 +437,7 @@ func (store *Control) bootstrapAndClaim(databaseExisted bool) error {
 		return fmt.Errorf("%w: invalid store metadata: %v", ErrForeignRuntimeStore, err)
 	}
 	if runtimeName != RuntimeGo || mode != ModeShadow || uniqueWriter != RuntimeGo ||
-		store.schema < 0 || store.schema > SchemaV2 {
+		store.schema < 0 || store.schema > SchemaV3 {
 		return ErrForeignRuntimeStore
 	}
 	var userVersion, migrationCount int
@@ -465,7 +471,7 @@ var bootstrapSchemaStatements = [...]string{
 		singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
 		runtime TEXT NOT NULL,
 		mode TEXT NOT NULL,
-		schema_version INTEGER NOT NULL CHECK(schema_version BETWEEN 0 AND 2),
+		schema_version INTEGER NOT NULL CHECK(schema_version BETWEEN 0 AND 3),
 		unique_writer TEXT NOT NULL
 	) STRICT`,
 	`CREATE TABLE IF NOT EXISTS control_writer (
@@ -533,7 +539,7 @@ func (store *Control) claimWriterTx(tx *sql.Tx) error {
 }
 
 func (store *Control) migrateTx(tx *sql.Tx) error {
-	if store.schema > SchemaV2 || store.schema < 0 {
+	if store.schema > SchemaV3 || store.schema < 0 {
 		return ErrForeignRuntimeStore
 	}
 	if store.schema == 0 {
@@ -543,6 +549,11 @@ func (store *Control) migrateTx(tx *sql.Tx) error {
 	}
 	if store.schema == SchemaV1 {
 		if err := store.migrateToV2Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV2 {
+		if err := store.migrateToV3Tx(tx); err != nil {
 			return err
 		}
 	}
@@ -669,6 +680,57 @@ func (store *Control) migrateToV2Tx(tx *sql.Tx) error {
 	return nil
 }
 
+func (store *Control) migrateToV3Tx(tx *sql.Tx) error {
+	if _, err := tx.Exec(`CREATE TABLE control_store_meta_v3 (
+		singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+		runtime TEXT NOT NULL,
+		mode TEXT NOT NULL,
+		schema_version INTEGER NOT NULL CHECK(schema_version BETWEEN 0 AND 3),
+		unique_writer TEXT NOT NULL
+	) STRICT`); err != nil {
+		return fmt.Errorf("create control store metadata v3: %w", err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO control_store_meta_v3(singleton, runtime, mode, schema_version, unique_writer)
+		 SELECT singleton, runtime, mode, schema_version, unique_writer FROM control_store_meta`,
+	); err != nil {
+		return fmt.Errorf("copy control store metadata v3: %w", err)
+	}
+	if _, err := tx.Exec("DROP TABLE control_store_meta"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("ALTER TABLE control_store_meta_v3 RENAME TO control_store_meta"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(controlOperationsSchema); err != nil {
+		return fmt.Errorf("create control operation journal: %w", err)
+	}
+	for _, statement := range controlOperationImmutabilityTriggers {
+		if _, err := tx.Exec(statement); err != nil {
+			return fmt.Errorf("create control operation immutability trigger: %w", err)
+		}
+	}
+	now := store.now()
+	if now < 0 {
+		return ErrWriterFenceHeld
+	}
+	if _, err := tx.Exec(
+		"INSERT INTO schema_migrations(version, applied_at, description) VALUES(3, ?, ?)",
+		now,
+		"create append-only replay-safe control operation journal",
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("UPDATE control_store_meta SET schema_version = 3 WHERE singleton = 1"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("PRAGMA user_version = 3"); err != nil {
+		return err
+	}
+	store.schema = SchemaV3
+	return nil
+}
+
 func createDomainTableSQL(table string) string {
 	return fmt.Sprintf(`CREATE TABLE %s (
 		id TEXT PRIMARY KEY CHECK(length(id) > 0),
@@ -773,16 +835,52 @@ var controlCutoverImmutabilityTriggers = [...]string{
 	END`,
 }
 
+const controlOperationsSchema = `CREATE TABLE control_operations (
+	operation_id TEXT PRIMARY KEY CHECK(length(operation_id) = 64 AND operation_id = lower(operation_id)),
+	request_id TEXT NOT NULL UNIQUE CHECK(length(request_id) = 64 AND request_id = lower(request_id)),
+	nonce TEXT NOT NULL UNIQUE CHECK(length(nonce) = 64 AND nonce = lower(nonce)),
+	domain TEXT NOT NULL CHECK(domain IN (
+		'policy', 'target', 'scheduler_run', 'action', 'risk', 'wave',
+		'peer', 'grant', 'session', 'transfer', 'forecast', 'agent_run'
+	)),
+	action_id TEXT NOT NULL CHECK(length(action_id) > 0),
+	execution_epoch INTEGER NOT NULL CHECK(execution_epoch > 0),
+	fencing_token INTEGER NOT NULL CHECK(fencing_token > 0),
+	payload_digest TEXT NOT NULL CHECK(length(payload_digest) > 0),
+	request_digest TEXT NOT NULL CHECK(length(request_digest) > 0),
+	canonical_request TEXT NOT NULL CHECK(json_valid(canonical_request) AND length(canonical_request) > 0),
+	result_status TEXT NOT NULL CHECK(result_status = 'PROPOSED'),
+	result_json TEXT NOT NULL CHECK(json_valid(result_json)),
+	writer_fencing_token INTEGER NOT NULL CHECK(writer_fencing_token > 0),
+	recorded_at INTEGER NOT NULL CHECK(recorded_at >= 0)
+) STRICT`
+
+var controlOperationImmutabilityTriggers = [...]string{
+	`CREATE TRIGGER control_operations_no_update
+	BEFORE UPDATE ON control_operations
+	BEGIN
+		SELECT RAISE(ABORT, 'CONTROL_OPERATION_IMMUTABLE');
+	END`,
+	`CREATE TRIGGER control_operations_no_delete
+	BEFORE DELETE ON control_operations
+	BEGIN
+		SELECT RAISE(ABORT, 'CONTROL_OPERATION_IMMUTABLE');
+	END`,
+}
+
 func verifySchemaTx(tx *sql.Tx, schema int) error {
 	if schema == 0 {
 		return nil
 	}
-	if schema != SchemaV1 && schema != SchemaV2 {
+	if schema != SchemaV1 && schema != SchemaV2 && schema != SchemaV3 {
 		return ErrForeignRuntimeStore
 	}
 	tables := append(append([]string(nil), controlTableNames[:]...), "control_events")
 	if schema >= SchemaV2 {
 		tables = append(tables, "control_cutover", "control_cutover_events")
+	}
+	if schema >= SchemaV3 {
+		tables = append(tables, "control_operations")
 	}
 	for _, table := range tables {
 		var marker int
@@ -860,6 +958,21 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 		}
 		if cutoverRows != len(controlDomainOrder) {
 			return fmt.Errorf("%w: incomplete control cutover rows", ErrForeignRuntimeStore)
+		}
+	}
+	if schema >= SchemaV3 {
+		var operationTriggerCount int
+		if err := tx.QueryRow(
+			`SELECT COUNT(*) FROM sqlite_schema
+			 WHERE type = 'trigger' AND name IN (
+				'control_operations_no_update',
+				'control_operations_no_delete'
+			 )`,
+		).Scan(&operationTriggerCount); err != nil {
+			return err
+		}
+		if operationTriggerCount != len(controlOperationImmutabilityTriggers) {
+			return fmt.Errorf("%w: missing control operation immutability trigger", ErrForeignRuntimeStore)
 		}
 	}
 	return nil
@@ -951,7 +1064,7 @@ func (store *Control) Put(record Record) error {
 	if err != nil {
 		return err
 	}
-	if store.schema != SchemaV2 {
+	if store.schema != SchemaV3 {
 		return ErrSchemaInactive
 	}
 	if err := verifySchemaTx(tx, store.schema); err != nil {
@@ -1525,6 +1638,9 @@ func (store *Control) Rollback(version int) error {
 	now := store.now()
 	leaseUntil, err := store.assertWriterTx(tx, now)
 	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DROP TABLE IF EXISTS control_operations"); err != nil {
 		return err
 	}
 	if _, err := tx.Exec("DROP TABLE IF EXISTS control_cutover_events"); err != nil {

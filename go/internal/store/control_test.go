@@ -225,7 +225,7 @@ func TestEveryDomainInitialAndNextTransition(t *testing.T) {
 
 func TestOpenControlRejectsForeignWriterAndSchema(t *testing.T) {
 	foreignSchema := openShadow(t)
-	if _, err := foreignSchema.db.Exec("PRAGMA user_version = 3"); err != nil {
+	if _, err := foreignSchema.db.Exec("PRAGMA user_version = 4"); err != nil {
 		t.Fatal(err)
 	}
 	foreignSchemaPath := foreignSchema.path
@@ -391,7 +391,7 @@ func TestExportSnapshotIsStableAndRollbackDropsRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if reopened.SchemaVersion() != SchemaV2 {
+	if reopened.SchemaVersion() != SchemaV3 {
 		t.Fatalf("migrated: %d", reopened.SchemaVersion())
 	}
 }
