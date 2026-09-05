@@ -56,7 +56,7 @@ def test_canonical_corpora_match_frozen_digests() -> None:
     } <= ids
 
     manifests = validate_corpora()
-    assert len(manifests) == 25
+    assert len(manifests) == 26
     assert manifests[1]["compatibility_reason"]
     assert manifests[2]["compatibility_reason"]
     assert manifests[3]["compatibility_reason"]
@@ -81,6 +81,7 @@ def test_canonical_corpora_match_frozen_digests() -> None:
     assert manifests[22]["compatibility_reason"]
     assert manifests[23]["compatibility_reason"]
     assert manifests[24]["compatibility_reason"]
+    assert manifests[25]["compatibility_reason"]
 
 
 def _apply_frozen_mutation(value: Any, *, op: str, pointer: str, replacement: Any) -> None:

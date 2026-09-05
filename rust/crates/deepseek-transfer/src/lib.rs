@@ -4,6 +4,7 @@ use deepseek_protocol::{
 
 pub mod authenticate;
 pub mod checkpoint;
+pub mod compliance;
 pub mod journal;
 mod pycompat;
 pub mod rebalance;
@@ -12,6 +13,7 @@ pub mod replication_job;
 pub mod writer_lease;
 pub use authenticate::replay_recovery_authenticate_case;
 pub use checkpoint::{MultipartCheckpoint, reconcile_multipart_checkpoint};
+pub use compliance::replay_replica_compliance_case;
 pub use rebalance::replay_rebalance_hold_case;
 pub use repair_job::replay_repair_phase_case;
 pub use replication_job::replay_replication_phase_case;

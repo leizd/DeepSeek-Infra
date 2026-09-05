@@ -1,0 +1,1033 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "scope": "validator-parity-only-not-provider-execution-evidence",
+  "now": "2026-09-05T15:00:00Z",
+  "ast_matches_source_commit": {
+    "calculate_replica_lag": true,
+    "replication_compliance": true,
+    "is_inside_maintenance_window": true
+  },
+  "cases": [
+    {
+      "name": "lag-calculated",
+      "op": "lag",
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "replica_target_id": "target-b",
+      "primary_target_id": "managed-local",
+      "expected": {
+        "lagRecoveryPoints": 1,
+        "lagSeconds": 3600,
+        "primaryCommittedAt": "2026-09-05T15:00:00Z",
+        "replicaCommittedAt": "2026-09-05T14:00:00Z",
+        "status": "calculated"
+      }
+    },
+    {
+      "name": "lag-no-primary",
+      "op": "lag",
+      "copies": [
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "replica_target_id": "target-b",
+      "primary_target_id": "managed-local",
+      "expected": {
+        "lagRecoveryPoints": 0,
+        "lagSeconds": 0,
+        "status": "no-primary"
+      }
+    },
+    {
+      "name": "lag-no-replica",
+      "op": "lag",
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "replica_target_id": "target-b",
+      "primary_target_id": "managed-local",
+      "expected": {
+        "lagRecoveryPoints": 999,
+        "lagSeconds": 999999,
+        "status": "no-replica"
+      }
+    },
+    {
+      "name": "lag-uses-first-recoverable-not-latest",
+      "op": "lag",
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-old",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-new",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-old",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T10:00:00Z"
+        }
+      ],
+      "replica_target_id": "target-b",
+      "primary_target_id": "managed-local",
+      "expected": {
+        "lagRecoveryPoints": 1,
+        "lagSeconds": 0,
+        "primaryCommittedAt": "2026-09-05T10:00:00Z",
+        "replicaCommittedAt": "2026-09-05T10:00:00Z",
+        "status": "calculated"
+      }
+    },
+    {
+      "name": "lag-explicit-latest-overrides-list-order",
+      "op": "lag",
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "replica_target_id": "target-b",
+      "primary_target_id": "managed-local",
+      "primary_pt": {
+        "committedAt": "2026-09-05T15:00:00Z",
+        "backupId": "bk-1"
+      },
+      "replica_pt": {
+        "committedAt": "2026-09-05T14:59:00Z",
+        "backupId": "bk-1"
+      },
+      "expected": {
+        "lagRecoveryPoints": 1,
+        "lagSeconds": 60,
+        "primaryCommittedAt": "2026-09-05T15:00:00Z",
+        "replicaCommittedAt": "2026-09-05T14:59:00Z",
+        "status": "calculated"
+      }
+    },
+    {
+      "name": "lag-replica-ahead-clamped-zero",
+      "op": "lag",
+      "copies": [],
+      "replica_target_id": "target-b",
+      "primary_target_id": "managed-local",
+      "primary_pt": {
+        "committedAt": "2026-09-05T14:00:00Z"
+      },
+      "replica_pt": {
+        "committedAt": "2026-09-05T15:00:00Z"
+      },
+      "expected": {
+        "lagRecoveryPoints": 0,
+        "lagSeconds": 0,
+        "primaryCommittedAt": "2026-09-05T14:00:00Z",
+        "replicaCommittedAt": "2026-09-05T15:00:00Z",
+        "status": "calculated"
+      }
+    },
+    {
+      "name": "lag-unparseable-times-zero-seconds",
+      "op": "lag",
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "replica_target_id": "target-b",
+      "primary_pt": {
+        "committedAt": "not-a-time"
+      },
+      "replica_pt": {
+        "committedAt": "2026-09-05T14:00:00Z"
+      },
+      "expected": {
+        "lagRecoveryPoints": 0,
+        "lagSeconds": 0,
+        "primaryCommittedAt": "not-a-time",
+        "replicaCommittedAt": "2026-09-05T14:00:00Z",
+        "status": "calculated"
+      }
+    },
+    {
+      "name": "lag-ignores-unrecoverable",
+      "op": "lag",
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": false,
+          "state": "healthy",
+          "committedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "replica_target_id": "target-b",
+      "expected": {
+        "lagRecoveryPoints": 0,
+        "lagSeconds": 0,
+        "status": "no-primary"
+      }
+    },
+    {
+      "name": "lag-degraded-state-still-counts",
+      "op": "lag",
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "degraded",
+          "committedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "degraded",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "replica_target_id": "target-b",
+      "expected": {
+        "lagRecoveryPoints": 0,
+        "lagSeconds": 3600,
+        "primaryCommittedAt": "2026-09-05T15:00:00Z",
+        "replicaCommittedAt": "2026-09-05T14:00:00Z",
+        "status": "calculated"
+      }
+    },
+    {
+      "name": "type-lag-missing-backupId",
+      "op": "lag",
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "recoverable": true
+        }
+      ],
+      "replica_target_id": "target-b",
+      "primary_pt": {
+        "committedAt": "2026-09-05T15:00:00Z"
+      },
+      "replica_pt": {
+        "committedAt": "2026-09-05T15:00:00Z"
+      },
+      "expected": {
+        "status": "error",
+        "oracle_exception": "KeyError"
+      }
+    },
+    {
+      "name": "compliance-disabled",
+      "op": "compliance",
+      "policy": {
+        "policyId": "p1",
+        "replication": {
+          "enabled": false
+        }
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "jobs": [],
+      "expected": {
+        "enabled": false,
+        "compliance": "healthy",
+        "committedCopies": 1,
+        "requiredCopies": 1
+      }
+    },
+    {
+      "name": "compliance-missing-replication",
+      "op": "compliance",
+      "policy": {
+        "policyId": "p1"
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "jobs": [],
+      "expected": {
+        "enabled": false,
+        "compliance": "healthy",
+        "committedCopies": 1,
+        "requiredCopies": 1
+      }
+    },
+    {
+      "name": "compliance-healthy",
+      "op": "compliance",
+      "policy": {
+        "policyId": "p1",
+        "targetId": "managed-local",
+        "replication": {
+          "enabled": true,
+          "minCommittedCopies": 2,
+          "targets": [
+            {
+              "targetId": "target-b"
+            }
+          ]
+        }
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "jobs": [
+        {
+          "mode": "best-effort",
+          "phase": "queued",
+          "jobId": "best-effort-queued"
+        }
+      ],
+      "expected": {
+        "enabled": true,
+        "compliance": "healthy",
+        "reasons": [],
+        "committedCopies": 3,
+        "requiredCopies": 2,
+        "healthyCopies": 3,
+        "openRequiredJobs": 0,
+        "failedRequiredJobs": 0,
+        "available": true
+      }
+    },
+    {
+      "name": "compliance-insufficient-copies",
+      "op": "compliance",
+      "policy": {
+        "policyId": "p1",
+        "replication": {
+          "enabled": true,
+          "minCommittedCopies": 5
+        }
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "jobs": [],
+      "expected": {
+        "enabled": true,
+        "compliance": "degraded",
+        "reasons": [
+          "insufficient-committed-copies"
+        ],
+        "committedCopies": 3,
+        "requiredCopies": 5,
+        "healthyCopies": 3,
+        "openRequiredJobs": 0,
+        "failedRequiredJobs": 0,
+        "available": true
+      }
+    },
+    {
+      "name": "compliance-open-required",
+      "op": "compliance",
+      "policy": {
+        "policyId": "p1",
+        "replication": {
+          "enabled": true,
+          "minCommittedCopies": 1
+        }
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "jobs": [
+        {
+          "mode": "required",
+          "phase": "queued",
+          "jobId": "required-queued"
+        }
+      ],
+      "expected": {
+        "enabled": true,
+        "compliance": "degraded",
+        "reasons": [
+          "open-required-jobs"
+        ],
+        "committedCopies": 3,
+        "requiredCopies": 1,
+        "healthyCopies": 3,
+        "openRequiredJobs": 1,
+        "failedRequiredJobs": 0,
+        "available": true
+      }
+    },
+    {
+      "name": "compliance-failed-required",
+      "op": "compliance",
+      "policy": {
+        "policyId": "p1",
+        "replication": {
+          "enabled": true,
+          "minCommittedCopies": 1
+        }
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "jobs": [
+        {
+          "mode": "required",
+          "phase": "failed-terminal",
+          "jobId": "required-failed-terminal"
+        }
+      ],
+      "expected": {
+        "enabled": true,
+        "compliance": "degraded",
+        "reasons": [
+          "failed-required-jobs"
+        ],
+        "committedCopies": 3,
+        "requiredCopies": 1,
+        "healthyCopies": 3,
+        "openRequiredJobs": 0,
+        "failedRequiredJobs": 1,
+        "available": true
+      }
+    },
+    {
+      "name": "compliance-mode-none-not-required",
+      "op": "compliance",
+      "policy": {
+        "policyId": "p1",
+        "replication": {
+          "enabled": true,
+          "minCommittedCopies": 1
+        }
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "jobs": [
+        {
+          "mode": null,
+          "phase": "queued",
+          "jobId": "None-queued"
+        }
+      ],
+      "expected": {
+        "enabled": true,
+        "compliance": "healthy",
+        "reasons": [],
+        "committedCopies": 3,
+        "requiredCopies": 1,
+        "healthyCopies": 3,
+        "openRequiredJobs": 0,
+        "failedRequiredJobs": 0,
+        "available": true
+      }
+    },
+    {
+      "name": "compliance-min-copies-zero-falsy-fallback",
+      "op": "compliance",
+      "policy": {
+        "policyId": "p1",
+        "replication": {
+          "enabled": true,
+          "minCommittedCopies": 0
+        }
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy"
+        }
+      ],
+      "jobs": [],
+      "expected": {
+        "enabled": true,
+        "compliance": "healthy",
+        "reasons": [],
+        "committedCopies": 1,
+        "requiredCopies": 1,
+        "healthyCopies": 1,
+        "openRequiredJobs": 0,
+        "failedRequiredJobs": 0,
+        "available": true
+      }
+    },
+    {
+      "name": "compliance-lag-exceeded",
+      "op": "compliance",
+      "policy": {
+        "policyId": "p1",
+        "targetId": "managed-local",
+        "replication": {
+          "enabled": true,
+          "minCommittedCopies": 1,
+          "maxReplicaLagSeconds": 10,
+          "targets": [
+            {
+              "targetId": "target-b"
+            }
+          ]
+        }
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "jobs": [],
+      "primary_pt": {
+        "committedAt": "2026-09-05T15:00:00Z"
+      },
+      "replica_pt": {
+        "committedAt": "2026-09-05T14:00:00Z"
+      },
+      "expected": {
+        "enabled": true,
+        "compliance": "degraded",
+        "reasons": [
+          "replica-lag-exceeded:target-b"
+        ],
+        "committedCopies": 3,
+        "requiredCopies": 1,
+        "healthyCopies": 3,
+        "openRequiredJobs": 0,
+        "failedRequiredJobs": 0,
+        "available": true
+      }
+    },
+    {
+      "name": "compliance-lag-within",
+      "op": "compliance",
+      "policy": {
+        "policyId": "p1",
+        "targetId": "managed-local",
+        "recoveryObjectives": {
+          "maxReplicaLagSeconds": 7200
+        },
+        "replication": {
+          "enabled": true,
+          "minCommittedCopies": 1,
+          "targets": [
+            {
+              "targetId": "target-b"
+            }
+          ]
+        }
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "jobs": [],
+      "primary_pt": {
+        "committedAt": "2026-09-05T15:00:00Z"
+      },
+      "replica_pt": {
+        "committedAt": "2026-09-05T14:00:00Z"
+      },
+      "expected": {
+        "enabled": true,
+        "compliance": "healthy",
+        "reasons": [],
+        "committedCopies": 3,
+        "requiredCopies": 1,
+        "healthyCopies": 3,
+        "openRequiredJobs": 0,
+        "failedRequiredJobs": 0,
+        "available": true
+      }
+    },
+    {
+      "name": "compliance-unhealthy-state-not-committed",
+      "op": "compliance",
+      "policy": {
+        "policyId": "p1",
+        "replication": {
+          "enabled": true,
+          "minCommittedCopies": 1
+        }
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "degraded"
+        }
+      ],
+      "jobs": [],
+      "expected": {
+        "enabled": true,
+        "compliance": "degraded",
+        "reasons": [
+          "insufficient-committed-copies"
+        ],
+        "committedCopies": 0,
+        "requiredCopies": 1,
+        "healthyCopies": 0,
+        "openRequiredJobs": 0,
+        "failedRequiredJobs": 0,
+        "available": false
+      }
+    },
+    {
+      "name": "type-compliance-min-copies-object",
+      "op": "compliance",
+      "policy": {
+        "policyId": "p1",
+        "replication": {
+          "enabled": true,
+          "minCommittedCopies": {
+            "n": 1
+          }
+        }
+      },
+      "copies": [
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T15:00:00Z"
+        },
+        {
+          "targetId": "managed-local",
+          "backupId": "bk-2",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        },
+        {
+          "targetId": "target-b",
+          "backupId": "bk-1",
+          "recoverable": true,
+          "state": "healthy",
+          "committedAt": "2026-09-05T14:00:00Z"
+        }
+      ],
+      "jobs": [],
+      "expected": {
+        "status": "error",
+        "oracle_exception": "TypeError"
+      }
+    },
+    {
+      "name": "window-missing-always-inside",
+      "op": "maintenance-window",
+      "policy": {
+        "placement": {}
+      },
+      "expected": {
+        "inside": true
+      }
+    },
+    {
+      "name": "window-utc-inside",
+      "op": "maintenance-window",
+      "policy": {
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "expected": {
+        "inside": true
+      }
+    },
+    {
+      "name": "window-utc-outside",
+      "op": "maintenance-window",
+      "policy": {
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "16:00",
+            "end": "18:00"
+          }
+        }
+      },
+      "expected": {
+        "inside": false
+      }
+    },
+    {
+      "name": "window-inclusive-start",
+      "op": "maintenance-window",
+      "policy": {
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "15:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "expected": {
+        "inside": true
+      }
+    },
+    {
+      "name": "window-wrap-evening-outside",
+      "op": "maintenance-window",
+      "policy": {
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "22:00",
+            "end": "02:00"
+          }
+        }
+      },
+      "expected": {
+        "inside": false
+      }
+    },
+    {
+      "name": "window-wrap-late-inside",
+      "op": "maintenance-window",
+      "now": "2026-09-05T23:00:00Z",
+      "policy": {
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "22:00",
+            "end": "02:00"
+          }
+        }
+      },
+      "expected": {
+        "inside": true
+      }
+    },
+    {
+      "name": "window-wrap-early-inside",
+      "op": "maintenance-window",
+      "now": "2026-09-05T01:00:00Z",
+      "policy": {
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "22:00",
+            "end": "02:00"
+          }
+        }
+      },
+      "expected": {
+        "inside": true
+      }
+    },
+    {
+      "name": "window-invalid-timezone-utc-fallback",
+      "op": "maintenance-window",
+      "policy": {
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "Not/AZone",
+            "start": "14:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "expected": {
+        "inside": true
+      }
+    },
+    {
+      "name": "window-invalid-clock-fail-open",
+      "op": "maintenance-window",
+      "policy": {
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "25:00",
+            "end": "26:00"
+          }
+        }
+      },
+      "expected": {
+        "inside": false
+      }
+    },
+    {
+      "name": "window-three-part-fail-open",
+      "op": "maintenance-window",
+      "policy": {
+        "placement": {
+          "maintenanceWindow": {
+            "timezone": "UTC",
+            "start": "14:00:00",
+            "end": "16:00"
+          }
+        }
+      },
+      "expected": {
+        "inside": true
+      }
+    },
+    {
+      "name": "window-non-dict-fail-open",
+      "op": "maintenance-window",
+      "policy": {
+        "placement": {
+          "maintenanceWindow": "always"
+        }
+      },
+      "expected": {
+        "inside": true
+      }
+    }
+  ]
+}
