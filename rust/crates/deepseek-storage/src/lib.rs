@@ -2,11 +2,14 @@ use deepseek_protocol::{
     ActionFence, AdmitError, CommandKind, admit_command, is_storage_command, validate_fence,
 };
 
+pub mod backup;
 pub mod object_set;
 pub mod receipt;
+pub mod restore;
 #[cfg(feature = "s3")]
 pub mod s3;
 
+pub use backup::{BackupEngine, BackupError, BackupItem, BackupParams, BackupResult};
 pub use object_set::{
     OBJECT_SET_SCHEMA, ObjectInventoryEntry, ObjectSet, ObjectSetError, object_inventory_digest,
 };
@@ -14,6 +17,7 @@ pub use receipt::{
     COMMIT_SCHEMA_VERSION, CommitError, CommitV4, DocumentError, GENESIS_COMMIT_HASH,
     RECEIPT_SCHEMA_VERSION, ReceiptError, ReceiptV4, slot_digest, validate_committed_documents,
 };
+pub use restore::{RestoreEngine, RestoreError, RestoreSummary, sanitize_relative_path};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageRequest {
