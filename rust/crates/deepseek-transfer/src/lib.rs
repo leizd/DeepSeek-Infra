@@ -5,6 +5,7 @@ use deepseek_protocol::{
 pub mod authenticate;
 pub mod checkpoint;
 pub mod compliance;
+pub mod engine;
 pub mod journal;
 mod pycompat;
 pub mod qos;
@@ -16,6 +17,12 @@ pub mod writer_lease;
 pub use authenticate::replay_recovery_authenticate_case;
 pub use checkpoint::{MultipartCheckpoint, reconcile_multipart_checkpoint};
 pub use compliance::replay_replica_compliance_case;
+#[cfg(feature = "s3")]
+pub use engine::s3_transfer;
+pub use engine::{
+    DEFAULT_CHUNK_SIZE, MAX_CHUNK_SIZE, MIN_CHUNK_SIZE, TransferError, TransferOptions,
+    TransferReceipt, TransferSink, TransferSource, execute_transfer,
+};
 pub use journal::{
     FEDERATED_TRANSFER_IDENTITY_SCHEMA, FederatedTransferJournal, FederatedTransferJournalError,
     ProposedTransfer, TRANSFER_ID_DOMAIN, TRANSFER_JOURNAL_EVENT_SCHEMA,

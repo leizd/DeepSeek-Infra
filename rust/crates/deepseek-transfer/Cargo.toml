@@ -6,6 +6,10 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+s3 = ["dep:deepseek-storage", "dep:bytes", "dep:tokio", "deepseek-storage/s3"]
+
 [dependencies]
 base64 = { workspace = true }
 deepseek-protocol = { path = "../deepseek-protocol" }
@@ -14,6 +18,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 md-5 = { workspace = true }
+bytes = { version = "1", optional = true }
+tokio = { workspace = true, features = ["io-util", "fs"], optional = true }
+deepseek-storage = { path = "../deepseek-storage", optional = true }
 
 [dev-dependencies]
 tempfile = "=3.27.0"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

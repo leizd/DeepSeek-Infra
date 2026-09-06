@@ -652,13 +652,16 @@ name = "deepseek-transfer"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "bytes",
  "deepseek-protocol",
+ "deepseek-storage",
  "md-5",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
