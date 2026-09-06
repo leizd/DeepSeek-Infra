@@ -16,18 +16,18 @@ pub mod writer_lease;
 pub use authenticate::replay_recovery_authenticate_case;
 pub use checkpoint::{MultipartCheckpoint, reconcile_multipart_checkpoint};
 pub use compliance::replay_replica_compliance_case;
-pub use qos::replay_transfer_qos_case;
-pub use rebalance::replay_rebalance_hold_case;
-pub use repair_job::replay_repair_phase_case;
-pub use replica_plan::replay_replica_planner_case;
-pub use replication_job::replay_replication_phase_case;
-pub use writer_lease::replay_writer_lease_case;
 pub use journal::{
     FEDERATED_TRANSFER_IDENTITY_SCHEMA, FederatedTransferJournal, FederatedTransferJournalError,
     ProposedTransfer, TRANSFER_ID_DOMAIN, TRANSFER_JOURNAL_EVENT_SCHEMA,
     TRANSFER_JOURNAL_RECORD_SCHEMA, TRANSFER_STATE_PAYLOAD_SCHEMA, TransferEvent, TransferRecord,
     TransferRole, TransferState, derive_transfer_id, transfer_identity_document,
 };
+pub use qos::replay_transfer_qos_case;
+pub use rebalance::replay_rebalance_hold_case;
+pub use repair_job::replay_repair_phase_case;
+pub use replica_plan::replay_replica_planner_case;
+pub use replication_job::replay_replication_phase_case;
+pub use writer_lease::replay_writer_lease_case;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferRequest {
