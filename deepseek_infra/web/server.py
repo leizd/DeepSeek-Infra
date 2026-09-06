@@ -378,6 +378,9 @@ def _chat_route_deps() -> ChatRouteDeps:
 
 
 def create_app() -> FastAPI:
+    from deepseek_infra.infra.native_runtime.authority import assert_production_python_allowed
+
+    assert_production_python_allowed()
     api = FastAPI(title="DeepSeek Infra", version=APP_VERSION)
 
     @api.middleware("http")

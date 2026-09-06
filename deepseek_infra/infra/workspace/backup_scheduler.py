@@ -1253,6 +1253,9 @@ def claim_due_drill_slots(
     workers and process restarts.
     """
     del instance_id
+    from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
+
+    assert_python_writer_allowed("scheduler")
     current = now or datetime.now(tz=timezone.utc)
     claimed: list[dict[str, Any]] = []
     with _connect() as connection:
@@ -1336,6 +1339,9 @@ def worker_tick(
     lease_seconds: int = DEFAULT_LEASE_SECONDS,
 ) -> dict[str, int]:
     """One scheduler tick: reclaim abandoned runs, claim due slots, execute."""
+    from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
+
+    assert_python_writer_allowed("scheduler")
     current = now or datetime.now(tz=timezone.utc)
     policies = backup_policies.enabled_policies()
     reclaimed = reclaim_abandoned_slots(instance_id=instance_id, now=current, lease_seconds=lease_seconds)
@@ -1407,6 +1413,9 @@ class BackupWorker:
     def start(self) -> None:
         if self._thread is not None:
             return
+        from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
+
+        assert_python_writer_allowed("scheduler")
         try:
             from deepseek_infra.infra.workspace import backup_control_recovery
 

@@ -28,19 +28,33 @@ class PythonRuntimeDisabledError(RuntimeError):
 GO_CONTROL_DOMAINS = frozenset(
     {
         "policy",
+        "policy_crud",
         "target",
+        "target_registry",
         "scheduler",
+        "backup_scheduler",
         "action",
+        "action_journal",
         "risk",
+        "risk_manager",
         "wave",
+        "wave_scheduler",
         "capacity",
+        "capacity_controller",
         "forecast",
+        "forecast_service",
         "maintenance",
+        "maintenance_window",
         "federation_peer",
+        "federation_topology",
         "federation_session",
+        "federation_session_handshake",
         "federation_transfer",
+        "federation_transfer_broker",
         "agent_run",
+        "agent_dag_scheduler",
         "dr_orchestration",
+        "dr_orchestrator",
     }
 )
 

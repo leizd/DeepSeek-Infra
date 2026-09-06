@@ -90,6 +90,9 @@ def assert_mutation_allowed(
     *,
     detail: dict[str, Any] | None = None,
 ) -> None:
+    from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
+
+    assert_python_writer_allowed(domain)
     capability = _ACTIVE_CAPABILITY.get()
     if capability is not None:
         capability._block(domain, operation, detail)  # noqa: SLF001

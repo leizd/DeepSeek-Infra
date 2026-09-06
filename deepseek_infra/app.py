@@ -65,6 +65,9 @@ def prepare_and_start(
     thread itself for clean Ctrl+C semantics.
     """
     configure_logging()
+    from deepseek_infra.infra.native_runtime.authority import assert_production_python_allowed
+
+    assert_production_python_allowed()
     if not STATIC_DIR.exists():
         raise SystemExit("Missing static directory")
     if not (STATIC_DIR / "ui" / "index.html").is_file():
