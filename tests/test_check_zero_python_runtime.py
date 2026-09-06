@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "check_zero_python_runtime.py"
@@ -121,7 +123,7 @@ def test_gate_detects_go_os_exec_violation(tmp_path: Path) -> None:
     assert "Go production code imports os/exec" in result.details
 
 
-def test_authority_modes_and_allowed_branches(monkeypatch: Any) -> None:
+def test_authority_modes_and_allowed_branches(monkeypatch: pytest.MonkeyPatch) -> None:
     from deepseek_infra.infra.native_runtime.authority import (
         RuntimeMode,
         assert_production_python_allowed,
