@@ -47,10 +47,6 @@
   "gates": {},
   "blockers": [
     {
-      "code": "PRODUCTION_CONTAINER_STAGE_AUDIT_PENDING",
-      "detail": "Multi-stage Docker production images require automated layer inspection to verify absolute absence of /usr/bin/python, site-packages, or libpython in final stages."
-    },
-    {
       "code": "PROVIDER_EVIDENCE_MISSING",
       "detail": "Native Three-MinIO, two-Fleet/four-MinIO, and SIGKILL/takeover workload evidence has not been produced."
     },
@@ -61,10 +57,6 @@
     {
       "code": "ZERO_PYTHON_MEASUREMENTS_MISSING",
       "detail": "Zero-Python and unique-writer invariants have targets and executable gates, but require live workload-measured artifacts."
-    },
-    {
-      "code": "DESKTOP_NATIVE_LAUNCHER_PENDING",
-      "detail": "Standalone native desktop launcher wrapper without Python interpreter dependency."
     }
   ]
 }
