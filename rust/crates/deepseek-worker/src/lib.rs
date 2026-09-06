@@ -10,6 +10,7 @@ use deepseek_protocol::{
 };
 use deepseek_storage::{StorageRequest, plan as plan_storage};
 use deepseek_transfer::{TransferRequest, plan as plan_transfer};
+#[cfg(feature = "s3")]
 use sha2::Digest;
 
 mod authority_request;

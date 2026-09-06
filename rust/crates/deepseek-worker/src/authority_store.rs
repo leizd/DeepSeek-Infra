@@ -5,10 +5,9 @@ use deepseek_protocol::{ActionFence, AdmitError, admit_command, validate_fence};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde_json::Value;
 
-use crate::{
-    AuthorityRequestContext, AuthorityRequestError, StorageEffectRecord, StorageEffectState,
-    WorkerAuthority, WorkerStorageError, authority_request,
-};
+use crate::{AuthorityRequestContext, AuthorityRequestError, WorkerAuthority, authority_request};
+#[cfg(feature = "s3")]
+use crate::{StorageEffectRecord, StorageEffectState, WorkerStorageError};
 
 const SCHEMA: &[&str] = &[
     "CREATE TABLE worker_authority (id INTEGER PRIMARY KEY CHECK(id=1), signer TEXT NOT NULL, fleet TEXT NOT NULL, environment TEXT NOT NULL, fencing_token INTEGER NOT NULL CHECK(fencing_token>0)) STRICT",
@@ -30,6 +29,7 @@ const APPLICATION_ID: i64 = 0x44535741; // DSWA: DeepSeek Worker Authority
 pub(super) struct AuthorityStore {
     connection: Connection,
     fencing_token: i64,
+    #[allow(dead_code)]
     now_override: Option<String>,
 }
 

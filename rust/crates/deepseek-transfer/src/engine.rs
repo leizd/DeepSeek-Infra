@@ -307,12 +307,9 @@ impl Write for TransferSink {
         match self {
             Self::Memory(vec) => vec.write(buf),
             Self::File { file, .. } => {
-                let f = file.as_mut().ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        "file sink already committed or closed",
-                    )
-                })?;
+                let f = file
+                    .as_mut()
+                    .ok_or_else(|| io::Error::other("file sink already committed or closed"))?;
                 f.write(buf)
             }
             Self::Writer(writer) => writer.write(buf),
