@@ -79,3 +79,27 @@ epoch/token. Its uncommitted padding is fault injection, not effect evidence.
 
 These tests neither contact MinIO nor prove exactly-once storage effects. Real
 Three-MinIO and two-Fleet/four-MinIO execution gates remain required.
+
+## Storage reconciliation: negative observations are not terminal proof
+
+The optional S3 worker journal must keep `EFFECT_UNKNOWN` when HEAD finds no
+object or observes metadata belonging to a different write. A pending request can
+still arrive after that observation. Strong consistency concerns completed writes,
+not cancellation of in-flight writes; see the [S3 consistency contract](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html#ConsistencyModel).
+Such observations are recorded as diagnostics, not `REJECTED`, and the original
+action/epoch remains blocked from blind retry.
+
+`authorized_storage_provider.rs` now exercises this with a TCP relay that captures
+the real signed worker PUT, disconnects the worker, waits for HEAD/reconciliation,
+then delivers the unchanged request to real MinIO and verifies its 200 ACK and
+downloaded bytes. It covers both an absent target and an old object awaiting a
+conditional overwrite. A separate relay case drops a real successful ACK.
+These cases do not seed the effect journal manually. Reopening a worker handle is
+not a process-kill/takeover test and must not be described as one.
+
+Positive reconciliation remains unqualified: matching user metadata alone does
+not prove stored byte integrity, and the journal does not yet bind the complete
+provider origin/bucket/prefix and conditional request identity. Those requirements,
+renewable authority and real process-kill/takeover evidence remain prerequisites
+for production. Existing terminal records from unqualified builds must not be
+silently accepted as release proof or rewritten as a rollback shortcut.

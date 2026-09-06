@@ -47,6 +47,18 @@
   "gates": {},
   "blockers": [
     {
+      "code": "PUBLIC_EDGE_AUTHORITY_INCOMPLETE",
+      "detail": "Native chat, model catalog, MCP, A2A and agent discovery still fail closed as unwired. Public /api isolation does not implement the authenticated proxy or full behavioral parity."
+    },
+    {
+      "code": "CONTROL_CUTOVER_INCOMPLETE",
+      "detail": "Go TransitionCutover still returns ErrCutoverNotAuthorized for states requiring production authorization. Route registration and writer-denial gates do not establish complete Go production ownership."
+    },
+    {
+      "code": "EFFECT_RECONCILIATION_UNPROVEN",
+      "detail": "Worker storage reconciliation lacks complete durable provider-target binding and conditional byte-integrity proof. A missing object or mismatched metadata cannot settle an uncertain in-flight write as unapplied; full process-kill/takeover recovery remains unqualified."
+    },
+    {
       "code": "PROVIDER_EVIDENCE_MISSING",
       "detail": "Native Three-MinIO, two-Fleet/four-MinIO, and SIGKILL/takeover workload evidence has not been produced."
     },

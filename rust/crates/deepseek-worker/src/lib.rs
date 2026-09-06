@@ -617,18 +617,22 @@ impl Worker {
                         Some(&metadata),
                     )?;
                 } else {
+                    // HEAD is only a point-in-time observation. The original
+                    // uncertain PUT may still replace these bytes after HEAD.
                     self.transition_storage_mutation(
                         fence,
-                        StorageEffectState::Rejected,
+                        StorageEffectState::EffectUnknown,
                         None,
                         Some("{\"reconciliation\":\"target_metadata_mismatch\"}"),
                     )?;
                 }
             }
             Ok(None) => {
+                // Even a strongly consistent absence does not fence an in-flight
+                // request. Do not turn uncertainty into a terminal NOT_APPLIED.
                 self.transition_storage_mutation(
                     fence,
-                    StorageEffectState::Rejected,
+                    StorageEffectState::EffectUnknown,
                     None,
                     Some("{\"reconciliation\":\"object_not_found\"}"),
                 )?;
