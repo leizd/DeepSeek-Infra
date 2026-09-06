@@ -58,6 +58,7 @@ fn create_routes() -> Router {
         .route("/.well-known/agent-card.json", get(agent_card))
         .route("/a2a", post(a2a_rpc))
         .route("/api/*path", any(proxy_api_to_go))
+        .route("/internal/*path", any(proxy_internal_to_go))
         .route("/rag/query/normalize", post(rag_query_normalize))
         .route("/rag/chunks/score", post(rag_chunks_score))
         .route("/rag/vectors/rank", post(rag_vectors_rank))
@@ -146,10 +147,11 @@ async fn a2a_rpc(body: Bytes) -> Json<serde_json::Value> {
     jsonrpc_not_ready(&body, "native A2A execution is not wired")
 }
 
-async fn proxy_api_to_go(
+async fn proxy_path_to_go(
+    prefix: &str,
     method: axum::http::Method,
     headers: HeaderMap,
-    Path(path): Path<String>,
+    path: &str,
     body: Bytes,
 ) -> Response {
     let go_url = std::env::var("GO_CONTROL_ADDR")
@@ -162,11 +164,11 @@ async fn proxy_api_to_go(
             "GO_CONTROL_PROXY_NOT_READY",
             "Go control-plane proxy is not wired",
         );
-        payload["error"]["target"] = json!(format!("/api/{path}"));
+        payload["error"]["target"] = json!(format!("/{prefix}/{path}"));
         return (status, Json(payload)).into_response();
     };
 
-    let target = format!("{}/api/{path}", base_url.trim_end_matches('/'));
+    let target = format!("{}/{prefix}/{path}", base_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -229,12 +231,30 @@ async fn proxy_api_to_go(
                 "error": {
                     "code": "GO_CONTROL_UNREACHABLE",
                     "message": "Failed to connect to Go control plane",
-                    "target": format!("/api/{path}"),
+                    "target": format!("/{prefix}/{path}"),
                 }
             })),
         )
             .into_response(),
     }
+}
+
+async fn proxy_api_to_go(
+    method: axum::http::Method,
+    headers: HeaderMap,
+    Path(path): Path<String>,
+    body: Bytes,
+) -> Response {
+    proxy_path_to_go("api", method, headers, &path, body).await
+}
+
+async fn proxy_internal_to_go(
+    method: axum::http::Method,
+    headers: HeaderMap,
+    Path(path): Path<String>,
+    body: Bytes,
+) -> Response {
+    proxy_path_to_go("internal", method, headers, &path, body).await
 }
 
 async fn gateway_request_prepare(body: Bytes) -> Json<serde_json::Value> {

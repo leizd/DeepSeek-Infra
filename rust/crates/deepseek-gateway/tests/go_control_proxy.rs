@@ -5,16 +5,27 @@ use tower::ServiceExt;
 
 #[tokio::test]
 async fn proxy_api_to_go_forwarding_and_unreachable_behavior() {
-    let mock_app = Router::new().route(
-        "/api/test-go",
-        get(|| async {
-            Json(json!({
-                "ok": true,
-                "service": "deepseekd-mock",
-                "authority": "go"
-            }))
-        }),
-    );
+    let mock_app = Router::new()
+        .route(
+            "/api/test-go",
+            get(|| async {
+                Json(json!({
+                    "ok": true,
+                    "service": "deepseekd-mock",
+                    "authority": "go"
+                }))
+            }),
+        )
+        .route(
+            "/internal/test-internal",
+            get(|| async {
+                Json(json!({
+                    "ok": true,
+                    "service": "deepseekd-internal",
+                    "authority": "go"
+                }))
+            }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mock_addr = listener.local_addr().unwrap();
     let server_handle = tokio::spawn(async move {
@@ -40,6 +51,21 @@ async fn proxy_api_to_go_forwarding_and_unreachable_behavior() {
     let val: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(val["ok"], true);
     assert_eq!(val["authority"], "go");
+
+    // Test /internal/* forwarding to Go control plane
+    let internal_req = axum::http::Request::builder()
+        .method("GET")
+        .uri("/internal/test-internal")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let internal_res = app.clone().oneshot(internal_req).await.unwrap();
+    assert_eq!(internal_res.status(), StatusCode::OK);
+    let internal_bytes = axum::body::to_bytes(internal_res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let internal_val: serde_json::Value = serde_json::from_slice(&internal_bytes).unwrap();
+    assert_eq!(internal_val["ok"], true);
+    assert_eq!(internal_val["service"], "deepseekd-internal");
 
     unsafe {
         std::env::set_var("GO_CONTROL_ADDR", "http://127.0.0.1:1");
