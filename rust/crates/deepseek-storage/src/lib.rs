@@ -4,6 +4,8 @@ use deepseek_protocol::{
 
 pub mod object_set;
 pub mod receipt;
+#[cfg(feature = "s3")]
+pub mod s3;
 
 pub use object_set::{
     OBJECT_SET_SCHEMA, ObjectInventoryEntry, ObjectSet, ObjectSetError, object_inventory_digest,

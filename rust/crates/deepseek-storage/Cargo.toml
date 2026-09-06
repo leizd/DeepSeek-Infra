@@ -6,8 +6,26 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+s3 = ["dep:async-trait", "dep:bytes", "dep:futures-util", "dep:object_store", "dep:reqwest", "dep:tokio"]
+s3-e2e = ["s3"]
+
 [dependencies]
 deepseek-protocol = { path = "../deepseek-protocol" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+async-trait = { version = "0.1", optional = true }
+bytes = { version = "1", optional = true }
+futures-util = { version = "0.3", optional = true }
+object_store = { version = "=0.12.4", default-features = false, features = ["aws", "tls-webpki-roots"], optional = true }
+reqwest = { version = "=0.12.28", default-features = false, features = ["rustls-tls-webpki-roots", "stream"], optional = true }
+tokio = { workspace = true, features = ["io-util"], optional = true }
+
+[[test]]
+name = "s3_transport"
+required-features = ["s3"]
+
+[[test]]
+name = "s3_provider"
+required-features = ["s3-e2e"]

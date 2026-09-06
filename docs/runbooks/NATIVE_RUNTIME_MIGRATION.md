@@ -106,6 +106,11 @@ export/import, not dual-write and not automatic Python fallback.
 
 ## Commands
 
+The optional [Rust S3 transport](../NATIVE_S3_TRANSPORT.md) now has a separate real-MinIO
+byte gate. It does not bypass worker authority barriers or enable production writes.
+Run `python scripts/run_native_s3_e2e.py` to provision isolated providers and execute it;
+do not treat that transport PASS as a Go ownership cutover or effect-journal proof.
+
 ```text
 python scripts/native_runtime_contract.py --check
 cargo test --manifest-path rust/Cargo.toml -p deepseek-protocol -p deepseek-worker
