@@ -11,7 +11,9 @@ SCRIPT = ROOT / "scripts" / "check_zero_python_runtime.py"
 
 from scripts.check_zero_python_runtime import (  # noqa: E402
     check_compose_topology,
+    check_container_image_isolation,
     check_ownership_matrix,
+    check_process_tree_isolation,
     run_all_checks,
 )
 
@@ -21,7 +23,7 @@ def test_gate_passes_on_current_repository() -> None:
     assert report["status"] == "PASS"
     assert report["passed"] is True
     assert report["checks_failed"] == 0
-    assert report["checks_passed"] == 6
+    assert report["checks_passed"] == 8
 
 
 def test_gate_cli_invocation_strict() -> None:
@@ -46,7 +48,7 @@ def test_gate_cli_invocation_json() -> None:
     payload = json.loads(result.stdout)
     assert payload["status"] == "PASS"
     assert payload["passed"] is True
-    assert len(payload["results"]) == 6
+    assert len(payload["results"]) == 8
 
 
 def test_gate_detects_forbidden_python_in_compose(tmp_path: Path) -> None:
@@ -89,3 +91,31 @@ def test_gate_detects_python_target_owner_in_ownership_matrix(tmp_path: Path) ->
     result = check_ownership_matrix(tmp_path)
     assert result.passed is False
     assert "Forbidden Python target owner for production domains" in result.details
+
+
+def test_gate_detects_container_image_isolation_failure(tmp_path: Path) -> None:
+    result = check_container_image_isolation(tmp_path)
+    assert result.passed is False
+    assert "Native container image audit failed" in result.details
+
+
+def test_gate_detects_rust_process_spawning_violation(tmp_path: Path) -> None:
+    rust_crate = tmp_path / "rust" / "crates" / "bad-crate" / "src"
+    rust_crate.mkdir(parents=True)
+    (rust_crate / "lib.rs").write_text('fn run() { Command::new("python"); }', encoding="utf-8")
+    (tmp_path / "go").mkdir(parents=True)
+
+    result = check_process_tree_isolation(tmp_path)
+    assert result.passed is False
+    assert "Rust production code spawns forbidden process" in result.details
+
+
+def test_gate_detects_go_os_exec_violation(tmp_path: Path) -> None:
+    (tmp_path / "rust" / "crates").mkdir(parents=True)
+    go_pkg = tmp_path / "go" / "pkg"
+    go_pkg.mkdir(parents=True)
+    (go_pkg / "bad.go").write_text('package pkg\nimport "os/exec"\n', encoding="utf-8")
+
+    result = check_process_tree_isolation(tmp_path)
+    assert result.passed is False
+    assert "Go production code imports os/exec" in result.details

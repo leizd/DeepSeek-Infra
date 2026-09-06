@@ -378,6 +378,80 @@ def check_gateway_route_cutover(root: Path) -> GateCheckResult:
     )
 
 
+def check_container_image_isolation(root: Path) -> GateCheckResult:
+    from scripts.check_native_images import run_all_audits
+
+    report = run_all_audits(root)
+    if not report["passed"]:
+        violations: list[str] = []
+        for r in report["results"]:
+            if not r["passed"]:
+                violations.extend(f"{r['target']}: {v}" for v in r["violations"])
+        return GateCheckResult(
+            name="container_image_isolation",
+            passed=False,
+            details=f"Native container image audit failed: {'; '.join(violations)}",
+            data=report,
+        )
+
+    return GateCheckResult(
+        name="container_image_isolation",
+        passed=True,
+        details=f"All {report['audits_total']} container targets pass zero-Python isolation audits",
+        data=report,
+    )
+
+
+def check_process_tree_isolation(root: Path) -> GateCheckResult:
+    # 1. Audit Rust crates for forbidden process invocations
+    rust_root = root / "rust" / "crates"
+    forbidden_tokens = ["python", "python3", "pyo3", "cpython"]
+    rust_violations: list[str] = []
+    for rs_file in rust_root.rglob("*.rs"):
+        if "tests" in rs_file.parts:
+            continue
+        text = rs_file.read_text(encoding="utf-8").lower()
+        if "command::new" in text:
+            for token in forbidden_tokens:
+                if f'"{token}"' in text or f"'{token}'" in text:
+                    rust_violations.append(f"{rs_file.relative_to(root)} spawns {token}")
+
+    if rust_violations:
+        return GateCheckResult(
+            name="process_tree_isolation",
+            passed=False,
+            details=f"Rust production code spawns forbidden process: {'; '.join(rust_violations)}",
+        )
+
+    # 2. Audit Go codebase for os/exec imports
+    go_root = root / "go"
+    go_violations: list[str] = []
+    for go_file in go_root.rglob("*.go"):
+        if "_test.go" in go_file.name:
+            continue
+        text = go_file.read_text(encoding="utf-8")
+        if '"os/exec"' in text:
+            go_violations.append(f"{go_file.relative_to(root)} imports os/exec")
+
+    if go_violations:
+        return GateCheckResult(
+            name="process_tree_isolation",
+            passed=False,
+            details=f"Go production code imports os/exec: {'; '.join(go_violations)}",
+        )
+
+    return GateCheckResult(
+        name="process_tree_isolation",
+        passed=True,
+        details="Rust and Go production binaries spawn zero Python subprocesses; process tree isolation verified",
+        data={
+            "rust_production_crates_checked": True,
+            "go_production_packages_checked": True,
+            "external_executors_detected": 0,
+        },
+    )
+
+
 def run_all_checks(root: Path) -> dict[str, Any]:
     checks = [
         check_compose_topology(root),
@@ -386,6 +460,8 @@ def run_all_checks(root: Path) -> dict[str, Any]:
         check_mechanical_writer_denial(),
         check_native_storage_and_transfer(root),
         check_gateway_route_cutover(root),
+        check_container_image_isolation(root),
+        check_process_tree_isolation(root),
     ]
 
     all_passed = all(c.passed for c in checks)
