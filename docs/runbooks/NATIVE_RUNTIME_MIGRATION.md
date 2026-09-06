@@ -58,7 +58,11 @@ Do not cut over mutation until that gate stays green.
   positive or negative effect claims fail closed.
 - The checked-in worker process starts with authority uninitialized unless the
   dedicated `DEEPSEEK_WORKER_AUTHORITY_*` public signer/fleet/environment/fencing
-  configuration is complete. Unconfigured workers reject command admission with
+  configuration is complete. Configured binaries also require
+  `DEEPSEEK_WORKER_STATE_ROOT` and persist epoch/replay state in the Rust-only
+  `rust-worker/authority.sqlite3` child path; there is no memory fallback on
+  configuration or database failure. See the [worker journal runbook](../NATIVE_WORKER_AUTHORITY_STORE.md).
+  Unconfigured workers reject command admission with
   `FENCE_MISMATCH` and reject `InstallAuthoritativeEpoch` with
   `AUTHORITY_REQUEST_SIGNER_MISMATCH`. A valid signed `control-authority-request-v1`
   document is required before a live epoch can be installed. That channel does

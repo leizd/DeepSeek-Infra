@@ -83,6 +83,7 @@ def test_ci_runs_real_go_to_rust_worker_boundary() -> None:
         "TestRustWorkerUnconfiguredInstallRemainsFailClosed",
         "TestRustWorkerInstallsEpochFromSignedAuthorityRequest",
         "DEEPSEEK_TEST_RUST_WORKER_AUTHORITY: \"1\"",
+        "DEEPSEEK_WORKER_STATE_ROOT: ${{ runner.temp }}/deepseek-worker-authority",
         "DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY: 11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
         "trap cleanup EXIT",
         'kill -INT "$worker_pid"',

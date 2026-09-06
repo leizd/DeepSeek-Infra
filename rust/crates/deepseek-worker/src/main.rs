@@ -45,30 +45,44 @@ fn configured_listen_addr(
     parse_listen_addr(raw.trim())
 }
 
-fn configured_worker() -> io::Result<Worker> {
-    let mut worker = Worker::new();
-    match authority_config_from_env(|name| std::env::var(name)) {
-        Ok(Some(config)) => worker.configure_authority(config).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("worker authority configuration rejected: {}", error.code),
+fn configured_worker(
+    get: impl Fn(&str) -> Result<String, std::env::VarError>,
+) -> io::Result<Worker> {
+    match authority_config_from_env(&get) {
+        Ok(Some(config)) => {
+            let state_root = get("DEEPSEEK_WORKER_STATE_ROOT").map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "configured worker requires DEEPSEEK_WORKER_STATE_ROOT",
+                )
+            })?;
+            if state_root.trim().is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "worker state root must not be empty",
+                ));
+            }
+            Worker::open_with_authority(config, std::path::Path::new(&state_root)).map_err(
+                |error| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("worker authority configuration rejected: {}", error.code),
+                    )
+                },
             )
-        })?,
-        Ok(None) => {}
-        Err(error) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("worker authority configuration rejected: {}", error.code),
-            ));
         }
+        Ok(None) => Ok(Worker::new()),
+        Err(error) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("worker authority configuration rejected: {}", error.code),
+        )),
     }
-    Ok(worker)
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address = configured_listen_addr(std::env::var("DEEPSEEK_WORKER_LISTEN"))?;
-    let worker = configured_worker()?;
+    let worker = configured_worker(|name| std::env::var(name))?;
     let authority = if worker.authority_configured() {
         "configured"
     } else {
@@ -124,7 +138,8 @@ mod tests {
 
     #[test]
     fn worker_starts_unconfigured_without_authority_env() {
-        let worker = configured_worker().expect("unconfigured worker");
+        let worker = configured_worker(|_| Err(std::env::VarError::NotPresent))
+            .expect("unconfigured worker");
         assert!(!worker.authority_configured());
     }
 }
