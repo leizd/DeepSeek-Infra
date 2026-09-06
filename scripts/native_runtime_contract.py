@@ -23,6 +23,7 @@ CORPUS_MANIFESTS = (
     ROOT / "compat" / "native-runtime" / "v4" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v5" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v6" / "manifest.json",
+    ROOT / "compat" / "native-runtime" / "v7" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v8" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v9" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v10" / "manifest.json",

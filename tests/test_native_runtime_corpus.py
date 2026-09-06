@@ -25,10 +25,20 @@ from deepseek_infra.infra.workspace import (
 from deepseek_infra.infra.workspace.federated_replica_attestation import REPLICA_ATTESTATION_FIELDS
 from deepseek_infra.infra.workspace.federated_replica_commit import COMMIT_V4_FIELDS, RECEIPT_V4_FIELDS
 from scripts import check_mcp_protocol_parity as mcp_parity
-from scripts.native_runtime_contract import sha256_file, validate_corpora, validate_corpus
+from scripts.native_runtime_contract import CORPUS_MANIFESTS, sha256_file, validate_corpora, validate_corpus
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_every_versioned_corpus_manifest_is_registered_exactly_once() -> None:
+    discovered = set((ROOT / "compat/native-runtime").glob("v*/manifest.json"))
+    registered = set(CORPUS_MANIFESTS)
+    assert len(CORPUS_MANIFESTS) == len(registered), "duplicate corpus manifest registration"
+    assert registered == discovered, {
+        "missing": sorted(str(path.relative_to(ROOT)) for path in discovered - registered),
+        "unexpected": sorted(str(path.relative_to(ROOT)) for path in registered - discovered),
+    }
 
 
 def test_corpus_hash_is_stable_across_crlf_checkouts(tmp_path: Path) -> None:
@@ -56,7 +66,7 @@ def test_canonical_corpora_match_frozen_digests() -> None:
     } <= ids
 
     manifests = validate_corpora()
-    assert len(manifests) == 28
+    assert len(manifests) == 29
     assert manifests[1]["compatibility_reason"]
     assert manifests[2]["compatibility_reason"]
     assert manifests[3]["compatibility_reason"]
@@ -84,6 +94,7 @@ def test_canonical_corpora_match_frozen_digests() -> None:
     assert manifests[25]["compatibility_reason"]
     assert manifests[26]["compatibility_reason"]
     assert manifests[27]["compatibility_reason"]
+    assert manifests[28]["compatibility_reason"]
 
 
 def _apply_frozen_mutation(value: Any, *, op: str, pointer: str, replacement: Any) -> None:
