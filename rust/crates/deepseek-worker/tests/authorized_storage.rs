@@ -493,3 +493,182 @@ async fn crash_during_dispatching_recovers_to_effect_unknown_and_requires_reconc
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn authority_installed_before_effect_reservation_survives_crash_and_allows_reservation() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, fence, key) = fixture();
+    let payload = Bytes::from_static(b"pre-reservation-crash-payload");
+    let digest: [u8; 32] = Sha256::digest(&payload).into();
+
+    {
+        // 1. Install authoritative epoch into SQLite store
+        let mut worker = Worker::open_with_authority(config.clone(), directory.path()).unwrap();
+        let request = sign_request(&key, &fence.action_id, 4, 4, "1", "1");
+        worker.install_signed_epoch(&fence, &request).unwrap();
+        // Worker crashes right here before reserving any effect
+    }
+
+    // 2. Restart worker: installed epoch survives, effect table is empty
+    let mut restarted = Worker::open_with_authority(config, directory.path()).unwrap();
+    assert_eq!(restarted.query_storage_effect(&fence).unwrap(), None);
+
+    // 3. Effect can now be cleanly reserved with the surviving installed epoch
+    let proof = restarted
+        .reserve_storage_mutation(&fence, "data/unreserved-key", &digest)
+        .unwrap();
+    assert_eq!(proof.action_id, fence.action_id);
+    assert_eq!(proof.execution_epoch, 4);
+
+    let recorded = restarted.query_storage_effect(&fence).unwrap().unwrap();
+    assert_eq!(recorded.state, StorageEffectState::Reserved);
+}
+
+#[tokio::test]
+async fn crash_during_reserved_recovers_to_effect_unknown_and_blocks_blind_retry() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, fence, key) = fixture();
+    let payload = Bytes::from_static(b"reserved-crash-payload");
+    let digest: [u8; 32] = Sha256::digest(&payload).into();
+
+    {
+        let mut worker = Worker::open_with_authority(config.clone(), directory.path()).unwrap();
+        let request = sign_request(&key, &fence.action_id, 4, 4, "1", "1");
+        worker.install_signed_epoch(&fence, &request).unwrap();
+        worker
+            .reserve_storage_mutation(&fence, "data/reserved-key", &digest)
+            .unwrap();
+
+        let reserved = worker.query_storage_effect(&fence).unwrap().unwrap();
+        assert_eq!(reserved.state, StorageEffectState::Reserved);
+        // Worker crashes before dispatching to provider
+    }
+
+    // Restart worker: AuthorityStore::open must recover RESERVED to EFFECT_UNKNOWN
+    let mut restarted = Worker::open_with_authority(config, directory.path()).unwrap();
+    let recovered = restarted.query_storage_effect(&fence).unwrap().unwrap();
+    assert_eq!(recovered.state, StorageEffectState::EffectUnknown);
+
+    // Blind retry is blocked
+    let transport = dummy_transport();
+    assert_eq!(
+        restarted
+            .execute_storage_put(
+                &transport,
+                "data/reserved-key",
+                payload,
+                digest,
+                &fence,
+                ConditionalWrite::Create,
+            )
+            .await,
+        Err(WorkerStorageError::UnknownEffectRetryBlocked)
+    );
+}
+
+#[tokio::test]
+async fn crash_during_reconciliation_recovers_to_effect_unknown_and_allows_re_reconciliation() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, fence, key) = fixture();
+    let payload = Bytes::from_static(b"reconciliation-crash-payload");
+    let digest: [u8; 32] = Sha256::digest(&payload).into();
+
+    {
+        let mut worker = Worker::open_with_authority(config.clone(), directory.path()).unwrap();
+        let request = sign_request(&key, &fence.action_id, 4, 4, "1", "1");
+        worker.install_signed_epoch(&fence, &request).unwrap();
+        worker
+            .reserve_storage_mutation(&fence, "data/reconcile-crash-key", &digest)
+            .unwrap();
+        worker
+            .transition_storage_mutation(&fence, StorageEffectState::EffectUnknown, None, None)
+            .unwrap();
+
+        // Worker enters RECONCILING
+        worker
+            .transition_storage_mutation(&fence, StorageEffectState::Reconciling, None, None)
+            .unwrap();
+        assert_eq!(
+            worker.query_storage_effect(&fence).unwrap().unwrap().state,
+            StorageEffectState::Reconciling
+        );
+        // Worker crashes during reconciliation
+    }
+
+    // Restart worker: AuthorityStore::open must recover RECONCILING to EFFECT_UNKNOWN
+    let mut restarted = Worker::open_with_authority(config, directory.path()).unwrap();
+    let recovered = restarted.query_storage_effect(&fence).unwrap().unwrap();
+    assert_eq!(recovered.state, StorageEffectState::EffectUnknown);
+
+    // Worker can safely re-enter RECONCILING and proceed to CONFIRMED
+    restarted
+        .transition_storage_mutation(&fence, StorageEffectState::Reconciling, None, None)
+        .unwrap();
+    restarted
+        .transition_storage_mutation(
+            &fence,
+            StorageEffectState::Confirmed,
+            Some("etag-reconciled"),
+            Some("{\"reconciled\":true}"),
+        )
+        .unwrap();
+
+    let final_record = restarted.query_storage_effect(&fence).unwrap().unwrap();
+    assert_eq!(final_record.state, StorageEffectState::Confirmed);
+    assert_eq!(final_record.etag.as_deref(), Some("etag-reconciled"));
+}
+
+#[tokio::test]
+async fn takeover_during_effect_unknown_rejects_stale_worker_and_allows_successor_reconciliation() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, fence, key) = fixture();
+    let payload = Bytes::from_static(b"takeover-crash-payload");
+    let digest: [u8; 32] = Sha256::digest(&payload).into();
+
+    let mut first_worker = Worker::open_with_authority(config.clone(), directory.path()).unwrap();
+    let request = sign_request(&key, &fence.action_id, 4, 4, "1", "1");
+    first_worker.install_signed_epoch(&fence, &request).unwrap();
+    first_worker
+        .reserve_storage_mutation(&fence, "data/takeover-key", &digest)
+        .unwrap();
+    first_worker
+        .transition_storage_mutation(&fence, StorageEffectState::EffectUnknown, None, None)
+        .unwrap();
+
+    // Successor worker takes over with higher fencing token 5
+    let successor_config = WorkerAuthorityConfig {
+        fencing_token: 5,
+        ..config
+    };
+    let mut successor_worker =
+        Worker::open_with_authority(successor_config, directory.path()).unwrap();
+
+    // First worker with stale fencing token 4 attempts to reconcile -> rejected
+    assert_eq!(
+        first_worker.transition_storage_mutation(
+            &fence,
+            StorageEffectState::Reconciling,
+            None,
+            None
+        ),
+        Err(WorkerStorageError::StaleFencingToken)
+    );
+
+    // Successor worker with live fencing token 5 successfully reconciles the unknown effect
+    successor_worker
+        .transition_storage_mutation(&fence, StorageEffectState::Reconciling, None, None)
+        .unwrap();
+    successor_worker
+        .transition_storage_mutation(
+            &fence,
+            StorageEffectState::Confirmed,
+            Some("etag-successor"),
+            Some("{\"successor\":true}"),
+        )
+        .unwrap();
+
+    let final_record = successor_worker.query_storage_effect(&fence).unwrap().unwrap();
+    assert_eq!(final_record.state, StorageEffectState::Confirmed);
+    assert_eq!(final_record.etag.as_deref(), Some("etag-successor"));
+}
+

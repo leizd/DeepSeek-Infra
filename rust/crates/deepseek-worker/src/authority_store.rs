@@ -152,7 +152,7 @@ impl AuthorityStore {
         };
         transaction
             .execute(
-                "UPDATE storage_effects SET state='EFFECT_UNKNOWN', updated_at=?1 WHERE state IN ('DISPATCHING', 'RECONCILING')",
+                "UPDATE storage_effects SET state='EFFECT_UNKNOWN', updated_at=?1 WHERE state IN ('RESERVED', 'PENDING', 'DISPATCHING', 'RECONCILING')",
                 params![now],
             )
             .map_err(|_| error())?;
@@ -416,7 +416,17 @@ impl AuthorityStore {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| WorkerStorageError::FenceMismatch)?;
-        transaction
+        let token: i64 = transaction
+            .query_row(
+                "SELECT fencing_token FROM worker_authority WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|_| WorkerStorageError::WorkerWithoutAuthority)?;
+        if token != self.fencing_token {
+            return Err(WorkerStorageError::StaleFencingToken);
+        }
+        let changed = transaction
             .execute(
                 "UPDATE storage_effects SET state=?1, etag=COALESCE(?2, etag), provider_metadata=COALESCE(?3, provider_metadata), updated_at=?4 WHERE action_id=?5 AND epoch=?6",
                 params![
@@ -425,10 +435,13 @@ impl AuthorityStore {
                     provider_metadata,
                     &now,
                     &fence.action_id,
-                    fence.execution_epoch as i64
+                    fence.execution_epoch as i64,
                 ],
             )
             .map_err(|_| WorkerStorageError::FenceMismatch)?;
+        if changed == 0 {
+            return Err(WorkerStorageError::FenceMismatch);
+        }
         transaction
             .commit()
             .map_err(|_| WorkerStorageError::FenceMismatch)?;
