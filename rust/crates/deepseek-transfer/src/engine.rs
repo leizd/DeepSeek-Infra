@@ -35,6 +35,8 @@ pub enum TransferError {
     InvalidFence(&'static str),
     SinkAborted(String),
     Journal(FederatedTransferJournalError),
+    AuthorityBindingMismatch(&'static str),
+    PathTraversal(&'static str),
     #[cfg(feature = "s3")]
     Storage(deepseek_storage::s3::S3Error),
 }
@@ -62,6 +64,12 @@ impl fmt::Display for TransferError {
             Self::InvalidFence(msg) => write!(f, "invalid fence for transfer: {msg}"),
             Self::SinkAborted(msg) => write!(f, "transfer sink aborted: {msg}"),
             Self::Journal(err) => write!(f, "transfer journal error: {err}"),
+            Self::AuthorityBindingMismatch(msg) => {
+                write!(f, "authority binding mismatch: {msg}")
+            }
+            Self::PathTraversal(msg) => {
+                write!(f, "path traversal or unsafe link rejected: {msg}")
+            }
             #[cfg(feature = "s3")]
             Self::Storage(err) => write!(f, "storage transport error: {err}"),
         }
@@ -92,6 +100,59 @@ impl From<FederatedTransferJournalError> for TransferError {
 impl From<deepseek_storage::s3::S3Error> for TransferError {
     fn from(err: deepseek_storage::s3::S3Error) -> Self {
         Self::Storage(err)
+    }
+}
+
+/// Control-plane authority proof bound to an exact transfer job.
+/// Any mutation or substitution of source, destination, digest, or length invalidates this proof.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransferAuthorityProof {
+    pub action_id: String,
+    pub execution_epoch: u64,
+    pub fencing_token: i64,
+    pub source_identity: String,
+    pub destination_identity: String,
+    pub expected_digest: [u8; 32],
+    pub expected_length: u64,
+    pub request_id: String,
+    pub nonce: String,
+}
+
+impl TransferAuthorityProof {
+    pub fn validate(
+        &self,
+        fence: &ActionFence,
+        actual_source: &str,
+        actual_dest: &str,
+        actual_digest: &[u8; 32],
+        actual_length: u64,
+    ) -> Result<(), TransferError> {
+        if self.action_id != fence.action_id || self.execution_epoch != fence.execution_epoch {
+            return Err(TransferError::AuthorityBindingMismatch(
+                "fence action_id or execution_epoch mismatch",
+            ));
+        }
+        if self.source_identity != actual_source {
+            return Err(TransferError::AuthorityBindingMismatch(
+                "source identity does not match authorized source",
+            ));
+        }
+        if self.destination_identity != actual_dest {
+            return Err(TransferError::AuthorityBindingMismatch(
+                "destination identity does not match authorized destination",
+            ));
+        }
+        if &self.expected_digest != actual_digest {
+            return Err(TransferError::AuthorityBindingMismatch(
+                "digest does not match authorized digest",
+            ));
+        }
+        if self.expected_length != actual_length {
+            return Err(TransferError::AuthorityBindingMismatch(
+                "length does not match authorized length",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -205,6 +266,20 @@ impl TransferSink {
 
     pub fn file(target_path: impl AsRef<Path>, atomic: bool) -> io::Result<Self> {
         let target_path = target_path.as_ref().to_path_buf();
+        for comp in target_path.components() {
+            if matches!(comp, std::path::Component::ParentDir) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "path traversal rejected: parent dir components forbidden",
+                ));
+            }
+        }
+        if target_path.is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "unsafe symlink target rejected",
+            ));
+        }
         if let Some(parent) = target_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -606,6 +681,62 @@ pub mod s3_transfer {
             chunks_count: 1,
             sha256: digest_arr,
             sha256_hex: to_hex(&digest_arr),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn transfer_s3_to_s3(
+        transfer_id: &str,
+        fence: &ActionFence,
+        live_epoch: u64,
+        source_transport: &S3Transport,
+        source_key: &str,
+        dest_transport: &S3Transport,
+        dest_key: &str,
+        authority: &TransferAuthorityProof,
+        condition: ConditionalWrite,
+    ) -> Result<TransferReceipt, TransferError> {
+        admit_command(fence, live_epoch)?;
+        let expected_source = format!("{}/{}", source_transport.bucket(), source_key);
+        let expected_dest = format!("{}/{}", dest_transport.bucket(), dest_key);
+        authority.validate(
+            fence,
+            &expected_source,
+            &expected_dest,
+            &authority.expected_digest,
+            authority.expected_length,
+        )?;
+        let mut buffer = Vec::with_capacity(authority.expected_length as usize);
+        source_transport
+            .download_verified(
+                source_key,
+                authority.expected_length,
+                authority.expected_digest,
+                &mut buffer,
+            )
+            .await?;
+        let storage_proof = StorageAuthorityProof {
+            action_id: authority.action_id.clone(),
+            execution_epoch: authority.execution_epoch,
+            fencing_token: authority.fencing_token,
+            request_id: authority.request_id.clone(),
+            nonce: authority.nonce.clone(),
+        };
+        let observation = dest_transport
+            .put_chunk(
+                dest_key,
+                Bytes::from(buffer),
+                authority.expected_digest,
+                &storage_proof,
+                condition,
+            )
+            .await?;
+        Ok(TransferReceipt {
+            transfer_id: transfer_id.to_string(),
+            bytes_transferred: observation.length,
+            chunks_count: 1,
+            sha256: authority.expected_digest,
+            sha256_hex: to_hex(&authority.expected_digest),
         })
     }
 }

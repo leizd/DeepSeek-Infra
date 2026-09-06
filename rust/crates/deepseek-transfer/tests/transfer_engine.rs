@@ -2,8 +2,9 @@ use std::fs;
 
 use deepseek_protocol::ActionFence;
 use deepseek_transfer::{
-    FederatedTransferJournal, ProposedTransfer, TransferError, TransferOptions, TransferSink,
-    TransferSource, TransferState, derive_transfer_id, execute_transfer,
+    FederatedTransferJournal, ProposedTransfer, TransferAuthorityProof, TransferError,
+    TransferOptions, TransferSink, TransferSource, TransferState, derive_transfer_id,
+    execute_transfer,
 };
 use sha2::{Digest, Sha256};
 
@@ -276,4 +277,145 @@ fn journal_advancement_during_transfer() {
     // Assert journal reached RemoteVerifying state
     let final_record = journal.get_transfer(&transfer_id).unwrap().unwrap();
     assert_eq!(final_record.state, TransferState::RemoteVerifying);
+}
+
+#[test]
+fn transfer_authority_proof_validates_and_rejects_substitutions() {
+    let fence = dummy_fence();
+    let payload = b"authenticated-transfer-data";
+    let digest: [u8; 32] = Sha256::digest(payload).into();
+
+    let proof = TransferAuthorityProof {
+        action_id: fence.action_id.clone(),
+        execution_epoch: fence.execution_epoch,
+        fencing_token: 42,
+        source_identity: "bucket-a/object-x".to_string(),
+        destination_identity: "bucket-b/object-y".to_string(),
+        expected_digest: digest,
+        expected_length: payload.len() as u64,
+        request_id: "req-1".to_string(),
+        nonce: "nonce-1".to_string(),
+    };
+
+    // 1. Exact match validates cleanly
+    assert!(
+        proof
+            .validate(
+                &fence,
+                "bucket-a/object-x",
+                "bucket-b/object-y",
+                &digest,
+                payload.len() as u64
+            )
+            .is_ok()
+    );
+
+    // 2. Source substitution fails closed
+    assert!(matches!(
+        proof.validate(
+            &fence,
+            "bucket-a/object-z",
+            "bucket-b/object-y",
+            &digest,
+            payload.len() as u64
+        ),
+        Err(TransferError::AuthorityBindingMismatch(_))
+    ));
+
+    // 3. Destination substitution fails closed
+    assert!(matches!(
+        proof.validate(
+            &fence,
+            "bucket-a/object-x",
+            "bucket-c/object-y",
+            &digest,
+            payload.len() as u64
+        ),
+        Err(TransferError::AuthorityBindingMismatch(_))
+    ));
+
+    // 4. Fence action mismatch fails closed
+    let wrong_action_fence = ActionFence {
+        action_id: "other-action".to_string(),
+        execution_epoch: fence.execution_epoch,
+    };
+    assert!(matches!(
+        proof.validate(
+            &wrong_action_fence,
+            "bucket-a/object-x",
+            "bucket-b/object-y",
+            &digest,
+            payload.len() as u64
+        ),
+        Err(TransferError::AuthorityBindingMismatch(_))
+    ));
+
+    // 5. Epoch mismatch fails closed
+    let wrong_epoch_fence = ActionFence {
+        action_id: fence.action_id.clone(),
+        execution_epoch: 99,
+    };
+    assert!(matches!(
+        proof.validate(
+            &wrong_epoch_fence,
+            "bucket-a/object-x",
+            "bucket-b/object-y",
+            &digest,
+            payload.len() as u64
+        ),
+        Err(TransferError::AuthorityBindingMismatch(_))
+    ));
+
+    // 6. Digest mismatch fails closed
+    let wrong_digest = [0xFF; 32];
+    assert!(matches!(
+        proof.validate(
+            &fence,
+            "bucket-a/object-x",
+            "bucket-b/object-y",
+            &wrong_digest,
+            payload.len() as u64
+        ),
+        Err(TransferError::AuthorityBindingMismatch(_))
+    ));
+
+    // 7. Length mismatch fails closed
+    assert!(matches!(
+        proof.validate(
+            &fence,
+            "bucket-a/object-x",
+            "bucket-b/object-y",
+            &digest,
+            9999
+        ),
+        Err(TransferError::AuthorityBindingMismatch(_))
+    ));
+}
+
+#[test]
+fn transfer_sink_rejects_path_traversal_parent_dir() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let traversal_path = temp_dir.path().join("subdir/../../escaped.bin");
+
+    match TransferSink::file(&traversal_path, true) {
+        Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied),
+        Ok(_) => panic!("expected path traversal to be rejected"),
+    }
+}
+
+#[test]
+fn transfer_sink_rejects_symlink_target() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let real_file = temp_dir.path().join("real.bin");
+    fs::write(&real_file, b"content").unwrap();
+
+    let _symlink_path = temp_dir.path().join("link.bin");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&real_file, &_symlink_path).unwrap();
+        match TransferSink::file(&_symlink_path, true) {
+            Err(err) => assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied),
+            Ok(_) => panic!("expected symlink target to be rejected"),
+        }
+    }
 }

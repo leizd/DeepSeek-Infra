@@ -667,8 +667,10 @@ async fn takeover_during_effect_unknown_rejects_stale_worker_and_allows_successo
         )
         .unwrap();
 
-    let final_record = successor_worker.query_storage_effect(&fence).unwrap().unwrap();
+    let final_record = successor_worker
+        .query_storage_effect(&fence)
+        .unwrap()
+        .unwrap();
     assert_eq!(final_record.state, StorageEffectState::Confirmed);
     assert_eq!(final_record.etag.as_deref(), Some("etag-successor"));
 }
-

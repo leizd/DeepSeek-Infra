@@ -20,8 +20,8 @@ pub use compliance::replay_replica_compliance_case;
 #[cfg(feature = "s3")]
 pub use engine::s3_transfer;
 pub use engine::{
-    DEFAULT_CHUNK_SIZE, MAX_CHUNK_SIZE, MIN_CHUNK_SIZE, TransferError, TransferOptions,
-    TransferReceipt, TransferSink, TransferSource, execute_transfer,
+    DEFAULT_CHUNK_SIZE, MAX_CHUNK_SIZE, MIN_CHUNK_SIZE, TransferAuthorityProof, TransferError,
+    TransferOptions, TransferReceipt, TransferSink, TransferSource, execute_transfer,
 };
 pub use journal::{
     FEDERATED_TRANSFER_IDENTITY_SCHEMA, FederatedTransferJournal, FederatedTransferJournalError,

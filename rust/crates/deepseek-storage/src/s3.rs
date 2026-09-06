@@ -122,6 +122,7 @@ impl std::error::Error for S3Error {}
 
 pub struct S3Transport {
     store: AmazonS3,
+    bucket: String,
     prefix: String,
 }
 
@@ -134,6 +135,7 @@ impl fmt::Debug for S3Transport {
 impl S3Transport {
     pub fn new(config: S3Config, credentials: S3Credentials) -> Result<Self, S3Error> {
         validate_config(&config)?;
+        let bucket = config.bucket.clone();
         // Explicit policy at BOTH retry layers; no ambient proxy or redirect target.
         // https://docs.rs/reqwest/0.12.28/reqwest/struct.ClientBuilder.html
         let client = Client::builder()
@@ -173,8 +175,17 @@ impl S3Transport {
         }
         Ok(Self {
             store: builder.build().map_err(|_| S3Error::InvalidConfig)?,
+            bucket,
             prefix: config.prefix,
         })
+    }
+
+    pub fn bucket(&self) -> &str {
+        &self.bucket
+    }
+
+    pub fn prefix(&self) -> &str {
+        &self.prefix
     }
 
     pub fn object_key(&self, key: &str) -> Result<String, S3Error> {
