@@ -26,3 +26,9 @@ def test_provider_suite_requires_explicit_opt_in_but_never_skips_missing_minio()
     tests = (ROOT / "rust/crates/deepseek-storage/tests/s3_provider.rs").read_text(encoding="utf-8")
     assert "#[ignore" not in tests
     assert '.expect("run scripts/run_native_s3_e2e.py with real MinIO")' in tests
+
+    worker_manifest = (ROOT / "rust/crates/deepseek-worker/Cargo.toml").read_text(encoding="utf-8")
+    assert 'name = "authorized_storage_provider"\nrequired-features = ["s3-e2e"]' in worker_manifest
+    worker_tests = (ROOT / "rust/crates/deepseek-worker/tests/authorized_storage_provider.rs").read_text(encoding="utf-8")
+    assert "#[ignore" not in worker_tests
+    assert '.expect("run scripts/run_native_s3_e2e.py with real MinIO")' in worker_tests

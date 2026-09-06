@@ -6,7 +6,6 @@ mod http;
 use std::{fmt, net::IpAddr, time::Duration};
 
 use bytes::Bytes;
-use deepseek_protocol::{ActionFence, validate_fence};
 use futures_util::TryStreamExt;
 use object_store::{
     Attribute, Attributes, GetOptions, ObjectStore, PutMode, PutOptions, RetryConfig,
@@ -26,10 +25,19 @@ pub enum ConditionalWrite {
     Match(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageAuthorityProof {
+    pub action_id: String,
+    pub execution_epoch: u64,
+    pub fencing_token: i64,
+    pub request_id: String,
+    pub nonce: String,
+}
+
 /// An observation of one PUT response, not a durable effect or live lease proof.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PutObservation {
-    pub fence: ActionFence,
+    pub authority: StorageAuthorityProof,
     pub length: u64,
     pub sha256: [u8; 32],
     pub etag: String,
@@ -44,6 +52,9 @@ pub struct ObjectObservation {
     pub claimed_sha256: Option<String>,
     pub claimed_action_id: Option<String>,
     pub claimed_execution_epoch: Option<String>,
+    pub claimed_fencing_token: Option<String>,
+    pub claimed_request_id: Option<String>,
+    pub claimed_nonce: Option<String>,
 }
 
 #[derive(Clone)]
@@ -182,18 +193,24 @@ impl S3Transport {
         key: &str,
         payload: Bytes,
         sha256: [u8; 32],
-        fence: &ActionFence,
+        authority: &StorageAuthorityProof,
         condition: ConditionalWrite,
     ) -> Result<PutObservation, S3Error> {
         let path = exact_path(&self.object_key(key)?)?;
         let length = payload.len() as u64;
         if payload.len() > MAX_PUT_CHUNK
-            || validate_fence(fence).is_err()
-            || fence.action_id.len() > 128
-            || !fence
+            || authority.execution_epoch == 0
+            || authority.fencing_token <= 0
+            || authority.action_id.is_empty()
+            || authority.action_id.len() > 128
+            || !authority
                 .action_id
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"-_.:".contains(&b))
+            || authority.request_id.len() != 64
+            || !authority.request_id.bytes().all(|b| b.is_ascii_hexdigit())
+            || authority.nonce.len() != 64
+            || !authority.nonce.bytes().all(|b| b.is_ascii_hexdigit())
             || <[u8; 32]>::from(Sha256::digest(&payload)) != sha256
         {
             return Err(S3Error::InvalidWrite);
@@ -213,12 +230,21 @@ impl S3Transport {
             ),
             (
                 Attribute::Metadata("action-id".into()),
-                fence.action_id.clone(),
+                authority.action_id.clone(),
             ),
             (
                 Attribute::Metadata("execution-epoch".into()),
-                fence.execution_epoch.to_string(),
+                authority.execution_epoch.to_string(),
             ),
+            (
+                Attribute::Metadata("fencing-token".into()),
+                authority.fencing_token.to_string(),
+            ),
+            (
+                Attribute::Metadata("request-id".into()),
+                authority.request_id.clone(),
+            ),
+            (Attribute::Metadata("nonce".into()), authority.nonce.clone()),
         ]
         .into_iter()
         .collect();
@@ -246,7 +272,7 @@ impl S3Transport {
             .filter(|etag| strong_etag(etag))
             .ok_or(S3Error::EffectUnknown)?;
         Ok(PutObservation {
-            fence: fence.clone(),
+            authority: authority.clone(),
             length,
             sha256,
             etag,
@@ -290,6 +316,9 @@ impl S3Transport {
             claimed_sha256: claim("sha256"),
             claimed_action_id: claim("action-id"),
             claimed_execution_epoch: claim("execution-epoch"),
+            claimed_fencing_token: claim("fencing-token"),
+            claimed_request_id: claim("request-id"),
+            claimed_nonce: claim("nonce"),
         }))
     }
 

@@ -10,6 +10,7 @@ use deepseek_protocol::{
 };
 use deepseek_storage::{StorageRequest, plan as plan_storage};
 use deepseek_transfer::{TransferRequest, plan as plan_transfer};
+use sha2::Digest;
 
 mod authority_request;
 mod authority_store;
@@ -39,6 +40,64 @@ pub struct WorkerAuthorityConfig {
     pub environment: String,
     pub fencing_token: i64,
     pub now: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StorageEffectState {
+    Pending,
+    Committed,
+    EffectUnknown,
+    Reconciling,
+    Rejected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageEffectRecord {
+    pub action_id: String,
+    pub execution_epoch: u64,
+    pub fencing_token: i64,
+    pub request_id: String,
+    pub nonce: String,
+    pub target_key: String,
+    pub payload_digest: String,
+    pub state: StorageEffectState,
+    pub etag: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkerStorageError {
+    WorkerWithoutAuthority,
+    FenceMismatch,
+    StaleEpoch,
+    StaleFencingToken,
+    TargetMismatch,
+    DigestMismatch,
+    ReplayRejected,
+    UnknownEffectRetryBlocked,
+    PreconditionRejected,
+    #[cfg(feature = "s3")]
+    Transport(deepseek_storage::s3::S3Error),
+    #[cfg(not(feature = "s3"))]
+    Transport(String),
+}
+
+impl std::fmt::Display for WorkerStorageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl std::error::Error for WorkerStorageError {}
+
+#[cfg(feature = "s3")]
+impl From<deepseek_storage::s3::S3Error> for WorkerStorageError {
+    fn from(err: deepseek_storage::s3::S3Error) -> Self {
+        match err {
+            deepseek_storage::s3::S3Error::PreconditionRejected => Self::PreconditionRejected,
+            other => Self::Transport(other),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -287,6 +346,156 @@ impl Worker {
             interpreted,
         );
         Ok(())
+    }
+
+    #[cfg(feature = "s3")]
+    pub fn reserve_storage_mutation(
+        &mut self,
+        fence: &ActionFence,
+        key: &str,
+        payload_digest: &[u8; 32],
+    ) -> Result<deepseek_storage::s3::StorageAuthorityProof, WorkerStorageError> {
+        let store = self
+            .authority_store
+            .as_mut()
+            .ok_or(WorkerStorageError::WorkerWithoutAuthority)?;
+        store.reserve_storage_mutation(fence, key, payload_digest)
+    }
+
+    #[cfg(feature = "s3")]
+    pub fn record_storage_mutation_committed(
+        &mut self,
+        fence: &ActionFence,
+        etag: &str,
+    ) -> Result<(), WorkerStorageError> {
+        let store = self
+            .authority_store
+            .as_mut()
+            .ok_or(WorkerStorageError::WorkerWithoutAuthority)?;
+        store.record_storage_mutation_outcome(fence, Some(etag), StorageEffectState::Committed)
+    }
+
+    #[cfg(feature = "s3")]
+    pub fn record_storage_mutation_effect_unknown(
+        &mut self,
+        fence: &ActionFence,
+    ) -> Result<(), WorkerStorageError> {
+        let store = self
+            .authority_store
+            .as_mut()
+            .ok_or(WorkerStorageError::WorkerWithoutAuthority)?;
+        store.record_storage_mutation_outcome(fence, None, StorageEffectState::EffectUnknown)
+    }
+
+    #[cfg(feature = "s3")]
+    pub fn record_storage_mutation_rejected(
+        &mut self,
+        fence: &ActionFence,
+    ) -> Result<(), WorkerStorageError> {
+        let store = self
+            .authority_store
+            .as_mut()
+            .ok_or(WorkerStorageError::WorkerWithoutAuthority)?;
+        store.record_storage_mutation_outcome(fence, None, StorageEffectState::Rejected)
+    }
+
+    #[cfg(feature = "s3")]
+    pub fn query_storage_effect(
+        &self,
+        fence: &ActionFence,
+    ) -> Result<Option<StorageEffectRecord>, WorkerStorageError> {
+        let store = self
+            .authority_store
+            .as_ref()
+            .ok_or(WorkerStorageError::WorkerWithoutAuthority)?;
+        store.query_storage_effect(fence)
+    }
+
+    #[cfg(feature = "s3")]
+    pub async fn execute_storage_put(
+        &mut self,
+        transport: &deepseek_storage::s3::S3Transport,
+        key: &str,
+        payload: bytes::Bytes,
+        payload_digest: [u8; 32],
+        fence: &ActionFence,
+        condition: deepseek_storage::s3::ConditionalWrite,
+    ) -> Result<deepseek_storage::s3::PutObservation, WorkerStorageError> {
+        if self.authority_store.is_none() {
+            return Err(WorkerStorageError::WorkerWithoutAuthority);
+        }
+        let proof = self.reserve_storage_mutation(fence, key, &payload_digest)?;
+        if <[u8; 32]>::from(sha2::Sha256::digest(&payload)) != payload_digest {
+            return Err(WorkerStorageError::DigestMismatch);
+        }
+        match transport
+            .put_chunk(key, payload, payload_digest, &proof, condition)
+            .await
+        {
+            Ok(observation) => {
+                self.record_storage_mutation_committed(fence, &observation.etag)?;
+                Ok(observation)
+            }
+            Err(deepseek_storage::s3::S3Error::PreconditionRejected) => {
+                let _ = self.record_storage_mutation_rejected(fence);
+                Err(WorkerStorageError::PreconditionRejected)
+            }
+            Err(deepseek_storage::s3::S3Error::EffectUnknown) => {
+                let _ = self.record_storage_mutation_effect_unknown(fence);
+                Err(WorkerStorageError::Transport(
+                    deepseek_storage::s3::S3Error::EffectUnknown,
+                ))
+            }
+            Err(other) => Err(WorkerStorageError::Transport(other)),
+        }
+    }
+
+    #[cfg(feature = "s3")]
+    pub async fn reconcile_storage_mutation(
+        &mut self,
+        transport: &deepseek_storage::s3::S3Transport,
+        fence: &ActionFence,
+    ) -> Result<StorageEffectRecord, WorkerStorageError> {
+        let record = self
+            .query_storage_effect(fence)?
+            .ok_or(WorkerStorageError::FenceMismatch)?;
+        if record.state == StorageEffectState::Committed
+            || record.state == StorageEffectState::Rejected
+        {
+            return Ok(record);
+        }
+        let store = self
+            .authority_store
+            .as_mut()
+            .ok_or(WorkerStorageError::WorkerWithoutAuthority)?;
+        store.record_storage_mutation_outcome(fence, None, StorageEffectState::Reconciling)?;
+
+        match transport.stat(&record.target_key).await {
+            Ok(Some(observation)) => {
+                let matches = observation.claimed_action_id.as_deref() == Some(&record.action_id)
+                    && observation.claimed_execution_epoch.as_deref()
+                        == Some(&record.execution_epoch.to_string())
+                    && observation.claimed_fencing_token.as_deref()
+                        == Some(&record.fencing_token.to_string())
+                    && observation.claimed_request_id.as_deref() == Some(&record.request_id)
+                    && observation.claimed_nonce.as_deref() == Some(&record.nonce)
+                    && observation.claimed_sha256.as_deref() == Some(&record.payload_digest);
+                if matches {
+                    self.record_storage_mutation_committed(fence, &observation.etag)?;
+                } else {
+                    self.record_storage_mutation_rejected(fence)?;
+                }
+            }
+            Ok(None) => {
+                self.record_storage_mutation_rejected(fence)?;
+            }
+            Err(err) => {
+                self.record_storage_mutation_effect_unknown(fence)?;
+                return Err(WorkerStorageError::Transport(err));
+            }
+        }
+        self.query_storage_effect(fence)?
+            .ok_or(WorkerStorageError::FenceMismatch)
     }
 }
 

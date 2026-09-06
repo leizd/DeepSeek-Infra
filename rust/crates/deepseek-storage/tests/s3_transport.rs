@@ -94,8 +94,7 @@ fn malformed_credentials_cannot_reach_signer_panics() {
 #[tokio::test]
 async fn invalid_writes_are_rejected_before_connecting() {
     use bytes::Bytes;
-    use deepseek_protocol::ActionFence;
-    use deepseek_storage::s3::{ConditionalWrite, MAX_PUT_CHUNK};
+    use deepseek_storage::s3::{ConditionalWrite, MAX_PUT_CHUNK, StorageAuthorityProof};
     use sha2::{Digest, Sha256};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mut options = config(&format!("http://{}", listener.local_addr().unwrap()));
@@ -103,9 +102,12 @@ async fn invalid_writes_are_rejected_before_connecting() {
     let store = S3Transport::new(options, credentials()).unwrap();
     let payload = Bytes::from_static(b"validated before network");
     let digest = Sha256::digest(&payload).into();
-    let fence = ActionFence {
+    let proof = StorageAuthorityProof {
         action_id: "action-1".into(),
         execution_epoch: 1,
+        fencing_token: 4,
+        request_id: "a".repeat(64),
+        nonce: "b".repeat(64),
     };
     for etag in [
         "*",
@@ -122,25 +124,41 @@ async fn invalid_writes_are_rejected_before_connecting() {
                     "key",
                     payload.clone(),
                     digest,
-                    &fence,
+                    &proof,
                     ConditionalWrite::Match(etag.into())
                 )
                 .await,
             Err(S3Error::InvalidWrite)
         );
     }
-    for bad_fence in [
-        ActionFence {
+    for bad_proof in [
+        StorageAuthorityProof {
             action_id: "".into(),
-            execution_epoch: 1,
+            ..proof.clone()
         },
-        ActionFence {
+        StorageAuthorityProof {
             action_id: "bad\nheader".into(),
-            execution_epoch: 1,
+            ..proof.clone()
         },
-        ActionFence {
-            action_id: "action-1".into(),
+        StorageAuthorityProof {
             execution_epoch: 0,
+            ..proof.clone()
+        },
+        StorageAuthorityProof {
+            fencing_token: 0,
+            ..proof.clone()
+        },
+        StorageAuthorityProof {
+            fencing_token: -1,
+            ..proof.clone()
+        },
+        StorageAuthorityProof {
+            request_id: "short".into(),
+            ..proof.clone()
+        },
+        StorageAuthorityProof {
+            nonce: "not-hex".repeat(10),
+            ..proof.clone()
         },
     ] {
         assert_eq!(
@@ -149,7 +167,7 @@ async fn invalid_writes_are_rejected_before_connecting() {
                     "key",
                     payload.clone(),
                     digest,
-                    &bad_fence,
+                    &bad_proof,
                     ConditionalWrite::Create
                 )
                 .await,
@@ -158,7 +176,7 @@ async fn invalid_writes_are_rejected_before_connecting() {
     }
     assert_eq!(
         store
-            .put_chunk("key", payload, [0; 32], &fence, ConditionalWrite::Create)
+            .put_chunk("key", payload, [0; 32], &proof, ConditionalWrite::Create)
             .await,
         Err(S3Error::InvalidWrite)
     );
@@ -168,7 +186,7 @@ async fn invalid_writes_are_rejected_before_connecting() {
                 "key",
                 vec![0; MAX_PUT_CHUNK + 1].into(),
                 [0; 32],
-                &fence,
+                &proof,
                 ConditionalWrite::Create
             )
             .await,

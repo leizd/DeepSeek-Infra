@@ -5,8 +5,9 @@ use std::{
 };
 
 use bytes::Bytes;
-use deepseek_protocol::ActionFence;
-use deepseek_storage::s3::{ConditionalWrite, S3Config, S3Credentials, S3Error, S3Transport};
+use deepseek_storage::s3::{
+    ConditionalWrite, S3Config, S3Credentials, S3Error, S3Transport, StorageAuthorityProof,
+};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWrite;
 
@@ -74,10 +75,13 @@ async fn missing_bucket_is_not_evidence_of_a_conditional_write_rejection() {
     );
 }
 
-fn fence(epoch: u64) -> ActionFence {
-    ActionFence {
+fn fence(epoch: u64) -> StorageAuthorityProof {
+    StorageAuthorityProof {
         action_id: "native-s3-real-test".into(),
         execution_epoch: epoch,
+        fencing_token: 4,
+        request_id: "a".repeat(64),
+        nonce: "b".repeat(64),
     }
 }
 
@@ -141,6 +145,15 @@ async fn rust_moves_and_verifies_payload_on_three_real_providers() {
             Some("native-s3-real-test")
         );
         assert_eq!(stat.claimed_execution_epoch.as_deref(), Some("7"));
+        assert_eq!(stat.claimed_fencing_token.as_deref(), Some("4"));
+        assert_eq!(
+            stat.claimed_request_id.as_deref(),
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+        assert_eq!(
+            stat.claimed_nonce.as_deref(),
+            Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
         let mut sink = HashSink::default();
         store
             .download_verified(key, payload.len() as u64, digest, &mut sink)

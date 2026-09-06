@@ -5,7 +5,10 @@ use deepseek_protocol::{ActionFence, AdmitError, admit_command, validate_fence};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde_json::Value;
 
-use crate::{AuthorityRequestContext, AuthorityRequestError, WorkerAuthority, authority_request};
+use crate::{
+    AuthorityRequestContext, AuthorityRequestError, StorageEffectRecord, StorageEffectState,
+    WorkerAuthority, WorkerStorageError, authority_request,
+};
 
 const SCHEMA: &[&str] = &[
     "CREATE TABLE worker_authority (id INTEGER PRIMARY KEY CHECK(id=1), signer TEXT NOT NULL, fleet TEXT NOT NULL, environment TEXT NOT NULL, fencing_token INTEGER NOT NULL CHECK(fencing_token>0)) STRICT",
@@ -15,6 +18,10 @@ const SCHEMA: &[&str] = &[
     "CREATE TRIGGER epoch_fence BEFORE INSERT ON epoch_installs WHEN NEW.fencing_token != (SELECT fencing_token FROM worker_authority WHERE id=1) OR NEW.epoch <= COALESCE((SELECT MAX(epoch) FROM epoch_installs WHERE action_id=NEW.action_id),0) BEGIN SELECT RAISE(ABORT,'stale epoch or writer'); END",
     "CREATE TRIGGER authority_no_delete BEFORE DELETE ON worker_authority BEGIN SELECT RAISE(ABORT,'immutable authority'); END",
     "CREATE TRIGGER authority_monotonic BEFORE UPDATE ON worker_authority WHEN NEW.id != OLD.id OR NEW.signer != OLD.signer OR NEW.fleet != OLD.fleet OR NEW.environment != OLD.environment OR NEW.fencing_token <= OLD.fencing_token BEGIN SELECT RAISE(ABORT,'authority regression'); END",
+    "CREATE TABLE storage_effects (action_id TEXT NOT NULL, epoch INTEGER NOT NULL CHECK(epoch>0), fencing_token INTEGER NOT NULL CHECK(fencing_token>0), request_id TEXT NOT NULL, nonce TEXT NOT NULL, target_key TEXT NOT NULL, payload_digest TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('PENDING','COMMITTED','EFFECT_UNKNOWN','RECONCILING','REJECTED')), etag TEXT, updated_at TEXT NOT NULL, PRIMARY KEY(action_id, epoch)) STRICT",
+    "CREATE TRIGGER storage_effects_fence BEFORE INSERT ON storage_effects WHEN NEW.fencing_token != (SELECT fencing_token FROM worker_authority WHERE id=1) OR NOT EXISTS (SELECT 1 FROM epoch_installs e WHERE e.action_id=NEW.action_id AND e.epoch=NEW.epoch AND e.fencing_token=NEW.fencing_token) BEGIN SELECT RAISE(ABORT,'unauthorized storage effect or stale fence'); END",
+    "CREATE TRIGGER storage_effects_no_delete BEFORE DELETE ON storage_effects BEGIN SELECT RAISE(ABORT,'immutable storage effect journal'); END",
+    "CREATE TRIGGER storage_effects_monotonic BEFORE UPDATE ON storage_effects WHEN OLD.state='COMMITTED' BEGIN SELECT RAISE(ABORT,'cannot mutate committed storage effect'); END",
 ];
 const APPLICATION_ID: i64 = 0x44535741; // DSWA: DeepSeek Worker Authority
 
@@ -22,6 +29,7 @@ const APPLICATION_ID: i64 = 0x44535741; // DSWA: DeepSeek Worker Authority
 pub(super) struct AuthorityStore {
     connection: Connection,
     fencing_token: i64,
+    now_override: Option<String>,
 }
 
 fn error() -> AuthorityRequestError {
@@ -141,6 +149,7 @@ impl AuthorityStore {
         Ok(Self {
             connection,
             fencing_token: authority.fencing_token,
+            now_override: authority.now.clone(),
         })
     }
 
@@ -249,6 +258,204 @@ impl AuthorityStore {
         transaction.commit().map_err(|_| error())?;
         Ok(fence.clone())
     }
+
+    #[cfg(feature = "s3")]
+    pub(super) fn reserve_storage_mutation(
+        &mut self,
+        fence: &ActionFence,
+        key: &str,
+        payload_digest: &[u8; 32],
+    ) -> Result<deepseek_storage::s3::StorageAuthorityProof, WorkerStorageError> {
+        deepseek_protocol::validate_fence(fence).map_err(|_| WorkerStorageError::FenceMismatch)?;
+        if key.is_empty() || key.len() > 1024 {
+            return Err(WorkerStorageError::TargetMismatch);
+        }
+        let mut digest_hex = String::with_capacity(64);
+        for b in payload_digest {
+            use std::fmt::Write as _;
+            let _ = write!(digest_hex, "{b:02x}");
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| WorkerStorageError::WorkerWithoutAuthority)?;
+        let token: i64 = transaction
+            .query_row(
+                "SELECT fencing_token FROM worker_authority WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|_| WorkerStorageError::WorkerWithoutAuthority)?;
+        if token != self.fencing_token {
+            return Err(WorkerStorageError::StaleFencingToken);
+        }
+        let live_epoch: i64 = transaction
+            .query_row(
+                "SELECT COALESCE(MAX(epoch),0) FROM epoch_installs WHERE action_id=?1",
+                [&fence.action_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| WorkerStorageError::FenceMismatch)?;
+        if live_epoch == 0 {
+            return Err(WorkerStorageError::FenceMismatch);
+        }
+        if (fence.execution_epoch as i64) < live_epoch {
+            return Err(WorkerStorageError::StaleEpoch);
+        }
+        if (fence.execution_epoch as i64) != live_epoch {
+            return Err(WorkerStorageError::FenceMismatch);
+        }
+        let install_row: (String, String, i64) = transaction
+            .query_row(
+                "SELECT request_id, nonce, fencing_token FROM epoch_installs WHERE action_id=?1 AND epoch=?2",
+                params![&fence.action_id, fence.execution_epoch as i64],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|_| WorkerStorageError::FenceMismatch)?;
+        if install_row.2 != token {
+            return Err(WorkerStorageError::StaleFencingToken);
+        }
+        let (request_id, nonce) = (install_row.0, install_row.1);
+
+        let existing: Option<(String, String, String)> = transaction
+            .query_row(
+                "SELECT target_key, payload_digest, state FROM storage_effects WHERE action_id=?1 AND epoch=?2",
+                params![&fence.action_id, fence.execution_epoch as i64],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(|_| WorkerStorageError::FenceMismatch)?;
+
+        if let Some((target_key, stored_digest, state)) = existing {
+            if target_key != key {
+                return Err(WorkerStorageError::TargetMismatch);
+            }
+            if stored_digest != digest_hex {
+                return Err(WorkerStorageError::DigestMismatch);
+            }
+            match state.as_str() {
+                "COMMITTED" => return Err(WorkerStorageError::ReplayRejected),
+                "EFFECT_UNKNOWN" => return Err(WorkerStorageError::UnknownEffectRetryBlocked),
+                "REJECTED" => return Err(WorkerStorageError::PreconditionRejected),
+                "PENDING" => {}
+                _ => return Err(WorkerStorageError::FenceMismatch),
+            }
+        } else {
+            let now = match &self.now_override {
+                Some(now) => now.clone(),
+                None => crate::authority_request::utc_z_now()
+                    .map_err(|_| WorkerStorageError::FenceMismatch)?,
+            };
+            transaction
+                .execute(
+                    "INSERT INTO storage_effects VALUES (?1,?2,?3,?4,?5,?6,?7,'PENDING',NULL,?8)",
+                    params![
+                        &fence.action_id,
+                        fence.execution_epoch as i64,
+                        token,
+                        &request_id,
+                        &nonce,
+                        key,
+                        &digest_hex,
+                        &now
+                    ],
+                )
+                .map_err(|_| WorkerStorageError::FenceMismatch)?;
+        }
+        transaction
+            .commit()
+            .map_err(|_| WorkerStorageError::FenceMismatch)?;
+
+        Ok(deepseek_storage::s3::StorageAuthorityProof {
+            action_id: fence.action_id.clone(),
+            execution_epoch: fence.execution_epoch,
+            fencing_token: token,
+            request_id,
+            nonce,
+        })
+    }
+
+    #[cfg(feature = "s3")]
+    pub(super) fn record_storage_mutation_outcome(
+        &mut self,
+        fence: &ActionFence,
+        etag: Option<&str>,
+        state: StorageEffectState,
+    ) -> Result<(), WorkerStorageError> {
+        let state_str = match state {
+            StorageEffectState::Pending => "PENDING",
+            StorageEffectState::Committed => "COMMITTED",
+            StorageEffectState::EffectUnknown => "EFFECT_UNKNOWN",
+            StorageEffectState::Reconciling => "RECONCILING",
+            StorageEffectState::Rejected => "REJECTED",
+        };
+        let now = match &self.now_override {
+            Some(now) => now.clone(),
+            None => crate::authority_request::utc_z_now()
+                .map_err(|_| WorkerStorageError::FenceMismatch)?,
+        };
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| WorkerStorageError::FenceMismatch)?;
+        transaction
+            .execute(
+                "UPDATE storage_effects SET state=?1, etag=COALESCE(?2, etag), updated_at=?3 WHERE action_id=?4 AND epoch=?5",
+                params![
+                    state_str,
+                    etag,
+                    &now,
+                    &fence.action_id,
+                    fence.execution_epoch as i64
+                ],
+            )
+            .map_err(|_| WorkerStorageError::FenceMismatch)?;
+        transaction
+            .commit()
+            .map_err(|_| WorkerStorageError::FenceMismatch)?;
+        Ok(())
+    }
+
+    #[cfg(feature = "s3")]
+    pub(super) fn query_storage_effect(
+        &self,
+        fence: &ActionFence,
+    ) -> Result<Option<StorageEffectRecord>, WorkerStorageError> {
+        deepseek_protocol::validate_fence(fence).map_err(|_| WorkerStorageError::FenceMismatch)?;
+        let row = self
+            .connection
+            .query_row(
+                "SELECT action_id, epoch, fencing_token, request_id, nonce, target_key, payload_digest, state, etag, updated_at FROM storage_effects WHERE action_id=?1 AND epoch=?2",
+                params![&fence.action_id, fence.execution_epoch as i64],
+                |row| {
+                    let state_str: String = row.get(7)?;
+                    let state = match state_str.as_str() {
+                        "PENDING" => StorageEffectState::Pending,
+                        "COMMITTED" => StorageEffectState::Committed,
+                        "EFFECT_UNKNOWN" => StorageEffectState::EffectUnknown,
+                        "RECONCILING" => StorageEffectState::Reconciling,
+                        "REJECTED" => StorageEffectState::Rejected,
+                        _ => return Err(rusqlite::Error::InvalidQuery),
+                    };
+                    let epoch: i64 = row.get(1)?;
+                    Ok(StorageEffectRecord {
+                        action_id: row.get(0)?,
+                        execution_epoch: epoch as u64,
+                        fencing_token: row.get(2)?,
+                        request_id: row.get(3)?,
+                        nonce: row.get(4)?,
+                        target_key: row.get(5)?,
+                        payload_digest: row.get(6)?,
+                        state,
+                        etag: row.get(8)?,
+                        updated_at: row.get(9)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|_| WorkerStorageError::FenceMismatch)?;
+        Ok(row)
+    }
 }
 
 fn validate_journal(
@@ -288,6 +495,33 @@ fn validate_journal(
             || token > head_token
         {
             return Err(error());
+        }
+    }
+    let mut effect_stmt = connection
+        .prepare("SELECT action_id,epoch,fencing_token,request_id,nonce FROM storage_effects")
+        .map_err(|_| error())?;
+    let mut effect_rows = effect_stmt.query([]).map_err(|_| error())?;
+    while let Some(row) = effect_rows.next().map_err(|_| error())? {
+        let action: String = row.get(0).map_err(|_| error())?;
+        let epoch: i64 = row.get(1).map_err(|_| error())?;
+        let token: i64 = row.get(2).map_err(|_| error())?;
+        let req_id: String = row.get(3).map_err(|_| error())?;
+        let nonce: String = row.get(4).map_err(|_| error())?;
+        if token > head_token {
+            return Err(error());
+        }
+        let matched: Option<(String, String)> = connection
+            .query_row(
+                "SELECT request_id, nonce FROM epoch_installs WHERE action_id=?1 AND epoch=?2 AND fencing_token=?3",
+                params![action, epoch, token],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|_| error())?;
+        match matched {
+            Some((expected_req, expected_nonce))
+                if expected_req == req_id && expected_nonce == nonce => {}
+            _ => return Err(error()),
         }
     }
     Ok(())

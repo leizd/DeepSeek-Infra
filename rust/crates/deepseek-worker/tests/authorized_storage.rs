@@ -1,0 +1,388 @@
+//! Tests enforcing durable authority barriers on storage mutation.
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use bytes::Bytes;
+use deepseek_protocol::ActionFence;
+use deepseek_storage::s3::{ConditionalWrite, S3Config, S3Credentials, S3Transport};
+use deepseek_worker::{StorageEffectState, Worker, WorkerAuthorityConfig, WorkerStorageError};
+use ed25519_dalek::{Signer as _, SigningKey};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+fn fixture() -> (WorkerAuthorityConfig, Vec<u8>, ActionFence, SigningKey) {
+    let fixture: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../compat/native-runtime/v7/control/authority_request_vector.json"
+    )))
+    .unwrap();
+    let bytes = fixture["canonical_request"]
+        .as_str()
+        .unwrap()
+        .as_bytes()
+        .to_vec();
+    let document: Value = serde_json::from_slice(&bytes).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let key = SigningKey::from_bytes(
+        &Sha256::digest(directory.path().to_string_lossy().as_bytes()).into(),
+    );
+    let config = WorkerAuthorityConfig {
+        signer_public_key: URL_SAFE_NO_PAD.encode(key.verifying_key().as_bytes()),
+        fleet_id: "fleet-a".into(),
+        environment: "test".into(),
+        fencing_token: 4,
+        now: Some(fixture["now"].as_str().unwrap().into()),
+    };
+    let fence = ActionFence {
+        action_id: document["actionId"].as_str().unwrap().into(),
+        execution_epoch: 4,
+    };
+    (config, bytes, fence, key)
+}
+
+fn canonical(value: &Value) -> Vec<u8> {
+    fn sorted(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                let ordered: std::collections::BTreeMap<_, _> =
+                    map.iter().map(|(k, v)| (k.clone(), sorted(v))).collect();
+                serde_json::to_value(ordered).unwrap()
+            }
+            Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
+            other => other.clone(),
+        }
+    }
+    serde_json::to_vec(&sorted(value)).unwrap()
+}
+
+fn sign_request(
+    key: &SigningKey,
+    action: &str,
+    epoch: u64,
+    token: i64,
+    request: &str,
+    nonce: &str,
+) -> Vec<u8> {
+    let mut value: Value = serde_json::json!({
+        "schema": "control-authority-request-v1",
+        "schemaVersion": 1,
+        "domain": "action",
+        "operation": "install-epoch",
+        "actionId": action,
+        "executionEpoch": epoch,
+        "fencingToken": token,
+        "revision": 1,
+        "requestId": request.repeat(64),
+        "nonce": nonce.repeat(64),
+        "issuedAt": "2026-09-04T00:00:30Z",
+        "expiresAt": "2026-09-04T00:05:30Z",
+        "runtime": "go",
+        "mode": "shadow",
+        "fleetId": "fleet-a",
+        "environment": "test",
+        "role": "control-plane",
+        "payload": {},
+        "payloadDigest": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "signatureAlgorithm": "Ed25519",
+        "signerKeyId": format!(
+            "ctrl-signer-{}",
+            &format!("{:x}", Sha256::digest(key.verifying_key().as_bytes()))[..16]
+        )
+    });
+    value["digest"] = format!("sha256:{:x}", Sha256::digest(canonical(&value))).into();
+    let mut message = b"deepseek-infra:control-authority-request-v1\0".to_vec();
+    message.extend(canonical(&value));
+    value["signature"] = URL_SAFE_NO_PAD.encode(key.sign(&message).to_bytes()).into();
+    canonical(&value)
+}
+
+fn dummy_transport() -> S3Transport {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    S3Transport::new(
+        S3Config {
+            endpoint: format!("http://127.0.0.1:{}", addr.port()),
+            bucket: "test-bucket".into(),
+            prefix: "prefix".into(),
+            region: "us-east-1".into(),
+            allow_http_loopback: true,
+        },
+        S3Credentials::new("access".into(), "secret".into(), None).unwrap(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn unconfigured_worker_rejects_storage_mutation() {
+    let mut worker = Worker::new();
+    let transport = dummy_transport();
+    let payload = Bytes::from_static(b"payload");
+    let digest = Sha256::digest(&payload).into();
+    let fence = ActionFence {
+        action_id: "act-1".into(),
+        execution_epoch: 1,
+    };
+    assert_eq!(
+        worker
+            .execute_storage_put(
+                &transport,
+                "key",
+                payload,
+                digest,
+                &fence,
+                ConditionalWrite::Create,
+            )
+            .await,
+        Err(WorkerStorageError::WorkerWithoutAuthority)
+    );
+}
+
+#[tokio::test]
+async fn unauthorized_action_without_authority_request_is_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, _, _) = fixture();
+    let mut worker = Worker::open_with_authority(config, directory.path()).unwrap();
+    let transport = dummy_transport();
+    let payload = Bytes::from_static(b"payload");
+    let digest = Sha256::digest(&payload).into();
+    let fence = ActionFence {
+        action_id: "unknown-act".into(),
+        execution_epoch: 1,
+    };
+    assert_eq!(
+        worker
+            .execute_storage_put(
+                &transport,
+                "key",
+                payload,
+                digest,
+                &fence,
+                ConditionalWrite::Create,
+            )
+            .await,
+        Err(WorkerStorageError::FenceMismatch)
+    );
+}
+
+#[tokio::test]
+async fn tampered_signature_install_fails_and_storage_mutation_is_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, fence, key) = fixture();
+    let mut worker = Worker::open_with_authority(config, directory.path()).unwrap();
+    let transport = dummy_transport();
+    let mut bad_request = sign_request(&key, &fence.action_id, 4, 4, "1", "1");
+    // Tamper one byte
+    let len = bad_request.len();
+    bad_request[len - 2] ^= 0xff;
+    assert!(worker.install_signed_epoch(&fence, &bad_request).is_err());
+    let payload = Bytes::from_static(b"payload");
+    let digest = Sha256::digest(&payload).into();
+    assert_eq!(
+        worker
+            .execute_storage_put(
+                &transport,
+                "key",
+                payload,
+                digest,
+                &fence,
+                ConditionalWrite::Create,
+            )
+            .await,
+        Err(WorkerStorageError::FenceMismatch)
+    );
+}
+
+#[tokio::test]
+async fn stale_epoch_is_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, fence, key) = fixture();
+    let mut worker = Worker::open_with_authority(config, directory.path()).unwrap();
+    let transport = dummy_transport();
+    let request = sign_request(&key, &fence.action_id, 4, 4, "1", "1");
+    worker.install_signed_epoch(&fence, &request).unwrap();
+    let stale_fence = ActionFence {
+        action_id: fence.action_id.clone(),
+        execution_epoch: 3,
+    };
+    let payload = Bytes::from_static(b"payload");
+    let digest = Sha256::digest(&payload).into();
+    assert_eq!(
+        worker
+            .execute_storage_put(
+                &transport,
+                "key",
+                payload,
+                digest,
+                &stale_fence,
+                ConditionalWrite::Create,
+            )
+            .await,
+        Err(WorkerStorageError::StaleEpoch)
+    );
+}
+
+#[tokio::test]
+async fn stale_fencing_token_is_rejected_on_takeover() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, fence, key) = fixture();
+    let mut first = Worker::open_with_authority(config.clone(), directory.path()).unwrap();
+    let request = sign_request(&key, &fence.action_id, 4, 4, "1", "1");
+    first.install_signed_epoch(&fence, &request).unwrap();
+    // Successor worker takes over with higher fencing token 5
+    let successor_config = WorkerAuthorityConfig {
+        fencing_token: 5,
+        ..config
+    };
+    let _successor = Worker::open_with_authority(successor_config, directory.path()).unwrap();
+    let transport = dummy_transport();
+    let payload = Bytes::from_static(b"payload");
+    let digest = Sha256::digest(&payload).into();
+    assert_eq!(
+        first
+            .execute_storage_put(
+                &transport,
+                "key",
+                payload,
+                digest,
+                &fence,
+                ConditionalWrite::Create,
+            )
+            .await,
+        Err(WorkerStorageError::StaleFencingToken)
+    );
+}
+
+#[tokio::test]
+async fn wrong_object_target_and_digest_are_rejected() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, fence, key) = fixture();
+    let mut worker = Worker::open_with_authority(config, directory.path()).unwrap();
+    let request = sign_request(&key, &fence.action_id, 4, 4, "1", "1");
+    worker.install_signed_epoch(&fence, &request).unwrap();
+    let payload1 = Bytes::from_static(b"payload1");
+    let digest1 = Sha256::digest(&payload1).into();
+    // Reserve effect for "target-1" and digest1
+    worker
+        .reserve_storage_mutation(&fence, "target-1", &digest1)
+        .unwrap();
+
+    // Trying to mutate different target under the same action and epoch is rejected
+    let transport = dummy_transport();
+    assert_eq!(
+        worker
+            .execute_storage_put(
+                &transport,
+                "different-target",
+                payload1.clone(),
+                digest1,
+                &fence,
+                ConditionalWrite::Create,
+            )
+            .await,
+        Err(WorkerStorageError::TargetMismatch)
+    );
+
+    // Trying to mutate with wrong digest is rejected
+    let payload2 = Bytes::from_static(b"payload2");
+    let digest2 = Sha256::digest(&payload2).into();
+    assert_eq!(
+        worker
+            .execute_storage_put(
+                &transport,
+                "target-1",
+                payload2,
+                digest2,
+                &fence,
+                ConditionalWrite::Create,
+            )
+            .await,
+        Err(WorkerStorageError::DigestMismatch)
+    );
+}
+
+#[tokio::test]
+async fn committed_effect_rejects_replay_even_after_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, fence, key) = fixture();
+    {
+        let mut worker = Worker::open_with_authority(config.clone(), directory.path()).unwrap();
+        let request = sign_request(&key, &fence.action_id, 4, 4, "1", "1");
+        worker.install_signed_epoch(&fence, &request).unwrap();
+        let payload = Bytes::from_static(b"payload");
+        let digest = Sha256::digest(&payload).into();
+        worker
+            .reserve_storage_mutation(&fence, "key", &digest)
+            .unwrap();
+        worker
+            .record_storage_mutation_committed(&fence, "etag-1")
+            .unwrap();
+        let transport = dummy_transport();
+        assert_eq!(
+            worker
+                .execute_storage_put(
+                    &transport,
+                    "key",
+                    payload.clone(),
+                    digest,
+                    &fence,
+                    ConditionalWrite::Create,
+                )
+                .await,
+            Err(WorkerStorageError::ReplayRejected)
+        );
+    }
+    // Restart worker from disk
+    let mut restarted = Worker::open_with_authority(config, directory.path()).unwrap();
+    let transport = dummy_transport();
+    let payload = Bytes::from_static(b"payload");
+    let digest = Sha256::digest(&payload).into();
+    assert_eq!(
+        restarted
+            .execute_storage_put(
+                &transport,
+                "key",
+                payload,
+                digest,
+                &fence,
+                ConditionalWrite::Create,
+            )
+            .await,
+        Err(WorkerStorageError::ReplayRejected)
+    );
+}
+
+#[tokio::test]
+async fn unknown_effect_cannot_be_blindly_retried_and_reconciles() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, fence, key) = fixture();
+    let mut worker = Worker::open_with_authority(config, directory.path()).unwrap();
+    let request = sign_request(&key, &fence.action_id, 4, 4, "1", "1");
+    worker.install_signed_epoch(&fence, &request).unwrap();
+    let payload = Bytes::from_static(b"payload");
+    let digest = Sha256::digest(&payload).into();
+    worker
+        .reserve_storage_mutation(&fence, "key", &digest)
+        .unwrap();
+    worker
+        .record_storage_mutation_effect_unknown(&fence)
+        .unwrap();
+
+    let transport = dummy_transport();
+    // Blind retry is blocked
+    assert_eq!(
+        worker
+            .execute_storage_put(
+                &transport,
+                "key",
+                payload,
+                digest,
+                &fence,
+                ConditionalWrite::Create,
+            )
+            .await,
+        Err(WorkerStorageError::UnknownEffectRetryBlocked)
+    );
+
+    // Query effect reports EFFECT_UNKNOWN
+    let effect = worker.query_storage_effect(&fence).unwrap().unwrap();
+    assert_eq!(effect.state, StorageEffectState::EffectUnknown);
+}

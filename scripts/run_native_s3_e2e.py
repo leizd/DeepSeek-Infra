@@ -24,9 +24,11 @@ def main() -> int:
     parser.add_argument("--toolchain", help="rustup toolchain override (without the leading +)")
     options = parser.parse_args()
     cargo = ["cargo", *([f"+{options.toolchain}"] if options.toolchain else [])]
-    command = [*cargo, "test", "--locked", "-p", "deepseek-storage", "--features", "s3-e2e", "--test", "s3_provider"]
+    command1 = [*cargo, "test", "--locked", "-p", "deepseek-storage", "--features", "s3-e2e", "--test", "s3_provider"]
+    command2 = [*cargo, "test", "--locked", "-p", "deepseek-worker", "--features", "s3-e2e", "--test", "authorized_storage_provider"]
     # Build before provisioning: provider lifetime is bounded by the actual tests.
-    subprocess.run([*command, "--no-run"], cwd=ROOT / "rust", check=True, timeout=1200)
+    subprocess.run([*command1, "--no-run"], cwd=ROOT / "rust", check=True, timeout=1200)
+    subprocess.run([*command2, "--no-run"], cwd=ROOT / "rust", check=True, timeout=1200)
     with tempfile.TemporaryDirectory(prefix="deepseek-native-s3-") as directory:
         harness = RealStorageEnvironment.acquire(ROOT, Path(directory))
         try:
@@ -48,8 +50,14 @@ def main() -> int:
             for variable in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
                 environment[variable] = "http://127.0.0.1:1"
             environment["NO_PROXY"] = environment["no_proxy"] = ""
+            code1 = subprocess.run(
+                [*command1, "--", "--nocapture"], cwd=ROOT / "rust", env=environment,
+                check=False, timeout=300,
+            ).returncode
+            if code1 != 0:
+                return code1
             return subprocess.run(
-                [*command, "--", "--nocapture"], cwd=ROOT / "rust", env=environment,
+                [*command2, "--", "--nocapture"], cwd=ROOT / "rust", env=environment,
                 check=False, timeout=300,
             ).returncode
         finally:
