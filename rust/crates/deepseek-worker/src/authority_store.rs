@@ -18,10 +18,11 @@ const SCHEMA: &[&str] = &[
     "CREATE TRIGGER epoch_fence BEFORE INSERT ON epoch_installs WHEN NEW.fencing_token != (SELECT fencing_token FROM worker_authority WHERE id=1) OR NEW.epoch <= COALESCE((SELECT MAX(epoch) FROM epoch_installs WHERE action_id=NEW.action_id),0) BEGIN SELECT RAISE(ABORT,'stale epoch or writer'); END",
     "CREATE TRIGGER authority_no_delete BEFORE DELETE ON worker_authority BEGIN SELECT RAISE(ABORT,'immutable authority'); END",
     "CREATE TRIGGER authority_monotonic BEFORE UPDATE ON worker_authority WHEN NEW.id != OLD.id OR NEW.signer != OLD.signer OR NEW.fleet != OLD.fleet OR NEW.environment != OLD.environment OR NEW.fencing_token <= OLD.fencing_token BEGIN SELECT RAISE(ABORT,'authority regression'); END",
-    "CREATE TABLE storage_effects (action_id TEXT NOT NULL, epoch INTEGER NOT NULL CHECK(epoch>0), fencing_token INTEGER NOT NULL CHECK(fencing_token>0), request_id TEXT NOT NULL, nonce TEXT NOT NULL, target_key TEXT NOT NULL, payload_digest TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('PENDING','COMMITTED','EFFECT_UNKNOWN','RECONCILING','REJECTED')), etag TEXT, updated_at TEXT NOT NULL, PRIMARY KEY(action_id, epoch)) STRICT",
+    "CREATE TABLE storage_effects (action_id TEXT NOT NULL, epoch INTEGER NOT NULL CHECK(epoch>0), fencing_token INTEGER NOT NULL CHECK(fencing_token>0), request_id TEXT NOT NULL, nonce TEXT NOT NULL, operation_kind TEXT NOT NULL, target_key TEXT NOT NULL, payload_digest TEXT NOT NULL, expected_length INTEGER NOT NULL CHECK(expected_length>=0), expected_version TEXT, authority_principal TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('RESERVED','PENDING','DISPATCHING','CONFIRMED','COMMITTED','EFFECT_UNKNOWN','RECONCILING','REJECTED','FAILED')), etag TEXT, provider_metadata TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(action_id, epoch)) STRICT",
     "CREATE TRIGGER storage_effects_fence BEFORE INSERT ON storage_effects WHEN NEW.fencing_token != (SELECT fencing_token FROM worker_authority WHERE id=1) OR NOT EXISTS (SELECT 1 FROM epoch_installs e WHERE e.action_id=NEW.action_id AND e.epoch=NEW.epoch AND e.fencing_token=NEW.fencing_token) BEGIN SELECT RAISE(ABORT,'unauthorized storage effect or stale fence'); END",
     "CREATE TRIGGER storage_effects_no_delete BEFORE DELETE ON storage_effects BEGIN SELECT RAISE(ABORT,'immutable storage effect journal'); END",
-    "CREATE TRIGGER storage_effects_monotonic BEFORE UPDATE ON storage_effects WHEN OLD.state='COMMITTED' BEGIN SELECT RAISE(ABORT,'cannot mutate committed storage effect'); END",
+    "CREATE TRIGGER storage_effects_monotonic BEFORE UPDATE ON storage_effects WHEN OLD.state IN ('CONFIRMED','COMMITTED','REJECTED','FAILED') BEGIN SELECT RAISE(ABORT,'cannot mutate terminal storage effect'); END",
+    "CREATE TRIGGER storage_effects_transition BEFORE UPDATE ON storage_effects WHEN OLD.state NOT IN ('CONFIRMED','COMMITTED','REJECTED','FAILED') AND NOT (OLD.state = NEW.state OR (OLD.state IN ('RESERVED','PENDING') AND NEW.state IN ('DISPATCHING','CONFIRMED','COMMITTED','EFFECT_UNKNOWN','RECONCILING','REJECTED','FAILED')) OR (OLD.state='DISPATCHING' AND NEW.state IN ('CONFIRMED','COMMITTED','EFFECT_UNKNOWN','REJECTED','FAILED')) OR (OLD.state='EFFECT_UNKNOWN' AND NEW.state='RECONCILING') OR (OLD.state='RECONCILING' AND NEW.state IN ('CONFIRMED','COMMITTED','EFFECT_UNKNOWN','REJECTED','FAILED'))) BEGIN SELECT RAISE(ABORT,'illegal storage effect transition'); END",
 ];
 const APPLICATION_ID: i64 = 0x44535741; // DSWA: DeepSeek Worker Authority
 
@@ -145,6 +146,16 @@ impl AuthorityStore {
                 )
                 .map_err(|_| error())?;
         }
+        let now = match &authority.now {
+            Some(now) => now.clone(),
+            None => authority_request::utc_z_now()?,
+        };
+        transaction
+            .execute(
+                "UPDATE storage_effects SET state='EFFECT_UNKNOWN', updated_at=?1 WHERE state IN ('DISPATCHING', 'RECONCILING')",
+                params![now],
+            )
+            .map_err(|_| error())?;
         transaction.commit().map_err(|_| error())?;
         Ok(Self {
             connection,
@@ -260,11 +271,16 @@ impl AuthorityStore {
     }
 
     #[cfg(feature = "s3")]
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn reserve_storage_mutation(
         &mut self,
         fence: &ActionFence,
         key: &str,
         payload_digest: &[u8; 32],
+        expected_length: u64,
+        operation_kind: &str,
+        expected_version: Option<&str>,
+        authority_principal: &str,
     ) -> Result<deepseek_storage::s3::StorageAuthorityProof, WorkerStorageError> {
         deepseek_protocol::validate_fence(fence).map_err(|_| WorkerStorageError::FenceMismatch)?;
         if key.is_empty() || key.len() > 1024 {
@@ -317,27 +333,31 @@ impl AuthorityStore {
         }
         let (request_id, nonce) = (install_row.0, install_row.1);
 
-        let existing: Option<(String, String, String)> = transaction
+        let existing: Option<(String, String, i64, String)> = transaction
             .query_row(
-                "SELECT target_key, payload_digest, state FROM storage_effects WHERE action_id=?1 AND epoch=?2",
+                "SELECT target_key, payload_digest, expected_length, state FROM storage_effects WHERE action_id=?1 AND epoch=?2",
                 params![&fence.action_id, fence.execution_epoch as i64],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()
             .map_err(|_| WorkerStorageError::FenceMismatch)?;
 
-        if let Some((target_key, stored_digest, state)) = existing {
+        if let Some((target_key, stored_digest, stored_length, state)) = existing {
             if target_key != key {
                 return Err(WorkerStorageError::TargetMismatch);
             }
             if stored_digest != digest_hex {
                 return Err(WorkerStorageError::DigestMismatch);
             }
+            if expected_length > 0 && stored_length > 0 && stored_length != expected_length as i64 {
+                return Err(WorkerStorageError::DigestMismatch);
+            }
             match state.as_str() {
-                "COMMITTED" => return Err(WorkerStorageError::ReplayRejected),
+                "CONFIRMED" | "COMMITTED" => return Err(WorkerStorageError::ReplayRejected),
                 "EFFECT_UNKNOWN" => return Err(WorkerStorageError::UnknownEffectRetryBlocked),
-                "REJECTED" => return Err(WorkerStorageError::PreconditionRejected),
-                "PENDING" => {}
+                "RECONCILING" => return Err(WorkerStorageError::UnknownEffectRetryBlocked),
+                "REJECTED" | "FAILED" => return Err(WorkerStorageError::PreconditionRejected),
+                "RESERVED" | "PENDING" | "DISPATCHING" => {}
                 _ => return Err(WorkerStorageError::FenceMismatch),
             }
         } else {
@@ -348,15 +368,19 @@ impl AuthorityStore {
             };
             transaction
                 .execute(
-                    "INSERT INTO storage_effects VALUES (?1,?2,?3,?4,?5,?6,?7,'PENDING',NULL,?8)",
+                    "INSERT INTO storage_effects VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'RESERVED',NULL,NULL,?12,?12)",
                     params![
                         &fence.action_id,
                         fence.execution_epoch as i64,
                         token,
                         &request_id,
                         &nonce,
+                        operation_kind,
                         key,
                         &digest_hex,
+                        expected_length as i64,
+                        expected_version,
+                        authority_principal,
                         &now
                     ],
                 )
@@ -381,14 +405,8 @@ impl AuthorityStore {
         fence: &ActionFence,
         etag: Option<&str>,
         state: StorageEffectState,
+        provider_metadata: Option<&str>,
     ) -> Result<(), WorkerStorageError> {
-        let state_str = match state {
-            StorageEffectState::Pending => "PENDING",
-            StorageEffectState::Committed => "COMMITTED",
-            StorageEffectState::EffectUnknown => "EFFECT_UNKNOWN",
-            StorageEffectState::Reconciling => "RECONCILING",
-            StorageEffectState::Rejected => "REJECTED",
-        };
         let now = match &self.now_override {
             Some(now) => now.clone(),
             None => crate::authority_request::utc_z_now()
@@ -400,10 +418,11 @@ impl AuthorityStore {
             .map_err(|_| WorkerStorageError::FenceMismatch)?;
         transaction
             .execute(
-                "UPDATE storage_effects SET state=?1, etag=COALESCE(?2, etag), updated_at=?3 WHERE action_id=?4 AND epoch=?5",
+                "UPDATE storage_effects SET state=?1, etag=COALESCE(?2, etag), provider_metadata=COALESCE(?3, provider_metadata), updated_at=?4 WHERE action_id=?5 AND epoch=?6",
                 params![
-                    state_str,
+                    state.as_str(),
                     etag,
+                    provider_metadata,
                     &now,
                     &fence.action_id,
                     fence.execution_epoch as i64
@@ -425,30 +444,31 @@ impl AuthorityStore {
         let row = self
             .connection
             .query_row(
-                "SELECT action_id, epoch, fencing_token, request_id, nonce, target_key, payload_digest, state, etag, updated_at FROM storage_effects WHERE action_id=?1 AND epoch=?2",
+                "SELECT action_id, epoch, fencing_token, request_id, nonce, operation_kind, target_key, payload_digest, expected_length, expected_version, authority_principal, state, etag, provider_metadata, created_at, updated_at FROM storage_effects WHERE action_id=?1 AND epoch=?2",
                 params![&fence.action_id, fence.execution_epoch as i64],
                 |row| {
-                    let state_str: String = row.get(7)?;
-                    let state = match state_str.as_str() {
-                        "PENDING" => StorageEffectState::Pending,
-                        "COMMITTED" => StorageEffectState::Committed,
-                        "EFFECT_UNKNOWN" => StorageEffectState::EffectUnknown,
-                        "RECONCILING" => StorageEffectState::Reconciling,
-                        "REJECTED" => StorageEffectState::Rejected,
-                        _ => return Err(rusqlite::Error::InvalidQuery),
-                    };
+                    let state_str: String = row.get(11)?;
+                    let state = StorageEffectState::from_db_str(&state_str)
+                        .ok_or(rusqlite::Error::InvalidQuery)?;
                     let epoch: i64 = row.get(1)?;
+                    let expected_length: i64 = row.get(8)?;
                     Ok(StorageEffectRecord {
                         action_id: row.get(0)?,
                         execution_epoch: epoch as u64,
                         fencing_token: row.get(2)?,
                         request_id: row.get(3)?,
                         nonce: row.get(4)?,
-                        target_key: row.get(5)?,
-                        payload_digest: row.get(6)?,
+                        operation_kind: row.get(5)?,
+                        target_key: row.get(6)?,
+                        payload_digest: row.get(7)?,
+                        expected_length: expected_length as u64,
+                        expected_version: row.get(9)?,
+                        authority_principal: row.get(10)?,
                         state,
-                        etag: row.get(8)?,
-                        updated_at: row.get(9)?,
+                        etag: row.get(12)?,
+                        provider_metadata: row.get(13)?,
+                        created_at: row.get(14)?,
+                        updated_at: row.get(15)?,
                     })
                 },
             )

@@ -44,11 +44,45 @@ pub struct WorkerAuthorityConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StorageEffectState {
-    Pending,
-    Committed,
+    Reserved,
+    Dispatching,
+    Confirmed,
     EffectUnknown,
     Reconciling,
     Rejected,
+    Failed,
+}
+
+impl StorageEffectState {
+    #[allow(non_upper_case_globals)]
+    pub const Pending: Self = Self::Reserved;
+    #[allow(non_upper_case_globals)]
+    pub const Committed: Self = Self::Confirmed;
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Reserved => "RESERVED",
+            Self::Dispatching => "DISPATCHING",
+            Self::Confirmed => "CONFIRMED",
+            Self::EffectUnknown => "EFFECT_UNKNOWN",
+            Self::Reconciling => "RECONCILING",
+            Self::Rejected => "REJECTED",
+            Self::Failed => "FAILED",
+        }
+    }
+
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "RESERVED" | "PENDING" => Some(Self::Reserved),
+            "DISPATCHING" => Some(Self::Dispatching),
+            "CONFIRMED" | "COMMITTED" => Some(Self::Confirmed),
+            "EFFECT_UNKNOWN" => Some(Self::EffectUnknown),
+            "RECONCILING" => Some(Self::Reconciling),
+            "REJECTED" => Some(Self::Rejected),
+            "FAILED" => Some(Self::Failed),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,10 +92,16 @@ pub struct StorageEffectRecord {
     pub fencing_token: i64,
     pub request_id: String,
     pub nonce: String,
+    pub operation_kind: String,
     pub target_key: String,
     pub payload_digest: String,
+    pub expected_length: u64,
+    pub expected_version: Option<String>,
+    pub authority_principal: String,
     pub state: StorageEffectState,
     pub etag: Option<String>,
+    pub provider_metadata: Option<String>,
+    pub created_at: String,
     pub updated_at: String,
 }
 
@@ -355,11 +395,62 @@ impl Worker {
         key: &str,
         payload_digest: &[u8; 32],
     ) -> Result<deepseek_storage::s3::StorageAuthorityProof, WorkerStorageError> {
+        let principal = self
+            .authority
+            .as_ref()
+            .map(|a| a.signer_public_key.clone())
+            .unwrap_or_else(|| "default-control-plane".to_string());
+        self.reserve_storage_mutation_ext(
+            fence,
+            key,
+            payload_digest,
+            0,
+            "PUT_CHUNK",
+            None,
+            &principal,
+        )
+    }
+
+    #[cfg(feature = "s3")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn reserve_storage_mutation_ext(
+        &mut self,
+        fence: &ActionFence,
+        key: &str,
+        payload_digest: &[u8; 32],
+        expected_length: u64,
+        operation_kind: &str,
+        expected_version: Option<&str>,
+        authority_principal: &str,
+    ) -> Result<deepseek_storage::s3::StorageAuthorityProof, WorkerStorageError> {
         let store = self
             .authority_store
             .as_mut()
             .ok_or(WorkerStorageError::WorkerWithoutAuthority)?;
-        store.reserve_storage_mutation(fence, key, payload_digest)
+        store.reserve_storage_mutation(
+            fence,
+            key,
+            payload_digest,
+            expected_length,
+            operation_kind,
+            expected_version,
+            authority_principal,
+        )
+    }
+
+    #[cfg(feature = "s3")]
+    pub fn transition_storage_mutation(
+        &mut self,
+        fence: &ActionFence,
+        state: StorageEffectState,
+        etag: Option<&str>,
+        provider_metadata: Option<&str>,
+    ) -> Result<(), WorkerStorageError> {
+        let store = self
+            .authority_store
+            .as_mut()
+            .ok_or(WorkerStorageError::WorkerWithoutAuthority)?;
+        store.record_storage_mutation_outcome(fence, etag, state, provider_metadata)
     }
 
     #[cfg(feature = "s3")]
@@ -368,11 +459,7 @@ impl Worker {
         fence: &ActionFence,
         etag: &str,
     ) -> Result<(), WorkerStorageError> {
-        let store = self
-            .authority_store
-            .as_mut()
-            .ok_or(WorkerStorageError::WorkerWithoutAuthority)?;
-        store.record_storage_mutation_outcome(fence, Some(etag), StorageEffectState::Committed)
+        self.transition_storage_mutation(fence, StorageEffectState::Confirmed, Some(etag), None)
     }
 
     #[cfg(feature = "s3")]
@@ -380,11 +467,7 @@ impl Worker {
         &mut self,
         fence: &ActionFence,
     ) -> Result<(), WorkerStorageError> {
-        let store = self
-            .authority_store
-            .as_mut()
-            .ok_or(WorkerStorageError::WorkerWithoutAuthority)?;
-        store.record_storage_mutation_outcome(fence, None, StorageEffectState::EffectUnknown)
+        self.transition_storage_mutation(fence, StorageEffectState::EffectUnknown, None, None)
     }
 
     #[cfg(feature = "s3")]
@@ -392,11 +475,7 @@ impl Worker {
         &mut self,
         fence: &ActionFence,
     ) -> Result<(), WorkerStorageError> {
-        let store = self
-            .authority_store
-            .as_mut()
-            .ok_or(WorkerStorageError::WorkerWithoutAuthority)?;
-        store.record_storage_mutation_outcome(fence, None, StorageEffectState::Rejected)
+        self.transition_storage_mutation(fence, StorageEffectState::Rejected, None, None)
     }
 
     #[cfg(feature = "s3")]
@@ -424,29 +503,71 @@ impl Worker {
         if self.authority_store.is_none() {
             return Err(WorkerStorageError::WorkerWithoutAuthority);
         }
-        let proof = self.reserve_storage_mutation(fence, key, &payload_digest)?;
+        let principal = self
+            .authority
+            .as_ref()
+            .map(|a| a.signer_public_key.clone())
+            .unwrap_or_else(|| "default-control-plane".to_string());
+        let payload_len = payload.len() as u64;
+        let proof = self.reserve_storage_mutation_ext(
+            fence,
+            key,
+            &payload_digest,
+            payload_len,
+            "PUT_CHUNK",
+            None,
+            &principal,
+        )?;
         if <[u8; 32]>::from(sha2::Sha256::digest(&payload)) != payload_digest {
             return Err(WorkerStorageError::DigestMismatch);
         }
+        self.transition_storage_mutation(fence, StorageEffectState::Dispatching, None, None)?;
         match transport
             .put_chunk(key, payload, payload_digest, &proof, condition)
             .await
         {
             Ok(observation) => {
-                self.record_storage_mutation_committed(fence, &observation.etag)?;
+                let metadata = format!(
+                    "{{\"etag\":\"{}\",\"size\":{}}}",
+                    observation.etag, observation.length
+                );
+                self.transition_storage_mutation(
+                    fence,
+                    StorageEffectState::Confirmed,
+                    Some(&observation.etag),
+                    Some(&metadata),
+                )?;
                 Ok(observation)
             }
             Err(deepseek_storage::s3::S3Error::PreconditionRejected) => {
-                let _ = self.record_storage_mutation_rejected(fence);
+                let _ = self.transition_storage_mutation(
+                    fence,
+                    StorageEffectState::Rejected,
+                    None,
+                    Some("{\"error\":\"PreconditionRejected\"}"),
+                );
                 Err(WorkerStorageError::PreconditionRejected)
             }
             Err(deepseek_storage::s3::S3Error::EffectUnknown) => {
-                let _ = self.record_storage_mutation_effect_unknown(fence);
+                let _ = self.transition_storage_mutation(
+                    fence,
+                    StorageEffectState::EffectUnknown,
+                    None,
+                    Some("{\"error\":\"EffectUnknown\"}"),
+                );
                 Err(WorkerStorageError::Transport(
                     deepseek_storage::s3::S3Error::EffectUnknown,
                 ))
             }
-            Err(other) => Err(WorkerStorageError::Transport(other)),
+            Err(other) => {
+                let _ = self.transition_storage_mutation(
+                    fence,
+                    StorageEffectState::Failed,
+                    None,
+                    Some(&format!("{{\"error\":\"{}\"}}", other)),
+                );
+                Err(WorkerStorageError::Transport(other))
+            }
         }
     }
 
@@ -459,20 +580,23 @@ impl Worker {
         let record = self
             .query_storage_effect(fence)?
             .ok_or(WorkerStorageError::FenceMismatch)?;
-        if record.state == StorageEffectState::Committed
+        if record.state == StorageEffectState::Confirmed
             || record.state == StorageEffectState::Rejected
+            || record.state == StorageEffectState::Failed
         {
             return Ok(record);
         }
-        let store = self
-            .authority_store
-            .as_mut()
-            .ok_or(WorkerStorageError::WorkerWithoutAuthority)?;
-        store.record_storage_mutation_outcome(fence, None, StorageEffectState::Reconciling)?;
+        self.transition_storage_mutation(fence, StorageEffectState::Reconciling, None, None)?;
 
         match transport.stat(&record.target_key).await {
             Ok(Some(observation)) => {
-                let matches = observation.claimed_action_id.as_deref() == Some(&record.action_id)
+                let length_match = if record.expected_length > 0 {
+                    observation.length == record.expected_length
+                } else {
+                    true
+                };
+                let matches = length_match
+                    && observation.claimed_action_id.as_deref() == Some(&record.action_id)
                     && observation.claimed_execution_epoch.as_deref()
                         == Some(&record.execution_epoch.to_string())
                     && observation.claimed_fencing_token.as_deref()
@@ -481,16 +605,40 @@ impl Worker {
                     && observation.claimed_nonce.as_deref() == Some(&record.nonce)
                     && observation.claimed_sha256.as_deref() == Some(&record.payload_digest);
                 if matches {
-                    self.record_storage_mutation_committed(fence, &observation.etag)?;
+                    let metadata = format!(
+                        "{{\"etag\":\"{}\",\"size\":{}}}",
+                        observation.etag, observation.length
+                    );
+                    self.transition_storage_mutation(
+                        fence,
+                        StorageEffectState::Confirmed,
+                        Some(&observation.etag),
+                        Some(&metadata),
+                    )?;
                 } else {
-                    self.record_storage_mutation_rejected(fence)?;
+                    self.transition_storage_mutation(
+                        fence,
+                        StorageEffectState::Rejected,
+                        None,
+                        Some("{\"reconciliation\":\"target_metadata_mismatch\"}"),
+                    )?;
                 }
             }
             Ok(None) => {
-                self.record_storage_mutation_rejected(fence)?;
+                self.transition_storage_mutation(
+                    fence,
+                    StorageEffectState::Rejected,
+                    None,
+                    Some("{\"reconciliation\":\"object_not_found\"}"),
+                )?;
             }
             Err(err) => {
-                self.record_storage_mutation_effect_unknown(fence)?;
+                self.transition_storage_mutation(
+                    fence,
+                    StorageEffectState::EffectUnknown,
+                    None,
+                    Some(&format!("{{\"error\":\"{}\"}}", err)),
+                )?;
                 return Err(WorkerStorageError::Transport(err));
             }
         }

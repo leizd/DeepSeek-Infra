@@ -386,3 +386,110 @@ async fn unknown_effect_cannot_be_blindly_retried_and_reconciles() {
     let effect = worker.query_storage_effect(&fence).unwrap().unwrap();
     assert_eq!(effect.state, StorageEffectState::EffectUnknown);
 }
+
+#[tokio::test]
+async fn crash_during_dispatching_recovers_to_effect_unknown_and_requires_reconciliation() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, fence, key) = fixture();
+    let payload = Bytes::from_static(b"crash-window-payload");
+    let digest: [u8; 32] = Sha256::digest(&payload).into();
+
+    {
+        let mut worker = Worker::open_with_authority(config.clone(), directory.path()).unwrap();
+        let request = sign_request(&key, &fence.action_id, 4, 4, "1", "1");
+        worker.install_signed_epoch(&fence, &request).unwrap();
+
+        // 1. Reserve mutation with extended audit identity
+        let proof = worker
+            .reserve_storage_mutation_ext(
+                &fence,
+                "data/chunk-01",
+                &digest,
+                payload.len() as u64,
+                "PUT_CHUNK",
+                Some("v1"),
+                &config.signer_public_key,
+            )
+            .unwrap();
+        assert_eq!(proof.action_id, fence.action_id);
+
+        // 2. Transition to DISPATCHING
+        worker
+            .transition_storage_mutation(&fence, StorageEffectState::Dispatching, None, None)
+            .unwrap();
+
+        let in_flight = worker.query_storage_effect(&fence).unwrap().unwrap();
+        assert_eq!(in_flight.state, StorageEffectState::Dispatching);
+        assert_eq!(in_flight.operation_kind, "PUT_CHUNK");
+        assert_eq!(in_flight.target_key, "data/chunk-01");
+        assert_eq!(in_flight.expected_length, payload.len() as u64);
+        assert_eq!(in_flight.expected_version.as_deref(), Some("v1"));
+        assert_eq!(in_flight.authority_principal, config.signer_public_key);
+        assert!(in_flight.etag.is_none());
+        assert!(in_flight.provider_metadata.is_none());
+        // Worker crashes while dispatching... (drop worker)
+    }
+
+    // 3. Worker restarts: AuthorityStore::open must recover DISPATCHING to EFFECT_UNKNOWN
+    let mut restarted = Worker::open_with_authority(config, directory.path()).unwrap();
+    let recovered = restarted.query_storage_effect(&fence).unwrap().unwrap();
+    assert_eq!(recovered.state, StorageEffectState::EffectUnknown);
+
+    // 4. Blind retry via execute_storage_put is blocked
+    let transport = dummy_transport();
+    assert_eq!(
+        restarted
+            .execute_storage_put(
+                &transport,
+                "data/chunk-01",
+                payload.clone(),
+                digest,
+                &fence,
+                ConditionalWrite::Create,
+            )
+            .await,
+        Err(WorkerStorageError::UnknownEffectRetryBlocked)
+    );
+
+    // 5. Direct illegal transition EFFECT_UNKNOWN -> CONFIRMED is rejected by trigger
+    assert!(
+        restarted
+            .transition_storage_mutation(
+                &fence,
+                StorageEffectState::Confirmed,
+                Some("etag-illegal"),
+                None
+            )
+            .is_err()
+    );
+
+    // 6. Transition EFFECT_UNKNOWN -> RECONCILING is permitted
+    restarted
+        .transition_storage_mutation(&fence, StorageEffectState::Reconciling, None, None)
+        .unwrap();
+
+    // 7. Transition RECONCILING -> CONFIRMED is permitted
+    restarted
+        .transition_storage_mutation(
+            &fence,
+            StorageEffectState::Confirmed,
+            Some("etag-valid"),
+            Some("{\"verified\":true}"),
+        )
+        .unwrap();
+
+    let final_record = restarted.query_storage_effect(&fence).unwrap().unwrap();
+    assert_eq!(final_record.state, StorageEffectState::Confirmed);
+    assert_eq!(final_record.etag.as_deref(), Some("etag-valid"));
+    assert_eq!(
+        final_record.provider_metadata.as_deref(),
+        Some("{\"verified\":true}")
+    );
+
+    // 8. Terminal state cannot be mutated (storage_effects_monotonic)
+    assert!(
+        restarted
+            .transition_storage_mutation(&fence, StorageEffectState::Reconciling, None, None)
+            .is_err()
+    );
+}
