@@ -52,20 +52,14 @@ async fn proxy_api_to_go_forwarding_and_unreachable_behavior() {
     assert_eq!(val["ok"], true);
     assert_eq!(val["authority"], "go");
 
-    // Test /internal/* forwarding to Go control plane
+    // Private Go handlers are never forwarded from the public edge.
     let internal_req = axum::http::Request::builder()
         .method("GET")
         .uri("/internal/test-internal")
         .body(axum::body::Body::empty())
         .unwrap();
     let internal_res = app.clone().oneshot(internal_req).await.unwrap();
-    assert_eq!(internal_res.status(), StatusCode::OK);
-    let internal_bytes = axum::body::to_bytes(internal_res.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let internal_val: serde_json::Value = serde_json::from_slice(&internal_bytes).unwrap();
-    assert_eq!(internal_val["ok"], true);
-    assert_eq!(internal_val["service"], "deepseekd-internal");
+    assert_eq!(internal_res.status(), StatusCode::NOT_FOUND);
 
     unsafe {
         std::env::set_var("GO_CONTROL_ADDR", "http://127.0.0.1:1");

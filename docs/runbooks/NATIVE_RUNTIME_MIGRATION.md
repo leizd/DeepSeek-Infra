@@ -42,6 +42,44 @@ Do not cut over mutation until that gate stays green.
 - Shadow mode rejects a configured production store path.
 - Do not point Go or Rust at Python SQLite files.
 
+## Public Edge to Go API isolation
+
+The Rust Edge forwards only `/api/*` to the operator-configured root origin in
+`GO_CONTROL_ADDR` (or `DEEPSEEK_GO_CONTROL_URL`). The origin must use HTTP or HTTPS
+and must not include credentials, a path prefix, query, or fragment. HTTP is for
+the explicitly configured private development/Compose network, not a public
+transport-security guarantee. Do not publish the Go port.
+
+`/internal`, `/internal/`, and `/internal/*` return 404 on both development and
+production Edge routers, without contacting Go or falling through to the SPA.
+Go's shadow and cutover handlers remain private management APIs; their existence
+does not authorize public exposure or production cutover.
+
+Forwarding uses the original encoded path and rejects URL normalization that
+changes it. Query order, duplicate parameters and existing escapes are retained;
+URL-standard escaping may encode characters such as apostrophes (`'` to `%27`)
+without changing decoded query values. CONNECT is rejected before dispatch.
+Redirects are returned without being followed. Ambient proxies, automatic retries,
+HTTP/2 and idle connection reuse are disabled; there is no Python fallback.
+Request and response hop-by-hop headers, including Connection-nominated fields,
+are removed. Request bodies remain subject to the Edge body limit; response bodies
+are streamed with backpressure and read errors, not buffered into an empty success.
+The current bridge has a 5-second connect timeout and 10-second total timeout;
+it is not a long-lived SSE or WebSocket transport.
+
+`GO_CONTROL_UNREACHABLE` does not prove that a mutation was unapplied. Callers must
+retain action/epoch identity and reconcile an uncertain effect before retrying.
+This isolation fix is not a substitute for native authentication, full public API
+parity, authenticated inter-service transport or the frozen gRPC/Protobuf boundary.
+
+Verification: `cargo test --locked -p deepseek-gateway --all-targets` includes
+loopback HTTP tests for traversal aliases, query/method/body/header fidelity,
+redirect confinement, proxy bypass and a real TCP truncated response. These tests
+are protocol-boundary regressions, not real-provider or release evidence.
+
+Implementation references: [Axum OriginalUri](https://docs.rs/axum/0.7.9/axum/extract/struct.OriginalUri.html)
+and [reqwest ClientBuilder](https://docs.rs/reqwest/0.12.28/reqwest/struct.ClientBuilder.html).
+
 ## Current Go-to-Rust worker boundary
 
 - `deepseek-worker` exposes the generated Tonic `Worker` service on
