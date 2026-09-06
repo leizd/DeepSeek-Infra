@@ -606,9 +606,11 @@ dependencies = [
  "deepseek-storage",
  "deepseek-transfer",
  "ed25519-dalek",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "tokio",
  "tonic",
 ]

@@ -12,6 +12,7 @@ use deepseek_storage::{StorageRequest, plan as plan_storage};
 use deepseek_transfer::{TransferRequest, plan as plan_transfer};
 
 mod authority_request;
+mod authority_store;
 mod mutation_request;
 mod service;
 
@@ -54,6 +55,7 @@ struct WorkerAuthority {
 
 #[derive(Debug, Default)]
 pub struct Worker {
+    authority_store: Option<authority_store::AuthorityStore>,
     live_epochs: HashMap<String, u64>,
     effects: HashMap<(String, u64), EffectState>,
     authority: Option<WorkerAuthority>,
@@ -62,6 +64,22 @@ pub struct Worker {
 impl Worker {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Open Rust-owned durable fencing state beneath `state_root/rust-worker`.
+    /// The directory must be writable only by the trusted worker/operator.
+    /// Signing and all production mutation remain subject to existing denial gates.
+    pub fn open_with_authority(
+        config: WorkerAuthorityConfig,
+        state_root: &std::path::Path,
+    ) -> Result<Self, AuthorityRequestError> {
+        let mut worker = Self::new();
+        worker.configure_authority(config)?;
+        worker.authority_store = Some(authority_store::AuthorityStore::open(
+            state_root,
+            worker.authority.as_ref().unwrap(),
+        )?);
+        Ok(worker)
     }
 
     pub fn configure_authority(
@@ -109,6 +127,9 @@ impl Worker {
     }
 
     pub fn install_authoritative_epoch(&mut self, fence: &ActionFence) -> Result<(), AdmitError> {
+        if self.authority_store.is_some() {
+            return Err(AdmitError::FenceMismatch);
+        }
         let live = self.live_epochs.get(&fence.action_id).copied().unwrap_or(0);
         validate_authoritative_epoch_update(fence, live)?;
         self.live_epochs
@@ -121,6 +142,13 @@ impl Worker {
         envelope_fence: &ActionFence,
         canonical_request: &[u8],
     ) -> Result<ActionFence, AuthorityRequestError> {
+        if let Some(store) = self.authority_store.as_mut() {
+            let authority = self
+                .authority
+                .as_ref()
+                .ok_or_else(|| AuthorityRequestError::new("AUTHORITY_REQUEST_SIGNER_MISMATCH"))?;
+            return store.install(authority, envelope_fence, canonical_request);
+        }
         validate_fence(envelope_fence).map_err(AuthorityRequestError::from)?;
         let live = self
             .live_epochs
@@ -179,6 +207,9 @@ impl Worker {
     }
 
     pub fn admit(&self, fence: &ActionFence) -> Result<(), AdmitError> {
+        if let Some(store) = &self.authority_store {
+            return store.admit(fence);
+        }
         let live = self.live_epochs.get(&fence.action_id).copied().unwrap_or(0);
         admit_command(fence, live)
     }
