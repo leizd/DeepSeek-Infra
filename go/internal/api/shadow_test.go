@@ -294,3 +294,139 @@ func TestShadowSnapshotReport(t *testing.T) {
 		t.Fatalf("closed snapshot %d", conflict.StatusCode)
 	}
 }
+
+func TestCutoverStatusAndTransitionEndpoints(t *testing.T) {
+	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "owner-cutover"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+
+	mux := http.NewServeMux()
+	Register(mux, control)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	nilServer := httptest.NewServer(Handler())
+	defer nilServer.Close()
+
+	// 1. Nil control -> 503
+	resp, err := http.Get(nilServer.URL + "/internal/cutover/status?domain=policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("nil control status expected 503, got %d", resp.StatusCode)
+	}
+
+	// 2. Missing domain -> 400
+	resp, err = http.Get(server.URL + "/internal/cutover/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing domain expected 400, got %d", resp.StatusCode)
+	}
+
+	// 3. Unknown domain -> 404
+	resp, err = http.Get(server.URL + "/internal/cutover/status?domain=nonexistent_domain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown domain expected 404, got %d", resp.StatusCode)
+	}
+
+	// 4. Existing domain initial status -> 200 OK, State = "shadow"
+	resp, err = http.Get(server.URL + "/internal/cutover/status?domain=policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("policy status expected 200, got %d", resp.StatusCode)
+	}
+	var rec store.CutoverRecord
+	if err := json.NewDecoder(resp.Body).Decode(&rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Domain != "policy" || rec.State != store.CutoverShadow || rec.Revision != 1 {
+		t.Fatalf("unexpected record: %+v", rec)
+	}
+
+	// 5. Method not allowed
+	postToStatus, err := http.Post(server.URL+"/internal/cutover/status?domain=policy", "application/json", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	postToStatus.Body.Close()
+	if postToStatus.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("POST to status expected 405, got %d", postToStatus.StatusCode)
+	}
+
+	// 6. Transition to DualEvaluate -> 200 OK
+	transBody, _ := json.Marshal(map[string]any{
+		"domain":           "policy",
+		"to":               "dual_evaluate",
+		"expectedRevision": rec.Revision,
+		"expectedEpoch":    rec.Epoch,
+		"fencingToken":     rec.FencingToken,
+		"transferId":       "test-trans-1",
+	})
+	transResp, err := http.Post(server.URL+"/internal/cutover/transition", "application/json", bytes.NewReader(transBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transResp.Body.Close()
+	if transResp.StatusCode != http.StatusOK {
+		t.Fatalf("transition expected 200, got %d", transResp.StatusCode)
+	}
+	var updatedRec store.CutoverRecord
+	if err := json.NewDecoder(transResp.Body).Decode(&updatedRec); err != nil {
+		t.Fatal(err)
+	}
+	if updatedRec.State != store.CutoverDualEvaluate || updatedRec.Revision != 2 {
+		t.Fatalf("unexpected updated record: %+v", updatedRec)
+	}
+
+	// 7a. Idempotent replay with same transferId -> 200 OK
+	replayResp, err := http.Post(server.URL+"/internal/cutover/transition", "application/json", bytes.NewReader(transBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayResp.Body.Close()
+	if replayResp.StatusCode != http.StatusOK {
+		t.Fatalf("idempotent replay expected 200, got %d", replayResp.StatusCode)
+	}
+
+	// 7b. Conflicting transition with new transferId but stale revision -> 409 Conflict
+	conflictBody, _ := json.Marshal(map[string]any{
+		"domain":           "policy",
+		"to":               "dual_evaluate",
+		"expectedRevision": rec.Revision, // stale revision 1 (current is 2)
+		"expectedEpoch":    rec.Epoch,
+		"fencingToken":     rec.FencingToken,
+		"transferId":       "test-trans-conflict-2",
+	})
+	conflictResp, err := http.Post(server.URL+"/internal/cutover/transition", "application/json", bytes.NewReader(conflictBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflictResp.Body.Close()
+	if conflictResp.StatusCode != http.StatusConflict {
+		t.Fatalf("conflict transition expected 409, got %d", conflictResp.StatusCode)
+	}
+
+	// 8. Invalid JSON -> 400 Bad Request
+	badJsonResp, err := http.Post(server.URL+"/internal/cutover/transition", "application/json", bytes.NewReader([]byte("{bad")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	badJsonResp.Body.Close()
+	if badJsonResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad json expected 400, got %d", badJsonResp.StatusCode)
+	}
+}
