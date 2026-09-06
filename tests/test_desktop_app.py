@@ -58,6 +58,61 @@ def test_desktop_app_shuts_down_when_server_never_becomes_ready() -> None:
     shutdown.assert_called_once_with(handle)
 
 
+def test_desktop_app_attaches_to_native_edge_without_starting_server(monkeypatch: Any) -> None:
+    monkeypatch.setenv("DEEPSEEK_EDGE_URL", "http://127.0.0.1:8787")
+
+    with (
+        patch.object(desktop_app, "prepare_and_start") as prepare,
+        patch.object(desktop_app, "wait_for_server_ready") as wait_ready,
+        patch.object(desktop_app, "open_app_window") as open_window,
+        patch.object(desktop_app, "shutdown_handle") as shutdown,
+    ):
+        assert desktop_app.main() == 0
+
+    prepare.assert_not_called()
+    shutdown.assert_not_called()
+    wait_ready.assert_called_once_with("http://127.0.0.1:8787/?desktop=1")
+    open_window.assert_called_once_with("http://127.0.0.1:8787/?desktop=1")
+
+
+def test_desktop_app_native_edge_handles_error(monkeypatch: Any) -> None:
+    monkeypatch.setenv("DEEPSEEK_EDGE_URL", "http://127.0.0.1:8787")
+
+    with (
+        patch.object(desktop_app, "prepare_and_start") as prepare,
+        patch.object(desktop_app, "wait_for_server_ready", side_effect=RuntimeError("connection refused")),
+        patch.object(desktop_app, "show_startup_error") as show_error,
+    ):
+        assert desktop_app.main() == 1
+
+    prepare.assert_not_called()
+    show_error.assert_called_once()
+
+
+def test_launch_sets_edge_url_from_cli_args(monkeypatch: Any) -> None:
+    import os
+    import launch
+    import pytest
+
+    monkeypatch.delenv("DEEPSEEK_EDGE_URL", raising=False)
+    with patch("deepseek_infra.desktop_app.main", return_value=0) as run_desktop:
+        monkeypatch.setattr(sys, "argv", ["launch.py", "--edge", "http://127.0.0.1:8787"])
+        with pytest.raises(SystemExit) as exc:
+            launch.main()
+        assert exc.value.code == 0
+        assert os.environ.get("DEEPSEEK_EDGE_URL") == "http://127.0.0.1:8787"
+        run_desktop.assert_called_once()
+
+    monkeypatch.delenv("DEEPSEEK_EDGE_URL", raising=False)
+    with patch("deepseek_infra.desktop_app.main", return_value=0) as run_desktop:
+        monkeypatch.setattr(sys, "argv", ["launch.py", "--edge=http://127.0.0.1:9000"])
+        with pytest.raises(SystemExit) as exc:
+            launch.main()
+        assert exc.value.code == 0
+        assert os.environ.get("DEEPSEEK_EDGE_URL") == "http://127.0.0.1:9000"
+        run_desktop.assert_called_once()
+
+
 def test_open_app_window_uses_pywebview() -> None:
     fake_webview = ModuleType("webview")
     calls: list[tuple[Any, ...]] = []
