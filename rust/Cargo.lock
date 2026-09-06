@@ -570,6 +570,7 @@ dependencies = [
  "deepseek-policy",
  "deepseek-rag",
  "percent-encoding",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",

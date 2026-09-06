@@ -146,13 +146,95 @@ async fn a2a_rpc(body: Bytes) -> Json<serde_json::Value> {
     jsonrpc_not_ready(&body, "native A2A execution is not wired")
 }
 
-async fn proxy_api_to_go(Path(path): Path<String>) -> (StatusCode, Json<serde_json::Value>) {
-    let (status, Json(mut payload)) = unavailable(
-        "GO_CONTROL_PROXY_NOT_READY",
-        "Go control-plane proxy is not wired",
-    );
-    payload["error"]["target"] = json!(format!("/api/{path}"));
-    (status, Json(payload))
+async fn proxy_api_to_go(
+    method: axum::http::Method,
+    headers: HeaderMap,
+    Path(path): Path<String>,
+    body: Bytes,
+) -> Response {
+    let go_url = std::env::var("GO_CONTROL_ADDR")
+        .or_else(|_| std::env::var("DEEPSEEK_GO_CONTROL_URL"))
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+
+    let Some(base_url) = go_url else {
+        let (status, Json(mut payload)) = unavailable(
+            "GO_CONTROL_PROXY_NOT_READY",
+            "Go control-plane proxy is not wired",
+        );
+        payload["error"]["target"] = json!(format!("/api/{path}"));
+        return (status, Json(payload)).into_response();
+    };
+
+    let target = format!("{}/api/{path}", base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_default();
+
+    let req_method = match reqwest::Method::from_bytes(method.as_str().as_bytes()) {
+        Ok(m) => m,
+        Err(_) => reqwest::Method::GET,
+    };
+    let mut req = client.request(req_method, &target);
+
+    for (key, value) in &headers {
+        if key != axum::http::header::HOST && key != axum::http::header::CONTENT_LENGTH {
+            if let Ok(v) = reqwest::header::HeaderValue::from_bytes(value.as_bytes()) {
+                if let Ok(k) = reqwest::header::HeaderName::from_bytes(key.as_str().as_bytes()) {
+                    req = req.header(k, v);
+                }
+            }
+        }
+    }
+
+    if !body.is_empty() {
+        req = req.body(body);
+    }
+
+    match req.send().await {
+        Ok(upstream_res) => {
+            let status = StatusCode::from_u16(upstream_res.status().as_u16())
+                .unwrap_or(StatusCode::BAD_GATEWAY);
+            let mut res_builder = Response::builder().status(status);
+
+            for (k, v) in upstream_res.headers() {
+                if let Ok(name) = axum::http::header::HeaderName::from_bytes(k.as_str().as_bytes())
+                {
+                    if let Ok(val) = axum::http::header::HeaderValue::from_bytes(v.as_bytes()) {
+                        res_builder = res_builder.header(name, val);
+                    }
+                }
+            }
+
+            let body_bytes = upstream_res.bytes().await.unwrap_or_default();
+            res_builder
+                .body(axum::body::Body::from(body_bytes))
+                .unwrap_or_else(|_| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "error": {
+                                "code": "PROXY_RESPONSE_ERROR",
+                                "message": "Failed to serialize response",
+                            }
+                        })),
+                    )
+                        .into_response()
+                })
+        }
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": {
+                    "code": "GO_CONTROL_UNREACHABLE",
+                    "message": "Failed to connect to Go control plane",
+                    "target": format!("/api/{path}"),
+                }
+            })),
+        )
+            .into_response(),
+    }
 }
 
 async fn gateway_request_prepare(body: Bytes) -> Json<serde_json::Value> {
