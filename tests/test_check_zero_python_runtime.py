@@ -119,3 +119,29 @@ def test_gate_detects_go_os_exec_violation(tmp_path: Path) -> None:
     result = check_process_tree_isolation(tmp_path)
     assert result.passed is False
     assert "Go production code imports os/exec" in result.details
+
+
+def test_authority_modes_and_allowed_branches(monkeypatch: Any) -> None:
+    from deepseek_infra.infra.native_runtime.authority import (
+        RuntimeMode,
+        assert_production_python_allowed,
+        assert_python_writer_allowed,
+        get_runtime_mode,
+    )
+
+    monkeypatch.setenv("DEEPSEEK_RUNTIME_MODE", "shadow")
+    monkeypatch.delenv("DEEPSEEK_GO_CONTROL", raising=False)
+    assert get_runtime_mode() == RuntimeMode.SHADOW
+
+    monkeypatch.delenv("DEEPSEEK_RUNTIME_MODE", raising=False)
+    monkeypatch.delenv("DEEPSEEK_GO_CONTROL", raising=False)
+    assert get_runtime_mode() == RuntimeMode.PYTHON_AUTHORITATIVE
+
+    # In python_authoritative: allowed
+    assert_production_python_allowed()
+    assert_python_writer_allowed("policy")
+
+    # Non-control domain allowed in go_authoritative
+    monkeypatch.setenv("DEEPSEEK_GO_CONTROL", "1")
+    assert_python_writer_allowed("arbitrary_non_control_domain")
+
