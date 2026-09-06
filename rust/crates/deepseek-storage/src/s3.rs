@@ -8,7 +8,7 @@ use std::{fmt, net::IpAddr, time::Duration};
 use bytes::Bytes;
 use futures_util::TryStreamExt;
 use object_store::{
-    Attribute, Attributes, GetOptions, ObjectStore, PutMode, PutOptions, RetryConfig,
+    Attribute, Attributes, GetOptions, GetResult, ObjectStore, PutMode, PutOptions, RetryConfig,
     UpdateVersion,
     aws::{AmazonS3, AmazonS3Builder, Checksum, S3ConditionalPut},
     path::Path,
@@ -124,6 +124,7 @@ pub struct S3Transport {
     store: AmazonS3,
     bucket: String,
     prefix: String,
+    target_identity: [u8; 32],
 }
 
 impl fmt::Debug for S3Transport {
@@ -135,6 +136,20 @@ impl fmt::Debug for S3Transport {
 impl S3Transport {
     pub fn new(config: S3Config, credentials: S3Credentials) -> Result<Self, S3Error> {
         validate_config(&config)?;
+        // Versioned, length-framed placement identity. Credentials may rotate
+        // without changing the target; caller key is bound separately in the journal.
+        let mut identity = Sha256::new();
+        identity.update(b"deepseek-infra:s3-target-v1\0");
+        for field in [
+            config.endpoint.trim_end_matches('/'),
+            &config.region,
+            &config.bucket,
+            &config.prefix,
+        ] {
+            identity.update((field.len() as u64).to_be_bytes());
+            identity.update(field.as_bytes());
+        }
+        let target_identity = identity.finalize().into();
         let bucket = config.bucket.clone();
         // Explicit policy at BOTH retry layers; no ambient proxy or redirect target.
         // https://docs.rs/reqwest/0.12.28/reqwest/struct.ClientBuilder.html
@@ -177,6 +192,7 @@ impl S3Transport {
             store: builder.build().map_err(|_| S3Error::InvalidConfig)?,
             bucket,
             prefix: config.prefix,
+            target_identity,
         })
     }
 
@@ -186,6 +202,12 @@ impl S3Transport {
 
     pub fn prefix(&self) -> &str {
         &self.prefix
+    }
+
+    /// Stable fingerprint of configured endpoint, region, bucket and prefix.
+    /// This is placement binding, not proof of provider ownership or permission.
+    pub fn target_identity(&self) -> [u8; 32] {
+        self.target_identity
     }
 
     pub fn object_key(&self, key: &str) -> Result<String, S3Error> {
@@ -308,29 +330,7 @@ impl S3Transport {
             Err(object_store::Error::NotFound { .. }) => return Ok(None),
             Err(_) => return Err(S3Error::ReadFailed),
         };
-        let claim = |name: &'static str| {
-            response
-                .attributes
-                .get(&Attribute::Metadata(name.into()))
-                .map(|value| value.to_string())
-        };
-        let etag = response
-            .meta
-            .e_tag
-            .clone()
-            .filter(|etag| strong_etag(etag))
-            .ok_or(S3Error::ReadFailed)?;
-        Ok(Some(ObjectObservation {
-            length: response.meta.size,
-            etag,
-            version: response.meta.version.clone(),
-            claimed_sha256: claim("sha256"),
-            claimed_action_id: claim("action-id"),
-            claimed_execution_epoch: claim("execution-epoch"),
-            claimed_fencing_token: claim("fencing-token"),
-            claimed_request_id: claim("request-id"),
-            claimed_nonce: claim("nonce"),
-        }))
+        object_observation(&response).map(Some)
     }
 
     /// Requires fresh/empty staging at offset zero. Success verifies the received stream
@@ -352,29 +352,101 @@ impl S3Transport {
                 object_store::Error::NotFound { .. } => S3Error::NotFound,
                 _ => S3Error::ReadFailed,
             })?;
-        if response.meta.size != length || response.range != (0..length) {
-            return Err(S3Error::IntegrityMismatch);
-        }
-        let mut stream = response.into_stream();
-        let mut received = 0u64;
-        let mut hash = Sha256::new();
-        while let Some(bytes) = stream.try_next().await.map_err(|_| S3Error::ReadFailed)? {
-            received = received
-                .checked_add(bytes.len() as u64)
-                .ok_or(S3Error::IntegrityMismatch)?;
-            if received > length {
-                return Err(S3Error::IntegrityMismatch);
-            }
-            hash.update(&bytes);
-            sink.write_all(&bytes)
-                .await
-                .map_err(|_| S3Error::SinkFailed)?;
-        }
-        if received != length || <[u8; 32]>::from(hash.finalize()) != sha256 {
-            return Err(S3Error::IntegrityMismatch);
-        }
-        sink.flush().await.map_err(|_| S3Error::SinkFailed)
+        stream_verified(response, length, sha256, sink).await
     }
+
+    /// Verify the exact observed ETag/version, authority metadata, length and bytes
+    /// in one conditional GET. An old HEAD alone is not byte-integrity evidence.
+    /// The sink has the same uncommitted staging obligations as download_verified.
+    pub async fn download_observation_verified<W: AsyncWrite + Unpin>(
+        &self,
+        key: &str,
+        observation: &ObjectObservation,
+        sha256: [u8; 32],
+        sink: &mut W,
+    ) -> Result<(), S3Error> {
+        if !strong_etag(&observation.etag) {
+            return Err(S3Error::IntegrityMismatch);
+        }
+        let path = exact_path(&self.object_key(key)?)?;
+        let response = self
+            .store
+            .get_opts(
+                &path,
+                GetOptions {
+                    if_match: Some(observation.etag.clone()),
+                    version: observation.version.clone(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(|error| match error {
+                object_store::Error::NotFound { .. } => S3Error::NotFound,
+                _ => S3Error::ReadFailed,
+            })?;
+        // Same-content overwrites can keep the same ETag while replacing metadata.
+        // Compare the GET's metadata too, before allowing any bytes into staging.
+        if object_observation(&response)? != *observation {
+            return Err(S3Error::IntegrityMismatch);
+        }
+        stream_verified(response, observation.length, sha256, sink).await
+    }
+}
+
+fn object_observation(response: &GetResult) -> Result<ObjectObservation, S3Error> {
+    let claim = |name: &'static str| {
+        response
+            .attributes
+            .get(&Attribute::Metadata(name.into()))
+            .map(|value| value.to_string())
+    };
+    let etag = response
+        .meta
+        .e_tag
+        .clone()
+        .filter(|etag| strong_etag(etag))
+        .ok_or(S3Error::ReadFailed)?;
+    Ok(ObjectObservation {
+        length: response.meta.size,
+        etag,
+        version: response.meta.version.clone(),
+        claimed_sha256: claim("sha256"),
+        claimed_action_id: claim("action-id"),
+        claimed_execution_epoch: claim("execution-epoch"),
+        claimed_fencing_token: claim("fencing-token"),
+        claimed_request_id: claim("request-id"),
+        claimed_nonce: claim("nonce"),
+    })
+}
+
+async fn stream_verified<W: AsyncWrite + Unpin>(
+    response: GetResult,
+    length: u64,
+    sha256: [u8; 32],
+    sink: &mut W,
+) -> Result<(), S3Error> {
+    if response.meta.size != length || response.range != (0..length) {
+        return Err(S3Error::IntegrityMismatch);
+    }
+    let mut stream = response.into_stream();
+    let mut received = 0u64;
+    let mut hash = Sha256::new();
+    while let Some(bytes) = stream.try_next().await.map_err(|_| S3Error::ReadFailed)? {
+        received = received
+            .checked_add(bytes.len() as u64)
+            .ok_or(S3Error::IntegrityMismatch)?;
+        if received > length {
+            return Err(S3Error::IntegrityMismatch);
+        }
+        hash.update(&bytes);
+        sink.write_all(&bytes)
+            .await
+            .map_err(|_| S3Error::SinkFailed)?;
+    }
+    if received != length || <[u8; 32]>::from(hash.finalize()) != sha256 {
+        return Err(S3Error::IntegrityMismatch);
+    }
+    sink.flush().await.map_err(|_| S3Error::SinkFailed)
 }
 
 fn strong_etag(etag: &str) -> bool {

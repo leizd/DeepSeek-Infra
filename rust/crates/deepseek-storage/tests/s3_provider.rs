@@ -370,3 +370,87 @@ async fn lost_success_response_is_unknown_even_when_real_minio_committed_bytes()
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn conditional_verified_read_binds_bytes_and_metadata_to_the_observed_object() {
+    let transport = store(&endpoints()[2]);
+    let key = "conditional-observation";
+    let payload = Bytes::from_static(b"same bytes but different operation metadata");
+    let digest = Sha256::digest(&payload).into();
+    transport
+        .put_chunk(
+            key,
+            payload.clone(),
+            digest,
+            &fence(21),
+            ConditionalWrite::Create,
+        )
+        .await
+        .unwrap();
+    let first = transport.stat(key).await.unwrap().unwrap();
+    transport
+        .download_observation_verified(key, &first, digest, &mut HashSink::default())
+        .await
+        .unwrap();
+
+    // Same payload preserves the ETag but changes action metadata. If-Match alone
+    // cannot establish that GET belongs to the object observed by the earlier HEAD.
+    transport
+        .put_chunk(
+            key,
+            payload.clone(),
+            digest,
+            &fence(22),
+            ConditionalWrite::Match(first.etag.clone()),
+        )
+        .await
+        .unwrap();
+    let second = transport.stat(key).await.unwrap().unwrap();
+    assert_eq!(first.etag, second.etag);
+    let mut sink = HashSink::default();
+    assert_eq!(
+        transport
+            .download_observation_verified(key, &first, digest, &mut sink)
+            .await,
+        Err(S3Error::IntegrityMismatch)
+    );
+    assert_eq!(sink.bytes, 0);
+    transport
+        .download_observation_verified(key, &second, digest, &mut HashSink::default())
+        .await
+        .unwrap();
+
+    // A different payload changes the ETag. The stale observation must fail the
+    // actual provider If-Match precondition before any response bytes reach staging.
+    let replacement = Bytes::from_static(b"different provider bytes");
+    let replacement_digest = Sha256::digest(&replacement).into();
+    transport
+        .put_chunk(
+            key,
+            replacement,
+            replacement_digest,
+            &fence(23),
+            ConditionalWrite::Match(second.etag.clone()),
+        )
+        .await
+        .unwrap();
+    let mut sink = HashSink::default();
+    assert_eq!(
+        transport
+            .download_observation_verified(key, &second, digest, &mut sink)
+            .await,
+        Err(S3Error::ReadFailed)
+    );
+    assert_eq!(sink.bytes, 0);
+    let current = transport.stat(key).await.unwrap().unwrap();
+    assert_eq!(
+        transport
+            .download_observation_verified(key, &current, digest, &mut HashSink::default())
+            .await,
+        Err(S3Error::IntegrityMismatch)
+    );
+    transport
+        .download_observation_verified(key, &current, replacement_digest, &mut HashSink::default())
+        .await
+        .unwrap();
+}

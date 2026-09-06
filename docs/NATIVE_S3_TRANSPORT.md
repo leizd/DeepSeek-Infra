@@ -51,6 +51,32 @@ fail on 1.85 with E0658; the real AWS-feature build, not package metadata, is th
 - [Retry configuration](https://docs.rs/object_store/0.12.4/object_store/struct.RetryConfig.html)
 - [S3 conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)
 
+## Placement identity and conditional byte observations
+
+`target_identity()` is a SHA-256 placement fingerprint with domain separator
+`deepseek-infra:s3-target-v1` followed by a NUL byte. The fields are canonical
+endpoint origin (without the optional final slash), region, bucket and prefix,
+in that order. Each UTF-8 field is preceded by its unsigned 64-bit big-endian byte
+length. Credentials are deliberately excluded so renewal does not change placement;
+the object key and write condition must be bound separately by the worker journal.
+This fingerprint is not expected-bucket-owner verification or authority proof.
+
+`download_observation_verified()` performs a GET with the observed strong ETag as
+If-Match and the observed version ID when available. Before consuming the body it
+compares the GET's full operation metadata with the prior observation, including
+length, version and all six action/digest fields. It then hashes the complete
+bounded-length stream. Same-byte overwrites can retain the ETag while changing
+metadata, so the ETag check alone is insufficient. Staging obligations remain the
+same as `download_verified()`, and any error leaves data unverified.
+The pinned [GetOptions contract](https://docs.rs/object_store/0.12.4/object_store/struct.GetOptions.html)
+supplies the conditional request, not a positive worker effect verdict.
+
+The real-MinIO suite passed six storage cases after adding a same-ETag metadata
+replacement, a changed-ETag conditional rejection, and correct/incorrect checksum
+observations. The five existing worker provider cases also passed. Durable worker
+target/condition binding and use of this conditional read are still separate,
+unfinished integration work; these primitives do not complete positive reconciliation.
+
 ## Remaining production gates
 
 Multipart create/ListParts/resume/conditional completion/abort, expected bucket owner,

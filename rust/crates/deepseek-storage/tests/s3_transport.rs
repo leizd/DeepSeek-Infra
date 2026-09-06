@@ -14,6 +14,58 @@ fn credentials() -> S3Credentials {
     S3Credentials::new("test-access".into(), "test-only-secret".into(), None).unwrap()
 }
 
+#[tokio::test]
+async fn target_identity_binds_placement_but_not_rotatable_credentials() {
+    let options = config("https://s3.example.com");
+    let target = S3Transport::new(options.clone(), credentials())
+        .unwrap()
+        .target_identity();
+    let rotated =
+        S3Credentials::new("rotated-access".into(), "rotated-test-secret".into(), None).unwrap();
+    assert_eq!(
+        target,
+        S3Transport::new(options.clone(), rotated)
+            .unwrap()
+            .target_identity()
+    );
+    assert_eq!(
+        target,
+        S3Transport::new(config("https://s3.example.com/"), credentials())
+            .unwrap()
+            .target_identity()
+    );
+    let variants = [
+        S3Config {
+            endpoint: "https://other.example.com".into(),
+            ..options.clone()
+        },
+        S3Config {
+            endpoint: "https://s3.example.com:9443".into(),
+            ..options.clone()
+        },
+        S3Config {
+            bucket: "other-bucket".into(),
+            ..options.clone()
+        },
+        S3Config {
+            prefix: "other-prefix".into(),
+            ..options.clone()
+        },
+        S3Config {
+            region: "other-region".into(),
+            ..options.clone()
+        },
+    ];
+    for variant in variants {
+        assert_ne!(
+            target,
+            S3Transport::new(variant, credentials())
+                .unwrap()
+                .target_identity()
+        );
+    }
+}
+
 #[test]
 fn transport_rejects_ambiguous_or_unsafe_endpoints_without_network() {
     for endpoint in [
