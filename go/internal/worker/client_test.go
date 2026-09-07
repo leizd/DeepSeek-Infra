@@ -26,6 +26,14 @@ type fakeWorkerRPC struct {
 	installRequest *actionv1.InstallAuthoritativeEpochRequest
 	installResp    *actionv1.InstallAuthoritativeEpochResponse
 	installErr     error
+
+	storageRequest  *actionv1.StorageMutationRequest
+	storageResponse *actionv1.StorageMutationResponse
+	storageErr      error
+
+	storageQueryReq  *actionv1.QueryStorageEffectRequest
+	storageQueryResp *actionv1.StorageMutationResponse
+	storageQueryErr  error
 }
 
 func (fake *fakeWorkerRPC) AdmitCommand(_ context.Context, request *actionv1.AdmitCommandRequest, _ ...grpc.CallOption) (*actionv1.AdmitCommandResponse, error) {
@@ -41,6 +49,16 @@ func (fake *fakeWorkerRPC) QueryEffect(_ context.Context, request *actionv1.Quer
 func (fake *fakeWorkerRPC) InstallAuthoritativeEpoch(_ context.Context, request *actionv1.InstallAuthoritativeEpochRequest, _ ...grpc.CallOption) (*actionv1.InstallAuthoritativeEpochResponse, error) {
 	fake.installRequest = request
 	return fake.installResp, fake.installErr
+}
+
+func (fake *fakeWorkerRPC) ExecuteStorageMutation(_ context.Context, request *actionv1.StorageMutationRequest, _ ...grpc.CallOption) (*actionv1.StorageMutationResponse, error) {
+	fake.storageRequest = request
+	return fake.storageResponse, fake.storageErr
+}
+
+func (fake *fakeWorkerRPC) QueryStorageEffect(_ context.Context, request *actionv1.QueryStorageEffectRequest, _ ...grpc.CallOption) (*actionv1.StorageMutationResponse, error) {
+	fake.storageQueryReq = request
+	return fake.storageQueryResp, fake.storageQueryErr
 }
 
 func TestAdmitNeverForwardsCallerControlledLiveEpoch(t *testing.T) {
@@ -367,5 +385,324 @@ func TestInstallAuthoritativeEpochMapsFrozenAuthorityCodes(t *testing.T) {
 		if err := New(rpc).InstallAuthoritativeEpoch(context.Background(), fence, canonical); err != want {
 			t.Fatalf("%s: %v", code, err)
 		}
+	}
+}
+
+func TestExecuteStorageMutationValidation(t *testing.T) {
+	client := New(&fakeWorkerRPC{})
+	// Nil client
+	var nilClient *Client
+	if _, err := nilClient.ExecuteStorageMutation(context.Background(), nil, ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("nil client: %v", err)
+	}
+
+	// Nil request or nil fence
+	if _, err := client.ExecuteStorageMutation(context.Background(), nil, ""); err != internalprotocol.ErrEmptyActionID {
+		t.Fatalf("nil request: %v", err)
+	}
+	if _, err := client.ExecuteStorageMutation(context.Background(), &actionv1.StorageMutationRequest{}, ""); err != internalprotocol.ErrEmptyActionID {
+		t.Fatalf("nil fence: %v", err)
+	}
+
+	// Invalid fence
+	if _, err := client.ExecuteStorageMutation(context.Background(), &actionv1.StorageMutationRequest{
+		Fence: &commonv1.ActionFence{ActionId: "", ExecutionEpoch: 1},
+	}, ""); err != internalprotocol.ErrEmptyActionID {
+		t.Fatalf("empty action id: %v", err)
+	}
+	if _, err := client.ExecuteStorageMutation(context.Background(), &actionv1.StorageMutationRequest{
+		Fence: &commonv1.ActionFence{ActionId: "a1", ExecutionEpoch: 0},
+	}, ""); err != internalprotocol.ErrZeroEpoch {
+		t.Fatalf("zero epoch: %v", err)
+	}
+
+	// Empty operation ID
+	if _, err := client.ExecuteStorageMutation(context.Background(), &actionv1.StorageMutationRequest{
+		Fence:       &commonv1.ActionFence{ActionId: "a1", ExecutionEpoch: 1},
+		OperationId: "",
+	}, ""); err != store.ErrAuthorityRequestOperationInvalid {
+		t.Fatalf("empty op id: %v", err)
+	}
+}
+
+func TestExecuteStorageMutationConfirmed(t *testing.T) {
+	fence := &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 2}
+	rpc := &fakeWorkerRPC{
+		storageResponse: &actionv1.StorageMutationResponse{
+			Status:   actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
+			State:    commonv1.EffectState_EFFECT_STATE_APPLIED,
+			Fence:    fence,
+			Etag:     "\"etag-1\"",
+			EffectId: "act-1:2",
+		},
+	}
+	client := New(rpc)
+	resp, err := client.ExecuteStorageMutation(context.Background(), &actionv1.StorageMutationRequest{
+		Fence:       fence,
+		OperationId: "op-1",
+	}, "test-token")
+	if err != nil {
+		t.Fatalf("confirmed: %v", err)
+	}
+	if resp.Etag != "\"etag-1\"" || resp.EffectId != "act-1:2" {
+		t.Fatalf("unexpected resp: %+v", resp)
+	}
+}
+
+func TestExecuteStorageMutationRejectionAndFailures(t *testing.T) {
+	fence := &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 2}
+	cases := map[string]error{
+		"SERVICE_AUTHENTICATION_UNAVAILABLE": internalprotocol.ErrServiceAuthenticationUnavailable,
+		"AUTHENTICATION_MISSING":             internalprotocol.ErrAuthenticationMissing,
+		"AUTHENTICATION_INVALID":             internalprotocol.ErrAuthenticationInvalid,
+		"PRECONDITION_REJECTED":              internalprotocol.ErrStoragePreconditionRejected,
+		"REPLAY_REJECTED":                    internalprotocol.ErrStorageReplayRejected,
+		"UNKNOWN_EFFECT_RETRY_BLOCKED":       internalprotocol.ErrStorageUnknownEffectRetryBlocked,
+		"TARGET_MISMATCH":                    internalprotocol.ErrStorageTargetMismatch,
+		"DIGEST_MISMATCH":                    internalprotocol.ErrStorageDigestMismatch,
+		"WORKER_WITHOUT_AUTHORITY":           internalprotocol.ErrStorageWorkerWithoutAuthority,
+		"STORAGE_TRANSPORT_UNAVAILABLE":      internalprotocol.ErrStorageTransportUnavailable,
+		"STORAGE_TRANSPORT_ERROR":            internalprotocol.ErrStorageTransportError,
+		"FENCE_MISMATCH":                     internalprotocol.ErrFenceMismatch,
+	}
+
+	for code, want := range cases {
+		rpc := &fakeWorkerRPC{
+			storageResponse: &actionv1.StorageMutationResponse{
+				Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED,
+				Fence:  fence,
+				Error:  &commonv1.ErrorDetail{Code: code},
+			},
+		}
+		client := New(rpc)
+		_, err := client.ExecuteStorageMutation(context.Background(), &actionv1.StorageMutationRequest{
+			Fence:       fence,
+			OperationId: "op-1",
+		}, "tok")
+		if !errors.Is(err, want) {
+			t.Fatalf("%s: got %v, want %v", code, err, want)
+		}
+	}
+}
+
+func TestQueryStorageEffectStates(t *testing.T) {
+	fence := &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 2}
+
+	// 1. Confirmed
+	rpc := &fakeWorkerRPC{
+		storageQueryResp: &actionv1.StorageMutationResponse{
+			Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
+			State:  commonv1.EffectState_EFFECT_STATE_APPLIED,
+			Fence:  fence,
+			Etag:   "\"etag-1\"",
+		},
+	}
+	client := New(rpc)
+	resp, err := client.QueryStorageEffect(context.Background(), fence, "op-1", "tok")
+	if err != nil || resp.Etag != "\"etag-1\"" {
+		t.Fatalf("confirmed query: %v, %+v", err, resp)
+	}
+
+	// 2. EffectUnknown
+	rpc.storageQueryResp = &actionv1.StorageMutationResponse{
+		Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_EFFECT_UNKNOWN,
+		State:  commonv1.EffectState_EFFECT_STATE_UNKNOWN,
+		Fence:  fence,
+	}
+	_, err = client.QueryStorageEffect(context.Background(), fence, "op-1", "tok")
+	if !errors.Is(err, internalprotocol.ErrUnknownEffect) {
+		t.Fatalf("unknown query: %v", err)
+	}
+
+	// 3. Reconciling
+	rpc.storageQueryResp = &actionv1.StorageMutationResponse{
+		Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_RECONCILING,
+		State:  commonv1.EffectState_EFFECT_STATE_UNKNOWN,
+		Fence:  fence,
+	}
+	_, err = client.QueryStorageEffect(context.Background(), fence, "op-1", "tok")
+	if !errors.Is(err, internalprotocol.ErrUnknownEffect) {
+		t.Fatalf("reconciling query: %v", err)
+	}
+
+	// 4. Transport error
+	rpc.storageQueryResp = nil
+	rpc.storageQueryErr = errors.New("connection reset")
+	_, err = client.QueryStorageEffect(context.Background(), fence, "op-1", "tok")
+	if err == nil {
+		t.Fatal("expected transport error")
+	}
+}
+
+func TestExecuteStorageMutationMalformedResponses(t *testing.T) {
+	fence := &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 2}
+	req := &actionv1.StorageMutationRequest{Fence: fence, OperationId: "op-1"}
+
+	// 1. Nil response from RPC
+	rpc := &fakeWorkerRPC{storageResponse: nil}
+	client := New(rpc)
+	if _, err := client.ExecuteStorageMutation(context.Background(), req, ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("expected ErrInvalidWorkerResponse on nil response, got: %v", err)
+	}
+
+	// 2. Transport error from RPC
+	rpc.storageErr = errors.New("rpc failed")
+	if _, err := client.ExecuteStorageMutation(context.Background(), req, ""); err == nil {
+		t.Fatal("expected rpc transport error")
+	}
+	rpc.storageErr = nil
+
+	// 3. Response fence mismatch: ActionId
+	rpc.storageResponse = &actionv1.StorageMutationResponse{
+		Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
+		State:  commonv1.EffectState_EFFECT_STATE_APPLIED,
+		Fence:  &commonv1.ActionFence{ActionId: "other", ExecutionEpoch: 2},
+	}
+	if _, err := client.ExecuteStorageMutation(context.Background(), req, ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("fence action mismatch: %v", err)
+	}
+
+	// 4. Response fence mismatch: ExecutionEpoch
+	rpc.storageResponse.Fence = &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 3}
+	if _, err := client.ExecuteStorageMutation(context.Background(), req, ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("fence epoch mismatch: %v", err)
+	}
+
+	// 5. Response operation ID mismatch
+	rpc.storageResponse.Fence = fence
+	rpc.storageResponse.OperationId = "wrong-op"
+	if _, err := client.ExecuteStorageMutation(context.Background(), req, ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("operation id mismatch: %v", err)
+	}
+	rpc.storageResponse.OperationId = "op-1"
+
+	// 6. Confirmed with Error != nil
+	rpc.storageResponse.Error = &commonv1.ErrorDetail{Code: "FENCE_MISMATCH"}
+	if _, err := client.ExecuteStorageMutation(context.Background(), req, ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("confirmed with error: %v", err)
+	}
+	rpc.storageResponse.Error = nil
+
+	// 7. Confirmed with State != Applied
+	rpc.storageResponse.State = commonv1.EffectState_EFFECT_STATE_UNKNOWN
+	if _, err := client.ExecuteStorageMutation(context.Background(), req, ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("confirmed with unknown state: %v", err)
+	}
+
+	// 8. Rejected with Error == nil
+	rpc.storageResponse.Status = actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED
+	rpc.storageResponse.Error = nil
+	if _, err := client.ExecuteStorageMutation(context.Background(), req, ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("rejected with nil error: %v", err)
+	}
+
+	// 9. Failed with Error == nil
+	rpc.storageResponse.Status = actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_FAILED
+	rpc.storageResponse.Error = nil
+	if _, err := client.ExecuteStorageMutation(context.Background(), req, ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("failed with nil error: %v", err)
+	}
+
+	// 10. Failed with known error
+	rpc.storageResponse.Error = &commonv1.ErrorDetail{Code: "STORAGE_TRANSPORT_ERROR"}
+	if _, err := client.ExecuteStorageMutation(context.Background(), req, ""); !errors.Is(err, internalprotocol.ErrStorageTransportError) {
+		t.Fatalf("failed with known error: %v", err)
+	}
+
+	// 11. Unknown status
+	rpc.storageResponse.Status = actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_UNSPECIFIED
+	if _, err := client.ExecuteStorageMutation(context.Background(), req, ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("unknown status: %v", err)
+	}
+}
+
+func TestQueryStorageEffectMalformedResponses(t *testing.T) {
+	fence := &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 2}
+
+	// 1. Nil client
+	var nilClient *Client
+	if _, err := nilClient.QueryStorageEffect(context.Background(), fence, "op-1", ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("nil client: %v", err)
+	}
+
+	// 2. Nil fence / invalid fence
+	client := New(&fakeWorkerRPC{})
+	if _, err := client.QueryStorageEffect(context.Background(), nil, "op-1", ""); err != internalprotocol.ErrEmptyActionID {
+		t.Fatalf("nil fence: %v", err)
+	}
+	if _, err := client.QueryStorageEffect(context.Background(), &commonv1.ActionFence{ActionId: "", ExecutionEpoch: 1}, "op-1", ""); err != internalprotocol.ErrEmptyActionID {
+		t.Fatalf("empty action id: %v", err)
+	}
+	if _, err := client.QueryStorageEffect(context.Background(), &commonv1.ActionFence{ActionId: "a", ExecutionEpoch: 0}, "op-1", ""); err != internalprotocol.ErrZeroEpoch {
+		t.Fatalf("zero epoch: %v", err)
+	}
+
+	// 3. Nil response from RPC
+	rpc := &fakeWorkerRPC{storageQueryResp: nil}
+	client = New(rpc)
+	if _, err := client.QueryStorageEffect(context.Background(), fence, "op-1", ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("nil query response: %v", err)
+	}
+
+	// 4. Response fence mismatch: ActionId
+	rpc.storageQueryResp = &actionv1.StorageMutationResponse{
+		Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
+		State:  commonv1.EffectState_EFFECT_STATE_APPLIED,
+		Fence:  &commonv1.ActionFence{ActionId: "other", ExecutionEpoch: 2},
+	}
+	if _, err := client.QueryStorageEffect(context.Background(), fence, "op-1", ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("fence action mismatch: %v", err)
+	}
+
+	// 5. Response fence mismatch: ExecutionEpoch
+	rpc.storageQueryResp.Fence = &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 5}
+	if _, err := client.QueryStorageEffect(context.Background(), fence, "op-1", ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("fence epoch mismatch: %v", err)
+	}
+
+	// 6. Confirmed with Error != nil
+	rpc.storageQueryResp.Fence = fence
+	rpc.storageQueryResp.Error = &commonv1.ErrorDetail{Code: "FENCE_MISMATCH"}
+	if _, err := client.QueryStorageEffect(context.Background(), fence, "op-1", ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("confirmed with error: %v", err)
+	}
+	rpc.storageQueryResp.Error = nil
+
+	// 7. Confirmed with State != Applied
+	rpc.storageQueryResp.State = commonv1.EffectState_EFFECT_STATE_UNKNOWN
+	if _, err := client.QueryStorageEffect(context.Background(), fence, "op-1", ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("confirmed with unknown state: %v", err)
+	}
+
+	// 8. Rejected with Error == nil
+	rpc.storageQueryResp.Status = actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED
+	rpc.storageQueryResp.Error = nil
+	if _, err := client.QueryStorageEffect(context.Background(), fence, "op-1", ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("rejected with nil error: %v", err)
+	}
+
+	// 9. Rejected with known error
+	rpc.storageQueryResp.Error = &commonv1.ErrorDetail{Code: "REPLAY_REJECTED"}
+	if _, err := client.QueryStorageEffect(context.Background(), fence, "op-1", ""); !errors.Is(err, internalprotocol.ErrStorageReplayRejected) {
+		t.Fatalf("rejected with replay: %v", err)
+	}
+
+	// 10. Failed with Error == nil
+	rpc.storageQueryResp.Status = actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_FAILED
+	rpc.storageQueryResp.Error = nil
+	if _, err := client.QueryStorageEffect(context.Background(), fence, "op-1", ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("failed with nil error: %v", err)
+	}
+
+	// 11. Failed with known error
+	rpc.storageQueryResp.Error = &commonv1.ErrorDetail{Code: "STORAGE_TRANSPORT_UNAVAILABLE"}
+	if _, err := client.QueryStorageEffect(context.Background(), fence, "op-1", ""); !errors.Is(err, internalprotocol.ErrStorageTransportUnavailable) {
+		t.Fatalf("failed with transport unavailable: %v", err)
+	}
+
+	// 12. Unknown status
+	rpc.storageQueryResp.Status = actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_UNSPECIFIED
+	if _, err := client.QueryStorageEffect(context.Background(), fence, "op-1", ""); err != ErrInvalidWorkerResponse {
+		t.Fatalf("unspecified status: %v", err)
 	}
 }

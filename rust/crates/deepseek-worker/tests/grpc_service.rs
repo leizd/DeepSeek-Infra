@@ -1,9 +1,14 @@
+use std::sync::Arc;
+
 use deepseek_protocol::generated::deepseek::action::v1::{
     AdmitCommandRequest, AdmitStatus, CommandKind, InstallAuthoritativeEpochRequest,
-    QueryEffectRequest, worker_server::Worker as WorkerRpc,
+    QueryEffectRequest, QueryStorageEffectRequest, StorageConditionType, StorageMutationRequest,
+    StorageMutationStatus, StoragePrecondition, worker_server::Worker as WorkerRpc,
 };
 use deepseek_protocol::generated::deepseek::common::v1::{ActionFence, EffectState};
-use deepseek_worker::{Worker, WorkerAuthorityConfig, WorkerRpcService};
+use deepseek_worker::{
+    CallerIdentity, StaticTokenAuthenticator, Worker, WorkerAuthorityConfig, WorkerRpcService,
+};
 use tonic::Request;
 
 fn fence(epoch: u64) -> ActionFence {
@@ -231,4 +236,190 @@ async fn rpc_install_rejects_missing_fence_and_tampered_bytes() {
     let tampered = install(&service, installed, canonical).await;
     assert_eq!(tampered.status(), AdmitStatus::Rejected);
     assert_eq!(tampered.error.unwrap().code, "AUTHORITY_REQUEST_INVALID");
+}
+
+#[tokio::test]
+async fn rpc_storage_mutation_fails_closed_by_default_without_approved_auth() {
+    let service = WorkerRpcService::new(Worker::new());
+    let response = WorkerRpc::execute_storage_mutation(
+        &service,
+        Request::new(StorageMutationRequest {
+            fence: Some(fence(1)),
+            operation_id: "op-1".to_string(),
+            mutation_type: "PUT_CHUNK".to_string(),
+            payload: vec![1, 2, 3],
+            expected_length: 3,
+            payload_digest: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81"
+                .to_string(),
+            precondition: Some(StoragePrecondition {
+                condition_type: StorageConditionType::CreateOnly as i32,
+                expected_etag: String::new(),
+            }),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap()
+    .into_inner();
+
+    assert_eq!(response.status(), StorageMutationStatus::Rejected);
+    assert_eq!(
+        response.error.unwrap().code,
+        "SERVICE_AUTHENTICATION_UNAVAILABLE"
+    );
+}
+
+#[tokio::test]
+async fn rpc_storage_mutation_rejects_missing_or_invalid_bearer_token() {
+    let auth = Arc::new(StaticTokenAuthenticator::new(
+        "secret-token",
+        CallerIdentity {
+            service_name: "test-caller".to_string(),
+            role: "controller".to_string(),
+        },
+    ));
+    let service = WorkerRpcService::new_with_authenticator(Worker::new(), auth);
+
+    // 1. Missing auth header
+    let response = WorkerRpc::execute_storage_mutation(
+        &service,
+        Request::new(StorageMutationRequest {
+            fence: Some(fence(1)),
+            operation_id: "op-1".to_string(),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap()
+    .into_inner();
+    assert_eq!(response.status(), StorageMutationStatus::Rejected);
+    assert_eq!(response.error.unwrap().code, "AUTHENTICATION_MISSING");
+
+    // 2. Wrong token
+    let mut req = Request::new(StorageMutationRequest {
+        fence: Some(fence(1)),
+        operation_id: "op-1".to_string(),
+        ..Default::default()
+    });
+    req.metadata_mut()
+        .insert("authorization", "Bearer wrong-token".parse().unwrap());
+    let response = WorkerRpc::execute_storage_mutation(&service, req)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.status(), StorageMutationStatus::Rejected);
+    assert_eq!(response.error.unwrap().code, "AUTHENTICATION_INVALID");
+}
+
+#[tokio::test]
+async fn rpc_storage_mutation_rejects_mismatched_payload_digest() {
+    let auth = Arc::new(StaticTokenAuthenticator::new(
+        "secret-token",
+        CallerIdentity {
+            service_name: "test-caller".to_string(),
+            role: "controller".to_string(),
+        },
+    ));
+    let service = WorkerRpcService::new_with_authenticator(Worker::new(), auth);
+
+    let mut req = Request::new(StorageMutationRequest {
+        fence: Some(fence(1)),
+        operation_id: "op-1".to_string(),
+        mutation_type: "PUT_CHUNK".to_string(),
+        payload: vec![1, 2, 3],
+        expected_length: 3,
+        payload_digest: "0000000000000000000000000000000000000000000000000000000000000000"
+            .to_string(),
+        precondition: Some(StoragePrecondition {
+            condition_type: StorageConditionType::CreateOnly as i32,
+            expected_etag: String::new(),
+        }),
+        ..Default::default()
+    });
+    req.metadata_mut()
+        .insert("authorization", "Bearer secret-token".parse().unwrap());
+
+    let response = WorkerRpc::execute_storage_mutation(&service, req)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.status(), StorageMutationStatus::Rejected);
+    if cfg!(feature = "s3") {
+        assert_eq!(response.error.unwrap().code, "DIGEST_MISMATCH");
+    } else {
+        assert_eq!(response.error.unwrap().code, "STORAGE_FEATURE_DISABLED");
+    }
+}
+
+#[tokio::test]
+async fn rpc_query_storage_effect_fails_closed_without_auth_and_reports_unknown_when_missing() {
+    // 1. Unauthenticated query fails closed
+    let unauth_service = WorkerRpcService::new(Worker::new());
+    let response = WorkerRpc::query_storage_effect(
+        &unauth_service,
+        Request::new(QueryStorageEffectRequest {
+            fence: Some(fence(1)),
+            operation_id: "op-1".to_string(),
+        }),
+    )
+    .await
+    .unwrap()
+    .into_inner();
+    assert_eq!(response.status(), StorageMutationStatus::Rejected);
+    assert_eq!(
+        response.error.unwrap().code,
+        "SERVICE_AUTHENTICATION_UNAVAILABLE"
+    );
+
+    // 2. Authenticated query against worker without authority is rejected
+    let auth = Arc::new(StaticTokenAuthenticator::new(
+        "secret-token",
+        CallerIdentity {
+            service_name: "test-caller".to_string(),
+            role: "controller".to_string(),
+        },
+    ));
+    let service = WorkerRpcService::new_with_authenticator(Worker::new(), auth.clone());
+    let mut req = Request::new(QueryStorageEffectRequest {
+        fence: Some(fence(1)),
+        operation_id: "op-1".to_string(),
+    });
+    req.metadata_mut()
+        .insert("authorization", "Bearer secret-token".parse().unwrap());
+
+    let response = WorkerRpc::query_storage_effect(&service, req)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.status(), StorageMutationStatus::Rejected);
+    if cfg!(feature = "s3") {
+        assert_eq!(response.error.unwrap().code, "WORKER_WITHOUT_AUTHORITY");
+    } else {
+        assert_eq!(response.error.unwrap().code, "STORAGE_FEATURE_DISABLED");
+    }
+
+    // 3. Authenticated query against authorized worker with missing record reports EFFECT_UNKNOWN
+    let tempdir = tempfile::tempdir().unwrap();
+    let (config, _, installed) = frozen_authority();
+    let worker = Worker::open_with_authority(config, tempdir.path()).unwrap();
+    let auth_service = WorkerRpcService::new_with_authenticator(worker, auth);
+    let mut req = Request::new(QueryStorageEffectRequest {
+        fence: Some(installed),
+        operation_id: "op-1".to_string(),
+    });
+    req.metadata_mut()
+        .insert("authorization", "Bearer secret-token".parse().unwrap());
+
+    let response = WorkerRpc::query_storage_effect(&auth_service, req)
+        .await
+        .unwrap()
+        .into_inner();
+    if cfg!(feature = "s3") {
+        assert_eq!(response.status(), StorageMutationStatus::EffectUnknown);
+        assert_eq!(response.state(), EffectState::Unknown);
+        assert_eq!(response.error.unwrap().code, "EFFECT_UNKNOWN");
+    } else {
+        assert_eq!(response.status(), StorageMutationStatus::Rejected);
+        assert_eq!(response.error.unwrap().code, "STORAGE_FEATURE_DISABLED");
+    }
 }

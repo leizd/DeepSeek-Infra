@@ -160,10 +160,11 @@ var transitions = map[string]map[string][]string{
 		"leased": {"complete", "failed"},
 	},
 	"action": {
-		"":          {"PENDING"},
-		"PENDING":   {"CLAIMED", "FAILED_BEFORE_EFFECT"},
-		"CLAIMED":   {"EXECUTING", "EFFECT_UNKNOWN"},
-		"EXECUTING": {"SUCCEEDED", "EFFECT_UNKNOWN"},
+		"":               {"PENDING"},
+		"PENDING":        {"CLAIMED", "FAILED_BEFORE_EFFECT"},
+		"CLAIMED":        {"EXECUTING", "EFFECT_UNKNOWN", "FAILED_BEFORE_EFFECT"},
+		"EXECUTING":      {"SUCCEEDED", "EFFECT_UNKNOWN", "FAILED_BEFORE_EFFECT"},
+		"EFFECT_UNKNOWN": {"SUCCEEDED", "FAILED_BEFORE_EFFECT"},
 	},
 	"risk": {
 		"":         {"OPEN"},

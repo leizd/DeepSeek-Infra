@@ -22,6 +22,8 @@ const (
 	Worker_AdmitCommand_FullMethodName              = "/deepseek.action.v1.Worker/AdmitCommand"
 	Worker_QueryEffect_FullMethodName               = "/deepseek.action.v1.Worker/QueryEffect"
 	Worker_InstallAuthoritativeEpoch_FullMethodName = "/deepseek.action.v1.Worker/InstallAuthoritativeEpoch"
+	Worker_ExecuteStorageMutation_FullMethodName    = "/deepseek.action.v1.Worker/ExecuteStorageMutation"
+	Worker_QueryStorageEffect_FullMethodName        = "/deepseek.action.v1.Worker/QueryStorageEffect"
 )
 
 // WorkerClient is the client API for Worker service.
@@ -31,6 +33,8 @@ type WorkerClient interface {
 	AdmitCommand(ctx context.Context, in *AdmitCommandRequest, opts ...grpc.CallOption) (*AdmitCommandResponse, error)
 	QueryEffect(ctx context.Context, in *QueryEffectRequest, opts ...grpc.CallOption) (*EffectResult, error)
 	InstallAuthoritativeEpoch(ctx context.Context, in *InstallAuthoritativeEpochRequest, opts ...grpc.CallOption) (*InstallAuthoritativeEpochResponse, error)
+	ExecuteStorageMutation(ctx context.Context, in *StorageMutationRequest, opts ...grpc.CallOption) (*StorageMutationResponse, error)
+	QueryStorageEffect(ctx context.Context, in *QueryStorageEffectRequest, opts ...grpc.CallOption) (*StorageMutationResponse, error)
 }
 
 type workerClient struct {
@@ -71,6 +75,26 @@ func (c *workerClient) InstallAuthoritativeEpoch(ctx context.Context, in *Instal
 	return out, nil
 }
 
+func (c *workerClient) ExecuteStorageMutation(ctx context.Context, in *StorageMutationRequest, opts ...grpc.CallOption) (*StorageMutationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StorageMutationResponse)
+	err := c.cc.Invoke(ctx, Worker_ExecuteStorageMutation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerClient) QueryStorageEffect(ctx context.Context, in *QueryStorageEffectRequest, opts ...grpc.CallOption) (*StorageMutationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StorageMutationResponse)
+	err := c.cc.Invoke(ctx, Worker_QueryStorageEffect_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WorkerServer is the server API for Worker service.
 // All implementations must embed UnimplementedWorkerServer
 // for forward compatibility.
@@ -78,6 +102,8 @@ type WorkerServer interface {
 	AdmitCommand(context.Context, *AdmitCommandRequest) (*AdmitCommandResponse, error)
 	QueryEffect(context.Context, *QueryEffectRequest) (*EffectResult, error)
 	InstallAuthoritativeEpoch(context.Context, *InstallAuthoritativeEpochRequest) (*InstallAuthoritativeEpochResponse, error)
+	ExecuteStorageMutation(context.Context, *StorageMutationRequest) (*StorageMutationResponse, error)
+	QueryStorageEffect(context.Context, *QueryStorageEffectRequest) (*StorageMutationResponse, error)
 	mustEmbedUnimplementedWorkerServer()
 }
 
@@ -96,6 +122,12 @@ func (UnimplementedWorkerServer) QueryEffect(context.Context, *QueryEffectReques
 }
 func (UnimplementedWorkerServer) InstallAuthoritativeEpoch(context.Context, *InstallAuthoritativeEpochRequest) (*InstallAuthoritativeEpochResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method InstallAuthoritativeEpoch not implemented")
+}
+func (UnimplementedWorkerServer) ExecuteStorageMutation(context.Context, *StorageMutationRequest) (*StorageMutationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExecuteStorageMutation not implemented")
+}
+func (UnimplementedWorkerServer) QueryStorageEffect(context.Context, *QueryStorageEffectRequest) (*StorageMutationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method QueryStorageEffect not implemented")
 }
 func (UnimplementedWorkerServer) mustEmbedUnimplementedWorkerServer() {}
 func (UnimplementedWorkerServer) testEmbeddedByValue()                {}
@@ -172,6 +204,42 @@ func _Worker_InstallAuthoritativeEpoch_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Worker_ExecuteStorageMutation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StorageMutationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServer).ExecuteStorageMutation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Worker_ExecuteStorageMutation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServer).ExecuteStorageMutation(ctx, req.(*StorageMutationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Worker_QueryStorageEffect_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QueryStorageEffectRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServer).QueryStorageEffect(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Worker_QueryStorageEffect_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServer).QueryStorageEffect(ctx, req.(*QueryStorageEffectRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Worker_ServiceDesc is the grpc.ServiceDesc for Worker service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -190,6 +258,14 @@ var Worker_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "InstallAuthoritativeEpoch",
 			Handler:    _Worker_InstallAuthoritativeEpoch_Handler,
+		},
+		{
+			MethodName: "ExecuteStorageMutation",
+			Handler:    _Worker_ExecuteStorageMutation_Handler,
+		},
+		{
+			MethodName: "QueryStorageEffect",
+			Handler:    _Worker_QueryStorageEffect_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

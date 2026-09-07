@@ -26,7 +26,10 @@ pub use mutation_request::{
     MAX_MUTATION_REQUEST_BYTES, MUTATION_REQUEST_SCHEMA, MutationRequestContext,
     MutationRequestError, verify_mutation_request_document,
 };
-pub use service::WorkerRpcService;
+pub use service::{
+    AuthError, CallerIdentity, ProductionFailClosedAuthenticator, StaticTokenAuthenticator,
+    TransportAuthenticator, WorkerRpcService,
+};
 
 const AUTH_SIGNER_PUBLIC_KEY: &str = "DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY";
 const AUTH_FLEET_ID: &str = "DEEPSEEK_WORKER_AUTHORITY_FLEET_ID";
@@ -724,7 +727,7 @@ impl Worker {
 }
 
 #[cfg(feature = "s3")]
-fn storage_digest_hex(bytes: &[u8; 32]) -> String {
+pub(crate) fn storage_digest_hex(bytes: &[u8; 32]) -> String {
     use std::fmt::Write as _;
     let mut text = String::with_capacity(64);
     for byte in bytes {
@@ -734,7 +737,7 @@ fn storage_digest_hex(bytes: &[u8; 32]) -> String {
 }
 
 #[cfg(feature = "s3")]
-fn storage_digest(text: &str) -> Result<[u8; 32], WorkerStorageError> {
+pub(crate) fn storage_digest(text: &str) -> Result<[u8; 32], WorkerStorageError> {
     if text.len() != 64
         || !text
             .bytes()

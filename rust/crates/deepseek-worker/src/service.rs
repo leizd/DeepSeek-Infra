@@ -1,35 +1,149 @@
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
+use tokio::sync::{Mutex, MutexGuard};
+
+#[cfg(feature = "s3")]
+use sha2::Digest as _;
+#[cfg(feature = "s3")]
+use deepseek_protocol::generated::deepseek::action::v1::StorageConditionType;
 
 use deepseek_protocol::generated::deepseek::action::v1::{
     AdmitCommandRequest, AdmitCommandResponse, AdmitStatus, CommandKind, EffectResult,
     InstallAuthoritativeEpochRequest, InstallAuthoritativeEpochResponse, QueryEffectRequest,
-    worker_server::Worker as WorkerRpc,
+    QueryStorageEffectRequest, StorageMutationRequest,
+    StorageMutationResponse, StorageMutationStatus, worker_server::Worker as WorkerRpc,
 };
-use deepseek_protocol::generated::deepseek::common::v1::{EffectState, ErrorDetail};
+use deepseek_protocol::generated::deepseek::common::v1::{ActionFence, EffectState, ErrorDetail};
 use deepseek_protocol::{
-    AdmitError, is_federation_command, is_storage_command, is_transfer_command,
+    is_federation_command, is_storage_command, is_transfer_command, validate_fence, AdmitError,
 };
 use tonic::{Request, Response, Status};
 
 use crate::Worker;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallerIdentity {
+    pub service_name: String,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthError {
+    MissingAuthorization,
+    InvalidToken,
+    ServiceAuthenticationUnavailable,
+    Internal(String),
+}
+
+impl AuthError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::MissingAuthorization => "AUTHENTICATION_MISSING",
+            Self::InvalidToken => "AUTHENTICATION_INVALID",
+            Self::ServiceAuthenticationUnavailable => "SERVICE_AUTHENTICATION_UNAVAILABLE",
+            Self::Internal(_) => "AUTHENTICATION_FAILED",
+        }
+    }
+}
+
+impl std::fmt::Display for AuthError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.code())
+    }
+}
+
+impl std::error::Error for AuthError {}
+
+pub trait TransportAuthenticator: Send + Sync + 'static {
+    fn authenticate(&self, metadata: &tonic::metadata::MetadataMap) -> Result<CallerIdentity, AuthError>;
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ProductionFailClosedAuthenticator;
+
+impl TransportAuthenticator for ProductionFailClosedAuthenticator {
+    fn authenticate(&self, _metadata: &tonic::metadata::MetadataMap) -> Result<CallerIdentity, AuthError> {
+        // Transport caller authentication for production execution is not yet approved.
+        // Fails closed unconditionally. Loopback is explicitly not caller authentication.
+        Err(AuthError::ServiceAuthenticationUnavailable)
+    }
+}
+
 #[derive(Debug, Clone)]
+pub struct StaticTokenAuthenticator {
+    expected_token: String,
+    identity: CallerIdentity,
+}
+
+impl StaticTokenAuthenticator {
+    pub fn new(token: impl Into<String>, identity: CallerIdentity) -> Self {
+        Self {
+            expected_token: token.into(),
+            identity,
+        }
+    }
+}
+
+impl TransportAuthenticator for StaticTokenAuthenticator {
+    fn authenticate(&self, metadata: &tonic::metadata::MetadataMap) -> Result<CallerIdentity, AuthError> {
+        let auth_header = metadata
+            .get("authorization")
+            .ok_or(AuthError::MissingAuthorization)?;
+        let auth_str = auth_header.to_str().map_err(|_| AuthError::InvalidToken)?;
+        let token = auth_str.strip_prefix("Bearer ").ok_or(AuthError::InvalidToken)?;
+        if token == self.expected_token {
+            Ok(self.identity.clone())
+        } else {
+            Err(AuthError::InvalidToken)
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct WorkerRpcService {
     worker: Arc<Mutex<Worker>>,
+    authenticator: Arc<dyn TransportAuthenticator>,
+    #[cfg(feature = "s3")]
+    transport: Option<Arc<deepseek_storage::s3::S3Transport>>,
+}
+
+impl std::fmt::Debug for WorkerRpcService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkerRpcService")
+            .field("authenticator", &"<TransportAuthenticator>")
+            .finish()
+    }
 }
 
 impl WorkerRpcService {
     pub fn new(worker: Worker) -> Self {
         Self {
             worker: Arc::new(Mutex::new(worker)),
+            authenticator: Arc::new(ProductionFailClosedAuthenticator),
+            #[cfg(feature = "s3")]
+            transport: None,
         }
     }
 
-    #[allow(clippy::result_large_err)]
-    fn lock(&self) -> Result<MutexGuard<'_, Worker>, Status> {
-        self.worker
-            .lock()
-            .map_err(|_| Status::unavailable("worker state unavailable"))
+    pub fn new_with_authenticator(
+        worker: Worker,
+        authenticator: Arc<dyn TransportAuthenticator>,
+    ) -> Self {
+        Self {
+            worker: Arc::new(Mutex::new(worker)),
+            authenticator,
+            #[cfg(feature = "s3")]
+            transport: None,
+        }
+    }
+
+    #[cfg(feature = "s3")]
+    pub fn with_transport(mut self, transport: Arc<deepseek_storage::s3::S3Transport>) -> Self {
+        self.transport = Some(transport);
+        self
+    }
+
+    async fn lock(&self) -> MutexGuard<'_, Worker> {
+        self.worker.lock().await
     }
 }
 
@@ -90,6 +204,53 @@ fn install_rejected(code: &'static str) -> InstallAuthoritativeEpochResponse {
     }
 }
 
+fn storage_rejected(
+    fence: Option<ActionFence>,
+    operation_id: String,
+    code: &'static str,
+    category: &'static str,
+    message: &str,
+) -> StorageMutationResponse {
+    StorageMutationResponse {
+        status: StorageMutationStatus::Rejected as i32,
+        state: EffectState::Unknown as i32,
+        fence,
+        operation_id,
+        effect_id: String::new(),
+        etag: String::new(),
+        provider_metadata: String::new(),
+        error: Some(ErrorDetail {
+            code: code.to_string(),
+            category: category.to_string(),
+            message: message.to_string(),
+        }),
+    }
+}
+
+#[cfg(feature = "s3")]
+fn storage_failed(
+    fence: Option<ActionFence>,
+    operation_id: String,
+    code: &'static str,
+    category: &'static str,
+    message: &str,
+) -> StorageMutationResponse {
+    StorageMutationResponse {
+        status: StorageMutationStatus::Failed as i32,
+        state: EffectState::Unknown as i32,
+        fence,
+        operation_id,
+        effect_id: String::new(),
+        etag: String::new(),
+        provider_metadata: String::new(),
+        error: Some(ErrorDetail {
+            code: code.to_string(),
+            category: category.to_string(),
+            message: message.to_string(),
+        }),
+    }
+}
+
 #[tonic::async_trait]
 impl WorkerRpc for WorkerRpcService {
     async fn admit_command(
@@ -104,7 +265,8 @@ impl WorkerRpc for WorkerRpcService {
             Some(fence) => fence,
             None => return Ok(Response::new(rejected(AdmitError::EmptyActionId))),
         };
-        if let Err(error) = self.lock()?.admit(fence) {
+        let worker = self.lock().await;
+        if let Err(error) = worker.admit(fence) {
             return Ok(Response::new(rejected(error)));
         }
         if let Err(error) = validate_kind(input.kind) {
@@ -132,7 +294,8 @@ impl WorkerRpc for WorkerRpcService {
                 }));
             }
         };
-        match self.lock()?.query_effect(&fence) {
+        let worker = self.lock().await;
+        match worker.query_effect(&fence) {
             Ok(_) => Ok(Response::new(EffectResult {
                 fence: Some(fence),
                 state: EffectState::Unknown as i32,
@@ -157,16 +320,502 @@ impl WorkerRpc for WorkerRpcService {
             Some(fence) => fence,
             None => return Ok(Response::new(install_rejected("EMPTY_ACTION_ID"))),
         };
-        match self
-            .lock()?
-            .install_signed_epoch(fence, &input.canonical_request)
-        {
+        let mut worker = self.lock().await;
+        match worker.install_signed_epoch(fence, &input.canonical_request) {
             Ok(installed) => Ok(Response::new(InstallAuthoritativeEpochResponse {
                 status: AdmitStatus::Admitted as i32,
                 fence: Some(installed),
                 error: None,
             })),
             Err(error) => Ok(Response::new(install_rejected(error.code))),
+        }
+    }
+
+    async fn execute_storage_mutation(
+        &self,
+        request: Request<StorageMutationRequest>,
+    ) -> Result<Response<StorageMutationResponse>, Status> {
+        let auth_result = self.authenticator.authenticate(request.metadata());
+        let input = request.into_inner();
+        if let Err(auth_err) = auth_result {
+            return Ok(Response::new(StorageMutationResponse {
+                status: StorageMutationStatus::Rejected as i32,
+                state: EffectState::Unknown as i32,
+                fence: input.fence,
+                operation_id: input.operation_id,
+                effect_id: String::new(),
+                etag: String::new(),
+                provider_metadata: String::new(),
+                error: Some(ErrorDetail {
+                    code: auth_err.code().to_string(),
+                    category: "AUTHENTICATION".to_string(),
+                    message: "caller authentication rejected".to_string(),
+                }),
+            }));
+        }
+
+        let fence = match input.fence.as_ref() {
+            Some(fence) => fence,
+            None => {
+                return Ok(Response::new(storage_rejected(
+                    None,
+                    input.operation_id,
+                    AdmitError::EmptyActionId.code(),
+                    "FENCE",
+                    "missing fence",
+                )));
+            }
+        };
+
+        if let Err(error) = validate_fence(fence) {
+            return Ok(Response::new(storage_rejected(
+                Some(fence.clone()),
+                input.operation_id,
+                error.code(),
+                "FENCE",
+                "invalid fence",
+            )));
+        }
+
+        if input.operation_id.trim().is_empty() {
+            return Ok(Response::new(storage_rejected(
+                Some(fence.clone()),
+                input.operation_id,
+                "OPERATION_INVALID",
+                "OPERATION",
+                "empty operation_id",
+            )));
+        }
+
+        if input.mutation_type != "PUT_CHUNK" {
+            return Ok(Response::new(storage_rejected(
+                Some(fence.clone()),
+                input.operation_id,
+                "OPERATION_INVALID",
+                "OPERATION",
+                "unsupported mutation type",
+            )));
+        }
+
+        if input.payload.len() as u64 != input.expected_length {
+            return Ok(Response::new(storage_rejected(
+                Some(fence.clone()),
+                input.operation_id,
+                "PAYLOAD_LENGTH_MISMATCH",
+                "PAYLOAD",
+                "payload length does not match expected_length",
+            )));
+        }
+
+        #[cfg(feature = "s3")]
+        {
+            let digest_bytes = match crate::storage_digest(&input.payload_digest) {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    return Ok(Response::new(storage_rejected(
+                        Some(fence.clone()),
+                        input.operation_id,
+                        "DIGEST_MISMATCH",
+                        "DIGEST",
+                        "invalid payload digest format",
+                    )));
+                }
+            };
+
+            if <[u8; 32]>::from(sha2::Sha256::digest(&input.payload)) != digest_bytes {
+                return Ok(Response::new(storage_rejected(
+                    Some(fence.clone()),
+                    input.operation_id,
+                    "DIGEST_MISMATCH",
+                    "DIGEST",
+                    "payload sha256 does not match payload_digest",
+                )));
+            }
+
+            let condition = match input.precondition {
+                Some(pre) => match StorageConditionType::try_from(pre.condition_type) {
+                    Ok(StorageConditionType::CreateOnly) => {
+                        deepseek_storage::s3::ConditionalWrite::Create
+                    }
+                    Ok(StorageConditionType::IfMatch) => {
+                        if pre.expected_etag.trim().is_empty() {
+                            return Ok(Response::new(storage_rejected(
+                                Some(fence.clone()),
+                                input.operation_id,
+                                "PRECONDITION_INVALID",
+                                "PRECONDITION",
+                                "expected_etag required for IF_MATCH",
+                            )));
+                        }
+                        deepseek_storage::s3::ConditionalWrite::Match(pre.expected_etag)
+                    }
+                    _ => {
+                        return Ok(Response::new(storage_rejected(
+                            Some(fence.clone()),
+                            input.operation_id,
+                            "PRECONDITION_INVALID",
+                            "PRECONDITION",
+                            "unsupported condition type",
+                        )));
+                    }
+                },
+                None => {
+                    return Ok(Response::new(storage_rejected(
+                        Some(fence.clone()),
+                        input.operation_id,
+                        "PRECONDITION_INVALID",
+                        "PRECONDITION",
+                        "precondition is required",
+                    )));
+                }
+            };
+
+            let transport = match &self.transport {
+                Some(t) => t.clone(),
+                None => {
+                    return Ok(Response::new(storage_failed(
+                        Some(fence.clone()),
+                        input.operation_id,
+                        "STORAGE_TRANSPORT_UNAVAILABLE",
+                        "STORAGE",
+                        "storage transport not configured",
+                    )));
+                }
+            };
+
+            let expected_target = crate::storage_digest_hex(&transport.target_identity());
+            if !input.target_identity.is_empty() && input.target_identity != expected_target {
+                return Ok(Response::new(storage_rejected(
+                    Some(fence.clone()),
+                    input.operation_id,
+                    "TARGET_MISMATCH",
+                    "STORAGE",
+                    "storage target identity mismatch",
+                )));
+            }
+
+            let bytes = bytes::Bytes::from(input.payload);
+            let mut worker = self.lock().await;
+            match worker
+                .execute_storage_put(
+                    &transport,
+                    &input.object_key,
+                    bytes,
+                    digest_bytes,
+                    fence,
+                    condition,
+                )
+                .await
+            {
+                Ok(observation) => Ok(Response::new(StorageMutationResponse {
+                    status: StorageMutationStatus::Confirmed as i32,
+                    state: EffectState::Applied as i32,
+                    fence: Some(fence.clone()),
+                    operation_id: input.operation_id,
+                    effect_id: format!("{}:{}", fence.action_id, fence.execution_epoch),
+                    etag: observation.etag.clone(),
+                    provider_metadata: serde_json::json!({
+                        "etag": observation.etag,
+                        "size": observation.length,
+                        "version": observation.version,
+                    })
+                    .to_string(),
+                    error: None,
+                })),
+                Err(crate::WorkerStorageError::PreconditionRejected) => {
+                    Ok(Response::new(storage_rejected(
+                        Some(fence.clone()),
+                        input.operation_id,
+                        "PRECONDITION_REJECTED",
+                        "STORAGE",
+                        "storage precondition rejected by provider",
+                    )))
+                }
+                Err(crate::WorkerStorageError::ReplayRejected) => {
+                    Ok(Response::new(storage_rejected(
+                        Some(fence.clone()),
+                        input.operation_id,
+                        "REPLAY_REJECTED",
+                        "STORAGE",
+                        "storage mutation replay rejected",
+                    )))
+                }
+                Err(crate::WorkerStorageError::UnknownEffectRetryBlocked) => {
+                    Ok(Response::new(StorageMutationResponse {
+                        status: StorageMutationStatus::EffectUnknown as i32,
+                        state: EffectState::Unknown as i32,
+                        fence: Some(fence.clone()),
+                        operation_id: input.operation_id,
+                        effect_id: String::new(),
+                        etag: String::new(),
+                        provider_metadata: String::new(),
+                        error: Some(ErrorDetail {
+                            code: "UNKNOWN_EFFECT_RETRY_BLOCKED".to_string(),
+                            category: "STORAGE".to_string(),
+                            message: "mutation in uncertain state, retry blocked".to_string(),
+                        }),
+                    }))
+                }
+                Err(crate::WorkerStorageError::FenceMismatch) => {
+                    Ok(Response::new(storage_rejected(
+                        Some(fence.clone()),
+                        input.operation_id,
+                        "FENCE_MISMATCH",
+                        "FENCE",
+                        "fence mismatch",
+                    )))
+                }
+                Err(crate::WorkerStorageError::StaleEpoch) => {
+                    Ok(Response::new(storage_rejected(
+                        Some(fence.clone()),
+                        input.operation_id,
+                        "STALE_EXECUTION_EPOCH",
+                        "FENCE",
+                        "stale execution epoch",
+                    )))
+                }
+                Err(crate::WorkerStorageError::StaleFencingToken) => {
+                    Ok(Response::new(storage_rejected(
+                        Some(fence.clone()),
+                        input.operation_id,
+                        "STALE_FENCING_TOKEN",
+                        "AUTHORITY",
+                        "stale fencing token",
+                    )))
+                }
+                Err(crate::WorkerStorageError::TargetMismatch) => {
+                    Ok(Response::new(storage_rejected(
+                        Some(fence.clone()),
+                        input.operation_id,
+                        "TARGET_MISMATCH",
+                        "STORAGE",
+                        "target mismatch",
+                    )))
+                }
+                Err(crate::WorkerStorageError::DigestMismatch) => {
+                    Ok(Response::new(storage_rejected(
+                        Some(fence.clone()),
+                        input.operation_id,
+                        "DIGEST_MISMATCH",
+                        "STORAGE",
+                        "digest mismatch",
+                    )))
+                }
+                Err(crate::WorkerStorageError::WorkerWithoutAuthority) => {
+                    Ok(Response::new(storage_rejected(
+                        Some(fence.clone()),
+                        input.operation_id,
+                        "WORKER_WITHOUT_AUTHORITY",
+                        "AUTHORITY",
+                        "worker authority not configured",
+                    )))
+                }
+                Err(crate::WorkerStorageError::Transport(deepseek_storage::s3::S3Error::EffectUnknown)) => {
+                    Ok(Response::new(StorageMutationResponse {
+                        status: StorageMutationStatus::EffectUnknown as i32,
+                        state: EffectState::Unknown as i32,
+                        fence: Some(fence.clone()),
+                        operation_id: input.operation_id,
+                        effect_id: String::new(),
+                        etag: String::new(),
+                        provider_metadata: String::new(),
+                        error: Some(ErrorDetail {
+                            code: "EFFECT_UNKNOWN".to_string(),
+                            category: "STORAGE".to_string(),
+                            message: "mutation effect unknown".to_string(),
+                        }),
+                    }))
+                }
+                Err(crate::WorkerStorageError::Transport(err)) => {
+                    Ok(Response::new(storage_failed(
+                        Some(fence.clone()),
+                        input.operation_id,
+                        "STORAGE_TRANSPORT_ERROR",
+                        "STORAGE",
+                        &err.to_string(),
+                    )))
+                }
+            }
+        }
+
+        #[cfg(not(feature = "s3"))]
+        {
+            Ok(Response::new(storage_rejected(
+                Some(fence.clone()),
+                input.operation_id,
+                "STORAGE_FEATURE_DISABLED",
+                "STORAGE",
+                "worker compiled without s3 feature",
+            )))
+        }
+    }
+
+    async fn query_storage_effect(
+        &self,
+        request: Request<QueryStorageEffectRequest>,
+    ) -> Result<Response<StorageMutationResponse>, Status> {
+        let auth_result = self.authenticator.authenticate(request.metadata());
+        let input = request.into_inner();
+        if let Err(auth_err) = auth_result {
+            return Ok(Response::new(StorageMutationResponse {
+                status: StorageMutationStatus::Rejected as i32,
+                state: EffectState::Unknown as i32,
+                fence: input.fence,
+                operation_id: input.operation_id,
+                effect_id: String::new(),
+                etag: String::new(),
+                provider_metadata: String::new(),
+                error: Some(ErrorDetail {
+                    code: auth_err.code().to_string(),
+                    category: "AUTHENTICATION".to_string(),
+                    message: "caller authentication rejected".to_string(),
+                }),
+            }));
+        }
+
+        let fence = match input.fence.as_ref() {
+            Some(fence) => fence,
+            None => {
+                return Ok(Response::new(storage_rejected(
+                    None,
+                    input.operation_id,
+                    AdmitError::EmptyActionId.code(),
+                    "FENCE",
+                    "missing fence",
+                )));
+            }
+        };
+
+        if let Err(error) = validate_fence(fence) {
+            return Ok(Response::new(storage_rejected(
+                Some(fence.clone()),
+                input.operation_id,
+                error.code(),
+                "FENCE",
+                "invalid fence",
+            )));
+        }
+
+        #[cfg(feature = "s3")]
+        {
+            let mut worker = self.lock().await;
+            let record = match worker.query_storage_effect(fence) {
+                Ok(Some(rec)) => rec,
+                Ok(None) => {
+                    return Ok(Response::new(StorageMutationResponse {
+                        status: StorageMutationStatus::EffectUnknown as i32,
+                        state: EffectState::Unknown as i32,
+                        fence: Some(fence.clone()),
+                        operation_id: input.operation_id,
+                        effect_id: String::new(),
+                        etag: String::new(),
+                        provider_metadata: String::new(),
+                        error: Some(ErrorDetail {
+                            code: "EFFECT_UNKNOWN".to_string(),
+                            category: "STORAGE".to_string(),
+                            message: "no recorded effect for fence".to_string(),
+                        }),
+                    }));
+                }
+                Err(crate::WorkerStorageError::WorkerWithoutAuthority) => {
+                    return Ok(Response::new(storage_rejected(
+                        Some(fence.clone()),
+                        input.operation_id,
+                        "WORKER_WITHOUT_AUTHORITY",
+                        "AUTHORITY",
+                        "worker authority not configured",
+                    )));
+                }
+                Err(crate::WorkerStorageError::FenceMismatch) => {
+                    return Ok(Response::new(storage_rejected(
+                        Some(fence.clone()),
+                        input.operation_id,
+                        "FENCE_MISMATCH",
+                        "FENCE",
+                        "fence mismatch",
+                    )));
+                }
+                Err(err) => {
+                    return Ok(Response::new(storage_failed(
+                        Some(fence.clone()),
+                        input.operation_id,
+                        "STORAGE_QUERY_ERROR",
+                        "STORAGE",
+                        &err.to_string(),
+                    )));
+                }
+            };
+
+            let record = if matches!(
+                record.state,
+                crate::StorageEffectState::EffectUnknown | crate::StorageEffectState::Dispatching
+            ) {
+                if let Some(transport) = &self.transport {
+                    let transport = transport.clone();
+                    match worker.reconcile_storage_mutation(&transport, fence).await {
+                        Ok(reconciled) => reconciled,
+                        Err(_) => match worker.query_storage_effect(fence) {
+                            Ok(Some(rec)) => rec,
+                            _ => record,
+                        },
+                    }
+                } else {
+                    record
+                }
+            } else {
+                record
+            };
+
+            let (status, state) = match record.state {
+                crate::StorageEffectState::Confirmed => {
+                    (StorageMutationStatus::Confirmed, EffectState::Applied)
+                }
+                crate::StorageEffectState::EffectUnknown => {
+                    (StorageMutationStatus::EffectUnknown, EffectState::Unknown)
+                }
+                crate::StorageEffectState::Reconciling => {
+                    (StorageMutationStatus::Reconciling, EffectState::Unknown)
+                }
+                crate::StorageEffectState::Rejected => {
+                    (StorageMutationStatus::Rejected, EffectState::NotApplied)
+                }
+                crate::StorageEffectState::Failed => {
+                    (StorageMutationStatus::Failed, EffectState::NotApplied)
+                }
+                crate::StorageEffectState::Reserved | crate::StorageEffectState::Dispatching => {
+                    (StorageMutationStatus::EffectUnknown, EffectState::Unknown)
+                }
+            };
+
+            Ok(Response::new(StorageMutationResponse {
+                status: status as i32,
+                state: state as i32,
+                fence: Some(fence.clone()),
+                operation_id: input.operation_id,
+                effect_id: format!("{}:{}", fence.action_id, fence.execution_epoch),
+                etag: record.etag.unwrap_or_default(),
+                provider_metadata: record.provider_metadata.unwrap_or_default(),
+                error: if status == StorageMutationStatus::Confirmed {
+                    None
+                } else {
+                    Some(ErrorDetail {
+                        code: format!("{:?}", record.state),
+                        category: "STORAGE".to_string(),
+                        message: "storage effect state".to_string(),
+                    })
+                },
+            }))
+        }
+
+        #[cfg(not(feature = "s3"))]
+        {
+            Ok(Response::new(storage_rejected(
+                Some(fence.clone()),
+                input.operation_id,
+                "STORAGE_FEATURE_DISABLED",
+                "STORAGE",
+                "worker compiled without s3 feature",
+            )))
         }
     }
 }

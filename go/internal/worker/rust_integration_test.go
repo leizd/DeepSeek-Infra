@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -96,6 +97,64 @@ func TestRustWorkerInstallsEpochFromSignedAuthorityRequest(t *testing.T) {
 	stale, staleFence := signLiveAuthorityRequest(t, "integration-act-auth-1", 1)
 	if err := client.InstallAuthoritativeEpoch(ctx, staleFence, stale); err != internalprotocol.ErrStaleEpoch {
 		t.Fatalf("stale epoch: %v", err)
+	}
+}
+
+func TestRustWorkerStorageMutationFailsClosedWithoutAuth(t *testing.T) {
+	target := os.Getenv("DEEPSEEK_TEST_RUST_WORKER_TARGET")
+	if target == "" {
+		t.Fatal("DEEPSEEK_TEST_RUST_WORKER_TARGET is required for integration tests")
+	}
+	client, err := DialPlaintextLoopback(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	fence := &commonv1.ActionFence{ActionId: "integration-storage-1", ExecutionEpoch: 1}
+	req := &actionv1.StorageMutationRequest{
+		Fence:       fence,
+		OperationId: "op-storage-1",
+	}
+
+	_, err = client.ExecuteStorageMutation(ctx, req, "")
+	if !errors.Is(err, internalprotocol.ErrServiceAuthenticationUnavailable) {
+		t.Fatalf("unauthenticated ExecuteStorageMutation must fail closed: %v", err)
+	}
+
+	_, err = client.QueryStorageEffect(ctx, fence, "op-storage-1", "")
+	if !errors.Is(err, internalprotocol.ErrServiceAuthenticationUnavailable) {
+		t.Fatalf("unauthenticated QueryStorageEffect must fail closed: %v", err)
+	}
+}
+
+func TestRustWorkerStorageMutationWithBearerToken(t *testing.T) {
+	token := os.Getenv("DEEPSEEK_TEST_RUST_WORKER_BEARER_TOKEN")
+	if token == "" {
+		t.Skip("DEEPSEEK_TEST_RUST_WORKER_BEARER_TOKEN required for authenticated storage mutation test")
+	}
+	target := os.Getenv("DEEPSEEK_TEST_RUST_WORKER_TARGET")
+	if target == "" {
+		t.Fatal("DEEPSEEK_TEST_RUST_WORKER_TARGET is required for integration tests")
+	}
+	client, err := DialPlaintextLoopback(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	fence := &commonv1.ActionFence{ActionId: "integration-storage-auth-1", ExecutionEpoch: 1}
+	req := &actionv1.StorageMutationRequest{
+		Fence:       fence,
+		OperationId: "op-storage-auth-1",
+	}
+	_, err = client.ExecuteStorageMutation(ctx, req, "invalid-token-value")
+	if !errors.Is(err, internalprotocol.ErrAuthenticationInvalid) {
+		t.Fatalf("invalid bearer token must be rejected: %v", err)
 	}
 }
 

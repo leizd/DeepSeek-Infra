@@ -13,6 +13,7 @@ import (
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 var (
@@ -162,6 +163,123 @@ func (client *Client) QueryEffect(ctx context.Context, fence *commonv1.ActionFen
 	return commonv1.EffectState_EFFECT_STATE_UNKNOWN, rejection
 }
 
+func (client *Client) ExecuteStorageMutation(ctx context.Context, request *actionv1.StorageMutationRequest, bearerToken string) (*actionv1.StorageMutationResponse, error) {
+	if client == nil || client.rpc == nil {
+		return nil, ErrInvalidWorkerResponse
+	}
+	if request == nil || request.Fence == nil {
+		return nil, internalprotocol.ErrEmptyActionID
+	}
+	if err := internalprotocol.ValidateFence(request.Fence); err != nil {
+		return nil, err
+	}
+	if request.OperationId == "" {
+		return nil, store.ErrAuthorityRequestOperationInvalid
+	}
+
+	callCtx := ctx
+	if bearerToken != "" {
+		callCtx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+bearerToken)
+	}
+
+	response, err := client.rpc.ExecuteStorageMutation(callCtx, request)
+	if err != nil {
+		return nil, fmt.Errorf("worker storage mutation transport: %w", err)
+	}
+	if response == nil {
+		return nil, ErrInvalidWorkerResponse
+	}
+
+	if response.Fence != nil {
+		if response.Fence.ActionId != request.Fence.ActionId || response.Fence.ExecutionEpoch != request.Fence.ExecutionEpoch {
+			return nil, ErrInvalidWorkerResponse
+		}
+	}
+	if response.OperationId != "" && response.OperationId != request.OperationId {
+		return nil, ErrInvalidWorkerResponse
+	}
+
+	switch response.Status {
+	case actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED:
+		if response.Error != nil || response.State != commonv1.EffectState_EFFECT_STATE_APPLIED {
+			return nil, ErrInvalidWorkerResponse
+		}
+		return response, nil
+	case actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_EFFECT_UNKNOWN:
+		return response, internalprotocol.ErrUnknownEffect
+	case actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED:
+		if response.Error == nil {
+			return nil, ErrInvalidWorkerResponse
+		}
+		return response, knownRejection(response.Error.Code)
+	case actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_FAILED:
+		if response.Error == nil {
+			return nil, ErrInvalidWorkerResponse
+		}
+		return response, knownRejection(response.Error.Code)
+	default:
+		return nil, ErrInvalidWorkerResponse
+	}
+}
+
+func (client *Client) QueryStorageEffect(ctx context.Context, fence *commonv1.ActionFence, operationID string, bearerToken string) (*actionv1.StorageMutationResponse, error) {
+	if client == nil || client.rpc == nil {
+		return nil, ErrInvalidWorkerResponse
+	}
+	if fence == nil {
+		return nil, internalprotocol.ErrEmptyActionID
+	}
+	if err := internalprotocol.ValidateFence(fence); err != nil {
+		return nil, err
+	}
+
+	callCtx := ctx
+	if bearerToken != "" {
+		callCtx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+bearerToken)
+	}
+
+	response, err := client.rpc.QueryStorageEffect(callCtx, &actionv1.QueryStorageEffectRequest{
+		Fence:       fence,
+		OperationId: operationID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("worker storage query transport: %w", err)
+	}
+	if response == nil {
+		return nil, ErrInvalidWorkerResponse
+	}
+
+	if response.Fence != nil {
+		if response.Fence.ActionId != fence.ActionId || response.Fence.ExecutionEpoch != fence.ExecutionEpoch {
+			return nil, ErrInvalidWorkerResponse
+		}
+	}
+
+	switch response.Status {
+	case actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED:
+		if response.Error != nil || response.State != commonv1.EffectState_EFFECT_STATE_APPLIED {
+			return nil, ErrInvalidWorkerResponse
+		}
+		return response, nil
+	case actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_EFFECT_UNKNOWN:
+		return response, internalprotocol.ErrUnknownEffect
+	case actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_RECONCILING:
+		return response, internalprotocol.ErrUnknownEffect
+	case actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED:
+		if response.Error == nil {
+			return nil, ErrInvalidWorkerResponse
+		}
+		return response, knownRejection(response.Error.Code)
+	case actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_FAILED:
+		if response.Error == nil {
+			return nil, ErrInvalidWorkerResponse
+		}
+		return response, knownRejection(response.Error.Code)
+	default:
+		return nil, ErrInvalidWorkerResponse
+	}
+}
+
 func ValidatePlaintextTarget(target string) error {
 	host, port, err := net.SplitHostPort(target)
 	if err != nil || host == "" || port == "" {
@@ -198,6 +316,30 @@ func knownRejection(code string) error {
 		return internalprotocol.ErrFederationNotAuthoritative
 	case internalprotocol.ErrProofNotAuthoritative.Error():
 		return internalprotocol.ErrProofNotAuthoritative
+	case internalprotocol.ErrServiceAuthenticationUnavailable.Error():
+		return internalprotocol.ErrServiceAuthenticationUnavailable
+	case internalprotocol.ErrAuthenticationMissing.Error():
+		return internalprotocol.ErrAuthenticationMissing
+	case internalprotocol.ErrAuthenticationInvalid.Error():
+		return internalprotocol.ErrAuthenticationInvalid
+	case internalprotocol.ErrStoragePreconditionRejected.Error():
+		return internalprotocol.ErrStoragePreconditionRejected
+	case internalprotocol.ErrStorageReplayRejected.Error():
+		return internalprotocol.ErrStorageReplayRejected
+	case internalprotocol.ErrStorageUnknownEffectRetryBlocked.Error():
+		return internalprotocol.ErrStorageUnknownEffectRetryBlocked
+	case internalprotocol.ErrStorageTargetMismatch.Error():
+		return internalprotocol.ErrStorageTargetMismatch
+	case internalprotocol.ErrStorageDigestMismatch.Error():
+		return internalprotocol.ErrStorageDigestMismatch
+	case internalprotocol.ErrStorageWorkerWithoutAuthority.Error():
+		return internalprotocol.ErrStorageWorkerWithoutAuthority
+	case internalprotocol.ErrStorageTransportUnavailable.Error():
+		return internalprotocol.ErrStorageTransportUnavailable
+	case internalprotocol.ErrStorageTransportError.Error():
+		return internalprotocol.ErrStorageTransportError
+	case store.ErrAuthorityRequestOperationInvalid.Error():
+		return store.ErrAuthorityRequestOperationInvalid
 	default:
 		return ErrInvalidWorkerResponse
 	}
