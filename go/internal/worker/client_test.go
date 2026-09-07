@@ -429,11 +429,12 @@ func TestExecuteStorageMutationConfirmed(t *testing.T) {
 	fence := &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 2}
 	rpc := &fakeWorkerRPC{
 		storageResponse: &actionv1.StorageMutationResponse{
-			Status:   actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
-			State:    commonv1.EffectState_EFFECT_STATE_APPLIED,
-			Fence:    fence,
-			Etag:     "\"etag-1\"",
-			EffectId: "act-1:2",
+			Status:      actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
+			OperationId: "op-1",
+			State:       commonv1.EffectState_EFFECT_STATE_APPLIED,
+			Fence:       fence,
+			Etag:        "\"etag-1\"",
+			EffectId:    "act-1:2",
 		},
 	}
 	client := New(rpc)
@@ -469,9 +470,10 @@ func TestExecuteStorageMutationRejectionAndFailures(t *testing.T) {
 	for code, want := range cases {
 		rpc := &fakeWorkerRPC{
 			storageResponse: &actionv1.StorageMutationResponse{
-				Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED,
-				Fence:  fence,
-				Error:  &commonv1.ErrorDetail{Code: code},
+				Status:      actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED,
+				OperationId: "op-1",
+				Fence:       fence,
+				Error:       &commonv1.ErrorDetail{Code: code},
 			},
 		}
 		client := New(rpc)
@@ -491,10 +493,11 @@ func TestQueryStorageEffectStates(t *testing.T) {
 	// 1. Confirmed
 	rpc := &fakeWorkerRPC{
 		storageQueryResp: &actionv1.StorageMutationResponse{
-			Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
-			State:  commonv1.EffectState_EFFECT_STATE_APPLIED,
-			Fence:  fence,
-			Etag:   "\"etag-1\"",
+			Status:      actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
+			OperationId: "op-1",
+			State:       commonv1.EffectState_EFFECT_STATE_APPLIED,
+			Fence:       fence,
+			Etag:        "\"etag-1\"",
 		},
 	}
 	client := New(rpc)
@@ -505,9 +508,10 @@ func TestQueryStorageEffectStates(t *testing.T) {
 
 	// 2. EffectUnknown
 	rpc.storageQueryResp = &actionv1.StorageMutationResponse{
-		Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_EFFECT_UNKNOWN,
-		State:  commonv1.EffectState_EFFECT_STATE_UNKNOWN,
-		Fence:  fence,
+		Status:      actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_EFFECT_UNKNOWN,
+		OperationId: "op-1",
+		State:       commonv1.EffectState_EFFECT_STATE_UNKNOWN,
+		Fence:       fence,
 	}
 	_, err = client.QueryStorageEffect(context.Background(), fence, "op-1", "tok")
 	if !errors.Is(err, internalprotocol.ErrUnknownEffect) {
@@ -516,9 +520,10 @@ func TestQueryStorageEffectStates(t *testing.T) {
 
 	// 3. Reconciling
 	rpc.storageQueryResp = &actionv1.StorageMutationResponse{
-		Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_RECONCILING,
-		State:  commonv1.EffectState_EFFECT_STATE_UNKNOWN,
-		Fence:  fence,
+		Status:      actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_RECONCILING,
+		OperationId: "op-1",
+		State:       commonv1.EffectState_EFFECT_STATE_UNKNOWN,
+		Fence:       fence,
 	}
 	_, err = client.QueryStorageEffect(context.Background(), fence, "op-1", "tok")
 	if !errors.Is(err, internalprotocol.ErrUnknownEffect) {
@@ -646,9 +651,10 @@ func TestQueryStorageEffectMalformedResponses(t *testing.T) {
 
 	// 4. Response fence mismatch: ActionId
 	rpc.storageQueryResp = &actionv1.StorageMutationResponse{
-		Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
-		State:  commonv1.EffectState_EFFECT_STATE_APPLIED,
-		Fence:  &commonv1.ActionFence{ActionId: "other", ExecutionEpoch: 2},
+		Status:      actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
+		OperationId: "op-1",
+		State:       commonv1.EffectState_EFFECT_STATE_APPLIED,
+		Fence:       &commonv1.ActionFence{ActionId: "other", ExecutionEpoch: 2},
 	}
 	if _, err := client.QueryStorageEffect(context.Background(), fence, "op-1", ""); err != ErrInvalidWorkerResponse {
 		t.Fatalf("fence action mismatch: %v", err)

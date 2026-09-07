@@ -190,12 +190,8 @@ func (client *Client) ExecuteStorageMutation(ctx context.Context, request *actio
 		return nil, ErrInvalidWorkerResponse
 	}
 
-	if response.Fence != nil {
-		if response.Fence.ActionId != request.Fence.ActionId || response.Fence.ExecutionEpoch != request.Fence.ExecutionEpoch {
-			return nil, ErrInvalidWorkerResponse
-		}
-	}
-	if response.OperationId != "" && response.OperationId != request.OperationId {
+	if response.Fence == nil || response.Fence.ActionId != request.Fence.ActionId ||
+		response.Fence.ExecutionEpoch != request.Fence.ExecutionEpoch || response.OperationId != request.OperationId {
 		return nil, ErrInvalidWorkerResponse
 	}
 
@@ -232,6 +228,9 @@ func (client *Client) QueryStorageEffect(ctx context.Context, fence *commonv1.Ac
 	if err := internalprotocol.ValidateFence(fence); err != nil {
 		return nil, err
 	}
+	if operationID == "" {
+		return nil, store.ErrAuthorityRequestOperationInvalid
+	}
 
 	callCtx := ctx
 	if bearerToken != "" {
@@ -249,10 +248,9 @@ func (client *Client) QueryStorageEffect(ctx context.Context, fence *commonv1.Ac
 		return nil, ErrInvalidWorkerResponse
 	}
 
-	if response.Fence != nil {
-		if response.Fence.ActionId != fence.ActionId || response.Fence.ExecutionEpoch != fence.ExecutionEpoch {
-			return nil, ErrInvalidWorkerResponse
-		}
+	if response.Fence == nil || response.Fence.ActionId != fence.ActionId ||
+		response.Fence.ExecutionEpoch != fence.ExecutionEpoch || response.OperationId != operationID {
+		return nil, ErrInvalidWorkerResponse
 	}
 
 	switch response.Status {
@@ -269,10 +267,16 @@ func (client *Client) QueryStorageEffect(ctx context.Context, fence *commonv1.Ac
 		if response.Error == nil {
 			return nil, ErrInvalidWorkerResponse
 		}
+		if response.State == commonv1.EffectState_EFFECT_STATE_NOT_APPLIED && response.Error.Code == "Rejected" {
+			return response, nil
+		}
 		return response, knownRejection(response.Error.Code)
 	case actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_FAILED:
 		if response.Error == nil {
 			return nil, ErrInvalidWorkerResponse
+		}
+		if response.State == commonv1.EffectState_EFFECT_STATE_NOT_APPLIED && response.Error.Code == "Failed" {
+			return response, nil
 		}
 		return response, knownRejection(response.Error.Code)
 	default:

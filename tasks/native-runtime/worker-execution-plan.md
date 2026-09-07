@@ -123,7 +123,7 @@ The original `tasks/plan.md` and `tasks/todo.md` recovery plans remain untouched
 
 3. **Go Control Plane & Client (`go/internal/action`, `go/internal/worker`)**:
    - `worker.Client`: `ExecuteStorageMutation` and `QueryStorageEffect` with outgoing metadata auth, fence validation, operation ID checking, and sentinel error mapping.
-   - `action.Coordinator`: Enforces fail-closed production cutover (`ErrCutoverNotAuthorized`), validates Go writer lease before claim and after dispatch, manages transition lifecycle (`PENDING -> CLAIMED -> EXECUTING -> SUCCEEDED / FAILED_BEFORE_EFFECT / EFFECT_UNKNOWN`), and reconciles uncertain effects (with `isQueryFailure` guarding unauthenticated or transport query errors from premature `FAILED_BEFORE_EFFECT` settlement).
+   - `action.Coordinator`: Enforces fail-closed production cutover (`ErrCutoverNotAuthorized`), validates Go writer lease before claim and after dispatch, manages transition lifecycle (`PENDING -> CLAIMED -> EXECUTING -> SUCCEEDED / FAILED_BEFORE_EFFECT / EFFECT_UNKNOWN`), and reconciles uncertain effects. Query failures do not establish a no-effect outcome; see the safety corrections below.
    - Test coverage: `internal/action` at 99.5%, `internal/worker` at 97.9%, overall Go module at 95.5% (meeting the 95.0% CI gate).
 
 4. **Multi-Process Integration Verification**:
@@ -131,4 +131,39 @@ The original `tasks/plan.md` and `tasks/todo.md` recovery plans remain untouched
    - Wired integration test invocation into `.github/workflows/ci.yml` `native-go` job.
    - All 13 real MinIO provider tests in `python scripts/run_native_s3_e2e.py` pass without skips.
 
+## 2026-09-07 dispatch and result-settlement corrections
 
+- Regressions reproduced missing fence/operation acceptance, redispatch of an
+  `EXECUTING` action, and erroneous terminal settlement after query failures.
+  Additional RED cases reproduced replay rejection being classified as no effect
+  and the reconciliation entry bypassing the explicit cutover-denial option.
+- Both storage RPC client methods now require an exact nonempty operation ID and
+  matching action/epoch fence in responses. Confirmed coordinator results must
+  match that identity and carry `APPLIED`. The production cutover gate applies to
+  reconciliation as well as execution.
+- `EXECUTING` is a durable dispatch claim: a retry must reconcile, not issue another
+  mutation RPC. A real Go SQLite test exercises two coordinators against the same
+  claim while the first worker call is outstanding.
+- A query error (including a new, unrecognized code) is not proof of no remote
+  effect. Terminal no-effect settlement requires bound `NOT_APPLIED` and a known
+  recorded terminal result. `REPLAY_REJECTED` during execution stays uncertain,
+  since Rust also returns it for an already-confirmed effect.
+- Local Go 1.27.1 formatting, `go vet ./...`, `go test ./... -count=1`, and the
+  unchanged 95.0% coverage gate pass (95.6%). These are control/protocol regressions,
+  not provider or production takeover evidence.
+- Rebuilt the actual Rust worker with Rust 1.85 GNU and ran four real Go-to-Rust
+  integration cases: missing authority, unconfigured signed install, unauthenticated
+  storage mutation, and coordinator rejection/reconciliation against the real
+  process. All passed; no provider was contacted and no production auth was enabled.
+
+### Remaining durable operation-binding gap
+
+Rust's current storage journal is keyed by action/epoch and records placement,
+condition and bytes, but does not persist the RPC `operation_id`. Its query method
+currently echoes the caller's operation ID. Client response checks alone cannot
+prove association with the original dispatched operation. Before production use,
+bind that identity atomically with the Rust intent, reject substitution and unbound
+legacy rows, return the persisted identity, and preserve it through real restart.
+Go must also persist the exact dispatch intent for recovery. This does not replace
+operation-specific signed authorization, service authentication or renewable action
+and resource leases; all remain required by the full ownership migration.

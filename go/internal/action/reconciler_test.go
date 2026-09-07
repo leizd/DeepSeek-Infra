@@ -89,6 +89,7 @@ func TestExecuteActionNormalConfirmed(t *testing.T) {
 			Status:      actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
 			State:       commonv1.EffectState_EFFECT_STATE_APPLIED,
 			Etag:        "\"etag-123\"",
+			Fence:       &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 1},
 			EffectId:    "act-1:1",
 			OperationId: "op-1",
 		},
@@ -297,6 +298,7 @@ func TestReconcileStorageActionConfirmed(t *testing.T) {
 			Status:      actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
 			State:       commonv1.EffectState_EFFECT_STATE_APPLIED,
 			Etag:        "\"etag-reconciled\"",
+			Fence:       &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 1},
 			EffectId:    "act-1:1",
 			OperationId: "op-1",
 		},
@@ -329,9 +331,11 @@ func TestReconcileStorageActionRejected(t *testing.T) {
 
 	worker := &fakeWorkerClient{
 		queryResp: &actionv1.StorageMutationResponse{
-			Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED,
-			State:  commonv1.EffectState_EFFECT_STATE_NOT_APPLIED,
-			Error:  &commonv1.ErrorDetail{Code: "PRECONDITION_REJECTED"},
+			Status:      actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED,
+			State:       commonv1.EffectState_EFFECT_STATE_NOT_APPLIED,
+			Fence:       &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 1},
+			OperationId: "op-1",
+			Error:       &commonv1.ErrorDetail{Code: "PRECONDITION_REJECTED"},
 		},
 	}
 
@@ -740,7 +744,7 @@ func TestReconcileStorageActionMoreEdgeCases(t *testing.T) {
 		t.Fatalf("expected ErrActionExecutionStale post-query, got %v", err)
 	}
 
-	// 8. Reconcile query response FAILED status
+	// 8. A query/storage failure is not proof that the prior effect was absent.
 	st.records["action:act-1"] = store.Record{
 		Domain:         "action",
 		ID:             "act-1",
@@ -755,12 +759,12 @@ func TestReconcileStorageActionMoreEdgeCases(t *testing.T) {
 	}
 	coord = NewCoordinator(st, workerFailed, WithNow(func() int64 { return 500 }))
 	_, err = coord.ReconcileStorageAction(context.Background(), "act-1", "op-1")
-	if err != nil {
-		t.Fatalf("unexpected error on FAILED status reconcile: %v", err)
+	if !errors.Is(err, ErrStorageMutationUncertain) {
+		t.Fatalf("query failure must remain uncertain: %v", err)
 	}
 	rec, _, _ := st.Get("action", "act-1")
-	if rec.State != "FAILED_BEFORE_EFFECT" {
-		t.Fatalf("expected FAILED_BEFORE_EFFECT, got %s", rec.State)
+	if rec.State != "EFFECT_UNKNOWN" {
+		t.Fatalf("expected EFFECT_UNKNOWN, got %s", rec.State)
 	}
 
 	// 9. Reconcile query response CONFIRMED but put fails
@@ -772,7 +776,10 @@ func TestReconcileStorageActionMoreEdgeCases(t *testing.T) {
 	}
 	workerConfirmed := &fakeWorkerClient{
 		queryResp: &actionv1.StorageMutationResponse{
-			Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
+			Status:      actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
+			State:       commonv1.EffectState_EFFECT_STATE_APPLIED,
+			Fence:       &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 1},
+			OperationId: "op-1",
 		},
 		onQuery: func() {
 			st.putErr = errors.New("reconcile confirmed put error")
@@ -794,7 +801,11 @@ func TestReconcileStorageActionMoreEdgeCases(t *testing.T) {
 	}
 	workerRejected := &fakeWorkerClient{
 		queryResp: &actionv1.StorageMutationResponse{
-			Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED,
+			Status:      actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED,
+			State:       commonv1.EffectState_EFFECT_STATE_NOT_APPLIED,
+			Fence:       &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 1},
+			OperationId: "op-1",
+			Error:       &commonv1.ErrorDetail{Code: "Rejected"},
 		},
 		onQuery: func() {
 			st.putErr = errors.New("reconcile rejected put error")
@@ -839,7 +850,6 @@ func TestDefiniteFailureBeforeEffect(t *testing.T) {
 		internalprotocol.ErrStorageWorkerWithoutAuthority,
 		internalprotocol.ErrStorageTargetMismatch,
 		internalprotocol.ErrStorageDigestMismatch,
-		internalprotocol.ErrStorageReplayRejected,
 	}
 
 	for _, err := range definiteErrors {

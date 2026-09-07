@@ -112,8 +112,9 @@ func (c *Coordinator) ExecuteStorageAction(ctx context.Context, actionID string,
 		return nil, internalprotocol.ErrFenceMismatch
 	}
 
-	// 5. If action is already in EFFECT_UNKNOWN, do not re-dispatch!
-	if record.State == "EFFECT_UNKNOWN" {
+	// EXECUTING is a durable dispatch claim, including after a crash. Only the
+	// caller that commits CLAIMED -> EXECUTING below may dispatch; retries reconcile.
+	if record.State == "EFFECT_UNKNOWN" || record.State == "EXECUTING" {
 		return nil, ErrStorageMutationUncertain
 	}
 
@@ -133,7 +134,7 @@ func (c *Coordinator) ExecuteStorageAction(ctx context.Context, actionID string,
 		if err := c.store.Put(record); err != nil {
 			return nil, err
 		}
-	} else if record.State != "EXECUTING" {
+	} else {
 		return nil, internalprotocol.ErrUnknownEffect
 	}
 
@@ -162,7 +163,8 @@ func (c *Coordinator) ExecuteStorageAction(ctx context.Context, actionID string,
 	}
 
 	// 11. Handle response
-	if dispatchErr == nil && resp != nil && resp.Status == actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED {
+	if dispatchErr == nil && resp != nil && resp.Status == actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED &&
+		resp.State == commonv1.EffectState_EFFECT_STATE_APPLIED && matchesStorageResult(resp, req.Fence, req.OperationId) {
 		payloadMap := map[string]any{
 			"etag":             resp.Etag,
 			"effectId":         resp.EffectId,
@@ -211,6 +213,9 @@ func (c *Coordinator) ExecuteStorageAction(ctx context.Context, actionID string,
 func (c *Coordinator) ReconcileStorageAction(ctx context.Context, actionID string, operationID string) (*actionv1.StorageMutationResponse, error) {
 	if c == nil || c.store == nil || c.worker == nil {
 		return nil, internalprotocol.ErrUnknownEffect
+	}
+	if c.authoritative {
+		return nil, store.ErrCutoverNotAuthorized
 	}
 
 	// 1. Fetch action from durable store
@@ -266,7 +271,8 @@ func (c *Coordinator) ReconcileStorageAction(ctx context.Context, actionID strin
 		return nil, ErrActionExecutionStale
 	}
 
-	if queryErr == nil && resp != nil && resp.Status == actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED {
+	if queryErr == nil && resp != nil && resp.Status == actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED &&
+		resp.State == commonv1.EffectState_EFFECT_STATE_APPLIED && matchesStorageResult(resp, fence, operationID) {
 		payloadMap := map[string]any{
 			"etag":             resp.Etag,
 			"effectId":         resp.EffectId,
@@ -291,7 +297,12 @@ func (c *Coordinator) ReconcileStorageAction(ctx context.Context, actionID strin
 		if resp.Error != nil {
 			errCode = resp.Error.Code
 		}
-		if isQueryFailure(errCode) {
+		// A failed query says nothing about an earlier PUT. Only an exact, bound
+		// NOT_APPLIED effect result can settle the action; unknown codes fail closed.
+		if resp.State != commonv1.EffectState_EFFECT_STATE_NOT_APPLIED ||
+			!matchesStorageResult(resp, fence, operationID) ||
+			!isRecordedNoEffect(resp.Status, errCode) ||
+			(queryErr != nil && !errors.Is(queryErr, internalprotocol.ErrStoragePreconditionRejected)) {
 			if queryErr != nil {
 				return resp, queryErr
 			}
@@ -321,22 +332,14 @@ func (c *Coordinator) ReconcileStorageAction(ctx context.Context, actionID strin
 	return resp, ErrStorageMutationUncertain
 }
 
-func isQueryFailure(code string) bool {
-	switch code {
-	case "SERVICE_AUTHENTICATION_UNAVAILABLE",
-		"AUTHENTICATION_MISSING",
-		"AUTHENTICATION_INVALID",
-		"WORKER_WITHOUT_AUTHORITY",
-		"FENCE_MISMATCH",
-		"EMPTY_ACTION_ID",
-		"ZERO_EXECUTION_EPOCH",
-		"STALE_EXECUTION_EPOCH",
-		"STORAGE_QUERY_ERROR",
-		"STORAGE_FEATURE_DISABLED":
-		return true
-	default:
-		return false
-	}
+func matchesStorageResult(resp *actionv1.StorageMutationResponse, fence *commonv1.ActionFence, operationID string) bool {
+	return resp.Fence != nil && resp.Fence.ActionId == fence.ActionId &&
+		resp.Fence.ExecutionEpoch == fence.ExecutionEpoch && operationID != "" && resp.OperationId == operationID
+}
+
+func isRecordedNoEffect(status actionv1.StorageMutationStatus, code string) bool {
+	return status == actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED && (code == "Rejected" || code == "PRECONDITION_REJECTED") ||
+		status == actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_FAILED && code == "Failed"
 }
 
 func isDefiniteFailureBeforeEffect(err error) bool {
@@ -353,6 +356,5 @@ func isDefiniteFailureBeforeEffect(err error) bool {
 		errors.Is(err, internalprotocol.ErrAuthenticationInvalid) ||
 		errors.Is(err, internalprotocol.ErrStorageWorkerWithoutAuthority) ||
 		errors.Is(err, internalprotocol.ErrStorageTargetMismatch) ||
-		errors.Is(err, internalprotocol.ErrStorageDigestMismatch) ||
-		errors.Is(err, internalprotocol.ErrStorageReplayRejected)
+		errors.Is(err, internalprotocol.ErrStorageDigestMismatch)
 }
