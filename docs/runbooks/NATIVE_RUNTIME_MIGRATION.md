@@ -71,7 +71,25 @@ Implementation follows Go's [HTTP shutdown contract](https://pkg.go.dev/net/http
 and [ticker behavior](https://pkg.go.dev/time#NewTicker). Local regressions cover a
 whole default lease with no requests, real SQLite lock contention, stale/expired
 owners, rollback before renewal commit, and an incomplete real HTTP upload during
-shutdown. They are not provider-backed action or process-kill takeover evidence.
+shutdown. They are not provider-backed action takeover evidence.
+
+`go/cmd/deepseekd/process_test.go` additionally builds and runs the actual Go main
+binary against temporary Go-owned state directories. One test acknowledges a
+policy over HTTP, leaves the process idle for a full default lease, force-kills
+it, and verifies that a replacement is rejected until the persisted lease expires.
+The replacement then advances the fence, recovers the exact record digest/history,
+and acknowledges a new policy record. The test reads the lease after kill; it does not
+edit the journal or advance a fake clock. `Process.Kill` is a forced termination
+on Windows and SIGKILL on Unix; local Windows results do not establish Unix results.
+
+A second real-process test holds an actual SQLite write transaction without
+changing rows. The listener must close while the lock is held. Once the lock is
+released, main must exit with a renewal error and a replacement must acquire the
+released fence immediately. These tests run in `go test ./...`; the focused command
+from `go/` is `go test ./cmd/deepseekd -run '^TestDeepseekd' -count=1 -v`.
+This proves Go process lifecycle and shadow-state recovery only, not a Rust worker
+storage effect, remote-write fencing, a production action takeover, authenticated
+execution, or release readiness.
 
 ## Public Edge to Go API isolation
 
