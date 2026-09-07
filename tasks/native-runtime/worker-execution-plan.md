@@ -123,6 +123,12 @@ The original `tasks/plan.md` and `tasks/todo.md` recovery plans remain untouched
 
 3. **Go Control Plane & Client (`go/internal/action`, `go/internal/worker`)**:
    - `worker.Client`: `ExecuteStorageMutation` and `QueryStorageEffect` with outgoing metadata auth, fence validation, operation ID checking, and sentinel error mapping.
-   - `action.Coordinator`: Enforces fail-closed production cutover (`ErrCutoverNotAuthorized`), validates Go writer lease before claim and after dispatch, manages transition lifecycle (`PENDING -> CLAIMED -> EXECUTING -> SUCCEEDED / FAILED_BEFORE_EFFECT / EFFECT_UNKNOWN`), and reconciles uncertain effects.
-   - Test coverage: `internal/action` at 99.5%, `internal/worker` at 97.9%, overall Go module at 95.6% (meeting the 95.0% CI gate).
+   - `action.Coordinator`: Enforces fail-closed production cutover (`ErrCutoverNotAuthorized`), validates Go writer lease before claim and after dispatch, manages transition lifecycle (`PENDING -> CLAIMED -> EXECUTING -> SUCCEEDED / FAILED_BEFORE_EFFECT / EFFECT_UNKNOWN`), and reconciles uncertain effects (with `isQueryFailure` guarding unauthenticated or transport query errors from premature `FAILED_BEFORE_EFFECT` settlement).
+   - Test coverage: `internal/action` at 99.5%, `internal/worker` at 97.9%, overall Go module at 95.5% (meeting the 95.0% CI gate).
+
+4. **Multi-Process Integration Verification**:
+   - `go/internal/worker/rust_integration_test.go`: Added `TestRustWorkerStorageMutationFailsClosedWithoutAuth` and `TestRustCoordinatorStorageActionAgainstRealWorker` orchestrating real `deepseek-worker` process, SQLite `ControlStore`, and Go `Coordinator`.
+   - Wired integration test invocation into `.github/workflows/ci.yml` `native-go` job.
+   - All 13 real MinIO provider tests in `python scripts/run_native_s3_e2e.py` pass without skips.
+
 
