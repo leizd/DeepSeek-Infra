@@ -214,6 +214,108 @@ async fn bound_intent_is_immutable_and_legacy_intent_cannot_dispatch() {
 }
 
 #[tokio::test]
+async fn storage_dispatch_claim_is_unique_across_existing_handles() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, fence, key) = fixture();
+    // Open both handles before any intent exists so startup recovery cannot settle it.
+    let mut first = Worker::open_with_authority(config.clone(), directory.path()).unwrap();
+    let mut second = Worker::open_with_authority(config, directory.path()).unwrap();
+    first
+        .install_signed_epoch(
+            &fence,
+            &sign_request(&key, &fence.action_id, 4, 4, "1", "1"),
+        )
+        .unwrap();
+    let transport = dummy_transport();
+    let payload = b"single dispatch claim";
+    let digest = Sha256::digest(payload).into();
+    for worker in [&mut first, &mut second] {
+        worker
+            .reserve_bound_storage_mutation(
+                &fence,
+                &transport,
+                "single-dispatch-key",
+                &digest,
+                payload.len() as u64,
+                &ConditionalWrite::Create,
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        second.query_storage_effect(&fence).unwrap().unwrap().state,
+        StorageEffectState::Reserved
+    );
+    first
+        .transition_storage_mutation(&fence, StorageEffectState::Dispatching, None, None)
+        .unwrap();
+
+    assert_eq!(
+        second.transition_storage_mutation(&fence, StorageEffectState::Dispatching, None, None),
+        Err(WorkerStorageError::UnknownEffectRetryBlocked)
+    );
+    assert_eq!(
+        second.reserve_bound_storage_mutation(
+            &fence,
+            &transport,
+            "single-dispatch-key",
+            &digest,
+            payload.len() as u64,
+            &ConditionalWrite::Create,
+        ),
+        Err(WorkerStorageError::UnknownEffectRetryBlocked)
+    );
+    assert_eq!(
+        first.query_storage_effect(&fence).unwrap().unwrap().state,
+        StorageEffectState::Dispatching
+    );
+}
+
+#[tokio::test]
+async fn storage_dispatch_rechecks_epoch_after_reservation() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, fence, key) = fixture();
+    let mut first = Worker::open_with_authority(config.clone(), directory.path()).unwrap();
+    let mut second = Worker::open_with_authority(config, directory.path()).unwrap();
+    first
+        .install_signed_epoch(
+            &fence,
+            &sign_request(&key, &fence.action_id, 4, 4, "1", "1"),
+        )
+        .unwrap();
+    let transport = dummy_transport();
+    let payload = b"stale dispatch claim";
+    first
+        .reserve_bound_storage_mutation(
+            &fence,
+            &transport,
+            "stale-dispatch-key",
+            &Sha256::digest(payload).into(),
+            payload.len() as u64,
+            &ConditionalWrite::Create,
+        )
+        .unwrap();
+    let next_fence = ActionFence {
+        action_id: fence.action_id.clone(),
+        execution_epoch: 5,
+    };
+    second
+        .install_signed_epoch(
+            &next_fence,
+            &sign_request(&key, &next_fence.action_id, 5, 4, "2", "2"),
+        )
+        .unwrap();
+
+    assert_eq!(
+        first.transition_storage_mutation(&fence, StorageEffectState::Dispatching, None, None),
+        Err(WorkerStorageError::StaleEpoch)
+    );
+    assert_eq!(
+        first.query_storage_effect(&fence).unwrap().unwrap().state,
+        StorageEffectState::Reserved
+    );
+}
+
+#[tokio::test]
 async fn v1_migration_preserves_legacy_journal_and_rolls_back_on_identity_failure() {
     let directory = tempfile::tempdir().unwrap();
     let (config, _, fence, key) = fixture();

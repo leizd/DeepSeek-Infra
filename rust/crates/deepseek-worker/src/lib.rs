@@ -640,6 +640,16 @@ impl Worker {
         {
             return Ok(record);
         }
+        if record.state == StorageEffectState::Dispatching {
+            // Dropping the PUT future cannot undo bytes already sent. A live
+            // handle must recover this state just as a reopened worker would.
+            self.transition_storage_mutation(
+                fence,
+                StorageEffectState::EffectUnknown,
+                None,
+                Some("{\"reconciliation\":\"dispatch_outcome_not_recorded\"}"),
+            )?;
+        }
         self.transition_storage_mutation(fence, StorageEffectState::Reconciling, None, None)?;
 
         match transport.stat(&record.target_key).await {

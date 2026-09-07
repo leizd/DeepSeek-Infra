@@ -350,7 +350,8 @@ async fn dropped_ack_unknown_effect_reconciles_against_real_minio() {
 
     // 1. Execute normally; the relay drops only real MinIO's successful ACK.
     // No manual journal state is used as provider evidence.
-    let (fault_endpoint, _release, mut relay) = faulted_put_relay(&endpoint, false).await;
+    let (fault_endpoint, _release, mut relay) =
+        faulted_put_relay(&endpoint, PutFault::DropAck).await;
     let fault_transport = store(&fault_endpoint);
     let result = worker
         .execute_storage_put(
@@ -434,6 +435,87 @@ async fn mismatched_old_object_stays_unknown_before_late_provider_overwrite() {
     late_provider_write_keeps_negative_observation_unknown(true).await;
 }
 
+#[tokio::test]
+async fn cancelled_put_cannot_be_redispatched_before_original_minio_commit() {
+    let directory = tempfile::tempdir().unwrap();
+    let (key, config) = test_signer();
+    let endpoint = endpoints()[0].clone();
+    let direct = store(&endpoint);
+    let (origin, release, mut relay) =
+        faulted_put_relay(&endpoint, PutFault::WaitForCancellation).await;
+    let transport = store(&origin);
+    let fence = ActionFence {
+        action_id: "cancelled-native-put".into(),
+        execution_epoch: 19,
+    };
+    let signed = sign_request(&key, &fence.action_id, 19, 4, "8", "9");
+    let mut worker = Worker::open_with_authority(config, directory.path()).unwrap();
+    worker.install_signed_epoch(&fence, &signed).unwrap();
+    let payload = Bytes::from_static(b"original cancelled task may still reach MinIO");
+    let digest = Sha256::digest(&payload).into();
+    let target_key = "cancelled-before-original-commit";
+    {
+        let pending = worker.execute_storage_put(
+            &transport,
+            target_key,
+            payload.clone(),
+            digest,
+            &fence,
+            ConditionalWrite::Create,
+        );
+        tokio::pin!(pending);
+        tokio::select! {
+            result = &mut pending => panic!("PUT completed before cancellation: {result:?}"),
+            _ = relay.wait_captured() => {}
+        }
+        // Drop the actual execution future after its complete signed PUT was
+        // captured, without manufacturing an error response or journal row.
+    }
+    assert_eq!(
+        worker.query_storage_effect(&fence).unwrap().unwrap().state,
+        StorageEffectState::Dispatching
+    );
+    assert!(direct.stat(target_key).await.unwrap().is_none());
+    let retry = worker
+        .execute_storage_put(
+            &transport,
+            target_key,
+            payload.clone(),
+            digest,
+            &fence,
+            ConditionalWrite::Create,
+        )
+        .await;
+
+    // Even on RED, deliver the first request and independently verify its real
+    // provider ACK and bytes before checking that a replacement was forbidden.
+    release.send(()).unwrap();
+    relay.wait_original_commit().await;
+    direct
+        .download_verified(
+            target_key,
+            payload.len() as u64,
+            digest,
+            &mut tokio::io::sink(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(retry, Err(WorkerStorageError::UnknownEffectRetryBlocked));
+    assert_eq!(
+        relay
+            .unexpected_writes
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    // Recovery must work on the same live handle, without requiring a restart.
+    let reconciled = worker
+        .reconcile_storage_mutation(&transport, &fence)
+        .await
+        .unwrap();
+    assert_eq!(reconciled.state, StorageEffectState::Confirmed);
+    assert_eq!(relay.observed_gets(), 1);
+}
+
 async fn late_provider_write_keeps_negative_observation_unknown(preexisting: bool) {
     let directory = tempfile::tempdir().unwrap();
     let (key, config) = test_signer();
@@ -484,7 +566,8 @@ async fn late_provider_write_keeps_negative_observation_unknown(preexisting: boo
 
     // Capture the real signed PUT, disconnect the worker, and delay the original
     // request's delivery to real MinIO. No manual effect-journal writes.
-    let (fault_endpoint, release, mut relay) = faulted_put_relay(&endpoint, true).await;
+    let (fault_endpoint, release, mut relay) =
+        faulted_put_relay(&endpoint, PutFault::DelayDelivery).await;
     let fault_transport = store(&fault_endpoint);
     let result = worker
         .execute_storage_put(
@@ -558,15 +641,30 @@ struct FaultRelay {
     reads: tokio::task::JoinHandle<()>,
     unexpected_writes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     gets: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    captured: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
 impl FaultRelay {
+    async fn wait_captured(&mut self) {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.captured.take().unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    }
+
+    async fn wait_original_commit(&mut self) {
+        self.first_put.take().unwrap().await.unwrap();
+    }
+
     fn observed_gets(&self) -> usize {
         self.gets.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     async fn wait_committed(&mut self) {
-        self.first_put.take().unwrap().await.unwrap();
+        self.wait_original_commit().await;
         assert_eq!(
             self.unexpected_writes
                 .load(std::sync::atomic::Ordering::SeqCst),
@@ -585,9 +683,16 @@ impl Drop for FaultRelay {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PutFault {
+    DropAck,
+    DelayDelivery,
+    WaitForCancellation,
+}
+
 async fn faulted_put_relay(
     endpoint: &str,
-    delayed: bool,
+    fault: PutFault,
 ) -> (String, tokio::sync::oneshot::Sender<()>, FaultRelay) {
     use std::time::Duration;
     use tokio::{
@@ -602,6 +707,7 @@ async fn faulted_put_relay(
     let relay_endpoint = format!("http://{}", listener.local_addr().unwrap());
     let (release, released) = tokio::sync::oneshot::channel();
     let (accepted, read_ready) = tokio::sync::oneshot::channel();
+    let (captured, capture_ready) = tokio::sync::oneshot::channel();
     let relay = tokio::spawn(async move {
         let (mut downstream, _) = timeout(Duration::from_secs(10), write_listener.accept())
             .await
@@ -639,13 +745,16 @@ async fn faulted_put_relay(
         })
         .await
         .unwrap();
+        captured.send(()).unwrap();
         // The provider has not seen any bytes. The worker cannot infer that
         // from its transport error; the relay may still finish the original PUT.
         let mut downstream = Some(downstream);
-        if delayed {
+        if fault == PutFault::DelayDelivery {
             let mut connection = downstream.take().unwrap();
             connection.shutdown().await.unwrap();
             drop(connection);
+        }
+        if fault != PutFault::DropAck {
             timeout(Duration::from_secs(20), released)
                 .await
                 .unwrap()
@@ -673,7 +782,9 @@ async fn faulted_put_relay(
             "real MinIO must ACK the original signed PUT"
         );
         if let Some(mut connection) = downstream {
-            connection.shutdown().await.unwrap();
+            if fault == PutFault::DropAck {
+                connection.shutdown().await.unwrap();
+            }
             drop(connection);
         }
     });
@@ -728,6 +839,7 @@ async fn faulted_put_relay(
             reads,
             unexpected_writes,
             gets,
+            captured: Some(capture_ready),
         },
     )
 }

@@ -147,3 +147,28 @@ forward real signed requests and provider responses unchanged and count observed
 GETs and unexpected writes. Counts describe observed traffic, not absence of future
 requests. This remains library/provider development evidence,
 not a worker process-kill/Go takeover or exactly-once proof.
+
+## Single dispatch claim and cancelled execution
+
+An idempotent reservation is reusable only before dispatch. `DISPATCHING`,
+`EFFECT_UNKNOWN` and `RECONCILING` block a new PUT for that action/epoch. Immediately
+before dispatch, the worker rechecks the live writer token, latest installed action
+epoch, stored intent token and current state in the same `BEGIN IMMEDIATE`
+transaction that changes RESERVED to DISPATCHING. Two already-open handles cannot
+both claim dispatch, and an epoch superseded after reservation cannot dispatch.
+
+Dropping an execution future does not undo a signed request already sent. Its row
+can remain DISPATCHING. Reconciliation on the same live worker first preserves that
+uncertainty as EFFECT_UNKNOWN, then performs the existing bound HEAD/conditional GET
+flow. Restarting the process is not required and blind redispatch remains forbidden.
+
+The cancellation provider regression captures the complete actual signed PUT,
+drops the execution future, attempts a retry, then forwards the original request
+to real MinIO. It checks the real 200 ACK, independently downloads/verifies the bytes,
+asserts the retry was blocked and observes the reconciliation GET. The two-handle
+and superseded-reservation tests use real SQLite only; they are not provider proof.
+
+This claim is local journal serialization, not a provider-side fence. A request
+already dispatched may still finish after a newer epoch or Go lease loss. Live Go
+authority, operation-specific signed admission, stale-result settlement and actual
+process-kill/takeover remain unqualified; no production exactly-once claim follows.

@@ -383,10 +383,11 @@ impl AuthorityStore {
             }
             match state.as_str() {
                 "CONFIRMED" | "COMMITTED" => return Err(WorkerStorageError::ReplayRejected),
-                "EFFECT_UNKNOWN" => return Err(WorkerStorageError::UnknownEffectRetryBlocked),
-                "RECONCILING" => return Err(WorkerStorageError::UnknownEffectRetryBlocked),
+                "DISPATCHING" | "EFFECT_UNKNOWN" | "RECONCILING" => {
+                    return Err(WorkerStorageError::UnknownEffectRetryBlocked);
+                }
                 "REJECTED" | "FAILED" => return Err(WorkerStorageError::PreconditionRejected),
-                "RESERVED" | "PENDING" | "DISPATCHING" => {}
+                "RESERVED" | "PENDING" => {}
                 _ => return Err(WorkerStorageError::FenceMismatch),
             }
             let expected =
@@ -454,6 +455,9 @@ impl AuthorityStore {
         state: StorageEffectState,
         provider_metadata: Option<&str>,
     ) -> Result<(), WorkerStorageError> {
+        validate_fence(fence).map_err(|_| WorkerStorageError::FenceMismatch)?;
+        let epoch =
+            i64::try_from(fence.execution_epoch).map_err(|_| WorkerStorageError::FenceMismatch)?;
         let now = match &self.now_override {
             Some(now) => now.clone(),
             None => crate::authority_request::utc_z_now()
@@ -473,6 +477,44 @@ impl AuthorityStore {
         if token != self.fencing_token {
             return Err(WorkerStorageError::StaleFencingToken);
         }
+        if state == StorageEffectState::Dispatching {
+            // Reservation and dispatch are separate transactions. Another handle
+            // may have claimed this intent or installed a newer epoch in between.
+            // Recheck while holding the writer transaction through the transition.
+            let (stored_token, current, live_epoch): (i64, String, i64) = transaction
+                .query_row(
+                    "SELECT fencing_token,state,(SELECT COALESCE(MAX(epoch),0) FROM epoch_installs WHERE action_id=?1) FROM storage_effects WHERE action_id=?1 AND epoch=?2",
+                    params![&fence.action_id, epoch],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .map_err(|_| WorkerStorageError::FenceMismatch)?;
+            if epoch < live_epoch {
+                return Err(WorkerStorageError::StaleEpoch);
+            }
+            if epoch != live_epoch {
+                return Err(WorkerStorageError::FenceMismatch);
+            }
+            if stored_token != token {
+                return Err(WorkerStorageError::StaleFencingToken);
+            }
+            match StorageEffectState::from_db_str(&current) {
+                Some(StorageEffectState::Reserved) => {}
+                Some(
+                    StorageEffectState::Dispatching
+                    | StorageEffectState::EffectUnknown
+                    | StorageEffectState::Reconciling,
+                ) => {
+                    return Err(WorkerStorageError::UnknownEffectRetryBlocked);
+                }
+                Some(StorageEffectState::Confirmed) => {
+                    return Err(WorkerStorageError::ReplayRejected);
+                }
+                Some(StorageEffectState::Rejected | StorageEffectState::Failed) => {
+                    return Err(WorkerStorageError::PreconditionRejected);
+                }
+                None => return Err(WorkerStorageError::FenceMismatch),
+            }
+        }
         let changed = transaction
             .execute(
                 "UPDATE storage_effects SET state=?1, etag=COALESCE(?2, etag), provider_metadata=COALESCE(?3, provider_metadata), updated_at=?4 WHERE action_id=?5 AND epoch=?6",
@@ -482,7 +524,7 @@ impl AuthorityStore {
                     provider_metadata,
                     &now,
                     &fence.action_id,
-                    fence.execution_epoch as i64,
+                    epoch,
                 ],
             )
             .map_err(|_| WorkerStorageError::FenceMismatch)?;
