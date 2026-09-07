@@ -25,7 +25,7 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	addr, err := lifecycle.Listen(ctx, cfg)
+	runtime, err := lifecycle.Start(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -33,7 +33,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("deepseekd listening on %s %s\n", addr, payload)
-	<-ctx.Done()
-	return nil
+	fmt.Printf("deepseekd listening on %s %s\n", runtime.Addr(), payload)
+	return <-runtime.Done()
 }

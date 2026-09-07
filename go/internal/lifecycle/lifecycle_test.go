@@ -3,12 +3,14 @@ package lifecycle
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/config"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 )
 
 func TestHealthzIsShadowAndReadOnly(t *testing.T) {
@@ -79,5 +81,34 @@ func TestListenRejectsPythonShadowStore(t *testing.T) {
 	defer cancel()
 	if _, err := Listen(ctx, config.Config{Mode: config.ModeShadow, Listen: "127.0.0.1:0", Owner: "owner-a", ShadowStoreDir: ".backup-control/x"}); err == nil {
 		t.Fatal("python shadow store must fail")
+	}
+}
+
+func TestIdleListenerKeepsItsDurableWriterLease(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(200 * time.Millisecond)
+	}()
+	path := t.TempDir()
+	addr, err := Listen(ctx, config.Config{Mode: config.ModeShadow, Listen: "127.0.0.1:0", Owner: "idle-owner", ShadowStoreDir: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No control mutations or HTTP requests during a whole initial lease. This
+	// tests the actual default listener and durable database, not a fake timer.
+	time.Sleep(31 * time.Second)
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Get("http://" + addr + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	successor, err := store.OpenControl(store.OpenOptions{Path: path, Owner: "unexpected-successor"})
+	if successor != nil {
+		_ = successor.Close()
+	}
+	if !errors.Is(err, store.ErrWriterFenceHeld) {
+		t.Fatalf("idle listener remained healthy but lost its writer lease: %v", err)
 	}
 }

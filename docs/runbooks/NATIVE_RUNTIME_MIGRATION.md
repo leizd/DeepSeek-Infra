@@ -42,6 +42,37 @@ Do not cut over mutation until that gate stays green.
 - Shadow mode rejects a configured production store path.
 - Do not point Go or Rust at Python SQLite files.
 
+## Go writer lease and runtime shutdown
+
+When `DEEPSEEKD_SHADOW_STORE` is configured, `deepseekd` retains its existing
+30-second Go writer lease by renewing every 10 seconds, including during idle
+periods. Renewal uses the same fenced `BEGIN IMMEDIATE` transaction and exact-schema
+checks as the store. It does not claim an expired lease, increase the writer token,
+alter action epochs or domain records, or grant production mutation authority.
+
+The lifecycle supervisor allows at most one renewal attempt at a time. A failed
+renewal or a 5-second renewal watchdog stops HTTP admission and cancels request
+contexts. HTTP drain is limited to 5 seconds, after which active connections are
+closed. Database cleanup may still wait for an outstanding SQLite call; the HTTP
+drain limit is not a claimed whole-process termination bound.
+
+`deepseekd` observes `lifecycle.Start(...).Done()` and reports runtime failures as
+non-zero exit errors, after resource cleanup. Context cancellation releases the
+store before normal exit. Library callers needing terminal status should use
+`Start`; the existing address-only `Listen` helper is retained for compatibility.
+Neither a successful renewal nor `/healthz` is proof of production ownership.
+
+On renewal failure, investigate the state directory, disk and SQLite lock holder.
+Preserve the database and fencing history; do not delete it or silently revive an
+expired owner. A new owner must pass the normal fenced claim path. This lifecycle
+work does not provide renewable action/resource leases or Go-to-Rust authentication.
+
+Implementation follows Go's [HTTP shutdown contract](https://pkg.go.dev/net/http#Server.Shutdown)
+and [ticker behavior](https://pkg.go.dev/time#NewTicker). Local regressions cover a
+whole default lease with no requests, real SQLite lock contention, stale/expired
+owners, rollback before renewal commit, and an incomplete real HTTP upload during
+shutdown. They are not provider-backed action or process-kill takeover evidence.
+
 ## Public Edge to Go API isolation
 
 The Rust Edge forwards only `/api/*` to the operator-configured root origin in
