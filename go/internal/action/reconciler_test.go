@@ -790,4 +790,3 @@ func TestDefiniteFailureBeforeEffect(t *testing.T) {
 		t.Fatal("arbitrary error should not be definite failure")
 	}
 }
-

@@ -2,19 +2,19 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard};
 
 #[cfg(feature = "s3")]
-use sha2::Digest as _;
-#[cfg(feature = "s3")]
 use deepseek_protocol::generated::deepseek::action::v1::StorageConditionType;
+#[cfg(feature = "s3")]
+use sha2::Digest as _;
 
 use deepseek_protocol::generated::deepseek::action::v1::{
     AdmitCommandRequest, AdmitCommandResponse, AdmitStatus, CommandKind, EffectResult,
     InstallAuthoritativeEpochRequest, InstallAuthoritativeEpochResponse, QueryEffectRequest,
-    QueryStorageEffectRequest, StorageMutationRequest,
-    StorageMutationResponse, StorageMutationStatus, worker_server::Worker as WorkerRpc,
+    QueryStorageEffectRequest, StorageMutationRequest, StorageMutationResponse,
+    StorageMutationStatus, worker_server::Worker as WorkerRpc,
 };
 use deepseek_protocol::generated::deepseek::common::v1::{ActionFence, EffectState, ErrorDetail};
 use deepseek_protocol::{
-    is_federation_command, is_storage_command, is_transfer_command, validate_fence, AdmitError,
+    AdmitError, is_federation_command, is_storage_command, is_transfer_command, validate_fence,
 };
 use tonic::{Request, Response, Status};
 
@@ -54,14 +54,20 @@ impl std::fmt::Display for AuthError {
 impl std::error::Error for AuthError {}
 
 pub trait TransportAuthenticator: Send + Sync + 'static {
-    fn authenticate(&self, metadata: &tonic::metadata::MetadataMap) -> Result<CallerIdentity, AuthError>;
+    fn authenticate(
+        &self,
+        metadata: &tonic::metadata::MetadataMap,
+    ) -> Result<CallerIdentity, AuthError>;
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct ProductionFailClosedAuthenticator;
 
 impl TransportAuthenticator for ProductionFailClosedAuthenticator {
-    fn authenticate(&self, _metadata: &tonic::metadata::MetadataMap) -> Result<CallerIdentity, AuthError> {
+    fn authenticate(
+        &self,
+        _metadata: &tonic::metadata::MetadataMap,
+    ) -> Result<CallerIdentity, AuthError> {
         // Transport caller authentication for production execution is not yet approved.
         // Fails closed unconditionally. Loopback is explicitly not caller authentication.
         Err(AuthError::ServiceAuthenticationUnavailable)
@@ -84,12 +90,17 @@ impl StaticTokenAuthenticator {
 }
 
 impl TransportAuthenticator for StaticTokenAuthenticator {
-    fn authenticate(&self, metadata: &tonic::metadata::MetadataMap) -> Result<CallerIdentity, AuthError> {
+    fn authenticate(
+        &self,
+        metadata: &tonic::metadata::MetadataMap,
+    ) -> Result<CallerIdentity, AuthError> {
         let auth_header = metadata
             .get("authorization")
             .ok_or(AuthError::MissingAuthorization)?;
         let auth_str = auth_header.to_str().map_err(|_| AuthError::InvalidToken)?;
-        let token = auth_str.strip_prefix("Bearer ").ok_or(AuthError::InvalidToken)?;
+        let token = auth_str
+            .strip_prefix("Bearer ")
+            .ok_or(AuthError::InvalidToken)?;
         if token == self.expected_token {
             Ok(self.identity.clone())
         } else {
@@ -565,15 +576,13 @@ impl WorkerRpc for WorkerRpcService {
                         "fence mismatch",
                     )))
                 }
-                Err(crate::WorkerStorageError::StaleEpoch) => {
-                    Ok(Response::new(storage_rejected(
-                        Some(fence.clone()),
-                        input.operation_id,
-                        "STALE_EXECUTION_EPOCH",
-                        "FENCE",
-                        "stale execution epoch",
-                    )))
-                }
+                Err(crate::WorkerStorageError::StaleEpoch) => Ok(Response::new(storage_rejected(
+                    Some(fence.clone()),
+                    input.operation_id,
+                    "STALE_EXECUTION_EPOCH",
+                    "FENCE",
+                    "stale execution epoch",
+                ))),
                 Err(crate::WorkerStorageError::StaleFencingToken) => {
                     Ok(Response::new(storage_rejected(
                         Some(fence.clone()),
@@ -610,22 +619,22 @@ impl WorkerRpc for WorkerRpcService {
                         "worker authority not configured",
                     )))
                 }
-                Err(crate::WorkerStorageError::Transport(deepseek_storage::s3::S3Error::EffectUnknown)) => {
-                    Ok(Response::new(StorageMutationResponse {
-                        status: StorageMutationStatus::EffectUnknown as i32,
-                        state: EffectState::Unknown as i32,
-                        fence: Some(fence.clone()),
-                        operation_id: input.operation_id,
-                        effect_id: String::new(),
-                        etag: String::new(),
-                        provider_metadata: String::new(),
-                        error: Some(ErrorDetail {
-                            code: "EFFECT_UNKNOWN".to_string(),
-                            category: "STORAGE".to_string(),
-                            message: "mutation effect unknown".to_string(),
-                        }),
-                    }))
-                }
+                Err(crate::WorkerStorageError::Transport(
+                    deepseek_storage::s3::S3Error::EffectUnknown,
+                )) => Ok(Response::new(StorageMutationResponse {
+                    status: StorageMutationStatus::EffectUnknown as i32,
+                    state: EffectState::Unknown as i32,
+                    fence: Some(fence.clone()),
+                    operation_id: input.operation_id,
+                    effect_id: String::new(),
+                    etag: String::new(),
+                    provider_metadata: String::new(),
+                    error: Some(ErrorDetail {
+                        code: "EFFECT_UNKNOWN".to_string(),
+                        category: "STORAGE".to_string(),
+                        message: "mutation effect unknown".to_string(),
+                    }),
+                })),
                 Err(crate::WorkerStorageError::Transport(err)) => {
                     Ok(Response::new(storage_failed(
                         Some(fence.clone()),

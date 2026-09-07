@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	ErrActionNotFound          = errors.New("ACTION_NOT_FOUND")
+	ErrActionNotFound           = errors.New("ACTION_NOT_FOUND")
 	ErrActionExecutionStale     = errors.New("ACTION_EXECUTION_STALE")
 	ErrWriterLeaseLost          = errors.New("WRITER_LEASE_LOST")
 	ErrStorageMutationUncertain = errors.New("STORAGE_MUTATION_UNCERTAIN")
