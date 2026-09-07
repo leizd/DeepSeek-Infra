@@ -1357,7 +1357,7 @@ jobs:
             exit 1
           fi
           go test -tags=integration ./internal/worker \
-            -run '^TestRustWorkerWithoutAuthorityFailsClosedAndKeepsMissingEffectUnknown$|^TestRustWorkerUnconfiguredInstallRemainsFailClosed$' \
+            -run '^TestRustWorkerWithoutAuthorityFailsClosedAndKeepsMissingEffectUnknown$|^TestRustWorkerUnconfiguredInstallRemainsFailClosed$|^TestRustWorkerStorageMutationFailsClosedWithoutAuth$|^TestRustCoordinatorStorageActionAgainstRealWorker$' \
             -count=1 -timeout=30s
       - name: Run authenticated Go-to-Rust epoch install boundary
         shell: bash

@@ -287,12 +287,22 @@ func (c *Coordinator) ReconcileStorageAction(ctx context.Context, actionID strin
 	// If definitely rejected or failed
 	if resp != nil && (resp.Status == actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED ||
 		resp.Status == actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_FAILED) {
+		errCode := ""
+		if resp.Error != nil {
+			errCode = resp.Error.Code
+		}
+		if isQueryFailure(errCode) {
+			if queryErr != nil {
+				return resp, queryErr
+			}
+			return resp, ErrStorageMutationUncertain
+		}
 		payloadMap := map[string]any{
 			"reconciled":  true,
 			"operationId": operationID,
 		}
-		if resp.Error != nil {
-			payloadMap["error"] = resp.Error.Code
+		if errCode != "" {
+			payloadMap["error"] = errCode
 		}
 		payloadBytes, _ := json.Marshal(payloadMap)
 		record.Revision++
@@ -309,6 +319,24 @@ func (c *Coordinator) ReconcileStorageAction(ctx context.Context, actionID strin
 		return resp, queryErr
 	}
 	return resp, ErrStorageMutationUncertain
+}
+
+func isQueryFailure(code string) bool {
+	switch code {
+	case "SERVICE_AUTHENTICATION_UNAVAILABLE",
+		"AUTHENTICATION_MISSING",
+		"AUTHENTICATION_INVALID",
+		"WORKER_WITHOUT_AUTHORITY",
+		"FENCE_MISMATCH",
+		"EMPTY_ACTION_ID",
+		"ZERO_EXECUTION_EPOCH",
+		"STALE_EXECUTION_EPOCH",
+		"STORAGE_QUERY_ERROR",
+		"STORAGE_FEATURE_DISABLED":
+		return true
+	default:
+		return false
+	}
 }
 
 func isDefiniteFailureBeforeEffect(err error) bool {

@@ -8,11 +8,13 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/leizd/DeepSeek-Infra/go/internal/action"
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
@@ -207,4 +209,106 @@ func randomHex64(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return hex.EncodeToString(raw[:])
+}
+
+func TestRustCoordinatorStorageActionAgainstRealWorker(t *testing.T) {
+	target := os.Getenv("DEEPSEEK_TEST_RUST_WORKER_TARGET")
+	if target == "" {
+		t.Fatal("DEEPSEEK_TEST_RUST_WORKER_TARGET is required for integration tests")
+	}
+	client, err := DialPlaintextLoopback(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	tempDir := t.TempDir()
+	controlStore, err := store.OpenControl(store.OpenOptions{
+		Path:         tempDir,
+		Owner:        "coord-test-owner",
+		LeaseSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlStore.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	coord := action.NewCoordinator(controlStore, client)
+	fence := &commonv1.ActionFence{ActionId: "coord-act-1", ExecutionEpoch: 1}
+	req := &actionv1.StorageMutationRequest{
+		Fence:       fence,
+		OperationId: "coord-op-1",
+	}
+
+	// 1. Action does not exist in store -> ErrActionNotFound
+	_, err = coord.ExecuteStorageAction(ctx, "coord-act-1", req)
+	if !errors.Is(err, action.ErrActionNotFound) {
+		t.Fatalf("expected ErrActionNotFound, got %v", err)
+	}
+
+	// 2. Insert action into store in PENDING state
+	act := store.Record{
+		Domain:         "action",
+		ID:             "coord-act-1",
+		State:          "PENDING",
+		Revision:       1,
+		ExecutionEpoch: 1,
+		Payload:        json.RawMessage(`{"command":"execute-storage-put","actionId":"coord-act-1","executionEpoch":1,"fencingToken":4}`),
+	}
+	if err := controlStore.Put(act); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Unauthenticated worker -> fails closed with ErrServiceAuthenticationUnavailable
+	// Because this is a definite pre-effect failure, action transitions to FAILED_BEFORE_EFFECT.
+	_, err = coord.ExecuteStorageAction(ctx, "coord-act-1", req)
+	if !errors.Is(err, internalprotocol.ErrServiceAuthenticationUnavailable) {
+		t.Fatalf("expected ErrServiceAuthenticationUnavailable, got %v", err)
+	}
+
+	rec, exists, err := controlStore.Get("action", "coord-act-1")
+	if err != nil || !exists {
+		t.Fatalf("action lookup failed: exists=%v, err=%v", exists, err)
+	}
+	if rec.State != "FAILED_BEFORE_EFFECT" {
+		t.Fatalf("expected state FAILED_BEFORE_EFFECT, got %s", rec.State)
+	}
+
+	// 4. Test Reconcile against real worker for an action in EFFECT_UNKNOWN
+	unknownAct := store.Record{
+		Domain:         "action",
+		ID:             "coord-act-unknown",
+		State:          "PENDING",
+		Revision:       1,
+		ExecutionEpoch: 1,
+		Payload:        json.RawMessage(`{"command":"execute-storage-put","actionId":"coord-act-unknown","executionEpoch":1,"fencingToken":4}`),
+	}
+	if err := controlStore.Put(unknownAct); err != nil {
+		t.Fatal(err)
+	}
+	unknownAct.State = "CLAIMED"
+	unknownAct.Revision = 2
+	if err := controlStore.Put(unknownAct); err != nil {
+		t.Fatal(err)
+	}
+	unknownAct.State = "EFFECT_UNKNOWN"
+	unknownAct.Revision = 3
+	if err := controlStore.Put(unknownAct); err != nil {
+		t.Fatal(err)
+	}
+
+	_, reconErr := coord.ReconcileStorageAction(ctx, "coord-act-unknown", "coord-op-unknown")
+	if !errors.Is(reconErr, internalprotocol.ErrServiceAuthenticationUnavailable) {
+		t.Fatalf("expected ErrServiceAuthenticationUnavailable, got %v", reconErr)
+	}
+	recUnknown, exists, err := controlStore.Get("action", "coord-act-unknown")
+	if err != nil || !exists {
+		t.Fatalf("action lookup failed: exists=%v, err=%v", exists, err)
+	}
+	if recUnknown.State != "EFFECT_UNKNOWN" {
+		t.Fatalf("expected state EFFECT_UNKNOWN, got %s", recUnknown.State)
+	}
 }
