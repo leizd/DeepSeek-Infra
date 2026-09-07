@@ -87,6 +87,13 @@ impl StorageEffectState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageEffectBinding {
+    pub target_identity: String,
+    /// None means conditional create; Some is the exact expected strong ETag.
+    pub expected_etag: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageEffectRecord {
     pub action_id: String,
     pub execution_epoch: u64,
@@ -104,6 +111,7 @@ pub struct StorageEffectRecord {
     pub provider_metadata: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub binding: Option<StorageEffectBinding>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -436,7 +444,48 @@ impl Worker {
             operation_kind,
             expected_version,
             authority_principal,
+            None,
         )
+    }
+
+    #[cfg(feature = "s3")]
+    pub fn reserve_bound_storage_mutation(
+        &mut self,
+        fence: &ActionFence,
+        transport: &deepseek_storage::s3::S3Transport,
+        key: &str,
+        digest: &[u8; 32],
+        length: u64,
+        condition: &deepseek_storage::s3::ConditionalWrite,
+    ) -> Result<deepseek_storage::s3::StorageAuthorityProof, WorkerStorageError> {
+        transport.object_key(key)?;
+        if length > deepseek_storage::s3::MAX_PUT_CHUNK as u64 {
+            return Err(deepseek_storage::s3::S3Error::InvalidWrite.into());
+        }
+        let expected_etag = condition.expected_etag()?.map(str::to_owned);
+        let binding = StorageEffectBinding {
+            target_identity: storage_digest_hex(&transport.target_identity()),
+            expected_etag,
+        };
+        let principal = self
+            .authority
+            .as_ref()
+            .ok_or(WorkerStorageError::WorkerWithoutAuthority)?
+            .signer_public_key
+            .clone();
+        self.authority_store
+            .as_mut()
+            .ok_or(WorkerStorageError::WorkerWithoutAuthority)?
+            .reserve_storage_mutation(
+                fence,
+                key,
+                digest,
+                length,
+                "PUT_CHUNK",
+                binding.expected_etag.as_deref(),
+                &principal,
+                Some(&binding),
+            )
     }
 
     #[cfg(feature = "s3")]
@@ -504,34 +553,30 @@ impl Worker {
         if self.authority_store.is_none() {
             return Err(WorkerStorageError::WorkerWithoutAuthority);
         }
-        let principal = self
-            .authority
-            .as_ref()
-            .map(|a| a.signer_public_key.clone())
-            .unwrap_or_else(|| "default-control-plane".to_string());
         let payload_len = payload.len() as u64;
-        let proof = self.reserve_storage_mutation_ext(
-            fence,
-            key,
-            &payload_digest,
-            payload_len,
-            "PUT_CHUNK",
-            None,
-            &principal,
-        )?;
         if <[u8; 32]>::from(sha2::Sha256::digest(&payload)) != payload_digest {
             return Err(WorkerStorageError::DigestMismatch);
         }
+        if payload.len() > deepseek_storage::s3::MAX_PUT_CHUNK {
+            return Err(deepseek_storage::s3::S3Error::InvalidWrite.into());
+        }
+        let proof = self.reserve_bound_storage_mutation(
+            fence,
+            transport,
+            key,
+            &payload_digest,
+            payload_len,
+            &condition,
+        )?;
         self.transition_storage_mutation(fence, StorageEffectState::Dispatching, None, None)?;
         match transport
             .put_chunk(key, payload, payload_digest, &proof, condition)
             .await
         {
             Ok(observation) => {
-                let metadata = format!(
-                    "{{\"etag\":\"{}\",\"size\":{}}}",
-                    observation.etag, observation.length
-                );
+                let metadata =
+                    serde_json::json!({"etag": observation.etag, "size": observation.length})
+                        .to_string();
                 self.transition_storage_mutation(
                     fence,
                     StorageEffectState::Confirmed,
@@ -581,6 +626,14 @@ impl Worker {
         let record = self
             .query_storage_effect(fence)?
             .ok_or(WorkerStorageError::FenceMismatch)?;
+        let binding = record
+            .binding
+            .as_ref()
+            .ok_or(WorkerStorageError::TargetMismatch)?;
+        let target = storage_digest_hex(&transport.target_identity());
+        if binding.target_identity != target || record.expected_version != binding.expected_etag {
+            return Err(WorkerStorageError::TargetMismatch);
+        }
         if record.state == StorageEffectState::Confirmed
             || record.state == StorageEffectState::Rejected
             || record.state == StorageEffectState::Failed
@@ -591,11 +644,7 @@ impl Worker {
 
         match transport.stat(&record.target_key).await {
             Ok(Some(observation)) => {
-                let length_match = if record.expected_length > 0 {
-                    observation.length == record.expected_length
-                } else {
-                    true
-                };
+                let length_match = observation.length == record.expected_length;
                 let matches = length_match
                     && observation.claimed_action_id.as_deref() == Some(&record.action_id)
                     && observation.claimed_execution_epoch.as_deref()
@@ -606,10 +655,22 @@ impl Worker {
                     && observation.claimed_nonce.as_deref() == Some(&record.nonce)
                     && observation.claimed_sha256.as_deref() == Some(&record.payload_digest);
                 if matches {
-                    let metadata = format!(
-                        "{{\"etag\":\"{}\",\"size\":{}}}",
-                        observation.etag, observation.length
-                    );
+                    let digest = storage_digest(&record.payload_digest)?;
+                    if let Err(error) = transport
+                        .download_observation_verified(
+                            &record.target_key,
+                            &observation,
+                            digest,
+                            &mut tokio::io::sink(),
+                        )
+                        .await
+                    {
+                        self.transition_storage_mutation(fence, StorageEffectState::EffectUnknown, None,
+                            Some(&serde_json::json!({"reconciliation":"conditional_byte_verification_failed", "error":error.to_string()}).to_string()))?;
+                        return Err(error.into());
+                    }
+                    let metadata = serde_json::json!({"etag": observation.etag, "size": observation.length,
+                        "sha256": record.payload_digest, "version": observation.version, "bytesVerified": true}).to_string();
                     self.transition_storage_mutation(
                         fence,
                         StorageEffectState::Confirmed,
@@ -650,6 +711,33 @@ impl Worker {
         self.query_storage_effect(fence)?
             .ok_or(WorkerStorageError::FenceMismatch)
     }
+}
+
+#[cfg(feature = "s3")]
+fn storage_digest_hex(bytes: &[u8; 32]) -> String {
+    use std::fmt::Write as _;
+    let mut text = String::with_capacity(64);
+    for byte in bytes {
+        let _ = write!(text, "{byte:02x}");
+    }
+    text
+}
+
+#[cfg(feature = "s3")]
+fn storage_digest(text: &str) -> Result<[u8; 32], WorkerStorageError> {
+    if text.len() != 64
+        || !text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(WorkerStorageError::DigestMismatch);
+    }
+    let mut bytes = [0_u8; 32];
+    for (index, value) in bytes.iter_mut().enumerate() {
+        *value = u8::from_str_radix(&text[index * 2..index * 2 + 2], 16)
+            .map_err(|_| WorkerStorageError::DigestMismatch)?;
+    }
+    Ok(bytes)
 }
 
 pub fn authority_config_from_env(

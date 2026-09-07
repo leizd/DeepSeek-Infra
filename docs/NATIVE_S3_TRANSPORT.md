@@ -73,9 +73,10 @@ supplies the conditional request, not a positive worker effect verdict.
 
 The real-MinIO suite passed six storage cases after adding a same-ETag metadata
 replacement, a changed-ETag conditional rejection, and correct/incorrect checksum
-observations. The five existing worker provider cases also passed. Durable worker
-target/condition binding and use of this conditional read are still separate,
-unfinished integration work; these primitives do not complete positive reconciliation.
+observations. The five existing worker provider cases also passed at that revision.
+The worker integration now journals the placement/condition before dispatch and uses
+this conditional read for UNKNOWN recovery; see `NATIVE_WORKER_AUTHORITY_STORE.md`.
+Neither those primitives nor the optional worker path complete production reconciliation.
 
 ## Remaining production gates
 

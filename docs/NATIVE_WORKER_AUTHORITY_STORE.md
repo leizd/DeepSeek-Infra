@@ -97,9 +97,53 @@ conditional overwrite. A separate relay case drops a real successful ACK.
 These cases do not seed the effect journal manually. Reopening a worker handle is
 not a process-kill/takeover test and must not be described as one.
 
-Positive reconciliation remains unqualified: matching user metadata alone does
-not prove stored byte integrity, and the journal does not yet bind the complete
-provider origin/bucket/prefix and conditional request identity. Those requirements,
-renewable authority and real process-kill/takeover evidence remain prerequisites
-for production. Existing terminal records from unqualified builds must not be
+Matching user metadata alone does not prove stored byte integrity. The optional
+S3 path now requires the placement binding and conditional byte verification below;
+this is still not qualified production reconciliation. Renewable authority,
+operation-specific signed admission and real process-kill/takeover evidence remain
+prerequisites. Existing terminal records from unqualified builds must not be
 silently accepted as release proof or rewritten as a rollback shortcut.
+
+## Additive v2 storage intent binding
+
+Schema v2 retains the exact v1 tables and adds `storage_effect_bindings` and
+immutability/dispatch triggers inside the same startup `BEGIN IMMEDIATE` transaction.
+Identity or journal verification failure rolls back the entire extension, including
+`user_version`. The v1 migration regression preserves the original signed request
+bytes and effect row. It constructs an isolated historical fixture, not provider
+evidence or a production downgrade mechanism.
+
+Every new `execute_storage_put` reserves the transport placement fingerprint
+(canonical endpoint, region, bucket, prefix) and exact condition atomically with
+the parent key, SHA-256, length, action/epoch and signer identity. Conditional create
+has no expected ETag; conditional replacement stores its exact strong If-Match ETag.
+Length is exact, including zero. Credentials are excluded from the fingerprint;
+see `NATIVE_S3_TRANSPORT.md` for its encoding. The fingerprint does not authenticate
+the provider's bucket owner or make an install-epoch request an operation grant.
+
+Both binding and parent identity fields reject changes. Duplicate-key BEFORE INSERT
+guards cover both composite keys and explicit rowid conflicts to reject `INSERT OR
+REPLACE`, which can bypass UPDATE/DELETE triggers under SQLite's default
+recursive-trigger setting ([SQLite conflict handling](https://www.sqlite.org/lang_conflict.html)).
+No binding is backfilled for historical
+rows. Legacy unbound rows cannot enter DISPATCHING or positively reconcile, even if
+their old terminal state says CONFIRMED. Their history remains available for diagnosis.
+
+Stop all workers before upgrading the journal. Older binaries reject the v2 schema
+on startup; mixed-version live execution is not supported or qualified by these guards.
+There is no downgrade that deletes binding or replay history.
+
+Reconciliation checks placement before returning any historical terminal result.
+For UNKNOWN, a matching HEAD is followed by a conditional GET bound to ETag, optional
+version ID and all six operation/digest metadata fields. The complete stream must
+match the reserved length and SHA-256 before CONFIRMED is recorded. GET errors retain
+EFFECT_UNKNOWN. `bytesVerified` is recorded only after this verification, using JSON
+serialization (quoted ETags must remain valid JSON). A previously confirmed record is
+a historical effect observation, not a claim of current object availability or lease.
+
+Fault relays keep the same configured origin for PUT, HEAD and GET; switching to a
+direct provider alias for reconciliation would violate the placement binding. They
+forward real signed requests and provider responses unchanged and count observed
+GETs and unexpected writes. Counts describe observed traffic, not absence of future
+requests. This remains library/provider development evidence,
+not a worker process-kill/Go takeover or exactly-once proof.

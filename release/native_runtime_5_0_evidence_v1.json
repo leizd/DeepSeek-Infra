@@ -56,7 +56,7 @@
     },
     {
       "code": "EFFECT_RECONCILIATION_UNPROVEN",
-      "detail": "Worker storage reconciliation lacks complete durable provider-target binding and conditional byte-integrity proof. A missing object or mismatched metadata cannot settle an uncertain in-flight write as unapplied; full process-kill/takeover recovery remains unqualified."
+      "detail": "The optional worker S3 path now journals placement/condition and requires conditional byte verification, but operation-specific signed admission, renewable live authority, provider ownership and full process-kill/takeover recovery remain unqualified. A missing object or mismatched metadata cannot settle an uncertain in-flight write as unapplied; local library results are not release proof."
     },
     {
       "code": "PROVIDER_EVIDENCE_MISSING",

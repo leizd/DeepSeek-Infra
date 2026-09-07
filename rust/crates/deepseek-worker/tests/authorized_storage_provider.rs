@@ -31,11 +31,15 @@ fn store(endpoint: &str) -> S3Transport {
 }
 
 fn store_in_bucket(endpoint: &str, bucket: String) -> S3Transport {
+    store_at(endpoint, bucket, "worker-authorized-e2e")
+}
+
+fn store_at(endpoint: &str, bucket: String, prefix: &str) -> S3Transport {
     S3Transport::new(
         S3Config {
             endpoint: endpoint.into(),
             bucket,
-            prefix: "worker-authorized-e2e".into(),
+            prefix: prefix.into(),
             region: "us-east-1".into(),
             allow_http_loopback: true,
         },
@@ -176,6 +180,11 @@ async fn authorized_storage_put_reaches_real_minio_and_is_durable() {
         let effect = worker.query_storage_effect(&fence).unwrap().unwrap();
         assert_eq!(effect.state, StorageEffectState::Committed);
         assert_eq!(effect.etag.as_deref(), Some(observation.etag.as_str()));
+        let metadata: Value =
+            serde_json::from_str(effect.provider_metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(metadata["etag"], observation.etag);
+        assert_eq!(metadata["size"], payload.len());
+        assert!(effect.binding.is_some());
 
         // Replay attempt on same worker is rejected
         assert_eq!(
@@ -261,6 +270,64 @@ async fn takeover_fencing_token_rejects_storage_put_on_real_minio() {
 }
 
 #[tokio::test]
+async fn confirmed_effect_is_not_reused_for_a_different_provider_target() {
+    let directory = tempfile::tempdir().unwrap();
+    let (key, config) = test_signer();
+    let endpoints = endpoints();
+    let original = store(&endpoints[0]);
+    let unrelated = store(&endpoints[1]);
+    let fence = ActionFence {
+        action_id: "provider-bound-confirmation".into(),
+        execution_epoch: 17,
+    };
+    let signed = sign_request(&key, &fence.action_id, 17, 4, "6", "7");
+    let mut worker = Worker::open_with_authority(config.clone(), directory.path()).unwrap();
+    worker.install_signed_epoch(&fence, &signed).unwrap();
+    let payload = Bytes::from_static(b"only the first provider received these bytes");
+    let digest = Sha256::digest(&payload).into();
+    let target_key = "provider-bound-confirmation";
+    worker
+        .execute_storage_put(
+            &original,
+            target_key,
+            payload.clone(),
+            digest,
+            &fence,
+            ConditionalWrite::Create,
+        )
+        .await
+        .unwrap();
+    assert!(unrelated.stat(target_key).await.unwrap().is_none());
+    drop(worker);
+    let mut worker = Worker::open_with_authority(config, directory.path()).unwrap();
+    let bucket = std::env::var("DEEPSEEK_NATIVE_S3_BUCKET").unwrap();
+    for other_target in [
+        store_in_bucket(&endpoints[0], format!("{bucket}-different")),
+        store_at(&endpoints[0], bucket, "different-prefix"),
+    ] {
+        assert_eq!(
+            worker
+                .reconcile_storage_mutation(&other_target, &fence)
+                .await,
+            Err(WorkerStorageError::TargetMismatch)
+        );
+    }
+    assert_eq!(
+        worker.reconcile_storage_mutation(&unrelated, &fence).await,
+        Err(WorkerStorageError::TargetMismatch),
+        "terminal journal result belongs to another provider"
+    );
+    assert_eq!(
+        worker
+            .reconcile_storage_mutation(&original, &fence)
+            .await
+            .unwrap()
+            .state,
+        StorageEffectState::Confirmed
+    );
+}
+
+#[tokio::test]
 async fn dropped_ack_unknown_effect_reconciles_against_real_minio() {
     let directory = tempfile::tempdir().unwrap();
     let (key, config) = test_signer();
@@ -283,10 +350,11 @@ async fn dropped_ack_unknown_effect_reconciles_against_real_minio() {
 
     // 1. Execute normally; the relay drops only real MinIO's successful ACK.
     // No manual journal state is used as provider evidence.
-    let (fault_endpoint, _release, relay) = faulted_put_relay(&endpoint, false).await;
+    let (fault_endpoint, _release, mut relay) = faulted_put_relay(&endpoint, false).await;
+    let fault_transport = store(&fault_endpoint);
     let result = worker
         .execute_storage_put(
-            &store(&fault_endpoint),
+            &fault_transport,
             target_key,
             payload.clone(),
             digest,
@@ -300,7 +368,7 @@ async fn dropped_ack_unknown_effect_reconciles_against_real_minio() {
             deepseek_storage::s3::S3Error::EffectUnknown
         ))
     );
-    relay.await.unwrap();
+    relay.wait_committed().await;
     let observation = transport.stat(target_key).await.unwrap().unwrap();
     assert_eq!(
         worker.query_storage_effect(&fence).unwrap().unwrap().state,
@@ -323,13 +391,22 @@ async fn dropped_ack_unknown_effect_reconciles_against_real_minio() {
     );
 
     // 5. Worker reconciles the mutation against real MinIO
+    assert_eq!(relay.observed_gets(), 0);
     let reconciled = worker
-        .reconcile_storage_mutation(&transport, &fence)
+        .reconcile_storage_mutation(&fault_transport, &fence)
         .await
         .unwrap();
 
     assert_eq!(reconciled.state, StorageEffectState::Committed);
     assert_eq!(reconciled.etag.as_deref(), Some(observation.etag.as_str()));
+    assert_eq!(relay.observed_gets(), 1);
+    let metadata: Value =
+        serde_json::from_str(reconciled.provider_metadata.as_deref().unwrap()).unwrap();
+    assert_eq!(metadata["bytesVerified"], true);
+    assert_eq!(
+        metadata["sha256"],
+        format!("{:x}", Sha256::digest(&payload))
+    );
 
     // 6. Once reconciled to COMMITTED, retry is rejected as ReplayRejected
     assert_eq!(
@@ -407,10 +484,11 @@ async fn late_provider_write_keeps_negative_observation_unknown(preexisting: boo
 
     // Capture the real signed PUT, disconnect the worker, and delay the original
     // request's delivery to real MinIO. No manual effect-journal writes.
-    let (fault_endpoint, release, relay) = faulted_put_relay(&endpoint, true).await;
+    let (fault_endpoint, release, mut relay) = faulted_put_relay(&endpoint, true).await;
+    let fault_transport = store(&fault_endpoint);
     let result = worker
         .execute_storage_put(
-            &store(&fault_endpoint),
+            &fault_transport,
             target_key,
             payload.clone(),
             digest,
@@ -438,14 +516,14 @@ async fn late_provider_write_keeps_negative_observation_unknown(preexisting: boo
     drop(worker);
     let mut worker = Worker::open_with_authority(config, directory.path()).unwrap();
     let reconciled = worker
-        .reconcile_storage_mutation(&transport, &fence)
+        .reconcile_storage_mutation(&fault_transport, &fence)
         .await
         .unwrap();
 
     // Complete the captured request even on the old failing implementation, so
     // the RED assertion is backed by an actual late committed provider write.
     release.send(()).unwrap();
-    relay.await.unwrap();
+    relay.wait_committed().await;
     transport
         .download_verified(
             target_key,
@@ -475,14 +553,42 @@ async fn late_provider_write_keeps_negative_observation_unknown(preexisting: boo
     );
 }
 
+struct FaultRelay {
+    first_put: Option<tokio::task::JoinHandle<()>>,
+    reads: tokio::task::JoinHandle<()>,
+    unexpected_writes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    gets: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl FaultRelay {
+    fn observed_gets(&self) -> usize {
+        self.gets.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    async fn wait_committed(&mut self) {
+        self.first_put.take().unwrap().await.unwrap();
+        assert_eq!(
+            self.unexpected_writes
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "hidden PUT retry"
+        );
+    }
+}
+
+impl Drop for FaultRelay {
+    fn drop(&mut self) {
+        if let Some(first_put) = &self.first_put {
+            first_put.abort();
+        }
+        self.reads.abort();
+    }
+}
+
 async fn faulted_put_relay(
     endpoint: &str,
     delayed: bool,
-) -> (
-    String,
-    tokio::sync::oneshot::Sender<()>,
-    tokio::task::JoinHandle<()>,
-) {
+) -> (String, tokio::sync::oneshot::Sender<()>, FaultRelay) {
     use std::time::Duration;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -490,14 +596,18 @@ async fn faulted_put_relay(
         time::timeout,
     };
     let upstream_address = endpoint.strip_prefix("http://").unwrap().to_owned();
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let read_address = upstream_address.clone();
+    let listener = std::sync::Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());
+    let write_listener = listener.clone();
     let relay_endpoint = format!("http://{}", listener.local_addr().unwrap());
     let (release, released) = tokio::sync::oneshot::channel();
+    let (accepted, read_ready) = tokio::sync::oneshot::channel();
     let relay = tokio::spawn(async move {
-        let (mut downstream, _) = timeout(Duration::from_secs(10), listener.accept())
+        let (mut downstream, _) = timeout(Duration::from_secs(10), write_listener.accept())
             .await
             .unwrap()
             .unwrap();
+        accepted.send(()).unwrap();
         let mut request = Vec::new();
         let mut expected = None;
         timeout(Duration::from_secs(10), async {
@@ -566,12 +676,58 @@ async fn faulted_put_relay(
             connection.shutdown().await.unwrap();
             drop(connection);
         }
-        assert!(
-            timeout(Duration::from_millis(250), listener.accept())
-                .await
-                .is_err(),
-            "hidden PUT retry"
-        );
     });
-    (relay_endpoint, release, relay)
+    let unexpected_writes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let writes = unexpected_writes.clone();
+    let gets = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let read_gets = gets.clone();
+    // Keep the exact configured origin alive for HEAD/GET after the fault.
+    // A durable target binding must never be bypassed by switching to a direct alias.
+    let reads = tokio::spawn(async move {
+        read_ready.await.unwrap();
+        loop {
+            let (mut client, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            timeout(Duration::from_secs(10), async {
+                loop {
+                    let mut part = [0; 4096];
+                    let count = client.read(&mut part).await.unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&part[..count]);
+                    assert!(request.len() <= 65536);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            if !request.starts_with(b"GET ") && !request.starts_with(b"HEAD ") {
+                writes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                client.shutdown().await.unwrap();
+                continue;
+            }
+            if request.starts_with(b"GET ") {
+                read_gets.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            let mut provider = TcpStream::connect(&read_address).await.unwrap();
+            provider.write_all(&request).await.unwrap();
+            // All provider responses are forwarded unchanged; no synthetic S3.
+            let _ = timeout(
+                Duration::from_secs(10),
+                tokio::io::copy_bidirectional(&mut client, &mut provider),
+            )
+            .await;
+        }
+    });
+    (
+        relay_endpoint,
+        release,
+        FaultRelay {
+            first_put: Some(relay),
+            reads,
+            unexpected_writes,
+            gets,
+        },
+    )
 }

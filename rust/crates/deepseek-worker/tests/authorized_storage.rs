@@ -112,6 +112,193 @@ fn dummy_transport() -> S3Transport {
 }
 
 #[tokio::test]
+async fn bound_intent_is_immutable_and_legacy_intent_cannot_dispatch() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, fence, key) = fixture();
+    let mut worker = Worker::open_with_authority(config, directory.path()).unwrap();
+    worker
+        .install_signed_epoch(
+            &fence,
+            &sign_request(&key, &fence.action_id, 4, 4, "1", "1"),
+        )
+        .unwrap();
+    let transport = dummy_transport();
+    let digest = Sha256::digest(b"immutable intent").into();
+    worker
+        .reserve_bound_storage_mutation(
+            &fence,
+            &transport,
+            "immutable-key",
+            &digest,
+            16,
+            &ConditionalWrite::Match("\"prior-etag\"".into()),
+        )
+        .unwrap();
+    let record = worker.query_storage_effect(&fence).unwrap().unwrap();
+    assert_eq!(
+        record.binding.as_ref().unwrap().expected_etag.as_deref(),
+        Some("\"prior-etag\"")
+    );
+    assert_eq!(
+        worker.reserve_bound_storage_mutation(
+            &fence,
+            &transport,
+            "immutable-key",
+            &digest,
+            0,
+            &ConditionalWrite::Match("\"prior-etag\"".into())
+        ),
+        Err(WorkerStorageError::DigestMismatch)
+    );
+    assert_eq!(
+        worker.reserve_bound_storage_mutation(
+            &fence,
+            &transport,
+            "immutable-key",
+            &digest,
+            16,
+            &ConditionalWrite::Create
+        ),
+        Err(WorkerStorageError::TargetMismatch)
+    );
+    let connection =
+        rusqlite::Connection::open(directory.path().join("rust-worker/authority.sqlite3")).unwrap();
+    let reject_immutable = |sql: &str| {
+        let error = connection.execute(sql, []).unwrap_err();
+        assert!(
+            error.to_string().contains("immutable"),
+            "wrong rejection for {sql}: {error}"
+        );
+    };
+    for sql in [
+        "UPDATE storage_effect_bindings SET expected_etag=NULL",
+        "DELETE FROM storage_effect_bindings",
+        "UPDATE storage_effects SET target_key='another-key'",
+        "UPDATE storage_effects SET payload_digest='changed-digest'",
+        "UPDATE storage_effects SET expected_length=17",
+        "UPDATE storage_effects SET expected_version=NULL",
+        "UPDATE storage_effects SET authority_principal='another-principal'",
+        "UPDATE storage_effects SET rowid=rowid+1",
+        "INSERT OR REPLACE INTO storage_effect_bindings SELECT action_id,epoch,target_identity,NULL FROM storage_effect_bindings",
+        "INSERT OR REPLACE INTO storage_effects SELECT action_id,epoch,fencing_token,request_id,nonce,operation_kind,'replacement-key',payload_digest,expected_length,expected_version,authority_principal,state,etag,provider_metadata,created_at,updated_at FROM storage_effects",
+    ] {
+        reject_immutable(sql);
+    }
+    let legacy = ActionFence {
+        action_id: "unbound-legacy-intent".into(),
+        execution_epoch: 1,
+    };
+    worker
+        .install_signed_epoch(
+            &legacy,
+            &sign_request(&key, &legacy.action_id, 1, 4, "2", "2"),
+        )
+        .unwrap();
+    reject_immutable(
+        "INSERT OR REPLACE INTO storage_effects (rowid,action_id,epoch,fencing_token,request_id,nonce,operation_kind,target_key,payload_digest,expected_length,expected_version,authority_principal,state,etag,provider_metadata,created_at,updated_at) SELECT rowid,'unbound-legacy-intent',1,fencing_token,request_id,nonce,operation_kind,target_key,payload_digest,expected_length,expected_version,authority_principal,state,etag,provider_metadata,created_at,updated_at FROM storage_effects",
+    );
+    worker
+        .reserve_storage_mutation(&legacy, "legacy-key", &digest)
+        .unwrap();
+    reject_immutable(
+        "INSERT OR REPLACE INTO storage_effect_bindings (rowid,action_id,epoch,target_identity,expected_etag) SELECT rowid,'unbound-legacy-intent',1,target_identity,expected_etag FROM storage_effect_bindings",
+    );
+    assert_eq!(
+        worker.transition_storage_mutation(&legacy, StorageEffectState::Dispatching, None, None),
+        Err(WorkerStorageError::FenceMismatch)
+    );
+    assert_eq!(
+        worker.reconcile_storage_mutation(&transport, &legacy).await,
+        Err(WorkerStorageError::TargetMismatch)
+    );
+}
+
+#[tokio::test]
+async fn v1_migration_preserves_legacy_journal_and_rolls_back_on_identity_failure() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, fence, key) = fixture();
+    let mut worker = Worker::open_with_authority(config.clone(), directory.path()).unwrap();
+    let signed = sign_request(&key, &fence.action_id, 4, 4, "1", "1");
+    worker.install_signed_epoch(&fence, &signed).unwrap();
+    worker
+        .reserve_storage_mutation(&fence, "historical-key", &Sha256::digest(b"legacy").into())
+        .unwrap();
+    worker
+        .record_storage_mutation_effect_unknown(&fence)
+        .unwrap();
+    let prior = worker.query_storage_effect(&fence).unwrap().unwrap();
+    drop(worker);
+    let path = directory.path().join("rust-worker/authority.sqlite3");
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    // Construct the exact historical schema only in this newly isolated test DB.
+    // No provider effect is inferred from this fixture and no release downgrade API exists.
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM storage_effect_bindings", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        0
+    );
+    let additions: Vec<String> = connection.prepare("SELECT name FROM sqlite_schema WHERE type='trigger' AND (name LIKE 'storage_binding_%' OR name LIKE 'storage_dispatch_%' OR name LIKE 'storage_effect_identity_%')").unwrap()
+        .query_map([], |row| row.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
+    for name in additions {
+        connection
+            .execute(&format!("DROP TRIGGER {name}"), [])
+            .unwrap();
+    }
+    connection
+        .execute("DROP TABLE storage_effect_bindings", [])
+        .unwrap();
+    connection.pragma_update(None, "user_version", 1).unwrap();
+    let wrong_identity = WorkerAuthorityConfig {
+        fleet_id: "wrong-fleet".into(),
+        ..config.clone()
+    };
+    assert!(Worker::open_with_authority(wrong_identity, directory.path()).is_err());
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name='storage_effect_bindings'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    let mut migrated = Worker::open_with_authority(config, directory.path()).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT request FROM epoch_installs", [], |row| row
+                .get::<_, Vec<u8>>(0))
+            .unwrap(),
+        signed
+    );
+    assert_eq!(
+        migrated.query_storage_effect(&fence).unwrap().unwrap(),
+        prior
+    );
+    assert_eq!(
+        migrated
+            .reconcile_storage_mutation(&dummy_transport(), &fence)
+            .await,
+        Err(WorkerStorageError::TargetMismatch)
+    );
+}
+
+#[tokio::test]
 async fn unconfigured_worker_rejects_storage_mutation() {
     let mut worker = Worker::new();
     let transport = dummy_transport();
@@ -401,14 +588,13 @@ async fn crash_during_dispatching_recovers_to_effect_unknown_and_requires_reconc
 
         // 1. Reserve mutation with extended audit identity
         let proof = worker
-            .reserve_storage_mutation_ext(
+            .reserve_bound_storage_mutation(
                 &fence,
+                &dummy_transport(),
                 "data/chunk-01",
                 &digest,
                 payload.len() as u64,
-                "PUT_CHUNK",
-                Some("v1"),
-                &config.signer_public_key,
+                &ConditionalWrite::Match("\"v1\"".into()),
             )
             .unwrap();
         assert_eq!(proof.action_id, fence.action_id);
@@ -423,7 +609,8 @@ async fn crash_during_dispatching_recovers_to_effect_unknown_and_requires_reconc
         assert_eq!(in_flight.operation_kind, "PUT_CHUNK");
         assert_eq!(in_flight.target_key, "data/chunk-01");
         assert_eq!(in_flight.expected_length, payload.len() as u64);
-        assert_eq!(in_flight.expected_version.as_deref(), Some("v1"));
+        assert_eq!(in_flight.expected_version.as_deref(), Some("\"v1\""));
+        assert!(in_flight.binding.is_some());
         assert_eq!(in_flight.authority_principal, config.signer_public_key);
         assert!(in_flight.etag.is_none());
         assert!(in_flight.provider_metadata.is_none());

@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use crate::{AuthorityRequestContext, AuthorityRequestError, WorkerAuthority, authority_request};
 #[cfg(feature = "s3")]
-use crate::{StorageEffectRecord, StorageEffectState, WorkerStorageError};
+use crate::{StorageEffectBinding, StorageEffectRecord, StorageEffectState, WorkerStorageError};
 
 const SCHEMA: &[&str] = &[
     "CREATE TABLE worker_authority (id INTEGER PRIMARY KEY CHECK(id=1), signer TEXT NOT NULL, fleet TEXT NOT NULL, environment TEXT NOT NULL, fencing_token INTEGER NOT NULL CHECK(fencing_token>0)) STRICT",
@@ -24,6 +24,18 @@ const SCHEMA: &[&str] = &[
     "CREATE TRIGGER storage_effects_transition BEFORE UPDATE ON storage_effects WHEN OLD.state NOT IN ('CONFIRMED','COMMITTED','REJECTED','FAILED') AND NOT (OLD.state = NEW.state OR (OLD.state IN ('RESERVED','PENDING') AND NEW.state IN ('DISPATCHING','CONFIRMED','COMMITTED','EFFECT_UNKNOWN','RECONCILING','REJECTED','FAILED')) OR (OLD.state='DISPATCHING' AND NEW.state IN ('CONFIRMED','COMMITTED','EFFECT_UNKNOWN','REJECTED','FAILED')) OR (OLD.state='EFFECT_UNKNOWN' AND NEW.state='RECONCILING') OR (OLD.state='RECONCILING' AND NEW.state IN ('CONFIRMED','COMMITTED','EFFECT_UNKNOWN','REJECTED','FAILED'))) BEGIN SELECT RAISE(ABORT,'illegal storage effect transition'); END",
 ];
 const APPLICATION_ID: i64 = 0x44535741; // DSWA: DeepSeek Worker Authority
+
+// Additive schema extension. Never infer bindings for historical effect rows.
+const SCHEMA_V2: &[&str] = &[
+    "CREATE TABLE storage_effect_bindings (action_id TEXT NOT NULL, epoch INTEGER NOT NULL, target_identity TEXT NOT NULL CHECK(length(target_identity)=64 AND target_identity NOT GLOB '*[^0-9a-f]*'), expected_etag TEXT, PRIMARY KEY(action_id,epoch)) STRICT",
+    "CREATE TRIGGER storage_binding_parent BEFORE INSERT ON storage_effect_bindings WHEN NOT EXISTS (SELECT 1 FROM storage_effects e WHERE e.action_id=NEW.action_id AND e.epoch=NEW.epoch AND e.state IN ('RESERVED','PENDING')) BEGIN SELECT RAISE(ABORT,'binding requires reserved effect'); END",
+    "CREATE TRIGGER storage_binding_no_update BEFORE UPDATE ON storage_effect_bindings BEGIN SELECT RAISE(ABORT,'immutable storage binding'); END",
+    "CREATE TRIGGER storage_binding_no_delete BEFORE DELETE ON storage_effect_bindings BEGIN SELECT RAISE(ABORT,'immutable storage binding'); END",
+    "CREATE TRIGGER storage_binding_no_replace BEFORE INSERT ON storage_effect_bindings WHEN EXISTS (SELECT 1 FROM storage_effect_bindings b WHERE b.rowid=NEW.rowid OR (b.action_id=NEW.action_id AND b.epoch=NEW.epoch)) BEGIN SELECT RAISE(ABORT,'immutable storage binding'); END",
+    "CREATE TRIGGER storage_effect_identity_no_replace BEFORE INSERT ON storage_effects WHEN EXISTS (SELECT 1 FROM storage_effects e WHERE e.rowid=NEW.rowid OR (e.action_id=NEW.action_id AND e.epoch=NEW.epoch)) BEGIN SELECT RAISE(ABORT,'immutable storage effect identity'); END",
+    "CREATE TRIGGER storage_dispatch_bound BEFORE UPDATE ON storage_effects WHEN NEW.state='DISPATCHING' AND NOT EXISTS (SELECT 1 FROM storage_effect_bindings b WHERE b.action_id=NEW.action_id AND b.epoch=NEW.epoch) BEGIN SELECT RAISE(ABORT,'unbound storage dispatch'); END",
+    "CREATE TRIGGER storage_effect_identity_immutable BEFORE UPDATE ON storage_effects WHEN NEW.rowid IS NOT OLD.rowid OR NEW.action_id IS NOT OLD.action_id OR NEW.epoch IS NOT OLD.epoch OR NEW.fencing_token IS NOT OLD.fencing_token OR NEW.request_id IS NOT OLD.request_id OR NEW.nonce IS NOT OLD.nonce OR NEW.operation_kind IS NOT OLD.operation_kind OR NEW.target_key IS NOT OLD.target_key OR NEW.payload_digest IS NOT OLD.payload_digest OR NEW.expected_length IS NOT OLD.expected_length OR NEW.expected_version IS NOT OLD.expected_version OR NEW.authority_principal IS NOT OLD.authority_principal OR NEW.created_at IS NOT OLD.created_at BEGIN SELECT RAISE(ABORT,'immutable storage effect identity'); END",
+];
 
 #[derive(Debug)]
 pub(super) struct AuthorityStore {
@@ -92,7 +104,8 @@ impl AuthorityStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| error())?;
-        if validate_schema(&transaction, !existed)? {
+        let schema_version = validate_schema(&transaction, !existed)?;
+        if schema_version == 0 {
             for sql in SCHEMA {
                 transaction.execute_batch(sql).map_err(|_| error())?;
             }
@@ -112,6 +125,14 @@ impl AuthorityStore {
                         authority.fencing_token
                     ],
                 )
+                .map_err(|_| error())?;
+        }
+        if schema_version < 2 {
+            for sql in SCHEMA_V2 {
+                transaction.execute(sql, []).map_err(|_| error())?;
+            }
+            transaction
+                .pragma_update(None, "user_version", 2)
                 .map_err(|_| error())?;
         }
         let (signer, fleet, environment, token): (String, String, String, i64) = transaction
@@ -281,6 +302,7 @@ impl AuthorityStore {
         operation_kind: &str,
         expected_version: Option<&str>,
         authority_principal: &str,
+        binding: Option<&StorageEffectBinding>,
     ) -> Result<deepseek_storage::s3::StorageAuthorityProof, WorkerStorageError> {
         deepseek_protocol::validate_fence(fence).map_err(|_| WorkerStorageError::FenceMismatch)?;
         if key.is_empty() || key.len() > 1024 {
@@ -343,13 +365,20 @@ impl AuthorityStore {
             .map_err(|_| WorkerStorageError::FenceMismatch)?;
 
         if let Some((target_key, stored_digest, stored_length, state)) = existing {
+            let persisted: Option<(String, Option<String>)> = transaction.query_row(
+                "SELECT target_identity,expected_etag FROM storage_effect_bindings WHERE action_id=?1 AND epoch=?2",
+                params![&fence.action_id, fence.execution_epoch as i64],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            ).optional().map_err(|_| WorkerStorageError::FenceMismatch)?;
             if target_key != key {
                 return Err(WorkerStorageError::TargetMismatch);
             }
             if stored_digest != digest_hex {
                 return Err(WorkerStorageError::DigestMismatch);
             }
-            if expected_length > 0 && stored_length > 0 && stored_length != expected_length as i64 {
+            if stored_length != expected_length as i64
+                && (persisted.is_some() || (expected_length > 0 && stored_length > 0))
+            {
                 return Err(WorkerStorageError::DigestMismatch);
             }
             match state.as_str() {
@@ -359,6 +388,11 @@ impl AuthorityStore {
                 "REJECTED" | "FAILED" => return Err(WorkerStorageError::PreconditionRejected),
                 "RESERVED" | "PENDING" | "DISPATCHING" => {}
                 _ => return Err(WorkerStorageError::FenceMismatch),
+            }
+            let expected =
+                binding.map(|value| (value.target_identity.clone(), value.expected_etag.clone()));
+            if persisted != expected {
+                return Err(WorkerStorageError::TargetMismatch);
             }
         } else {
             let now = match &self.now_override {
@@ -385,6 +419,19 @@ impl AuthorityStore {
                     ],
                 )
                 .map_err(|_| WorkerStorageError::FenceMismatch)?;
+            if let Some(binding) = binding {
+                transaction
+                    .execute(
+                        "INSERT INTO storage_effect_bindings VALUES (?1,?2,?3,?4)",
+                        params![
+                            &fence.action_id,
+                            fence.execution_epoch as i64,
+                            &binding.target_identity,
+                            &binding.expected_etag
+                        ],
+                    )
+                    .map_err(|_| WorkerStorageError::FenceMismatch)?;
+            }
         }
         transaction
             .commit()
@@ -457,7 +504,7 @@ impl AuthorityStore {
         let row = self
             .connection
             .query_row(
-                "SELECT action_id, epoch, fencing_token, request_id, nonce, operation_kind, target_key, payload_digest, expected_length, expected_version, authority_principal, state, etag, provider_metadata, created_at, updated_at FROM storage_effects WHERE action_id=?1 AND epoch=?2",
+                "SELECT action_id, epoch, fencing_token, request_id, nonce, operation_kind, target_key, payload_digest, expected_length, expected_version, authority_principal, state, etag, provider_metadata, created_at, updated_at, (SELECT b.target_identity FROM storage_effect_bindings b WHERE b.action_id=storage_effects.action_id AND b.epoch=storage_effects.epoch), (SELECT b.expected_etag FROM storage_effect_bindings b WHERE b.action_id=storage_effects.action_id AND b.epoch=storage_effects.epoch) FROM storage_effects WHERE action_id=?1 AND epoch=?2",
                 params![&fence.action_id, fence.execution_epoch as i64],
                 |row| {
                     let state_str: String = row.get(11)?;
@@ -465,6 +512,8 @@ impl AuthorityStore {
                         .ok_or(rusqlite::Error::InvalidQuery)?;
                     let epoch: i64 = row.get(1)?;
                     let expected_length: i64 = row.get(8)?;
+                    let target: Option<String> = row.get(16)?;
+                    let expected_etag: Option<String> = row.get(17)?;
                     Ok(StorageEffectRecord {
                         action_id: row.get(0)?,
                         execution_epoch: epoch as u64,
@@ -482,6 +531,7 @@ impl AuthorityStore {
                         provider_metadata: row.get(13)?,
                         created_at: row.get(14)?,
                         updated_at: row.get(15)?,
+                        binding: target.map(|target_identity| StorageEffectBinding { target_identity, expected_etag }),
                     })
                 },
             )
@@ -587,7 +637,7 @@ fn context<'a>(
 fn validate_schema(
     connection: &Connection,
     allow_empty: bool,
-) -> Result<bool, AuthorityRequestError> {
+) -> Result<u8, AuthorityRequestError> {
     let version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(|_| error())?;
@@ -603,14 +653,17 @@ fn validate_schema(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| error())?;
     if allow_empty && version == 0 && application == 0 && actual.is_empty() {
-        return Ok(true);
+        return Ok(0);
     }
     let mut expected: Vec<_> = SCHEMA.iter().map(|sql| sql.to_string()).collect();
+    if version == 2 {
+        expected.extend(SCHEMA_V2.iter().map(|sql| sql.to_string()));
+    }
     expected.sort();
-    if version != 1 || application != APPLICATION_ID || actual != expected {
+    if !matches!(version, 1 | 2) || application != APPLICATION_ID || actual != expected {
         return Err(error());
     }
-    Ok(false)
+    Ok(version as u8)
 }
 
 fn reject_link(path: &Path) -> Result<(), AuthorityRequestError> {

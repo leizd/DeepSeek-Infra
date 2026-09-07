@@ -25,6 +25,17 @@ pub enum ConditionalWrite {
     Match(String),
 }
 
+impl ConditionalWrite {
+    /// Validate a conditional intent before it is persisted or dispatched.
+    pub fn expected_etag(&self) -> Result<Option<&str>, S3Error> {
+        match self {
+            Self::Create => Ok(None),
+            Self::Match(etag) if strong_etag(etag) => Ok(Some(etag)),
+            Self::Match(_) => Err(S3Error::InvalidWrite),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageAuthorityProof {
     pub action_id: String,
