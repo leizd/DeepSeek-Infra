@@ -216,6 +216,72 @@ func TestExecuteActionLeaseLostDuringDispatch(t *testing.T) {
 	}
 }
 
+func TestExecuteActionTakeoverFencingTokenDuringDispatch(t *testing.T) {
+	st := newFakeStore()
+	st.records["action:act-1"] = store.Record{
+		Domain:         "action",
+		ID:             "act-1",
+		Revision:       1,
+		ExecutionEpoch: 1,
+		State:          "PENDING",
+	}
+
+	worker := &fakeWorkerClient{
+		executeResp: &actionv1.StorageMutationResponse{
+			Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
+		},
+		onExecute: func() {
+			st.lease.FencingToken = 99
+		},
+	}
+
+	coord := NewCoordinator(st, worker, WithNow(func() int64 { return 500 }))
+	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", &actionv1.StorageMutationRequest{OperationId: "op-1"})
+	if !errors.Is(err, ErrWriterLeaseLost) {
+		t.Fatalf("expected ErrWriterLeaseLost on takeover, got: %v", err)
+	}
+
+	rec, _, _ := st.Get("action", "act-1")
+	if rec.State != "EFFECT_UNKNOWN" {
+		t.Fatalf("expected EFFECT_UNKNOWN after takeover, got: %s", rec.State)
+	}
+}
+
+func TestReconcileActionTakeoverFencingTokenDuringQuery(t *testing.T) {
+	st := newFakeStore()
+	st.records["action:act-1"] = store.Record{
+		Domain:         "action",
+		ID:             "act-1",
+		Revision:       2,
+		ExecutionEpoch: 1,
+		State:          "EFFECT_UNKNOWN",
+	}
+
+	worker := &fakeWorkerClient{
+		queryResp: &actionv1.StorageMutationResponse{
+			Status:      actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
+			State:       commonv1.EffectState_EFFECT_STATE_APPLIED,
+			Etag:        "\"etag-1\"",
+			EffectId:    "act-1:1",
+			OperationId: "op-1",
+		},
+		onQuery: func() {
+			st.lease.FencingToken = 99
+		},
+	}
+
+	coord := NewCoordinator(st, worker, WithNow(func() int64 { return 500 }))
+	_, err := coord.ReconcileStorageAction(context.Background(), "act-1", "op-1")
+	if !errors.Is(err, ErrWriterLeaseLost) {
+		t.Fatalf("expected ErrWriterLeaseLost on takeover during query, got: %v", err)
+	}
+
+	rec, _, _ := st.Get("action", "act-1")
+	if rec.State != "EFFECT_UNKNOWN" {
+		t.Fatalf("expected EFFECT_UNKNOWN to persist, got: %s", rec.State)
+	}
+}
+
 func TestReconcileStorageActionConfirmed(t *testing.T) {
 	st := newFakeStore()
 	st.records["action:act-1"] = store.Record{
