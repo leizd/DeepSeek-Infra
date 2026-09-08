@@ -156,14 +156,63 @@ The original `tasks/plan.md` and `tasks/todo.md` recovery plans remain untouched
   storage mutation, and coordinator rejection/reconciliation against the real
   process. All passed; no provider was contacted and no production auth was enabled.
 
-### Remaining durable operation-binding gap
+### Durable operation-binding gap identified on 2026-09-07
 
-Rust's current storage journal is keyed by action/epoch and records placement,
-condition and bytes, but does not persist the RPC `operation_id`. Its query method
-currently echoes the caller's operation ID. Client response checks alone cannot
-prove association with the original dispatched operation. Before production use,
-bind that identity atomically with the Rust intent, reject substitution and unbound
-legacy rows, return the persisted identity, and preserve it through real restart.
-Go must also persist the exact dispatch intent for recovery. This does not replace
+Before the v3 change below, Rust's journal recorded action/epoch, placement,
+condition and bytes but not the RPC `operation_id`; query echoed the caller's ID.
+Client response checks alone could not prove the original operation association.
+The Rust v3 work binds that identity atomically, rejects substitution and unbound
+legacy rows, and returns the persisted identity across journal reopen.
+Go must still persist the exact dispatch intent for recovery. This does not replace
 operation-specific signed authorization, service authentication or renewable action
 and resource leases; all remain required by the full ownership migration.
+
+## Rust operation binding implementation contract (2026-09-08)
+
+- Additive worker schema v3 retains v1/v2 unchanged and adds a Rust-owned immutable
+  `storage_rpc_operations` association keyed by action/epoch. No historical operation
+  identity is inferred or backfilled; old library rows remain diagnostically readable.
+- The first RPC reservation inserts parent intent, placement/condition binding and
+  operation ID in one `BEGIN IMMEDIATE` transaction before dispatch. A pre-existing
+  intent with a different or absent operation association cannot be adopted by RPC.
+- IDs are opaque and compared exactly (no normalization), nonblank, NUL-free and
+  at most 1024 UTF-8 bytes. Query validates identity before reconciliation/provider
+  access and returns the persisted ID; a caller cannot name an old effect arbitrarily.
+- Existing Rust library methods retain their signature and non-RPC semantics.
+  They cannot modify or dispatch an intent already associated with an RPC identity.
+- Verify legacy rejection, exact-ID retry, substitution before/after restart,
+  insert/update/delete/replace guards, atomic rollback and v1/v2 migration rollback.
+  Provider tests must use real MinIO and actual RPC-created intent, not seeded effects.
+- Stop workers before upgrade. An older binary must reject v3; there is no downgrade
+  that deletes replay/operation history. Migration failure rolls back without partial
+  schema changes. This preservation rule takes precedence over destructive down scripts.
+- This association is not an operation authorization signature, a renewable lease,
+  service authentication or proof of full Go/Rust ownership.
+
+### Implemented and locally verified (2026-09-08)
+
+- Schema v3 and atomic operation association are implemented. Query rejects legacy
+  unbound effects and substituted IDs before reconciliation. Immutable association
+  checks also run inside state-transition transactions, closing an unbound library
+  dispatch/settlement bypass reproduced during self-review.
+- Eight real-SQLite unit cases cover exact retry, UTF-8 limits, restart recovery,
+  library/RPC separation, insert rollback, immutable guards, v2 migration rollback
+  and corrupted/orphaned associations. The v1 migration test now checks upgrade to
+  v3 while preserving historical rows and signed bytes; neither fixture is provider
+  evidence or a supported downgrade.
+- Rust 1.85 GNU: worker all-target tests pass with S3 (71) and without it (45), and
+  strict Clippy passes with `s3-e2e` and without S3. Formatting, frozen contract
+  checks (40 corpora, 29 versions, 43 domains, 7 proto files, 10 generated outputs)
+  and checksum-pinned code generation checks pass. No frozen message changed.
+- The native provider runner passes 15 tests without skips (6 storage, 9 worker),
+  using three real MinIO instances. New RPC-handler tests create actual provider
+  writes, reject substituted IDs before/after journal reopen, independently verify
+  bytes, and recover a dropped successful ACK through the original operation ID
+  and bound conditional GET. These do not manually seed effect history.
+- This is local development evidence. The RPC-handler provider tests reopen worker
+  handles; they do not prove operation recovery across an actual worker/controller
+  process kill, qualified transport authentication, or exact-head release CI.
+- Next dependency: Go-owned durable dispatch intent and recovery, followed by the
+  remaining signed-operation, renewable lease and real process-kill/takeover gates.
+  Production transport-authentication confirmation and full ownership cutover remain
+  pending. No Python production surface is declared migrated by this journal change.

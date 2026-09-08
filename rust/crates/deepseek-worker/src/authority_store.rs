@@ -37,6 +37,16 @@ const SCHEMA_V2: &[&str] = &[
     "CREATE TRIGGER storage_effect_identity_immutable BEFORE UPDATE ON storage_effects WHEN NEW.rowid IS NOT OLD.rowid OR NEW.action_id IS NOT OLD.action_id OR NEW.epoch IS NOT OLD.epoch OR NEW.fencing_token IS NOT OLD.fencing_token OR NEW.request_id IS NOT OLD.request_id OR NEW.nonce IS NOT OLD.nonce OR NEW.operation_kind IS NOT OLD.operation_kind OR NEW.target_key IS NOT OLD.target_key OR NEW.payload_digest IS NOT OLD.payload_digest OR NEW.expected_length IS NOT OLD.expected_length OR NEW.expected_version IS NOT OLD.expected_version OR NEW.authority_principal IS NOT OLD.authority_principal OR NEW.created_at IS NOT OLD.created_at BEGIN SELECT RAISE(ABORT,'immutable storage effect identity'); END",
 ];
 
+// The association is inserted only by the same transaction as its parent intent.
+// Retain exact v1/v2 schema and never backfill an identity for historical effects.
+const SCHEMA_V3: &[&str] = &[
+    "CREATE TABLE storage_rpc_operations (action_id TEXT NOT NULL, epoch INTEGER NOT NULL CHECK(epoch>0), operation_id TEXT NOT NULL CHECK(length(CAST(operation_id AS BLOB)) BETWEEN 1 AND 1024 AND length(trim(operation_id))>0 AND instr(operation_id,char(0))=0), PRIMARY KEY(action_id,epoch)) STRICT",
+    "CREATE TRIGGER storage_rpc_parent BEFORE INSERT ON storage_rpc_operations WHEN NOT EXISTS (SELECT 1 FROM storage_effects e JOIN storage_effect_bindings b ON b.action_id=e.action_id AND b.epoch=e.epoch WHERE e.action_id=NEW.action_id AND e.epoch=NEW.epoch AND e.state IN ('RESERVED','PENDING')) BEGIN SELECT RAISE(ABORT,'operation requires bound reserved effect'); END",
+    "CREATE TRIGGER storage_rpc_no_update BEFORE UPDATE ON storage_rpc_operations BEGIN SELECT RAISE(ABORT,'immutable storage operation'); END",
+    "CREATE TRIGGER storage_rpc_no_delete BEFORE DELETE ON storage_rpc_operations BEGIN SELECT RAISE(ABORT,'immutable storage operation'); END",
+    "CREATE TRIGGER storage_rpc_no_replace BEFORE INSERT ON storage_rpc_operations WHEN EXISTS (SELECT 1 FROM storage_rpc_operations o WHERE o.rowid=NEW.rowid OR (o.action_id=NEW.action_id AND o.epoch=NEW.epoch)) BEGIN SELECT RAISE(ABORT,'immutable storage operation'); END",
+];
+
 #[derive(Debug)]
 pub(super) struct AuthorityStore {
     connection: Connection,
@@ -133,6 +143,14 @@ impl AuthorityStore {
             }
             transaction
                 .pragma_update(None, "user_version", 2)
+                .map_err(|_| error())?;
+        }
+        if schema_version < 3 {
+            for sql in SCHEMA_V3 {
+                transaction.execute(sql, []).map_err(|_| error())?;
+            }
+            transaction
+                .pragma_update(None, "user_version", 3)
                 .map_err(|_| error())?;
         }
         let (signer, fleet, environment, token): (String, String, String, i64) = transaction
@@ -303,10 +321,14 @@ impl AuthorityStore {
         expected_version: Option<&str>,
         authority_principal: &str,
         binding: Option<&StorageEffectBinding>,
+        operation_id: Option<&str>,
     ) -> Result<deepseek_storage::s3::StorageAuthorityProof, WorkerStorageError> {
         deepseek_protocol::validate_fence(fence).map_err(|_| WorkerStorageError::FenceMismatch)?;
         if key.is_empty() || key.len() > 1024 {
             return Err(WorkerStorageError::TargetMismatch);
+        }
+        if operation_id.is_some_and(|id| !crate::valid_storage_operation_id(id)) {
+            return Err(WorkerStorageError::OperationMismatch);
         }
         let mut digest_hex = String::with_capacity(64);
         for b in payload_digest {
@@ -365,6 +387,13 @@ impl AuthorityStore {
             .map_err(|_| WorkerStorageError::FenceMismatch)?;
 
         if let Some((target_key, stored_digest, stored_length, state)) = existing {
+            let persisted_operation: Option<String> = transaction.query_row(
+                "SELECT operation_id FROM storage_rpc_operations WHERE action_id=?1 AND epoch=?2",
+                params![&fence.action_id, fence.execution_epoch as i64], |row| row.get(0),
+            ).optional().map_err(|_| WorkerStorageError::FenceMismatch)?;
+            if persisted_operation.as_deref() != operation_id {
+                return Err(WorkerStorageError::OperationMismatch);
+            }
             let persisted: Option<(String, Option<String>)> = transaction.query_row(
                 "SELECT target_identity,expected_etag FROM storage_effect_bindings WHERE action_id=?1 AND epoch=?2",
                 params![&fence.action_id, fence.execution_epoch as i64],
@@ -433,6 +462,14 @@ impl AuthorityStore {
                     )
                     .map_err(|_| WorkerStorageError::FenceMismatch)?;
             }
+            if let Some(operation) = operation_id {
+                transaction
+                    .execute(
+                        "INSERT INTO storage_rpc_operations VALUES (?1,?2,?3)",
+                        params![&fence.action_id, fence.execution_epoch as i64, operation],
+                    )
+                    .map_err(|_| WorkerStorageError::FenceMismatch)?;
+            }
         }
         transaction
             .commit()
@@ -454,6 +491,7 @@ impl AuthorityStore {
         etag: Option<&str>,
         state: StorageEffectState,
         provider_metadata: Option<&str>,
+        operation_id: Option<&str>,
     ) -> Result<(), WorkerStorageError> {
         validate_fence(fence).map_err(|_| WorkerStorageError::FenceMismatch)?;
         let epoch =
@@ -476,6 +514,17 @@ impl AuthorityStore {
             .map_err(|_| WorkerStorageError::WorkerWithoutAuthority)?;
         if token != self.fencing_token {
             return Err(WorkerStorageError::StaleFencingToken);
+        }
+        let persisted_operation: Option<String> = transaction
+            .query_row(
+                "SELECT operation_id FROM storage_rpc_operations WHERE action_id=?1 AND epoch=?2",
+                params![&fence.action_id, epoch],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| WorkerStorageError::FenceMismatch)?;
+        if persisted_operation.as_deref() != operation_id {
+            return Err(WorkerStorageError::OperationMismatch);
         }
         if state == StorageEffectState::Dispatching {
             // Reservation and dispatch are separate transactions. Another handle
@@ -546,7 +595,7 @@ impl AuthorityStore {
         let row = self
             .connection
             .query_row(
-                "SELECT action_id, epoch, fencing_token, request_id, nonce, operation_kind, target_key, payload_digest, expected_length, expected_version, authority_principal, state, etag, provider_metadata, created_at, updated_at, (SELECT b.target_identity FROM storage_effect_bindings b WHERE b.action_id=storage_effects.action_id AND b.epoch=storage_effects.epoch), (SELECT b.expected_etag FROM storage_effect_bindings b WHERE b.action_id=storage_effects.action_id AND b.epoch=storage_effects.epoch) FROM storage_effects WHERE action_id=?1 AND epoch=?2",
+                "SELECT action_id, epoch, fencing_token, request_id, nonce, operation_kind, target_key, payload_digest, expected_length, expected_version, authority_principal, state, etag, provider_metadata, created_at, updated_at, (SELECT b.target_identity FROM storage_effect_bindings b WHERE b.action_id=storage_effects.action_id AND b.epoch=storage_effects.epoch), (SELECT b.expected_etag FROM storage_effect_bindings b WHERE b.action_id=storage_effects.action_id AND b.epoch=storage_effects.epoch), (SELECT o.operation_id FROM storage_rpc_operations o WHERE o.action_id=storage_effects.action_id AND o.epoch=storage_effects.epoch) FROM storage_effects WHERE action_id=?1 AND epoch=?2",
                 params![&fence.action_id, fence.execution_epoch as i64],
                 |row| {
                     let state_str: String = row.get(11)?;
@@ -574,6 +623,7 @@ impl AuthorityStore {
                         created_at: row.get(14)?,
                         updated_at: row.get(15)?,
                         binding: target.map(|target_identity| StorageEffectBinding { target_identity, expected_etag }),
+                        operation_id: row.get(18)?,
                     })
                 },
             )
@@ -649,6 +699,16 @@ fn validate_journal(
             _ => return Err(error()),
         }
     }
+    let mut operations = connection.prepare("SELECT o.operation_id,e.action_id,b.action_id FROM storage_rpc_operations o LEFT JOIN storage_effects e ON e.action_id=o.action_id AND e.epoch=o.epoch LEFT JOIN storage_effect_bindings b ON b.action_id=o.action_id AND b.epoch=o.epoch").map_err(|_| error())?;
+    let mut rows = operations.query([]).map_err(|_| error())?;
+    while let Some(row) = rows.next().map_err(|_| error())? {
+        let id: String = row.get(0).map_err(|_| error())?;
+        let effect: Option<String> = row.get(1).map_err(|_| error())?;
+        let binding: Option<String> = row.get(2).map_err(|_| error())?;
+        if !crate::valid_storage_operation_id(&id) || effect.is_none() || binding.is_none() {
+            return Err(error());
+        }
+    }
     Ok(())
 }
 
@@ -698,11 +758,14 @@ fn validate_schema(
         return Ok(0);
     }
     let mut expected: Vec<_> = SCHEMA.iter().map(|sql| sql.to_string()).collect();
-    if version == 2 {
+    if version >= 2 {
         expected.extend(SCHEMA_V2.iter().map(|sql| sql.to_string()));
     }
+    if version >= 3 {
+        expected.extend(SCHEMA_V3.iter().map(|sql| sql.to_string()));
+    }
     expected.sort();
-    if !matches!(version, 1 | 2) || application != APPLICATION_ID || actual != expected {
+    if !matches!(version, 1..=3) || application != APPLICATION_ID || actual != expected {
         return Err(error());
     }
     Ok(version as u8)

@@ -18,6 +18,67 @@ fn fence(epoch: u64) -> ActionFence {
     }
 }
 
+#[cfg(feature = "s3")]
+#[tokio::test]
+async fn rpc_query_cannot_assign_an_operation_to_a_legacy_effect() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, canonical, installed) = frozen_authority();
+    let mut worker = Worker::open_with_authority(config, directory.path()).unwrap();
+    worker.install_signed_epoch(&installed, &canonical).unwrap();
+    worker
+        .reserve_storage_mutation(&installed, "historical", &[1; 32])
+        .unwrap();
+    let auth = Arc::new(StaticTokenAuthenticator::new(
+        "qualification-token",
+        CallerIdentity {
+            service_name: "test-caller".into(),
+            role: "controller".into(),
+        },
+    ));
+    let service = WorkerRpcService::new_with_authenticator(worker, auth);
+    let mut request = Request::new(QueryStorageEffectRequest {
+        fence: Some(installed),
+        operation_id: "invented-operation".into(),
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        "Bearer qualification-token".parse().unwrap(),
+    );
+    let response = WorkerRpc::query_storage_effect(&service, request)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.status(), StorageMutationStatus::Rejected);
+    assert_eq!(response.state(), EffectState::Unknown);
+    assert_eq!(response.error.unwrap().code, "STORAGE_OPERATION_UNBOUND");
+    assert!(response.effect_id.is_empty());
+}
+
+#[tokio::test]
+async fn rpc_query_rejects_empty_operation_before_storage_lookup() {
+    let auth = Arc::new(StaticTokenAuthenticator::new(
+        "qualification-token",
+        CallerIdentity {
+            service_name: "test-caller".into(),
+            role: "controller".into(),
+        },
+    ));
+    let service = WorkerRpcService::new_with_authenticator(Worker::new(), auth);
+    let mut request = Request::new(QueryStorageEffectRequest {
+        fence: Some(fence(1)),
+        operation_id: "".into(),
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        "Bearer qualification-token".parse().unwrap(),
+    );
+    let response = WorkerRpc::query_storage_effect(&service, request)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.error.unwrap().code, "OPERATION_INVALID");
+}
+
 async fn admit(
     service: &WorkerRpcService,
     command_fence: ActionFence,

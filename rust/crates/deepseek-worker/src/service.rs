@@ -388,13 +388,13 @@ impl WorkerRpc for WorkerRpcService {
             )));
         }
 
-        if input.operation_id.trim().is_empty() {
+        if !crate::valid_storage_operation_id(&input.operation_id) {
             return Ok(Response::new(storage_rejected(
                 Some(fence.clone()),
                 input.operation_id,
                 "OPERATION_INVALID",
                 "OPERATION",
-                "empty operation_id",
+                "invalid operation_id",
             )));
         }
 
@@ -508,13 +508,14 @@ impl WorkerRpc for WorkerRpcService {
             let bytes = bytes::Bytes::from(input.payload);
             let mut worker = self.lock().await;
             match worker
-                .execute_storage_put(
+                .execute_storage_put_for_operation(
                     &transport,
                     &input.object_key,
                     bytes,
                     digest_bytes,
                     fence,
                     condition,
+                    Some(&input.operation_id),
                 )
                 .await
             {
@@ -533,6 +534,15 @@ impl WorkerRpc for WorkerRpcService {
                     .to_string(),
                     error: None,
                 })),
+                Err(crate::WorkerStorageError::OperationMismatch) => {
+                    Ok(Response::new(storage_rejected(
+                        Some(fence.clone()),
+                        input.operation_id,
+                        "STORAGE_OPERATION_MISMATCH",
+                        "STORAGE",
+                        "operation does not match the durable intent",
+                    )))
+                }
                 Err(crate::WorkerStorageError::PreconditionRejected) => {
                     Ok(Response::new(storage_rejected(
                         Some(fence.clone()),
@@ -704,6 +714,15 @@ impl WorkerRpc for WorkerRpcService {
                 "invalid fence",
             )));
         }
+        if !crate::valid_storage_operation_id(&input.operation_id) {
+            return Ok(Response::new(storage_rejected(
+                Some(fence.clone()),
+                input.operation_id,
+                "OPERATION_INVALID",
+                "STORAGE",
+                "invalid storage operation identity",
+            )));
+        }
 
         #[cfg(feature = "s3")]
         {
@@ -755,13 +774,39 @@ impl WorkerRpc for WorkerRpcService {
                 }
             };
 
+            let Some(operation_id) = record.operation_id.clone() else {
+                return Ok(Response::new(storage_rejected(
+                    Some(fence.clone()),
+                    input.operation_id,
+                    "STORAGE_OPERATION_UNBOUND",
+                    "STORAGE",
+                    "historical effect has no RPC operation identity",
+                )));
+            };
+            if operation_id != input.operation_id {
+                return Ok(Response::new(storage_rejected(
+                    Some(fence.clone()),
+                    input.operation_id,
+                    "STORAGE_OPERATION_MISMATCH",
+                    "STORAGE",
+                    "operation does not match the durable intent",
+                )));
+            }
+
             let record = if matches!(
                 record.state,
                 crate::StorageEffectState::EffectUnknown | crate::StorageEffectState::Dispatching
             ) {
                 if let Some(transport) = &self.transport {
                     let transport = transport.clone();
-                    match worker.reconcile_storage_mutation(&transport, fence).await {
+                    match worker
+                        .reconcile_storage_mutation_for_operation(
+                            &transport,
+                            fence,
+                            Some(&operation_id),
+                        )
+                        .await
+                    {
                         Ok(reconciled) => reconciled,
                         Err(_) => match worker.query_storage_effect(fence) {
                             Ok(Some(rec)) => rec,
@@ -800,7 +845,7 @@ impl WorkerRpc for WorkerRpcService {
                 status: status as i32,
                 state: state as i32,
                 fence: Some(fence.clone()),
-                operation_id: input.operation_id,
+                operation_id,
                 effect_id: format!("{}:{}", fence.action_id, fence.execution_epoch),
                 etag: record.etag.unwrap_or_default(),
                 provider_metadata: record.provider_metadata.unwrap_or_default(),

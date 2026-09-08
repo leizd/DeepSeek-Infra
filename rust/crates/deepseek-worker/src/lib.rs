@@ -115,10 +115,13 @@ pub struct StorageEffectRecord {
     pub created_at: String,
     pub updated_at: String,
     pub binding: Option<StorageEffectBinding>,
+    /// None for historical/library intents; RPC must not invent an association.
+    pub operation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkerStorageError {
+    OperationMismatch,
     WorkerWithoutAuthority,
     FenceMismatch,
     StaleEpoch,
@@ -141,6 +144,10 @@ impl std::fmt::Display for WorkerStorageError {
 }
 
 impl std::error::Error for WorkerStorageError {}
+
+pub(crate) fn valid_storage_operation_id(id: &str) -> bool {
+    !id.trim().is_empty() && id.len() <= 1024 && !id.contains('\0')
+}
 
 #[cfg(feature = "s3")]
 impl From<deepseek_storage::s3::S3Error> for WorkerStorageError {
@@ -448,6 +455,7 @@ impl Worker {
             expected_version,
             authority_principal,
             None,
+            None,
         )
     }
 
@@ -460,6 +468,23 @@ impl Worker {
         digest: &[u8; 32],
         length: u64,
         condition: &deepseek_storage::s3::ConditionalWrite,
+    ) -> Result<deepseek_storage::s3::StorageAuthorityProof, WorkerStorageError> {
+        self.reserve_bound_storage_mutation_for_operation(
+            fence, transport, key, digest, length, condition, None,
+        )
+    }
+
+    #[cfg(feature = "s3")]
+    #[allow(clippy::too_many_arguments)]
+    fn reserve_bound_storage_mutation_for_operation(
+        &mut self,
+        fence: &ActionFence,
+        transport: &deepseek_storage::s3::S3Transport,
+        key: &str,
+        digest: &[u8; 32],
+        length: u64,
+        condition: &deepseek_storage::s3::ConditionalWrite,
+        operation_id: Option<&str>,
     ) -> Result<deepseek_storage::s3::StorageAuthorityProof, WorkerStorageError> {
         transport.object_key(key)?;
         if length > deepseek_storage::s3::MAX_PUT_CHUNK as u64 {
@@ -488,6 +513,7 @@ impl Worker {
                 binding.expected_etag.as_deref(),
                 &principal,
                 Some(&binding),
+                operation_id,
             )
     }
 
@@ -499,11 +525,23 @@ impl Worker {
         etag: Option<&str>,
         provider_metadata: Option<&str>,
     ) -> Result<(), WorkerStorageError> {
+        self.transition_storage_mutation_for_operation(fence, state, etag, provider_metadata, None)
+    }
+
+    #[cfg(feature = "s3")]
+    fn transition_storage_mutation_for_operation(
+        &mut self,
+        fence: &ActionFence,
+        state: StorageEffectState,
+        etag: Option<&str>,
+        provider_metadata: Option<&str>,
+        operation_id: Option<&str>,
+    ) -> Result<(), WorkerStorageError> {
         let store = self
             .authority_store
             .as_mut()
             .ok_or(WorkerStorageError::WorkerWithoutAuthority)?;
-        store.record_storage_mutation_outcome(fence, etag, state, provider_metadata)
+        store.record_storage_mutation_outcome(fence, etag, state, provider_metadata, operation_id)
     }
 
     #[cfg(feature = "s3")]
@@ -553,6 +591,30 @@ impl Worker {
         fence: &ActionFence,
         condition: deepseek_storage::s3::ConditionalWrite,
     ) -> Result<deepseek_storage::s3::PutObservation, WorkerStorageError> {
+        self.execute_storage_put_for_operation(
+            transport,
+            key,
+            payload,
+            payload_digest,
+            fence,
+            condition,
+            None,
+        )
+        .await
+    }
+
+    #[cfg(feature = "s3")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn execute_storage_put_for_operation(
+        &mut self,
+        transport: &deepseek_storage::s3::S3Transport,
+        key: &str,
+        payload: bytes::Bytes,
+        payload_digest: [u8; 32],
+        fence: &ActionFence,
+        condition: deepseek_storage::s3::ConditionalWrite,
+        operation_id: Option<&str>,
+    ) -> Result<deepseek_storage::s3::PutObservation, WorkerStorageError> {
         if self.authority_store.is_none() {
             return Err(WorkerStorageError::WorkerWithoutAuthority);
         }
@@ -563,15 +625,22 @@ impl Worker {
         if payload.len() > deepseek_storage::s3::MAX_PUT_CHUNK {
             return Err(deepseek_storage::s3::S3Error::InvalidWrite.into());
         }
-        let proof = self.reserve_bound_storage_mutation(
+        let proof = self.reserve_bound_storage_mutation_for_operation(
             fence,
             transport,
             key,
             &payload_digest,
             payload_len,
             &condition,
+            operation_id,
         )?;
-        self.transition_storage_mutation(fence, StorageEffectState::Dispatching, None, None)?;
+        self.transition_storage_mutation_for_operation(
+            fence,
+            StorageEffectState::Dispatching,
+            None,
+            None,
+            operation_id,
+        )?;
         match transport
             .put_chunk(key, payload, payload_digest, &proof, condition)
             .await
@@ -580,40 +649,44 @@ impl Worker {
                 let metadata =
                     serde_json::json!({"etag": observation.etag, "size": observation.length})
                         .to_string();
-                self.transition_storage_mutation(
+                self.transition_storage_mutation_for_operation(
                     fence,
                     StorageEffectState::Confirmed,
                     Some(&observation.etag),
                     Some(&metadata),
+                    operation_id,
                 )?;
                 Ok(observation)
             }
             Err(deepseek_storage::s3::S3Error::PreconditionRejected) => {
-                let _ = self.transition_storage_mutation(
+                let _ = self.transition_storage_mutation_for_operation(
                     fence,
                     StorageEffectState::Rejected,
                     None,
                     Some("{\"error\":\"PreconditionRejected\"}"),
+                    operation_id,
                 );
                 Err(WorkerStorageError::PreconditionRejected)
             }
             Err(deepseek_storage::s3::S3Error::EffectUnknown) => {
-                let _ = self.transition_storage_mutation(
+                let _ = self.transition_storage_mutation_for_operation(
                     fence,
                     StorageEffectState::EffectUnknown,
                     None,
                     Some("{\"error\":\"EffectUnknown\"}"),
+                    operation_id,
                 );
                 Err(WorkerStorageError::Transport(
                     deepseek_storage::s3::S3Error::EffectUnknown,
                 ))
             }
             Err(other) => {
-                let _ = self.transition_storage_mutation(
+                let _ = self.transition_storage_mutation_for_operation(
                     fence,
                     StorageEffectState::Failed,
                     None,
                     Some(&format!("{{\"error\":\"{}\"}}", other)),
+                    operation_id,
                 );
                 Err(WorkerStorageError::Transport(other))
             }
@@ -626,9 +699,23 @@ impl Worker {
         transport: &deepseek_storage::s3::S3Transport,
         fence: &ActionFence,
     ) -> Result<StorageEffectRecord, WorkerStorageError> {
+        self.reconcile_storage_mutation_for_operation(transport, fence, None)
+            .await
+    }
+
+    #[cfg(feature = "s3")]
+    pub(crate) async fn reconcile_storage_mutation_for_operation(
+        &mut self,
+        transport: &deepseek_storage::s3::S3Transport,
+        fence: &ActionFence,
+        operation_id: Option<&str>,
+    ) -> Result<StorageEffectRecord, WorkerStorageError> {
         let record = self
             .query_storage_effect(fence)?
             .ok_or(WorkerStorageError::FenceMismatch)?;
+        if record.operation_id.as_deref() != operation_id {
+            return Err(WorkerStorageError::OperationMismatch);
+        }
         let binding = record
             .binding
             .as_ref()
@@ -646,14 +733,21 @@ impl Worker {
         if record.state == StorageEffectState::Dispatching {
             // Dropping the PUT future cannot undo bytes already sent. A live
             // handle must recover this state just as a reopened worker would.
-            self.transition_storage_mutation(
+            self.transition_storage_mutation_for_operation(
                 fence,
                 StorageEffectState::EffectUnknown,
                 None,
                 Some("{\"reconciliation\":\"dispatch_outcome_not_recorded\"}"),
+                operation_id,
             )?;
         }
-        self.transition_storage_mutation(fence, StorageEffectState::Reconciling, None, None)?;
+        self.transition_storage_mutation_for_operation(
+            fence,
+            StorageEffectState::Reconciling,
+            None,
+            None,
+            operation_id,
+        )?;
 
         match transport.stat(&record.target_key).await {
             Ok(Some(observation)) => {
@@ -678,45 +772,49 @@ impl Worker {
                         )
                         .await
                     {
-                        self.transition_storage_mutation(fence, StorageEffectState::EffectUnknown, None,
-                            Some(&serde_json::json!({"reconciliation":"conditional_byte_verification_failed", "error":error.to_string()}).to_string()))?;
+                        self.transition_storage_mutation_for_operation(fence, StorageEffectState::EffectUnknown, None,
+                            Some(&serde_json::json!({"reconciliation":"conditional_byte_verification_failed", "error":error.to_string()}).to_string()), operation_id)?;
                         return Err(error.into());
                     }
                     let metadata = serde_json::json!({"etag": observation.etag, "size": observation.length,
                         "sha256": record.payload_digest, "version": observation.version, "bytesVerified": true}).to_string();
-                    self.transition_storage_mutation(
+                    self.transition_storage_mutation_for_operation(
                         fence,
                         StorageEffectState::Confirmed,
                         Some(&observation.etag),
                         Some(&metadata),
+                        operation_id,
                     )?;
                 } else {
                     // HEAD is only a point-in-time observation. The original
                     // uncertain PUT may still replace these bytes after HEAD.
-                    self.transition_storage_mutation(
+                    self.transition_storage_mutation_for_operation(
                         fence,
                         StorageEffectState::EffectUnknown,
                         None,
                         Some("{\"reconciliation\":\"target_metadata_mismatch\"}"),
+                        operation_id,
                     )?;
                 }
             }
             Ok(None) => {
                 // Even a strongly consistent absence does not fence an in-flight
                 // request. Do not turn uncertainty into a terminal NOT_APPLIED.
-                self.transition_storage_mutation(
+                self.transition_storage_mutation_for_operation(
                     fence,
                     StorageEffectState::EffectUnknown,
                     None,
                     Some("{\"reconciliation\":\"object_not_found\"}"),
+                    operation_id,
                 )?;
             }
             Err(err) => {
-                self.transition_storage_mutation(
+                self.transition_storage_mutation_for_operation(
                     fence,
                     StorageEffectState::EffectUnknown,
                     None,
                     Some(&format!("{{\"error\":\"{}\"}}", err)),
+                    operation_id,
                 )?;
                 return Err(WorkerStorageError::Transport(err));
             }
@@ -806,6 +904,9 @@ fn optional_env(
         }
     }
 }
+
+#[cfg(all(test, feature = "s3"))]
+mod storage_operation_tests;
 
 #[cfg(test)]
 mod tests {

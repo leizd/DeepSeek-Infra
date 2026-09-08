@@ -172,3 +172,33 @@ This claim is local journal serialization, not a provider-side fence. A request
 already dispatched may still finish after a newer epoch or Go lease loss. Live Go
 authority, operation-specific signed admission, stale-result settlement and actual
 process-kill/takeover remain unqualified; no production exactly-once claim follows.
+
+## Additive v3 RPC operation identity
+
+Schema v3 retains the exact v1/v2 schema and adds `storage_rpc_operations`, a
+Rust-owned immutable association keyed by action/epoch. The first RPC reservation
+inserts its operation ID, parent effect and placement/condition binding in one
+`BEGIN IMMEDIATE` transaction before dispatch. Failure of the last insert rolls
+back all three records. IDs are opaque, exact, nonblank, NUL-free and limited to
+1024 UTF-8 bytes; whitespace is not stripped from an otherwise valid ID.
+
+Queries reject absent or substituted associations with UNKNOWN and no effect
+fields, before any provider reconciliation. Positive responses carry the persisted
+operation ID. An existing library or historical intent cannot be adopted by a new
+RPC request, even when action/epoch, placement and bytes match. Diagnostic library
+reads remain available, but unbound library mutation/reconciliation methods cannot
+change RPC-bound records. The same identity is checked transactionally at each
+RPC state transition, including dispatch and result settlement.
+
+There is no historical backfill. Upgrading from v1 or v2 and validating the signer,
+identity and retained journal occur in the same transaction. A failure restores
+the prior schema and `user_version`; successful migration preserves signed request
+bytes and historical effects. Stop every worker before upgrading. Older binaries
+reject v3, and mixed-version live execution is unsupported. Do not downgrade by
+dropping operation bindings or deleting history.
+
+This associates a local RPC intent with a recorded effect; it does not supply an
+operation-specific authorization signature, renewable action/resource leases, or
+production service authentication. Go still needs its own durable dispatch intent.
+Provider qualification and actual process-kill/takeover evidence remain separate
+from schema and handler tests; no production cutover is enabled by this change.

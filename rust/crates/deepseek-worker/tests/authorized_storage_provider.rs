@@ -8,6 +8,9 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+#[path = "authorized_storage_provider/rpc_operations.rs"]
+mod rpc_operations;
+
 fn endpoints() -> Vec<String> {
     let endpoints: Vec<_> = std::env::var("DEEPSEEK_NATIVE_S3_ENDPOINTS")
         .expect("run scripts/run_native_s3_e2e.py with real MinIO")

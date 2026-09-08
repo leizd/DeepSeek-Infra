@@ -342,13 +342,16 @@ async fn v1_migration_preserves_legacy_journal_and_rolls_back_on_identity_failur
             .unwrap(),
         0
     );
-    let additions: Vec<String> = connection.prepare("SELECT name FROM sqlite_schema WHERE type='trigger' AND (name LIKE 'storage_binding_%' OR name LIKE 'storage_dispatch_%' OR name LIKE 'storage_effect_identity_%')").unwrap()
+    let additions: Vec<String> = connection.prepare("SELECT name FROM sqlite_schema WHERE type='trigger' AND (name LIKE 'storage_binding_%' OR name LIKE 'storage_dispatch_%' OR name LIKE 'storage_effect_identity_%' OR name LIKE 'storage_rpc_%')").unwrap()
         .query_map([], |row| row.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
     for name in additions {
         connection
             .execute(&format!("DROP TRIGGER {name}"), [])
             .unwrap();
     }
+    connection
+        .execute("DROP TABLE storage_rpc_operations", [])
+        .unwrap();
     connection
         .execute("DROP TABLE storage_effect_bindings", [])
         .unwrap();
@@ -367,7 +370,7 @@ async fn v1_migration_preserves_legacy_journal_and_rolls_back_on_identity_failur
     assert_eq!(
         connection
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_schema WHERE name='storage_effect_bindings'",
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name IN ('storage_effect_bindings','storage_rpc_operations')",
                 [],
                 |row| row.get::<_, i64>(0)
             )
@@ -379,7 +382,7 @@ async fn v1_migration_preserves_legacy_journal_and_rolls_back_on_identity_failur
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        2
+        3
     );
     assert_eq!(
         connection
