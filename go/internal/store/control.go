@@ -1061,33 +1061,10 @@ func (store *Control) putControlRecord(record Record, dispatch *StorageDispatchI
 	if store.closed {
 		return ErrWriterFenceHeld
 	}
-	if !ValidRecordID(record.ID) {
-		return ErrEmptyRecordID
-	}
-	table, ok := tableForDomain(record.Domain)
-	if !ok {
-		return ErrUnknownDomain
-	}
-	if record.ExecutionEpoch > math.MaxInt64 {
-		return ErrEpochOutOfRange
-	}
-	payload, err := canonicalControlPayload(record.Payload)
+	write, err := prepareControlRecordWrite(record, dispatch)
 	if err != nil {
 		return err
 	}
-	record.Payload = payload
-	var intentJSON []byte
-	var intentDigest string
-	if dispatch != nil {
-		if record.Domain != "action" || record.State != "EXECUTING" || dispatch.ActionID != record.ID || dispatch.ExecutionEpoch != record.ExecutionEpoch {
-			return ErrInvalidStorageIntent
-		}
-		intentJSON, intentDigest, err = encodeStorageDispatchIntent(*dispatch)
-		if err != nil {
-			return err
-		}
-	}
-
 	tx, err := store.db.Begin()
 	if err != nil {
 		return err
@@ -1104,6 +1081,65 @@ func (store *Control) putControlRecord(record Record, dispatch *StorageDispatchI
 	if err := verifySchemaTx(tx, store.schema); err != nil {
 		return err
 	}
+	if err := store.putControlRecordTx(tx, write, now); err != nil {
+		return err
+	}
+	if commitNow := store.now(); commitNow < 0 || commitNow >= leaseUntil {
+		return ErrWriterFenceHeld
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	store.leaseUntil = leaseUntil
+	return nil
+}
+
+// A prepared write owns its canonical bytes, including a dispatch's operation
+// identity. It cannot be rebound by modifying the caller's payload or intent.
+type controlRecordWrite struct {
+	record       Record
+	table        string
+	intentJSON   []byte
+	intentDigest string
+	operationID  string
+}
+
+func prepareControlRecordWrite(record Record, dispatch *StorageDispatchIntent) (controlRecordWrite, error) {
+	if !ValidRecordID(record.ID) {
+		return controlRecordWrite{}, ErrEmptyRecordID
+	}
+	table, ok := tableForDomain(record.Domain)
+	if !ok {
+		return controlRecordWrite{}, ErrUnknownDomain
+	}
+	if record.ExecutionEpoch > math.MaxInt64 {
+		return controlRecordWrite{}, ErrEpochOutOfRange
+	}
+	payload, err := canonicalControlPayload(record.Payload)
+	if err != nil {
+		return controlRecordWrite{}, err
+	}
+	record.Payload = payload
+	write := controlRecordWrite{record: record, table: table}
+	if dispatch != nil {
+		if record.Domain != "action" || record.State != "EXECUTING" || dispatch.ActionID != record.ID || dispatch.ExecutionEpoch != record.ExecutionEpoch {
+			return controlRecordWrite{}, ErrInvalidStorageIntent
+		}
+		write.intentJSON, write.intentDigest, err = encodeStorageDispatchIntent(*dispatch)
+		if err != nil {
+			return controlRecordWrite{}, err
+		}
+		write.operationID = dispatch.OperationID
+	}
+	return write, nil
+}
+
+// putControlRecordTx does not own the transaction or writer lease. The caller
+// holds store.mu, asserts its live writer and schema, then commits all admission
+// reservations and this journal write together. Never call sql.DB here:
+// https://go.dev/doc/database/execute-transactions#best-practices
+func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, now int64) error {
+	record, table := write.record, write.table
 	existing, exists, err := readControlRecord(tx.QueryRow(
 		fmt.Sprintf(
 			"SELECT id, revision, execution_epoch, state, payload_json, record_digest, writer_fencing_token, updated_at FROM %s WHERE id = ?",
@@ -1125,7 +1161,7 @@ func (store *Control) putControlRecord(record Record, dispatch *StorageDispatchI
 	if exists {
 		from = existing.State
 	}
-	if dispatch != nil && (!exists || existing.State != "CLAIMED" || existing.ExecutionEpoch != record.ExecutionEpoch) {
+	if write.intentJSON != nil && (!exists || existing.State != "CLAIMED" || existing.ExecutionEpoch != record.ExecutionEpoch) {
 		return ErrIllegalTransition
 	}
 	if !LegalTransition(record.Domain, from, record.State) {
@@ -1220,19 +1256,12 @@ func (store *Control) putControlRecord(record Record, dispatch *StorageDispatchI
 	); err != nil {
 		return err
 	}
-	if dispatch != nil {
+	if write.intentJSON != nil {
 		if _, err := tx.Exec(`INSERT INTO storage_dispatches(action_id,execution_epoch,operation_id,intent_json,intent_digest,claim_revision,writer_fencing_token,recorded_at)
-			VALUES(?,?,?,?,?,?,?,?)`, record.ID, int64(record.ExecutionEpoch), dispatch.OperationID, string(intentJSON), intentDigest, record.Revision, store.token, now); err != nil {
+			VALUES(?,?,?,?,?,?,?,?)`, record.ID, int64(record.ExecutionEpoch), write.operationID, string(write.intentJSON), write.intentDigest, record.Revision, store.token, now); err != nil {
 			return err
 		}
-		if commitNow := store.now(); commitNow < 0 || commitNow >= leaseUntil {
-			return ErrWriterFenceHeld
-		}
 	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	store.leaseUntil = leaseUntil
 	return nil
 }
 
