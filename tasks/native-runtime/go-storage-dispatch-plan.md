@@ -80,9 +80,26 @@ full native ownership, not the 5.0 completion gate.
   `_mingw_mac.h`, below the
   [Go race detector's MinGW runtime 8 requirement](https://go.dev/doc/articles/race_detector#Requirements).
   No tests were skipped, no runtime libraries were replaced and no global compiler
-  settings were changed. Race PASS remains outstanding pending a compatible
-  toolchain or the existing Linux CI gate; no unchanged failing command was retried.
+  settings were changed. This initial failure was resolved with an isolated
+  compiler as recorded below; the existing Linux CI gate remains outstanding.
 - No provider takeover, production cutover or exact-head CI PASS is claimed.
+
+### Windows race verification after compiler isolation
+
+- On unchanged implementation head `46d0bcf`, the minimum race runtime test and
+  `go test -race ./... -count=1 -timeout=240s` pass using checksum-verified
+  LLVM-MinGW 20260826 (Clang 23.1.0 / MinGW runtime 15). No application source,
+  production configuration, system DLL, global compiler or user/system PATH was
+  changed to obtain this result. See the
+  [Windows toolchain runbook](../../docs/NATIVE_WINDOWS_GO_TOOLCHAIN.md).
+- The JSON event log has 15 passed test packages, 487 passed test entries,
+  zero failed events and zero race warnings. One existing test,
+  `TestExistingForeignOrSymlinkedDatabaseIsRejected`, skips when Windows denies
+  symbolic-link creation. Seven generated protobuf packages have no tests.
+  This is not a zero-skip result or Linux/provider takeover evidence.
+- The local retained log is `.tools/native-race-20260826/go-race-full.jsonl`,
+  SHA-256 `e91b210225e943fca51763f1391403c021bfd12dad76942756445d9197a2e655`.
+  It is an ignored development artifact, not release evidence.
 
 ## Design sources and remaining gates
 

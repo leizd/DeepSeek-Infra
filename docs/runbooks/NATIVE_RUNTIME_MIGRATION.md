@@ -232,3 +232,8 @@ cargo test --manifest-path rust/Cargo.toml -p deepseek-protocol -p deepseek-work
 go test ./...
 go test -race ./...
 ```
+
+Windows race builds require a compatible C runtime, not just a recent Go binary.
+Use the [isolated Windows Go toolchain runbook](../NATIVE_WINDOWS_GO_TOOLCHAIN.md)
+for the verified compiler pin, checksum, local commands and result limitations.
+This does not replace the Linux CI gate or change production toolchain ownership.
