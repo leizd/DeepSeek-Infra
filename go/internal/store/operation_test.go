@@ -335,8 +335,9 @@ func TestControlMigratesFromV2ToOperationJournal(t *testing.T) {
 	}
 	db := sql.OpenDB(connector)
 	for _, statement := range []string{
+		"DROP TABLE storage_dispatches",
 		"DROP TABLE control_operations",
-		"DELETE FROM schema_migrations WHERE version = 3",
+		"DELETE FROM schema_migrations WHERE version IN (3, 4)",
 		"UPDATE control_store_meta SET schema_version = 2 WHERE singleton = 1",
 		"PRAGMA user_version = 2",
 	} {
@@ -356,13 +357,20 @@ func TestControlMigratesFromV2ToOperationJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if reopened.SchemaVersion() != SchemaV3 {
+	if reopened.SchemaVersion() != CurrentSchema {
 		t.Fatalf("migrated schema: %d", reopened.SchemaVersion())
 	}
 	private, public := rfc8032MutationKeys(t)
 	got, err := reopened.AcceptMutation(signPolicyMutation(t, reopened, private, public, hex64(0x11), hex64(0x22), hex64(0x33), now, nil), mutationAuth(public, now))
 	if err != nil || got.Status != MutationProposed {
 		t.Fatalf("migrated accept: %+v %v", got, err)
+	}
+}
+
+func prepareV3MigrationReplay(t *testing.T, tx *sql.Tx) {
+	t.Helper()
+	if _, err := tx.Exec("UPDATE control_store_meta SET schema_version=3 WHERE singleton=1"); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -373,6 +381,8 @@ func TestMigrateToV3FailsClosedWithoutPartialJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
+	prepareV3MigrationReplay(t, tx)
 	if err := store.migrateToV3Tx(tx); err == nil {
 		t.Fatal("rebuilding an existing v3 operation schema must fail")
 	}
@@ -401,6 +411,8 @@ func TestMigrateToV3FailsClosedWithoutPartialJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
+	prepareV3MigrationReplay(t, tx)
 	if _, err := tx.Exec("DROP TABLE control_operations"); err != nil {
 		t.Fatal(err)
 	}
@@ -420,6 +432,7 @@ func TestMigrateToV3FailsClosedWithoutPartialJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
 	if _, err := tx.Exec("DROP TABLE control_store_meta"); err != nil {
 		t.Fatal(err)
 	}
@@ -436,6 +449,8 @@ func TestMigrateToV3FailsClosedWithoutPartialJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
+	prepareV3MigrationReplay(t, tx)
 	if _, err := tx.Exec("DROP TABLE control_operations"); err != nil {
 		t.Fatal(err)
 	}
@@ -455,6 +470,8 @@ func TestMigrateToV3FailsClosedWithoutPartialJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
+	prepareV3MigrationReplay(t, tx)
 	if _, err := tx.Exec("DROP TABLE control_operations"); err != nil {
 		t.Fatal(err)
 	}
@@ -480,6 +497,8 @@ func TestMigrateToV3FailsClosedWithoutPartialJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
+	prepareV3MigrationReplay(t, tx)
 	if _, err := tx.Exec("DROP TABLE control_operations"); err != nil {
 		t.Fatal(err)
 	}
@@ -496,6 +515,8 @@ func TestMigrateToV3FailsClosedWithoutPartialJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tx.Rollback()
+	prepareV3MigrationReplay(t, tx)
 	if _, err := tx.Exec(`CREATE TABLE operation_meta_ref (
 		singleton INTEGER PRIMARY KEY REFERENCES control_store_meta(singleton)
 	) STRICT`); err != nil {

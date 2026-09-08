@@ -51,10 +51,10 @@ func TestControlUsesOneHardenedSQLiteDatabase(t *testing.T) {
 		}
 	}
 	var userVersion, migrationCount, cutoverCount int
-	if err := control.db.QueryRow("PRAGMA user_version").Scan(&userVersion); err != nil || userVersion != SchemaV3 {
+	if err := control.db.QueryRow("PRAGMA user_version").Scan(&userVersion); err != nil || userVersion != CurrentSchema {
 		t.Fatalf("user_version=%d err=%v", userVersion, err)
 	}
-	if err := control.db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil || migrationCount != SchemaV3 {
+	if err := control.db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil || migrationCount != CurrentSchema {
 		t.Fatalf("migration count=%d err=%v", migrationCount, err)
 	}
 	if err := control.db.QueryRow("SELECT COUNT(*) FROM control_cutover").Scan(&cutoverCount); err != nil || cutoverCount != len(controlDomainOrder) {
@@ -356,7 +356,7 @@ func TestUnknownSQLiteUserObjectsAreRejectedBeforeWriteSideEffects(t *testing.T)
 	t.Run("extra migration row", func(t *testing.T) {
 		assertCopiedForeignDatabaseUntouched(t, func(control *Control) error {
 			_, err := control.db.Exec(
-				"INSERT INTO schema_migrations(version, applied_at, description) VALUES(4, 1, 'foreign')",
+				"INSERT INTO schema_migrations(version, applied_at, description) VALUES(?, 1, 'foreign')", CurrentSchema+1,
 			)
 			return err
 		})

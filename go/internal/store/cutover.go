@@ -118,7 +118,7 @@ func (store *Control) GetCutover(domain string) (CutoverRecord, error) {
 	if _, ok := tableForDomain(domain); !ok {
 		return CutoverRecord{}, ErrUnknownDomain
 	}
-	if store.schema != SchemaV3 {
+	if store.schema != CurrentSchema {
 		return CutoverRecord{}, ErrSchemaInactive
 	}
 	tx, err := store.db.Begin()
@@ -154,7 +154,7 @@ func (store *Control) TransitionCutover(req CutoverTransition) (CutoverRecord, e
 	if !ValidCutoverState(req.To) {
 		return CutoverRecord{}, ErrIllegalCutover
 	}
-	if store.schema != SchemaV3 {
+	if store.schema != CurrentSchema {
 		return CutoverRecord{}, ErrSchemaInactive
 	}
 	tx, err := store.db.Begin()

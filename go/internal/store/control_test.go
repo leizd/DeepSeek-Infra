@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -225,7 +226,7 @@ func TestEveryDomainInitialAndNextTransition(t *testing.T) {
 
 func TestOpenControlRejectsForeignWriterAndSchema(t *testing.T) {
 	foreignSchema := openShadow(t)
-	if _, err := foreignSchema.db.Exec("PRAGMA user_version = 4"); err != nil {
+	if _, err := foreignSchema.db.Exec(fmt.Sprintf("PRAGMA user_version = %d", CurrentSchema+1)); err != nil {
 		t.Fatal(err)
 	}
 	foreignSchemaPath := foreignSchema.path
@@ -391,7 +392,7 @@ func TestExportSnapshotIsStableAndRollbackDropsRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if reopened.SchemaVersion() != SchemaV3 {
+	if reopened.SchemaVersion() != CurrentSchema {
 		t.Fatalf("migrated: %d", reopened.SchemaVersion())
 	}
 }

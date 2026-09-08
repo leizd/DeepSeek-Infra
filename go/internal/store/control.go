@@ -266,7 +266,7 @@ func validateExistingControlMarker(databasePath string) (bool, error) {
 		).Scan(&runtimeName, &mode, &schema, &uniqueWriter)
 	}
 	if queryErr == nil && (runtimeName != RuntimeGo || mode != ModeShadow ||
-		uniqueWriter != RuntimeGo || schema < 0 || schema > SchemaV3) {
+		uniqueWriter != RuntimeGo || schema < 0 || schema > CurrentSchema) {
 		queryErr = ErrForeignRuntimeStore
 	}
 	var userVersion, migrationCount int
@@ -334,6 +334,15 @@ func expectedControlUserObjects(schema int) map[string]string {
 	objects["control_operations"] = "table"
 	objects["control_operations_no_update"] = "trigger"
 	objects["control_operations_no_delete"] = "trigger"
+	if schema >= SchemaV4 {
+		for name := range storageDispatchSchemaObjects {
+			kind := "trigger"
+			if name == "storage_dispatches" {
+				kind = "table"
+			}
+			objects[name] = kind
+		}
+	}
 	return objects
 }
 
@@ -437,7 +446,7 @@ func (store *Control) bootstrapAndClaim(databaseExisted bool) error {
 		return fmt.Errorf("%w: invalid store metadata: %v", ErrForeignRuntimeStore, err)
 	}
 	if runtimeName != RuntimeGo || mode != ModeShadow || uniqueWriter != RuntimeGo ||
-		store.schema < 0 || store.schema > SchemaV3 {
+		store.schema < 0 || store.schema > CurrentSchema {
 		return ErrForeignRuntimeStore
 	}
 	var userVersion, migrationCount int
@@ -539,7 +548,7 @@ func (store *Control) claimWriterTx(tx *sql.Tx) error {
 }
 
 func (store *Control) migrateTx(tx *sql.Tx) error {
-	if store.schema > SchemaV3 || store.schema < 0 {
+	if store.schema > CurrentSchema || store.schema < 0 {
 		return ErrForeignRuntimeStore
 	}
 	if store.schema == 0 {
@@ -554,6 +563,11 @@ func (store *Control) migrateTx(tx *sql.Tx) error {
 	}
 	if store.schema == SchemaV2 {
 		if err := store.migrateToV3Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV3 {
+		if err := store.migrateToV4Tx(tx); err != nil {
 			return err
 		}
 	}
@@ -872,7 +886,7 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 	if schema == 0 {
 		return nil
 	}
-	if schema != SchemaV1 && schema != SchemaV2 && schema != SchemaV3 {
+	if schema < SchemaV1 || schema > CurrentSchema {
 		return ErrForeignRuntimeStore
 	}
 	tables := append(append([]string(nil), controlTableNames[:]...), "control_events")
@@ -881,6 +895,11 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 	}
 	if schema >= SchemaV3 {
 		tables = append(tables, "control_operations")
+	}
+	if schema >= SchemaV4 {
+		if err := verifyStorageDispatchSchemaTx(tx); err != nil {
+			return err
+		}
 	}
 	for _, table := range tables {
 		var marker int
@@ -1033,6 +1052,10 @@ func (store *Control) DatabasePath() string {
 }
 
 func (store *Control) Put(record Record) error {
+	return store.putControlRecord(record, nil)
+}
+
+func (store *Control) putControlRecord(record Record, dispatch *StorageDispatchIntent) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.closed {
@@ -1053,6 +1076,17 @@ func (store *Control) Put(record Record) error {
 		return err
 	}
 	record.Payload = payload
+	var intentJSON []byte
+	var intentDigest string
+	if dispatch != nil {
+		if record.Domain != "action" || record.State != "EXECUTING" || dispatch.ActionID != record.ID || dispatch.ExecutionEpoch != record.ExecutionEpoch {
+			return ErrInvalidStorageIntent
+		}
+		intentJSON, intentDigest, err = encodeStorageDispatchIntent(*dispatch)
+		if err != nil {
+			return err
+		}
+	}
 
 	tx, err := store.db.Begin()
 	if err != nil {
@@ -1064,7 +1098,7 @@ func (store *Control) Put(record Record) error {
 	if err != nil {
 		return err
 	}
-	if store.schema != SchemaV3 {
+	if store.schema != CurrentSchema {
 		return ErrSchemaInactive
 	}
 	if err := verifySchemaTx(tx, store.schema); err != nil {
@@ -1090,6 +1124,9 @@ func (store *Control) Put(record Record) error {
 	from := ""
 	if exists {
 		from = existing.State
+	}
+	if dispatch != nil && (!exists || existing.State != "CLAIMED" || existing.ExecutionEpoch != record.ExecutionEpoch) {
+		return ErrIllegalTransition
 	}
 	if !LegalTransition(record.Domain, from, record.State) {
 		return ErrIllegalTransition
@@ -1182,6 +1219,15 @@ func (store *Control) Put(record Record) error {
 		now,
 	); err != nil {
 		return err
+	}
+	if dispatch != nil {
+		if _, err := tx.Exec(`INSERT INTO storage_dispatches(action_id,execution_epoch,operation_id,intent_json,intent_digest,claim_revision,writer_fencing_token,recorded_at)
+			VALUES(?,?,?,?,?,?,?,?)`, record.ID, int64(record.ExecutionEpoch), dispatch.OperationID, string(intentJSON), intentDigest, record.Revision, store.token, now); err != nil {
+			return err
+		}
+		if commitNow := store.now(); commitNow < 0 || commitNow >= leaseUntil {
+			return ErrWriterFenceHeld
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -1639,6 +1685,11 @@ func (store *Control) Rollback(version int) error {
 	leaseUntil, err := store.assertWriterTx(tx, now)
 	if err != nil {
 		return err
+	}
+	if store.schema >= SchemaV4 {
+		if err := retireEmptyStorageDispatchesTx(tx); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec("DROP TABLE IF EXISTS control_operations"); err != nil {
 		return err

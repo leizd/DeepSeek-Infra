@@ -11,7 +11,7 @@ func (store *Control) RenewWriter(ctx context.Context) error {
 	if store.closed {
 		return ErrWriterFenceHeld
 	}
-	if store.schema != SchemaV3 {
+	if store.schema != CurrentSchema {
 		return ErrSchemaInactive
 	}
 	tx, err := store.db.BeginTx(ctx, nil)

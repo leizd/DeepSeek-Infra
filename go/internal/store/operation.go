@@ -34,7 +34,7 @@ func (store *Control) AcceptMutation(raw []byte, auth MutationAuthority) (Mutati
 	if store.closed {
 		return MutationResult{}, ErrWriterFenceHeld
 	}
-	if store.schema != SchemaV3 {
+	if store.schema != CurrentSchema {
 		return MutationResult{}, ErrSchemaInactive
 	}
 	tx, err := store.db.Begin()
@@ -204,7 +204,7 @@ func (store *Control) GetOperation(operationID string) (MutationResult, bool, er
 	if store.closed {
 		return MutationResult{}, false, ErrWriterFenceHeld
 	}
-	if store.schema != SchemaV3 {
+	if store.schema != CurrentSchema {
 		return MutationResult{}, false, ErrSchemaInactive
 	}
 	if !hex64Pattern.MatchString(operationID) {

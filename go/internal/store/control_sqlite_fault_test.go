@@ -53,7 +53,7 @@ func TestControlOpenAndConnectionFailuresAreClosed(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer control.Close()
-		if control.SchemaVersion() != SchemaV3 {
+		if control.SchemaVersion() != CurrentSchema {
 			t.Fatalf("schema version: %d", control.SchemaVersion())
 		}
 	})
@@ -81,7 +81,7 @@ func TestControlOpenAndConnectionFailuresAreClosed(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer control.Close()
-		if control.SchemaVersion() != SchemaV3 {
+		if control.SchemaVersion() != CurrentSchema {
 			t.Fatalf("schema version: %d", control.SchemaVersion())
 		}
 	})
@@ -157,7 +157,7 @@ func TestControlMigrationAndSchemaCorruptionAreClosed(t *testing.T) {
 		control := openShadow(t)
 		defer control.Close()
 		if _, err := control.db.Exec(
-			"INSERT INTO schema_migrations(version, applied_at, description) VALUES(4, 1, 'foreign')",
+			"INSERT INTO schema_migrations(version, applied_at, description) VALUES(?, 1, 'foreign')", CurrentSchema+1,
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -190,7 +190,7 @@ func TestControlMigrationAndSchemaCorruptionAreClosed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := verifySchemaTx(tx, SchemaV3); err == nil {
+		if err := verifySchemaTx(tx, CurrentSchema); err == nil {
 			t.Fatal("missing metadata row must fail verification")
 		}
 		_ = tx.Rollback()
@@ -206,7 +206,7 @@ func TestControlMigrationAndSchemaCorruptionAreClosed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := verifySchemaTx(tx, SchemaV3); !errors.Is(err, ErrForeignRuntimeStore) {
+		if err := verifySchemaTx(tx, CurrentSchema); !errors.Is(err, ErrForeignRuntimeStore) {
 			t.Fatalf("foreign metadata: %v", err)
 		}
 		_ = tx.Rollback()
@@ -222,7 +222,7 @@ func TestControlMigrationAndSchemaCorruptionAreClosed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := verifySchemaTx(tx, SchemaV3); err == nil {
+		if err := verifySchemaTx(tx, CurrentSchema); err == nil {
 			t.Fatal("missing writer table must fail verification")
 		}
 		_ = tx.Rollback()
@@ -238,7 +238,7 @@ func TestControlMigrationAndSchemaCorruptionAreClosed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := verifySchemaTx(tx, SchemaV3); err == nil {
+		if err := verifySchemaTx(tx, CurrentSchema); err == nil {
 			t.Fatal("missing migration table must fail verification")
 		}
 		_ = tx.Rollback()
@@ -251,12 +251,13 @@ func TestControlMigrationAndSchemaCorruptionAreClosed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		control.schema = SchemaV3 + 1
+		defer tx.Rollback()
+		control.schema = CurrentSchema + 1
 		if err := control.migrateTx(tx); !errors.Is(err, ErrForeignRuntimeStore) {
 			t.Fatalf("future schema: %v", err)
 		}
 		_ = tx.Rollback()
-		control.schema = SchemaV3
+		control.schema = CurrentSchema
 	})
 
 	t.Run("conflicting migration object", func(t *testing.T) {
@@ -411,7 +412,7 @@ func TestBootstrapAndWriterMetadataFailuresAreClosed(t *testing.T) {
 		control := openShadow(t)
 		defer control.Close()
 		if _, err := control.db.Exec(
-			"INSERT INTO schema_migrations(version, applied_at, description) VALUES(4, 1, 'foreign')",
+			"INSERT INTO schema_migrations(version, applied_at, description) VALUES(?, 1, 'foreign')", CurrentSchema+1,
 		); err != nil {
 			t.Fatal(err)
 		}

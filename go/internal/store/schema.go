@@ -28,12 +28,14 @@ var (
 )
 
 const (
-	RuntimeGo   = "go"
-	OwnerPython = "python"
-	ModeShadow  = "shadow"
-	SchemaV1    = 1
-	SchemaV2    = 2
-	SchemaV3    = 3
+	RuntimeGo     = "go"
+	OwnerPython   = "python"
+	ModeShadow    = "shadow"
+	SchemaV1      = 1
+	SchemaV2      = 2
+	SchemaV3      = 3
+	SchemaV4      = 4
+	CurrentSchema = SchemaV4
 )
 
 var controlTableNames = [...]string{

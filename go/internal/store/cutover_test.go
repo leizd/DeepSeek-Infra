@@ -105,7 +105,7 @@ func TestIsDomainGoAuthoritative(t *testing.T) {
 func TestOpenControlSeedsShadowCutoverWithoutProductionAuthority(t *testing.T) {
 	store := openShadow(t)
 	defer store.Close()
-	if store.SchemaVersion() != SchemaV3 {
+	if store.SchemaVersion() != CurrentSchema {
 		t.Fatalf("schema: %d", store.SchemaVersion())
 	}
 	for _, domain := range controlDomainOrder {
@@ -358,10 +358,11 @@ func TestCutoverJournalRejectsMutationAndControlMigratesFromV1(t *testing.T) {
 	}
 	db := sql.OpenDB(connector)
 	for _, statement := range []string{
+		"DROP TABLE storage_dispatches",
 		"DROP TABLE control_operations",
 		"DROP TABLE control_cutover_events",
 		"DROP TABLE control_cutover",
-		"DELETE FROM schema_migrations WHERE version IN (2, 3)",
+		"DELETE FROM schema_migrations WHERE version IN (2, 3, 4)",
 		"UPDATE control_store_meta SET schema_version = 1 WHERE singleton = 1",
 		"PRAGMA user_version = 1",
 	} {
@@ -381,7 +382,7 @@ func TestCutoverJournalRejectsMutationAndControlMigratesFromV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if reopened.SchemaVersion() != SchemaV3 {
+	if reopened.SchemaVersion() != CurrentSchema {
 		t.Fatalf("migrated schema: %d", reopened.SchemaVersion())
 	}
 	got, err := reopened.GetCutover("policy")
@@ -645,7 +646,8 @@ func TestCutoverRemainingFailClosedBranches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := verifySchemaTx(tx, 4); !errors.Is(err, ErrForeignRuntimeStore) {
+	defer tx.Rollback()
+	if err := verifySchemaTx(tx, CurrentSchema+1); !errors.Is(err, ErrForeignRuntimeStore) {
 		t.Fatalf("future schema verify: %v", err)
 	}
 	v1.schema = SchemaV1
