@@ -159,6 +159,34 @@ and [reqwest ClientBuilder](https://docs.rs/reqwest/0.12.28/reqwest/struct.Clien
   security, durable replay journals, effect reconciliation, and proof-bound
   execution remain prerequisites for any cutover.
 
+## Go storage dispatch journal (schema v4)
+
+The Go-only control database now retains an append-only `storage_dispatches`
+association alongside its existing action history. Rust continues to own its
+separate worker database; neither runtime reads or writes the other's journal.
+
+`ClaimStorageDispatch` commits CLAIMED -> EXECUTING, the corresponding event and
+the exact action/epoch/operation/placement/condition metadata in one writer-fenced
+transaction. It stores no payload, raw authorization, credentials or bearer token.
+Only the successful claim caller may send the RPC; a retry or successor must query.
+
+Recovery obtains the exact operation from this journal. An empty operation argument
+to `ReconcileStorageAction` means derive it from persisted state; a nonempty argument
+must match exactly. Missing legacy bindings, substitutions, unreadable/corrupted
+intent or action history do not authorize a query or a replacement mutation.
+
+Stop all controllers before upgrade and retain a consistent backup. The v4 upgrade
+preserves v1-v3 history; it does not infer old operation IDs. An older binary rejects
+v4, mixed-version execution is unsupported, and migration failure rolls back the
+schema and writer claim. `Rollback(0)` rejects nonempty dispatch history with
+`DISPATCH_HISTORY_RETAINED`. Do not delete rows or restore an older snapshot to
+bypass replay/fencing checks. A future production rollback requires coordinated,
+fenced export/import, not a destructive schema downgrade.
+
+See the [dispatch implementation and evidence plan](../../tasks/native-runtime/go-storage-dispatch-plan.md)
+for current verification. These changes do not enable production authentication,
+signed operation authorization, action/resource leases or ownership cutover.
+
 ## Unknown effect
 
 If a Rust worker or remote provider result is missing, malformed, or

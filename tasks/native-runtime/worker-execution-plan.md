@@ -163,7 +163,8 @@ condition and bytes but not the RPC `operation_id`; query echoed the caller's ID
 Client response checks alone could not prove the original operation association.
 The Rust v3 work binds that identity atomically, rejects substitution and unbound
 legacy rows, and returns the persisted identity across journal reopen.
-Go must still persist the exact dispatch intent for recovery. This does not replace
+At that checkpoint Go still needed durable dispatch intent; the v4 coordinator
+implementation below addresses that binding. This does not replace
 operation-specific signed authorization, service authentication or renewable action
 and resource leases; all remain required by the full ownership migration.
 
@@ -212,7 +213,10 @@ and resource leases; all remain required by the full ownership migration.
 - This is local development evidence. The RPC-handler provider tests reopen worker
   handles; they do not prove operation recovery across an actual worker/controller
   process kill, qualified transport authentication, or exact-head release CI.
-- Next dependency: Go-owned durable dispatch intent and recovery, followed by the
-  remaining signed-operation, renewable lease and real process-kill/takeover gates.
+- The Go-owned durable dispatch intent/recovery dependency is now implemented as
+  described in [the Go dispatch plan](go-storage-dispatch-plan.md). Its real SQLite
+  and killed Go test-process evidence does not prove provider-backed takeover.
+  Remaining gates include signed operations, renewable leases and real
+  provider-backed controller/worker process-kill/takeover.
   Production transport-authentication confirmation and full ownership cutover remain
   pending. No Python production surface is declared migrated by this journal change.

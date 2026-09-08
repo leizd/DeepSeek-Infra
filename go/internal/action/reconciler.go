@@ -11,6 +11,7 @@ import (
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -18,11 +19,14 @@ var (
 	ErrActionExecutionStale     = errors.New("ACTION_EXECUTION_STALE")
 	ErrWriterLeaseLost          = errors.New("WRITER_LEASE_LOST")
 	ErrStorageMutationUncertain = errors.New("STORAGE_MUTATION_UNCERTAIN")
+	ErrStorageDispatchUnbound   = errors.New("STORAGE_DISPATCH_UNBOUND")
 )
 
 type ControlStore interface {
 	Get(domain, id string) (store.Record, bool, error)
 	Put(record store.Record) error
+	ClaimStorageDispatch(record store.Record, intent store.StorageDispatchIntent) error
+	GetStorageDispatch(actionID string, epoch uint64) (store.StorageDispatch, bool, error)
 	Writer() store.WriterLease
 }
 
@@ -103,12 +107,7 @@ func (c *Coordinator) ExecuteStorageAction(ctx context.Context, actionID string,
 	}
 
 	// 4. Validate fence match
-	if req.Fence == nil {
-		req.Fence = &commonv1.ActionFence{
-			ActionId:       record.ID,
-			ExecutionEpoch: record.ExecutionEpoch,
-		}
-	} else if req.Fence.ActionId != record.ID || req.Fence.ExecutionEpoch != record.ExecutionEpoch {
+	if req.Fence != nil && (req.Fence.ActionId != record.ID || req.Fence.ExecutionEpoch != record.ExecutionEpoch) {
 		return nil, internalprotocol.ErrFenceMismatch
 	}
 
@@ -117,6 +116,18 @@ func (c *Coordinator) ExecuteStorageAction(ctx context.Context, actionID string,
 	if record.State == "EFFECT_UNKNOWN" || record.State == "EXECUTING" {
 		return nil, ErrStorageMutationUncertain
 	}
+	if record.State != "PENDING" && record.State != "CLAIMED" {
+		return nil, internalprotocol.ErrUnknownEffect
+	}
+	intent, err := storageDispatchIntent(req, record)
+	if err != nil {
+		return nil, err
+	}
+	// Snapshot the bounded qualification request without changing caller-owned
+	// protobufs. Result validation uses immutable metadata, not this RPC argument.
+	req = proto.Clone(req).(*actionv1.StorageMutationRequest)
+	fence := &commonv1.ActionFence{ActionId: intent.ActionID, ExecutionEpoch: intent.ExecutionEpoch}
+	req.Fence = proto.Clone(fence).(*commonv1.ActionFence)
 
 	// 6. Claim action: PENDING -> CLAIMED
 	if record.State == "PENDING" {
@@ -131,11 +142,9 @@ func (c *Coordinator) ExecuteStorageAction(ctx context.Context, actionID string,
 	if record.State == "CLAIMED" {
 		record.Revision++
 		record.State = "EXECUTING"
-		if err := c.store.Put(record); err != nil {
+		if err := c.store.ClaimStorageDispatch(record, intent); err != nil {
 			return nil, err
 		}
-	} else {
-		return nil, internalprotocol.ErrUnknownEffect
 	}
 
 	// 8. Dispatch to Rust Worker
@@ -164,7 +173,7 @@ func (c *Coordinator) ExecuteStorageAction(ctx context.Context, actionID string,
 
 	// 11. Handle response
 	if dispatchErr == nil && resp != nil && resp.Status == actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED &&
-		resp.State == commonv1.EffectState_EFFECT_STATE_APPLIED && matchesStorageResult(resp, req.Fence, req.OperationId) {
+		resp.State == commonv1.EffectState_EFFECT_STATE_APPLIED && matchesStorageResult(resp, fence, intent.OperationID) {
 		payloadMap := map[string]any{
 			"etag":             resp.Etag,
 			"effectId":         resp.EffectId,
@@ -185,7 +194,7 @@ func (c *Coordinator) ExecuteStorageAction(ctx context.Context, actionID string,
 	if isDefiniteFailureBeforeEffect(dispatchErr) {
 		payloadMap := map[string]any{
 			"error":       dispatchErr.Error(),
-			"operationId": req.OperationId,
+			"operationId": intent.OperationID,
 		}
 		payloadBytes, _ := json.Marshal(payloadMap)
 		record.Revision++
@@ -239,15 +248,27 @@ func (c *Coordinator) ReconcileStorageAction(ctx context.Context, actionID strin
 		return nil, ErrWriterLeaseLost
 	}
 
-	// 3. Must be in EFFECT_UNKNOWN (or EXECUTING) to reconcile
+	// 3. Resolve only an existing dispatch binding before changing state or querying.
+	// A supplied ID is an exact assertion, never a source of recovery identity.
+	if record.State != "EXECUTING" && record.State != "EFFECT_UNKNOWN" {
+		return nil, internalprotocol.ErrUnknownEffect
+	}
+	dispatch, bound, err := c.store.GetStorageDispatch(record.ID, record.ExecutionEpoch)
+	if err != nil {
+		return nil, err
+	}
+	if !bound || dispatch.Intent.ActionID != record.ID || dispatch.Intent.ExecutionEpoch != record.ExecutionEpoch || dispatch.Intent.OperationID == "" ||
+		(operationID != "" && operationID != dispatch.Intent.OperationID) {
+		return nil, ErrStorageDispatchUnbound
+	}
+	operationID = dispatch.Intent.OperationID
+
 	if record.State == "EXECUTING" {
 		record.Revision++
 		record.State = "EFFECT_UNKNOWN"
 		if err := c.store.Put(record); err != nil {
 			return nil, err
 		}
-	} else if record.State != "EFFECT_UNKNOWN" {
-		return nil, internalprotocol.ErrUnknownEffect
 	}
 
 	fence := &commonv1.ActionFence{
@@ -256,7 +277,7 @@ func (c *Coordinator) ReconcileStorageAction(ctx context.Context, actionID strin
 	}
 
 	// 4. Query effect from worker
-	resp, queryErr := c.worker.QueryStorageEffect(ctx, fence, operationID, c.bearerToken)
+	resp, queryErr := c.worker.QueryStorageEffect(ctx, proto.Clone(fence).(*commonv1.ActionFence), operationID, c.bearerToken)
 
 	// 5. Re-check writer lease
 	postLease := c.store.Writer()

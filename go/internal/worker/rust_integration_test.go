@@ -6,11 +6,13 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestRustWorkerWithoutAuthorityFailsClosedAndKeepsMissingEffectUnknown(t *testing.T) {
@@ -238,9 +241,13 @@ func TestRustCoordinatorStorageActionAgainstRealWorker(t *testing.T) {
 
 	coord := action.NewCoordinator(controlStore, client)
 	fence := &commonv1.ActionFence{ActionId: "coord-act-1", ExecutionEpoch: 1}
+	emptyDigest := sha256.Sum256(nil)
 	req := &actionv1.StorageMutationRequest{
-		Fence:       fence,
-		OperationId: "coord-op-1",
+		Fence:        fence,
+		OperationId:  "coord-op-1",
+		MutationType: "PUT_CHUNK", Provider: "s3", TargetIdentity: strings.Repeat("a", 64),
+		Bucket: "qualification", ObjectKey: "object", PayloadDigest: hex.EncodeToString(emptyDigest[:]),
+		Precondition: &actionv1.StoragePrecondition{ConditionType: actionv1.StorageConditionType_STORAGE_CONDITION_TYPE_CREATE_ONLY},
 	}
 
 	// 1. Action does not exist in store -> ErrActionNotFound
@@ -277,7 +284,8 @@ func TestRustCoordinatorStorageActionAgainstRealWorker(t *testing.T) {
 		t.Fatalf("expected state FAILED_BEFORE_EFFECT, got %s", rec.State)
 	}
 
-	// 4. Test Reconcile against real worker for an action in EFFECT_UNKNOWN
+	// 4. Lose an actual Rust rejection ACK, reopen Go, then query under the
+	// persisted operation identity. No provider write or effect is fabricated.
 	unknownAct := store.Record{
 		Domain:         "action",
 		ID:             "coord-act-unknown",
@@ -289,26 +297,42 @@ func TestRustCoordinatorStorageActionAgainstRealWorker(t *testing.T) {
 	if err := controlStore.Put(unknownAct); err != nil {
 		t.Fatal(err)
 	}
-	unknownAct.State = "CLAIMED"
-	unknownAct.Revision = 2
-	if err := controlStore.Put(unknownAct); err != nil {
+	unknownReq := proto.Clone(req).(*actionv1.StorageMutationRequest)
+	unknownReq.Fence = &commonv1.ActionFence{ActionId: unknownAct.ID, ExecutionEpoch: 1}
+	unknownReq.OperationId = "coord-op-unknown"
+	dropped := &discardStorageACK{Client: client}
+	_, err = action.NewCoordinator(controlStore, dropped).ExecuteStorageAction(ctx, unknownAct.ID, unknownReq)
+	if !errors.Is(err, action.ErrStorageMutationUncertain) || !errors.Is(dropped.receivedErr, internalprotocol.ErrServiceAuthenticationUnavailable) {
+		t.Fatalf("must drop a real Rust authentication rejection: coordinator=%v received=%v", err, dropped.receivedErr)
+	}
+	if err := controlStore.Close(); err != nil {
 		t.Fatal(err)
 	}
-	unknownAct.State = "EFFECT_UNKNOWN"
-	unknownAct.Revision = 3
-	if err := controlStore.Put(unknownAct); err != nil {
+	recovered, err := store.OpenControl(store.OpenOptions{Path: tempDir, Owner: "coord-successor"})
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	_, reconErr := coord.ReconcileStorageAction(ctx, "coord-act-unknown", "coord-op-unknown")
+	defer recovered.Close()
+	coord = action.NewCoordinator(recovered, client)
+	_, reconErr := coord.ReconcileStorageAction(ctx, "coord-act-unknown", "")
 	if !errors.Is(reconErr, internalprotocol.ErrServiceAuthenticationUnavailable) {
 		t.Fatalf("expected ErrServiceAuthenticationUnavailable, got %v", reconErr)
 	}
-	recUnknown, exists, err := controlStore.Get("action", "coord-act-unknown")
+	recUnknown, exists, err := recovered.Get("action", "coord-act-unknown")
 	if err != nil || !exists {
 		t.Fatalf("action lookup failed: exists=%v, err=%v", exists, err)
 	}
 	if recUnknown.State != "EFFECT_UNKNOWN" {
 		t.Fatalf("expected state EFFECT_UNKNOWN, got %s", recUnknown.State)
 	}
+}
+
+type discardStorageACK struct {
+	*Client
+	receivedErr error
+}
+
+func (c *discardStorageACK) ExecuteStorageMutation(ctx context.Context, request *actionv1.StorageMutationRequest, bearer string) (*actionv1.StorageMutationResponse, error) {
+	_, c.receivedErr = c.Client.ExecuteStorageMutation(ctx, request, bearer)
+	return nil, context.DeadlineExceeded
 }

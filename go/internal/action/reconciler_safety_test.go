@@ -27,7 +27,7 @@ func TestExecutingActionCannotDispatchAgain(t *testing.T) {
 		}
 	}
 	worker := &fakeWorkerClient{onExecute: func() { t.Error("EXECUTING action was dispatched again") }}
-	_, err = NewCoordinator(control, worker, WithNow(func() int64 { return 500 })).ExecuteStorageAction(context.Background(), "once", &actionv1.StorageMutationRequest{OperationId: "op"})
+	_, err = NewCoordinator(control, worker, WithNow(func() int64 { return 500 })).ExecuteStorageAction(context.Background(), "once", storageRequest("op"))
 	if !errors.Is(err, ErrStorageMutationUncertain) {
 		t.Fatalf("expected reconciliation requirement: %v", err)
 	}
@@ -41,6 +41,7 @@ func TestQueryFailureCannotProveNoRemoteEffect(t *testing.T) {
 	for _, code := range []string{"DISK_CORRUPT", "NEW_QUERY_ERROR", "PRECONDITION_REJECTED", "Failed"} {
 		t.Run(code, func(t *testing.T) {
 			control := newFakeStore()
+			control.seedDispatch("a", "op")
 			control.records["action:a"] = store.Record{Domain: "action", ID: "a", ExecutionEpoch: 1, Revision: 3, State: "EFFECT_UNKNOWN"}
 			worker := &fakeWorkerClient{queryResp: &actionv1.StorageMutationResponse{
 				Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_FAILED,
@@ -77,7 +78,7 @@ func TestTwoCoordinatorsShareOneDurableDispatchClaim(t *testing.T) {
 	first := NewCoordinator(control, worker, WithNow(func() int64 { return 500 }))
 	second := NewCoordinator(control, worker, WithNow(func() int64 { return 500 }))
 	go func() {
-		_, err := first.ExecuteStorageAction(context.Background(), "one-dispatch", &actionv1.StorageMutationRequest{OperationId: "op"})
+		_, err := first.ExecuteStorageAction(context.Background(), "one-dispatch", storageRequest("op"))
 		done <- err
 	}()
 	defer func() {
@@ -96,7 +97,7 @@ func TestTwoCoordinatorsShareOneDurableDispatchClaim(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("first dispatch did not reach worker")
 	}
-	_, err = second.ExecuteStorageAction(context.Background(), "one-dispatch", &actionv1.StorageMutationRequest{OperationId: "op"})
+	_, err = second.ExecuteStorageAction(context.Background(), "one-dispatch", storageRequest("op"))
 	if !errors.Is(err, ErrStorageMutationUncertain) || calls.Load() != 1 {
 		t.Fatalf("concurrent coordinator bypassed the dispatch claim: calls=%d error=%v", calls.Load(), err)
 	}
@@ -110,6 +111,7 @@ func TestRecordedNoEffectRequiresBoundTerminalEvidence(t *testing.T) {
 		}
 		for _, valid := range []bool{false, true} {
 			control := newFakeStore()
+			control.seedDispatch("a", "op")
 			control.records["action:a"] = store.Record{Domain: "action", ID: "a", ExecutionEpoch: 1, Revision: 3, State: "EFFECT_UNKNOWN"}
 			response := &actionv1.StorageMutationResponse{Status: status, State: commonv1.EffectState_EFFECT_STATE_NOT_APPLIED,
 				Fence: &commonv1.ActionFence{ActionId: "a", ExecutionEpoch: 1}, OperationId: "op", Error: &commonv1.ErrorDetail{Code: code}}
@@ -131,6 +133,7 @@ func TestRecordedNoEffectRequiresBoundTerminalEvidence(t *testing.T) {
 func TestUnboundConfirmationCannotSettleAction(t *testing.T) {
 	for _, query := range []bool{false, true} {
 		control := newFakeStore()
+		control.seedDispatch("a", "op")
 		state := "PENDING"
 		if query {
 			state = "EFFECT_UNKNOWN"
@@ -143,7 +146,7 @@ func TestUnboundConfirmationCannotSettleAction(t *testing.T) {
 		if query {
 			_, err = coordinator.ReconcileStorageAction(context.Background(), "a", "op")
 		} else {
-			_, err = coordinator.ExecuteStorageAction(context.Background(), "a", &actionv1.StorageMutationRequest{OperationId: "op"})
+			_, err = coordinator.ExecuteStorageAction(context.Background(), "a", storageRequest("op"))
 		}
 		record, _, _ := control.Get("action", "a")
 		if !errors.Is(err, ErrStorageMutationUncertain) || record.State != "EFFECT_UNKNOWN" {
@@ -156,7 +159,7 @@ func TestReplayRejectionMayDescribeAnAlreadyCommittedEffect(t *testing.T) {
 	control := newFakeStore()
 	control.records["action:a"] = store.Record{Domain: "action", ID: "a", ExecutionEpoch: 1, Revision: 1, State: "PENDING"}
 	worker := &fakeWorkerClient{executeErr: internalprotocol.ErrStorageReplayRejected}
-	_, err := NewCoordinator(control, worker, WithNow(func() int64 { return 500 })).ExecuteStorageAction(context.Background(), "a", &actionv1.StorageMutationRequest{OperationId: "op"})
+	_, err := NewCoordinator(control, worker, WithNow(func() int64 { return 500 })).ExecuteStorageAction(context.Background(), "a", storageRequest("op"))
 	record, _, _ := control.Get("action", "a")
 	if !errors.Is(err, ErrStorageMutationUncertain) || record.State != "EFFECT_UNKNOWN" {
 		t.Fatalf("replay rejection incorrectly proved no effect: %+v %v", record, err)

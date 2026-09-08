@@ -12,15 +12,22 @@ import (
 )
 
 type fakeControlStore struct {
-	records map[string]store.Record
-	lease   store.WriterLease
-	getErr  error
-	putErr  error
+	records    map[string]store.Record
+	dispatches map[dispatchKey]store.StorageDispatch
+	lease      store.WriterLease
+	getErr     error
+	putErr     error
+}
+
+type dispatchKey struct {
+	action string
+	epoch  uint64
 }
 
 func newFakeStore() *fakeControlStore {
 	return &fakeControlStore{
-		records: make(map[string]store.Record),
+		records:    make(map[string]store.Record),
+		dispatches: make(map[dispatchKey]store.StorageDispatch),
 		lease: store.WriterLease{
 			Runtime:         store.RuntimeGo,
 			Mode:            store.ModeShadow,
@@ -49,6 +56,26 @@ func (s *fakeControlStore) Put(record store.Record) error {
 
 func (s *fakeControlStore) Writer() store.WriterLease {
 	return s.lease
+}
+
+func (s *fakeControlStore) ClaimStorageDispatch(record store.Record, intent store.StorageDispatchIntent) error {
+	if err := s.Put(record); err != nil {
+		return err
+	}
+	s.dispatches[dispatchKey{record.ID, record.ExecutionEpoch}] = store.StorageDispatch{Intent: intent}
+	return nil
+}
+
+func (s *fakeControlStore) GetStorageDispatch(actionID string, epoch uint64) (store.StorageDispatch, bool, error) {
+	dispatch, exists := s.dispatches[dispatchKey{actionID, epoch}]
+	return dispatch, exists, nil
+}
+
+// Explicit unit fixture only; production must never infer a dispatch from a row.
+func (s *fakeControlStore) seedDispatch(actionID, operationID string) {
+	s.dispatches[dispatchKey{actionID, 1}] = store.StorageDispatch{Intent: store.StorageDispatchIntent{
+		ActionID: actionID, ExecutionEpoch: 1, OperationID: operationID,
+	}}
 }
 
 type fakeWorkerClient struct {
@@ -96,9 +123,7 @@ func TestExecuteActionNormalConfirmed(t *testing.T) {
 	}
 
 	coord := NewCoordinator(st, worker, WithNow(func() int64 { return 500 }))
-	req := &actionv1.StorageMutationRequest{
-		OperationId: "op-1",
-	}
+	req := storageRequest("op-1")
 
 	resp, err := coord.ExecuteStorageAction(context.Background(), "act-1", req)
 	if err != nil {
@@ -142,7 +167,7 @@ func TestExecuteActionDefiniteFailureBeforeEffect(t *testing.T) {
 	}
 
 	coord := NewCoordinator(st, worker, WithNow(func() int64 { return 500 }))
-	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", &actionv1.StorageMutationRequest{OperationId: "op-1"})
+	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", storageRequest("op-1"))
 	if !errors.Is(err, internalprotocol.ErrStoragePreconditionRejected) {
 		t.Fatalf("expected PreconditionRejected, got: %v", err)
 	}
@@ -168,7 +193,7 @@ func TestExecuteActionUncertainOutcomeRetainsEffectUnknown(t *testing.T) {
 	}
 
 	coord := NewCoordinator(st, worker, WithNow(func() int64 { return 500 }))
-	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", &actionv1.StorageMutationRequest{OperationId: "op-1"})
+	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", storageRequest("op-1"))
 	if !errors.Is(err, ErrStorageMutationUncertain) {
 		t.Fatalf("expected ErrStorageMutationUncertain, got: %v", err)
 	}
@@ -179,7 +204,7 @@ func TestExecuteActionUncertainOutcomeRetainsEffectUnknown(t *testing.T) {
 	}
 
 	// Re-dispatching an uncertain action must be blocked
-	_, err = coord.ExecuteStorageAction(context.Background(), "act-1", &actionv1.StorageMutationRequest{OperationId: "op-1"})
+	_, err = coord.ExecuteStorageAction(context.Background(), "act-1", storageRequest("op-1"))
 	if !errors.Is(err, ErrStorageMutationUncertain) {
 		t.Fatalf("expected blocked re-dispatch, got: %v", err)
 	}
@@ -206,7 +231,7 @@ func TestExecuteActionLeaseLostDuringDispatch(t *testing.T) {
 	}
 
 	coord := NewCoordinator(st, worker, WithNow(func() int64 { return timeVal }))
-	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", &actionv1.StorageMutationRequest{OperationId: "op-1"})
+	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", storageRequest("op-1"))
 	if !errors.Is(err, ErrWriterLeaseLost) {
 		t.Fatalf("expected ErrWriterLeaseLost, got: %v", err)
 	}
@@ -237,7 +262,7 @@ func TestExecuteActionTakeoverFencingTokenDuringDispatch(t *testing.T) {
 	}
 
 	coord := NewCoordinator(st, worker, WithNow(func() int64 { return 500 }))
-	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", &actionv1.StorageMutationRequest{OperationId: "op-1"})
+	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", storageRequest("op-1"))
 	if !errors.Is(err, ErrWriterLeaseLost) {
 		t.Fatalf("expected ErrWriterLeaseLost on takeover, got: %v", err)
 	}
@@ -250,6 +275,7 @@ func TestExecuteActionTakeoverFencingTokenDuringDispatch(t *testing.T) {
 
 func TestReconcileActionTakeoverFencingTokenDuringQuery(t *testing.T) {
 	st := newFakeStore()
+	st.seedDispatch("act-1", "op-1")
 	st.records["action:act-1"] = store.Record{
 		Domain:         "action",
 		ID:             "act-1",
@@ -285,6 +311,7 @@ func TestReconcileActionTakeoverFencingTokenDuringQuery(t *testing.T) {
 
 func TestReconcileStorageActionConfirmed(t *testing.T) {
 	st := newFakeStore()
+	st.seedDispatch("act-1", "op-1")
 	st.records["action:act-1"] = store.Record{
 		Domain:         "action",
 		ID:             "act-1",
@@ -321,6 +348,7 @@ func TestReconcileStorageActionConfirmed(t *testing.T) {
 
 func TestReconcileStorageActionRejected(t *testing.T) {
 	st := newFakeStore()
+	st.seedDispatch("act-1", "op-1")
 	st.records["action:act-1"] = store.Record{
 		Domain:         "action",
 		ID:             "act-1",
@@ -353,6 +381,7 @@ func TestReconcileStorageActionRejected(t *testing.T) {
 
 func TestReconcileStorageActionStillUncertain(t *testing.T) {
 	st := newFakeStore()
+	st.seedDispatch("act-1", "op-1")
 	st.records["action:act-1"] = store.Record{
 		Domain:         "action",
 		ID:             "act-1",
@@ -435,13 +464,13 @@ func TestExecuteActionStoreGetErrorAndNotFound(t *testing.T) {
 	st.getErr = errors.New("db disk failure")
 	coord := NewCoordinator(st, &fakeWorkerClient{}, WithNow(func() int64 { return 500 }))
 
-	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", &actionv1.StorageMutationRequest{OperationId: "op-1"})
+	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", storageRequest("op-1"))
 	if err == nil || err.Error() != "db disk failure" {
 		t.Fatalf("expected db disk failure, got %v", err)
 	}
 
 	st.getErr = nil
-	_, err = coord.ExecuteStorageAction(context.Background(), "act-nonexistent", &actionv1.StorageMutationRequest{OperationId: "op-1"})
+	_, err = coord.ExecuteStorageAction(context.Background(), "act-nonexistent", storageRequest("op-1"))
 	if !errors.Is(err, ErrActionNotFound) {
 		t.Fatalf("expected ErrActionNotFound, got %v", err)
 	}
@@ -459,7 +488,7 @@ func TestExecuteActionLeaseExpiredOrTokenZero(t *testing.T) {
 	// Lease expired
 	st.lease.LeaseUntil = 400
 	coord := NewCoordinator(st, &fakeWorkerClient{}, WithNow(func() int64 { return 500 }))
-	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", &actionv1.StorageMutationRequest{OperationId: "op-1"})
+	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", storageRequest("op-1"))
 	if !errors.Is(err, ErrWriterLeaseLost) {
 		t.Fatalf("expected ErrWriterLeaseLost when lease expired, got %v", err)
 	}
@@ -467,7 +496,7 @@ func TestExecuteActionLeaseExpiredOrTokenZero(t *testing.T) {
 	// Fencing token zero
 	st.lease.LeaseUntil = 1000
 	st.lease.FencingToken = 0
-	_, err = coord.ExecuteStorageAction(context.Background(), "act-1", &actionv1.StorageMutationRequest{OperationId: "op-1"})
+	_, err = coord.ExecuteStorageAction(context.Background(), "act-1", storageRequest("op-1"))
 	if !errors.Is(err, ErrWriterLeaseLost) {
 		t.Fatalf("expected ErrWriterLeaseLost when token zero, got %v", err)
 	}
@@ -511,7 +540,7 @@ func TestExecuteActionInvalidInitialStateAndPutErrors(t *testing.T) {
 		State:          "COMPLETED_UNKNOWN",
 	}
 	coord := NewCoordinator(st, &fakeWorkerClient{}, WithNow(func() int64 { return 500 }))
-	_, err := coord.ExecuteStorageAction(context.Background(), "act-invalid", &actionv1.StorageMutationRequest{OperationId: "op-1"})
+	_, err := coord.ExecuteStorageAction(context.Background(), "act-invalid", storageRequest("op-1"))
 	if !errors.Is(err, internalprotocol.ErrUnknownEffect) {
 		t.Fatalf("expected ErrUnknownEffect on invalid initial state, got %v", err)
 	}
@@ -524,7 +553,7 @@ func TestExecuteActionInvalidInitialStateAndPutErrors(t *testing.T) {
 		State:          "PENDING",
 	}
 	st.putErr = errors.New("put error on claim")
-	_, err = coord.ExecuteStorageAction(context.Background(), "act-pending", &actionv1.StorageMutationRequest{OperationId: "op-1"})
+	_, err = coord.ExecuteStorageAction(context.Background(), "act-pending", storageRequest("op-1"))
 	if err == nil || err.Error() != "put error on claim" {
 		t.Fatalf("expected put error on claim, got %v", err)
 	}
@@ -537,7 +566,7 @@ func TestExecuteActionInvalidInitialStateAndPutErrors(t *testing.T) {
 		State:          "CLAIMED",
 	}
 	st.putErr = errors.New("put error on executing")
-	_, err = coord.ExecuteStorageAction(context.Background(), "act-claimed", &actionv1.StorageMutationRequest{OperationId: "op-1"})
+	_, err = coord.ExecuteStorageAction(context.Background(), "act-claimed", storageRequest("op-1"))
 	if err == nil || err.Error() != "put error on executing" {
 		t.Fatalf("expected put error on executing, got %v", err)
 	}
@@ -568,7 +597,7 @@ func TestExecuteActionEpochSupersededPostDispatch(t *testing.T) {
 	}
 
 	coord := NewCoordinator(st, worker, WithNow(func() int64 { return 500 }))
-	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", &actionv1.StorageMutationRequest{OperationId: "op-1"})
+	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", storageRequest("op-1"))
 	if !errors.Is(err, ErrActionExecutionStale) {
 		t.Fatalf("expected ErrActionExecutionStale, got %v", err)
 	}
@@ -598,7 +627,7 @@ func TestExecuteActionPutErrorsPostDispatch(t *testing.T) {
 		},
 	}
 	coord := NewCoordinator(st, workerConfirmed, WithNow(func() int64 { return 500 }))
-	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", &actionv1.StorageMutationRequest{OperationId: "op-1"})
+	_, err := coord.ExecuteStorageAction(context.Background(), "act-1", storageRequest("op-1"))
 	if err == nil || err.Error() != "post-dispatch put fail" {
 		t.Fatalf("expected post-dispatch put fail, got %v", err)
 	}
@@ -618,7 +647,7 @@ func TestExecuteActionPutErrorsPostDispatch(t *testing.T) {
 		},
 	}
 	coord = NewCoordinator(st, workerDefinite, WithNow(func() int64 { return 500 }))
-	_, err = coord.ExecuteStorageAction(context.Background(), "act-2", &actionv1.StorageMutationRequest{OperationId: "op-2"})
+	_, err = coord.ExecuteStorageAction(context.Background(), "act-2", storageRequest("op-2"))
 	if err == nil || err.Error() != "post-failure put fail" {
 		t.Fatalf("expected post-failure put fail, got %v", err)
 	}
@@ -638,7 +667,7 @@ func TestExecuteActionPutErrorsPostDispatch(t *testing.T) {
 		},
 	}
 	coord = NewCoordinator(st, workerUncertain, WithNow(func() int64 { return 500 }))
-	_, err = coord.ExecuteStorageAction(context.Background(), "act-3", &actionv1.StorageMutationRequest{OperationId: "op-3"})
+	_, err = coord.ExecuteStorageAction(context.Background(), "act-3", storageRequest("op-3"))
 	if err == nil || err.Error() != "post-uncertain put fail" {
 		t.Fatalf("expected post-uncertain put fail, got %v", err)
 	}
@@ -646,6 +675,8 @@ func TestExecuteActionPutErrorsPostDispatch(t *testing.T) {
 
 func TestReconcileStorageActionMoreEdgeCases(t *testing.T) {
 	st := newFakeStore()
+	st.seedDispatch("act-1", "op-1")
+	st.seedDispatch("act-exec", "op-1")
 
 	// 1. Get error
 	st.getErr = errors.New("get store failed")
