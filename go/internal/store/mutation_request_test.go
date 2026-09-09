@@ -424,3 +424,33 @@ func TestSignMutationRequestRejectsUnmarshalableValues(t *testing.T) {
 		t.Fatalf("unmarshalable signature payload: %v", err)
 	}
 }
+
+func TestSignMutationRequestInputValidation(t *testing.T) {
+	privKey, pubKey := rfc8032PrivateKey(t)
+
+	// nil unsigned
+	if _, _, err := SignMutationRequest(nil, privKey, pubKey); !errors.Is(err, ErrMutationRequestInvalid) {
+		t.Fatalf("expected ErrMutationRequestInvalid, got: %v", err)
+	}
+	// already signed
+	if _, _, err := SignMutationRequest(map[string]any{"signature": "foo"}, privKey, pubKey); !errors.Is(err, ErrMutationRequestInvalid) {
+		t.Fatalf("expected ErrMutationRequestInvalid, got: %v", err)
+	}
+	// bad private key length
+	if _, _, err := SignMutationRequest(map[string]any{}, []byte("short"), pubKey); !errors.Is(err, ErrMutationRequestSignatureInvalid) {
+		t.Fatalf("expected ErrMutationRequestSignatureInvalid, got: %v", err)
+	}
+	// payload not map[string]any
+	if _, _, err := SignMutationRequest(map[string]any{"payload": 123}, privKey, pubKey); !errors.Is(err, ErrMutationRequestInvalid) {
+		t.Fatalf("expected ErrMutationRequestInvalid, got: %v", err)
+	}
+	// bad public key
+	if _, _, err := SignMutationRequest(map[string]any{"payload": map[string]any{"foo": "bar"}}, privKey, "invalid-pub-key"); !errors.Is(err, ErrMutationRequestSignerMismatch) {
+		t.Fatalf("expected ErrMutationRequestSignerMismatch, got: %v", err)
+	}
+	// success
+	doc, raw, err := SignMutationRequest(map[string]any{"payload": map[string]any{"foo": "bar"}}, privKey, pubKey)
+	if err != nil || doc == nil || len(raw) == 0 {
+		t.Fatalf("SignMutationRequest failed: %v", err)
+	}
+}

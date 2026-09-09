@@ -7,24 +7,34 @@ import (
 )
 
 var (
-	ErrEmptyStorePath         = errors.New("EMPTY_STORE_PATH")
-	ErrPythonStorePath        = errors.New("PYTHON_STORE_PATH")
-	ErrWriterFenceHeld        = errors.New("WRITER_FENCE_HELD")
-	ErrUnknownDomain          = errors.New("UNKNOWN_DOMAIN")
-	ErrDomainNotAuthoritative = errors.New("DOMAIN_NOT_AUTHORITATIVE")
-	ErrIllegalCutover         = errors.New("ILLEGAL_CUTOVER_TRANSITION")
-	ErrCutoverNotAuthorized   = errors.New("CUTOVER_NOT_AUTHORIZED")
-	ErrStaleCutoverFence      = errors.New("STALE_CUTOVER_FENCE")
-	ErrCutoverReplayConflict  = errors.New("CUTOVER_REPLAY_CONFLICT")
-	ErrRevisionConflict       = errors.New("REVISION_CONFLICT")
-	ErrIllegalTransition      = errors.New("ILLEGAL_TRANSITION")
-	ErrForeignRuntimeStore    = errors.New("FOREIGN_RUNTIME_STORE")
-	ErrSchemaInactive         = errors.New("SCHEMA_INACTIVE")
-	ErrEmptyRecordID          = errors.New("EMPTY_RECORD_ID")
-	ErrInvalidPayload         = errors.New("INVALID_PAYLOAD")
-	ErrCorruptRecord          = errors.New("CORRUPT_RECORD")
-	ErrEpochOutOfRange        = errors.New("EPOCH_OUT_OF_RANGE")
-	ErrLegacyFileStore        = errors.New("LEGACY_FILE_STORE")
+	ErrEmptyStorePath           = errors.New("EMPTY_STORE_PATH")
+	ErrPythonStorePath          = errors.New("PYTHON_STORE_PATH")
+	ErrWriterFenceHeld          = errors.New("WRITER_FENCE_HELD")
+	ErrUnknownDomain            = errors.New("UNKNOWN_DOMAIN")
+	ErrDomainNotAuthoritative   = errors.New("DOMAIN_NOT_AUTHORITATIVE")
+	ErrIllegalCutover           = errors.New("ILLEGAL_CUTOVER_TRANSITION")
+	ErrCutoverNotAuthorized     = errors.New("CUTOVER_NOT_AUTHORIZED")
+	ErrStaleCutoverFence        = errors.New("STALE_CUTOVER_FENCE")
+	ErrCutoverReplayConflict    = errors.New("CUTOVER_REPLAY_CONFLICT")
+	ErrRevisionConflict         = errors.New("REVISION_CONFLICT")
+	ErrIllegalTransition        = errors.New("ILLEGAL_TRANSITION")
+	ErrForeignRuntimeStore      = errors.New("FOREIGN_RUNTIME_STORE")
+	ErrSchemaInactive           = errors.New("SCHEMA_INACTIVE")
+	ErrEmptyRecordID            = errors.New("EMPTY_RECORD_ID")
+	ErrInvalidPayload           = errors.New("INVALID_PAYLOAD")
+	ErrCorruptRecord            = errors.New("CORRUPT_RECORD")
+	ErrEpochOutOfRange          = errors.New("EPOCH_OUT_OF_RANGE")
+	ErrLegacyFileStore          = errors.New("LEGACY_FILE_STORE")
+	ErrResourceConflict         = errors.New("RESOURCE_CONFLICT")
+	ErrBudgetExceeded           = errors.New("BUDGET_EXCEEDED")
+	ErrActionNotClaimable       = errors.New("ACTION_NOT_CLAIMABLE")
+	ErrActionLeaseActive        = errors.New("ACTION_LEASE_ACTIVE")
+	ErrActionLeaseNotFound      = errors.New("ACTION_LEASE_NOT_FOUND")
+	ErrActionLeaseStale         = errors.New("ACTION_LEASE_STALE")
+	ErrActionLeaseExpired       = errors.New("ACTION_LEASE_EXPIRED")
+	ErrInvalidClaimToken        = errors.New("INVALID_CLAIM_TOKEN")
+	ErrActionLeaseRequired      = errors.New("ACTION_LEASE_REQUIRED")
+	ErrAdmissionHistoryRetained = errors.New("ADMISSION_HISTORY_RETAINED")
 )
 
 const (
@@ -35,7 +45,8 @@ const (
 	SchemaV2      = 2
 	SchemaV3      = 3
 	SchemaV4      = 4
-	CurrentSchema = SchemaV4
+	SchemaV5      = 5
+	CurrentSchema = SchemaV5
 )
 
 var controlTableNames = [...]string{

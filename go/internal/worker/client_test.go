@@ -712,3 +712,61 @@ func TestQueryStorageEffectMalformedResponses(t *testing.T) {
 		t.Fatalf("unspecified status: %v", err)
 	}
 }
+
+func TestDialPlaintextLoopbackTargets(t *testing.T) {
+	if _, err := DialPlaintextLoopback("192.168.1.1:8080"); err == nil {
+		t.Fatal("expected error for non-loopback target")
+	}
+	client, err := DialPlaintextLoopback("127.0.0.1:54321")
+	if err != nil {
+		t.Fatalf("unexpected dial error: %v", err)
+	}
+	if client != nil {
+		_ = client.Close()
+	}
+}
+
+func TestWorkerClientEdgeCoverage(t *testing.T) {
+	client := New(&fakeWorkerRPC{})
+
+	// 1. InstallAuthoritativeEpoch with malformed JSON canonical request (line 101)
+	fence := &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 1}
+	if err := client.InstallAuthoritativeEpoch(context.Background(), fence, []byte("{")); err == nil {
+		t.Fatal("expected error on malformed JSON")
+	}
+
+	// 2. ExecuteStorageMutation returning STORAGE_MUTATION_STATUS_EFFECT_UNKNOWN (line 205)
+	rpcUnknown := &fakeWorkerRPC{
+		storageResponse: &actionv1.StorageMutationResponse{
+			Status:      actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_EFFECT_UNKNOWN,
+			OperationId: "op-1",
+			Fence:       fence,
+		},
+	}
+	clientUnknown := New(rpcUnknown)
+	_, err := clientUnknown.ExecuteStorageMutation(context.Background(), &actionv1.StorageMutationRequest{
+		Fence:       fence,
+		OperationId: "op-1",
+	}, "")
+	if !errors.Is(err, internalprotocol.ErrUnknownEffect) {
+		t.Fatalf("expected ErrUnknownEffect, got: %v", err)
+	}
+
+	// 3. knownRejection for OPERATION_INVALID (line 346)
+	rpcOpInv := &fakeWorkerRPC{
+		storageResponse: &actionv1.StorageMutationResponse{
+			Status:      actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED,
+			Error:       &commonv1.ErrorDetail{Code: store.ErrAuthorityRequestOperationInvalid.Error()},
+			Fence:       fence,
+			OperationId: "op-1",
+		},
+	}
+	clientOpInv := New(rpcOpInv)
+	_, err = clientOpInv.ExecuteStorageMutation(context.Background(), &actionv1.StorageMutationRequest{
+		Fence:       fence,
+		OperationId: "op-1",
+	}, "")
+	if !errors.Is(err, store.ErrAuthorityRequestOperationInvalid) {
+		t.Fatalf("expected ErrAuthorityRequestOperationInvalid, got: %v", err)
+	}
+}

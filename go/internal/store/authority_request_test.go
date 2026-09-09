@@ -330,4 +330,83 @@ func TestSignAuthorityRequestFailsClosed(t *testing.T) {
 	if _, err := FenceFromAuthorityRequest([]byte(`{"actionId":"act-1","executionEpoch":0}`)); !errors.Is(err, internalprotocol.ErrZeroEpoch) {
 		t.Fatalf("zero epoch: %v", err)
 	}
+	if _, _, err := SignAuthorityRequest(map[string]any{"payload": map[string]any{}}, private, "not-a-key"); !errors.Is(err, ErrAuthorityRequestSignerMismatch) {
+		t.Fatalf("bad public key: %v", err)
+	}
+	if _, _, err := SignAuthorityRequest(map[string]any{"payload": map[string]any{"bad": make(chan int)}}, private, public); err == nil {
+		t.Fatal("expected error on unmarshalable payload")
+	}
+}
+
+func TestVerifyAuthorityRequestDocumentEdgeCases(t *testing.T) {
+	fixture := loadAuthorityRequestFixture(t)
+	context := testAuthorityRequestContext(t, fixture, nil)
+
+	// Bad signature base64
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(fixture.CanonicalRequest), &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["signature"] = "??bad-base64??"
+	raw, _ := json.Marshal(doc)
+	if _, err := VerifyAuthorityRequestDocument(raw, context); !errors.Is(err, ErrAuthorityRequestSignatureInvalid) {
+		t.Fatalf("expected ErrAuthorityRequestSignatureInvalid for bad sig base64, got: %v", err)
+	}
+
+	// Bad signer public key base64 in context
+	badContext := context
+	badContext.SignerPublicKey = "??bad-base64??"
+	if _, err := VerifyAuthorityRequestDocument([]byte(fixture.CanonicalRequest), badContext); !errors.Is(err, ErrAuthorityRequestSignatureInvalid) {
+		t.Fatalf("expected ErrAuthorityRequestSignatureInvalid for bad pubkey base64, got: %v", err)
+	}
+
+	// Non-map payload
+	if err := json.Unmarshal([]byte(fixture.CanonicalRequest), &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["payload"] = "not-a-map"
+	raw, _ = json.Marshal(doc)
+	if _, err := VerifyAuthorityRequestDocument(raw, context); !errors.Is(err, ErrAuthorityRequestInvalid) {
+		t.Fatalf("expected ErrAuthorityRequestInvalid for non-map payload, got: %v", err)
+	}
+
+	// Bad issuedAt timestamp
+	if err := json.Unmarshal([]byte(fixture.CanonicalRequest), &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["issuedAt"] = "invalid-date"
+	if d, err := authorityRequestDigest(doc); err == nil {
+		doc["digest"] = d
+	}
+	raw, _ = json.Marshal(doc)
+	if _, err := VerifyAuthorityRequestDocument(raw, context); err == nil {
+		t.Fatal("expected error on invalid issuedAt")
+	}
+
+	// Bad expiresAt timestamp
+	if err := json.Unmarshal([]byte(fixture.CanonicalRequest), &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["expiresAt"] = "invalid-date"
+	if d, err := authorityRequestDigest(doc); err == nil {
+		doc["digest"] = d
+	}
+	raw, _ = json.Marshal(doc)
+	if _, err := VerifyAuthorityRequestDocument(raw, context); err == nil {
+		t.Fatal("expected error on invalid expiresAt")
+	}
+
+	// Lifetime exceeding maxAuthorityRequestLifetime
+	if err := json.Unmarshal([]byte(fixture.CanonicalRequest), &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["issuedAt"] = "2026-09-04T00:00:00Z"
+	doc["expiresAt"] = "2026-09-05T00:00:00Z"
+	if d, err := authorityRequestDigest(doc); err == nil {
+		doc["digest"] = d
+	}
+	raw, _ = json.Marshal(doc)
+	if _, err := VerifyAuthorityRequestDocument(raw, context); !errors.Is(err, ErrAuthorityRequestInvalid) {
+		t.Fatalf("expected ErrAuthorityRequestInvalid for long lifetime, got: %v", err)
+	}
 }

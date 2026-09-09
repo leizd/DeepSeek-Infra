@@ -94,6 +94,111 @@ Exact-head CI and provider-backed evidence remain distinct release gates.
   resource tables or provider behavior changed. Increments 2-5 are not implemented
   by this transaction refactor. No new provider or release PASS is claimed.
 
+## Go-local admission implementation (2026-09-09)
+
+Increments 2-4 now have a store-level implementation under qualification. This is
+not completed coordinator integration or qualified terminal-effect settlement.
+No production caller currently invokes the new lease methods, and the existing
+coordinator cannot use its generic dispatch path for a lease-bound action.
+
+### Internal contract
+
+- `AdmitAndClaimAction` reads the persisted action and validates its canonical
+  digest/history. Default budgets are 3 concurrent actions, 20 claims/hour,
+  2 concurrent actions per target/policy and 1 distinct failure domain. Omitting
+  policy selects these defaults; there is no budget-disable flag. Positive typed
+  limits override individual defaults. These inputs are not a production policy
+  source: binding them to a durable, authorized policy revision is still required.
+- Global/hourly limits and target/policy/domain counts are evaluated inside the
+  same immediate transaction as claim, lease, resource set and events. Active
+  peers must have valid native lease/history/resource bindings; corrupt or legacy
+  unqualified active peers are rejected, not skipped. Expiry alone never frees
+  another action's capacity or reservations. Hourly accounting currently uses
+  CLAIMED control events, not the Python creation-time accounting; parity review
+  and recovery-specific budget semantics remain required before cutover.
+- Explicit resource keys add to, never replace, persisted scope. All supported
+  target aliases are deduplicated and reserved; the selected policy/backup aliases
+  retain their existing precedence. The sorted exact set is recorded on immutable
+  lease events. Update/delete/replace and a second claim manifest for one epoch
+  are rejected by schema guards. Every renewal, leased dispatch and settlement
+  verifies this set, owner, epoch, writer, deadline and claim history together.
+- Fresh PENDING -> CLAIMED preserves the already allocated positive action epoch.
+  A first expired CLAIMED/EXECUTING takeover advances that journal epoch exactly
+  once and enters EFFECT_UNKNOWN, rotating the Go-local random CAS token. Missing
+  leases, corrupt epoch jumps, scope expansion and epoch overflow are rejected.
+  Previously requested extra resources survive omitted takeover arguments. The
+  acquired-at timestamp and returned lease match the new persisted claim.
+- Expiry is exclusive (`now >= leaseUntil`). Renewal cannot shorten a deadline
+  or overflow it, and the original claim must still be live at the pre-commit
+  check. All mutation paths check the writer and action deadlines before Commit;
+  a clock reversal or elapsed deadline rolls back the entire transaction. As in
+  increment 1, this does not measure time spent inside SQLite Commit/fsync.
+- A successor Go writer cannot reuse the prior writer's claim token. Generic
+  `Put` and `ClaimStorageDispatch` reject bound actions. The explicit
+  `ClaimLeasedStorageDispatch` requires the matching current token and preserves
+  the admitted payload while atomically recording EXECUTING plus immutable intent.
+  That token is neither a transport credential nor provider authorization.
+- `CompleteAction`/`FailAction` validate the canonical payload and frozen legal
+  transition, and release resources transactionally. Their caller must eventually
+  supply a qualified effect/no-effect outcome; these methods alone do not verify
+  a signed Rust/provider proof and are not exposed as production success authority.
+
+### Persistence and evidence boundaries
+
+- Go schema v5 adds action leases, immutable lease events with the resource
+  manifest, and resource reservations. v4 upgrade preserves existing control and
+  storage-dispatch history without adopting or backfilling legacy actions.
+  Any retained admission row/event/reservation blocks rollback to zero.
+- v5 has not been released. The earlier uncommitted experimental v5 shape without
+  the manifest/replace guard is not accepted as this schema. Preserve any such
+  development database for diagnosis; do not delete its history or relabel it as
+  v4. A separately qualified migration would be needed if it contains useful state.
+- Regression tests reproduced and repaired expiry equality, action expiry during
+  a transaction, old-writer token reuse, shortened/overflowed renewal, skipped
+  resource scope, missing/substituted reservations, anonymous dispatch, mutated
+  dispatch payload, corrupt journal renewal, unsafe takeover repair, disabled
+  default budgets and ignored corrupt active peers. Rejections check persisted
+  and cached writer state as well as action, event and reservation rollback.
+- Real SQLite injected INSERT/UPDATE/DELETE errors cover admission, takeover,
+  renewal and settlement rollback, including errors after earlier writes. These
+  are database fault tests, not remote-effect evidence. Concurrent unit tests
+  currently contend through one Control handle, not independent processes.
+- The former crash-named admission test is now explicitly a **graceful reopen**
+  test, preserving old operation identity and expiring the action lease. No
+  actual process kill or provider effect is claimed for it.
+- Full Go tests, vet and frozen contract/codegen checks pass. An initial coverage
+  run reported 94.8%, below the unchanged 95% gate. After adding SQL-failure and
+  integrity regressions, the final internal/pkg coverage gate passes at **95.5%**.
+  Profile/log: `.tools/native-race-20260826/go-admission-coverage-final.out` and
+  `go-admission-coverage-final.log`. No package or assertion was excluded to pass.
+- The isolated Windows full `go test -race ./... -count=1 -timeout=600s -json`
+  invocation passes: 15 test packages, 617 passed test entries, zero failures and
+  zero race warnings. Store completes in 218.339 seconds. One existing Windows
+  symlink-privilege test is skipped; this is not a zero-skip claim. Generated-only
+  protobuf packages have no tests. The existing command helper still builds a
+  normal child binary, not a race-instrumented child executable.
+  Log: `.tools/native-race-20260826/go-admission-race.jsonl`, SHA-256
+  `31ee68f40918e49bade20b5fba7a3bef0e54a19058cb67598340950454a06375`.
+  Test processes were reaped. No provider-backed or exact-head release PASS is
+  claimed by these local results.
+
+### Remaining dependency work
+
+1. Bind production admission to durable authorized policy identity/revision and
+   resolve fresh-claim epoch, hourly accounting and takeover budget parity.
+2. Integrate leased dispatch, heartbeat renewal and cancellation into the real
+   coordinator, including typed proof-qualified settlement. Keep production
+   authority disabled until those paths and Rust live-epoch installation qualify.
+3. Define repeated EFFECT_UNKNOWN lease takeover without changing the frozen
+   action transition graph. Currently it fails closed; it is not a completed
+   recovery loop. Preserve the old dispatch identity throughout reconciliation.
+4. After the separate transport-authentication decision, qualify signed operations
+   and actual controller/worker process kills against real Three-MinIO, followed
+   by the required Federation/provider gates and exact-head CI.
+5. Continue all remaining production surfaces in the complete zero-Python scope.
+   This Go store increment does not migrate server/desktop/Android/media/MCP or
+   establish Rust ownership of every production security/data-plane path.
+
 ## Sources
 
 The existing Python admission and renewal semantics were inspected directly in

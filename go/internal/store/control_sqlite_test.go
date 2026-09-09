@@ -472,3 +472,31 @@ func TestMutableCompatibilityCatalogCannotRedirectSQL(t *testing.T) {
 		t.Fatalf("trusted table write count=%d err=%v", count, err)
 	}
 }
+
+func TestOpenControlRejectsDatabaseDirectory(t *testing.T) {
+	dir := t.TempDir()
+	dbDir := filepath.Join(dir, ControlDatabaseFilename)
+	if err := os.Mkdir(dbDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenControl(OpenOptions{Path: dir, Owner: "w"}); !errors.Is(err, ErrForeignRuntimeStore) {
+		t.Fatalf("expected ErrForeignRuntimeStore for database directory, got: %v", err)
+	}
+}
+
+func TestControlRollbackAndSnapshotValidation(t *testing.T) {
+	control := openShadow(t)
+	defer control.Close()
+
+	if err := control.Rollback(1); !errors.Is(err, ErrSchemaInactive) {
+		t.Fatalf("expected ErrSchemaInactive for non-zero version, got: %v", err)
+	}
+
+	_ = control.Close()
+	if err := control.Rollback(0); !errors.Is(err, ErrWriterFenceHeld) {
+		t.Fatalf("expected ErrWriterFenceHeld on closed, got: %v", err)
+	}
+	if _, err := control.ExportSnapshot(); !errors.Is(err, ErrWriterFenceHeld) {
+		t.Fatalf("expected ErrWriterFenceHeld on closed, got: %v", err)
+	}
+}

@@ -498,3 +498,135 @@ func FuzzAuthorityCheckpointJSONFailsClosedWithoutPanics(f *testing.F) {
 		_, _ = json.Marshal(checkpoint)
 	})
 }
+
+func TestAuthorityNilAndEmptyCheckpoints(t *testing.T) {
+	var cp AuthorityCheckpoint
+	if _, err := cp.MarshalJSON(); err == nil {
+		t.Fatal("expected error from empty AuthorityCheckpoint.MarshalJSON")
+	}
+	if err := ValidateAuthorityCheckpoint(nil); !errors.Is(err, ErrInvalidAuthorityCheckpoint) {
+		t.Fatalf("expected ErrInvalidAuthorityCheckpoint for nil, got: %v", err)
+	}
+	if _, err := ComputePayloadDigest(nil); !errors.Is(err, ErrInvalidAuthorityCheckpoint) {
+		t.Fatalf("expected ErrInvalidAuthorityCheckpoint for nil, got: %v", err)
+	}
+	if _, err := ComputeCheckpointDigest(nil); !errors.Is(err, ErrInvalidAuthorityCheckpoint) {
+		t.Fatalf("expected ErrInvalidAuthorityCheckpoint for nil, got: %v", err)
+	}
+	if err := VerifyAuthorityCheckpointIntegrity(nil); !errors.Is(err, ErrInvalidAuthorityCheckpoint) {
+		t.Fatalf("expected ErrInvalidAuthorityCheckpoint for nil, got: %v", err)
+	}
+}
+
+func TestVerifyAuthorityCheckpointIntegrityAndChain(t *testing.T) {
+	cp1 := frozenCheckpoint(t, 0)
+
+	// 1. VerifyAuthorityCheckpointIntegrity digest mismatches
+	tamperedPayload := *cp1
+	tamperedPayload.PayloadDigest = strings.Repeat("0", 64)
+	if err := VerifyAuthorityCheckpointIntegrity(&tamperedPayload); !errors.Is(err, ErrAuthorityPayloadDigestMismatch) {
+		t.Fatalf("expected ErrAuthorityPayloadDigestMismatch, got: %v", err)
+	}
+
+	tamperedDigest := *cp1
+	tamperedDigest.Digest = strings.Repeat("0", 64)
+	if err := VerifyAuthorityCheckpointIntegrity(&tamperedDigest); !errors.Is(err, ErrAuthorityDigestMismatch) {
+		t.Fatalf("expected ErrAuthorityDigestMismatch, got: %v", err)
+	}
+
+	// 2. VerifyAuthorityChain empty history
+	if err := VerifyAuthorityChain(nil); !errors.Is(err, ErrAuthorityEmptyHistory) {
+		t.Fatalf("expected ErrAuthorityEmptyHistory for nil, got: %v", err)
+	}
+	if err := VerifyAuthorityChain([]*AuthorityCheckpoint{}); !errors.Is(err, ErrAuthorityEmptyHistory) {
+		t.Fatalf("expected ErrAuthorityEmptyHistory for empty slice, got: %v", err)
+	}
+
+	// 3. Single genesis checkpoint passes
+	if err := VerifyAuthorityChain([]*AuthorityCheckpoint{cp1}); err != nil {
+		t.Fatalf("single genesis checkpoint failed: %v", err)
+	}
+
+	// 4. Genesis with non-empty previousDigest
+	badGenesis := *cp1
+	prev := "0000000000000000000000000000000000000000000000000000000000000000"
+	badGenesis.PreviousDigest = &prev
+	resealCheckpoint(t, &badGenesis)
+	if err := VerifyAuthorityChain([]*AuthorityCheckpoint{&badGenesis}); !errors.Is(err, ErrAuthorityGenesisPreviousDigest) {
+		t.Fatalf("expected ErrAuthorityGenesisPreviousDigest, got: %v", err)
+	}
+
+	// 5. Genesis with generation != 1
+	gapGenesis := *cp1
+	gapGenesis.AuthorityGeneration = 2
+	resealCheckpoint(t, &gapGenesis)
+	if err := VerifyAuthorityChain([]*AuthorityCheckpoint{&gapGenesis}); !errors.Is(err, ErrAuthorityGenerationGap) {
+		t.Fatalf("expected ErrAuthorityGenerationGap, got: %v", err)
+	}
+
+	// 6. Create valid checkpoint 2
+	cp2 := *cp1
+	cp2.AuthorityGeneration = 2
+	cp2.PreviousDigest = &cp1.Digest
+	resealCheckpoint(t, &cp2)
+	if err := VerifyAuthorityChain([]*AuthorityCheckpoint{cp1, &cp2}); err != nil {
+		t.Fatalf("valid 2-checkpoint chain failed: %v", err)
+	}
+
+	// 7. Broken chain previousDigest mismatch
+	badPrev := "0000000000000000000000000000000000000000000000000000000000000000"
+	brokenChain := *cp1
+	brokenChain.AuthorityGeneration = 2
+	brokenChain.PreviousDigest = &badPrev
+	resealCheckpoint(t, &brokenChain)
+	if err := VerifyAuthorityChain([]*AuthorityCheckpoint{cp1, &brokenChain}); !errors.Is(err, ErrAuthorityBrokenChain) {
+		t.Fatalf("expected ErrAuthorityBrokenChain, got: %v", err)
+	}
+
+	// 8. Fork detection (same generation, different digest)
+	cp2Fork := cp2
+	cp2Fork.Policies = []any{map[string]any{"policyId": "forked-policy"}}
+	resealCheckpoint(t, &cp2Fork)
+	if err := VerifyAuthorityChain([]*AuthorityCheckpoint{cp1, &cp2, &cp2Fork}); !errors.Is(err, ErrAuthorityFork) {
+		t.Fatalf("expected ErrAuthorityFork, got: %v", err)
+	}
+
+	// 9. VerifyAuthorityHeadTransition
+	adv, err := VerifyAuthorityHeadTransition(nil, cp1)
+	if err != nil || !adv {
+		t.Fatalf("expected true, nil for genesis head transition, got %v, %v", adv, err)
+	}
+	head1 := &AuthorityHead{Generation: 1, Digest: cp1.Digest}
+	adv, err = VerifyAuthorityHeadTransition(head1, cp1)
+	if err != nil || adv {
+		t.Fatalf("expected false, nil for replay of tip, got %v, %v", adv, err)
+	}
+	adv, err = VerifyAuthorityHeadTransition(head1, &cp2)
+	if err != nil || !adv {
+		t.Fatalf("expected true, nil for advance to cp2, got %v, %v", adv, err)
+	}
+	if _, err := VerifyAuthorityHeadTransition(head1, &brokenChain); !errors.Is(err, ErrAuthorityBrokenChain) {
+		t.Fatalf("expected ErrAuthorityBrokenChain, got: %v", err)
+	}
+	cp1Fork := *cp1
+	cp1Fork.Policies = []any{map[string]any{"policyId": "forked-policy-1"}}
+	resealCheckpoint(t, &cp1Fork)
+	if _, err := VerifyAuthorityHeadTransition(head1, &cp1Fork); !errors.Is(err, ErrAuthorityFork) {
+		t.Fatalf("expected ErrAuthorityFork, got: %v", err)
+	}
+}
+
+func TestAuthorityNilAndMarshalValidation(t *testing.T) {
+	if _, err := json.Marshal(AuthorityCheckpoint{Schema: "invalid"}); err == nil {
+		t.Fatal("expected error on invalid checkpoint marshal")
+	}
+	if _, err := ComputePayloadDigest(nil); !errors.Is(err, ErrInvalidAuthorityCheckpoint) {
+		t.Fatalf("expected ErrInvalidAuthorityCheckpoint, got: %v", err)
+	}
+	if _, err := ComputeCheckpointDigest(nil); !errors.Is(err, ErrInvalidAuthorityCheckpoint) {
+		t.Fatalf("expected ErrInvalidAuthorityCheckpoint, got: %v", err)
+	}
+	if err := VerifyAuthorityCheckpointIntegrity(nil); !errors.Is(err, ErrInvalidAuthorityCheckpoint) {
+		t.Fatalf("expected ErrInvalidAuthorityCheckpoint, got: %v", err)
+	}
+}

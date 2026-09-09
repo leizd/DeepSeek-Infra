@@ -335,9 +335,12 @@ func TestControlMigratesFromV2ToOperationJournal(t *testing.T) {
 	}
 	db := sql.OpenDB(connector)
 	for _, statement := range []string{
-		"DROP TABLE storage_dispatches",
-		"DROP TABLE control_operations",
-		"DELETE FROM schema_migrations WHERE version IN (3, 4)",
+		"DROP TABLE IF EXISTS action_resource_leases",
+		"DROP TABLE IF EXISTS action_lease_events",
+		"DROP TABLE IF EXISTS action_leases",
+		"DROP TABLE IF EXISTS storage_dispatches",
+		"DROP TABLE IF EXISTS control_operations",
+		"DELETE FROM schema_migrations WHERE version >= 3",
 		"UPDATE control_store_meta SET schema_version = 2 WHERE singleton = 1",
 		"PRAGMA user_version = 2",
 	} {
@@ -740,4 +743,28 @@ func operationRowCount(t *testing.T, store *Control) int {
 		t.Fatal(err)
 	}
 	return count
+}
+
+func TestGetOperationInputValidation(t *testing.T) {
+	now := mutationNow()
+	store := openControlAt(t, now.Unix())
+	defer store.Close()
+
+	// 1. Non-hex operation ID returns false, nil
+	if _, ok, err := store.GetOperation("not-hex"); err != nil || ok {
+		t.Fatalf("expected false, nil for non-hex op id, got ok=%v err=%v", ok, err)
+	}
+
+	// 2. Schema inactive
+	store.schema = 0
+	if _, _, err := store.GetOperation(hex64(1)); !errors.Is(err, ErrSchemaInactive) {
+		t.Fatalf("expected ErrSchemaInactive, got: %v", err)
+	}
+	store.schema = CurrentSchema
+
+	// 3. Closed store
+	_ = store.Close()
+	if _, _, err := store.GetOperation(hex64(1)); !errors.Is(err, ErrWriterFenceHeld) {
+		t.Fatalf("expected ErrWriterFenceHeld on closed, got: %v", err)
+	}
 }

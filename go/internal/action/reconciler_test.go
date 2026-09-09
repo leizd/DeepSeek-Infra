@@ -897,3 +897,50 @@ func TestDefiniteFailureBeforeEffect(t *testing.T) {
 		t.Fatal("arbitrary error should not be definite failure")
 	}
 }
+
+func TestReconcileStorageActionEdgeCases(t *testing.T) {
+	st := newFakeStore()
+	st.records["action:act-edge"] = store.Record{
+		Domain:         "action",
+		ID:             "act-edge",
+		ExecutionEpoch: 1,
+		State:          "EFFECT_UNKNOWN",
+	}
+	workerQueryErr := &fakeWorkerClient{
+		queryResp: &actionv1.StorageMutationResponse{
+			Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_FAILED,
+		},
+		queryErr: errors.New("network dropped"),
+	}
+	st.seedDispatch("act-edge", "op-1")
+	coord := NewCoordinator(st, workerQueryErr, WithNow(func() int64 { return 500 }))
+	_, err := coord.ReconcileStorageAction(context.Background(), "act-edge", "op-1")
+	if err == nil || err.Error() != "network dropped" {
+		t.Fatalf("expected network dropped, got %v", err)
+	}
+}
+
+func TestExecuteStorageActionPutError(t *testing.T) {
+	st := newFakeStore()
+	st.records["action:act-put-err"] = store.Record{
+		Domain:         "action",
+		ID:             "act-put-err",
+		ExecutionEpoch: 1,
+		State:          "CLAIMED",
+	}
+	st.seedDispatch("act-put-err", "op-1")
+	workerSuccess := &fakeWorkerClient{
+		executeResp: &actionv1.StorageMutationResponse{
+			Status:      actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED,
+			OperationId: "op-1",
+			State:       commonv1.EffectState_EFFECT_STATE_APPLIED,
+			Fence:       &commonv1.ActionFence{ActionId: "act-put-err", ExecutionEpoch: 1},
+		},
+	}
+	st.putErr = errors.New("injected put failure")
+	coord := NewCoordinator(st, workerSuccess, WithNow(func() int64 { return 500 }))
+	_, err := coord.ExecuteStorageAction(context.Background(), "act-put-err", storageRequest("op-1"))
+	if err == nil || err.Error() != "injected put failure" {
+		t.Fatalf("expected injected put failure, got %v", err)
+	}
+}

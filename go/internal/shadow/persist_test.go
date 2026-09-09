@@ -367,6 +367,30 @@ func TestPersistNilStoreIsNoop(t *testing.T) {
 	}
 }
 
+func TestPersistEdgeBranches(t *testing.T) {
+	control := openStore(t)
+
+	err := Persist(control, map[string]any{}, map[string]any{
+		"scheduler": map[string]any{
+			"admissions": []any{
+				map[string]any{"decision": "DENY"},
+				map[string]any{"decision": "ADMIT", "actionId": ""},
+				map[string]any{"decision": "ADMIT", "actionId": "act-no-epoch"},
+			},
+		},
+		"federation": map[string]any{
+			"transitions": []any{
+				map[string]any{"decision": "DENY"},
+				map[string]any{"decision": "ALLOW", "peerFleetId": ""},
+				map[string]any{"decision": "ALLOW", "peerFleetId": "peer-1", "from": ""},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Persist edge branches failed: %v", err)
+	}
+}
+
 func openStore(t *testing.T) *store.Control {
 	t.Helper()
 	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "owner-a"})

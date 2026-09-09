@@ -429,4 +429,68 @@ func TestCutoverStatusAndTransitionEndpoints(t *testing.T) {
 	if badJsonResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("bad json expected 400, got %d", badJsonResp.StatusCode)
 	}
+
+	// 9. Method not allowed (GET to transition endpoint)
+	getTransResp, err := http.Get(server.URL + "/internal/cutover/transition")
+	if err != nil {
+		t.Fatal(err)
+	}
+	getTransResp.Body.Close()
+	if getTransResp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("get transition expected 405, got %d", getTransResp.StatusCode)
+	}
+
+	// 10. Nil control on transition endpoint -> 503
+	nilTransResp, err := http.Post(nilServer.URL+"/internal/cutover/transition", "application/json", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nilTransResp.Body.Close()
+	if nilTransResp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("nil control transition expected 503, got %d", nilTransResp.StatusCode)
+	}
+}
+
+func TestEvaluateShadowEndpoint(t *testing.T) {
+	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "owner-eval"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	server := httptest.NewServer(Handler())
+	defer server.Close()
+
+	// 1. Method not allowed (GET)
+	getResp, err := http.Get(server.URL + "/internal/shadow/evaluate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	getResp.Body.Close()
+	if getResp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", getResp.StatusCode)
+	}
+
+	// 2. Bad JSON
+	badResp, err := http.Post(server.URL+"/internal/shadow/evaluate", "application/json", bytes.NewReader([]byte("{")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	badResp.Body.Close()
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", badResp.StatusCode)
+	}
+
+	// 3. Success
+	mux := http.NewServeMux()
+	Register(mux, control)
+	cServer := httptest.NewServer(mux)
+	defer cServer.Close()
+	okResp, err := http.Post(cServer.URL+"/internal/shadow/evaluate", "application/json", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer okResp.Body.Close()
+	if okResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", okResp.StatusCode)
+	}
 }

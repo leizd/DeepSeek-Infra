@@ -169,10 +169,33 @@ func TestMaintenanceWindow(t *testing.T) {
 				"executionEpoch":    1,
 				"maintenanceWindow": map[string]any{"start": "01:99", "end": "02:00"},
 			},
+			map[string]any{
+				"actionId":          "act-min-nan",
+				"executionEpoch":    1,
+				"maintenanceWindow": map[string]any{"start": "01:xx", "end": "02:00"},
+			},
 		},
 	})
 	row = badMin["admissions"].([]any)[0].(map[string]any)
 	if row["reason"] != "INVALID_MAINTENANCE_WINDOW" {
 		t.Fatalf("minute %+v", row)
+	}
+	rowNan := badMin["admissions"].([]any)[1].(map[string]any)
+	if rowNan["reason"] != "INVALID_MAINTENANCE_WINDOW" {
+		t.Fatalf("minute nan %+v", rowNan)
+	}
+}
+
+func TestEvaluateUnequalScoreRanking(t *testing.T) {
+	got := Evaluate(map[string]any{
+		"nowUnix": 10,
+		"actions": []any{
+			map[string]any{"actionId": "act-low", "executionEpoch": 1, "severity": "low", "createdAtUnix": 10},
+			map[string]any{"actionId": "act-high", "executionEpoch": 1, "severity": "critical", "createdAtUnix": 10},
+		},
+	})
+	ordered := got["orderedActionIds"].([]any)
+	if len(ordered) != 2 || ordered[0] != "act-high" || ordered[1] != "act-low" {
+		t.Fatalf("expected act-high first, got %v", ordered)
 	}
 }

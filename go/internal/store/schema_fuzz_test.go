@@ -27,3 +27,21 @@ func FuzzValidRecordID(f *testing.F) {
 		_ = ValidRecordID(id)
 	})
 }
+
+func TestSchemaValidRecordIDAndLegalTransition(t *testing.T) {
+	invalid := []string{"", ".", "..", "a/b", "a\\b", "a\x00b", "a/../b"}
+	for _, id := range invalid {
+		if ValidRecordID(id) {
+			t.Fatalf("expected %q to be invalid record ID", id)
+		}
+	}
+	if !ValidRecordID("valid-id-123") {
+		t.Fatal("expected valid record ID to pass")
+	}
+	if LegalTransition("unknown-domain", "A", "B") {
+		t.Fatal("expected unknown domain to return false")
+	}
+	if LegalTransition("action", "UNKNOWN_STATE", "CLAIMED") {
+		t.Fatal("expected unknown from state to return false")
+	}
+}

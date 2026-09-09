@@ -76,3 +76,15 @@ func TestReplayBadJSONFails(t *testing.T) {
 		t.Fatal("json")
 	}
 }
+
+func TestReplayClosedStoreExportSnapshotFails(t *testing.T) {
+	control := openStore(t)
+	_ = control.Close()
+	path := filepath.Join(t.TempDir(), "empty_cases.json")
+	if err := os.WriteFile(path, []byte(`{"kernel":"control-shadow-decision-v1","cases":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Replay(control, path); err == nil {
+		t.Fatal("expected error on export snapshot from closed store")
+	}
+}

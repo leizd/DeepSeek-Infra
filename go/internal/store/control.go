@@ -74,17 +74,18 @@ type Snapshot struct {
 }
 
 type Control struct {
-	mu           sync.Mutex
-	path         string
-	databasePath string
-	owner        string
-	token        int64
-	leaseUntil   int64
-	leaseSeconds int64
-	now          func() int64
-	schema       int
-	db           *sql.DB
-	closed       bool
+	mu                  sync.Mutex
+	path                string
+	databasePath        string
+	owner               string
+	token               int64
+	leaseUntil          int64
+	leaseSeconds        int64
+	now                 func() int64
+	schema              int
+	db                  *sql.DB
+	closed              bool
+	admissionFaultStage string
 }
 
 type rowScanner interface {
@@ -343,6 +344,17 @@ func expectedControlUserObjects(schema int) map[string]string {
 			objects[name] = kind
 		}
 	}
+	if schema >= SchemaV5 {
+		for name := range actionAdmissionSchemaObjects {
+			kind := "trigger"
+			if name == "action_leases" || name == "action_lease_events" || name == "action_resource_leases" {
+				kind = "table"
+			} else if name == "idx_action_resource_leases_action" {
+				kind = "index"
+			}
+			objects[name] = kind
+		}
+	}
 	return objects
 }
 
@@ -568,6 +580,11 @@ func (store *Control) migrateTx(tx *sql.Tx) error {
 	}
 	if store.schema == SchemaV3 {
 		if err := store.migrateToV4Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV4 {
+		if err := store.migrateToV5Tx(tx); err != nil {
 			return err
 		}
 	}
@@ -901,6 +918,11 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 			return err
 		}
 	}
+	if schema >= SchemaV5 {
+		if err := verifyActionAdmissionSchemaTx(tx); err != nil {
+			return err
+		}
+	}
 	for _, table := range tables {
 		var marker int
 		if err := tx.QueryRow(
@@ -1056,6 +1078,10 @@ func (store *Control) Put(record Record) error {
 }
 
 func (store *Control) putControlRecord(record Record, dispatch *StorageDispatchIntent) error {
+	return store.putLeasedControlRecord(record, dispatch, "")
+}
+
+func (store *Control) putLeasedControlRecord(record Record, dispatch *StorageDispatchIntent, claimToken string) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.closed {
@@ -1081,11 +1107,36 @@ func (store *Control) putControlRecord(record Record, dispatch *StorageDispatchI
 	if err := verifySchemaTx(tx, store.schema); err != nil {
 		return err
 	}
+	var actionLeaseUntil int64
+	if claimToken != "" {
+		lease, err := readActiveActionLeaseTx(tx, record.ID)
+		if err != nil {
+			return err
+		}
+		if lease.Epoch != record.ExecutionEpoch || lease.WriterFencingToken != store.token {
+			return ErrActionLeaseStale
+		}
+		if lease.ClaimToken != claimToken {
+			return ErrInvalidClaimToken
+		}
+		if lease.LeaseUntil <= now {
+			return ErrActionLeaseExpired
+		}
+		if _, _, err := validateActionLeaseResourcesTx(tx, lease); err != nil {
+			return err
+		}
+		write.allowBoundLease = true
+		actionLeaseUntil = lease.LeaseUntil
+	}
 	if err := store.putControlRecordTx(tx, write, now); err != nil {
 		return err
 	}
-	if commitNow := store.now(); commitNow < 0 || commitNow >= leaseUntil {
+	commitNow := store.now()
+	if commitNow < 0 || commitNow >= leaseUntil {
 		return ErrWriterFenceHeld
+	}
+	if actionLeaseUntil != 0 && (commitNow < now || commitNow >= actionLeaseUntil) {
+		return ErrActionLeaseExpired
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -1097,11 +1148,12 @@ func (store *Control) putControlRecord(record Record, dispatch *StorageDispatchI
 // A prepared write owns its canonical bytes, including a dispatch's operation
 // identity. It cannot be rebound by modifying the caller's payload or intent.
 type controlRecordWrite struct {
-	record       Record
-	table        string
-	intentJSON   []byte
-	intentDigest string
-	operationID  string
+	record          Record
+	table           string
+	intentJSON      []byte
+	intentDigest    string
+	operationID     string
+	allowBoundLease bool
 }
 
 func prepareControlRecordWrite(record Record, dispatch *StorageDispatchIntent) (controlRecordWrite, error) {
@@ -1163,6 +1215,20 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 	}
 	if write.intentJSON != nil && (!exists || existing.State != "CLAIMED" || existing.ExecutionEpoch != record.ExecutionEpoch) {
 		return ErrIllegalTransition
+	}
+	if write.intentJSON != nil && write.allowBoundLease && string(record.Payload) != string(existing.Payload) {
+		return ErrActionLeaseStale
+	}
+	if record.Domain == "action" && store.schema >= SchemaV5 {
+		var boundEpoch uint64
+		err := tx.QueryRow("SELECT epoch FROM action_leases WHERE action_id = ?", record.ID).Scan(&boundEpoch)
+		if err == nil {
+			if !write.allowBoundLease {
+				return ErrActionLeaseRequired
+			}
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
 	}
 	if !LegalTransition(record.Domain, from, record.State) {
 		return ErrIllegalTransition
@@ -1714,6 +1780,11 @@ func (store *Control) Rollback(version int) error {
 	leaseUntil, err := store.assertWriterTx(tx, now)
 	if err != nil {
 		return err
+	}
+	if store.schema >= SchemaV5 {
+		if err := retireEmptyActionAdmissionTx(tx); err != nil {
+			return err
+		}
 	}
 	if store.schema >= SchemaV4 {
 		if err := retireEmptyStorageDispatchesTx(tx); err != nil {

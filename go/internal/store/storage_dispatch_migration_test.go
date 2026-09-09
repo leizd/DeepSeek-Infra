@@ -20,11 +20,15 @@ func prepareDispatchV3Fixture(t *testing.T, control *Control) {
 	defer tx.Rollback()
 	oldMetadata := strings.Replace(bootstrapSchemaStatements[0], "CREATE TABLE IF NOT EXISTS control_store_meta", "CREATE TABLE control_meta_v3_fixture", 1)
 	for _, statement := range []string{
-		"DROP TABLE storage_dispatches", oldMetadata,
+		"DROP TABLE IF EXISTS action_resource_leases",
+		"DROP TABLE IF EXISTS action_lease_events",
+		"DROP TABLE IF EXISTS action_leases",
+		"DROP TABLE IF EXISTS storage_dispatches",
+		oldMetadata,
 		"INSERT INTO control_meta_v3_fixture SELECT singleton,runtime,mode,3,unique_writer FROM control_store_meta",
 		"DROP TABLE control_store_meta",
 		"ALTER TABLE control_meta_v3_fixture RENAME TO control_store_meta",
-		"DELETE FROM schema_migrations WHERE version=4",
+		"DELETE FROM schema_migrations WHERE version >= 4",
 		"PRAGMA user_version=3",
 	} {
 		if _, err := tx.Exec(statement); err != nil {
@@ -73,7 +77,7 @@ func TestStorageDispatchV3UpgradePreservesHistoryAndFailedClaim(t *testing.T) {
 	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 3 {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
-	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_schema WHERE name LIKE 'storage_dispatches%' OR name='control_store_meta_v4'").Scan(&objects); err != nil || objects != 0 {
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_schema WHERE name LIKE 'storage_dispatches%' OR name='control_store_meta_v4' OR name LIKE 'action_leases%' OR name LIKE 'action_resource_leases%'").Scan(&objects); err != nil || objects != 0 {
 		t.Fatalf("partial objects=%d err=%v", objects, err)
 	}
 	if err := db.QueryRow("SELECT COUNT(*) FROM control_events").Scan(&events); err != nil || events != 2 {

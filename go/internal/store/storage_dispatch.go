@@ -86,6 +86,16 @@ func (store *Control) ClaimStorageDispatch(record Record, intent StorageDispatch
 	return store.putControlRecord(record, &intent)
 }
 
+// ClaimLeasedStorageDispatch requires the current Go-local claim token, epoch,
+// writer and exact resource set in the same transaction as the dispatch intent.
+// The token is not a transport credential or permission for a provider mutation.
+func (store *Control) ClaimLeasedStorageDispatch(record Record, intent StorageDispatchIntent, claimToken string) error {
+	if strings.TrimSpace(claimToken) == "" {
+		return ErrInvalidClaimToken
+	}
+	return store.putLeasedControlRecord(record, &intent, claimToken)
+}
+
 func (store *Control) GetStorageDispatch(actionID string, epoch uint64) (StorageDispatch, bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()

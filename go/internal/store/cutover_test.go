@@ -358,11 +358,14 @@ func TestCutoverJournalRejectsMutationAndControlMigratesFromV1(t *testing.T) {
 	}
 	db := sql.OpenDB(connector)
 	for _, statement := range []string{
-		"DROP TABLE storage_dispatches",
-		"DROP TABLE control_operations",
-		"DROP TABLE control_cutover_events",
-		"DROP TABLE control_cutover",
-		"DELETE FROM schema_migrations WHERE version IN (2, 3, 4)",
+		"DROP TABLE IF EXISTS action_resource_leases",
+		"DROP TABLE IF EXISTS action_lease_events",
+		"DROP TABLE IF EXISTS action_leases",
+		"DROP TABLE IF EXISTS storage_dispatches",
+		"DROP TABLE IF EXISTS control_operations",
+		"DROP TABLE IF EXISTS control_cutover_events",
+		"DROP TABLE IF EXISTS control_cutover",
+		"DELETE FROM schema_migrations WHERE version >= 2",
 		"UPDATE control_store_meta SET schema_version = 1 WHERE singleton = 1",
 		"PRAGMA user_version = 1",
 	} {
@@ -884,5 +887,38 @@ func TestCutoverRemainingFailClosedBranches(t *testing.T) {
 	}
 	if err := tx.Rollback(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCutoverInputValidation(t *testing.T) {
+	control := openShadow(t)
+	defer control.Close()
+
+	// 1. Unknown domain
+	if _, err := control.TransitionCutover(CutoverTransition{Domain: "unknown", TransferID: "t1", To: CutoverDualEvaluate}); !errors.Is(err, ErrUnknownDomain) {
+		t.Fatalf("expected ErrUnknownDomain, got: %v", err)
+	}
+
+	// 2. Empty transfer ID
+	if _, err := control.TransitionCutover(CutoverTransition{Domain: "policy", TransferID: "", To: CutoverDualEvaluate}); !errors.Is(err, ErrEmptyRecordID) {
+		t.Fatalf("expected ErrEmptyRecordID, got: %v", err)
+	}
+
+	// 3. Illegal cutover target state
+	if _, err := control.TransitionCutover(CutoverTransition{Domain: "policy", TransferID: "t1", To: "INVALID_STATE"}); !errors.Is(err, ErrIllegalCutover) {
+		t.Fatalf("expected ErrIllegalCutover, got: %v", err)
+	}
+
+	// 4. Schema inactive
+	control.schema = 0
+	if _, err := control.TransitionCutover(CutoverTransition{Domain: "policy", TransferID: "t1", To: CutoverDualEvaluate}); !errors.Is(err, ErrSchemaInactive) {
+		t.Fatalf("expected ErrSchemaInactive, got: %v", err)
+	}
+	control.schema = CurrentSchema
+
+	// 5. Closed control
+	_ = control.Close()
+	if _, err := control.TransitionCutover(CutoverTransition{Domain: "policy", TransferID: "t1", To: CutoverDualEvaluate}); !errors.Is(err, ErrWriterFenceHeld) {
+		t.Fatalf("expected ErrWriterFenceHeld, got: %v", err)
 	}
 }
