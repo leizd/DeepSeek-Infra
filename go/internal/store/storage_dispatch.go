@@ -116,9 +116,20 @@ func (store *Control) GetStorageDispatch(actionID string, epoch uint64) (Storage
 	if err := verifySchemaTx(tx, store.schema); err != nil {
 		return StorageDispatch{}, false, err
 	}
+	result, exists, err := readStorageDispatchTx(tx, actionID, epoch)
+	if err != nil || !exists {
+		return StorageDispatch{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return StorageDispatch{}, false, err
+	}
+	return result, true, nil
+}
+
+func readStorageDispatchTx(tx *sql.Tx, actionID string, epoch uint64) (StorageDispatch, bool, error) {
 	var result StorageDispatch
 	var operationID, raw, digest string
-	err = tx.QueryRow(`SELECT operation_id,intent_json,intent_digest,claim_revision,writer_fencing_token,recorded_at
+	err := tx.QueryRow(`SELECT operation_id,intent_json,intent_digest,claim_revision,writer_fencing_token,recorded_at
 		FROM storage_dispatches WHERE action_id=? AND execution_epoch=?`, actionID, int64(epoch)).Scan(&operationID, &raw, &digest, &result.ClaimRevision, &result.WriterFencingToken, &result.RecordedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return StorageDispatch{}, false, nil
@@ -144,9 +155,6 @@ func (store *Control) GetStorageDispatch(actionID string, epoch uint64) (Storage
 		return StorageDispatch{}, false, ErrCorruptRecord
 	}
 	if err := validateControlHistory(tx, latest); err != nil {
-		return StorageDispatch{}, false, err
-	}
-	if err := tx.Commit(); err != nil {
 		return StorageDispatch{}, false, err
 	}
 	return result, true, nil

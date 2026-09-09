@@ -1,8 +1,26 @@
 # Go action admission and renewable resource leases
 
 Status: implementation in progress; production authority remains disabled.
-This is a dependency of ADR-0049, not a change to the frozen action state machine.
+This is a dependency of ADR-0049, not a completed action-state parity migration.
 The original recovery `tasks/plan.md` and `tasks/todo.md` remain untouched.
+
+### State-parity correction (2026-09-09)
+
+Earlier references below to a "frozen action graph" mean the **current native
+qualification graph**, not the full Python 4.8.0 action lifecycle. Direct inspection
+of `a37735c68398fc8f795babaa269e2de6a5acd567:deepseek_infra/infra/workspace/resilience_action_journal.py`
+confirms expired active actions become RECONCILING, with VERIFYING and
+ASSESSING_EFFECT also participating in admission and renewal. Go's current
+`schema.go` graph does not implement those states. Moreover,
+`compat/native-runtime/v1/state/legal_transitions.json` contains peer trust,
+effect enums and four fail-closed labels, **not** a complete action transition oracle.
+Thus the passing corpus/Go transition tests do not prove full action-state parity.
+
+Required next work is to capture the actual baseline admission/reconciliation/
+verification/compensation behavior in a versioned oracle and migrate the native
+graph with explicit schema/history compatibility. Do not invent an UNKNOWN
+self-transition simply to unblock repeated takeover, silently relabel Python's
+RECONCILING behavior as UNKNOWN, or discard current intent/lease history.
 
 ## Invariants and boundaries
 
@@ -269,6 +287,47 @@ signed live-epoch/operation installation in Rust, provider-qualified settlement,
 and actual provider-backed process kills. The current qualification request still
 carries bounded test payload bytes through Go; production payload custody must move
 to Rust-owned prepared handles/streams, not become a permanent Go byte-moving path.
+
+### Leased recovery identity lookup (2026-09-09, local qualification)
+
+`GetLeasedStorageDispatch(actionID, claimEpoch, claimToken)` now resolves the
+original immutable storage intent from a live native claim. It verifies the
+writer, exact lease/resources, journal history and claim event in one read-only
+transaction. For an existing supported takeover, it follows the exact predecessor
+of that claim event to the old dispatch epoch, not an arbitrary latest older
+operation. The returned dispatch retains its original action/epoch/operation,
+revision, writer token and timestamp. The method does not renew, rewrite, dispatch
+or settle anything. Missing intent returns unbound; that is never no-effect proof.
+The existing exact-epoch reader shares the same canonical/history validation.
+
+Local tests cover live and successor lookup, missing dispatch, wrong/expired claim,
+writer loss, clock rollback, expiry during read, missing reservations, terminal
+leases and deliberately corrupted original intent. Actual Go process termination
+after a durable leased dispatch and subsequent real-clock writer/action takeover
+also preserves the original intent and uncertain resource reservation. This child
+uses the real Go store, not the production deepseekd main or a storage provider;
+no worker RPC, successful effect seed, Python writer or MinIO call is involved.
+
+Verification: focused tests, full Go tests and vet passed. Full isolated Windows
+race exited 0: 15 packages and 670 test entries passed, zero failures/race warnings,
+one existing Windows symlink-privilege skip; store 239.338 seconds. The killed-owner
+regression passed in 3.570 seconds under race. Log:
+`.tools/native-race-20260826/go-leased-recovery-race.jsonl`, SHA-256
+`45a4d240d6126d185125b765ff48b21d70e3488c5508091bbae3599ad9be1c6c`.
+The unchanged 95% internal/pkg coverage gate passed at 95.1%, after correcting
+the command's relative profile path (the report subprocess runs from `go/`). This
+is lower than the preceding slice's 95.3%; the gate was not weakened. Full test and
+coverage logs/profiles use the `go-leased-recovery-` prefix in that same directory.
+Contract/codegen checks still pass at 40 corpora, 29 versions, 43 domains, 9 command
+codes, 7 proto files and 10 generated outputs; their action-parity limitation above
+remains explicit. Gofmt and diff checks passed.
+
+This is the durable lookup dependency, not a completed reconciliation loop.
+The leased coordinator must still consume it, query the old Rust effect while
+renewing the current claim, and settle only a qualified bound result under that
+current claim. Production authorization, provider evidence and full baseline
+state parity remain mandatory before cutover. Original Python retirement and
+all server/desktop/Android/media/MCP migration requirements remain in scope.
 
 ## Sources
 
