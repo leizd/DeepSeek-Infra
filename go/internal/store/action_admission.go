@@ -826,7 +826,7 @@ func (store *Control) RenewActionLease(renewal ActionLeaseRenewal) (ActionLease,
 	}, nil
 }
 
-func (store *Control) settleActionTerminalTx(
+func (store *Control) transitionLeasedAction(
 	actionID string,
 	epoch uint64,
 	claimToken string,
@@ -954,25 +954,29 @@ func (store *Control) settleActionTerminalTx(
 		return Record{}, err
 	}
 
-	// 3. Mark action lease as terminal
-	if _, err := tx.Exec(`UPDATE action_leases
+	// Unknown effects retain the exact live claim and all reservations. A local
+	// timeout/cancellation cannot authorize release or invent a no-effect result.
+	if targetState != "EFFECT_UNKNOWN" {
+		// 3. Mark action lease as terminal
+		if _, err := tx.Exec(`UPDATE action_leases
 		SET terminal_state = ?, updated_at = ?, writer_fencing_token = ?
 		WHERE action_id = ? AND epoch = ? AND claim_token = ?`,
-		targetState, now, store.token, actionID, int64(epoch), claimToken); err != nil {
-		return Record{}, err
-	}
+			targetState, now, store.token, actionID, int64(epoch), claimToken); err != nil {
+			return Record{}, err
+		}
 
-	// 4. Release all resource reservations
-	if _, err := tx.Exec("DELETE FROM action_resource_leases WHERE action_id = ?", actionID); err != nil {
-		return Record{}, err
-	}
+		// 4. Release all resource reservations
+		if _, err := tx.Exec("DELETE FROM action_resource_leases WHERE action_id = ?", actionID); err != nil {
+			return Record{}, err
+		}
 
-	// 5. Append event
-	if _, err := tx.Exec(`INSERT INTO action_lease_events(
+		// 5. Append event
+		if _, err := tx.Exec(`INSERT INTO action_lease_events(
 		action_id, event_type, owner, epoch, claim_token, lease_until, claim_revision, writer_fencing_token, recorded_at, resource_keys_json
 	) VALUES(?, 'TERMINATED', ?, ?, ?, ?, ?, ?, ?, ?)`,
-		actionID, heldOwner, int64(epoch), claimToken, leaseUntil, record.Revision, store.token, now, resourceManifest); err != nil {
-		return Record{}, err
+			actionID, heldOwner, int64(epoch), claimToken, leaseUntil, record.Revision, store.token, now, resourceManifest); err != nil {
+			return Record{}, err
+		}
 	}
 
 	// 6. Commit check
@@ -993,11 +997,18 @@ func (store *Control) settleActionTerminalTx(
 }
 
 func (store *Control) CompleteAction(actionID string, epoch uint64, claimToken string, payload json.RawMessage) (Record, error) {
-	return store.settleActionTerminalTx(actionID, epoch, claimToken, "SUCCEEDED", payload)
+	return store.transitionLeasedAction(actionID, epoch, claimToken, "SUCCEEDED", payload)
 }
 
 func (store *Control) FailAction(actionID string, epoch uint64, claimToken string, payload json.RawMessage) (Record, error) {
-	return store.settleActionTerminalTx(actionID, epoch, claimToken, "FAILED_BEFORE_EFFECT", payload)
+	return store.transitionLeasedAction(actionID, epoch, claimToken, "FAILED_BEFORE_EFFECT", payload)
+}
+
+// MarkActionEffectUnknown records uncertainty without releasing resources or
+// modifying the original dispatch identity. An already lost lease may not write
+// even this transition: its durable EXECUTING record still requires reconciliation.
+func (store *Control) MarkActionEffectUnknown(actionID string, epoch uint64, claimToken string) (Record, error) {
+	return store.transitionLeasedAction(actionID, epoch, claimToken, "EFFECT_UNKNOWN", nil)
 }
 
 func (store *Control) GetActionLease(actionID string) (ActionLease, bool, error) {

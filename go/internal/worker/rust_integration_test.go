@@ -332,6 +332,57 @@ type discardStorageACK struct {
 	receivedErr error
 }
 
+// Exercise the explicit leased coordinator over an actual Rust RPC connection.
+// An unconfigured worker denies mutation; this is not a provider-write proof.
+func TestRustWorkerLeasedCoordinatorRetainsUnknownAfterAuthRejection(t *testing.T) {
+	target := os.Getenv("DEEPSEEK_TEST_RUST_WORKER_TARGET")
+	if target == "" {
+		t.Fatal("DEEPSEEK_TEST_RUST_WORKER_TARGET is required")
+	}
+	client, err := DialPlaintextLoopback(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "leased-rpc-integration"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	id := "leased-rust-auth-rejection"
+	if err := control.Put(store.Record{Domain: "action", ID: id, Revision: 1, ExecutionEpoch: 1, State: "PENDING"}); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := control.AdmitAndClaimAction(store.AdmissionRequest{ActionID: id, LeaseSeconds: 30, ResourceKeys: []string{"rust-rpc-target"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bytes := []byte("no provider dispatch is authorized")
+	digest := sha256.Sum256(bytes)
+	req := &actionv1.StorageMutationRequest{OperationId: "leased-rpc-operation", RequestId: "leased-rpc-request", Nonce: "leased-rpc-nonce",
+		MutationType: "PUT_CHUNK", Provider: "s3", TargetIdentity: strings.Repeat("a", 64), Bucket: "qualification", ObjectKey: "denied",
+		Payload: bytes, PayloadDigest: hex.EncodeToString(digest[:]), ExpectedLength: uint64(len(bytes)),
+		Precondition: &actionv1.StoragePrecondition{ConditionType: actionv1.StorageConditionType_STORAGE_CONDITION_TYPE_CREATE_ONLY}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = action.NewCoordinator(control, client).ExecuteClaimedStorageAction(ctx, claim.Lease, req)
+	if !errors.Is(err, action.ErrStorageMutationUncertain) || !errors.Is(err, internalprotocol.ErrServiceAuthenticationUnavailable) {
+		t.Fatalf("Rust rejection was not retained as uncertainty: %v", err)
+	}
+	record, _, err := control.Get("action", id)
+	if err != nil || record.State != "EFFECT_UNKNOWN" {
+		t.Fatalf("state=%s err=%v", record.State, err)
+	}
+	resources, err := control.GetResourceLeases(id)
+	if err != nil || len(resources) != 1 {
+		t.Fatalf("Rust rejection released reservation: %v", err)
+	}
+	dispatch, bound, err := control.GetStorageDispatch(id, claim.Lease.Epoch)
+	if err != nil || !bound || dispatch.Intent.OperationID != req.OperationId {
+		t.Fatalf("lost operation identity: %v", err)
+	}
+}
+
 func (c *discardStorageACK) ExecuteStorageMutation(ctx context.Context, request *actionv1.StorageMutationRequest, bearer string) (*actionv1.StorageMutationResponse, error) {
 	_, c.receivedErr = c.Client.ExecuteStorageMutation(ctx, request, bearer)
 	return nil, context.DeadlineExceeded

@@ -36,11 +36,12 @@ type WorkerClient interface {
 }
 
 type Coordinator struct {
-	store         ControlStore
-	worker        WorkerClient
-	bearerToken   string
-	now           func() int64
-	authoritative bool
+	store                  ControlStore
+	worker                 WorkerClient
+	bearerToken            string
+	now                    func() int64
+	authoritative          bool
+	leaseHeartbeatInterval time.Duration
 }
 
 type CoordinatorOption func(*Coordinator)
@@ -65,8 +66,9 @@ func WithAuthoritative(authoritative bool) CoordinatorOption {
 
 func NewCoordinator(store ControlStore, worker WorkerClient, opts ...CoordinatorOption) *Coordinator {
 	c := &Coordinator{
-		store:  store,
-		worker: worker,
+		store:                  store,
+		worker:                 worker,
+		leaseHeartbeatInterval: 20 * time.Second,
 		now: func() int64 {
 			return time.Now().Unix()
 		},

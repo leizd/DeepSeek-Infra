@@ -199,6 +199,77 @@ coordinator cannot use its generic dispatch path for a lease-bound action.
    This Go store increment does not migrate server/desktop/Android/media/MCP or
    establish Rust ownership of every production security/data-plane path.
 
+### Explicit claimed execution (2026-09-09, local qualification)
+
+Implemented contract: `ExecuteClaimedStorageAction(ctx, claim, request)`
+accepts a previously admitted Go-local lease, not a policy override or an inferred
+token. It is separate from the existing unbound qualification entry point; neither
+may enable production authority while cutover and transport auth are unqualified.
+The implementation renews before dispatch, claims the exact immutable intent,
+renews action/resources/writer together during RPC, cancels RPC on renewal failure,
+stops and joins the heartbeat before settlement, and revalidates the claim afterwards.
+Cancellation is uncertainty, never no-effect evidence. A late successful ACK after
+lost lease cannot settle. A bound CONFIRMED/APPLIED result may use the local typed
+completion path; a no-effect outcome requires a bound recorded NOT_APPLIED result,
+not an arbitrary returned error code. Other outcomes retain resources through
+`MarkActionEffectUnknown`; if the claim has already expired, leave EXECUTING durable
+for successor reconciliation. These are control-path qualification tests until
+signed operations and real provider-backed process-kill evidence are available.
+
+Specific boundaries and local evidence:
+
+- A nil request or mismatched supplied action/epoch is rejected before renewal or
+  RPC; the caller's protobuf is cloned, not rewritten. Missing native lease methods
+  never fall back to generic Put/dispatch. Production-authoritative mode still
+  rejects the call before any native claim mutation.
+- The default 60-second action renewal does not assume the writer has the same
+  lifetime. Heartbeat intervals are capped by one third of the shorter remaining
+  lease (and the configured interval), with bounded integer-to-duration conversion.
+  A one-second writer regression initially timed out waiting for cancellation;
+  the interval correction makes it pass. This is not a substitute for Rust-side
+  signed live-lease enforcement while a Go process is paused or killed.
+- The RPC inherits cancellation with an explicit failure cause through Go's
+  [context API](https://pkg.go.dev/context#WithCancelCause). The heartbeat owns and
+  stops its [ticker](https://pkg.go.dev/time#NewTicker), and is joined before any
+  terminal store write. No background lease renewal intentionally survives the call.
+- If cancellation is observed after durable intent but before RPC, no request is
+  started. An in-flight cancellation, missing/mismatched result, or an error without
+  a bound NOT_APPLIED record retains uncertainty. A late APPLIED ACK following
+  renewal failure cannot settle or release resources.
+- `MarkActionEffectUnknown` shares the existing transaction, history, canonical
+  payload, writer and action-lease checks. It appends the frozen legal state
+  transition without terminating the lease, changing its manifest, releasing
+  reservations or replacing dispatch identity. Unknown actions remain renewable.
+- Focused tests use real Go SQLite and an RPC double for controlled ACK loss,
+  cancellation and late responses; those tests do not prove provider effects.
+  New tests reproduced nil-request panic, overwritten request fences, dispatch
+  after cancellation and the short-writer heartbeat failure before their fixes.
+- Rebuilt the real no-S3 Rust worker using Rust 1.85 GNU. Five selected real
+  Go/Rust gRPC boundary tests passed, including the new explicit leased execution
+  against an uninitialized, mutation-denied worker. Its actual auth rejection
+  leaves EFFECT_UNKNOWN, the reservation and exact operation ID durable in Go.
+  No MinIO/provider was contacted, and the spawned Rust worker was reaped.
+- Final post-interval-correction full Go tests and both normal/integration vet
+  checks passed. The unchanged 95% internal/pkg coverage gate passed at 95.3%.
+  Frozen contracts/codegen remain 40 corpora, 29 versions, 43 domains, 9 command
+  codes, 7 proto files and 10 generated outputs. Gofmt and diff checks passed.
+- The final isolated Windows race run exited 0: 15 passed packages, 647 passed
+  test entries, zero failures/race warnings, store 441.685 seconds. One existing
+  Windows symlink-privilege test skipped; this is not a zero-skip full-platform
+  qualification. Evidence: `.tools/native-race-20260826/go-leased-execution-final-race.jsonl`,
+  SHA-256 `0971999a6239d390215d55749dc15cc5b705bcdc9831cd1c77430eab464e317d`.
+  The corresponding `go-leased-execution-final-full.log`,
+  `go-leased-execution-final-coverage.log` and
+  `go-leased-execution-final-rpc.log` capture the other final runs. These supersede
+  the earlier intermediate snapshot, not provider-backed or exact-head CI evidence.
+
+Still outstanding: a main-process/scheduler caller with durable authorized policy,
+lease-aware effect reconciliation and repeated-unknown takeover, transport auth,
+signed live-epoch/operation installation in Rust, provider-qualified settlement,
+and actual provider-backed process kills. The current qualification request still
+carries bounded test payload bytes through Go; production payload custody must move
+to Rust-owned prepared handles/streams, not become a permanent Go byte-moving path.
+
 ## Sources
 
 The existing Python admission and renewal semantics were inspected directly in
