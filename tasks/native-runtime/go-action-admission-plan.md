@@ -22,6 +22,57 @@ graph with explicit schema/history compatibility. Do not invent an UNKNOWN
 self-transition simply to unblock repeated takeover, silently relabel Python's
 RECONCILING behavior as UNKNOWN, or discard current intent/lease history.
 
+### Executed baseline v30 and accepted safety exceptions (2026-09-09)
+
+`python scripts/native_action_lifecycle_oracle.py --check` now exports the exact
+4.8.0 package from the fixed Git commit into a new temporary snapshot, runs that
+package under an isolated Python child, and compares actual SQLite/API observations
+with `compat/native-runtime/v30/state/action_lifecycle_vector.json`. Ambient
+application configuration/import paths are removed, all loaded runtime modules
+must originate in the snapshot, and network/subprocess activity is denied inside
+the scenario process. Source hashes and deterministic input steps are recorded;
+raw random claim tokens and their hashes are not published. This Python remains
+an offline migration oracle, not a production dependency or an execution fallback.
+
+The 11 initial cases cover initial claim, takeover from five active states,
+repeated real admission takeover, exact-deadline rejection, expired current-token
+renewal, post-takeover stale-token rejection, and terminal UNKNOWN behavior.
+For the five state probes, the setup uses the real baseline `update_action_state`
+CAS API; it is not evidence that an autonomous executor traversed those edges.
+The repeated-takeover case instead follows successive real admission calls and
+observes CLAIMED -> RECONCILING -> RECONCILING with epochs 1 -> 2 -> 3.
+
+The user explicitly approved these two safety exceptions in this thread:
+
+| Behavior | Actual 4.8.0 baseline | Accepted native behavior |
+| --- | --- | --- |
+| Renewal with the current token after lease expiry | Renew succeeds | Reject expired leases; do not revive old authority |
+| EFFECT_UNKNOWN resource custody | Treated as terminal and releases locks | Keep reservations until the prior effect is safely reconciled |
+
+The fixture preserves the original observations; it must not be rewritten to
+pretend those exceptions are parity. This confirmation does **not** authorize a
+transport-authentication design, production authority, provider writes, every
+other state/clock-policy difference, or removing Python production surfaces early.
+Exact-deadline takeover (baseline requires `lease_until < now`, while current Go
+uses an exclusive expiry boundary) remains a separately documented discrepancy.
+
+Tests reproduce the fixed snapshot, reject a tampered expected result, and show
+that poisoned parent runtime-root/PYTHONPATH variables do not redirect the oracle.
+The generator also refuses to replace a different existing fixture; regeneration
+cannot silently rewrite a frozen version. Final related contract/oracle tests:
+49 passed, zero failures/errors/skips, 30.306 seconds (JUnit evidence at
+`.tools/native-race-20260826/action-lifecycle-oracle-final.xml`). Repository-wide
+Ruff and Mypy passed (855 source files); final changed-file checks passed after
+the overwrite guard. The v30 CLI reproduces 11 cases. Contract/codegen gates pass
+with 41 corpora, 30 versions, 43 domains, 9 command codes, 7 protos and 10 generated
+outputs. The fixture SHA-256 is
+`7228e224eea42cbe9c6b5b81f6711c252233038e545f54dc445456223558709d`.
+The CLI reports `native_parity_proven: false`: Go does not yet replay these cases.
+This is **not** the complete state oracle. Still required are budget/preemption,
+full CAS/renewal/update boundaries, verified effect/compensation outcomes, the real
+executor/reconciler branches and versioned Go schema/history migration. Real
+provider/process-kill evidence remains a separate mandatory gate.
+
 ## Invariants and boundaries
 
 - The Go control database is the only writer of action admission and resource
