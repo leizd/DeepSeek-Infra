@@ -118,6 +118,12 @@ go/coverage*
 go/cov-*
 go/$out
 
+# Go control-plane runtime state. deepseekd's store dir is env-configured
+# (DEEPSEEKD_SHADOW_STORE / DEEPSEEKD_PRODUCTION_STORE; Compose mounts it at
+# /data/go-control inside the data volume). /go-control is the conventional
+# repo-relative path for a local shadow run.
+/go-control/
+
 # Generated native backup encryption helper
 /bin/
 
