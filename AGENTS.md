@@ -8,7 +8,14 @@ Executable config (CI, `pyproject.toml`, requirements) is the source of truth; t
 - `app.py` and `launch.py` are thin shims. Real entry points:
   - HTTP server: `deepseek_infra/app.py:main` → `deepseek_infra/web/server.py:create_server`
   - `launch.py` flags: `--gui` (Tk launcher), `--mobile` (mobile launcher), `--server` (headless), `--app` (desktop WebView, default)
-- All backend code is the single package `deepseek_infra/`. The 9 infra modules live under `deepseek_infra/infra/` (`gateway`, `agent_runtime`, `rag`, `tool_runtime`, `observability`, `mcp`, `evaluation`, `data`).
+- All backend code is the single package `deepseek_infra/`. Supporting layers are `core/` (`config`, `errors`, `utils`), `web/` (`server.py:create_app` plus `routes/`), `launcher/`, and `desktop_app.py` / `android_entry.py` / `federation_app.py`. The **17** capability subpackages live under `deepseek_infra/infra/`: `gateway`, `agent_runtime`, `rag`, `tool_runtime`, `observability`, `mcp`, `evaluation`, `data`, `workspace`, `automation`, `browser`, `media`, `memory`, `skills`, `diagnostics`, `native_runtime`, `rust_core`.
+- **Python is the default and only production-authoritative runtime.** Three non-authoritative surfaces exist; do not assume any of them is wired in or owns production state:
+  - `rust/` — cargo workspace (edition 2024, rust 1.85). Only `backup-crypto` (streaming age) and `deepseek-backup` (FastCDC scan) are built as production helpers; the rest (`deepseek-gateway`, `-mcp`, `-policy`, `-rag`, plus the 4.9.x targets `-storage`, `-transfer`, `-federation`, `-proof`, `-worker`) are opt-in delegates or migration foundations.
+  - `go/` — module `github.com/leizd/DeepSeek-Infra/go` (Go 1.27). `cmd/deepseekd` is the control-plane runtime and currently runs in read-only **shadow** mode; `go/internal/shadow` reconciles `pythonDecisionDigest == goDecisionDigest`.
+  - `stateless-mcp/` — standalone TypeScript + Redis MCP task plane on its own Compose stack; it does not replace the Python `POST /mcp` hub.
+- Native **ownership rules are machine-enforced, not conventions**. `deepseek_infra/infra/native_runtime/authority.py` defines `GO_CONTROL_DOMAINS`; a Python write into a Go-owned domain raises `PythonWriterMechanicallyDeniedError`, and Rust worker mutations fail closed with `MUTATION_DENIED` (`release/native_runtime_command_codes_v1.json`).
+- Cross-process contracts are versioned Protobuf in `proto/{common,control,action,storage,federation,evidence,agent}/v1`; versioned replay/parity corpora live in `compat/native-runtime/v1` … `v30`. The toolchain is checksum-pinned — read `release/native_runtime_toolchain_v1.json` before changing Go/protoc versions.
+- `release/native_runtime_5_0_evidence_v1.json` is a **fail-closed readiness assessment, currently `NOT_READY`**. It is not proof that the 5.0 native topology is delivered; do not cite it as a pass.
 - `/` serves the React + TypeScript + Vite build from `frontend/` exclusively. Generated assets are emitted into the gitignored `static/ui/`; build with `npm run build --prefix frontend` and never hand-edit that output. Startup and packaging require `static/ui/index.html`.
 - `android/` is an Android Studio project wrapping the Python backend into an APK; `scripts/build_exe.py` builds a single-file PyInstaller exe.
 
@@ -17,7 +24,7 @@ Executable config (CI, `pyproject.toml`, requirements) is the source of truth; t
 ```bash
 python -m pip install -r requirements.txt -r requirements-dev.txt
 npm ci --prefix frontend
-npm run check --prefix frontend
+npm run check --prefix frontend   # = typecheck + vitest + vite build + bundle check
 ruff check .
 mypy .
 pytest --cov --cov-fail-under=95.0
@@ -27,9 +34,10 @@ node --check static/vendor/katex/katex.min.js
 
 - Python 3.10+ (CI matrix: 3.10 / 3.11 / 3.12). `mypy` targets `python_version="3.10"`.
 - Node 22.12+ is required for the Vite frontend; CI uses Node 24 and the committed `frontend/package-lock.json`.
-- No API key is needed. Evals and the fast non-integration subset are offline; the complete `pytest` gate builds the native backup helpers and provisions three real MinIO instances from a local binary or the pinned Docker image.
+- No API key is needed. Evals and the fast non-integration subset are offline; the complete `pytest` gate builds the native backup helpers and provisions **five** real MinIO instances from a local binary or the pinned Docker image. Endpoints are named `DEEPSEEK_TEST_S3_ENDPOINT_{A..E}`; suffixes `D`/`E` form the second fleet and use distinct `FEDERATION_MINIO_ROOT_USER` / `FEDERATION_MINIO_ROOT_PASSWORD` credentials (the fixture asserts source and receiver credentials differ). See `tests/real_storage_environment.py`.
 - Single test: `pytest tests/test_mcp.py::test_name`. Run fast subset: `pytest -m "not integration and not slow"`.
 - `VERSION` at repo root is the canonical release version; `python scripts/check_release_version.py` enforces cross-surface consistency (CI gate job `release-version`).
+- Native changes have dedicated CI lanes that a Python-only edit does not exercise — run the matching one locally before touching `rust/`, `go/`, `proto/`, or `compat/native-runtime/`: `rust`, `rust-coverage`, `rust-docker`, `native-protocol` (generated-code drift + `scripts/control_plane_shadow.py --check`), `native-go` (`gofmt` / `go vet` / `go test` / `-race` + Go coverage ≥ 95% + a real Go→Rust worker boundary run), and `native-s3-transport`.
 
 ### Tooling quirks
 
@@ -72,8 +80,15 @@ detect-secrets scan --baseline .secrets.baseline           # ALWAYS pass --basel
 
 ## Runtime data dirs (never commit)
 
-These repo-root dirs are gitignored runtime state — do not stage, package, or assume they exist on a fresh clone:
-`.file-cache .projects .local-rag .traces .semantic-cache .request-queue .generated .tool-audit .scheduler .a2a .budget .memory .reminders .agent-runs .search-cache .auth-token .backups .restore-staging .backup-policies .backup-mirror .backup-scheduler .backup-targets .backup-catalog .backup-retention .backup-spool .backup-run-plans .backup-index .backup-continuity .backup-rebalance .resilience-risk .resilience-scheduler .resilience-slo .resilience-waves .resilience-capacity .resilience-cost .resilience-optimizer .federation`
+These repo-root paths are gitignored runtime state — do not stage, package, or assume they exist on a fresh clone. `.gitignore` is the authoritative list; this is a grouped summary:
+
+- **Chat / retrieval:** `.file-cache/` `.projects/` `.local-rag/` `.memory/` `.search-cache/` `.media/` `.skills/` `.reminders/`
+- **Gateway / runtime / output:** `.traces/` `.semantic-cache/` `.request-queue/` `.budget/` `.tool-audit/` `.scheduler/` `.agent-runs/` `.a2a/` `.tools/` `.automation/` `.generated/`
+- **Browser:** `.browser-audit/` `.browser-downloads/` `.browser-profiles/`
+- **Backup / DR:** `.backups/` `.restore-staging/` `.backup-policies/` `.backup-mirror/` `.backup-scheduler/` `.backup-targets/` `.backup-catalog/` `.backup-retention/` `.backup-spool/` `.backup-run-plans/` `.backup-index/` `.backup-continuity/` `.backup-rebalance/` `.backup-component-cache/` `.backup-dr/` `.backup-drains/` `.backup-retirements/` `.backup-control/` `.backup-authority-retention/` `.backup-replication/`
+- **Resilience / federation:** `.resilience-risk/` `.resilience-scheduler/` `.resilience-slo/` `.resilience-waves/` `.resilience-capacity/` `.resilience-cost/` `.resilience-optimizer/` `.federation/`
+- **Locks / secrets / state files:** `.auth-token` `.launcher-config.json` (and `.tmp`) `.workspace-mutation.lock` `.workspace-generation`
+- **Native build output:** `rust/target/`, `go/**/*.exe`, `/go/bin/`, `go/*.out`, `go/coverage*`, `go/cov-*`, `/bin/`
 - For a clean distributable archive use `python scripts/release.py --clean-workspace` (emits `dist/deepseek-infra-<version>.zip`).
 - `.env` holds secrets and is gitignored; only `.env.example` is tracked.
 
