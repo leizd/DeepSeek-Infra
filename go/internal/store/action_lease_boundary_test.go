@@ -289,7 +289,7 @@ func TestTakeoverAtDeadlineRetainsExactResources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.Lease.Epoch != first.Lease.Epoch+1 || second.Record.State != "EFFECT_UNKNOWN" || !reflect.DeepEqual(first.ResourceKeys, second.ResourceKeys) {
+	if second.Lease.Epoch != first.Lease.Epoch+1 || second.Record.State != "RECONCILING" || !reflect.DeepEqual(first.ResourceKeys, second.ResourceKeys) {
 		t.Fatal("takeover lost scope or did not advance the frozen action fence")
 	}
 	got, exists, err := control.GetActionLease("extra-scope")

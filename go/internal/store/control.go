@@ -312,6 +312,12 @@ func expectedControlUserObjects(schema int) map[string]string {
 		"control_writer":     "table",
 		"schema_migrations":  "table",
 	}
+	if schema >= SchemaV6 {
+		for name := range actionReconciliationSchemaObjects {
+			objects[name] = "trigger"
+		}
+		objects["action_reconciliation_boundary"] = "table"
+	}
 	if schema < SchemaV1 {
 		return objects
 	}
@@ -585,6 +591,11 @@ func (store *Control) migrateTx(tx *sql.Tx) error {
 	}
 	if store.schema == SchemaV4 {
 		if err := store.migrateToV5Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV5 {
+		if err := store.migrateToV6Tx(tx); err != nil {
 			return err
 		}
 	}
@@ -923,6 +934,11 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 			return err
 		}
 	}
+	if schema >= SchemaV6 {
+		if err := verifyActionReconciliationSchemaTx(tx); err != nil {
+			return err
+		}
+	}
 	for _, table := range tables {
 		var marker int
 		if err := tx.QueryRow(
@@ -1230,7 +1246,9 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 			return err
 		}
 	}
-	if !LegalTransition(record.Domain, from, record.State) {
+	if !LegalTransition(record.Domain, from, record.State) &&
+		!(write.allowBoundLease && record.Domain == "action" && store.schema >= SchemaV6 &&
+			reconciliationTransition(from, record.State, existing.ExecutionEpoch, record.ExecutionEpoch)) {
 		return ErrIllegalTransition
 	}
 	if exists {
@@ -1383,11 +1401,11 @@ func readControlRecord(row rowScanner, domain string) (Record, bool, error) {
 	return record, exists, err
 }
 
-func scanControlRecord(row rowScanner, domain string) (Record, storedRecordMetadata, bool, error) {
+func scanControlRecord(row rowScanner, domain string, extra ...any) (Record, storedRecordMetadata, bool, error) {
 	var record Record
 	var executionEpoch, writerToken, updatedAt int64
 	var payload, digest string
-	err := row.Scan(
+	fields := []any{
 		&record.ID,
 		&record.Revision,
 		&executionEpoch,
@@ -1396,7 +1414,8 @@ func scanControlRecord(row rowScanner, domain string) (Record, storedRecordMetad
 		&digest,
 		&writerToken,
 		&updatedAt,
-	)
+	}
+	err := row.Scan(append(fields, extra...)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Record{}, storedRecordMetadata{}, false, nil
 	}
@@ -1440,9 +1459,17 @@ func validateNoControlHistory(tx *sql.Tx, domain, id string) error {
 }
 
 func validateControlHistory(tx *sql.Tx, latest Record) error {
+	boundary := int64(math.MaxInt64)
+	if latest.Domain == "action" {
+		var err error
+		boundary, err = reconciliationHistoryBoundaryTx(tx)
+		if err != nil {
+			return err
+		}
+	}
 	rows, err := tx.Query(
 		`SELECT record_id, revision, execution_epoch, state, payload_json,
-		        record_digest, writer_fencing_token, recorded_at
+		        record_digest, writer_fencing_token, recorded_at, event_id
 		 FROM control_events
 		 WHERE domain = ? AND record_id = ?
 		 ORDER BY revision`,
@@ -1460,12 +1487,20 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 	var previousWriterToken, previousTimestamp int64
 	var final Record
 	for rows.Next() {
-		event, metadata, exists, err := scanControlRecord(rows, latest.Domain)
+		var eventID int64
+		event, metadata, exists, err := scanControlRecord(rows, latest.Domain, &eventID)
 		if err != nil {
 			return err
 		}
-		if !exists || event.Revision != expectedRevision ||
-			!LegalTransition(latest.Domain, previousState, event.State) {
+		legal := LegalTransition(latest.Domain, previousState, event.State)
+		if !legal && latest.Domain == "action" && eventID > boundary &&
+			reconciliationTransition(previousState, event.State, previousEpoch, event.ExecutionEpoch) {
+			if err := validateReconciliationEventTx(tx, event, metadata); err != nil {
+				return err
+			}
+			legal = true
+		}
+		if !exists || event.Revision != expectedRevision || !legal {
 			return fmt.Errorf("%w: invalid control event sequence", ErrCorruptRecord)
 		}
 		if expectedRevision > 1 &&
@@ -1606,6 +1641,9 @@ func secretBearingControlKey(key string) bool {
 }
 
 func knownState(domain, state string) bool {
+	if domain == "action" && state == "RECONCILING" {
+		return true
+	}
 	edges, ok := transitions[domain]
 	if !ok {
 		return false
@@ -1783,6 +1821,11 @@ func (store *Control) Rollback(version int) error {
 	}
 	if store.schema >= SchemaV5 {
 		if err := retireEmptyActionAdmissionTx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema >= SchemaV6 {
+		if _, err := tx.Exec("DROP TABLE action_reconciliation_boundary"); err != nil {
 			return err
 		}
 	}

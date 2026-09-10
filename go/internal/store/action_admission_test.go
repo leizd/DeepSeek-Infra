@@ -1026,7 +1026,7 @@ func TestAdditionalAdmissionCoverage(t *testing.T) {
 	if _, err := control.GetResourceLeases("act"); !errors.Is(err, ErrSchemaInactive) {
 		t.Fatalf("expected ErrSchemaInactive on GetResourceLeases, got: %v", err)
 	}
-	control.schema = SchemaV5
+	control.schema = CurrentSchema
 
 	// 4. Resource key length > 1024
 	longKey := strings.Repeat("a", 1025)

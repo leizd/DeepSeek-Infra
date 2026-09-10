@@ -20,6 +20,7 @@ func prepareDispatchV3Fixture(t *testing.T, control *Control) {
 	defer tx.Rollback()
 	oldMetadata := strings.Replace(bootstrapSchemaStatements[0], "CREATE TABLE IF NOT EXISTS control_store_meta", "CREATE TABLE control_meta_v3_fixture", 1)
 	for _, statement := range []string{
+		"DROP TABLE IF EXISTS action_reconciliation_boundary",
 		"DROP TABLE IF EXISTS action_resource_leases",
 		"DROP TABLE IF EXISTS action_lease_events",
 		"DROP TABLE IF EXISTS action_leases",

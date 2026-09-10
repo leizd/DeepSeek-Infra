@@ -335,6 +335,7 @@ func TestControlMigratesFromV2ToOperationJournal(t *testing.T) {
 	}
 	db := sql.OpenDB(connector)
 	for _, statement := range []string{
+		"DROP TABLE IF EXISTS action_reconciliation_boundary",
 		"DROP TABLE IF EXISTS action_resource_leases",
 		"DROP TABLE IF EXISTS action_lease_events",
 		"DROP TABLE IF EXISTS action_leases",

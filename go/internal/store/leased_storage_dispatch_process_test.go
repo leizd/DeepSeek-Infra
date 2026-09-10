@@ -116,7 +116,7 @@ func TestLeasedStorageDispatchSurvivesKilledOwner(t *testing.T) {
 		t.Fatalf("killed owner lost original operation: %v", err)
 	}
 	resources, err := successor.GetResourceLeases(claim.Lease.ActionID)
-	if err != nil || len(resources) != 1 || resources[0].Epoch != claim.Lease.Epoch || claim.Record.State != "EFFECT_UNKNOWN" {
+	if err != nil || len(resources) != 1 || resources[0].Epoch != claim.Lease.Epoch || claim.Record.State != "RECONCILING" {
 		t.Fatalf("takeover released uncertain resources: %v", err)
 	}
 }

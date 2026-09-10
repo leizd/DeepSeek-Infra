@@ -16,11 +16,15 @@ func prepareActionV4Fixture(t *testing.T, control *Control) {
 	}
 	defer tx.Rollback()
 
-	// Drop V5 tables
-	for _, table := range []string{"action_resource_leases", "action_lease_events", "action_leases"} {
-		_, _ = tx.Exec("DROP TABLE IF EXISTS " + table)
+	// Construct the historical shape only in this isolated fixture.
+	for _, table := range []string{"action_reconciliation_boundary", "action_resource_leases", "action_lease_events", "action_leases"} {
+		if _, err := tx.Exec("DROP TABLE IF EXISTS " + table); err != nil {
+			t.Fatal(err)
+		}
 	}
-	_, _ = tx.Exec("DELETE FROM schema_migrations WHERE version=5")
+	if _, err := tx.Exec("DELETE FROM schema_migrations WHERE version>=5"); err != nil {
+		t.Fatal(err)
+	}
 
 	// Set control_store_meta ceiling back to 4
 	oldMetadata := `CREATE TABLE control_meta_v4_fixture (
@@ -110,8 +114,8 @@ func TestActionAdmissionV4UpgradePreservesHistoryAndRollsBackOnFailure(t *testin
 	}
 	defer reopened.Close()
 
-	if reopened.SchemaVersion() != SchemaV5 {
-		t.Fatalf("expected SchemaV5, got %d", reopened.SchemaVersion())
+	if reopened.SchemaVersion() != CurrentSchema {
+		t.Fatalf("expected current schema, got %d", reopened.SchemaVersion())
 	}
 
 	got, ok, err := reopened.Get("action", "a")

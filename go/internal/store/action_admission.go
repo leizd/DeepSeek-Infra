@@ -240,12 +240,7 @@ func (store *Control) AdmitAndClaimAction(req AdmissionRequest) (AdmissionResult
 
 	// 2. Determine whether fresh claim or takeover
 	isFreshClaim := existing.State == "PENDING"
-	activeStates := map[string]bool{
-		"CLAIMED":        true,
-		"EXECUTING":      true,
-		"EFFECT_UNKNOWN": true,
-	}
-	isTakeover := activeStates[existing.State]
+	isTakeover := activeLeasedActionState(existing.State)
 
 	if !isFreshClaim && !isTakeover {
 		return AdmissionResult{}, ErrActionNotClaimable
@@ -283,7 +278,7 @@ func (store *Control) AdmitAndClaimAction(req AdmissionRequest) (AdmissionResult
 			return AdmissionResult{}, ErrEpochOutOfRange
 		}
 		nextEpoch = existing.ExecutionEpoch + 1
-		targetState = "EFFECT_UNKNOWN"
+		targetState = "RECONCILING"
 	} else {
 		if hasLeaseRow {
 			return AdmissionResult{}, ErrActionLeaseStale
@@ -511,7 +506,7 @@ func (store *Control) evaluateAdmissionBudgetsTx(
 	// 1. MaxConcurrentActions
 	var activeCount int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM action_journal
-		WHERE state IN ('CLAIMED', 'EXECUTING', 'EFFECT_UNKNOWN')
+		WHERE state IN ('CLAIMED', 'EXECUTING', 'EFFECT_UNKNOWN', 'RECONCILING')
 		  AND id != ?`, actionID).Scan(&activeCount); err != nil {
 		return err
 	}
@@ -551,7 +546,7 @@ func (store *Control) evaluateAdmissionBudgetsTx(
 	}
 
 	rows, err := tx.Query(`SELECT id, revision, execution_epoch, state, payload_json, record_digest, writer_fencing_token, updated_at FROM action_journal
-		WHERE state IN ('CLAIMED', 'EXECUTING', 'EFFECT_UNKNOWN')
+		WHERE state IN ('CLAIMED', 'EXECUTING', 'EFFECT_UNKNOWN', 'RECONCILING')
 		  AND id != ?`, actionID)
 	if err != nil {
 		return err
@@ -752,8 +747,7 @@ func (store *Control) RenewActionLease(renewal ActionLeaseRenewal) (ActionLease,
 	if err := validateControlHistory(tx, action); err != nil {
 		return ActionLease{}, err
 	}
-	activeStates := map[string]bool{"CLAIMED": true, "EXECUTING": true, "EFFECT_UNKNOWN": true}
-	if !activeStates[action.State] || action.ExecutionEpoch != renewal.Epoch {
+	if !activeLeasedActionState(action.State) || action.ExecutionEpoch != renewal.Epoch {
 		return ActionLease{}, ErrActionLeaseStale
 	}
 	lease := ActionLease{ActionID: renewal.ActionID, Owner: owner, Epoch: epoch, ClaimToken: claimToken,
@@ -927,10 +921,6 @@ func (store *Control) transitionLeasedAction(
 	if existing.ExecutionEpoch != epoch {
 		return Record{}, ErrActionLeaseStale
 	}
-	if !LegalTransition("action", existing.State, targetState) {
-		return Record{}, ErrIllegalTransition
-	}
-
 	recordPayload := payload
 	if len(recordPayload) == 0 {
 		recordPayload = existing.Payload
