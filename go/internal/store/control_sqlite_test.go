@@ -309,6 +309,17 @@ func TestExistingForeignOrSymlinkedDatabaseIsRejected(t *testing.T) {
 	if err := os.Symlink(target, symlink); err != nil {
 		t.Skipf("symbolic links are unavailable: %v", err)
 	}
+	// Windows without SeCreateSymbolicLinkPrivilege and without Developer Mode can
+	// return success from os.Symlink while creating nothing at all. The premise of
+	// this test is that a real link exists, so verify that first; otherwise the
+	// store legitimately takes its create-new-database path.
+	linkInfo, linkErr := os.Lstat(symlink)
+	if linkErr != nil {
+		t.Skipf("symbolic links are not observable on this platform: %v", linkErr)
+	}
+	if linkInfo.Mode()&os.ModeSymlink == 0 {
+		t.Skipf("os.Symlink reported success but created no link (mode=%v)", linkInfo.Mode())
+	}
 	if _, err := OpenControl(OpenOptions{Path: symlinkStore, Owner: "owner-a"}); !errors.Is(err, ErrForeignRuntimeStore) {
 		t.Fatalf("symlinked database: %v", err)
 	}
