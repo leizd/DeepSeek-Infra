@@ -1,5 +1,10 @@
 # Go durable storage dispatch intent
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Status: Go schema v4 and coordinator dispatch/recovery are implemented locally;
 production authentication and authority remain disabled. This is a dependency of
 full native ownership, not the 5.0 completion gate.

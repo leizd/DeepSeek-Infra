@@ -1,5 +1,10 @@
 # Windows Go race-detector toolchain
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 This is development/test tooling only. It does not change the native runtime's
 Rust/Go process boundary, introduce Go-to-Rust FFI, or enter production packages.
 The existing Linux CI `native-go` race gate remains required for release evidence.

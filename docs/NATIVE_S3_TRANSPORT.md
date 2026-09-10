@@ -1,5 +1,10 @@
 # Native S3 transport increment
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 This is a Rust byte-transport library, not production storage authority. The worker's
 `StorageNotAuthoritative` / `TransferNotAuthoritative` barriers remain unchanged.
 Python is allowed to provision isolated test providers; test payloads must be generated,

@@ -1,5 +1,10 @@
 # Native Go-to-Rust worker execution: dependency plan
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Status: transport-authentication choice awaiting confirmation. No production
 authority is enabled by this plan. Full 5.0 scope remains the accepted specification
 in `docs/specs/5.0-native-rust-go-runtime.md`.

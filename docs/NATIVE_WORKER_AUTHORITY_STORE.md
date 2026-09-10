@@ -1,5 +1,10 @@
 # Native worker authority journal
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 This is a Rust worker restart-safety substrate, not production storage authority.
 `control-authority-request-v1` and the existing Protobuf messages are unchanged.
 

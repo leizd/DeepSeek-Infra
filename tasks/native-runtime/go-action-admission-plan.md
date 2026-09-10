@@ -1,5 +1,10 @@
 # Go action admission and renewable resource leases
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Status: implementation in progress; production authority remains disabled.
 This is a dependency of ADR-0049, not a completed action-state parity migration.
 The original recovery `tasks/plan.md` and `tasks/todo.md` remain untouched.
@@ -379,6 +384,55 @@ renewing the current claim, and settle only a qualified bound result under that
 current claim. Production authorization, provider evidence and full baseline
 state parity remain mandatory before cutover. Original Python retirement and
 all server/desktop/Android/media/MCP migration requirements remain in scope.
+
+### Versioned RECONCILING and repeated takeover (2026-09-10)
+
+Schema v6 adds an immutable `action_reconciliation_boundary` containing the last
+pre-upgrade control event ID. Migration changes no existing action record, event,
+digest, dispatch, lease or reservation. Its DDL, boundary capture, migration marker
+and writer acquisition share the existing transaction. Old binaries reject the
+new schema; no downgrade to v5 is exposed. The existing rollback-to-empty path
+still refuses retained admission or dispatch history.
+
+The original generic `LegalTransition` qualification graph is unchanged. New
+typed native takeover writes use RECONCILING from CLAIMED, EXECUTING,
+EFFECT_UNKNOWN or RECONCILING, advancing the epoch by exactly one and issuing a
+new claim token. Retained UNKNOWN recovery follows the approved resource-custody
+exception, not Python's lock-releasing terminal behavior. Returning from
+RECONCILING to UNKNOWN or a supported terminal result keeps the same epoch;
+RECONCILING cannot redispatch EXECUTING. Terminal calls remain qualification
+primitives requiring a future provider-qualified caller, not proof of effects.
+
+History validation permits these additional edges only after the immutable
+boundary, and cross-checks their native lease-claim journal bindings. Existing
+pre-v6 histories are still interpreted by the old graph. Tests explicitly show
+that upgrading a v5-shaped database with a corrupt RECONCILING edge does not
+legalize that edge. Boundary replacement/deletion/update, missing schema objects,
+missing rows and a future boundary fail closed.
+
+The live-claim dispatch reader follows the exact immutable claim chain back to
+the original admission, including preserved v5 UNKNOWN takeovers and repeated
+v6 RECONCILING takeovers. Each step checks the claim revision, epoch, writer and
+time against its control event; epochs strictly decrease during traversal. It
+does not search for an arbitrary older available intent, fabricate missing intent,
+change the original operation epoch, renew leases or authorize another dispatch.
+Reconciliation continues to count against admission budgets and resource conflicts.
+
+The tests first failed on the old UNKNOWN takeover and repeated-UNKNOWN admission
+rejection; the next failure exposed the reader's single-takeover assumption. The
+implemented path now passes three successive native takeovers, missing-dispatch
+recovery, stale-token rejection, renewal, budget/resource retention, generic-write
+and redispatch denial, real SQLite upgrade rollback, and corrupt claim-history
+checks. Historical-shape fixtures use isolated temporary databases; their explicit
+journal edits construct legacy/corrupt input, never successful provider evidence.
+
+This is not complete baseline parity or a finished reconciliation coordinator.
+VERIFYING, ASSESSING_EFFECT, compensation and the other source lifecycle branches,
+full v30 replay, signed Rust live-lease installation, provider-qualified settlement,
+production transport authority and real provider-backed process kills remain
+required. The exact-deadline discrepancy remains unapproved and unchanged. No
+frozen corpus/protobuf, Python production surface or production authorization was
+changed by this slice; the original full Rust/Go end state remains the goal.
 
 ## Sources
 
