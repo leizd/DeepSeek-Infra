@@ -133,6 +133,8 @@ def test_worker_rpc_exposes_authenticated_epoch_install_without_control_mutation
         "AdmitCommand",
         "QueryEffect",
         "InstallAuthoritativeEpoch",
+        "ExecuteStorageMutation",
+        "QueryStorageEffect",
     }
     install = next(rpc for rpc in worker["rpcs"] if rpc["name"] == "InstallAuthoritativeEpoch")
     assert install["request"] == "InstallAuthoritativeEpochRequest"
