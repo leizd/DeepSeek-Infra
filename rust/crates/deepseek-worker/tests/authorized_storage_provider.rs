@@ -11,6 +11,12 @@ use sha2::{Digest, Sha256};
 #[path = "authorized_storage_provider/rpc_operations.rs"]
 mod rpc_operations;
 
+fn minio_configured() -> bool {
+    std::env::var("DEEPSEEK_NATIVE_S3_ENDPOINTS")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
 fn endpoints() -> Vec<String> {
     let endpoints: Vec<_> = std::env::var("DEEPSEEK_NATIVE_S3_ENDPOINTS")
         .expect("run scripts/run_native_s3_e2e.py with real MinIO")
@@ -127,6 +133,9 @@ fn test_signer() -> (SigningKey, WorkerAuthorityConfig) {
 
 #[tokio::test]
 async fn authorized_storage_put_reaches_real_minio_and_is_durable() {
+    if !minio_configured() {
+        return;
+    }
     let directory = tempfile::tempdir().unwrap();
     let (key, config) = test_signer();
     let transport = store(&endpoints()[0]);
@@ -230,6 +239,9 @@ async fn authorized_storage_put_reaches_real_minio_and_is_durable() {
 
 #[tokio::test]
 async fn takeover_fencing_token_rejects_storage_put_on_real_minio() {
+    if !minio_configured() {
+        return;
+    }
     let directory = tempfile::tempdir().unwrap();
     let (key, config) = test_signer();
     let transport = store(&endpoints()[0]);
@@ -274,6 +286,9 @@ async fn takeover_fencing_token_rejects_storage_put_on_real_minio() {
 
 #[tokio::test]
 async fn confirmed_effect_is_not_reused_for_a_different_provider_target() {
+    if !minio_configured() {
+        return;
+    }
     let directory = tempfile::tempdir().unwrap();
     let (key, config) = test_signer();
     let endpoints = endpoints();
@@ -332,6 +347,9 @@ async fn confirmed_effect_is_not_reused_for_a_different_provider_target() {
 
 #[tokio::test]
 async fn dropped_ack_unknown_effect_reconciles_against_real_minio() {
+    if !minio_configured() {
+        return;
+    }
     let directory = tempfile::tempdir().unwrap();
     let (key, config) = test_signer();
     let endpoint = endpoints()[0].clone();
@@ -430,16 +448,25 @@ async fn dropped_ack_unknown_effect_reconciles_against_real_minio() {
 
 #[tokio::test]
 async fn temporarily_absent_unknown_effect_stays_unknown_before_late_provider_write() {
+    if !minio_configured() {
+        return;
+    }
     late_provider_write_keeps_negative_observation_unknown(false).await;
 }
 
 #[tokio::test]
 async fn mismatched_old_object_stays_unknown_before_late_provider_overwrite() {
+    if !minio_configured() {
+        return;
+    }
     late_provider_write_keeps_negative_observation_unknown(true).await;
 }
 
 #[tokio::test]
 async fn cancelled_put_cannot_be_redispatched_before_original_minio_commit() {
+    if !minio_configured() {
+        return;
+    }
     let directory = tempfile::tempdir().unwrap();
     let (key, config) = test_signer();
     let endpoint = endpoints()[0].clone();

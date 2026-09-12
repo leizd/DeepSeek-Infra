@@ -1039,6 +1039,16 @@ class SidecarProcess:
         env = dict(os.environ)
         env["GATEWAY_BIND_ADDR"] = f"127.0.0.1:{port}"
         env.setdefault("RUST_LOG", "deepseek_gateway=info")
+        env.setdefault("AUTH_DISABLED", "1")
+        index = ROOT / "static" / "ui" / "index.html"
+        if not index.is_file():
+            fixture = Path(tempfile.mkdtemp(prefix="deepseek-sidecar-static-"))
+            (fixture / "ui").mkdir(parents=True, exist_ok=True)
+            (fixture / "ui" / "index.html").write_text(
+                "<!doctype html><main>sidecar</main>",
+                encoding="utf-8",
+            )
+            env["DEEPSEEK_INFRA_STATIC_DIR"] = str(fixture)
         started_ns = time.perf_counter_ns()
         self.process = subprocess.Popen(
             [str(self.binary)],

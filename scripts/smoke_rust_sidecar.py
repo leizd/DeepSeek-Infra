@@ -158,7 +158,8 @@ def run_smoke(base_url: str, *, wait_seconds: float = 60.0, timeout: float = 5.0
     models = _request_json(base_url, "GET", "/v1/models", timeout=timeout, expected_status=200)
     _require(models.get("object") == "list", "native model catalog is not an OpenAI list")
     data = models.get("data")
-    _require(isinstance(data, list) and data, "native model catalog data is empty")
+    _require(isinstance(data, list) and bool(data), "native model catalog data is empty")
+    assert isinstance(data, list)
     ids = [entry.get("id") for entry in data if isinstance(entry, dict)]
     _require(ids == ["deepseek-v4-pro", "deepseek-v4-flash"], f"unexpected native catalog ids: {ids}")
     _require("error" not in models, "native model catalog returned an error envelope")

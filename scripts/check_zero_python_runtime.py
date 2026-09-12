@@ -341,7 +341,8 @@ def check_native_storage_and_transfer(root: Path) -> GateCheckResult:
 
 
 def check_gateway_route_cutover(root: Path) -> GateCheckResult:
-    gateway_lib = root / "rust" / "crates" / "deepseek-gateway" / "src" / "lib.rs"
+    gateway_src = root / "rust" / "crates" / "deepseek-gateway" / "src"
+    gateway_lib = gateway_src / "lib.rs"
     if not gateway_lib.is_file():
         return GateCheckResult(
             name="gateway_route_cutover",
@@ -349,7 +350,9 @@ def check_gateway_route_cutover(root: Path) -> GateCheckResult:
             details="deepseek-gateway src/lib.rs missing",
         )
 
-    content = gateway_lib.read_text(encoding="utf-8")
+    content = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(gateway_src.rglob("*.rs"))
+    )
     if "proxy_api_to_go" not in content:
         return GateCheckResult(
             name="gateway_route_cutover",

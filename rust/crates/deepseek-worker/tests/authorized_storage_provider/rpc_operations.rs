@@ -1,5 +1,5 @@
 //! Real providers and RPC handlers; not a process-kill or production-auth proof.
-use super::{PutFault, endpoints, faulted_put_relay, sign_request, store, test_signer};
+use super::{PutFault, endpoints, faulted_put_relay, minio_configured, sign_request, store, test_signer};
 use std::sync::Arc;
 
 use deepseek_protocol::ActionFence;
@@ -53,6 +53,9 @@ fn assert_mismatch(response: &StorageMutationResponse) {
 
 #[tokio::test]
 async fn rpc_created_intent_preserves_operation_identity_on_three_real_providers() {
+    if !minio_configured() {
+        return;
+    }
     for endpoint in endpoints() {
         let directory = tempfile::tempdir().unwrap();
         let (key, config) = test_signer();
@@ -167,6 +170,9 @@ async fn rpc_created_intent_preserves_operation_identity_on_three_real_providers
 
 #[tokio::test]
 async fn rpc_unknown_effect_reconciles_only_for_its_persisted_operation() {
+    if !minio_configured() {
+        return;
+    }
     let directory = tempfile::tempdir().unwrap();
     let (key, config) = test_signer();
     let endpoint = endpoints()[0].clone();

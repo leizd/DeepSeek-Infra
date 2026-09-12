@@ -37,7 +37,8 @@ def _get_all_processes_windows() -> list[ProcessInfo]:
             ("szExeFile", ctypes.c_char * 260),
         ]
 
-    snapshot = ctypes.windll.kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
     if snapshot == -1 or snapshot is None:
         return []
 
@@ -45,7 +46,7 @@ def _get_all_processes_windows() -> list[ProcessInfo]:
     try:
         entry = PROCESSENTRY32()
         entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
-        if ctypes.windll.kernel32.Process32First(snapshot, ctypes.byref(entry)):
+        if kernel32.Process32First(snapshot, ctypes.byref(entry)):
             while True:
                 name = entry.szExeFile.decode("mbcs", errors="replace")
                 entries.append(
@@ -55,10 +56,10 @@ def _get_all_processes_windows() -> list[ProcessInfo]:
                         name=name,
                     )
                 )
-                if not ctypes.windll.kernel32.Process32Next(snapshot, ctypes.byref(entry)):
+                if not kernel32.Process32Next(snapshot, ctypes.byref(entry)):
                     break
     finally:
-        ctypes.windll.kernel32.CloseHandle(snapshot)
+        kernel32.CloseHandle(snapshot)
 
     return entries
 

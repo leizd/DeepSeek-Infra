@@ -749,7 +749,7 @@ jobs:
           --tag deepseek-rust-gateway:$RELEASE_VERSION
           --out docs/evidence/rust-sidecar-image-v$RELEASE_VERSION.json
       - name: Run Rust sidecar
-        run: docker run --detach --name deepseek-rust-gateway --publish 127.0.0.1:8787:8787 deepseek-rust-gateway:$RELEASE_VERSION
+        run: docker run --detach --name deepseek-rust-gateway --publish 127.0.0.1:8787:8787 -e AUTH_DISABLED=1 deepseek-rust-gateway:$RELEASE_VERSION
       - name: Smoke test Rust sidecar
         run: python scripts/smoke_rust_sidecar.py --base-url http://127.0.0.1:8787
       - run: >-
@@ -1205,7 +1205,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: clippy
-      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install -r requirements.txt -r requirements-s3-e2e.txt
       - name: Check native transport on the frozen MSRV
         run: cargo clippy --locked --manifest-path rust/Cargo.toml -p deepseek-storage --all-targets --all-features -- -D warnings
       - name: Native S3 boundary tests

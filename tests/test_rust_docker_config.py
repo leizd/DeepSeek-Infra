@@ -36,6 +36,7 @@ def test_rust_dockerfile_is_multistage_locked_and_non_root() -> None:
     assert "-p deepseek-worker" in dockerfile
     assert "FROM debian:bookworm-slim" in dockerfile
     assert "COPY rust ./rust" in dockerfile
+    assert "COPY proto ./proto" in dockerfile
     assert "COPY static ./static" in dockerfile
     assert "COPY --from=frontend-builder /build/static/ui ./static/ui" in dockerfile
     assert "test -f /app/static/ui/index.html" in dockerfile

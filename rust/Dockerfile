@@ -11,6 +11,7 @@ FROM rust:1.85-bookworm AS builder
 
 WORKDIR /app
 COPY rust ./rust
+COPY proto ./proto
 
 RUN cargo build \
     --locked \
