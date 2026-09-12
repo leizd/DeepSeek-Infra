@@ -434,6 +434,69 @@ required. The exact-deadline discrepancy remains unapproved and unchanged. No
 frozen corpus/protobuf, Python production surface or production authorization was
 changed by this slice; the original full Rust/Go end state remains the goal.
 
+### Recovery RPC lifetime follow-up (2026-09-12, in progress)
+
+The user confirmed that the pending `recovery.go`, its tests, the additional
+store invariant tests and Rust worker changes may be completed together. No
+subagents were used in this continuation. Production authority remains disabled.
+
+Current review found that the pending recovery query neither renewed its action
+claim nor checked cancellation before accepting a late APPLIED response. New
+real-SQLite tests reproduced both failures. Mutation execution and effect queries
+now share a joined heartbeat with the same short-writer deadline bound. Recovery
+renews before querying, renews during the query, and checks cancellation and renews
+again before considering a result. The RPC error and lease error remain distinct;
+late successful bodies cannot override a lost lease or canceled context. Tests
+advance the actual persisted renewed deadline, not a pre-query cached deadline.
+
+The Rust no-S3 query path now reports missing durable effect as UNKNOWN, never
+NOT_APPLIED or a successful no-effect result. Tests use the existing isolated
+authority fixture so the same missing-record assertion is meaningful with and
+without S3. This is not real-provider or production transport authorization proof.
+
+**Outstanding correctness boundary:** both leased execution and the pending
+recovery coordinator still use the older qualification terminal primitives for
+APPLIED. They must enter the actual VERIFYING/ASSESSING_EFFECT lifecycle with
+versioned history and retained budgets/resources before these paths can be wired
+into production. The classifier label is APPLIED, not a claim that VERIFYING was
+persisted. Full baseline fidelity, provider-qualified verification/compensation,
+main-process recovery and complete Python retirement remain required.
+
+The earlier v6 full Go/vet run passed, but its coverage was 94.9% and its race run
+hit the 600-second aggregate timeout while progressing through storage tests;
+neither is a passing full gate. After the pending additional invariant/recovery
+tests were included, the intermediate current-tree coverage passed at 95.2%.
+That predates the heartbeat extraction; final validation must cover the new tree.
+Old sessions were confirmed absent before new runs were started. Heavy gates are
+being separated rather than simply extending the timeout or weakening coverage.
+
+Fixed-source executor inspection at 4.8.0 confirms the next required sequence:
+`ADVANCE_TO_VERIFYING` skips repeating the mutation, then VERIFYING runs the
+outcome verifier under a heartbeat, ASSESSING_EFFECT checks scoped risk reduction,
+and only then does SUCCEEDED carry the resulting verification and decision proof.
+Failure routes to compensation. The next Go phase migration must retain original
+action inputs/budget scope separately from result/verification observations, add
+an explicit history-version boundary for new phases, and preserve resources
+through verification and takeover. A storage APPLIED body alone proves none of
+the scoped-risk or compensation requirements.
+
+The recovery cancellation tests additionally caught cancellation during the
+post-query renewal itself. The shared helper now checks cancellation again after
+that renewal. The new focused regression passed after failing with a successful
+settlement on the prior implementation.
+
+Rust 1.85 GNU grpc_service tests passed in default (12 tests) and S3 (13 tests)
+modes, without failures or ignored tests. The first attempt using LLVM-MinGW as
+Rust's GNU linker failed to locate `libgcc`; the existing GNU linker supplies it,
+without a Rust/toolchain/dependency upgrade. Go's race compiler remains the
+isolated LLVM-MinGW installation, not that older GNU compiler.
+
+Five real Go-to-Rust boundary tests passed against a freshly rebuilt no-S3 worker;
+stdout confirmed `authority=uninitialized mutation=denied`. The loopback child
+was killed and reaped in cleanup. It contacted no provider and enabled no
+production authority. Shadow checks passed 8/8 and frozen contract counts remain
+41 corpora, 30 versions, 43 domains, 9 command codes, 7 protos, 10 generated outputs.
+
 ## Sources
 
 The existing Python admission and renewal semantics were inspected directly in

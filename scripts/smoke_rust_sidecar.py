@@ -155,14 +155,14 @@ def run_smoke(base_url: str, *, wait_seconds: float = 60.0, timeout: float = 5.0
     _require(frontend_headers.get("x-content-type-options") == "nosniff", "frontend HTML is missing nosniff")
     checks.append(CheckResult("frontend", "GET /"))
 
-    models = _request_json(base_url, "GET", "/v1/models", timeout=timeout, expected_status=503)
-    model_error = models.get("error")
-    _require(
-        isinstance(model_error, dict) and model_error.get("code") == "NATIVE_MODELS_NOT_READY",
-        "unwired model catalog did not fail closed with NATIVE_MODELS_NOT_READY",
-    )
-    _require("data" not in models, "unwired model catalog returned fabricated model data")
-    checks.append(CheckResult("models_fail_closed", "GET /v1/models -> 503"))
+    models = _request_json(base_url, "GET", "/v1/models", timeout=timeout, expected_status=200)
+    _require(models.get("object") == "list", "native model catalog is not an OpenAI list")
+    data = models.get("data")
+    _require(isinstance(data, list) and data, "native model catalog data is empty")
+    ids = [entry.get("id") for entry in data if isinstance(entry, dict)]
+    _require(ids == ["deepseek-v4-pro", "deepseek-v4-flash"], f"unexpected native catalog ids: {ids}")
+    _require("error" not in models, "native model catalog returned an error envelope")
+    checks.append(CheckResult("models_catalog", "GET /v1/models -> 200 native catalog"))
 
     chat = _request_json(
         base_url,

@@ -2,6 +2,7 @@ use serde_json::{Map, Value, json};
 use std::collections::HashSet;
 
 pub const MAX_REQUEST_BYTES: usize = 16_000_000;
+pub const CATALOG_MODEL_IDS: [&str; 2] = ["deepseek-v4-pro", "deepseek-v4-flash"];
 const MAX_REQUEST_DEPTH: usize = 32;
 const MAX_TOKENS: i64 = 131_072;
 
@@ -50,9 +51,9 @@ fn normalized_model(value: Option<&Value>) -> Result<String, PreparationError> {
     }
     let key = raw.to_lowercase().replace('_', "-").replace(' ', "");
     let normalized = match key.as_str() {
-        "deepseek-v4-pro" | "deepseekv4pro" | "v4pro" | "expert" => "deepseek-v4-pro",
+        "deepseek-v4-pro" | "deepseekv4pro" | "v4pro" | "expert" => CATALOG_MODEL_IDS[0],
         "deepseek-v4-flash" | "deepseekv4flash" | "v4flash" | "flash" | "fast" => {
-            "deepseek-v4-flash"
+            CATALOG_MODEL_IDS[1]
         }
         _ => {
             return Err(PreparationError::new(
@@ -62,6 +63,18 @@ fn normalized_model(value: Option<&Value>) -> Result<String, PreparationError> {
         }
     };
     Ok(normalized.to_string())
+}
+
+pub fn native_model_catalog(created: i64) -> Value {
+    json!({
+        "object": "list",
+        "data": CATALOG_MODEL_IDS.iter().map(|id| json!({
+            "id": id,
+            "object": "model",
+            "created": created,
+            "owned_by": "deepseek-infra",
+        })).collect::<Vec<_>>(),
+    })
 }
 
 fn normalize_content(value: Option<&Value>, allow_empty: bool) -> Result<Value, PreparationError> {
@@ -523,6 +536,25 @@ mod tests {
 
     fn minimal() -> Value {
         json!({"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": " hello "}]})
+    }
+
+    #[test]
+    fn native_catalog_ids_are_the_models_prepare_request_accepts() {
+        let catalog = native_model_catalog(1);
+        assert_eq!(catalog["object"], "list");
+        let ids: Vec<&str> = catalog["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, CATALOG_MODEL_IDS);
+        for id in CATALOG_MODEL_IDS {
+            assert_eq!(
+                normalized_model(Some(&Value::String(id.to_string()))).unwrap(),
+                id
+            );
+        }
     }
 
     #[test]

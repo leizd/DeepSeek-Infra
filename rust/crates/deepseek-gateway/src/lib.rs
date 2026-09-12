@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{io, path::Path as FsPath};
 
+mod auth;
 mod control_proxy;
 pub mod observability;
 pub mod policy_routes;
@@ -82,12 +83,23 @@ fn apply_gateway_layers(router: Router) -> Router {
 }
 
 pub fn create_production_app(static_root: impl AsRef<FsPath>) -> io::Result<Router> {
+    create_production_app_with_auth(static_root, auth::ProductionAuth::from_env())
+}
+
+fn create_production_app_with_auth(
+    static_root: impl AsRef<FsPath>,
+    auth_config: auth::ProductionAuth,
+) -> io::Result<Router> {
     let static_files = static_files::StaticFiles::load(static_root)?;
-    Ok(apply_gateway_layers(create_routes().fallback(
-        move |request: axum::extract::Request| {
+    Ok(apply_gateway_layers(
+        create_routes().fallback(move |request: axum::extract::Request| {
             let static_files = static_files.clone();
             async move { static_files.serve(request).await }
-        },
+        }),
+    )
+    .layer(middleware::from_fn_with_state(
+        auth_config,
+        auth::require_production_auth,
     )))
 }
 
@@ -104,9 +116,24 @@ fn unavailable(code: &'static str, message: &'static str) -> (StatusCode, Json<s
 }
 
 async fn agent_card() -> (StatusCode, Json<serde_json::Value>) {
-    unavailable(
-        "NATIVE_AGENT_CARD_NOT_READY",
-        "native agent discovery is not wired",
+    (
+        StatusCode::OK,
+        Json(json!({
+            "protocolVersion": "0.3.0",
+            "name": "DeepSeek Infra Orchestrator",
+            "description": "Native agent discovery; A2A execution is not wired",
+            "url": "/a2a",
+            "preferredTransport": "JSONRPC",
+            "version": gateway_version(),
+            "capabilities": {
+                "streaming": false,
+                "pushNotifications": false,
+                "stateTransitionHistory": false
+            },
+            "defaultInputModes": ["text/plain"],
+            "defaultOutputModes": ["text/plain"],
+            "skills": []
+        })),
     )
 }
 
@@ -143,8 +170,59 @@ fn jsonrpc_not_ready(body: &Bytes, message: &'static str) -> Json<serde_json::Va
     }))
 }
 
-async fn mcp_rpc(body: Bytes) -> Json<serde_json::Value> {
-    jsonrpc_not_ready(&body, "native MCP execution is not wired")
+const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+
+fn jsonrpc_result(id: serde_json::Value, result: serde_json::Value) -> Json<serde_json::Value> {
+    Json(json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result,
+    }))
+}
+
+async fn mcp_rpc(body: Bytes) -> Response {
+    if body.is_empty() {
+        return jsonrpc_not_ready(&body, "native MCP execution is not wired").into_response();
+    }
+    let val: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return jsonrpc_not_ready(&body, "native MCP execution is not wired").into_response();
+        }
+    };
+    if !val.is_object() {
+        return jsonrpc_not_ready(&body, "native MCP execution is not wired").into_response();
+    }
+    let method = val
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let notification = val.get("id").is_none();
+    if method == "notifications/initialized" && notification {
+        return StatusCode::ACCEPTED.into_response();
+    }
+    let id = val.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    match method {
+        "initialize" => jsonrpc_result(
+            id,
+            json!({
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {"tools": {"listChanged": false}},
+                "serverInfo": {
+                    "name": "deepseek-infra",
+                    "title": "DeepSeek Infra MCP Tool Hub",
+                    "version": gateway_version(),
+                },
+            }),
+        )
+        .into_response(),
+        "ping" => jsonrpc_result(id, json!({})).into_response(),
+        "tools/list" | "tools/call" | "resources/list" | "resources/read" | "prompts/list"
+        | "prompts/get" => {
+            jsonrpc_not_ready(&body, "native MCP tool execution is not wired").into_response()
+        }
+        _ => jsonrpc_not_ready(&body, "native MCP execution is not wired").into_response(),
+    }
 }
 
 async fn a2a_rpc(body: Bytes) -> Json<serde_json::Value> {
@@ -400,9 +478,13 @@ async fn healthz() -> Json<HealthzResponse> {
 }
 
 async fn models() -> (StatusCode, Json<serde_json::Value>) {
-    unavailable(
-        "NATIVE_MODELS_NOT_READY",
-        "native model catalog is not wired",
+    let created = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    (
+        StatusCode::OK,
+        Json(request_preparation::native_model_catalog(created)),
     )
 }
 
@@ -667,14 +749,21 @@ mod tests {
     async fn production_routes_take_precedence_and_static_post_is_rejected() {
         let temp = tempfile::tempdir().unwrap();
         write_frontend_fixture(temp.path());
-        let app = create_production_app(temp.path()).unwrap();
+        let app = create_production_app_with_auth(
+            temp.path(),
+            auth::ProductionAuth {
+                enabled: true,
+                token: String::new(),
+            },
+        )
+        .unwrap();
 
         let api = get_response(app.clone(), "/api/policies").await;
-        assert_eq!(api.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(api.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&response_body(api).await).unwrap()["error"]
                 ["code"],
-            "GO_CONTROL_PROXY_NOT_READY"
+            "UNAUTHORIZED"
         );
 
         let post = app
@@ -688,6 +777,54 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(post.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn production_models_and_api_accept_bearer_then_enforce_proxy_readiness() {
+        let temp = tempfile::tempdir().unwrap();
+        write_frontend_fixture(temp.path());
+        let app = create_production_app_with_auth(
+            temp.path(),
+            auth::ProductionAuth {
+                enabled: true,
+                token: "gateway-test-token".to_string(),
+            },
+        )
+        .unwrap();
+
+        let denied = Request::builder()
+            .method("GET")
+            .uri("/v1/models")
+            .body(Body::empty())
+            .unwrap();
+        let denied = app.clone().oneshot(denied).await.unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+
+        let allowed = Request::builder()
+            .method("GET")
+            .uri("/v1/models")
+            .header(header::AUTHORIZATION, "Bearer gateway-test-token")
+            .body(Body::empty())
+            .unwrap();
+        let allowed = app.clone().oneshot(allowed).await.unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+        let catalog: serde_json::Value =
+            serde_json::from_str(&response_body(allowed).await).unwrap();
+        assert_eq!(catalog["object"], "list");
+
+        let proxy = Request::builder()
+            .method("GET")
+            .uri("/api/policies")
+            .header(header::AUTHORIZATION, "Bearer gateway-test-token")
+            .body(Body::empty())
+            .unwrap();
+        let proxy = app.oneshot(proxy).await.unwrap();
+        assert_eq!(proxy.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&response_body(proxy).await).unwrap()["error"]
+                ["code"],
+            "GO_CONTROL_PROXY_NOT_READY"
+        );
     }
 
     #[test]
@@ -706,12 +843,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn models_fail_closed_until_native_catalog_is_wired() {
+    async fn models_returns_native_catalog_matching_prepare_request() {
         let app = create_app();
         let (status, body) = send_request(app, "GET", "/v1/models", None).await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(status, StatusCode::OK);
         let response: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(response["error"]["code"], "NATIVE_MODELS_NOT_READY");
+        assert_eq!(response["object"], "list");
+        let data = response["data"].as_array().expect("catalog data");
+        let ids: Vec<&str> = data
+            .iter()
+            .map(|entry| entry["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, request_preparation::CATALOG_MODEL_IDS);
+        for entry in data {
+            assert_eq!(entry["object"], "model");
+            assert_eq!(entry["owned_by"], "deepseek-infra");
+            assert!(entry["created"].as_i64().unwrap() > 0);
+            assert!(
+                request_preparation::prepare_request(&json!({
+                    "model": entry["id"],
+                    "messages": [{"role": "user", "content": "catalog"}]
+                }))
+                .is_ok(),
+                "{}",
+                entry["id"]
+            );
+        }
+        assert!(response.get("error").is_none());
     }
 
     #[tokio::test]
@@ -849,9 +1007,45 @@ mod tests {
             send_request(app, "POST", "/mcp", Some(alias_body)).await;
         assert_eq!(alias_status, StatusCode::OK);
         let alias_response = serde_json::from_str::<serde_json::Value>(&alias_response).unwrap();
-        assert_eq!(alias_response["error"]["code"], -32601);
         assert_eq!(alias_response["id"], 1);
-        assert!(alias_response.get("result").is_none());
+        assert_eq!(alias_response["result"], json!({}));
+        assert!(alias_response.get("error").is_none());
+    }
+
+    #[tokio::test]
+    async fn mcp_initialize_and_ping_are_native_jsonrpc_while_tools_stay_unwired() {
+        let app = create_app();
+        let init = json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "native-test", "version": "1"}
+            }
+        })
+        .to_string();
+        let (status, body) = send_request(app.clone(), "POST", "/mcp", Some(init)).await;
+        assert_eq!(status, StatusCode::OK);
+        let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(response["result"]["protocolVersion"], "2025-06-18");
+        assert_eq!(response["result"]["serverInfo"]["name"], "deepseek-infra");
+        assert!(response.get("error").is_none());
+
+        let tools = json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"echo"}})
+            .to_string();
+        let (tool_status, tool_body) = send_request(app, "POST", "/mcp", Some(tools)).await;
+        assert_eq!(tool_status, StatusCode::OK);
+        let tool_response: serde_json::Value = serde_json::from_str(&tool_body).unwrap();
+        assert_eq!(tool_response["error"]["code"], -32601);
+        assert!(
+            tool_response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("tool execution is not wired")
+        );
+        assert!(tool_response.get("result").is_none());
     }
 
     #[tokio::test]
@@ -859,10 +1053,15 @@ mod tests {
         let app = create_app();
         let (card_status, card_body) =
             send_request(app.clone(), "GET", "/.well-known/agent-card.json", None).await;
-        assert_eq!(card_status, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&card_body).unwrap()["error"]["code"],
-            "NATIVE_AGENT_CARD_NOT_READY"
+        assert_eq!(card_status, StatusCode::OK);
+        let card: serde_json::Value = serde_json::from_str(&card_body).unwrap();
+        assert_eq!(card["protocolVersion"], "0.3.0");
+        assert_eq!(card["capabilities"]["streaming"], false);
+        assert!(
+            card.get("description")
+                .and_then(|value| value.as_str())
+                .unwrap()
+                .contains("A2A execution is not wired")
         );
 
         let a2a_body = json!({"jsonrpc":"2.0","id":"a2a-1","method":"message/send"});

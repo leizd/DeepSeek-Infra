@@ -139,8 +139,23 @@ class _SidecarHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/v1/models":
             self._send(
-                {"error": {"code": "NATIVE_MODELS_NOT_READY", "message": "native model catalog is not wired"}},
-                status=503,
+                {
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "deepseek-v4-pro",
+                            "object": "model",
+                            "created": 1,
+                            "owned_by": "deepseek-infra",
+                        },
+                        {
+                            "id": "deepseek-v4-flash",
+                            "object": "model",
+                            "created": 1,
+                            "owned_by": "deepseek-infra",
+                        },
+                    ],
+                }
             )
             return
         if self.path == "/metrics":
@@ -250,7 +265,7 @@ def test_smoke_exercises_all_offline_sidecar_contracts(sidecar_url: str) -> None
         "health",
         "metrics",
         "frontend",
-        "models_fail_closed",
+        "models_catalog",
         "chat_fail_closed",
         "mcp_protocol_preparation",
         "policy",

@@ -863,13 +863,20 @@ impl WorkerRpc for WorkerRpcService {
 
         #[cfg(not(feature = "s3"))]
         {
-            Ok(Response::new(storage_rejected(
-                Some(fence.clone()),
-                input.operation_id,
-                "STORAGE_FEATURE_DISABLED",
-                "STORAGE",
-                "worker compiled without s3 feature",
-            )))
+            Ok(Response::new(StorageMutationResponse {
+                status: StorageMutationStatus::EffectUnknown as i32,
+                state: EffectState::Unknown as i32,
+                fence: Some(fence.clone()),
+                operation_id: input.operation_id,
+                effect_id: String::new(),
+                etag: String::new(),
+                provider_metadata: String::new(),
+                error: Some(ErrorDetail {
+                    code: "EFFECT_UNKNOWN".to_string(),
+                    category: "STORAGE".to_string(),
+                    message: "no recorded effect for fence".to_string(),
+                }),
+            }))
         }
     }
 }

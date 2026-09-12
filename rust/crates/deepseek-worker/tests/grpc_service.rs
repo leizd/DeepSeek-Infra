@@ -79,6 +79,96 @@ async fn rpc_query_rejects_empty_operation_before_storage_lookup() {
     assert_eq!(response.error.unwrap().code, "OPERATION_INVALID");
 }
 
+fn storage_query_service(worker: Worker) -> WorkerRpcService {
+    let auth = Arc::new(StaticTokenAuthenticator::new(
+        "qualification-token",
+        CallerIdentity {
+            service_name: "test-caller".into(),
+            role: "controller".into(),
+        },
+    ));
+    WorkerRpcService::new_with_authenticator(worker, auth)
+}
+
+async fn query_storage(
+    service: &WorkerRpcService,
+    fence: Option<ActionFence>,
+    operation_id: &str,
+) -> deepseek_protocol::generated::deepseek::action::v1::StorageMutationResponse {
+    let mut request = Request::new(QueryStorageEffectRequest {
+        fence,
+        operation_id: operation_id.into(),
+    });
+    request.metadata_mut().insert(
+        "authorization",
+        "Bearer qualification-token".parse().unwrap(),
+    );
+    WorkerRpc::query_storage_effect(service, request)
+        .await
+        .unwrap()
+        .into_inner()
+}
+
+#[tokio::test]
+async fn rpc_query_storage_effect_rejects_bad_identity_and_keeps_missing_unknown() {
+    let directory = tempfile::tempdir().unwrap();
+    let (config, _, _) = frozen_authority();
+    let worker = Worker::open_with_authority(config, directory.path()).unwrap();
+    let service = storage_query_service(worker);
+
+    let empty_operation = query_storage(&service, Some(fence(1)), "").await;
+    assert_ne!(empty_operation.state(), EffectState::NotApplied);
+    assert_eq!(empty_operation.error.unwrap().code, "OPERATION_INVALID");
+    assert!(empty_operation.effect_id.is_empty());
+
+    let missing_fence = query_storage(&service, None, "original-operation").await;
+    assert_ne!(missing_fence.state(), EffectState::NotApplied);
+    assert_eq!(missing_fence.error.unwrap().code, "EMPTY_ACTION_ID");
+    assert!(missing_fence.effect_id.is_empty());
+
+    let empty_action = query_storage(
+        &service,
+        Some(ActionFence {
+            action_id: String::new(),
+            execution_epoch: 1,
+        }),
+        "original-operation",
+    )
+    .await;
+    assert_ne!(empty_action.state(), EffectState::NotApplied);
+    assert_eq!(empty_action.error.unwrap().code, "EMPTY_ACTION_ID");
+
+    let zero_epoch = query_storage(
+        &service,
+        Some(ActionFence {
+            action_id: "act-1".into(),
+            execution_epoch: 0,
+        }),
+        "original-operation",
+    )
+    .await;
+    assert_ne!(zero_epoch.state(), EffectState::NotApplied);
+    assert_eq!(zero_epoch.error.unwrap().code, "ZERO_EXECUTION_EPOCH");
+
+    let unbound = query_storage(&service, Some(fence(3)), "original-operation").await;
+    assert_eq!(unbound.status(), StorageMutationStatus::EffectUnknown);
+    assert_eq!(unbound.state(), EffectState::Unknown);
+    assert_ne!(unbound.state(), EffectState::NotApplied);
+    assert_eq!(unbound.error.unwrap().code, "EFFECT_UNKNOWN");
+    assert!(unbound.effect_id.is_empty());
+    assert_eq!(unbound.operation_id, "original-operation");
+    assert_eq!(unbound.fence.unwrap().execution_epoch, 3);
+
+    let mismatched_epoch = query_storage(&service, Some(fence(1)), "original-operation").await;
+    assert_eq!(
+        mismatched_epoch.status(),
+        StorageMutationStatus::EffectUnknown
+    );
+    assert_eq!(mismatched_epoch.state(), EffectState::Unknown);
+    assert_ne!(mismatched_epoch.state(), EffectState::NotApplied);
+    assert!(mismatched_epoch.effect_id.is_empty());
+}
+
 async fn admit(
     service: &WorkerRpcService,
     command_fence: ActionFence,
@@ -452,11 +542,16 @@ async fn rpc_query_storage_effect_fails_closed_without_auth_and_reports_unknown_
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(response.status(), StorageMutationStatus::Rejected);
     if cfg!(feature = "s3") {
+        assert_eq!(response.status(), StorageMutationStatus::Rejected);
+        assert_ne!(response.state(), EffectState::NotApplied);
         assert_eq!(response.error.unwrap().code, "WORKER_WITHOUT_AUTHORITY");
     } else {
-        assert_eq!(response.error.unwrap().code, "STORAGE_FEATURE_DISABLED");
+        assert_eq!(response.status(), StorageMutationStatus::EffectUnknown);
+        assert_eq!(response.state(), EffectState::Unknown);
+        assert_ne!(response.state(), EffectState::NotApplied);
+        assert!(response.effect_id.is_empty());
+        assert_eq!(response.error.unwrap().code, "EFFECT_UNKNOWN");
     }
 
     // 3. Authenticated query against authorized worker with missing record reports EFFECT_UNKNOWN
@@ -475,12 +570,9 @@ async fn rpc_query_storage_effect_fails_closed_without_auth_and_reports_unknown_
         .await
         .unwrap()
         .into_inner();
-    if cfg!(feature = "s3") {
-        assert_eq!(response.status(), StorageMutationStatus::EffectUnknown);
-        assert_eq!(response.state(), EffectState::Unknown);
-        assert_eq!(response.error.unwrap().code, "EFFECT_UNKNOWN");
-    } else {
-        assert_eq!(response.status(), StorageMutationStatus::Rejected);
-        assert_eq!(response.error.unwrap().code, "STORAGE_FEATURE_DISABLED");
-    }
+    assert_eq!(response.status(), StorageMutationStatus::EffectUnknown);
+    assert_eq!(response.state(), EffectState::Unknown);
+    assert_ne!(response.state(), EffectState::NotApplied);
+    assert_eq!(response.error.unwrap().code, "EFFECT_UNKNOWN");
+    assert!(response.effect_id.is_empty());
 }

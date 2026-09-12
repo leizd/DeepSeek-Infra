@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"time"
 
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
@@ -17,6 +16,7 @@ type leasedControlStore interface {
 	ControlStore
 	RenewActionLease(store.ActionLeaseRenewal) (store.ActionLease, error)
 	ClaimLeasedStorageDispatch(store.Record, store.StorageDispatchIntent, string) error
+	GetLeasedStorageDispatch(string, uint64, string) (store.StorageDispatch, bool, error)
 	CompleteAction(string, uint64, string, json.RawMessage) (store.Record, error)
 	FailAction(string, uint64, string, json.RawMessage) (store.Record, error)
 	MarkActionEffectUnknown(string, uint64, string) (store.Record, error)
@@ -86,56 +86,15 @@ func (c *Coordinator) ExecuteClaimedStorageAction(ctx context.Context, claim sto
 		_, markErr := owner.MarkActionEffectUnknown(claim.ActionID, claim.Epoch, claim.ClaimToken)
 		return nil, errors.Join(ErrStorageMutationUncertain, cause, markErr)
 	}
-	leaseNow := time.Now().Unix()
-	if c.now != nil {
-		leaseNow = c.now()
-	}
-	leaseLimit := min(activeClaim.LeaseUntil, owner.Writer().LeaseUntil)
-	if leaseNow < activeClaim.UpdatedAt || leaseNow >= leaseLimit {
-		_, markErr := owner.MarkActionEffectUnknown(claim.ActionID, claim.Epoch, claim.ClaimToken)
-		return nil, errors.Join(ErrStorageMutationUncertain, store.ErrActionLeaseExpired, markErr)
-	}
-
-	rpcCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	interval := c.leaseHeartbeatInterval
-	if interval <= 0 || interval >= 60*time.Second {
-		interval = 20 * time.Second
-	}
-	// Writer lifetimes are configurable and may be shorter than the action TTL.
-	// Bound before converting to Duration, and leave room for renewal latency.
-	interval = min(interval, time.Duration(min(leaseLimit-leaseNow, 60))*time.Second/3)
-	stop, stopped := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(stopped)
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-rpcCtx.Done():
-				return
-			case <-ticker.C:
-				if _, err := owner.RenewActionLease(renewal); err != nil {
-					cancel(err)
-					return
-				}
-			}
-		}
-	}()
-	resp, dispatchErr := c.worker.ExecuteStorageMutation(rpcCtx, req, c.bearerToken)
-	close(stop)
-	<-stopped // No heartbeat can race terminal settlement or outlive this call.
+	resp, dispatchErr, leaseErr := c.callWithActionLease(ctx, owner, activeClaim, renewal, func(rpcCtx context.Context) (*actionv1.StorageMutationResponse, error) {
+		return c.worker.ExecuteStorageMutation(rpcCtx, req, c.bearerToken)
+	})
 	uncertain := func(cause error) (*actionv1.StorageMutationResponse, error) {
 		_, markErr := owner.MarkActionEffectUnknown(claim.ActionID, claim.Epoch, claim.ClaimToken)
 		return resp, errors.Join(ErrStorageMutationUncertain, cause, markErr)
 	}
-	if cause := context.Cause(rpcCtx); cause != nil {
-		return uncertain(cause)
-	}
-	if _, err := owner.RenewActionLease(renewal); err != nil {
-		return uncertain(err)
+	if leaseErr != nil {
+		return uncertain(leaseErr)
 	}
 	if resp == nil || !matchesStorageResult(resp, fence, intent.OperationID) {
 		return uncertain(dispatchErr)
