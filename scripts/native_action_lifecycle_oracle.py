@@ -70,7 +70,10 @@ def _run_snapshot() -> dict[str, Any]:
         path = Path(module.__file__).resolve()
         if not path.is_relative_to(snapshot):
             raise RuntimeError("oracle imported code outside baseline")
-        provenance[path.relative_to(snapshot).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        # Frozen v30 fingerprints Windows git-archive extraction (CRLF) of the
+        # same blobs. Hash the CRLF form so Linux runners match the fixture.
+        payload = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        provenance[path.relative_to(snapshot).as_posix()] = hashlib.sha256(payload).hexdigest()
 
     cases = []
 
