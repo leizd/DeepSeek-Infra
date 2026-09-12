@@ -1,0 +1,596 @@
+{
+  "schema_version": 1,
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "kernel": "control-shadow-decision-v1",
+  "cases": [
+    {
+      "name": "admit_repair_before_rebalance",
+      "snapshot": {
+        "nowUnix": 1756771200,
+        "nowMinute": 60,
+        "liveEpochs": {},
+        "actions": [
+          {
+            "actionId": "act-rebalance",
+            "executionEpoch": 1,
+            "type": "CREATE_REBALANCE_JOB",
+            "severity": "warning",
+            "policyCriticality": "standard",
+            "createdAtUnix": 1756684800
+          },
+          {
+            "actionId": "act-repair",
+            "executionEpoch": 1,
+            "type": "CREATE_REPAIR_JOB",
+            "severity": "degraded",
+            "policyCriticality": "high",
+            "createdAtUnix": 1756684800
+          }
+        ],
+        "capacityTargets": [
+          {
+            "targetId": "t-a",
+            "freePercent": 42.0,
+            "estimatedDaysToFull": 90
+          }
+        ],
+        "scheduleId": "sched-1",
+        "admitWaveIndex": 0,
+        "localFleetId": "fleet-a",
+        "federationTransitions": []
+      },
+      "expect": {
+        "digest": "7ef1280693ffedca6491e5f1771141762ee939dd85a8c0c40e6fdd31f6180e1b",
+        "scheduler": {
+          "orderedActionIds": [
+            "act-repair",
+            "act-rebalance"
+          ],
+          "admissions": [
+            {
+              "actionId": "act-rebalance",
+              "decision": "ADMIT",
+              "reason": "NO_MAINTENANCE_WINDOW"
+            },
+            {
+              "actionId": "act-repair",
+              "decision": "ADMIT",
+              "reason": "NO_MAINTENANCE_WINDOW"
+            }
+          ]
+        },
+        "risk": {
+          "overallRisk": "healthy",
+          "risks": [
+            {
+              "type": "CAPACITY_EXHAUSTION",
+              "target": "t-a",
+              "severity": "healthy",
+              "evidence": "free-space-healthy"
+            }
+          ]
+        },
+        "wave": {
+          "scheduleId": "sched-1",
+          "decision": "ADMIT",
+          "admitWaveIndex": 0
+        },
+        "federation": {
+          "transitions": []
+        },
+        "mutationDenied": true
+      }
+    },
+    {
+      "name": "reject_stale_and_empty_fences",
+      "snapshot": {
+        "nowUnix": 1756771200,
+        "nowMinute": 60,
+        "liveEpochs": {
+          "act-old": 4
+        },
+        "actions": [
+          {
+            "actionId": "",
+            "executionEpoch": 1,
+            "type": "CREATE_REPAIR_JOB",
+            "severity": "warning",
+            "createdAtUnix": 1756771200
+          },
+          {
+            "actionId": "act-zero",
+            "executionEpoch": 0,
+            "type": "CREATE_REPAIR_JOB",
+            "severity": "warning",
+            "createdAtUnix": 1756771200
+          },
+          {
+            "actionId": "act-old",
+            "executionEpoch": 3,
+            "type": "CREATE_REPAIR_JOB",
+            "severity": "warning",
+            "createdAtUnix": 1756771200
+          }
+        ],
+        "capacityTargets": [],
+        "scheduleId": "sched-2",
+        "admitWaveIndex": 0,
+        "localFleetId": "fleet-a",
+        "federationTransitions": []
+      },
+      "expect": {
+        "digest": "0290a2b5506aeeeaa3ae9957ba46bc3625ad982b14772bfcaedec4de2666eb23",
+        "scheduler": {
+          "orderedActionIds": [],
+          "admissions": [
+            {
+              "actionId": "",
+              "decision": "REJECT",
+              "reason": "EMPTY_ACTION_ID"
+            },
+            {
+              "actionId": "act-zero",
+              "decision": "REJECT",
+              "reason": "ZERO_EXECUTION_EPOCH"
+            },
+            {
+              "actionId": "act-old",
+              "decision": "REJECT",
+              "reason": "STALE_EXECUTION_EPOCH"
+            }
+          ]
+        },
+        "risk": {
+          "overallRisk": "healthy",
+          "risks": []
+        },
+        "wave": {
+          "scheduleId": "sched-2",
+          "decision": "ADMIT",
+          "admitWaveIndex": 0
+        },
+        "federation": {
+          "transitions": []
+        },
+        "mutationDenied": true
+      }
+    },
+    {
+      "name": "maintenance_window_and_critical_override",
+      "snapshot": {
+        "nowUnix": 1756771200,
+        "nowMinute": 600,
+        "liveEpochs": {},
+        "actions": [
+          {
+            "actionId": "act-blocked",
+            "executionEpoch": 1,
+            "type": "CREATE_REBALANCE_JOB",
+            "severity": "warning",
+            "createdAtUnix": 1756771200,
+            "maintenanceWindow": {
+              "start": "00:00",
+              "end": "01:00"
+            }
+          },
+          {
+            "actionId": "act-critical",
+            "executionEpoch": 1,
+            "type": "CREATE_REPAIR_JOB",
+            "severity": "critical",
+            "createdAtUnix": 1756771200,
+            "maintenanceWindow": {
+              "start": "00:00",
+              "end": "01:00"
+            }
+          }
+        ],
+        "capacityTargets": [],
+        "scheduleId": "sched-3",
+        "admitWaveIndex": 0,
+        "localFleetId": "fleet-a",
+        "federationTransitions": []
+      },
+      "expect": {
+        "digest": "2218b35b8dbe74c64a4120ea1c13330970213f4b3b74ca0277d45340f74b20bc",
+        "scheduler": {
+          "orderedActionIds": [
+            "act-critical"
+          ],
+          "admissions": [
+            {
+              "actionId": "act-blocked",
+              "decision": "REJECT",
+              "reason": "OUTSIDE_MAINTENANCE_WINDOW"
+            },
+            {
+              "actionId": "act-critical",
+              "decision": "ADMIT",
+              "reason": "CRITICAL_DURABILITY_OVERRIDE"
+            }
+          ]
+        },
+        "risk": {
+          "overallRisk": "healthy",
+          "risks": []
+        },
+        "wave": {
+          "scheduleId": "sched-3",
+          "decision": "ADMIT",
+          "admitWaveIndex": 0
+        },
+        "federation": {
+          "transitions": []
+        },
+        "mutationDenied": true
+      }
+    },
+    {
+      "name": "capacity_risk_thresholds",
+      "snapshot": {
+        "nowUnix": 1756771200,
+        "nowMinute": 0,
+        "liveEpochs": {},
+        "actions": [],
+        "capacityTargets": [
+          {
+            "targetId": "t-critical",
+            "freePercent": 4.0,
+            "estimatedDaysToFull": 40
+          },
+          {
+            "targetId": "t-degraded",
+            "freePercent": 8.0,
+            "estimatedDaysToFull": 40
+          },
+          {
+            "targetId": "t-warning",
+            "freePercent": 18.0,
+            "estimatedDaysToFull": 40
+          },
+          {
+            "targetId": "t-healthy",
+            "freePercent": 55.0,
+            "estimatedDaysToFull": 90
+          },
+          {
+            "targetId": "t-open"
+          }
+        ],
+        "scheduleId": "sched-4",
+        "admitWaveIndex": 0,
+        "localFleetId": "fleet-a",
+        "federationTransitions": []
+      },
+      "expect": {
+        "digest": "5b5ee4c8404493303ec6695e3bf5daa01fa5606d51709b81bf9e7de32416973a",
+        "scheduler": {
+          "orderedActionIds": [],
+          "admissions": []
+        },
+        "risk": {
+          "overallRisk": "critical",
+          "risks": [
+            {
+              "type": "CAPACITY_EXHAUSTION",
+              "target": "t-critical",
+              "severity": "critical",
+              "evidence": "free-space-critical"
+            },
+            {
+              "type": "CAPACITY_EXHAUSTION",
+              "target": "t-degraded",
+              "severity": "degraded",
+              "evidence": "free-space-degraded"
+            },
+            {
+              "type": "CAPACITY_EXHAUSTION",
+              "target": "t-healthy",
+              "severity": "healthy",
+              "evidence": "free-space-healthy"
+            },
+            {
+              "type": "CAPACITY_EXHAUSTION",
+              "target": "t-open",
+              "severity": "healthy",
+              "evidence": "unconstrained-quota"
+            },
+            {
+              "type": "CAPACITY_EXHAUSTION",
+              "target": "t-warning",
+              "severity": "warning",
+              "evidence": "free-space-warning"
+            }
+          ]
+        },
+        "wave": {
+          "scheduleId": "sched-4",
+          "decision": "ADMIT",
+          "admitWaveIndex": 0
+        },
+        "federation": {
+          "transitions": []
+        },
+        "mutationDenied": true
+      }
+    },
+    {
+      "name": "wave_predecessor_and_identity",
+      "snapshot": {
+        "nowUnix": 1756771200,
+        "nowMinute": 0,
+        "liveEpochs": {},
+        "actions": [],
+        "capacityTargets": [],
+        "scheduleId": "sched-5",
+        "admitWaveIndex": 1,
+        "waves": [
+          {
+            "index": 0,
+            "status": "RUNNING"
+          }
+        ],
+        "waveActions": [
+          {
+            "waveIndex": 0,
+            "status": "EXECUTING"
+          }
+        ],
+        "plannedRiskDigest": "aaa",
+        "freshRiskDigest": "aaa",
+        "localFleetId": "fleet-a",
+        "federationTransitions": []
+      },
+      "expect": {
+        "digest": "14dbb40c968b9fec6a12cce8fc703d657d562a8b4fcf4ec8e7a960df686f7577",
+        "scheduler": {
+          "orderedActionIds": [],
+          "admissions": []
+        },
+        "risk": {
+          "overallRisk": "healthy",
+          "risks": []
+        },
+        "wave": {
+          "scheduleId": "sched-5",
+          "decision": "WAIT_PREDECESSOR",
+          "admitWaveIndex": 1
+        },
+        "federation": {
+          "transitions": []
+        },
+        "mutationDenied": true
+      }
+    },
+    {
+      "name": "wave_admit_after_verified_predecessor",
+      "snapshot": {
+        "nowUnix": 1756771200,
+        "nowMinute": 0,
+        "liveEpochs": {},
+        "actions": [],
+        "capacityTargets": [],
+        "scheduleId": "sched-6",
+        "admitWaveIndex": 1,
+        "waves": [
+          {
+            "index": 0,
+            "status": "COMPLETED"
+          }
+        ],
+        "waveActions": [
+          {
+            "waveIndex": 0,
+            "status": "VERIFIED_SUCCESS"
+          }
+        ],
+        "plannedRiskDigest": "abc",
+        "freshRiskDigest": "abc",
+        "localFleetId": "fleet-a",
+        "federationTransitions": []
+      },
+      "expect": {
+        "digest": "de6dac42a1865235f0064de2b325114f1ae958ac8594145790d0260c6dad0b64",
+        "scheduler": {
+          "orderedActionIds": [],
+          "admissions": []
+        },
+        "risk": {
+          "overallRisk": "healthy",
+          "risks": []
+        },
+        "wave": {
+          "scheduleId": "sched-6",
+          "decision": "ADMIT",
+          "admitWaveIndex": 1
+        },
+        "federation": {
+          "transitions": []
+        },
+        "mutationDenied": true
+      }
+    },
+    {
+      "name": "wave_conflict_and_replan",
+      "snapshot": {
+        "nowUnix": 1756771200,
+        "nowMinute": 0,
+        "liveEpochs": {},
+        "actions": [],
+        "capacityTargets": [],
+        "scheduleId": "sched-7",
+        "admitWaveIndex": 0,
+        "existingScheduleDigest": "digest-a",
+        "incomingScheduleDigest": "digest-b",
+        "plannedRiskDigest": "old",
+        "freshRiskDigest": "new",
+        "localFleetId": "fleet-a",
+        "federationTransitions": []
+      },
+      "expect": {
+        "digest": "62c2e21c071cf4a37a836129b73fac80f5af36e86f2ac7ccd1a994856f0f175e",
+        "scheduler": {
+          "orderedActionIds": [],
+          "admissions": []
+        },
+        "risk": {
+          "overallRisk": "healthy",
+          "risks": []
+        },
+        "wave": {
+          "scheduleId": "sched-7",
+          "decision": "SCHEDULE_IDENTITY_CONFLICT",
+          "admitWaveIndex": -1
+        },
+        "federation": {
+          "transitions": []
+        },
+        "mutationDenied": true
+      }
+    },
+    {
+      "name": "federation_trust_matrix",
+      "snapshot": {
+        "nowUnix": 1756771200,
+        "nowMinute": 0,
+        "liveEpochs": {},
+        "actions": [],
+        "capacityTargets": [],
+        "scheduleId": "sched-8",
+        "admitWaveIndex": 0,
+        "localFleetId": "fleet-a",
+        "federationTransitions": [
+          {
+            "peerFleetId": "fleet-a",
+            "from": "PENDING",
+            "to": "VERIFIED",
+            "metadata": {
+              "provider": "minio",
+              "region": "us",
+              "jurisdiction": "us",
+              "siteClass": "region"
+            }
+          },
+          {
+            "peerFleetId": "fleet-b",
+            "from": "PENDING",
+            "to": "ACTIVE",
+            "metadata": {
+              "provider": "minio",
+              "region": "us",
+              "jurisdiction": "us",
+              "siteClass": "region"
+            }
+          },
+          {
+            "peerFleetId": "fleet-b",
+            "from": "VERIFIED",
+            "to": "ACTIVE",
+            "metadata": {
+              "provider": "minio",
+              "region": "us",
+              "jurisdiction": "us",
+              "siteClass": "region"
+            }
+          },
+          {
+            "peerFleetId": "fleet-c",
+            "from": "ACTIVE",
+            "to": "SUSPENDED",
+            "metadata": {
+              "provider": "minio",
+              "region": "eu",
+              "jurisdiction": "de",
+              "siteClass": "region"
+            }
+          },
+          {
+            "peerFleetId": "fleet-d",
+            "from": "REVOKED",
+            "to": "ACTIVE",
+            "metadata": {
+              "provider": "minio",
+              "region": "eu",
+              "jurisdiction": "de",
+              "siteClass": "region"
+            }
+          },
+          {
+            "peerFleetId": "fleet-e",
+            "from": "PENDING",
+            "to": "VERIFIED",
+            "metadata": {
+              "provider": "minio",
+              "region": "",
+              "jurisdiction": "us",
+              "siteClass": "region"
+            }
+          }
+        ]
+      },
+      "expect": {
+        "digest": "e74a1f4bdf057e90a2ee3200e6324752a3e4a8bccb22c5a020236e166cf88d40",
+        "scheduler": {
+          "orderedActionIds": [],
+          "admissions": []
+        },
+        "risk": {
+          "overallRisk": "healthy",
+          "risks": []
+        },
+        "wave": {
+          "scheduleId": "sched-8",
+          "decision": "ADMIT",
+          "admitWaveIndex": 0
+        },
+        "federation": {
+          "transitions": [
+            {
+              "peerFleetId": "fleet-a",
+              "from": "PENDING",
+              "to": "VERIFIED",
+              "decision": "REJECT",
+              "code": "FEDERATION_PEER_SAME_FLEET"
+            },
+            {
+              "peerFleetId": "fleet-b",
+              "from": "PENDING",
+              "to": "ACTIVE",
+              "decision": "REJECT",
+              "code": "FEDERATION_PEER_NOT_VERIFIED"
+            },
+            {
+              "peerFleetId": "fleet-b",
+              "from": "VERIFIED",
+              "to": "ACTIVE",
+              "decision": "ALLOW",
+              "code": "OK"
+            },
+            {
+              "peerFleetId": "fleet-c",
+              "from": "ACTIVE",
+              "to": "SUSPENDED",
+              "decision": "ALLOW",
+              "code": "OK"
+            },
+            {
+              "peerFleetId": "fleet-d",
+              "from": "REVOKED",
+              "to": "ACTIVE",
+              "decision": "REJECT",
+              "code": "FEDERATION_PEER_REVOKED"
+            },
+            {
+              "peerFleetId": "fleet-e",
+              "from": "PENDING",
+              "to": "VERIFIED",
+              "decision": "REJECT",
+              "code": "FEDERATION_PEER_METADATA_INVALID"
+            }
+          ]
+        },
+        "mutationDenied": true
+      }
+    }
+  ]
+}

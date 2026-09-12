@@ -222,9 +222,7 @@ fn outcome(status: StatusCode) -> (&'static str, &'static str) {
 }
 
 pub async fn observe_sidecar_request(request: Request, next: Next) -> Response {
-    let Some(component) = component_for_path(request.uri().path()) else {
-        return next.run(request).await;
-    };
+    let component = component_for_path(request.uri().path());
     let payload_bytes = content_length(&request);
     let vector_encoding = vector_encoding_for_path(request.uri().path());
     let request_id = correlation_id(&request);
@@ -234,14 +232,26 @@ pub async fn observe_sidecar_request(request: Request, next: Next) -> Response {
     let duration_us = elapsed.as_micros().min(u128::from(u64::MAX)) as u64;
     let response_bytes = body_size(&response);
     let (outcome, stable_error_code) = outcome(response.status());
-    if let Ok(mut metrics) = registry().lock() {
-        metrics.record(
+    if let Some(component) = component {
+        if let Ok(mut metrics) = registry().lock() {
+            metrics.record(
+                component,
+                outcome,
+                elapsed.as_secs_f64(),
+                payload_bytes,
+                response_bytes,
+                vector_encoding,
+            );
+        }
+        tracing::info!(
             component,
-            outcome,
-            elapsed.as_secs_f64(),
             payload_bytes,
             response_bytes,
-            vector_encoding,
+            duration_us,
+            outcome,
+            stable_error_code,
+            correlation_id = request_id,
+            "rust sidecar request"
         );
     }
     if let Ok(value) = HeaderValue::from_str(&duration_us.to_string()) {
@@ -250,16 +260,6 @@ pub async fn observe_sidecar_request(request: Request, next: Next) -> Response {
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         response.headers_mut().insert(REQUEST_ID_HEADER, value);
     }
-    tracing::info!(
-        component,
-        payload_bytes,
-        response_bytes,
-        duration_us,
-        outcome,
-        stable_error_code,
-        correlation_id = request_id,
-        "rust sidecar request"
-    );
     response
 }
 

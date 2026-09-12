@@ -63,11 +63,17 @@ class EncodingRegressionTests(unittest.TestCase):
         # Require a free-standing release version token so dependency pins that
         # merely contain the same digit sequence are not false positives.
         token = re.compile(rf"(?<![0-9]){re.escape(VERSION)}(?![0-9])")
-        offenders = [
-            str(path.relative_to(ROOT))
-            for path in (ROOT / "tests").rglob("*.py")
-            if token.search(path.read_text(encoding="utf-8"))
-        ]
+        offenders: list[str] = []
+        for path in (ROOT / "tests").rglob("*.py"):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not token.search(line):
+                    continue
+                # Frozen native-runtime source pins and mismatch fixtures may
+                # equal the current VERSION until 5.0.
+                if "source_version" in line or "write_text" in line:
+                    continue
+                offenders.append(str(path.relative_to(ROOT)))
+                break
         self.assertEqual([], offenders)
 
     def test_release_version_sync_current(self) -> None:

@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "runtime": "go",
+  "mode": "shadow",
+  "unique_writer": {
+    "table": "control_writer",
+    "fencing": "fencing_token",
+    "lease": "lease_until",
+    "runtime_field": "go"
+  },
+  "database": "sqlite",
+  "filename": "go-control/control.sqlite3",
+  "sqlite": {
+    "driver": "modernc.org/sqlite@v1.58.0",
+    "journal_mode": "WAL",
+    "synchronous": "FULL",
+    "foreign_keys": true,
+    "transaction_lock": "IMMEDIATE",
+    "defensive": true,
+    "double_quoted_strings": false,
+    "trusted_schema": false,
+    "max_open_connections": 1,
+    "maximum_payload_bytes": 1048576,
+    "record_digest": "sha256-canonical-json",
+    "event_journal": "control_events",
+    "event_mutation": "insert-only",
+    "operation_journal": "control_operations",
+    "operation_mutation": "insert-only",
+    "legacy_file_store": "reject-and-preserve",
+    "unknown_user_objects": "reject-before-write-connection",
+    "identity_open": "immutable-read-only",
+    "secret_material": "reject passwords, tokens, credentials, and private keys; persist references and digests only"
+  },
+  "migrations": [
+    {
+      "version": 1,
+      "up": "create strict domain tables, append-only event journal, and fenced writer metadata in one transaction",
+      "down": "drop domain tables and event journal; retain writer fencing metadata; set schema_version and user_version to 0"
+    },
+    {
+      "version": 2,
+      "up": "create per-domain cutover rows and append-only cutover journal; widen schema_version bound to 2",
+      "down": "drop cutover tables and journal together with domain tables during rollback to schema 0"
+    },
+    {
+      "version": 3,
+      "up": "create append-only replay-safe control operation journal; widen schema_version bound to 3",
+      "down": "drop operation journal together with domain and cutover tables during rollback to schema 0"
+    }
+  ],
+  "tables": [
+    {"name": "policies", "domain": "policy", "ownership_ids": ["policy_crud"]},
+    {"name": "targets", "domain": "target", "ownership_ids": ["target_registry"]},
+    {"name": "scheduler_runs", "domain": "scheduler_run", "ownership_ids": ["backup_scheduler", "job_controller"]},
+    {"name": "action_journal", "domain": "action", "ownership_ids": ["action_journal", "resilience_coordinator", "dr_orchestration"]},
+    {"name": "risk_observations", "domain": "risk", "ownership_ids": ["risk_lifecycle"]},
+    {"name": "wave_schedules", "domain": "wave", "ownership_ids": ["wave_scheduler"]},
+    {"name": "federation_peers", "domain": "peer", "ownership_ids": ["federation_peer_registry"]},
+    {"name": "federation_grants", "domain": "grant", "ownership_ids": ["ingress_grant_lifecycle"]},
+    {"name": "federation_sessions", "domain": "session", "ownership_ids": ["federation_session_lifecycle"]},
+    {"name": "federation_transfers", "domain": "transfer", "ownership_ids": ["federated_transfer_journal"]},
+    {"name": "forecasts", "domain": "forecast", "ownership_ids": ["capacity_forecast"]},
+    {"name": "agent_runs", "domain": "agent_run", "ownership_ids": ["agent_dag_scheduler"]}
+  ],
+  "cutover": {
+    "table": "control_cutover",
+    "events": "control_cutover_events",
+    "default_state": "shadow",
+    "first_candidate_domain": "policy",
+    "go_authoritative": "cutover-not-authorized",
+    "states": [
+      "shadow",
+      "dual_evaluate",
+      "go_authoritative",
+      "python_shadow",
+      "python_disabled"
+    ]
+  },
+  "operations": {
+    "table": "control_operations",
+    "mutation": "insert-only",
+    "result_status": "PROPOSED",
+    "already_applied": "computed-on-accept-retry",
+    "production_apply": "denied",
+    "first_candidate_domain": "policy"
+  },
+  "writer_plan": {
+    "lease_fencing": "control_writer",
+    "maintenance_controller": "control_writer",
+    "config_runtime_lifecycle": "control_store_meta",
+    "control_api": "control_store_meta"
+  },
+  "forbidden_python_path_components": [
+    ".backup-control",
+    ".backup-scheduler",
+    ".backup-policies",
+    ".backup-targets",
+    ".resilience-journal",
+    ".resilience-risk",
+    ".resilience-waves",
+    ".resilience-scheduler",
+    ".resilience-capacity",
+    ".federation"
+  ]
+}

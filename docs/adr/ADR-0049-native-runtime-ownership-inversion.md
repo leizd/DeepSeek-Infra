@@ -36,8 +36,11 @@ evaluation, migration, benchmark, and release tooling.
 3. **Use process boundaries.** Go and Rust communicate through versioned gRPC and
    Protobuf. C FFI/cgo is not the primary server, desktop, or worker architecture.
 4. **Bind every effect.** `actionId + executionEpoch` is mandatory from Go claim
-   through Rust effect, provider metadata, proof, and Go reconciliation. Stale
-   epochs are rejected and unknown remote outcomes remain `EFFECT_UNKNOWN`.
+   through Rust effect, provider metadata, proof, and Go reconciliation. Only
+   the Go authority update path establishes or advances an epoch; effect
+   admission requires exact equality with locally resolved authority and never
+   advances it. Stale epochs are rejected, future/missing fences mismatch, and
+   unknown remote outcomes remain `EFFECT_UNKNOWN`.
 5. **Assign one durable owner.** Go alone writes control-plane state; Rust alone
    writes transfer/effect/checkpoint state. No table or SQLite database has
    simultaneous Python/Go/Rust write ownership.

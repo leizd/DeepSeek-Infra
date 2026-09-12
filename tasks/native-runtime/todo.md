@@ -15,13 +15,16 @@ Status: in progress on `codex/native-runtime-4.8.1`.
 
 ## Phase 1 — Protocol foundation
 
-- [x] Pin Go 1.27.x, protoc 36.x, generators/runtimes, and checksums.
+- [x] Pin Go 1.27.1, protoc 36.1, generators/runtimes, and Windows/Linux checksums.
 - [x] Add deterministic tool bootstrap/check path.
 - [x] Define `common/v1` and `action/v1`.
 - [x] Define `storage/v1` and `federation/v1`.
 - [x] Define `control/v1`, `evidence/v1`, and `agent/v1`.
-- [x] Generate language-neutral descriptor JSON; Go/Rust typed foundations match the contract.
+- [x] Generate hashed Go bindings, Rust Prost/Tonic types, and a binary descriptor from the proto contract.
 - [x] Add descriptor compatibility and generated-code drift gates.
+- [x] Bind Go admission/dispatch helpers to generated types and require Rust's descriptor to equal protoc bytes.
+- [x] Freeze an immutable v1 semantic baseline and compare it against the complete binary descriptor, including oneof/presence/options/RPC streaming metadata.
+- [x] Keep generated Go/Rust code out of business-logic coverage without lowering thresholds.
 
 ## Phase 2 — Non-authoritative native processes
 
@@ -30,8 +33,11 @@ Status: in progress on `codex/native-runtime-4.8.1`.
 - [x] Add isolated deterministic Go shadow envelopes.
 - [x] Add Rust protocol crate.
 - [x] Add Rust worker admission/result foundation.
-- [x] Prove empty/zero/stale action fences are rejected before effects.
+- [x] Prove empty/zero/stale/missing/future action fences are rejected before effects, with epoch advance isolated to the authority path.
 - [x] Prove unknown effects cannot be treated as not-applied.
+- [x] Add a loopback-only Rust Tonic worker process and a typed Go client that never forwards caller-controlled `live_epoch`.
+- [x] Prove with a real Go-to-Rust process test that an authority-uninitialized worker returns exact `FENCE_MISMATCH`.
+- [x] Make Go-to-Rust effect queries require an exact returned fence and keep missing or unproven effects fail-closed.
 
 ## Phase 3 — Canonical corpus
 
@@ -48,10 +54,11 @@ Status: in progress on `codex/native-runtime-4.8.1`.
 ## Phase 4 — CI, operations, release
 
 - [x] Add Go fmt/vet/test/race gates.
+- [x] Run the real Go-to-Rust admission and effect-query boundary in the `native-go` CI gate with exact worker cleanup.
 - [x] Extend Rust workspace to protocol/worker crates.
 - [x] Add protocol generation and native contract gates.
 - [x] Add native migration/rollback/unknown-effect runbook.
-- [ ] Run existing frontend/Python/Rust/eval/security/release gates.
+- [x] Run existing frontend/Python/Rust/eval/security/release gates.
 - [ ] Run exact-head CI and Evidence Assembly.
 - [x] Verify no production owner or frozen contract changed.
 - [ ] Qualify 4.8.1 without skips, mocks, or synthetic Evidence.

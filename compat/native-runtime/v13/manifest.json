@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze recovery, post-recovery commit, process replacement, boot epoch, three-endpoint, and legacy structured-evidence validator semantics before Rust assumes production validation.",
+  "normalization": "LF-normalized SHA-256 of public validator fixture bytes",
+  "corpora": [
+    {
+      "id": "recovery-evidence-semantics-v13",
+      "path": "compat/native-runtime/v13/evidence/recovery_evidence_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen recovery and process evidence validator semantics",
+      "sha256": "a04de511307ad9c366660a5ed23b465f83508c8d6136394c910e3b37bb2cdb3a"
+    },
+    {
+      "id": "recovery-evidence-coercions-v13",
+      "path": "compat/native-runtime/v13/evidence/recovery_coercions_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Recovery Evidence JSON precision, text coercion, and integer boundaries",
+      "sha256": "e36f62993a0c74736d361bc6d21af659c4005989da604ea4b3123c2149815c87"
+    }
+  ]
+}

@@ -6,5 +6,36 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+s3 = ["deepseek-storage/s3", "dep:bytes"]
+s3-e2e = ["s3", "deepseek-storage/s3-e2e"]
+
 [dependencies]
 deepseek-protocol = { path = "../deepseek-protocol" }
+deepseek-storage = { path = "../deepseek-storage" }
+deepseek-transfer = { path = "../deepseek-transfer" }
+deepseek-federation = { path = "../deepseek-federation" }
+deepseek-proof = { path = "../deepseek-proof" }
+base64.workspace = true
+bytes = { version = "1", optional = true }
+ed25519-dalek.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+rusqlite.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+
+[[test]]
+name = "authorized_storage"
+required-features = ["s3"]
+
+[[test]]
+name = "authorized_storage_provider"
+required-features = ["s3-e2e"]
+
+[dev-dependencies]
+tempfile = "3.27.0"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true

@@ -24,12 +24,23 @@ def _read(path: str) -> str:
 def test_rust_dockerfile_is_multistage_locked_and_non_root() -> None:
     dockerfile = _read("rust/Dockerfile")
 
+    assert "FROM node:24-bookworm-slim AS frontend-builder" in dockerfile
+    assert "COPY frontend/package.json frontend/package-lock.json ./" in dockerfile
+    assert "npm ci" in dockerfile
+    assert "npm run build" in dockerfile
+    assert "test -f /build/static/ui/index.html" in dockerfile
     assert "FROM rust:1.85-bookworm AS builder" in dockerfile
     assert "cargo build" in dockerfile
     assert "--locked" in dockerfile
     assert "-p deepseek-gateway" in dockerfile
+    assert "-p deepseek-worker" in dockerfile
     assert "FROM debian:bookworm-slim" in dockerfile
     assert "COPY rust ./rust" in dockerfile
+    assert "COPY proto ./proto" in dockerfile
+    assert "COPY static ./static" in dockerfile
+    assert "COPY --from=frontend-builder /build/static/ui ./static/ui" in dockerfile
+    assert "test -f /app/static/ui/index.html" in dockerfile
+    assert "DEEPSEEK_INFRA_STATIC_DIR=/app/static" in dockerfile
     assert "GATEWAY_BIND_ADDR=0.0.0.0:8787" in dockerfile
     assert "USER deepseek" in dockerfile
     assert "10001" in dockerfile
@@ -38,6 +49,17 @@ def test_rust_dockerfile_is_multistage_locked_and_non_root() -> None:
     assert "requirements.txt" not in dockerfile
     assert "COPY deepseek_infra" not in dockerfile
     assert "DEEPSEEK_RUST_BIND" not in dockerfile
+
+
+def test_rust_dockerfile_has_distinct_gateway_and_worker_targets() -> None:
+    dockerfile = _read("rust/Dockerfile")
+
+    assert "AS worker" in dockerfile
+    assert "/app/rust/target/release/deepseek-worker" in dockerfile
+    assert "DEEPSEEK_WORKER_LISTEN=127.0.0.1:50052" in dockerfile
+    assert 'CMD ["deepseek-worker"]' in dockerfile
+    assert "AS gateway" in dockerfile
+    assert dockerfile.rfind("AS gateway") > dockerfile.rfind("AS worker")
 
 
 def test_optional_compose_does_not_change_default_python_deployment() -> None:
@@ -94,20 +116,48 @@ class _SidecarHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         return
 
-    def _send(self, payload: dict[str, Any]) -> None:
+    def _send(self, payload: dict[str, Any], status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self) -> None:
+        if self.path == "/":
+            body = b"<!doctype html><main>native ui</main>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/healthz":
             self._send({"ok": True, "service": "deepseek-gateway-rs"})
             return
         if self.path == "/v1/models":
-            self._send({"object": "list", "data": [{"id": "deepseek-v4-pro", "object": "model"}]})
+            self._send(
+                {
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "deepseek-v4-pro",
+                            "object": "model",
+                            "created": 1,
+                            "owned_by": "deepseek-infra",
+                        },
+                        {
+                            "id": "deepseek-v4-flash",
+                            "object": "model",
+                            "created": 1,
+                            "owned_by": "deepseek-infra",
+                        },
+                    ],
+                }
+            )
             return
         if self.path == "/metrics":
             body = (
@@ -145,10 +195,8 @@ class _SidecarHandler(BaseHTTPRequestHandler):
         if self.path == "/v1/chat/completions":
             assert request["stream"] is False
             self._send(
-                {
-                    "object": "chat.completion",
-                    "choices": [{"message": {"role": "assistant", "content": "offline stub"}}],
-                }
+                {"error": {"code": "NATIVE_CHAT_NOT_READY", "message": "native chat execution is not wired"}},
+                status=503,
             )
             return
         if self.path == "/mcp/request/prepare":
@@ -217,8 +265,9 @@ def test_smoke_exercises_all_offline_sidecar_contracts(sidecar_url: str) -> None
     assert [check.name for check in checks] == [
         "health",
         "metrics",
-        "models",
-        "chat",
+        "frontend",
+        "models_catalog",
+        "chat_fail_closed",
         "mcp_protocol_preparation",
         "policy",
         "rag",

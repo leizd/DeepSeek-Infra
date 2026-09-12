@@ -16,11 +16,14 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 blake2 = { workspace = true }
+percent-encoding = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+reqwest = { version = "=0.12.28", default-features = false, features = ["rustls-tls-webpki-roots", "stream"] }
 
 [dev-dependencies]
+tempfile = "3.27.0"
 tokio = { workspace = true }
 tower = { workspace = true }

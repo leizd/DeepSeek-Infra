@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 from typing import Any
@@ -24,6 +25,18 @@ logger = logging.getLogger("deepseek_infra.desktop_app")
 
 
 def main() -> int:
+    edge_url = os.environ.get("DEEPSEEK_EDGE_URL") or os.environ.get("DEEPSEEK_GATEWAY_URL")
+    if edge_url:
+        try:
+            url = webview_entry_url(edge_url)
+            wait_for_server_ready(url)
+            open_app_window(url)
+            return 0
+        except Exception as exc:
+            logger.exception("desktop_app_failed")
+            show_startup_error(exc)
+            return 1
+
     handle: ServerHandle | None = None
     try:
         handle = prepare_and_start(host="127.0.0.1", serve=True)

@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "release": "5.0.0",
+  "status": "NOT_READY",
+  "title": "DeepSeek Infra 5.0 Native Rust/Go Runtime Readiness Assessment",
+  "assessment_scope": "Repository snapshot only; this file is not release evidence.",
+  "provenance": {
+    "foundation_head": "b0656629643c146c2d593b9a39eb5706143d89a1",
+    "exact_head": null,
+    "source_version": "4.8.0",
+    "source_merge": "a37735c68398fc8f795babaa269e2de6a5acd567"
+  },
+  "target_topology": {
+    "public_listener": {
+      "service": "deepseek-edge",
+      "runtime": "rust",
+      "port": 8000,
+      "protocol": "HTTP/SSE"
+    },
+    "control_plane": {
+      "service": "deepseekd",
+      "runtime": "go",
+      "port": 8090,
+      "cgo_enabled": false,
+      "durable_store": "go-control/"
+    },
+    "worker_plane": {
+      "service": "deepseek-worker",
+      "runtime": "rust",
+      "roles": ["storage", "transfer", "crypto", "proof", "sandbox"]
+    },
+    "user_interface": {
+      "service": "frontend",
+      "type": "static assets (React + TypeScript + Vite)"
+    }
+  },
+  "required_invariants": {
+    "pythonProductionHttpRequests": 0,
+    "pythonProductionMutations": 0,
+    "pythonProductionSchedulerRuns": 0,
+    "pythonProductionStorageWrites": 0,
+    "pythonProductionFederationSigns": 0,
+    "sharedDatabaseWrites": 0,
+    "crossLanguageCgoAllocations": 0
+  },
+  "measurements": {},
+  "gates": {},
+  "blockers": [
+    {
+      "code": "PUBLIC_EDGE_AUTHORITY_INCOMPLETE",
+      "detail": "Native chat, model catalog, MCP, A2A and agent discovery still fail closed as unwired. Public /api isolation does not implement the authenticated proxy or full behavioral parity."
+    },
+    {
+      "code": "CONTROL_CUTOVER_INCOMPLETE",
+      "detail": "Go TransitionCutover still returns ErrCutoverNotAuthorized for states requiring production authorization. Route registration and writer-denial gates do not establish complete Go production ownership."
+    },
+    {
+      "code": "EFFECT_RECONCILIATION_UNPROVEN",
+      "detail": "The optional worker S3 path now journals placement/condition and requires conditional byte verification, but operation-specific signed admission, renewable live authority, provider ownership and full process-kill/takeover recovery remain unqualified. A missing object or mismatched metadata cannot settle an uncertain in-flight write as unapplied; local library results are not release proof."
+    },
+    {
+      "code": "PROVIDER_EVIDENCE_MISSING",
+      "detail": "Native Three-MinIO, two-Fleet/four-MinIO, and SIGKILL/takeover workload evidence has not been produced."
+    },
+    {
+      "code": "EXACT_HEAD_CI_MISSING",
+      "detail": "No exact-head CI and Evidence Assembly artifacts qualify this native runtime snapshot."
+    },
+    {
+      "code": "ZERO_PYTHON_MEASUREMENTS_MISSING",
+      "detail": "Zero-Python and unique-writer invariants have targets and executable gates, but require live workload-measured artifacts."
+    }
+  ]
+}

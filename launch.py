@@ -42,6 +42,18 @@ def main() -> None:
 
             raise SystemExit(run_mobile(_without_launcher_flags(args, "--app")))
 
+    for idx, arg in enumerate(args):
+        if arg == "--edge" and idx + 1 < len(args):
+            import os
+
+            os.environ["DEEPSEEK_EDGE_URL"] = args[idx + 1]
+            break
+        if arg.startswith("--edge="):
+            import os
+
+            os.environ["DEEPSEEK_EDGE_URL"] = arg.split("=", 1)[1]
+            break
+
     from deepseek_infra.desktop_app import main as run_desktop_app
 
     raise SystemExit(run_desktop_app())

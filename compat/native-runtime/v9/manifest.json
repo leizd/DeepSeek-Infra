@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze autonomous Receipt v4 and Commit v4 Evidence byte/provider binding semantics before Rust assumes production validation.",
+  "normalization": "LF-normalized SHA-256 of public inventory/fixture bytes",
+  "corpora": [
+    {
+      "id": "autonomous-storage-bytes-semantics-v9",
+      "path": "compat/native-runtime/v9/evidence/autonomous_storage_bytes_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen Receipt and Commit Evidence byte/provider binding semantics",
+      "sha256": "766dcc55feef7a5a3fe22556fa6c2ec566c1e7c45b58c422df81b16ef68feafa"
+    }
+  ]
+}

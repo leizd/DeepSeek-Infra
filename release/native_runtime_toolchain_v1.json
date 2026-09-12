@@ -4,26 +4,77 @@
   "go": {
     "version": "1.27.1",
     "source": "https://go.dev/doc/devel/release",
-    "note": "go1.27.1 released 2026-09-01; current latest on the 1.27 line."
+    "artifacts": {
+      "windows_amd64": {
+        "filename": "go1.27.1.windows-amd64.zip",
+        "sha256": "a3911b5e0e1b1053f25ed0675f4c1c6aad1e2bfcf253df2b9be4caabd2edd95d"
+      },
+      "linux_amd64": {
+        "filename": "go1.27.1.linux-amd64.tar.gz",
+        "sha256": "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445"
+      }
+    },
+    "note": "go1.27.1 released 2026-09-01; native CI installs the checksum-pinned Linux archive and disables implicit toolchain upgrades."
   },
   "protoc": {
-    "version_line": "36.x",
-    "source": "https://protobuf.dev/support/version-support/",
+    "version": "36.1",
+    "release": "v36.1",
+    "source": "https://github.com/protocolbuffers/protobuf/releases/tag/v36.1",
     "syntax": "proto3",
-    "note": "protoc 36.x is the active compiler line. 4.8.1 freezes proto3 sources and a language-neutral descriptor JSON; checksum-pinned protoc bootstrap generates pb.go/prost bindings without hand edits."
+    "artifacts": {
+      "windows_amd64": {
+        "filename": "protoc-36.1-win64.zip",
+        "sha256": "390e515cb456e6a978553bdb57baf087b054885077fd6da7f7ff0160279c07d6"
+      },
+      "linux_amd64": {
+        "filename": "protoc-36.1-linux-x86_64.zip",
+        "sha256": "c4bc672d9d49214dc8cafdceadf4df92182d6ca8e3ec65a56b2d7de5602669b4"
+      }
+    },
+    "note": "Go bindings and the binary descriptor are generated only with this exact checksum-pinned compiler."
   },
-  "protobuf_language_runtimes": {
-    "python": "7.36.x",
-    "go_module": "google.golang.org/protobuf",
-    "source": "https://protobuf.dev/support/version-support/"
+  "generators": {
+    "protoc_gen_go": {
+      "module": "google.golang.org/protobuf/cmd/protoc-gen-go",
+      "version": "1.36.11"
+    },
+    "protoc_gen_go_grpc": {
+      "module": "google.golang.org/grpc/cmd/protoc-gen-go-grpc",
+      "version": "1.6.2"
+    },
+    "prost": {
+      "crate": "prost",
+      "version": "0.13.5"
+    },
+    "tonic_build": {
+      "crate": "tonic-build",
+      "version": "0.12.3"
+    },
+    "protox": {
+      "crate": "protox",
+      "version": "0.8.0"
+    }
+  },
+  "validators": {
+    "python_protobuf": {
+      "distribution": "protobuf",
+      "version": "7.35.1",
+      "requires_python": ">=3.10",
+      "wheel": {
+        "filename": "protobuf-7.35.1-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/19/c7/5f7c636ec43e0c545e28d1f1db71990108306f7bdcb89f069ba97e428e7f/protobuf-7.35.1-py3-none-any.whl",
+        "sha256": "4bc97768d8fe4ad6743c8a19403e314511ed9f6d13205b687e52421c023ac1b9"
+      }
+    }
   },
   "ci": {
-    "go_setup": "1.27.1",
+    "go_version": "1.27.1",
     "gates": [
       "gofmt",
       "go vet",
       "go test",
       "go test -race",
+      "python scripts/native_codegen.py --check",
       "python scripts/native_runtime_contract.py --check",
       "cargo fmt/clippy/test for new crates"
     ]

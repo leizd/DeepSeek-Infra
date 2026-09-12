@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "valid_proof": {
+    "dr": {
+      "cleanupCompleted": true,
+      "restorePath": "backup-recovery-drill-production-v1",
+      "schema": "federated-dr-drill-attestation-v1",
+      "transferId": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "workspaceDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "failClosed": {
+      "replayedIngressGrant": "FEDERATION_REPLICA_COMPONENT_WRITE_REPLAY",
+      "revokedPeer": "FEDERATION_PEER_REVOKED",
+      "tamperedReplicaAttestation": "FEDERATION_DOCUMENT_SIGNATURE_INVALID"
+    },
+    "fleetProcesses": {
+      "receiverAfter": {
+        "fleetId": "fleet-b",
+        "pid": 303,
+        "rootFingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "receiverBefore": {
+        "fleetId": "fleet-b",
+        "pid": 202,
+        "rootFingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "receiverKillReturnCode": -9,
+      "source": {
+        "fleetId": "fleet-a",
+        "pid": 101,
+        "rootFingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    "minioTopology": {
+      "containers": [
+        "minio-a1",
+        "minio-a2",
+        "minio-b1",
+        "minio-b2"
+      ],
+      "endpoints": [
+        "http://127.0.0.1:19001",
+        "http://127.0.0.1:19002",
+        "http://127.0.0.1:19003",
+        "http://127.0.0.1:19004"
+      ],
+      "targetBindings": [
+        {
+          "endpoint": "http://127.0.0.1:19001",
+          "fleetId": "fleet-a",
+          "providerObjectCount": 3,
+          "role": "A1",
+          "targetId": "target-a1"
+        },
+        {
+          "endpoint": "http://127.0.0.1:19002",
+          "fleetId": "fleet-a",
+          "providerObjectCount": 3,
+          "role": "A2",
+          "targetId": "target-a2"
+        },
+        {
+          "endpoint": "http://127.0.0.1:19003",
+          "fleetId": "fleet-b",
+          "providerObjectCount": 3,
+          "role": "B1",
+          "targetId": "target-b1"
+        },
+        {
+          "endpoint": "http://127.0.0.1:19004",
+          "fleetId": "fleet-b",
+          "providerObjectCount": 3,
+          "role": "B2",
+          "targetId": "target-b2"
+        }
+      ]
+    },
+    "proofDigest": "sha256:f44fe465fd3208ebe37c259f68dbb2957f9b3736829190beb6ebafa4902b67f5",
+    "schema": "federation-runtime-e2e-proof-v1",
+    "storagePrincipalIsolation": {
+      "receiverPrincipalDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "receiverToSourceDeniedCode": "InvalidAccessKeyId",
+      "sourcePrincipalDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "sourceToReceiverDeniedCode": "AccessDenied"
+    },
+    "transferRecovery": {
+      "commitEffectDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "interruptedBytesSent": 5,
+      "interruptedComponentBytes": 10,
+      "interruptedComponentDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "localInventoryAfterDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "localInventoryBeforeDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "receiverTransferId": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "reconcileState": "REMOTE_TRANSFERRING",
+      "reconcileStatus": "RESUME",
+      "remoteCommittedEvents": [
+        {
+          "nextState": "REMOTE_COMMITTED",
+          "transferId": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        }
+      ],
+      "repeatedCommitEffectDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "senderFinalState": "SUCCEEDED",
+      "senderTransferId": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "transferId": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "validatedAt": "2026-09-04T00:00:00Z"
+  },
+  "invalid_cases": [
+    {
+      "path": "/proofDigest",
+      "replacement": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "expected_errors": [
+        "federation-runtime-proof-digest-mismatch"
+      ]
+    },
+    {
+      "path": "/fleetProcesses/receiverAfter/pid",
+      "replacement": 202,
+      "expected_errors": [
+        "fleet-processes-not-independent",
+        "federation-runtime-proof-digest-mismatch"
+      ]
+    },
+    {
+      "path": "/storagePrincipalIsolation/receiverPrincipalDigest",
+      "replacement": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "expected_errors": [
+        "cross-fleet-storage-principal-isolation-invalid",
+        "federation-runtime-proof-digest-mismatch"
+      ]
+    },
+    {
+      "path": "/minioTopology/targetBindings/3/providerObjectCount",
+      "replacement": 0,
+      "expected_errors": [
+        "minio-provider-object-count-invalid",
+        "federation-runtime-proof-digest-mismatch"
+      ]
+    },
+    {
+      "path": "/transferRecovery/interruptedBytesSent",
+      "replacement": 10,
+      "expected_errors": [
+        "interrupted-transfer-bytes-invalid",
+        "federation-runtime-proof-digest-mismatch"
+      ]
+    },
+    {
+      "path": "/failClosed/revokedPeer",
+      "replacement": "FEDERATION_PEER_ACTIVE",
+      "expected_errors": [
+        "runtime-fail-closed-evidence-invalid",
+        "federation-runtime-proof-digest-mismatch"
+      ]
+    },
+    {
+      "path": "/dr/restorePath",
+      "replacement": "AGE-SECRET-KEY-MUST-NOT-LEAK",
+      "expected_errors": [
+        "federation-runtime-proof-contains-secret",
+        "runtime-dr-evidence-invalid",
+        "federation-runtime-proof-digest-mismatch"
+      ]
+    }
+  ]
+}

@@ -54,6 +54,8 @@ jobs:
         python: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
@@ -749,7 +751,7 @@ jobs:
           --tag deepseek-rust-gateway:$RELEASE_VERSION
           --out docs/evidence/rust-sidecar-image-v$RELEASE_VERSION.json
       - name: Run Rust sidecar
-        run: docker run --detach --name deepseek-rust-gateway --publish 127.0.0.1:8787:8787 deepseek-rust-gateway:$RELEASE_VERSION
+        run: docker run --detach --name deepseek-rust-gateway --publish 127.0.0.1:8787:8787 -e AUTH_DISABLED=1 deepseek-rust-gateway:$RELEASE_VERSION
       - name: Smoke test Rust sidecar
         run: python scripts/smoke_rust_sidecar.py --base-url http://127.0.0.1:8787
       - run: >-
@@ -1190,35 +1192,232 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
-      - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings
-      - run: cargo test --manifest-path rust/Cargo.toml --all
+      - run: cargo clippy --locked --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --manifest-path rust/Cargo.toml --all
 
-  native-protocol:
+  native-s3-transport:
     needs: release-version
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: clippy
+      - run: python -m pip install -r requirements.txt -r requirements-s3-e2e.txt
+      - name: Check native transport on the frozen MSRV
+        run: cargo clippy --locked --manifest-path rust/Cargo.toml -p deepseek-storage --all-targets --all-features -- -D warnings
+      - name: Native S3 boundary tests
+        run: cargo test --locked --manifest-path rust/Cargo.toml -p deepseek-storage --features s3 --lib --test s3_transport
+      - name: Real three-MinIO Rust bytes and lost-response tests
+        run: python scripts/run_native_s3_e2e.py
+
+  native-protocol:
+    needs: release-version
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+      GOSUMDB: sum.golang.org
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install checksum-pinned Protobuf descriptor validator
+        run: >-
+          python -m pip install --disable-pip-version-check --no-deps
+          --only-binary=:all: --require-hashes
+          -r requirements-native-protocol.txt
+      - name: Install checksum-pinned Go 1.27.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+          install_dir="$RUNNER_TEMP/go-1.27.1"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+          echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir"
+          echo "$install_dir/go/bin" >> "$GITHUB_PATH"
+      - run: test "$(go env GOVERSION)" = "go1.27.1"
+      - name: Install checksum-pinned protoc 36.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/protoc-36.1-linux-x86_64.zip"
+          install_dir="$RUNNER_TEMP/protoc-36.1"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            https://github.com/protocolbuffers/protobuf/releases/download/v36.1/protoc-36.1-linux-x86_64.zip
+          echo "c4bc672d9d49214dc8cafdceadf4df92182d6ca8e3ec65a56b2d7de5602669b4  $archive" | sha256sum --check --strict
+          unzip -q "$archive" -d "$install_dir"
+          echo "$install_dir/bin" >> "$GITHUB_PATH"
+      - name: Install pinned Go protobuf generators
+        shell: bash
+        env:
+          GOBIN: ${{ runner.temp }}/native-proto-plugins
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          mkdir -p "$GOBIN"
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+          echo "$GOBIN" >> "$GITHUB_PATH"
+      - run: python scripts/native_codegen.py --check
       - run: python scripts/native_runtime_contract.py --check
+      - run: python scripts/native_runtime_evidence.py
+      - run: python scripts/control_plane_shadow.py --check --export-report artifacts/control-shadow-report.json
 
   native-go:
     needs: release-version
     runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+      GOSUMDB: sum.golang.org
     defaults:
       run:
         working-directory: go
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-python@v5
         with:
-          go-version: "1.27.1"
-          cache-dependency-path: go/go.mod
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Install checksum-pinned Go 1.27.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+          install_dir="$RUNNER_TEMP/go-1.27.1"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+          echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir"
+          echo "$install_dir/go/bin" >> "$GITHUB_PATH"
+      - run: test "$(go env GOVERSION)" = "go1.27.1"
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test ./...
       - run: go test -race ./...
+      - name: Go coverage
+        run: python ../scripts/check_go_coverage.py --dir . --min 95.0
+      - name: Build fail-closed Rust worker boundary
+        run: cargo build --locked --manifest-path ../rust/Cargo.toml -p deepseek-worker
+      - name: Run real Go-to-Rust worker boundary
+        shell: bash
+        env:
+          DEEPSEEK_WORKER_LISTEN: 127.0.0.1:50052
+          DEEPSEEK_TEST_RUST_WORKER_TARGET: 127.0.0.1:50052
+        run: |
+          set -euo pipefail
+          worker_log="$RUNNER_TEMP/deepseek-worker.log"
+          ../rust/target/debug/deepseek-worker >"$worker_log" 2>&1 &
+          worker_pid=$!
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if kill -0 "$worker_pid" 2>/dev/null; then
+              kill -INT "$worker_pid" 2>/dev/null || true
+              for _ in {1..50}; do
+                if ! kill -0 "$worker_pid" 2>/dev/null; then
+                  break
+                fi
+                sleep 0.1
+              done
+              if kill -0 "$worker_pid" 2>/dev/null; then
+                kill -TERM "$worker_pid" 2>/dev/null || true
+              fi
+            fi
+            wait "$worker_pid" 2>/dev/null || true
+            if [ "$status" -ne 0 ]; then
+              cat "$worker_log"
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          ready=0
+          for _ in {1..50}; do
+            if ! kill -0 "$worker_pid" 2>/dev/null; then
+              break
+            fi
+            if { exec 3<>/dev/tcp/127.0.0.1/50052; } 2>/dev/null; then
+              exec 3>&-
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Rust worker did not become ready" >&2
+            exit 1
+          fi
+          go test -tags=integration ./internal/worker \
+            -run '^TestRustWorkerWithoutAuthorityFailsClosedAndKeepsMissingEffectUnknown$|^TestRustWorkerUnconfiguredInstallRemainsFailClosed$|^TestRustWorkerStorageMutationFailsClosedWithoutAuth$|^TestRustCoordinatorStorageActionAgainstRealWorker$' \
+            -count=1 -timeout=30s
+      - name: Run authenticated Go-to-Rust epoch install boundary
+        shell: bash
+        env:
+          DEEPSEEK_WORKER_LISTEN: 127.0.0.1:50053
+          DEEPSEEK_TEST_RUST_WORKER_TARGET: 127.0.0.1:50053
+          DEEPSEEK_TEST_RUST_WORKER_AUTHORITY: "1"
+          DEEPSEEK_WORKER_STATE_ROOT: ${{ runner.temp }}/deepseek-worker-authority
+          DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY: 11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo
+          DEEPSEEK_WORKER_AUTHORITY_FLEET_ID: fleet-a
+          DEEPSEEK_WORKER_AUTHORITY_ENVIRONMENT: test
+          DEEPSEEK_WORKER_AUTHORITY_FENCING_TOKEN: "4"
+        run: |
+          set -euo pipefail
+          worker_log="$RUNNER_TEMP/deepseek-worker-authority.log"
+          ../rust/target/debug/deepseek-worker >"$worker_log" 2>&1 &
+          worker_pid=$!
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if kill -0 "$worker_pid" 2>/dev/null; then
+              kill -INT "$worker_pid" 2>/dev/null || true
+              for _ in {1..50}; do
+                if ! kill -0 "$worker_pid" 2>/dev/null; then
+                  break
+                fi
+                sleep 0.1
+              done
+              if kill -0 "$worker_pid" 2>/dev/null; then
+                kill -TERM "$worker_pid" 2>/dev/null || true
+              fi
+            fi
+            wait "$worker_pid" 2>/dev/null || true
+            if [ "$status" -ne 0 ]; then
+              cat "$worker_log"
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          ready=0
+          for _ in {1..50}; do
+            if ! kill -0 "$worker_pid" 2>/dev/null; then
+              break
+            fi
+            if { exec 3<>/dev/tcp/127.0.0.1/50053; } 2>/dev/null; then
+              exec 3>&-
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Configured Rust worker did not become ready" >&2
+            exit 1
+          fi
+          go test -tags=integration ./internal/worker \
+            -run '^TestRustWorkerInstallsEpochFromSignedAuthorityRequest$' \
+            -count=1 -timeout=30s
 
   rust-coverage:
     needs:
@@ -1353,6 +1552,7 @@ jobs:
       - rust-sidecar-performance
       - native-protocol
       - native-go
+      - native-s3-transport
       - release-version
     runs-on: ubuntu-latest
     steps:

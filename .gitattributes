@@ -1,1 +1,4 @@
 graphify-out/graph.json merge=graphify
+/go/internal/protocol/**/*.pb.go text eol=lf
+/proto/generated/*.json text eol=lf
+/proto/generated/*.pb binary

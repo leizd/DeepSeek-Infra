@@ -48,7 +48,76 @@ message EffectResult {
   deepseek.common.v1.ErrorDetail error = 7;
 }
 
+message InstallAuthoritativeEpochRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  bytes canonical_request = 2;
+}
+
+message InstallAuthoritativeEpochResponse {
+  AdmitStatus status = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  deepseek.common.v1.ErrorDetail error = 3;
+}
+
+enum StorageMutationStatus {
+  STORAGE_MUTATION_STATUS_UNSPECIFIED = 0;
+  STORAGE_MUTATION_STATUS_CONFIRMED = 1;
+  STORAGE_MUTATION_STATUS_EFFECT_UNKNOWN = 2;
+  STORAGE_MUTATION_STATUS_RECONCILING = 3;
+  STORAGE_MUTATION_STATUS_REJECTED = 4;
+  STORAGE_MUTATION_STATUS_FAILED = 5;
+}
+
+enum StorageConditionType {
+  STORAGE_CONDITION_TYPE_UNSPECIFIED = 0;
+  STORAGE_CONDITION_TYPE_CREATE_ONLY = 1;
+  STORAGE_CONDITION_TYPE_IF_MATCH = 2;
+}
+
+message StoragePrecondition {
+  StorageConditionType condition_type = 1;
+  string expected_etag = 2;
+}
+
+message StorageMutationRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string operation_id = 2;
+  string request_id = 3;
+  string nonce = 4;
+  string mutation_type = 5;
+  string provider = 6;
+  string target_identity = 7;
+  string bucket = 8;
+  string prefix = 9;
+  string object_key = 10;
+  string payload_digest = 11;
+  uint64 expected_length = 12;
+  StoragePrecondition precondition = 13;
+  bytes canonical_authorization = 14;
+  uint32 schema_version = 15;
+  bytes payload = 16;
+}
+
+message StorageMutationResponse {
+  StorageMutationStatus status = 1;
+  deepseek.common.v1.EffectState state = 2;
+  deepseek.common.v1.ActionFence fence = 3;
+  string operation_id = 4;
+  string effect_id = 5;
+  string etag = 6;
+  string provider_metadata = 7;
+  deepseek.common.v1.ErrorDetail error = 8;
+}
+
+message QueryStorageEffectRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string operation_id = 2;
+}
+
 service Worker {
   rpc AdmitCommand(AdmitCommandRequest) returns (AdmitCommandResponse);
   rpc QueryEffect(QueryEffectRequest) returns (EffectResult);
+  rpc InstallAuthoritativeEpoch(InstallAuthoritativeEpochRequest) returns (InstallAuthoritativeEpochResponse);
+  rpc ExecuteStorageMutation(StorageMutationRequest) returns (StorageMutationResponse);
+  rpc QueryStorageEffect(QueryStorageEffectRequest) returns (StorageMutationResponse);
 }

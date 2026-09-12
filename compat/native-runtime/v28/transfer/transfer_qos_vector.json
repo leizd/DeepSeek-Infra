@@ -1,0 +1,438 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "scope": "validator-parity-only-not-provider-execution-evidence",
+  "defaults": {
+    "globalBytesPerSecond": 209715200,
+    "reservedRecoveryBytesPerSec": 104857600,
+    "backgroundMaxBytesPerSec": 52428800,
+    "targetMaxConcurrency": 4
+  },
+  "ast_matches_source_commit": {
+    "from_str": true,
+    "can_share_scheduler_wave": true,
+    "_base_class_rate": true,
+    "acquire_transfer_token": true,
+    "_verify_destination_component": true,
+    "_multipart_upload_missing": true
+  },
+  "cases": [
+    {
+      "name": "class-p0-name",
+      "op": "traffic-class",
+      "value": "P0_DISASTER_RECOVERY",
+      "expected": {
+        "name": "P0_DISASTER_RECOVERY",
+        "value": 0,
+        "priority": 0
+      }
+    },
+    {
+      "name": "class-lowercase-p2",
+      "op": "traffic-class",
+      "value": " p2_required_repair ",
+      "expected": {
+        "name": "P2_REQUIRED_REPAIR",
+        "value": 2,
+        "priority": 2
+      }
+    },
+    {
+      "name": "class-substring-p",
+      "op": "traffic-class",
+      "value": "P",
+      "expected": {
+        "name": "P0_DISASTER_RECOVERY",
+        "value": 0,
+        "priority": 0
+      }
+    },
+    {
+      "name": "class-substring-repair",
+      "op": "traffic-class",
+      "value": "REPAIR",
+      "expected": {
+        "name": "P2_REQUIRED_REPAIR",
+        "value": 2,
+        "priority": 2
+      }
+    },
+    {
+      "name": "class-alias-full-name-misses",
+      "op": "traffic-class",
+      "value": "P1_ACTIVE_BACKUP_PUBLISH",
+      "expected": {
+        "name": "P3_REQUIRED_REPLICATION",
+        "value": 3,
+        "priority": 3
+      }
+    },
+    {
+      "name": "class-p1-short",
+      "op": "traffic-class",
+      "value": "P1",
+      "expected": {
+        "name": "P1_BACKUP_PUBLISH",
+        "value": 1,
+        "priority": 1
+      }
+    },
+    {
+      "name": "class-value-2",
+      "op": "traffic-class",
+      "value": "2",
+      "expected": {
+        "name": "P2_REQUIRED_REPAIR",
+        "value": 2,
+        "priority": 2
+      }
+    },
+    {
+      "name": "class-unknown-defaults-p3",
+      "op": "traffic-class",
+      "value": "ZZZ",
+      "expected": {
+        "name": "P3_REQUIRED_REPLICATION",
+        "value": 3,
+        "priority": 3
+      }
+    },
+    {
+      "name": "class-blank-matches-p0",
+      "op": "traffic-class",
+      "value": "   ",
+      "expected": {
+        "name": "P0_DISASTER_RECOVERY",
+        "value": 0,
+        "priority": 0
+      }
+    },
+    {
+      "name": "type-class-non-string",
+      "op": "traffic-class",
+      "value": 2,
+      "expected": {
+        "status": "error",
+        "oracle_exception": "AttributeError"
+      }
+    },
+    {
+      "name": "wave-rebalance-blocked-by-repair",
+      "op": "share-wave",
+      "existing": [
+        {
+          "type": "CREATE_REPAIR_JOB"
+        }
+      ],
+      "candidate": {
+        "type": "CREATE_REBALANCE_JOB"
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "DEFERRED_TRANSFER_BUDGET"
+      }
+    },
+    {
+      "name": "wave-repair-blocked-by-rebalance",
+      "op": "share-wave",
+      "existing": [
+        {
+          "type": "create_rebalance_job"
+        }
+      ],
+      "candidate": {
+        "type": "CREATE_REPAIR_JOB"
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "DEFERRED_TRANSFER_BUDGET"
+      }
+    },
+    {
+      "name": "wave-repair-with-repair-ok",
+      "op": "share-wave",
+      "existing": [
+        {
+          "type": "CREATE_REPAIR_JOB"
+        }
+      ],
+      "candidate": {
+        "type": "CREATE_REPAIR_JOB"
+      },
+      "expected": {
+        "allowed": true,
+        "reason": "TRANSFER_BUDGET_AVAILABLE"
+      }
+    },
+    {
+      "name": "wave-empty-ok",
+      "op": "share-wave",
+      "existing": [],
+      "candidate": {
+        "type": "CREATE_REBALANCE_JOB"
+      },
+      "expected": {
+        "allowed": true,
+        "reason": "TRANSFER_BUDGET_AVAILABLE"
+      }
+    },
+    {
+      "name": "concurrency-ok",
+      "op": "concurrency",
+      "traffic_class": 2,
+      "max_concurrent": 1,
+      "source_target_id": "src",
+      "dest_target_id": "dst",
+      "active": [
+        {
+          "source_target_id": "other",
+          "dest_target_id": "dst2"
+        }
+      ],
+      "expected": {
+        "status": "ok"
+      }
+    },
+    {
+      "name": "concurrency-exceeded-dest",
+      "op": "concurrency",
+      "traffic_class": 2,
+      "max_concurrent": 1,
+      "source_target_id": "src",
+      "dest_target_id": "dst",
+      "active": [
+        {
+          "source_target_id": "x",
+          "dest_target_id": "dst"
+        }
+      ],
+      "expected": {
+        "status": "error",
+        "error": "target-transfer-concurrency-exceeded",
+        "activeCount": 1,
+        "max": 1,
+        "targetId": "dst"
+      }
+    },
+    {
+      "name": "concurrency-p0-bypass",
+      "op": "concurrency",
+      "traffic_class": 0,
+      "max_concurrent": 1,
+      "dest_target_id": "dst",
+      "active": [
+        {
+          "source_target_id": "x",
+          "dest_target_id": "dst"
+        }
+      ],
+      "expected": {
+        "status": "ok"
+      }
+    },
+    {
+      "name": "concurrency-falsy-target-skipped",
+      "op": "concurrency",
+      "traffic_class": 2,
+      "max_concurrent": 0,
+      "source_target_id": "",
+      "dest_target_id": null,
+      "active": [
+        {
+          "source_target_id": "x",
+          "dest_target_id": "y"
+        }
+      ],
+      "expected": {
+        "status": "ok"
+      }
+    },
+    {
+      "name": "rate-p0-full",
+      "op": "base-rate",
+      "traffic_class": 0,
+      "expected": {
+        "bytesPerSecond": 209715200
+      }
+    },
+    {
+      "name": "rate-p2-no-recovery",
+      "op": "base-rate",
+      "traffic_class": 2,
+      "expected": {
+        "bytesPerSecond": 209715200
+      }
+    },
+    {
+      "name": "rate-p5-background",
+      "op": "base-rate",
+      "traffic_class": 5,
+      "expected": {
+        "bytesPerSecond": 52428800
+      }
+    },
+    {
+      "name": "rate-p2-throttled-when-p0-local",
+      "op": "base-rate",
+      "traffic_class": 2,
+      "local_transfers": [
+        {
+          "traffic_class": 0
+        }
+      ],
+      "expected": {
+        "bytesPerSecond": 52428800
+      }
+    },
+    {
+      "name": "rate-p2-throttled-when-p0-durable",
+      "op": "base-rate",
+      "traffic_class": 2,
+      "durable_transfers": [
+        {
+          "trafficClass": 0
+        }
+      ],
+      "expected": {
+        "bytesPerSecond": 52428800
+      }
+    },
+    {
+      "name": "rate-durable-false-counts-as-p0",
+      "op": "base-rate",
+      "traffic_class": 5,
+      "durable_transfers": [
+        {
+          "trafficClass": false
+        }
+      ],
+      "expected": {
+        "bytesPerSecond": 52428800
+      }
+    },
+    {
+      "name": "verify-none",
+      "op": "verify-destination",
+      "kind": "none",
+      "expected_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": {
+        "valid": false,
+        "corrupt": false
+      }
+    },
+    {
+      "name": "verify-missing",
+      "op": "verify-destination",
+      "kind": "missing",
+      "expected_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": {
+        "valid": false,
+        "corrupt": false
+      }
+    },
+    {
+      "name": "verify-sha256-match",
+      "op": "verify-destination",
+      "kind": "stat",
+      "expected_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": {
+        "valid": true,
+        "corrupt": false
+      }
+    },
+    {
+      "name": "verify-wrong-sha256-provider-match",
+      "op": "verify-destination",
+      "kind": "stat",
+      "expected_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "provider_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": {
+        "valid": true,
+        "corrupt": false
+      }
+    },
+    {
+      "name": "verify-wrong-hashes-stream-match",
+      "op": "verify-destination",
+      "kind": "stat",
+      "expected_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "provider_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "stream_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": {
+        "valid": true,
+        "corrupt": false
+      }
+    },
+    {
+      "name": "verify-stream-mismatch-corrupt",
+      "op": "verify-destination",
+      "kind": "stat",
+      "expected_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "stream_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expected": {
+        "valid": false,
+        "corrupt": true
+      }
+    },
+    {
+      "name": "verify-empty-stream",
+      "op": "verify-destination",
+      "kind": "stat",
+      "expected_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "has_data": false,
+      "expected": {
+        "valid": false,
+        "corrupt": false
+      }
+    },
+    {
+      "name": "multipart-404",
+      "op": "multipart-missing",
+      "status": 404,
+      "message": "nope",
+      "expected": {
+        "missing": true
+      }
+    },
+    {
+      "name": "multipart-message",
+      "op": "multipart-missing",
+      "status": 500,
+      "message": "Multipart-Upload-Not-Found",
+      "expected": {
+        "missing": true
+      }
+    },
+    {
+      "name": "multipart-neither",
+      "op": "multipart-missing",
+      "status": 500,
+      "message": "timeout",
+      "expected": {
+        "missing": false
+      }
+    },
+    {
+      "name": "multipart-status-falsy",
+      "op": "multipart-missing",
+      "status": 0,
+      "message": "",
+      "expected": {
+        "missing": false
+      }
+    },
+    {
+      "name": "multipart-omit-status-message",
+      "op": "multipart-missing",
+      "omit_status": true,
+      "message": "multipart-upload-not-found",
+      "expected": {
+        "missing": true
+      }
+    }
+  ]
+}

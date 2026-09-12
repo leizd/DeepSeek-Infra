@@ -9,6 +9,10 @@ members = [
     "crates/deepseek-rag",
     "crates/deepseek-protocol",
     "crates/deepseek-worker",
+    "crates/deepseek-storage",
+    "crates/deepseek-transfer",
+    "crates/deepseek-federation",
+    "crates/deepseek-proof",
 ]
 resolver = "3"
 
@@ -22,15 +26,26 @@ rust-version = "1.85"
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread", "signal"] }
 axum = "0.7"
+base64 = "=0.22.1"
 blake2 = "0.10"
+ed25519-dalek = "=2.2.0"
+aes-gcm = "=0.10.3"
+argon2 = "=0.5.3"
+md-5 = "=0.10.6"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "cors"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 age = { version = "0.12.1", default-features = false }
 sha2 = "0.10"
+percent-encoding = "2.3"
+prost = "=0.13.5"
+tonic = "=0.12.3"
+protox = "=0.8.0"
+tonic-build = "=0.12.3"
+rusqlite = { version = "=0.37.0", features = ["bundled"] }
 
 [profile.release]
 lto = true

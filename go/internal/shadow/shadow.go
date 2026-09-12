@@ -12,13 +12,6 @@ func DecisionDigest(input []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func Evaluate(domain string, input []byte) (digest string, err error) {
-	if domain == "" {
-		return "", protocol.ErrMutationDenied
-	}
-	return DecisionDigest(input), nil
-}
-
 func ExecuteRepair() error {
 	return protocol.DenyMutation()
 }

@@ -10,6 +10,11 @@ It does not replace the historical [Rust Core Migration Roadmap](RUST_MIGRATION_
 which records the Python-first 3.x/4.0 hybrid path. This document starts the
 ownership-inversion line.
 
+> **Current implementation status:** not ready for any 4.9.x/5.0 cutover.
+> The native packages currently in the repository are foundations and shadow
+> scaffolding. `release/native_runtime_5_0_evidence_v1.json` is a fail-closed
+> readiness assessment; it is not proof that the target topology is delivered.
+
 ## Governing invariants
 
 - Go decides what should happen; Rust decides how bytes and security-sensitive
@@ -54,6 +59,16 @@ production mutation authority.
   command.
 - Generated code is reproducible from the pinned toolchain.
 - No 4.8.0 behavior, frozen contract, or production owner changes.
+
+## 4.8.2: Go Control Plane Shadow Foundation
+
+Python remains production-authoritative. Go `deepseekd` evaluates scheduler,
+risk, wave, and federation decisions in an isolated shadow plane and CI requires
+`pythonDecisionDigest == goDecisionDigest`. Mutation RPCs stay denied. Package
+layout:
+
+`go/cmd/deepseekd`, `internal/{api,config,store,scheduler,action,resilience,federation,observability}`,
+`pkg/protocol`.
 
 ## 4.9.0: Go Control Plane Foundation
 

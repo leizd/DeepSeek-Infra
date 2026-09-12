@@ -5,14 +5,18 @@ use axum::{
     http::{HeaderMap, StatusCode, header::CONTENT_TYPE},
     middleware,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{any, get, post},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::{io, path::Path as FsPath};
 
+mod auth;
+mod control_proxy;
 pub mod observability;
 pub mod policy_routes;
 pub mod request_preparation;
+pub mod static_files;
 
 pub fn gateway_version() -> &'static str {
     deepseek_core::version_info().version
@@ -40,47 +44,26 @@ pub struct ChatMessage {
     pub content: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ChatCompletionResponse {
-    pub id: String,
-    pub object: String,
-    pub created: i64,
-    pub model: String,
-    pub choices: Vec<ChatChoice>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ChatChoice {
-    pub index: u32,
-    pub message: ChatMessage,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub finish_reason: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ModelListResponse {
-    pub object: String,
-    pub data: Vec<ModelDescriptor>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ModelDescriptor {
-    pub id: String,
-    pub object: String,
-    pub created: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub owned_by: Option<String>,
-}
-
 pub fn create_app() -> Router {
+    apply_gateway_layers(create_routes())
+}
+
+fn create_routes() -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/metrics", get(observability::metrics))
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/gateway/request/prepare", post(gateway_request_prepare))
-        .route("/mcp", post(mcp_protocol_prepare))
+        .route("/mcp", post(mcp_rpc))
         .route("/mcp/request/prepare", post(mcp_protocol_prepare))
+        .route("/.well-known/agent-card.json", get(agent_card))
+        .route("/a2a", post(a2a_rpc))
+        .route("/api/*path", any(control_proxy::proxy_api_to_go))
+        // Private control handlers must not fall through to either proxy or SPA.
+        .route("/internal", any(|| async { StatusCode::NOT_FOUND }))
+        .route("/internal/", any(|| async { StatusCode::NOT_FOUND }))
+        .route("/internal/*path", any(|| async { StatusCode::NOT_FOUND }))
         .route("/rag/query/normalize", post(rag_query_normalize))
         .route("/rag/chunks/score", post(rag_chunks_score))
         .route("/rag/vectors/rank", post(rag_vectors_rank))
@@ -89,10 +72,161 @@ pub fn create_app() -> Router {
         .route("/rag/index/validate", post(rag_index_validate))
         .route("/rag/documents/prepare", post(rag_document_prepare))
         .merge(policy_routes::router())
+}
+
+fn apply_gateway_layers(router: Router) -> Router {
+    router
         .layer(DefaultBodyLimit::max(
             deepseek_rag::document_preparation::MAX_REQUEST_BYTES + 1_000_000,
         ))
         .layer(middleware::from_fn(observability::observe_sidecar_request))
+}
+
+pub fn create_production_app(static_root: impl AsRef<FsPath>) -> io::Result<Router> {
+    create_production_app_with_auth(static_root, auth::ProductionAuth::from_env())
+}
+
+fn create_production_app_with_auth(
+    static_root: impl AsRef<FsPath>,
+    auth_config: auth::ProductionAuth,
+) -> io::Result<Router> {
+    let static_files = static_files::StaticFiles::load(static_root)?;
+    Ok(apply_gateway_layers(
+        create_routes().fallback(move |request: axum::extract::Request| {
+            let static_files = static_files.clone();
+            async move { static_files.serve(request).await }
+        }),
+    )
+    .layer(middleware::from_fn_with_state(
+        auth_config,
+        auth::require_production_auth,
+    )))
+}
+
+fn unavailable(code: &'static str, message: &'static str) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "error": {
+                "code": code,
+                "message": message,
+            }
+        })),
+    )
+}
+
+async fn agent_card() -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::OK,
+        Json(json!({
+            "protocolVersion": "0.3.0",
+            "name": "DeepSeek Infra Orchestrator",
+            "description": "Native agent discovery; A2A execution is not wired",
+            "url": "/a2a",
+            "preferredTransport": "JSONRPC",
+            "version": gateway_version(),
+            "capabilities": {
+                "streaming": false,
+                "pushNotifications": false,
+                "stateTransitionHistory": false
+            },
+            "defaultInputModes": ["text/plain"],
+            "defaultOutputModes": ["text/plain"],
+            "skills": []
+        })),
+    )
+}
+
+fn jsonrpc_not_ready(body: &Bytes, message: &'static str) -> Json<serde_json::Value> {
+    if body.is_empty() {
+        return Json(json!({
+            "jsonrpc": "2.0",
+            "error": {"code": -32600, "message": "Invalid Request: empty body"},
+            "id": null
+        }));
+    }
+    let val: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(_) => {
+            return Json(json!({
+                "jsonrpc": "2.0",
+                "error": {"code": -32700, "message": "Parse error"},
+                "id": null
+            }));
+        }
+    };
+    if !val.is_object() {
+        return Json(json!({
+            "jsonrpc": "2.0",
+            "error": {"code": -32600, "message": "Invalid Request"},
+            "id": null
+        }));
+    }
+    let id = val.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    Json(json!({
+        "jsonrpc": "2.0",
+        "error": {"code": -32601, "message": message},
+        "id": id
+    }))
+}
+
+const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+
+fn jsonrpc_result(id: serde_json::Value, result: serde_json::Value) -> Json<serde_json::Value> {
+    Json(json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result,
+    }))
+}
+
+async fn mcp_rpc(body: Bytes) -> Response {
+    if body.is_empty() {
+        return jsonrpc_not_ready(&body, "native MCP execution is not wired").into_response();
+    }
+    let val: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return jsonrpc_not_ready(&body, "native MCP execution is not wired").into_response();
+        }
+    };
+    if !val.is_object() {
+        return jsonrpc_not_ready(&body, "native MCP execution is not wired").into_response();
+    }
+    let method = val
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let notification = val.get("id").is_none();
+    if method == "notifications/initialized" && notification {
+        return StatusCode::ACCEPTED.into_response();
+    }
+    let id = val.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    match method {
+        "initialize" => jsonrpc_result(
+            id,
+            json!({
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {"tools": {"listChanged": false}},
+                "serverInfo": {
+                    "name": "deepseek-infra",
+                    "title": "DeepSeek Infra MCP Tool Hub",
+                    "version": gateway_version(),
+                },
+            }),
+        )
+        .into_response(),
+        "ping" => jsonrpc_result(id, json!({})).into_response(),
+        "tools/list" | "tools/call" | "resources/list" | "resources/read" | "prompts/list"
+        | "prompts/get" => {
+            jsonrpc_not_ready(&body, "native MCP tool execution is not wired").into_response()
+        }
+        _ => jsonrpc_not_ready(&body, "native MCP execution is not wired").into_response(),
+    }
+}
+
+async fn a2a_rpc(body: Bytes) -> Json<serde_json::Value> {
+    jsonrpc_not_ready(&body, "native A2A execution is not wired")
 }
 
 async fn gateway_request_prepare(body: Bytes) -> Json<serde_json::Value> {
@@ -343,38 +477,25 @@ async fn healthz() -> Json<HealthzResponse> {
     })
 }
 
-async fn models() -> Json<ModelListResponse> {
-    Json(ModelListResponse {
-        object: "list".to_string(),
-        data: vec![ModelDescriptor {
-            id: "deepseek-v4-pro".to_string(),
-            object: "model".to_string(),
-            created: 1_700_000_000,
-            owned_by: Some("deepseek".to_string()),
-        }],
-    })
+async fn models() -> (StatusCode, Json<serde_json::Value>) {
+    let created = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    (
+        StatusCode::OK,
+        Json(request_preparation::native_model_catalog(created)),
+    )
 }
 
 async fn chat_completions(
     Json(req): Json<ChatCompletionRequest>,
-) -> Result<Json<ChatCompletionResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     validate_chat_request(&req)?;
-
-    Ok(Json(ChatCompletionResponse {
-        id: "chatcmpl-stub".to_string(),
-        object: "chat.completion".to_string(),
-        created: 1_700_000_000,
-        model: req.model,
-        choices: vec![ChatChoice {
-            index: 0,
-            message: ChatMessage {
-                role: "assistant".to_string(),
-                content: "This is a deterministic stub response from deepseek-gateway-rs."
-                    .to_string(),
-            },
-            finish_reason: Some("stop".to_string()),
-        }],
-    }))
+    Ok(unavailable(
+        "NATIVE_CHAT_NOT_READY",
+        "native chat execution is not wired",
+    ))
 }
 
 fn validate_chat_request(
@@ -423,7 +544,9 @@ fn validate_chat_request(
 mod tests {
     use super::*;
     use axum::body::{Body, to_bytes};
-    use axum::http::Request;
+    use axum::http::{Request, header};
+    use std::fs;
+    use std::path::Path as FsPath;
     use tower::ServiceExt;
 
     async fn send_request(
@@ -469,6 +592,241 @@ mod tests {
         (status, content_type, bytes.to_vec())
     }
 
+    fn write_frontend_fixture(root: &FsPath) {
+        fs::create_dir_all(root.join("ui/assets")).unwrap();
+        fs::create_dir_all(root.join("icons")).unwrap();
+        fs::write(
+            root.join("ui/index.html"),
+            "<!doctype html><main>native ui</main>",
+        )
+        .unwrap();
+        fs::write(
+            root.join("ui/assets/app-0123456789abcdef.js"),
+            "globalThis.__nativeUi = true;",
+        )
+        .unwrap();
+        fs::write(root.join("icons/app.svg"), "<svg></svg>").unwrap();
+        fs::write(
+            root.join("ui/manifest-root.webmanifest"),
+            r#"{"name":"DeepSeek Infra"}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("ui/sw-root-0123456789abcdef.js"),
+            "self.__nativeWorker = true;",
+        )
+        .unwrap();
+    }
+
+    async fn get_response(app: Router, uri: &str) -> Response {
+        app.oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn response_body(response: Response) -> String {
+        String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn production_app_rejects_a_missing_frontend_build() {
+        let temp = tempfile::tempdir().unwrap();
+        let error = create_production_app(temp.path()).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert!(error.to_string().contains("static/ui/index.html"));
+    }
+
+    #[tokio::test]
+    async fn production_app_serves_index_and_spa_routes_with_security_headers() {
+        let temp = tempfile::tempdir().unwrap();
+        write_frontend_fixture(temp.path());
+        let app = create_production_app(temp.path()).unwrap();
+
+        for uri in ["/", "/ui", "/conversations/conv-1"] {
+            let response = get_response(app.clone(), uri).await;
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            assert_eq!(
+                response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+                "nosniff"
+            );
+            assert_eq!(response.headers()[header::X_FRAME_OPTIONS], "DENY");
+            assert!(response.headers().contains_key("x-deepseek-request-id"));
+            assert!(
+                response.headers()[header::CONTENT_TYPE]
+                    .to_str()
+                    .unwrap()
+                    .starts_with("text/html")
+            );
+            assert!(response_body(response).await.contains("native ui"));
+        }
+    }
+
+    #[tokio::test]
+    async fn production_app_serves_assets_with_the_frozen_cache_contract() {
+        let temp = tempfile::tempdir().unwrap();
+        write_frontend_fixture(temp.path());
+        let app = create_production_app(temp.path()).unwrap();
+
+        let hashed = get_response(app.clone(), "/ui/assets/app-0123456789abcdef.js").await;
+        assert_eq!(hashed.status(), StatusCode::OK);
+        assert_eq!(
+            hashed.headers()[header::CACHE_CONTROL],
+            "public, max-age=31536000, immutable"
+        );
+        assert!(response_body(hashed).await.contains("__nativeUi"));
+
+        let ordinary = get_response(app, "/icons/app.svg").await;
+        assert_eq!(ordinary.status(), StatusCode::OK);
+        assert_eq!(ordinary.headers()[header::CACHE_CONTROL], "no-cache");
+        assert_eq!(ordinary.headers()[header::CONTENT_TYPE], "image/svg+xml");
+    }
+
+    #[tokio::test]
+    async fn production_app_preserves_root_pwa_aliases() {
+        let temp = tempfile::tempdir().unwrap();
+        write_frontend_fixture(temp.path());
+        let app = create_production_app(temp.path()).unwrap();
+
+        let manifest = get_response(app.clone(), "/manifest.webmanifest").await;
+        assert_eq!(manifest.status(), StatusCode::OK);
+        assert_eq!(manifest.headers()[header::CACHE_CONTROL], "no-cache");
+        assert_eq!(
+            manifest.headers()[header::CONTENT_TYPE],
+            "application/manifest+json"
+        );
+
+        let worker = get_response(app, "/sw-0123456789abcdef.js").await;
+        assert_eq!(worker.status(), StatusCode::OK);
+        assert_eq!(
+            worker.headers()[header::CACHE_CONTROL],
+            "public, max-age=31536000, immutable"
+        );
+        assert!(response_body(worker).await.contains("__nativeWorker"));
+    }
+
+    #[tokio::test]
+    async fn production_app_never_turns_missing_assets_or_traversal_into_spa_success() {
+        let temp = tempfile::tempdir().unwrap();
+        write_frontend_fixture(temp.path());
+        fs::write(
+            temp.path().parent().unwrap().join("outside-secret"),
+            "secret",
+        )
+        .unwrap();
+        let app = create_production_app(temp.path()).unwrap();
+
+        for uri in [
+            "/ui/assets/missing.js",
+            "/icons",
+            "/%2e%2e/outside-secret",
+            "/ui/%2e%2e/%2e%2e/outside-secret",
+            "/%5coutside-secret",
+            "/legacy",
+        ] {
+            let response = get_response(app.clone(), uri).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+            assert!(
+                !response_body(response).await.contains("native ui"),
+                "{uri}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn production_routes_take_precedence_and_static_post_is_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        write_frontend_fixture(temp.path());
+        let app = create_production_app_with_auth(
+            temp.path(),
+            auth::ProductionAuth {
+                enabled: true,
+                token: String::new(),
+            },
+        )
+        .unwrap();
+
+        let api = get_response(app.clone(), "/api/policies").await;
+        assert_eq!(api.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&response_body(api).await).unwrap()["error"]
+                ["code"],
+            "UNAUTHORIZED"
+        );
+
+        let post = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/conversations/conv-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(post.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn production_models_and_api_accept_bearer_then_enforce_proxy_readiness() {
+        let temp = tempfile::tempdir().unwrap();
+        write_frontend_fixture(temp.path());
+        let app = create_production_app_with_auth(
+            temp.path(),
+            auth::ProductionAuth {
+                enabled: true,
+                token: "gateway-test-token".to_string(),
+            },
+        )
+        .unwrap();
+
+        let denied = Request::builder()
+            .method("GET")
+            .uri("/v1/models")
+            .body(Body::empty())
+            .unwrap();
+        let denied = app.clone().oneshot(denied).await.unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+
+        let allowed = Request::builder()
+            .method("GET")
+            .uri("/v1/models")
+            .header(header::AUTHORIZATION, "Bearer gateway-test-token")
+            .body(Body::empty())
+            .unwrap();
+        let allowed = app.clone().oneshot(allowed).await.unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+        let catalog: serde_json::Value =
+            serde_json::from_str(&response_body(allowed).await).unwrap();
+        assert_eq!(catalog["object"], "list");
+
+        let proxy = Request::builder()
+            .method("GET")
+            .uri("/api/policies")
+            .header(header::AUTHORIZATION, "Bearer gateway-test-token")
+            .body(Body::empty())
+            .unwrap();
+        let proxy = app.oneshot(proxy).await.unwrap();
+        assert_eq!(proxy.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&response_body(proxy).await).unwrap()["error"]
+                ["code"],
+            "GO_CONTROL_PROXY_NOT_READY"
+        );
+    }
+
     #[test]
     fn gateway_version_matches_core() {
         assert_eq!(gateway_version(), deepseek_core::version_info().version);
@@ -485,16 +843,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn models_returns_openai_compatible_shape() {
+    async fn models_returns_native_catalog_matching_prepare_request() {
         let app = create_app();
         let (status, body) = send_request(app, "GET", "/v1/models", None).await;
         assert_eq!(status, StatusCode::OK);
-        let list: ModelListResponse = serde_json::from_str(&body).unwrap();
-        assert_eq!(list.object, "list");
-        assert!(!list.data.is_empty());
-        let model = &list.data[0];
-        assert_eq!(model.object, "model");
-        assert!(!model.id.is_empty());
+        let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(response["object"], "list");
+        let data = response["data"].as_array().expect("catalog data");
+        let ids: Vec<&str> = data
+            .iter()
+            .map(|entry| entry["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, request_preparation::CATALOG_MODEL_IDS);
+        for entry in data {
+            assert_eq!(entry["object"], "model");
+            assert_eq!(entry["owned_by"], "deepseek-infra");
+            assert!(entry["created"].as_i64().unwrap() > 0);
+            assert!(
+                request_preparation::prepare_request(&json!({
+                    "model": entry["id"],
+                    "messages": [{"role": "user", "content": "catalog"}]
+                }))
+                .is_ok(),
+                "{}",
+                entry["id"]
+            );
+        }
+        assert!(response.get("error").is_none());
     }
 
     #[tokio::test]
@@ -516,17 +891,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chat_accepts_minimal_non_stream_request() {
+    async fn chat_never_returns_a_stubbed_success() {
         let app = create_app();
         let body = r#"{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}]}"#;
         let (status, response_body) =
             send_request(app, "POST", "/v1/chat/completions", Some(body.to_string())).await;
-        assert_eq!(status, StatusCode::OK);
-        let response: ChatCompletionResponse = serde_json::from_str(&response_body).unwrap();
-        assert_eq!(response.object, "chat.completion");
-        assert_eq!(response.model, "deepseek-v4-pro");
-        assert_eq!(response.choices.len(), 1);
-        assert_eq!(response.choices[0].message.role, "assistant");
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let response: serde_json::Value = serde_json::from_str(&response_body).unwrap();
+        assert_eq!(response["error"]["code"], "NATIVE_CHAT_NOT_READY");
+        assert!(!response_body.contains("chatcmpl-stub"));
     }
 
     #[tokio::test]
@@ -633,9 +1006,78 @@ mod tests {
         let (alias_status, alias_response) =
             send_request(app, "POST", "/mcp", Some(alias_body)).await;
         assert_eq!(alias_status, StatusCode::OK);
+        let alias_response = serde_json::from_str::<serde_json::Value>(&alias_response).unwrap();
+        assert_eq!(alias_response["id"], 1);
+        assert_eq!(alias_response["result"], json!({}));
+        assert!(alias_response.get("error").is_none());
+    }
+
+    #[tokio::test]
+    async fn mcp_initialize_and_ping_are_native_jsonrpc_while_tools_stay_unwired() {
+        let app = create_app();
+        let init = json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "native-test", "version": "1"}
+            }
+        })
+        .to_string();
+        let (status, body) = send_request(app.clone(), "POST", "/mcp", Some(init)).await;
+        assert_eq!(status, StatusCode::OK);
+        let response: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(response["result"]["protocolVersion"], "2025-06-18");
+        assert_eq!(response["result"]["serverInfo"]["name"], "deepseek-infra");
+        assert!(response.get("error").is_none());
+
+        let tools = json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"echo"}})
+            .to_string();
+        let (tool_status, tool_body) = send_request(app, "POST", "/mcp", Some(tools)).await;
+        assert_eq!(tool_status, StatusCode::OK);
+        let tool_response: serde_json::Value = serde_json::from_str(&tool_body).unwrap();
+        assert_eq!(tool_response["error"]["code"], -32601);
+        assert!(
+            tool_response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("tool execution is not wired")
+        );
+        assert!(tool_response.get("result").is_none());
+    }
+
+    #[tokio::test]
+    async fn unimplemented_public_routes_never_claim_native_success() {
+        let app = create_app();
+        let (card_status, card_body) =
+            send_request(app.clone(), "GET", "/.well-known/agent-card.json", None).await;
+        assert_eq!(card_status, StatusCode::OK);
+        let card: serde_json::Value = serde_json::from_str(&card_body).unwrap();
+        assert_eq!(card["protocolVersion"], "0.3.0");
+        assert_eq!(card["capabilities"]["streaming"], false);
+        assert!(
+            card.get("description")
+                .and_then(|value| value.as_str())
+                .unwrap()
+                .contains("A2A execution is not wired")
+        );
+
+        let a2a_body = json!({"jsonrpc":"2.0","id":"a2a-1","method":"message/send"});
+        let (a2a_status, a2a_response) =
+            send_request(app.clone(), "POST", "/a2a", Some(a2a_body.to_string())).await;
+        assert_eq!(a2a_status, StatusCode::OK);
+        let a2a_response = serde_json::from_str::<serde_json::Value>(&a2a_response).unwrap();
+        assert_eq!(a2a_response["error"]["code"], -32601);
+        assert_eq!(a2a_response["id"], "a2a-1");
+        assert!(a2a_response.get("result").is_none());
+
+        let (proxy_status, proxy_body) = send_request(app, "GET", "/api/policies", None).await;
+        assert_eq!(proxy_status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&alias_response).unwrap()["routing"]["owner"],
-            "python"
+            serde_json::from_str::<serde_json::Value>(&proxy_body).unwrap()["error"]["code"],
+            "GO_CONTROL_PROXY_NOT_READY"
         );
     }
 

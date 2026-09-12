@@ -1,9 +1,10 @@
-use deepseek_gateway::create_app;
+use deepseek_gateway::create_production_app;
+use std::{error::Error, path::PathBuf};
 use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -13,8 +14,13 @@ async fn main() {
         .init();
 
     let addr = std::env::var("GATEWAY_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
-    let listener = TcpListener::bind(&addr).await.unwrap();
+    let static_root = std::env::var_os("DEEPSEEK_INFRA_STATIC_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("static"));
+    let app = create_production_app(&static_root)?;
+    let listener = TcpListener::bind(&addr).await?;
     tracing::info!("deepseek-gateway-rs listening on {}", addr);
 
-    axum::serve(listener, create_app()).await.unwrap();
+    axum::serve(listener, app).await?;
+    Ok(())
 }

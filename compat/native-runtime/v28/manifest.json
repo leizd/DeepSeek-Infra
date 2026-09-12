@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze transfer QoS classification: TrafficClass.from_str substring matching, repair/rebalance wave exclusion, P0 concurrency bypass, recovery-throttled class rates, destination digest verify, and multipart-upload-missing detection. This does not move payload bytes or contact MinIO.",
+  "normalization": "LF-normalized SHA-256 of public validator fixture bytes",
+  "corpora": [
+    {
+      "id": "transfer-qos-semantics-v28",
+      "path": "compat/native-runtime/v28/transfer/transfer_qos_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen transfer traffic-class, wave-sharing, and destination-verify semantics",
+      "sha256": "c55e9c12e1293846a93845df83504e70e26e29906fb84ccb6194d53ebfc97dec"
+    }
+  ]
+}
