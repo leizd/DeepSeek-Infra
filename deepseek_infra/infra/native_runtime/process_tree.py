@@ -37,7 +37,8 @@ def _get_all_processes_windows() -> list[ProcessInfo]:
             ("szExeFile", ctypes.c_char * 260),
         ]
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # Linux mypy stubs omit WinDLL/windll; Windows runtime still has them.
+    kernel32 = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)
     snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
     if snapshot == -1 or snapshot is None:
         return []

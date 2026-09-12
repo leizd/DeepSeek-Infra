@@ -1,5 +1,7 @@
 //! Real providers and RPC handlers; not a process-kill or production-auth proof.
-use super::{PutFault, endpoints, faulted_put_relay, minio_configured, sign_request, store, test_signer};
+use super::{
+    PutFault, endpoints, faulted_put_relay, minio_configured, sign_request, store, test_signer,
+};
 use std::sync::Arc;
 
 use deepseek_protocol::ActionFence;
