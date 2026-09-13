@@ -2,15 +2,13 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, MutexGuard};
 
 #[cfg(feature = "s3")]
-use deepseek_protocol::generated::deepseek::action::v1::StorageConditionType;
-#[cfg(feature = "s3")]
 use sha2::Digest as _;
 
 use deepseek_protocol::generated::deepseek::action::v1::{
     AdmitCommandRequest, AdmitCommandResponse, AdmitStatus, CommandKind, EffectResult,
     InstallAuthoritativeEpochRequest, InstallAuthoritativeEpochResponse, QueryEffectRequest,
-    QueryStorageEffectRequest, StorageMutationRequest, StorageMutationResponse,
-    StorageMutationStatus, worker_server::Worker as WorkerRpc,
+    QueryStorageEffectRequest, StorageConditionType, StorageMutationRequest,
+    StorageMutationResponse, StorageMutationStatus, worker_server::Worker as WorkerRpc,
 };
 use deepseek_protocol::generated::deepseek::common::v1::{ActionFence, EffectState, ErrorDetail};
 use deepseek_protocol::{
@@ -53,6 +51,50 @@ impl std::fmt::Display for AuthError {
 
 impl std::error::Error for AuthError {}
 
+pub(crate) fn unix_now_seconds() -> Result<i64, AuthError> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .map_err(|_| AuthError::ServiceAuthenticationUnavailable)
+}
+
+pub(crate) fn valid_service_bearer(token: &str) -> bool {
+    !token.is_empty() && token.len() <= 4096 && token.bytes().all(|byte| byte.is_ascii_graphic())
+}
+
+pub(crate) const MAX_SERVICE_BEARER_LIFETIME_SECONDS: i64 = 3600;
+
+pub(crate) fn bearer_token_from_metadata(
+    metadata: &tonic::metadata::MetadataMap,
+) -> Result<&str, AuthError> {
+    let mut values = metadata.get_all("authorization").iter();
+    let Some(first) = values.next() else {
+        return Err(AuthError::MissingAuthorization);
+    };
+    if values.next().is_some() {
+        return Err(AuthError::InvalidToken);
+    }
+    let auth_str = first.to_str().map_err(|_| AuthError::InvalidToken)?;
+    let token = auth_str
+        .strip_prefix("Bearer ")
+        .ok_or(AuthError::InvalidToken)?;
+    if !valid_service_bearer(token) {
+        return Err(AuthError::InvalidToken);
+    }
+    Ok(token)
+}
+
+fn tokens_equal(left: &str, right: &str) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (a, b) in left.bytes().zip(right.bytes()) {
+        diff |= a ^ b;
+    }
+    diff == 0
+}
+
 pub trait TransportAuthenticator: Send + Sync + 'static {
     fn authenticate(
         &self,
@@ -68,16 +110,25 @@ impl TransportAuthenticator for ProductionFailClosedAuthenticator {
         &self,
         _metadata: &tonic::metadata::MetadataMap,
     ) -> Result<CallerIdentity, AuthError> {
-        // Transport caller authentication for production execution is not yet approved.
-        // Fails closed unconditionally. Loopback is explicitly not caller authentication.
+        // No configured authenticated transport. Loopback is not caller identity.
+        // Transport approval alone never enables production execution authority.
         Err(AuthError::ServiceAuthenticationUnavailable)
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StaticTokenAuthenticator {
     expected_token: String,
     identity: CallerIdentity,
+}
+
+impl std::fmt::Debug for StaticTokenAuthenticator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StaticTokenAuthenticator")
+            .field("expected_token", &"<redacted>")
+            .field("identity", &self.identity)
+            .finish()
+    }
 }
 
 impl StaticTokenAuthenticator {
@@ -94,14 +145,56 @@ impl TransportAuthenticator for StaticTokenAuthenticator {
         &self,
         metadata: &tonic::metadata::MetadataMap,
     ) -> Result<CallerIdentity, AuthError> {
-        let auth_header = metadata
-            .get("authorization")
-            .ok_or(AuthError::MissingAuthorization)?;
-        let auth_str = auth_header.to_str().map_err(|_| AuthError::InvalidToken)?;
-        let token = auth_str
-            .strip_prefix("Bearer ")
-            .ok_or(AuthError::InvalidToken)?;
-        if token == self.expected_token {
+        let token = bearer_token_from_metadata(metadata)?;
+        if tokens_equal(token, &self.expected_token) {
+            Ok(self.identity.clone())
+        } else {
+            Err(AuthError::InvalidToken)
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ServiceBearerAuthenticator {
+    expected_token: String,
+    expires_at_unix: i64,
+    identity: CallerIdentity,
+}
+
+impl std::fmt::Debug for ServiceBearerAuthenticator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServiceBearerAuthenticator")
+            .field("expected_token", &"<redacted>")
+            .field("expires_at_unix", &self.expires_at_unix)
+            .field("identity", &self.identity)
+            .finish()
+    }
+}
+
+impl ServiceBearerAuthenticator {
+    pub fn new(token: impl Into<String>, expires_at_unix: i64, identity: CallerIdentity) -> Self {
+        Self {
+            expected_token: token.into(),
+            expires_at_unix,
+            identity,
+        }
+    }
+}
+
+impl TransportAuthenticator for ServiceBearerAuthenticator {
+    fn authenticate(
+        &self,
+        metadata: &tonic::metadata::MetadataMap,
+    ) -> Result<CallerIdentity, AuthError> {
+        let token = bearer_token_from_metadata(metadata)?;
+        let now = unix_now_seconds()?;
+        if self.expected_token.len() < 32
+            || now >= self.expires_at_unix
+            || self.expires_at_unix.saturating_sub(now) > MAX_SERVICE_BEARER_LIFETIME_SECONDS
+        {
+            return Err(AuthError::InvalidToken);
+        }
+        if tokens_equal(token, &self.expected_token) {
             Ok(self.identity.clone())
         } else {
             Err(AuthError::InvalidToken)
@@ -194,6 +287,25 @@ fn rejected(error: AdmitError) -> AdmitCommandResponse {
     }
 }
 
+fn authentication_detail(error: AuthError) -> ErrorDetail {
+    ErrorDetail {
+        code: error.code().to_string(),
+        category: "AUTHENTICATION".to_string(),
+        message: "caller authentication rejected".to_string(),
+    }
+}
+
+fn configured_transport_identity(
+    authenticator: &dyn TransportAuthenticator,
+    metadata: &tonic::metadata::MetadataMap,
+) -> Result<Option<CallerIdentity>, AuthError> {
+    match authenticator.authenticate(metadata) {
+        Ok(identity) => Ok(Some(identity)),
+        Err(AuthError::ServiceAuthenticationUnavailable) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 fn authority_detail(code: &'static str) -> ErrorDetail {
     let category = if code.starts_with("AUTHORITY_REQUEST_") {
         "AUTHORITY"
@@ -268,6 +380,15 @@ impl WorkerRpc for WorkerRpcService {
         &self,
         request: Request<AdmitCommandRequest>,
     ) -> Result<Response<AdmitCommandResponse>, Status> {
+        if let Err(auth_err) =
+            configured_transport_identity(self.authenticator.as_ref(), request.metadata())
+        {
+            return Ok(Response::new(AdmitCommandResponse {
+                status: AdmitStatus::Rejected as i32,
+                state: EffectState::Unknown as i32,
+                error: Some(authentication_detail(auth_err)),
+            }));
+        }
         let input = request.into_inner();
         // v1 retained this field for wire compatibility. It is caller-controlled
         // and must never establish or advance the worker's local authority.
@@ -294,7 +415,17 @@ impl WorkerRpc for WorkerRpcService {
         &self,
         request: Request<QueryEffectRequest>,
     ) -> Result<Response<EffectResult>, Status> {
+        let auth_result =
+            configured_transport_identity(self.authenticator.as_ref(), request.metadata());
         let input = request.into_inner();
+        if let Err(auth_err) = auth_result {
+            return Ok(Response::new(EffectResult {
+                fence: input.fence,
+                state: EffectState::Unknown as i32,
+                error: Some(authentication_detail(auth_err)),
+                ..EffectResult::default()
+            }));
+        }
         let fence = match input.fence {
             Some(fence) => fence,
             None => {
@@ -326,6 +457,15 @@ impl WorkerRpc for WorkerRpcService {
         &self,
         request: Request<InstallAuthoritativeEpochRequest>,
     ) -> Result<Response<InstallAuthoritativeEpochResponse>, Status> {
+        if let Err(auth_err) =
+            configured_transport_identity(self.authenticator.as_ref(), request.metadata())
+        {
+            return Ok(Response::new(InstallAuthoritativeEpochResponse {
+                status: AdmitStatus::Rejected as i32,
+                fence: None,
+                error: Some(authentication_detail(auth_err)),
+            }));
+        }
         let input = request.into_inner();
         let fence = match input.fence.as_ref() {
             Some(fence) => fence,
@@ -396,6 +536,50 @@ impl WorkerRpc for WorkerRpcService {
                 "OPERATION",
                 "invalid operation_id",
             )));
+        }
+
+        let condition = match input.precondition.as_ref() {
+            Some(pre) => match StorageConditionType::try_from(pre.condition_type) {
+                Ok(StorageConditionType::CreateOnly) => "CREATE_ONLY",
+                Ok(StorageConditionType::IfMatch) => "IF_MATCH",
+                _ => "",
+            },
+            None => "",
+        };
+        let expected_etag = input
+            .precondition
+            .as_ref()
+            .map(|pre| pre.expected_etag.as_str())
+            .unwrap_or("");
+        let command = crate::StorageOperationCommand {
+            action_id: &fence.action_id,
+            execution_epoch: fence.execution_epoch,
+            operation_id: &input.operation_id,
+            mutation_type: &input.mutation_type,
+            provider: &input.provider,
+            target_identity: &input.target_identity,
+            bucket: &input.bucket,
+            prefix: &input.prefix,
+            object_key: &input.object_key,
+            object_digest: &input.payload_digest,
+            expected_length: input.expected_length,
+            condition_type: condition,
+            expected_etag,
+            claim_revision: 0,
+        };
+        {
+            let mut worker = self.lock().await;
+            if let Err(error) =
+                worker.admit_storage_operation_grant(&input.canonical_authorization, &command)
+            {
+                return Ok(Response::new(storage_rejected(
+                    Some(fence.clone()),
+                    input.operation_id.clone(),
+                    error.code,
+                    "AUTHORIZATION",
+                    "storage operation grant rejected",
+                )));
+            }
         }
 
         if input.mutation_type != "PUT_CHUNK" {

@@ -17,7 +17,7 @@ func prepareActionV4Fixture(t *testing.T, control *Control) {
 	defer tx.Rollback()
 
 	// Construct the historical shape only in this isolated fixture.
-	for _, table := range []string{"action_reconciliation_boundary", "action_resource_leases", "action_lease_events", "action_leases"} {
+	for _, table := range []string{"action_verification_boundary", "action_reconciliation_boundary", "action_resource_leases", "action_lease_events", "action_leases"} {
 		if _, err := tx.Exec("DROP TABLE IF EXISTS " + table); err != nil {
 			t.Fatal(err)
 		}

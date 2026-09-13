@@ -47,7 +47,7 @@ func claimedResponse(req *actionv1.StorageMutationRequest) *actionv1.StorageMuta
 		Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED, State: commonv1.EffectState_EFFECT_STATE_APPLIED}
 }
 
-func TestClaimedExecutionSettlesOnlyBoundResults(t *testing.T) {
+func TestClaimedExecutionVerifiesAppliedAndSettlesOnlyRecordedNoEffect(t *testing.T) {
 	for _, outcome := range []string{"confirmed", "lost ack", "wrong operation", "error alone", "recorded no effect"} {
 		t.Run(outcome, func(t *testing.T) {
 			control, claim, now := nativeClaim(t)
@@ -75,9 +75,9 @@ func TestClaimedExecutionSettlesOnlyBoundResults(t *testing.T) {
 			coordinator := NewCoordinator(control, worker, WithNow(now.Load))
 			_, err := coordinator.ExecuteClaimedStorageAction(context.Background(), claim, storageRequest("leased-operation"))
 			want := "EFFECT_UNKNOWN"
-			terminal := outcome == "confirmed" || outcome == "recorded no effect"
-			if terminal {
-				want = "SUCCEEDED"
+			terminal := outcome == "recorded no effect"
+			if outcome == "confirmed" || terminal {
+				want = "VERIFYING"
 				if outcome == "recorded no effect" {
 					want = "FAILED_BEFORE_EFFECT"
 				}
@@ -231,8 +231,11 @@ func TestClaimedExecutionRenewsSQLiteClaimDuringRPC(t *testing.T) {
 	if _, err := coordinator.ExecuteClaimedStorageAction(context.Background(), claim, storageRequest("heartbeat-operation")); err != nil {
 		t.Fatal(err)
 	}
-	if _, exists, err := control.GetActionLease(claim.ActionID); err != nil || exists {
-		t.Fatalf("heartbeat prevented terminal settlement: %v", err)
+	if _, exists, err := control.GetActionLease(claim.ActionID); err != nil || !exists {
+		t.Fatalf("APPLIED released the verification lease: %v", err)
+	}
+	if record, _, err := control.Get("action", claim.ActionID); err != nil || record.State != "VERIFYING" {
+		t.Fatalf("heartbeat did not reach VERIFYING: %v", err)
 	}
 }
 

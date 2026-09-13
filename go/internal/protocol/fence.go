@@ -27,6 +27,7 @@ var (
 	ErrStorageTargetMismatch            = errors.New("TARGET_MISMATCH")
 	ErrStorageDigestMismatch            = errors.New("DIGEST_MISMATCH")
 	ErrStorageWorkerWithoutAuthority    = errors.New("WORKER_WITHOUT_AUTHORITY")
+	ErrStorageOperationInvalid          = errors.New("OPERATION_INVALID")
 	ErrStorageTransportUnavailable      = errors.New("STORAGE_TRANSPORT_UNAVAILABLE")
 	ErrStorageTransportError            = errors.New("STORAGE_TRANSPORT_ERROR")
 )

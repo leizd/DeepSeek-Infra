@@ -2,6 +2,9 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bytes::Bytes;
 use deepseek_protocol::ActionFence;
+use deepseek_protocol::generated::deepseek::action::v1::{
+    StorageConditionType, StorageMutationRequest,
+};
 use deepseek_storage::s3::{ConditionalWrite, S3Config, S3Credentials, S3Transport};
 use deepseek_worker::{StorageEffectState, Worker, WorkerAuthorityConfig, WorkerStorageError};
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -113,6 +116,70 @@ fn sign_request(
     });
     value["digest"] = format!("sha256:{:x}", Sha256::digest(canonical(&value))).into();
     let mut message = b"deepseek-infra:control-authority-request-v1\0".to_vec();
+    message.extend(canonical(&value));
+    value["signature"] = URL_SAFE_NO_PAD.encode(key.sign(&message).to_bytes()).into();
+    canonical(&value)
+}
+
+fn sign_grant(key: &SigningKey, request: &StorageMutationRequest) -> Vec<u8> {
+    let fence = request.fence.as_ref().unwrap();
+    let pre = request.precondition.as_ref().unwrap();
+    let condition = match StorageConditionType::try_from(pre.condition_type) {
+        Ok(StorageConditionType::CreateOnly) => "CREATE_ONLY",
+        Ok(StorageConditionType::IfMatch) => "IF_MATCH",
+        _ => "",
+    };
+    let request_id = format!(
+        "{:x}",
+        Sha256::digest(format!("rid:{}", request.operation_id).as_bytes())
+    );
+    let nonce = format!(
+        "{:x}",
+        Sha256::digest(format!("n:{}", request.operation_id).as_bytes())
+    );
+    let payload = serde_json::json!({
+        "bucket": request.bucket,
+        "claimRevision": 1,
+        "conditionType": condition,
+        "expectedEtag": pre.expected_etag,
+        "expectedLength": request.expected_length,
+        "mutationType": request.mutation_type,
+        "objectDigest": request.payload_digest,
+        "objectKey": request.object_key,
+        "prefix": request.prefix,
+        "provider": request.provider,
+        "targetIdentity": request.target_identity,
+    });
+    let payload_digest = format!("sha256:{:x}", Sha256::digest(canonical(&payload)));
+    let mut value = serde_json::json!({
+        "schema": "control-storage-operation-grant-v1",
+        "schemaVersion": 1,
+        "domain": "action",
+        "operation": "execute-storage-put",
+        "actionId": fence.action_id,
+        "executionEpoch": fence.execution_epoch,
+        "fencingToken": 4,
+        "revision": 1,
+        "requestId": request_id,
+        "nonce": nonce,
+        "operationId": request.operation_id,
+        "issuedAt": "2026-09-04T00:00:30Z",
+        "expiresAt": "2026-09-04T00:05:30Z",
+        "runtime": "go",
+        "mode": "shadow",
+        "fleetId": "fleet-a",
+        "environment": "test",
+        "role": "control-plane",
+        "payload": payload,
+        "payloadDigest": payload_digest,
+        "signatureAlgorithm": "Ed25519",
+        "signerKeyId": format!(
+            "ctrl-signer-{}",
+            &format!("{:x}", Sha256::digest(key.verifying_key().as_bytes()))[..16]
+        )
+    });
+    value["digest"] = format!("sha256:{:x}", Sha256::digest(canonical(&value))).into();
+    let mut message = b"deepseek-infra:control-storage-operation-grant-v1\0".to_vec();
     message.extend(canonical(&value));
     value["signature"] = URL_SAFE_NO_PAD.encode(key.sign(&message).to_bytes()).into();
     canonical(&value)

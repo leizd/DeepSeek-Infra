@@ -105,8 +105,8 @@ func TestReconcileClaimedUsesOriginalDispatchIdentity(t *testing.T) {
 		t.Fatalf("query used current claim epoch: fence=%+v claim=%d original=%d", worker.fence, claim.Epoch, original.Intent.ExecutionEpoch)
 	}
 	record, _, err := control.Get("action", claim.ActionID)
-	if err != nil || record.State != "SUCCEEDED" || record.ExecutionEpoch != claim.Epoch {
-		t.Fatalf("expected same-epoch SUCCEEDED: %+v %v", record, err)
+	if err != nil || record.State != "VERIFYING" || record.ExecutionEpoch != claim.Epoch {
+		t.Fatalf("expected same-epoch VERIFYING: %+v %v", record, err)
 	}
 	got, bound, err := control.GetStorageDispatch(claim.ActionID, original.Intent.ExecutionEpoch)
 	if err != nil || !bound || got != original {
@@ -116,8 +116,8 @@ func TestReconcileClaimedUsesOriginalDispatchIdentity(t *testing.T) {
 		t.Fatalf("recovery claimed current epoch: bound=%v err=%v", bound, err)
 	}
 	after, err := control.GetResourceLeases(claim.ActionID)
-	if err != nil || len(after) != 0 {
-		t.Fatalf("success kept reservations: %v", err)
+	if err != nil || len(after) != len(resources) {
+		t.Fatalf("verification lost reservations: %v", err)
 	}
 }
 
@@ -132,7 +132,7 @@ func TestReconcileClaimedClassifiesBoundEvidenceWithoutNewWrite(t *testing.T) {
 		locks    bool
 		err      error
 	}{
-		{"applied", actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED, commonv1.EffectState_EFFECT_STATE_APPLIED, "", nil, "SUCCEEDED", false, nil},
+		{"applied", actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED, commonv1.EffectState_EFFECT_STATE_APPLIED, "", nil, "VERIFYING", true, nil},
 		{"recorded no effect", actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED, commonv1.EffectState_EFFECT_STATE_NOT_APPLIED, "PRECONDITION_REJECTED", nil, "FAILED_BEFORE_EFFECT", false, nil},
 		{"recorded failed", actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_FAILED, commonv1.EffectState_EFFECT_STATE_NOT_APPLIED, "Failed", nil, "FAILED_BEFORE_EFFECT", false, nil},
 		{"worker reconciling", actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_RECONCILING, commonv1.EffectState_EFFECT_STATE_UNKNOWN, "", internalprotocol.ErrUnknownEffect, "RECONCILING", true, ErrStorageMutationUncertain},
@@ -524,7 +524,7 @@ func TestReconcileClaimedUnknownAfterTakeoverKeepsOriginalIdentity(t *testing.T)
 		t.Fatalf("unknown recovery used claim epoch %d original %d", claim.Epoch, original.Intent.ExecutionEpoch)
 	}
 	record, _, err := control.Get("action", claim.ActionID)
-	if err != nil || record.State != "SUCCEEDED" {
-		t.Fatalf("expected SUCCEEDED: %+v %v", record, err)
+	if err != nil || record.State != "VERIFYING" {
+		t.Fatalf("expected VERIFYING: %+v %v", record, err)
 	}
 }

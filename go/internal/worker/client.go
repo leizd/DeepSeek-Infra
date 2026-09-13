@@ -22,8 +22,10 @@ var (
 )
 
 type Client struct {
-	rpc        actionv1.WorkerClient
-	connection *grpc.ClientConn
+	rpc            actionv1.WorkerClient
+	connection     *grpc.ClientConn
+	tlsSecured     bool
+	bearerAttached bool
 }
 
 func New(rpc actionv1.WorkerClient) *Client {
@@ -31,6 +33,9 @@ func New(rpc actionv1.WorkerClient) *Client {
 }
 
 func DialPlaintextLoopback(target string) (*Client, error) {
+	if tlsEnvConfigured() {
+		return nil, ErrWorkerTLSRequired
+	}
 	if err := ValidatePlaintextTarget(target); err != nil {
 		return nil, err
 	}
@@ -57,6 +62,10 @@ func (client *Client) Admit(ctx context.Context, kind actionv1.CommandKind, fenc
 	}
 	if client == nil || client.rpc == nil {
 		return ErrInvalidWorkerResponse
+	}
+	ctx, err := client.outgoingContext(ctx, "")
+	if err != nil {
+		return err
 	}
 	response, err := client.rpc.AdmitCommand(ctx, &actionv1.AdmitCommandRequest{
 		Kind:  kind,
@@ -106,6 +115,10 @@ func (client *Client) InstallAuthoritativeEpoch(ctx context.Context, fence *comm
 	if client == nil || client.rpc == nil {
 		return ErrInvalidWorkerResponse
 	}
+	ctx, err = client.outgoingContext(ctx, "")
+	if err != nil {
+		return err
+	}
 	response, err := client.rpc.InstallAuthoritativeEpoch(ctx, &actionv1.InstallAuthoritativeEpochRequest{
 		Fence:            fence,
 		CanonicalRequest: canonical,
@@ -141,6 +154,10 @@ func (client *Client) QueryEffect(ctx context.Context, fence *commonv1.ActionFen
 	if client == nil || client.rpc == nil {
 		return commonv1.EffectState_EFFECT_STATE_UNKNOWN, ErrInvalidWorkerResponse
 	}
+	ctx, err := client.outgoingContext(ctx, "")
+	if err != nil {
+		return commonv1.EffectState_EFFECT_STATE_UNKNOWN, err
+	}
 	response, err := client.rpc.QueryEffect(ctx, &actionv1.QueryEffectRequest{Fence: fence})
 	if err != nil {
 		return commonv1.EffectState_EFFECT_STATE_UNKNOWN, fmt.Errorf("worker effect query transport: %w", err)
@@ -157,10 +174,14 @@ func (client *Client) QueryEffect(ctx context.Context, fence *commonv1.ActionFen
 		return commonv1.EffectState_EFFECT_STATE_UNKNOWN, ErrInvalidWorkerResponse
 	}
 	rejection := knownRejection(response.Error.Code)
-	if rejection != internalprotocol.ErrUnknownEffect && rejection != internalprotocol.ErrProofNotAuthoritative {
+	switch rejection {
+	case internalprotocol.ErrUnknownEffect, internalprotocol.ErrProofNotAuthoritative,
+		internalprotocol.ErrServiceAuthenticationUnavailable, internalprotocol.ErrAuthenticationMissing,
+		internalprotocol.ErrAuthenticationInvalid:
+		return commonv1.EffectState_EFFECT_STATE_UNKNOWN, rejection
+	default:
 		return commonv1.EffectState_EFFECT_STATE_UNKNOWN, ErrInvalidWorkerResponse
 	}
-	return commonv1.EffectState_EFFECT_STATE_UNKNOWN, rejection
 }
 
 func (client *Client) ExecuteStorageMutation(ctx context.Context, request *actionv1.StorageMutationRequest, bearerToken string) (*actionv1.StorageMutationResponse, error) {
@@ -177,9 +198,9 @@ func (client *Client) ExecuteStorageMutation(ctx context.Context, request *actio
 		return nil, store.ErrAuthorityRequestOperationInvalid
 	}
 
-	callCtx := ctx
-	if bearerToken != "" {
-		callCtx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+bearerToken)
+	callCtx, err := client.outgoingContext(ctx, bearerToken)
+	if err != nil {
+		return nil, err
 	}
 
 	response, err := client.rpc.ExecuteStorageMutation(callCtx, request)
@@ -232,9 +253,9 @@ func (client *Client) QueryStorageEffect(ctx context.Context, fence *commonv1.Ac
 		return nil, store.ErrAuthorityRequestOperationInvalid
 	}
 
-	callCtx := ctx
-	if bearerToken != "" {
-		callCtx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+bearerToken)
+	callCtx, err := client.outgoingContext(ctx, bearerToken)
+	if err != nil {
+		return nil, err
 	}
 
 	response, err := client.rpc.QueryStorageEffect(callCtx, &actionv1.QueryStorageEffectRequest{
@@ -282,6 +303,27 @@ func (client *Client) QueryStorageEffect(ctx context.Context, fence *commonv1.Ac
 	default:
 		return nil, ErrInvalidWorkerResponse
 	}
+}
+
+func (client *Client) outgoingContext(ctx context.Context, bearerToken string) (context.Context, error) {
+	if ctx == nil {
+		return nil, ErrInvalidWorkerResponse
+	}
+	md, _ := metadata.FromOutgoingContext(ctx)
+	contextCredentials := len(md.Get("authorization")) > 0
+	if client != nil && client.connection != nil && !client.tlsSecured && (bearerToken != "" || contextCredentials) {
+		return nil, ErrWorkerPlaintextCredential
+	}
+	if client != nil && client.bearerAttached {
+		if bearerToken != "" || contextCredentials {
+			return nil, ErrWorkerTLSConfigInvalid
+		}
+		return ctx, nil
+	}
+	if bearerToken == "" {
+		return ctx, nil
+	}
+	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+bearerToken), nil
 }
 
 func ValidatePlaintextTarget(target string) error {
@@ -338,12 +380,30 @@ func knownRejection(code string) error {
 		return internalprotocol.ErrStorageDigestMismatch
 	case internalprotocol.ErrStorageWorkerWithoutAuthority.Error():
 		return internalprotocol.ErrStorageWorkerWithoutAuthority
+	case internalprotocol.ErrStorageOperationInvalid.Error():
+		return internalprotocol.ErrStorageOperationInvalid
 	case internalprotocol.ErrStorageTransportUnavailable.Error():
 		return internalprotocol.ErrStorageTransportUnavailable
 	case internalprotocol.ErrStorageTransportError.Error():
 		return internalprotocol.ErrStorageTransportError
 	case store.ErrAuthorityRequestOperationInvalid.Error():
 		return store.ErrAuthorityRequestOperationInvalid
+	case store.ErrStorageOperationGrantMissing.Error():
+		return store.ErrStorageOperationGrantMissing
+	case store.ErrStorageOperationGrantAuthorityMissing.Error():
+		return store.ErrStorageOperationGrantAuthorityMissing
+	case store.ErrStorageOperationGrantCommandMismatch.Error():
+		return store.ErrStorageOperationGrantCommandMismatch
+	case store.ErrStorageOperationGrantReplay.Error():
+		return store.ErrStorageOperationGrantReplay
+	case store.ErrStorageOperationGrantNonceReuse.Error():
+		return store.ErrStorageOperationGrantNonceReuse
+	case store.ErrStorageOperationGrantReplayConflict.Error():
+		return store.ErrStorageOperationGrantReplayConflict
+	case store.ErrStorageOperationGrantSignatureInvalid.Error():
+		return store.ErrStorageOperationGrantSignatureInvalid
+	case store.ErrStorageOperationGrantExpired.Error():
+		return store.ErrStorageOperationGrantExpired
 	default:
 		return ErrInvalidWorkerResponse
 	}
@@ -403,6 +463,12 @@ func knownAuthorityRejection(code string) error {
 		return internalprotocol.ErrStaleEpoch
 	case internalprotocol.ErrFenceMismatch.Error():
 		return internalprotocol.ErrFenceMismatch
+	case internalprotocol.ErrServiceAuthenticationUnavailable.Error():
+		return internalprotocol.ErrServiceAuthenticationUnavailable
+	case internalprotocol.ErrAuthenticationMissing.Error():
+		return internalprotocol.ErrAuthenticationMissing
+	case internalprotocol.ErrAuthenticationInvalid.Error():
+		return internalprotocol.ErrAuthenticationInvalid
 	default:
 		return ErrInvalidWorkerResponse
 	}

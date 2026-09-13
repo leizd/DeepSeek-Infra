@@ -159,6 +159,9 @@ func TestQueryEffectPreservesUnknownAndFrozenRejection(t *testing.T) {
 	}{
 		{code: "EFFECT_UNKNOWN", want: internalprotocol.ErrUnknownEffect},
 		{code: "PROOF_NOT_AUTHORITATIVE", want: internalprotocol.ErrProofNotAuthoritative},
+		{code: "SERVICE_AUTHENTICATION_UNAVAILABLE", want: internalprotocol.ErrServiceAuthenticationUnavailable},
+		{code: "AUTHENTICATION_MISSING", want: internalprotocol.ErrAuthenticationMissing},
+		{code: "AUTHENTICATION_INVALID", want: internalprotocol.ErrAuthenticationInvalid},
 	} {
 		rpc := &fakeWorkerRPC{queryResponse: &actionv1.EffectResult{
 			Fence: &commonv1.ActionFence{ActionId: "act-1", ExecutionEpoch: 7},
@@ -376,6 +379,9 @@ func TestInstallAuthoritativeEpochMapsFrozenAuthorityCodes(t *testing.T) {
 		"FENCE_MISMATCH":                            internalprotocol.ErrFenceMismatch,
 		"EMPTY_ACTION_ID":                           internalprotocol.ErrEmptyActionID,
 		"ZERO_EXECUTION_EPOCH":                      internalprotocol.ErrZeroEpoch,
+		"SERVICE_AUTHENTICATION_UNAVAILABLE":        internalprotocol.ErrServiceAuthenticationUnavailable,
+		"AUTHENTICATION_MISSING":                    internalprotocol.ErrAuthenticationMissing,
+		"AUTHENTICATION_INVALID":                    internalprotocol.ErrAuthenticationInvalid,
 	}
 	for code, want := range cases {
 		rpc := &fakeWorkerRPC{installResp: &actionv1.InstallAuthoritativeEpochResponse{
@@ -462,6 +468,8 @@ func TestExecuteStorageMutationRejectionAndFailures(t *testing.T) {
 		"TARGET_MISMATCH":                    internalprotocol.ErrStorageTargetMismatch,
 		"DIGEST_MISMATCH":                    internalprotocol.ErrStorageDigestMismatch,
 		"WORKER_WITHOUT_AUTHORITY":           internalprotocol.ErrStorageWorkerWithoutAuthority,
+		"OPERATION_INVALID":                  internalprotocol.ErrStorageOperationInvalid,
+		"STORAGE_OPERATION_GRANT_MISSING":    store.ErrStorageOperationGrantMissing,
 		"STORAGE_TRANSPORT_UNAVAILABLE":      internalprotocol.ErrStorageTransportUnavailable,
 		"STORAGE_TRANSPORT_ERROR":            internalprotocol.ErrStorageTransportError,
 		"FENCE_MISMATCH":                     internalprotocol.ErrFenceMismatch,
@@ -768,5 +776,21 @@ func TestWorkerClientEdgeCoverage(t *testing.T) {
 	}, "")
 	if !errors.Is(err, store.ErrAuthorityRequestOperationInvalid) {
 		t.Fatalf("expected ErrAuthorityRequestOperationInvalid, got: %v", err)
+	}
+
+	rpcWorkerOp := &fakeWorkerRPC{
+		storageResponse: &actionv1.StorageMutationResponse{
+			Status:      actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED,
+			Error:       &commonv1.ErrorDetail{Code: internalprotocol.ErrStorageOperationInvalid.Error()},
+			Fence:       fence,
+			OperationId: "op-1",
+		},
+	}
+	_, err = New(rpcWorkerOp).ExecuteStorageMutation(context.Background(), &actionv1.StorageMutationRequest{
+		Fence:       fence,
+		OperationId: "op-1",
+	}, "")
+	if !errors.Is(err, internalprotocol.ErrStorageOperationInvalid) {
+		t.Fatalf("expected OPERATION_INVALID, got: %v", err)
 	}
 }

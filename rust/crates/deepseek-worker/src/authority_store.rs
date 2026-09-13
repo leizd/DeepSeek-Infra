@@ -219,6 +219,16 @@ impl AuthorityStore {
         admit_command(fence, epoch)
     }
 
+    pub(super) fn installed_epoch(&self, action_id: &str) -> i64 {
+        self.connection
+            .query_row(
+                "SELECT COALESCE(MAX(epoch),0) FROM epoch_installs WHERE action_id=?1",
+                [action_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0)
+    }
+
     pub(super) fn install(
         &mut self,
         authority: &WorkerAuthority,

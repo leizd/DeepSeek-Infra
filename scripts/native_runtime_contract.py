@@ -47,6 +47,7 @@ CORPUS_MANIFESTS = (
     ROOT / "compat" / "native-runtime" / "v28" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v29" / "manifest.json",
     ROOT / "compat" / "native-runtime" / "v30" / "manifest.json",
+    ROOT / "compat" / "native-runtime" / "v31" / "manifest.json",
 )
 COMMAND_CODES_PATH = ROOT / "release" / "native_runtime_command_codes_v1.json"
 PROTO_ROOT = ROOT / "proto"
