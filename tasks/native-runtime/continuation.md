@@ -135,3 +135,57 @@ budget ledger. `release/native_runtime_5_0_evidence_v1.json` stays `NOT_READY`.
 Wire Go `ExecuteClaimedStorageAction` to sign `control-storage-operation-grant-v1`
 from the live claim (no payload bytes in the grant), persist grants in the Rust
 worker sqlite journal, then slice 3 provider-backed dispatch.
+
+**Tool-round layer 1 is now implemented and byte-verified (2026-09-14, uncommitted).**
+`rust/crates/deepseek-gateway/src/tool_rounds.rs` mirrors the oracle's round
+*bookkeeping* only: `ToolCallAccumulator` (streamed `tool_calls` delta merge and
+finalization), `normalize_tool_calls_lenient`, `decide_round` (the round/budget
+branch), `append_tool_exchange` (message assembly), and
+`force_final_answer_without_tools`, plus `tool_names` / `select_tool_calls` /
+`tool_call_note` and the three constants.
+
+The public route **keeps refusing** a `tool_calls` turn with
+`NATIVE_CHAT_TOOL_ROUNDS_NOT_READY`. Layers 2 (tool execution: the 17 branches
+plus `browser_*`) and 3 (policy/sandbox) are not implemented, and wiring layer 1
+alone would replace the oracle's terminating tool loop with a permanently
+failing one that still answers `200` — the forbidden silent behavior change.
+This slice exists to make that refusal precise and to make later enablement a
+wiring change rather than a rewrite.
+
+Verified locally:
+
+- Byte-level parity: `tasks/native-runtime/tool_round_parity_probe.py` (extracts
+  the real `append_tool_exchange`, `merge_stream_tool_call_deltas`,
+  `finalized_stream_tool_calls`, `normalize_tool_calls`, `tool_names`,
+  `force_final_answer_without_tools` via `ast`; stubs only the layer-2
+  `execute_tool_calls` and the transport `raise_if_cancelled`) vs
+  `examples/tool_round_parity_probe.rs` over the same 12 input scripts ->
+  **identical MD5 `ca9b072a4826fc470e3ccdc6e436bc58`**, 36 keys, no differences.
+- `cargo test -p deepseek-gateway --lib tool_rounds -j 1` -> 24 tests, all pass.
+- `cargo fmt --check` clean.
+
+Three real divergences were found and fixed **by the probe**, not by reasoning:
+
+1. an index-less delta lands at the *slot count*, not the highest index plus one
+   (oracle: `["first", "third", "five"]`; the original unit test asserted
+   `["first", "five", "third"]` and was wrong);
+2. `str(item.get("id") or f"call_{i+1}")` stringifies truthy non-strings, so
+   `id: 123` becomes `"123"` while `id: 0` / `id: ""` fall back — the first
+   implementation read only string ids and silently renumbered them;
+3. non-string `arguments` use Python's **default** JSON separators (`{"a": 1}`),
+   not `serde_json`'s compact form (`{"a":1}`). This lands verbatim in the
+   upstream body and therefore changes the prompt prefix and DeepSeek's prefix
+   caching.
+
+Known bounded limitation: this workspace compiles `serde_json` **without**
+`preserve_order`, so an `arguments` *object* whose keys are not already sorted
+serializes in Rust's sorted order rather than the caller's insertion order.
+Enabling `preserve_order` workspace-wide would silently reorder every other Rust
+response (only `deepseek-proof` opts in), so it was deliberately not done;
+resolving it belongs with argument canonicalization. Recorded in
+`docs/GATEWAY_TOOL_ROUND_PARITY.md`.
+
+Next concrete action for this line: implement layer 2 (`execute_tool_call`'s 17
+branches + `browser_*`) and layer 3 (`ToolPolicy.evaluate`/`sanitize_result`),
+then wire `tool_rounds` into `chat_execution`/`chat_stream` and delete the
+`ToolRoundsUnwired` refusal.

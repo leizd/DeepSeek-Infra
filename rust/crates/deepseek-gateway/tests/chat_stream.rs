@@ -62,11 +62,8 @@ fn stub_sse_upstream(chunks: Vec<String>, status: StatusCode, sink: Sink) -> Rou
                         .map(ToString::to_string);
                     captured.body = serde_json::from_str(&body).ok();
                 }
-                let stream = futures_util::stream::iter(
-                    chunks
-                        .into_iter()
-                        .map(|chunk| Ok::<_, std::io::Error>(chunk)),
-                );
+                let stream =
+                    futures_util::stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
                 (
                     status,
                     [(header::CONTENT_TYPE, "text/event-stream")],
@@ -100,11 +97,8 @@ fn stub_sse_upstream_bytes(chunks: Vec<Vec<u8>>, status: StatusCode, sink: Sink)
                         .map(ToString::to_string);
                     captured.body = serde_json::from_str(&body).ok();
                 }
-                let stream = futures_util::stream::iter(
-                    chunks
-                        .into_iter()
-                        .map(|chunk| Ok::<_, std::io::Error>(chunk)),
-                );
+                let stream =
+                    futures_util::stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
                 (
                     status,
                     [(header::CONTENT_TYPE, "text/event-stream")],

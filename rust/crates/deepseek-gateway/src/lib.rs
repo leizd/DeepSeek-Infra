@@ -19,6 +19,7 @@ pub mod observability;
 pub mod policy_routes;
 pub mod request_preparation;
 pub mod static_files;
+pub mod tool_rounds;
 
 pub fn gateway_version() -> &'static str {
     deepseek_core::version_info().version

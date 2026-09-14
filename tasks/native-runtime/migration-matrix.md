@@ -29,6 +29,9 @@ production authority is Python. Target owners are 5.0 goals.
 | chat_completions_fast_path | rust | py | route exists | wired, unverified | `tests/chat_execution.rs` (real upstream, local) | tool rounds; exact-head CI |
 | chat_streaming_openai_sse | rust | py | `chat_stream.rs` decoder + encoder + read loop | wired via `chat_completions` | byte-identical to oracle (`b9129475…`); 6 scripted upstream cases | tool-round refusal is in-band; no `/api/chat` |
 | chat_message_normalization | rust | py | both layers fail closed on the same codes | aligned | 101 passed (`df7dfa13`); `oracle_layering_probe.py` | none for preparation; SSE/tool rounds separate |
+| tool_round_control (layer 1) | rust | py | `tool_rounds.rs`: accumulator, lenient normalize, round decision, message assembly, force-final | **implemented; not wired (route still refuses `tool_calls`)** | byte-identical to oracle (`ca9b072a…`), 36 keys / 12 scripts; 24 unit tests; `docs/GATEWAY_TOOL_ROUND_PARITY.md` | layer 2 (tool execution) and layer 3 (policy/sandbox) before any live wiring |
+| tool_execution (layer 2) | rust | py | none equivalent | **unimplemented** | none | 17 `execute_tool_call` branches + `browser_*`; depends on `rag`/`data`/`browser`/`media` |
+| tool_policy_sandbox (layer 3) | rust | py | `deepseek-policy` crate | **unimplemented** | crate tests only | `ToolPolicy.evaluate`/`sanitize_result`, `rust_policy_enabled` dual path, permissive fallback |
 | mcp_jsonrpc | rust | py | deepseek-mcp crate | no | corpus replay only | public `/mcp` |
 | rag_hot_path | rust | py | deepseek-rag | no | document-prep sidecar | query/index ownership |
 | tool_sandbox | rust | py | policy crate | no | none | sandbox execution |
