@@ -456,16 +456,53 @@ def _has_image_content(api_messages: list[dict[str, Any]]) -> bool:
 
 
 def normalize_chat_messages(messages: list[Any]) -> list[dict[str, Any]]:
+    """Normalize frontend ``messages`` into upstream chat messages.
+
+    Fail-closed by design. An earlier revision silently ``continue``-ed past
+    every turn it could not represent (non-dict entries, blank or ``None``
+    content, ``tool`` turns missing ``tool_call_id``, and every ``system``
+    turn). Because the caller's instruction then reached the model as if it had
+    never been written, the failure was invisible: the request succeeded and the
+    answer quietly ignored what the user had said. Measured consequence — a
+    caller-supplied ``system`` turn is dropped here and *never* appears in the
+    upstream body, so the model cannot honour it.
+
+    Dropping the ``system`` role also defended nothing: this function's callers
+    build the authoritative system prefix themselves from
+    ``payload["systemPrompt"]`` (see :func:`build_deepseek_request`), so a
+    ``system`` turn arriving in ``messages`` is not a duplicate to be pruned —
+    it is caller intent being discarded.
+
+    Each unrepresentable turn now raises instead, with the same
+    :class:`~deepseek_infra.core.errors.ErrorCode` values the Rust gateway
+    preparation layer returns, so both paths fail identically and the caller is
+    told which turn was rejected rather than getting a silently shortened
+    conversation.
+    """
+    if not isinstance(messages, list):
+        raise AppError("messages must be an array", code=ErrorCode.INVALID_MESSAGES)
     api_messages: list[dict[str, Any]] = []
-    for message in messages:
+    for index, message in enumerate(messages):
         if not isinstance(message, dict):
-            continue
+            raise AppError(
+                f"message at index {index} must be an object",
+                code=ErrorCode.INVALID_MESSAGES,
+            )
         role = message.get("role")
         content = expanded_message_content(message)
         if role == "tool":
             tool_call_id = str(message.get("tool_call_id") or "").strip()
-            if isinstance(content, str) and content.strip() and tool_call_id:
-                api_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": content.strip()})
+            if not isinstance(content, str) or not content.strip():
+                raise AppError(
+                    f"tool message at index {index} requires non-empty content",
+                    code=ErrorCode.INVALID_MESSAGE_CONTENT,
+                )
+            if not tool_call_id:
+                raise AppError(
+                    f"tool message at index {index} requires tool_call_id",
+                    code=ErrorCode.INVALID_MESSAGE_CONTENT,
+                )
+            api_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": content.strip()})
             continue
         if role == "user":
             image_parts = _image_content_parts(message)
@@ -475,14 +512,21 @@ def normalize_chat_messages(messages: list[Any]) -> list[dict[str, Any]]:
                 parts.extend(image_parts)
                 api_messages.append({"role": "user", "content": parts})
                 continue
-        if role not in {"user", "assistant"} or not isinstance(content, str):
-            continue
+        if role not in {"system", "user", "assistant"} or not isinstance(content, str):
+            raise AppError(
+                f"message at index {index} has an unsupported role or content",
+                code=ErrorCode.INVALID_MESSAGE_CONTENT,
+            )
         tool_calls = normalize_tool_calls(message.get("tool_calls")) if role == "assistant" else []
         if role == "assistant" and tool_calls:
             api_messages.append({"role": role, "content": content.strip(), "tool_calls": tool_calls})
             continue
-        if content.strip():
-            api_messages.append({"role": role, "content": content.strip()})
+        if not content.strip():
+            raise AppError(
+                f"message at index {index} has empty content",
+                code=ErrorCode.INVALID_MESSAGE_CONTENT,
+            )
+        api_messages.append({"role": role, "content": content.strip()})
     return api_messages
 
 
