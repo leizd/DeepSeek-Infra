@@ -3,6 +3,9 @@ use std::collections::HashSet;
 
 pub const MAX_REQUEST_BYTES: usize = 16_000_000;
 pub const CATALOG_MODEL_IDS: [&str; 2] = ["deepseek-v4-pro", "deepseek-v4-flash"];
+/// Mirrors `deepseek_client.MESSAGE_HARD_LIMIT`: above this many normalized
+/// messages the Python oracle demands prior context compression.
+pub const MESSAGE_HARD_LIMIT: usize = 40;
 const MAX_REQUEST_DEPTH: usize = 32;
 const MAX_TOKENS: i64 = 131_072;
 
@@ -63,6 +66,17 @@ fn normalized_model(value: Option<&Value>) -> Result<String, PreparationError> {
         }
     };
     Ok(normalized.to_string())
+}
+
+/// Mirrors the oracle's `contextSummary` escape hatch: a non-blank summary
+/// lifts the message-count ceiling. Both accept a non-string value as absent,
+/// matching `str(payload.get("contextSummary") or "").strip()`.
+fn context_summary_present(object: &Map<String, Value>) -> bool {
+    object
+        .get("contextSummary")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|summary| !summary.is_empty())
 }
 
 pub fn native_model_catalog(created: i64) -> Value {
@@ -422,10 +436,28 @@ pub fn prepare_request(value: &Value) -> Result<Value, PreparationError> {
         "model".to_string(),
         Value::String(normalized_model(object.get("model"))?),
     );
-    request.insert(
-        "messages".to_string(),
-        normalize_messages(object.get("messages"))?,
-    );
+    let messages = normalize_messages(object.get("messages"))?;
+    // Parity with `deepseek_client._validate_request_messages`: both rules are
+    // evaluated against *normalized* messages, because normalization drops
+    // empty-content turns. A request whose only user turn has blank content
+    // therefore still fails the user-message requirement.
+    let normalized_turns = messages.as_array().map(Vec::as_slice).unwrap_or_default();
+    if normalized_turns.len() > MESSAGE_HARD_LIMIT && !context_summary_present(object) {
+        return Err(PreparationError::new(
+            "context_compression_required",
+            "context compression is required before sending more than 40 messages",
+        ));
+    }
+    if !normalized_turns
+        .iter()
+        .any(|turn| turn.get("role").and_then(Value::as_str) == Some("user"))
+    {
+        return Err(PreparationError::new(
+            "missing_user_message",
+            "a user message is required",
+        ));
+    }
+    request.insert("messages".to_string(), messages);
     if object.get("stream") == Some(&Value::Bool(true)) {
         return Err(PreparationError::new(
             "invalid_request",
@@ -561,6 +593,171 @@ mod tests {
     fn valid_minimal_request() {
         let prepared = prepare_request(&minimal()).unwrap();
         assert_eq!(prepared["messages"][0]["content"], "hello");
+    }
+
+    #[test]
+    fn rejects_request_without_a_user_turn() {
+        // Oracle: `_validate_request_messages` requires at least one user turn.
+        let request = json!({"model": "deepseek-v4-pro", "messages": [{"role": "assistant", "content": "hi"}]});
+        let error = prepare_request(&request).unwrap_err();
+        assert_eq!(error.code, "missing_user_message");
+    }
+
+    #[test]
+    fn rejects_a_blank_turn_instead_of_dropping_it() {
+        // Measured against the real oracle (`normalize_chat_messages`): Python
+        // silently drops a blank-content turn and accepts the request, so
+        // `[{user:"  "},{user:"real"}]` becomes a single user turn. Dropping a
+        // turn the caller sent is silent data loss - the caller gets no signal
+        // that part of its input never reached the model - so this crate
+        // rejects instead. Rejecting is the strict direction; relaxing it to
+        // match the oracle would turn a rejection into an acceptance.
+        let request = json!({
+            "model": "deepseek-v4-pro",
+            "messages": [
+                {"role": "user", "content": "   "},
+                {"role": "user", "content": "real"},
+            ],
+        });
+        let error = prepare_request(&request).unwrap_err();
+        assert_eq!(error.code, "invalid_message_content");
+    }
+
+    #[test]
+    fn rejects_a_blank_assistant_turn_instead_of_dropping_it() {
+        // Same divergence, assistant side. Python drops it; this crate refuses
+        // the whole request rather than building a prompt that differs from
+        // what the caller sent.
+        let request = json!({
+            "model": "deepseek-v4-pro",
+            "messages": [
+                {"role": "assistant", "content": ""},
+                {"role": "user", "content": "real"},
+            ],
+        });
+        let error = prepare_request(&request).unwrap_err();
+        assert_eq!(error.code, "invalid_message_content");
+    }
+
+    #[test]
+    fn rejects_non_object_messages_instead_of_ignoring_them() {
+        // Second measured divergence: Python's `isinstance(message, dict)`
+        // guard skips a non-object entry and still accepts the request. That is
+        // the same silent-loss class as the blank-turn case, so this crate
+        // reports it instead of quietly discarding it.
+        let request = json!({
+            "model": "deepseek-v4-pro",
+            "messages": ["nope", {"role": "user", "content": "real"}],
+        });
+        let error = prepare_request(&request).unwrap_err();
+        assert_eq!(error.code, "invalid_messages");
+    }
+
+    #[test]
+    fn rejects_a_tool_message_without_tool_call_id_instead_of_dropping_it() {
+        // Third measured divergence: Python drops a `tool` turn whose
+        // `tool_call_id` is missing, which silently breaks the
+        // assistant.tool_calls <-> tool-result pairing the upstream API
+        // requires. Refusing surfaces the malformed request at the edge.
+        let request = json!({
+            "model": "deepseek-v4-pro",
+            "messages": [
+                {"role": "tool", "content": "x"},
+                {"role": "user", "content": "real"},
+            ],
+        });
+        let error = prepare_request(&request).unwrap_err();
+        assert_eq!(error.code, "invalid_message_content");
+    }
+
+    #[test]
+    fn keeps_system_turns_where_the_oracle_drops_them() {
+        // Fourth measured divergence, and the only one where this crate is the
+        // *looser* side. Python accepts only `user`/`assistant` during
+        // normalization and therefore drops every `system` turn the caller
+        // sends. `build_deepseek_request` constructs system turns itself, so
+        // system is a first-class role on this protocol; dropping caller-
+        // supplied ones would be a capability removal, not a strictness
+        // alignment. This test pins the retained behavior so the difference
+        // cannot disappear unnoticed.
+        let request = json!({
+            "model": "deepseek-v4-pro",
+            "messages": [
+                {"role": "system", "content": "be terse"},
+                {"role": "user", "content": "real"},
+            ],
+        });
+        let prepared = prepare_request(&request).unwrap();
+        let roles: Vec<&str> = prepared["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|message| message["role"].as_str())
+            .collect();
+        assert_eq!(roles, ["system", "user"]);
+        assert_eq!(prepared["messages"][0]["content"], "be terse");
+    }
+
+    #[test]
+    fn blank_only_turns_agree_with_the_oracle_by_both_refusing() {
+        // Not a divergence: Python drops the blank turn and then fails its
+        // user-turn requirement; this crate rejects the blank content. Both
+        // refuse, so the observable contract agrees. Only the code differs.
+        let request =
+            json!({"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "   "}]});
+        let error = prepare_request(&request).unwrap_err();
+        assert!(
+            matches!(
+                error.code,
+                "missing_user_message" | "invalid_message_content"
+            ),
+            "unexpected code: {}",
+            error.code
+        );
+    }
+
+    #[test]
+    fn rejects_more_than_message_hard_limit_without_context_summary() {
+        let mut messages = Vec::new();
+        for index in 0..=MESSAGE_HARD_LIMIT {
+            messages.push(json!({"role": "user", "content": format!("turn {index}")}));
+        }
+        let request = json!({"model": "deepseek-v4-pro", "messages": messages});
+        let error = prepare_request(&request).unwrap_err();
+        assert_eq!(error.code, "context_compression_required");
+    }
+
+    #[test]
+    fn context_summary_lifts_the_message_ceiling() {
+        let mut messages = Vec::new();
+        for index in 0..=MESSAGE_HARD_LIMIT {
+            messages.push(json!({"role": "user", "content": format!("turn {index}")}));
+        }
+        let request = json!({
+            "model": "deepseek-v4-pro",
+            "messages": messages,
+            "contextSummary": "earlier turns were compressed",
+        });
+        let prepared = prepare_request(&request).unwrap();
+        assert_eq!(
+            prepared["messages"].as_array().unwrap().len(),
+            MESSAGE_HARD_LIMIT + 1
+        );
+    }
+
+    #[test]
+    fn blank_context_summary_does_not_lift_the_message_ceiling() {
+        let mut messages = Vec::new();
+        for index in 0..=MESSAGE_HARD_LIMIT {
+            messages.push(json!({"role": "user", "content": format!("turn {index}")}));
+        }
+        let request = json!({
+            "model": "deepseek-v4-pro",
+            "messages": messages,
+            "contextSummary": "   ",
+        });
+        let error = prepare_request(&request).unwrap_err();
+        assert_eq!(error.code, "context_compression_required");
     }
 
     #[test]

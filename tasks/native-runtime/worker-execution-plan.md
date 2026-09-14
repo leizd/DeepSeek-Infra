@@ -522,3 +522,111 @@ production entry is still the Python HTTP server.
 
 This session does **not** change `release/native_runtime_5_0_evidence_v1.json`;
 it stays `NOT_READY`, which is correct.
+
+## Phase D edge slice: native chat execution wired (2026-09-14)
+
+Two commits on `codex/native-runtime-5.0.0-continue`:
+
+| Commit | Scope |
+| --- | --- |
+| `c0489a47` | `POST /v1/chat/completions` runs the shared `request_preparation` layer instead of a second thin validator; `MESSAGE_HARD_LIMIT`, `context_compression_required`, `missing_user_message` |
+| (this slice) | the route now executes: `chat_execution.rs` owns the upstream non-streaming exchange and the OpenAI envelope |
+
+### What is genuinely wired now
+
+`POST /v1/chat/completions` (non-stream) runs the whole path in Rust:
+preparation reuse -> credential check -> HTTP POST to the configured upstream ->
+usage/answer translation -> `chat.completion` envelope. Proven by
+`tests/chat_execution.rs`, which drives `create_app()` through Tower against a
+real loopback upstream and asserts the response **and** the captured outbound
+request (bearer header, JSON accept, prepared body, no credential in the body).
+
+Credentials come from the server environment only (`DEEPSEEK_API_KEY`,
+`DEEPSEEK_API_URL`, `DEEPSEEK_TIMEOUT_SECONDS`), matching the oracle's model:
+`request_preparation` rejects client-supplied `api_key`/`apikey`/`authorization`.
+
+### Explicitly NOT wired (each fails closed with its own code)
+
+| Missing capability | Behavior | Code / status |
+| --- | --- | --- |
+| Tool-call rounds (`append_tool_exchange`, web search, `create_pptx`) | refuses instead of returning the round's prose as the final answer | `NATIVE_CHAT_TOOL_ROUNDS_NOT_READY` / 501 |
+| No server-side upstream credential | refuses before contacting upstream | `NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING` / 503 |
+| Upstream non-success / malformed body / empty answer | 502, no `choices` emitted | `NATIVE_CHAT_UPSTREAM_STATUS` / `_MALFORMED` / `_NO_ANSWER` |
+| Upstream unreachable | 502 | `NATIVE_CHAT_UPSTREAM_UNREACHABLE` |
+
+Still on the Python path and **not** implemented here: SSE streaming
+(`stream_deepseek`), semantic cache, memory retrieval, context compression,
+model router, scheduler leases, resiliency retries, trace/span emission, budget
+ledger, and the tool loop. Streaming requests are refused by
+`request_preparation` before reaching this module.
+
+### Verified locally on this HEAD
+
+`cargo fmt -p deepseek-gateway -- --check` clean; `cargo clippy -p
+deepseek-gateway --all-targets` clean for the new files (the one remaining
+warning is pre-existing in `control_proxy.rs` and byte-identical to HEAD);
+`cargo test -p deepseek-gateway -j 1` -> 77 lib + 4 `chat_execution` + 1
+`go_control_proxy` + 1 `public_control_boundary`, all passed.
+
+Not claimed: exact-head CI, SSE parity, tool-round parity, `/api/*`
+authenticated proxy, or any readiness change. `release/native_runtime_5_0_evidence_v1.json`
+stays `NOT_READY`, which remains correct.
+
+## Oracle parity: measured normalization differences (2026-09-14)
+
+The earlier note called this "one known blank-content divergence". Measuring
+both implementations against the same nine inputs shows **four** real
+differences, one of which runs the opposite way. Both probes are committed and
+reproducible:
+
+```bash
+python tasks/native-runtime/oracle_parity_probe.py
+cargo run -p deepseek-gateway --example oracle_parity_probe
+```
+
+The Python probe extracts `normalize_chat_messages` and its helpers from the
+real sources via `ast` (stubbing only `build_attachment_context`, which needs
+`defusedxml`), so it exercises the oracle rather than a reimplementation.
+
+| Case | Python oracle | Rust `prepare_request` | Direction |
+| --- | --- | --- | --- |
+| A blank user + real | accepts, drops the blank turn | rejects `invalid_message_content` | Rust stricter |
+| B only blank user | rejects (no user turn) | rejects `invalid_message_content` | agree |
+| C blank assistant + real | accepts, drops the blank turn | rejects `invalid_message_content` | Rust stricter |
+| D content `null` + real | accepts, drops the turn | rejects `invalid_message_content` | Rust stricter |
+| E system + real | **drops the system turn** | keeps `system` + `user` | **Rust looser** |
+| F non-object + real | ignores the entry | rejects `invalid_messages` | Rust stricter |
+| G tool without `tool_call_id` | drops the tool turn | rejects `invalid_message_content` | Rust stricter |
+| H assistant `tool_calls`, blank content | accepts (assistant only) | rejects `missing_user_message` | Rust stricter |
+| I user content as parts array | accepts | accepts | agree |
+
+### Decision: keep Rust strict; do not relax it
+
+Cases A/C/D/F/G are the same defect in the oracle: `normalize_chat_messages`
+silently drops a message the caller sent, with no signal to the caller that part
+of its input never reached the model. G is the most damaging - dropping a `tool`
+turn breaks the `assistant.tool_calls` ↔ tool-result pairing the upstream API
+requires, so the upstream can reject the very next request. Rust refusing these
+is the strict direction, and the migration contract forbids turning a rejection
+into an acceptance, so **no Rust behavior changed in this slice**.
+
+The four previously-pinned tests were replaced by five tests that assert the
+intended behavior instead of describing a "divergence", plus one that records the
+agreement case. Test names now state the requirement
+(`rejects_a_blank_turn_instead_of_dropping_it`, ...) rather than the accident.
+
+### Open decision: case E (the only Rust-looser case)
+
+Python accepts only `user`/`assistant` during normalization, so a caller-supplied
+`system` turn is dropped. Rust keeps it. Tightening Rust here would mean
+deleting a capability, not aligning strictness: `build_deepseek_request` builds
+`system` turns itself (`stable_system_parts`), so `system` is a first-class role
+on this protocol. Recorded as an open decision rather than silently resolved;
+`keeps_system_turns_where_the_oracle_drops_them` pins the current behavior.
+
+### Not claimed
+
+These differences mean `POST /api/chat` (Python) and
+`POST /v1/chat/completions` (Rust) can disagree for the same request during
+migration. Reconciling the oracle is a change to the live Python production path
+and needs its own authorization; it has not been made.

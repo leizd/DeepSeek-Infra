@@ -24,9 +24,9 @@ production authority is Python. Target owners are 5.0 goals.
 
 | Domain | Target | Current prod | Native code | Wired | Evidence | Blocker |
 | --- | --- | --- | --- | --- | --- | --- |
-| public_http_listener | rust | py | deepseek-gateway routes registered | fail-closed stubs | local gateway tests only | chat/MCP/A2A/catalog unwired |
-| llm_gateway_sse | rust | py | gateway request-prep | no | none | SSE parity |
-| chat_completions_fast_path | rust | py | route exists | fail-closed | none | native chat |
+| public_http_listener | rust | py | deepseek-gateway routes registered | chat non-stream wired; MCP/A2A fail-closed | local gateway tests only | SSE, MCP/A2A, catalog parity |
+| llm_gateway_sse | rust | py | gateway request-prep + non-stream execution | request-prep only | local + real-stub tests | SSE parity |
+| chat_completions_fast_path | rust | py | route exists | wired, unverified | `tests/chat_execution.rs` (real upstream, local) | tool rounds; exact-head CI |
 | mcp_jsonrpc | rust | py | deepseek-mcp crate | no | corpus replay only | public `/mcp` |
 | rag_hot_path | rust | py | deepseek-rag | no | document-prep sidecar | query/index ownership |
 | tool_sandbox | rust | py | policy crate | no | none | sandbox execution |
@@ -75,7 +75,7 @@ several of these, but HTTP/CLI still import Python.
 
 | Package | Production entry | Target owner | Native stand-in | Status |
 | --- | --- | --- | --- | --- |
-| gateway | `web/routes/chat.py`, `openai_api.py` | rust | deepseek-gateway | registered, fail-closed |
+| gateway | `web/routes/chat.py`, `openai_api.py` | rust | deepseek-gateway | non-stream chat wired; MCP/A2A/SSE fail-closed |
 | agent_runtime | A2A routes, agent runs | go+rust | proto/agent, go/agent | shadow DAG only |
 | rag | `routes/rag.py`, local_rag | rust | deepseek-rag | library |
 | tool_runtime | tools, OCR, documents, slides | rust | none equivalent | **unmigrated** |
@@ -100,7 +100,7 @@ public inventory but does not implement behavior.
 
 | Surface | Current entry | Target | Native | Retire when |
 | --- | --- | --- | --- | --- |
-| `/v1/chat/completions`, `/v1/models` | `routes/chat.py` | rust edge | fail-closed | corpus + browser parity |
+| `/v1/chat/completions`, `/v1/models` | `routes/chat.py` | rust edge | non-stream wired (tool rounds refuse) | SSE + tool-round + browser parity |
 | `/api/chat`, `/api/title`, search | `routes/chat.py` | rust or go `/api` | no | proxy + Go API |
 | `/mcp`, `/api/mcp/*` | `routes/mcp.py` | rust | no | MCP corpus on edge |
 | `/.well-known/agent-card.json`, `/a2a` | agent_runtime | rust | fail-closed | A2A corpus |

@@ -75,11 +75,29 @@ None started by this continuation unless a later section records a PID.
 2. Outcome/risk verifiers and compensation (not journal primitives).
 3. Provider-backed Three-MinIO / two-Fleet kill-and-takeover.
 4. Rust edge chat/MCP/A2A/catalog parity; authenticated `/api/*` proxy.
+   Non-stream `/v1/chat/completions` now executes natively (see below); SSE,
+   tool rounds, MCP and A2A remain fail-closed.
+5. Oracle normalization differences (measured, four of them): Python silently
+   drops blank-content turns, `null` content, non-object entries and `tool`
+   turns missing `tool_call_id`; Rust refuses all of these. Python also drops
+   caller-supplied `system` turns, which Rust keeps - the one case where Rust is
+   the looser side. Rust behavior is deliberately unchanged; see the parity
+   section in `worker-execution-plan.md`. Reconciling the oracle touches the
+   live Python path and needs its own authorization.
 5. Go production cutover authorization protocol.
 6. Default launchers/images still start Python (`launch.py`, `docker-compose.yml`).
 7. Exact-head CI and Evidence Assembly.
 
 ## Next explicit action
+
+Native edge chat has moved from fail-closed to a wired non-stream path
+(`c0489a47` + `chat_execution.rs`, 2026-09-14). Verified locally:
+`cargo fmt -p deepseek-gateway -- --check` clean; `cargo test -p deepseek-gateway
+-j 1` -> 77 lib + 4 `chat_execution` real-upstream tests + 2 boundary tests,
+all passed. Still unwired and each failing closed with its own code: SSE
+streaming, tool-call rounds, semantic cache/memory/context-compression, model
+router, scheduler leases and budget ledger. `release/native_runtime_5_0_evidence_v1.json`
+stays `NOT_READY`.
 
 Wire Go `ExecuteClaimedStorageAction` to sign `control-storage-operation-grant-v1`
 from the live claim (no payload bytes in the grant), persist grants in the Rust
