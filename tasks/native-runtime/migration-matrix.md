@@ -24,9 +24,10 @@ production authority is Python. Target owners are 5.0 goals.
 
 | Domain | Target | Current prod | Native code | Wired | Evidence | Blocker |
 | --- | --- | --- | --- | --- | --- | --- |
-| public_http_listener | rust | py | deepseek-gateway routes registered | chat non-stream wired; MCP/A2A fail-closed | local gateway tests only | SSE, MCP/A2A, catalog parity |
-| llm_gateway_sse | rust | py | gateway request-prep + non-stream execution | non-stream wired; **prep parity closed** | local + real-stub tests; parity `df7dfa13` | SSE parity |
+| public_http_listener | rust | py | deepseek-gateway routes registered | chat non-stream + SSE wired; MCP/A2A fail-closed | local gateway tests only | MCP/A2A, catalog parity |
+| llm_gateway_sse | rust | py | gateway request-prep + non-stream + SSE execution | **SSE wired, byte-parity verified locally** | `chat_stream.rs` (15 unit) + `tests/chat_stream.rs` (7 real-boundary) + byte-identical probe | exact-head CI; `/api/chat` NDJSON |
 | chat_completions_fast_path | rust | py | route exists | wired, unverified | `tests/chat_execution.rs` (real upstream, local) | tool rounds; exact-head CI |
+| chat_streaming_openai_sse | rust | py | `chat_stream.rs` decoder + encoder + read loop | wired via `chat_completions` | byte-identical to oracle (`b9129475…`); 6 scripted upstream cases | tool-round refusal is in-band; no `/api/chat` |
 | chat_message_normalization | rust | py | both layers fail closed on the same codes | aligned | 101 passed (`df7dfa13`); `oracle_layering_probe.py` | none for preparation; SSE/tool rounds separate |
 | mcp_jsonrpc | rust | py | deepseek-mcp crate | no | corpus replay only | public `/mcp` |
 | rag_hot_path | rust | py | deepseek-rag | no | document-prep sidecar | query/index ownership |
@@ -101,8 +102,8 @@ public inventory but does not implement behavior.
 
 | Surface | Current entry | Target | Native | Retire when |
 | --- | --- | --- | --- | --- |
-| `/v1/chat/completions`, `/v1/models` | `routes/chat.py` | rust edge | non-stream wired (tool rounds refuse) | SSE + tool-round + browser parity |
-| `/api/chat`, `/api/title`, search | `routes/chat.py` | rust or go `/api` | no | proxy + Go API |
+| `/v1/chat/completions`, `/v1/models` | `routes/chat.py` | rust edge | non-stream + SSE wired (tool rounds refuse) | tool-round parity + browser parity |
+| `/api/chat` (NDJSON), `/api/title`, search | `routes/chat.py` | rust or go `/api` | no | proxy + Go API |
 | `/mcp`, `/api/mcp/*` | `routes/mcp.py` | rust | no | MCP corpus on edge |
 | `/.well-known/agent-card.json`, `/a2a` | agent_runtime | rust | fail-closed | A2A corpus |
 | `/api/workspace/*` backups/DR/resilience | workspace + backup_governance | go `/api` via edge | isolation only | Go control API |

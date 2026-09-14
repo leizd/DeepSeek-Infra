@@ -106,10 +106,31 @@ Native edge chat has moved from fail-closed to a wired non-stream path
 (`6ea4dde3` + `chat_execution.rs`, 2026-09-14). Verified locally:
 `cargo fmt -p deepseek-gateway -- --check` clean; `cargo test -p deepseek-gateway
 -j 1` -> 77 lib + 4 `chat_execution` real-upstream tests + 2 boundary tests,
-all passed. Still unwired and each failing closed with its own code: SSE
-streaming, tool-call rounds, semantic cache/memory/context-compression, model
-router, scheduler leases and budget ledger. `release/native_runtime_5_0_evidence_v1.json`
-stays `NOT_READY`.
+all passed.
+
+**SSE streaming is now wired too (2026-09-14, uncommitted).** `chat_stream.rs`
+owns upstream SSE decoding (`decode_event`/`decode_chunk`) and downstream OpenAI
+SSE encoding (`StreamChunkEncoder`), and `chat_completions` now branches on
+`stream`. `request_preparation` no longer refuses `stream: true` — it normalizes
+it to a boolean and forwards it, because transport selection is not a
+preparation-layer concern. Verified locally:
+
+- `cargo test -p deepseek-gateway -j 1` -> 96 lib + 4 `chat_execution` +
+  6 `chat_stream` real-boundary tests, all passed.
+- Byte-level parity: `tasks/native-runtime/sse_parity_probe.py` (extracts the
+  real `_sse`/`openai_chat_stream` via `ast`) vs `examples/sse_parity_probe.rs`
+  over the same two upstream scripts -> identical MD5
+  `b9129475b6bae8b1239f4529e0a50932`, 12 frames, no differences.
+- `cargo clippy -p deepseek-gateway --all-targets --all-features -- -D warnings`
+  -> only the pre-existing `control_proxy.rs:20` `result_large_err` (file
+  byte-identical to HEAD; local rustc 1.97.1 vs the declared 1.85).
+- See `docs/GATEWAY_SSE_PARITY.md` for the frame contract and the explicit
+  non-goals.
+
+Still unwired and each failing closed with its own code: tool-call rounds,
+`/api/chat` NDJSON (including `system_note`/`search`/`memory_suggestion`),
+semantic cache/memory/context-compression, model router, scheduler leases and
+budget ledger. `release/native_runtime_5_0_evidence_v1.json` stays `NOT_READY`.
 
 Wire Go `ExecuteClaimedStorageAction` to sign `control-storage-operation-grant-v1`
 from the live claim (no payload bytes in the grant), persist grants in the Rust

@@ -145,6 +145,33 @@ fn usage_int(usage: &Value, names: &[&str]) -> i64 {
     0
 }
 
+/// Build the upstream HTTP client shared by both exchange shapes.
+///
+/// The same client options must apply whether the caller streams or not, so the
+/// two paths cannot drift on timeout, redirect, proxy or retry policy. Only the
+/// total timeout differs: a single non-streaming answer is bounded by the
+/// request timeout, while a streaming body is read incrementally and must be
+/// allowed to outlive the first byte — its bound is the read loop's own
+/// cancellation, not a whole-response deadline.
+fn upstream_client(
+    config: &UpstreamConfig,
+    whole_response_timeout: bool,
+) -> Result<reqwest::Client, ChatExecutionError> {
+    let mut builder = reqwest::Client::builder()
+        // Upstream reachability must be the operator's decision, not whatever
+        // proxy variables happen to be set in the server process.
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .connect_timeout(Duration::from_secs(10));
+    if whole_response_timeout {
+        builder = builder.timeout(config.timeout);
+    }
+    builder
+        .build()
+        .map_err(|_| ChatExecutionError::UpstreamUnreachable)
+}
+
 /// Send one non-streaming completion and translate the upstream body.
 ///
 /// `prepared` is the output of `request_preparation::prepare_request`, so the
@@ -155,16 +182,7 @@ pub async fn execute_chat_completion(
 ) -> Result<ChatCompletionResult, ChatExecutionError> {
     let url = config.validate()?;
     let body = serde_json::to_vec(prepared).map_err(|_| ChatExecutionError::UpstreamMalformed)?;
-    let client = reqwest::Client::builder()
-        // Upstream reachability must be the operator's decision, not whatever
-        // proxy variables happen to be set in the server process.
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .retry(reqwest::retry::never())
-        .timeout(config.timeout)
-        .connect_timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|_| ChatExecutionError::UpstreamUnreachable)?;
+    let client = upstream_client(config, true)?;
     let response = client
         .post(url)
         .header("Authorization", format!("Bearer {}", config.api_key))
@@ -189,6 +207,47 @@ pub async fn execute_chat_completion(
     let payload: Value =
         serde_json::from_slice(&bytes).map_err(|_| ChatExecutionError::UpstreamMalformed)?;
     translate_completion(&payload)
+}
+
+/// Open one streaming upstream turn and hand back the live response.
+///
+/// Split from the decoding loop on purpose: the caller needs the *status* before
+/// it writes the first downstream frame, because a non-success upstream status
+/// must surface as an HTTP error rather than a `200` followed by an error frame.
+/// Returning the open `reqwest::Response` lets the caller make that decision and
+/// then own the read loop, which is where cancellation and backpressure live.
+///
+/// `prepared` must already carry `"stream": true`; `request_preparation` sets it
+/// for streaming requests, mirroring the oracle's
+/// `{"model": ..., "messages": ..., "stream": stream}` body (line 299 of
+/// `deepseek_client.py`). This function does not re-inject it: negotiating the
+/// body shape is preparation's job, and duplicating it here would make the two
+/// layers able to disagree.
+pub async fn open_chat_stream(
+    config: &UpstreamConfig,
+    prepared: &Value,
+) -> Result<reqwest::Response, ChatExecutionError> {
+    let url = config.validate()?;
+    let body = serde_json::to_vec(prepared).map_err(|_| ChatExecutionError::UpstreamMalformed)?;
+    let client = upstream_client(config, false)?;
+    let response = client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", config.api_key))
+        .header("Content-Type", "application/json")
+        // The oracle asks for `text/event-stream` on the streaming path
+        // (`request_with_body(..., accept="text/event-stream")`).
+        .header("Accept", "text/event-stream")
+        .body(body)
+        .send()
+        .await
+        .map_err(|_| ChatExecutionError::UpstreamUnreachable)?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(ChatExecutionError::UpstreamStatus {
+            status: status.as_u16(),
+        });
+    }
+    Ok(response)
 }
 
 /// Pure translation from an upstream chat-completions body. Split out so the

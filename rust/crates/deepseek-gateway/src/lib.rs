@@ -13,6 +13,7 @@ use std::{io, path::Path as FsPath};
 
 mod auth;
 pub mod chat_execution;
+pub mod chat_stream;
 mod control_proxy;
 pub mod observability;
 pub mod policy_routes;
@@ -495,8 +496,8 @@ async fn chat_completions(
     // Run the same preparation layer `/gateway/request/prepare` exposes instead
     // of a second, thinner validation path. The typed request is re-encoded so
     // both entry points share one normalization and one set of rules; the
-    // contract (`model` required, non-empty `messages`, a user turn, a
-    // streaming refusal) therefore cannot drift between the two.
+    // contract (`model` required, non-empty `messages`, a user turn, a boolean
+    // `stream`) therefore cannot drift between the two.
     let raw = serde_json::to_value(&req).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
@@ -517,19 +518,37 @@ async fn chat_completions(
     // The upstream credential is read from the server environment, never from
     // the request: preparation already rejects client-supplied credential keys.
     let config = chat_execution::UpstreamConfig::from_env();
+    let streaming = prepared
+        .get("stream")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if streaming {
+        // The upstream turn is opened *before* the response is built so a
+        // non-success upstream status can surface as an HTTP error. Once the
+        // stream is open the status line is already on the wire, so any later
+        // failure has to travel as an SSE error frame instead.
+        let upstream = chat_execution::open_chat_stream(&config, &prepared)
+            .await
+            .map_err(chat_execution_error)?;
+        let created = now_unix_seconds();
+        return Ok(chat_stream::streaming_response(upstream, &model, created));
+    }
     match chat_execution::execute_chat_completion(&config, &prepared).await {
-        Ok(result) => {
-            let created = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_secs() as i64)
-                .unwrap_or(0);
-            Ok(Json(chat_execution::openai_completion_response(
-                &result, &model, created,
-            ))
-            .into_response())
-        }
+        Ok(result) => Ok(Json(chat_execution::openai_completion_response(
+            &result,
+            &model,
+            now_unix_seconds(),
+        ))
+        .into_response()),
         Err(error) => Err(chat_execution_error(error)),
     }
+}
+
+fn now_unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Report a native execution failure with the OpenAI-compatible envelope and a
@@ -1183,13 +1202,29 @@ mod tests {
         );
     }
 
+    /// Streaming is a first-class transport now, so the route must no longer
+    /// answer `501`. Without an upstream credential the honest answer is `503`
+    /// from the credential check, *before* any streaming frame is written — the
+    /// request is accepted and prepared, then refused for a real reason.
     #[tokio::test]
-    async fn chat_rejects_streaming_for_mvp() {
+    async fn chat_accepts_streaming_and_fails_only_on_the_upstream() {
         let app = create_app();
         let body = r#"{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}],"stream":true}"#;
-        let (status, _body) =
+        let (status, response) =
             send_request(app, "POST", "/v1/chat/completions", Some(body.to_string())).await;
-        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        assert_ne!(
+            status,
+            StatusCode::NOT_IMPLEMENTED,
+            "streaming must not be refused as unimplemented: {response}"
+        );
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            parsed["error"]["code"],
+            "NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING"
+        );
+        // The refusal happened before the body, so it is ordinary JSON, not SSE.
+        assert!(!response.starts_with("data: "));
     }
 
     #[tokio::test]

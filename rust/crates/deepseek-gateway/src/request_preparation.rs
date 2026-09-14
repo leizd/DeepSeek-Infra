@@ -458,20 +458,24 @@ pub fn prepare_request(value: &Value) -> Result<Value, PreparationError> {
         ));
     }
     request.insert("messages".to_string(), messages);
-    if object.get("stream") == Some(&Value::Bool(true)) {
-        return Err(PreparationError::new(
-            "invalid_request",
-            "streaming requests stay on the Python path",
-        ));
-    }
+    // `stream` is a real upstream body field, exactly as the oracle builds it
+    // (`{"model": ..., "messages": ..., "stream": stream}`). It is normalized to
+    // a boolean and forwarded verbatim; the *transport* decision (single JSON
+    // body vs. an SSE read loop) belongs to the route, not to preparation. An
+    // earlier revision refused `stream: true` here, which made the preparation
+    // layer the arbiter of a transport concern it cannot see.
     if object.contains_key("stream") {
-        if object.get("stream") != Some(&Value::Bool(false)) {
-            return Err(PreparationError::new(
-                "invalid_request",
-                "stream must be a boolean",
-            ));
+        match object.get("stream") {
+            Some(Value::Bool(value)) => {
+                request.insert("stream".to_string(), Value::Bool(*value));
+            }
+            _ => {
+                return Err(PreparationError::new(
+                    "invalid_request",
+                    "stream must be a boolean",
+                ));
+            }
         }
-        request.insert("stream".to_string(), Value::Bool(false));
     }
 
     let mut tools = Vec::new();

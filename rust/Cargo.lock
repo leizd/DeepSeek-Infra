@@ -563,12 +563,16 @@ dependencies = [
 name = "deepseek-gateway"
 version = "0.1.0"
 dependencies = [
+ "async-stream",
  "axum",
  "blake2",
+ "bytes",
  "deepseek-core",
  "deepseek-mcp",
  "deepseek-policy",
  "deepseek-rag",
+ "futures-core",
+ "futures-util",
  "percent-encoding",
  "reqwest",
  "serde",
