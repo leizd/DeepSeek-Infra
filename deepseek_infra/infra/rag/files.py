@@ -45,6 +45,7 @@ from deepseek_infra.infra.rag.document_preparation import (
     rag_document_preparation_enabled,
 )
 from deepseek_infra.infra.tool_runtime.ocr import extract_image_ocr, extract_pdf_ocr
+from deepseek_infra.infra.tool_runtime.ocr_trace import OcrTrace
 
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
@@ -482,7 +483,7 @@ def fallback_page_texts_from_text(text: str, *, page_count: int = 0) -> list[dic
     return pages
 
 
-def extract_image_text(data: bytes, *, ocr_enabled: bool | None = None, ocr_api_key: str | None = None) -> str:
+def extract_image_text(data: bytes, *, ocr_enabled: bool | None = None, ocr_api_key: str | None = None, ocr_trace: OcrTrace | None = None) -> str:
     enabled = settings.ocr.enabled if ocr_enabled is None else ocr_enabled
     if not enabled:
         raise AppError(
@@ -490,7 +491,10 @@ def extract_image_text(data: bytes, *, ocr_enabled: bool | None = None, ocr_api_
             code=ErrorCode.OCR_REQUIRED,
             status=415,
         )
-    return extract_image_ocr(data, api_key=ocr_api_key)
+    # Callers that did not ask for telemetry keep the pre-existing call shape.
+    if ocr_trace is None:
+        return extract_image_ocr(data, api_key=ocr_api_key)
+    return extract_image_ocr(data, api_key=ocr_api_key, trace=ocr_trace)
 
 
 def chunk_text(text: str) -> list[dict[str, Any]]:
@@ -1424,7 +1428,7 @@ def read_xlsx_sheet(xml_bytes: bytes, shared_strings: list[str]) -> str:
     return "\n".join(rows)
 
 
-def extract_pdf_text(data: bytes, *, ocr_enabled: bool | None = None, ocr_api_key: str | None = None) -> str:
+def extract_pdf_text(data: bytes, *, ocr_enabled: bool | None = None, ocr_api_key: str | None = None, ocr_trace: OcrTrace | None = None) -> str:
     try:
         return _extract_pdf_text_native(data)
     except AppError as exc:
@@ -1438,7 +1442,10 @@ def extract_pdf_text(data: bytes, *, ocr_enabled: bool | None = None, ocr_api_ke
             code=ErrorCode.OCR_REQUIRED,
             status=422,
         )
-    return extract_pdf_ocr(data, api_key=ocr_api_key)
+    # Callers that did not ask for telemetry keep the pre-existing call shape.
+    if ocr_trace is None:
+        return extract_pdf_ocr(data, api_key=ocr_api_key)
+    return extract_pdf_ocr(data, api_key=ocr_api_key, trace=ocr_trace)
 
 
 def _extract_pdf_text_native(data: bytes) -> str:

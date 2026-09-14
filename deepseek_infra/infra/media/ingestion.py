@@ -6,6 +6,7 @@ from typing import Any
 
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.media import citations, indexer, library, processors, schema
+from deepseek_infra.infra.tool_runtime.ocr_trace import OcrTrace
 from deepseek_infra.infra.workspace.schema import normalize_source_ref
 
 
@@ -19,6 +20,7 @@ def ingest_upload(
     process: bool = False,
     ocr_enabled: bool | None = None,
     ocr_api_key: str | None = None,
+    ocr_trace: OcrTrace | None = None,
 ) -> dict[str, Any]:
     filename = str(file_info.get("filename") or "media.bin")
     data = file_info.get("data")
@@ -39,11 +41,11 @@ def ingest_upload(
         metadata=metadata or {},
     )
     if process:
-        media = process_media(media["mediaId"], ocr_enabled=ocr_enabled, ocr_api_key=ocr_api_key)["media"]
+        media = process_media(media["mediaId"], ocr_enabled=ocr_enabled, ocr_api_key=ocr_api_key, ocr_trace=ocr_trace)["media"]
     return media
 
 
-def register_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def register_from_payload(payload: dict[str, Any], *, ocr_trace: OcrTrace | None = None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise AppError("Media payload must be an object", code=ErrorCode.INVALID_PAYLOAD)
     project_id = str(payload.get("projectId") or "").strip()
@@ -94,17 +96,25 @@ def register_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         metadata=metadata,
     )
     if bool(payload.get("process")):
-        media = process_media(media["mediaId"])["media"]
+        media = process_media(media["mediaId"], ocr_trace=ocr_trace)["media"]
     return media
 
 
-def process_media(media_id: str, *, ocr_enabled: bool | None = None, ocr_api_key: str | None = None, force: bool = False) -> dict[str, Any]:
+def process_media(
+    media_id: str,
+    *,
+    ocr_enabled: bool | None = None,
+    ocr_api_key: str | None = None,
+    force: bool = False,
+    ocr_trace: OcrTrace | None = None,
+) -> dict[str, Any]:
+    trace = ocr_trace if ocr_trace is not None else OcrTrace()
     media = library.set_status(media_id, "processing")
     try:
         if force:
             indexer.delete_media_index(str(media["mediaId"]), project_id=str(media.get("projectId") or ""))
             library.save_segments(str(media["mediaId"]), [])
-        raw_segments = processors.extract_segments(media, ocr_enabled=ocr_enabled, ocr_api_key=ocr_api_key)
+        raw_segments = processors.extract_segments(media, ocr_enabled=ocr_enabled, ocr_api_key=ocr_api_key, ocr_trace=trace)
         segments = []
         for index, segment in enumerate(raw_segments):
             normalized = schema.normalize_segment(segment, media_id=media["mediaId"], fallback_index=index)
@@ -115,10 +125,19 @@ def process_media(media_id: str, *, ocr_enabled: bool | None = None, ocr_api_key
         raw_metadata = media.get("metadata")
         metadata: dict[str, Any] = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
         metadata.update(_segment_metadata(saved_segments, indexed=indexed))
+        # Persist OCR telemetry only when OCR actually ran, so media that never
+        # reached an OCR engine keeps its existing metadata shape.
+        if trace.recorded():
+            metadata["ocrTrace"] = trace.to_metadata()
         media = library.update_media(media["mediaId"], {"status": "ready", "metadata": metadata})
         return {"ok": True, "media": media, "segments": saved_segments, "indexed": indexed}
     except Exception as exc:
-        media = library.set_status(media_id, "failed", metadata_patch={"error": str(exc)[:500]})
+        patch: dict[str, Any] = {"error": str(exc)[:500]}
+        if trace.recorded():
+            # Keep the correlation id and the stage timings observed up to the
+            # failure so a timeout or unavailable engine stays diagnosable.
+            patch["ocrTrace"] = trace.to_metadata()
+        media = library.set_status(media_id, "failed", metadata_patch=patch)
         if isinstance(exc, AppError):
             raise
         raise AppError(f"Media processing failed: {exc}", code=ErrorCode.INTERNAL, status=500) from exc

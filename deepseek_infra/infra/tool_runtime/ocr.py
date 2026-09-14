@@ -15,11 +15,21 @@ import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from deepseek_infra.core.config import DEEPSEEK_TIMEOUT_SECONDS, DEEPSEEK_URL, settings
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.core.utils import format_upstream_error
+from deepseek_infra.infra.tool_runtime.ocr_trace import (
+    OCR_STAGE_NORMALIZE,
+    OCR_STAGE_SCORE,
+    OCR_STAGE_SELECT,
+    OCR_STAGE_TRANSPORT,
+    OcrTrace,
+    note_attempt,
+    ocr_stage,
+    record_backend_timings,
+)
 
 # OCR 输入预处理 / 渲染参数。提高印刷体识别率的两个关键：足够分辨率 + 二值化。
 OCR_PDF_DPI = 300  # PDF 渲染 DPI（原 200 偏低；300 显著提升小字 / 公式识别）
@@ -1390,6 +1400,54 @@ class WindowsOcrEngine:
                 path.unlink(missing_ok=True)
 
 
+_ANDROID_TIMEOUT_MARKERS = ("timed out", "timeout")
+_ANDROID_DECODE_MARKERS = ("cannot be decoded", "unable to decode", "broken image", "decode")
+_ANDROID_ERROR_MESSAGE_CHARS = 300
+
+
+def _take_android_backend_timings(bridge: Any) -> dict[str, object]:
+    """Read and clear the JNI bridge stage timings.
+
+    Telemetry is best-effort by contract: a bridge that predates the timing probe,
+    returns nothing, or returns malformed JSON must never fail an OCR call.
+    """
+    try:
+        raw = bridge.takeLastTimingsJson()
+    except Exception:
+        return {}
+    try:
+        parsed = json.loads(str(raw or ""))
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _android_bridge_error(exc: Exception, *, stage: str) -> AppError:
+    """Map a raw JNI/JVM failure onto the shared OCREngine error contract.
+
+    Every other engine reports ``OCR_UNAVAILABLE`` for "this engine cannot serve
+    the request" and ``OCR_EMPTY`` for "no text found".  The bridge raises plain
+    ``IllegalArgumentException`` / ``IllegalStateException``, which the
+    orchestration layer would otherwise classify as an internal 500 and lose the
+    ``OCR_UNAVAILABLE`` / ``OCR_EMPTY`` semantics the API surface exposes.
+    """
+    name = type(exc).__name__
+    message = str(exc).strip()[:_ANDROID_ERROR_MESSAGE_CHARS]
+    lowered = message.lower()
+    if any(marker in lowered for marker in _ANDROID_TIMEOUT_MARKERS):
+        reason = "timeout"
+    elif any(marker in lowered for marker in _ANDROID_DECODE_MARKERS):
+        reason = "decode"
+    else:
+        reason = "bridge"
+    return AppError(
+        f"Android ML Kit OCR failed ({reason}) during {stage}: {name}: {message}",
+        code=ErrorCode.OCR_UNAVAILABLE,
+        status=415,
+        details={"engine": "android-mlkit", "stage": stage, "reason": reason},
+    )
+
+
 class AndroidMlKitEngine:
     name = "android-mlkit"
 
@@ -1411,12 +1469,25 @@ class AndroidMlKitEngine:
                 status=415,
             )
         self._bridge = bridge
+        # Stage breakdown reported by the bridge for the most recent call on this
+        # thread. The orchestration layer reads it right after each invocation.
+        self.last_backend_timings: dict[str, object] = {}
 
     def extract(self, pdf_bytes: bytes) -> str:
-        return normalize_ocr_text(str(self._bridge.recognizePdf(pdf_bytes)))
+        return self._run(lambda: self._bridge.recognizePdf(pdf_bytes), "recognizePdf")
 
     def extract_image(self, image_bytes: bytes) -> str:
-        return normalize_ocr_text(str(self._bridge.recognizeImage(image_bytes)))
+        return self._run(lambda: self._bridge.recognizeImage(image_bytes), "recognizeImage")
+
+    def _run(self, call: Callable[[], Any], stage: str) -> str:
+        self.last_backend_timings = {}
+        try:
+            raw = call()
+        except Exception as exc:
+            self.last_backend_timings = _take_android_backend_timings(self._bridge)
+            raise _android_bridge_error(exc, stage=stage) from exc
+        self.last_backend_timings = _take_android_backend_timings(self._bridge)
+        return normalize_ocr_text(str(raw))
 
 
 def select_ocr_engine(api_key: str | None = None) -> OCREngine | None:
@@ -1470,6 +1541,20 @@ def _with_error_details(message: str, details: list[str]) -> str:
     return f"{message} Details: {'; '.join(cleaned[:4])}"
 
 
+def _merge_ocr_error_details(*sources: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Combine captured engine details with the trace summary for one error.
+
+    Later sources win, so the trace's ``correlationId`` always survives. When no
+    telemetry was requested and no engine attached details, this returns ``None``,
+    keeping the error response identical to the pre-telemetry behaviour.
+    """
+    merged: dict[str, Any] = {}
+    for source in sources:
+        if source:
+            merged.update(source)
+    return merged or None
+
+
 def _pdf_page_images(pdf_bytes: bytes, engines: list[OCREngine]) -> list[object]:
     for engine in engines:
         engine_pdf2image = getattr(engine, "_pdf2image", None)
@@ -1492,6 +1577,7 @@ def _extract_pdf_with_page_fallback(
     *,
     no_engine_message: str,
     empty_message: str,
+    trace: OcrTrace | None = None,
 ) -> str | None:
     page_engines = [engine for engine in engines if callable(getattr(engine, "extract_page_image", None))]
     if not page_engines:
@@ -1504,55 +1590,76 @@ def _extract_pdf_with_page_fallback(
     except Exception as exc:
         raise AppError("PDF OCR rendering failed.", code=ErrorCode.OCR_UNAVAILABLE, status=415) from exc
 
+    if trace is not None:
+        trace.pages = len(images)
+
     pages: list[str] = []
     runtime_errors: list[str] = []
     saw_empty_result = False
+    last_details: dict[str, Any] | None = None
     for index, image in enumerate(images, start=1):
         page_text = ""
         page_score = -1
         for engine in page_engines:
             name = _engine_name(engine)
             try:
-                text = str(getattr(engine, "extract_page_image")(image))
+                with ocr_stage(trace, OCR_STAGE_TRANSPORT):
+                    text = str(getattr(engine, "extract_page_image")(image))
             except AppError as exc:
+                note_attempt(trace, name, "empty" if exc.code == ErrorCode.OCR_EMPTY else "unavailable")
                 if exc.code == ErrorCode.OCR_EMPTY:
                     saw_empty_result = True
                     runtime_errors.append(f"{name} page {index}: {exc}")
                     continue
                 if exc.code == ErrorCode.OCR_UNAVAILABLE:
+                    last_details = _merge_ocr_error_details(last_details, exc.details)
                     runtime_errors.append(f"{name} page {index}: {exc}")
                     continue
                 raise
             except Exception as exc:
+                note_attempt(trace, name, "error")
                 runtime_errors.append(f"{name} page {index}: {exc}")
                 continue
 
-            text = normalize_ocr_text(text)
-            if name == "formula-command" and not _formula_ocr_output_is_credible(text):
-                text = ""
+            record_backend_timings(trace, engine)
+
+            with ocr_stage(trace, OCR_STAGE_NORMALIZE):
+                text = normalize_ocr_text(text)
+                if name == "formula-command" and not _formula_ocr_output_is_credible(text):
+                    text = ""
             if text.strip():
                 if name == "deepseek-api":
                     page_text = text.strip()
+                    if trace is not None:
+                        trace.engine = name
+                    note_attempt(trace, name, "ok")
                     break
-                score = _ocr_text_score(text)
+                with ocr_stage(trace, OCR_STAGE_SCORE):
+                    score = _ocr_text_score(text)
                 if score > page_score:
                     page_text = text.strip()
                     page_score = score
+                    if trace is not None:
+                        trace.engine = name
+                note_attempt(trace, name, "candidate")
                 continue
             saw_empty_result = True
+            note_attempt(trace, name, "empty")
             runtime_errors.append(f"{name} page {index}: empty result")
 
         if page_text:
             pages.append(f"[PDF 第 {index} 页 (OCR)]\n{page_text}")
 
+    details = _merge_ocr_error_details(last_details, trace.details() if trace is not None else None)
     if pages:
         return "\n\n".join(pages)
     if saw_empty_result:
-        raise AppError(empty_message, code=ErrorCode.OCR_EMPTY, status=422)
+        raise AppError(empty_message, code=ErrorCode.OCR_EMPTY, status=422, details=details)
     raise AppError(
         _with_error_details(no_engine_message, runtime_errors),
         code=ErrorCode.OCR_UNAVAILABLE,
         status=415,
+        details=details,
     )
 
 
@@ -1563,13 +1670,16 @@ def _extract_with_fallback(
     no_engine_message: str,
     empty_message: str,
     api_key: str | None = None,
+    trace: OcrTrace | None = None,
 ) -> str:
-    engines, startup_errors = _ocr_engine_candidates(api_key=api_key)
+    with ocr_stage(trace, OCR_STAGE_SELECT):
+        engines, startup_errors = _ocr_engine_candidates(api_key=api_key)
     if not engines:
         raise AppError(
             _with_error_details(no_engine_message, startup_errors),
             code=ErrorCode.OCR_UNAVAILABLE,
             status=415,
+            details=_merge_ocr_error_details(trace.details() if trace is not None else None),
         )
 
     if mode == "pdf":
@@ -1578,6 +1688,7 @@ def _extract_with_fallback(
             engines,
             no_engine_message=no_engine_message,
             empty_message=empty_message,
+            trace=trace,
         )
         if page_text is not None:
             return page_text
@@ -1586,51 +1697,72 @@ def _extract_with_fallback(
     saw_empty_result = False
     best_text = ""
     best_score = -1
+    last_details: dict[str, Any] | None = None
     for engine in engines:
         name = _engine_name(engine)
         try:
-            text = engine.extract(data) if mode == "pdf" else engine.extract_image(data)
+            with ocr_stage(trace, OCR_STAGE_TRANSPORT):
+                text = engine.extract(data) if mode == "pdf" else engine.extract_image(data)
         except AppError as exc:
+            note_attempt(trace, name, "empty" if exc.code == ErrorCode.OCR_EMPTY else "unavailable")
             if exc.code == ErrorCode.OCR_EMPTY:
                 saw_empty_result = True
                 runtime_errors.append(f"{name}: {exc}")
                 continue
             if exc.code == ErrorCode.OCR_UNAVAILABLE:
+                last_details = _merge_ocr_error_details(last_details, exc.details)
                 runtime_errors.append(f"{name}: {exc}")
                 continue
             raise
         except Exception as exc:
+            note_attempt(trace, name, "error")
             runtime_errors.append(f"{name}: {exc}")
             continue
 
-        text = normalize_ocr_text(text)
-        if name == "formula-command" and not _formula_ocr_output_is_credible(text):
-            text = ""
+        record_backend_timings(trace, engine)
+
+        with ocr_stage(trace, OCR_STAGE_NORMALIZE):
+            text = normalize_ocr_text(text)
+            if name == "formula-command" and not _formula_ocr_output_is_credible(text):
+                text = ""
         if text.strip():
             if name == "deepseek-api":
+                if trace is not None:
+                    trace.engine = name
+                note_attempt(trace, name, "ok")
                 return text.strip()
-            score = _ocr_text_score(text)
+            with ocr_stage(trace, OCR_STAGE_SCORE):
+                score = _ocr_text_score(text)
             if score > best_score:
                 best_text = text.strip()
                 best_score = score
+                if trace is not None:
+                    trace.engine = name
+            note_attempt(trace, name, "candidate")
             continue
         saw_empty_result = True
+        note_attempt(trace, name, "empty")
         runtime_errors.append(f"{name}: empty result")
 
+    details = _merge_ocr_error_details(last_details, trace.details() if trace is not None else None)
     if best_text:
         return best_text
 
     if saw_empty_result:
-        raise AppError(empty_message, code=ErrorCode.OCR_EMPTY, status=422)
+        raise AppError(empty_message, code=ErrorCode.OCR_EMPTY, status=422, details=details)
 
     raise AppError(
         _with_error_details(no_engine_message, startup_errors + runtime_errors),
         code=ErrorCode.OCR_UNAVAILABLE,
         status=415,
+        details=details,
     )
 
 
-def extract_pdf_ocr(pdf_bytes: bytes, *, api_key: str | None = None) -> str:
+def extract_pdf_ocr(pdf_bytes: bytes, *, api_key: str | None = None, trace: OcrTrace | None = None) -> str:
+    if trace is not None:
+        trace.mode = "pdf"
+        trace.input_bytes = len(pdf_bytes)
     return _extract_with_fallback(
         pdf_bytes,
         mode="pdf",
@@ -1640,10 +1772,14 @@ def extract_pdf_ocr(pdf_bytes: bytes, *, api_key: str | None = None) -> str:
         ),
         empty_message="OCR did not recognize any text.",
         api_key=api_key,
+        trace=trace,
     )
 
 
-def extract_image_ocr(image_bytes: bytes, *, api_key: str | None = None) -> str:
+def extract_image_ocr(image_bytes: bytes, *, api_key: str | None = None, trace: OcrTrace | None = None) -> str:
+    if trace is not None:
+        trace.mode = "image"
+        trace.input_bytes = len(image_bytes)
     return _extract_with_fallback(
         image_bytes,
         mode="image",
@@ -1653,4 +1789,5 @@ def extract_image_ocr(image_bytes: bytes, *, api_key: str | None = None) -> str:
         ),
         empty_message="OCR did not recognize any text in image.",
         api_key=api_key,
+        trace=trace,
     )

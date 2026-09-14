@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
-from deepseek_infra.core.errors import AppError
+from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.media import ingestion, library, schema
 from deepseek_infra.infra.rag import local_rag
+from deepseek_infra.infra.tool_runtime import ocr
+from deepseek_infra.infra.tool_runtime.ocr_trace import OcrTrace
 from deepseek_infra.infra.workspace import exports, projects
+
+TINY_PNG = b"\x89PNG\r\n\x1a\n" + b"traceable-image" * 4
 
 
 def test_media_register_process_index_and_delete(tmp_settings: Path) -> None:
@@ -162,3 +168,67 @@ def test_video_frame_captions_are_sorted_and_frame_paths_validated(tmp_settings:
                 "process": True,
             }
         )
+
+
+def test_media_ocr_records_correlation_trace(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = SimpleNamespace(name="tesseract", extract_image=lambda data: "traced text")
+    monkeypatch.setattr(ocr, "_ocr_engine_candidates", lambda api_key=None: ([engine], []))
+    trace = OcrTrace(correlation_id="media-req-1")
+
+    media = ingestion.ingest_upload(
+        {"filename": "scan.png", "content_type": "image/png", "data": TINY_PNG},
+        title="Traced Scan",
+        process=True,
+        ocr_enabled=True,
+        ocr_trace=trace,
+    )
+
+    assert media["status"] == "ready"
+    payload = media["metadata"]["ocrTrace"]
+    assert payload["correlationId"] == "media-req-1"
+    assert payload["mode"] == "image"
+    assert payload["engine"] == "tesseract"
+    assert payload["inputBytes"] == len(TINY_PNG)
+    assert payload["attempts"] == ["tesseract:candidate"]
+    assert payload["timingsUs"]["transport"] >= 0
+    assert "backendTimingsUs" not in payload
+
+
+def test_media_ocr_failure_keeps_correlation_trace(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def explode(*args: Any, **kwargs: Any) -> str:
+        raise AppError("engine down", code=ErrorCode.OCR_UNAVAILABLE, status=415)
+
+    engine = SimpleNamespace(name="tesseract", extract_image=explode)
+    monkeypatch.setattr(ocr, "_ocr_engine_candidates", lambda api_key=None: ([engine], []))
+    project = projects.create_project("Media OCR Trace Failure")
+    project_id = str(project["projectId"])
+
+    with pytest.raises(AppError):
+        ingestion.ingest_upload(
+            {"filename": "scan.png", "content_type": "image/png", "data": TINY_PNG},
+            project_id=project_id,
+            process=True,
+            ocr_enabled=True,
+            ocr_trace=OcrTrace(correlation_id="media-fail-1"),
+        )
+
+    failed = library.list_media(project_id=project_id)[0]
+    assert failed["status"] == "failed"
+    payload = failed["metadata"]["ocrTrace"]
+    assert payload["correlationId"] == "media-fail-1"
+    assert payload["attempts"] == ["tesseract:unavailable"]
+    assert failed["metadata"]["error"]
+
+
+def test_media_without_ocr_keeps_metadata_shape(tmp_settings: Path) -> None:
+    media = ingestion.register_from_payload(
+        {
+            "type": "webpage",
+            "title": "No OCR Here",
+            "html": "<main><p>Static snapshot.</p></main>",
+            "process": True,
+        }
+    )
+
+    assert media["status"] == "ready"
+    assert "ocrTrace" not in media["metadata"]
