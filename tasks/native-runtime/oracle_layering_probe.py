@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import ast
 import json
-import sys
+from dataclasses import dataclass as _dataclass
 from pathlib import Path
 
 SOURCE = Path(r"D:\deepseek\deepseek_infra\infra\gateway\deepseek_client.py")
@@ -127,8 +127,6 @@ ns.update({
     "merge_context_manager_diagnostics": lambda diagnostics, update: diagnostics,
     "context_taint": type("_T", (), {"build_taint_report": staticmethod(lambda body: None)})(),
 })
-
-from dataclasses import dataclass as _dataclass
 
 
 @_dataclass(frozen=True)

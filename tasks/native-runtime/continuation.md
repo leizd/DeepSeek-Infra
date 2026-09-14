@@ -77,21 +77,33 @@ None started by this continuation unless a later section records a PID.
 4. Rust edge chat/MCP/A2A/catalog parity; authenticated `/api/*` proxy.
    Non-stream `/v1/chat/completions` now executes natively (see below); SSE,
    tool rounds, MCP and A2A remain fail-closed.
-5. Oracle normalization differences (measured, four of them): Python silently
-   drops blank-content turns, `null` content, non-object entries and `tool`
-   turns missing `tool_call_id`; Rust refuses all of these. Python also drops
-   caller-supplied `system` turns, which Rust keeps - the one case where Rust is
-   the looser side. Rust behavior is deliberately unchanged; see the parity
-   section in `worker-execution-plan.md`. Reconciling the oracle touches the
-   live Python path and needs its own authorization.
+5. Oracle normalization differences - **RESOLVED 2026-09-14** (commit `df7dfa13`).
+   The oracle silently dropped blank-content turns, `null` content, non-object
+   entries, `tool` turns missing `tool_call_id`, and caller-supplied `system`
+   turns. It now refuses the first four (same `ErrorCode` values as Rust) and
+   *keeps* `system` turns. The `system` case is the important correction: a
+   second measurement on the full assembly path
+   (`tasks/native-runtime/oracle_layering_probe.py`) showed the caller's
+   instruction never reached the upstream body at all, because
+   `normalize_chat_messages` dropped it while `build_deepseek_request` builds
+   the authoritative prefix separately from `payload["systemPrompt"]`. Keeping
+   the turn is therefore not a capability addition - it stops silent data loss.
+   Rust behavior unchanged, as decided.
 5. Go production cutover authorization protocol.
 6. Default launchers/images still start Python (`launch.py`, `docker-compose.yml`).
 7. Exact-head CI and Evidence Assembly.
 
 ## Next explicit action
 
+The Python oracle now fails closed on unrepresentable turns instead of silently
+dropping them (commit `df7dfa13`, 2026-09-14). Verified: 101 passed across
+`test_deepseek_client_failure_paths.py`, `test_gateway_request_preparation.py`
+and `test_rust_gateway_request_parity_contract.py`; the only pre-existing failure
+was the test that encoded the bug itself. The four measured parity differences
+are now closed, with the two layers proven to agree.
+
 Native edge chat has moved from fail-closed to a wired non-stream path
-(`c0489a47` + `chat_execution.rs`, 2026-09-14). Verified locally:
+(`6ea4dde3` + `chat_execution.rs`, 2026-09-14). Verified locally:
 `cargo fmt -p deepseek-gateway -- --check` clean; `cargo test -p deepseek-gateway
 -j 1` -> 77 lib + 4 `chat_execution` real-upstream tests + 2 boundary tests,
 all passed. Still unwired and each failing closed with its own code: SSE

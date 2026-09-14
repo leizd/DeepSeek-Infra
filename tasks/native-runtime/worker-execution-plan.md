@@ -615,18 +615,65 @@ intended behavior instead of describing a "divergence", plus one that records th
 agreement case. Test names now state the requirement
 (`rejects_a_blank_turn_instead_of_dropping_it`, ...) rather than the accident.
 
-### Open decision: case E (the only Rust-looser case)
+### Case E resolved by user decision: keep the `system` turn
 
-Python accepts only `user`/`assistant` during normalization, so a caller-supplied
-`system` turn is dropped. Rust keeps it. Tightening Rust here would mean
-deleting a capability, not aligning strictness: `build_deepseek_request` builds
-`system` turns itself (`stable_system_parts`), so `system` is a first-class role
-on this protocol. Recorded as an open decision rather than silently resolved;
+Python accepted only `user`/`assistant` during normalization, so a
+caller-supplied `system` turn was dropped. Rust keeps it. Tightening Rust here
+would have meant deleting a capability, not aligning strictness:
+`build_deepseek_request` builds `system` turns itself (`stable_system_parts`),
+so `system` is a first-class role on this protocol.
 `keeps_system_turns_where_the_oracle_drops_them` pins the current behavior.
+
+**Decision (user, 2026-09-14): keep Rust's behavior, then fix the Python oracle.**
+
+### Second measurement: the layers, and why E was not merely a preference
+
+The nine-case probe compares `normalize_chat_messages` - one layer. The upstream
+body is that layer **plus** `build_deepseek_request`, which composes the
+authoritative system prefix from `payload["systemPrompt"]` and pushes it into
+`api_messages` *before* extending with the normalized turns. Running the real
+assembly path (`tasks/native-runtime/oracle_layering_probe.py`, which extracts
+`build_deepseek_request` from source via `ast`) showed the consequence directly:
+
+| Input | `normalize_chat_messages` | Upstream body |
+| --- | --- | --- |
+| `system` + `user`, no `systemPrompt` | `[user]` | user + trailing dynamic system - **"be concise" gone** |
+| `system` + `user`, with `systemPrompt` | `[user]` | systemPrompt + user + trailing - **still gone** |
+| only `system` | `[]` | raises "A user message is required" |
+
+So dropping `system` was not the oracle exercising restraint about duplicates -
+the caller's instruction never reached the model by any path. Combined with
+A/C/D/F/G this is one defect class: silent loss of caller input behind a `200`.
+
+### Fix applied (`df7dfa13`)
+
+`normalize_chat_messages` now refuses each unrepresentable turn instead of
+dropping it, using the same `ErrorCode` values Rust returns - no new codes, no
+wire-contract change:
+
+| Caller input | Now | Rust |
+| --- | --- | --- |
+| `system` turn + `user` turn | kept, reaches the upstream body | kept |
+| non-object entry | `invalid_messages` | `invalid_messages` |
+| blank / `None` content | `invalid_message_content` | `invalid_message_content` |
+| `tool` turn without `tool_call_id` | `invalid_message_content` | `invalid_message_content` |
+
+Slide-window invariants were re-verified at 14/44/64 messages: the leading stable
+prefix and trailing dynamic-context message stay protected, and the trailing slot
+still holds the dynamic context rather than the caller's turn. A caller `system`
+turn is a *variable* message, so it can still be windowed out on long
+conversations - that is the existing contract, not a regression.
+
+Verified: 101 passed across `test_deepseek_client_failure_paths.py`,
+`test_gateway_request_preparation.py` and
+`test_rust_gateway_request_parity_contract.py`. Before the fix the same three
+files were 138 passed / 1 failed, and the single failure was
+`test_chat_message_normalization_rejects_malformed_entries` - the test that
+encoded the bug by asserting `system` was skipped.
 
 ### Not claimed
 
-These differences mean `POST /api/chat` (Python) and
-`POST /v1/chat/completions` (Rust) can disagree for the same request during
-migration. Reconciling the oracle is a change to the live Python production path
-and needs its own authorization; it has not been made.
+`POST /api/chat` (Python) and `POST /v1/chat/completions` (Rust) now agree on
+these inputs at the **preparation** layer. They can still differ elsewhere -
+SSE streaming, tool rounds, semantic cache/memory/context-compression and the
+model router remain Python-owned and unwired on the Rust side.

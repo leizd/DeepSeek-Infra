@@ -25,8 +25,9 @@ production authority is Python. Target owners are 5.0 goals.
 | Domain | Target | Current prod | Native code | Wired | Evidence | Blocker |
 | --- | --- | --- | --- | --- | --- | --- |
 | public_http_listener | rust | py | deepseek-gateway routes registered | chat non-stream wired; MCP/A2A fail-closed | local gateway tests only | SSE, MCP/A2A, catalog parity |
-| llm_gateway_sse | rust | py | gateway request-prep + non-stream execution | request-prep only | local + real-stub tests | SSE parity |
+| llm_gateway_sse | rust | py | gateway request-prep + non-stream execution | non-stream wired; **prep parity closed** | local + real-stub tests; parity `df7dfa13` | SSE parity |
 | chat_completions_fast_path | rust | py | route exists | wired, unverified | `tests/chat_execution.rs` (real upstream, local) | tool rounds; exact-head CI |
+| chat_message_normalization | rust | py | both layers fail closed on the same codes | aligned | 101 passed (`df7dfa13`); `oracle_layering_probe.py` | none for preparation; SSE/tool rounds separate |
 | mcp_jsonrpc | rust | py | deepseek-mcp crate | no | corpus replay only | public `/mcp` |
 | rag_hot_path | rust | py | deepseek-rag | no | document-prep sidecar | query/index ownership |
 | tool_sandbox | rust | py | policy crate | no | none | sandbox execution |
