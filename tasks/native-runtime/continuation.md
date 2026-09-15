@@ -681,3 +681,55 @@ Next: slice C, the scorer (`query_tokens` / `score_chunk` / `utc_now_iso` /
 `latest_user_query`) — pure, and shared with `search_files`, so one port unblocks two
 branches. `due_reminders` is ported and unit-tested but not yet in a compared corpus
 (calling it mutates the store past the probe's last observation).
+
+**Data layer slice C: the retrieval scorer (2026-09-15 九轮，uncommitted).**
+
+`core_utils.rs` ports `query_tokens`, `score_chunk`, `utc_now_iso` and
+`latest_user_query` from `core/utils.py`. Shared by the memory branches **and** the
+RAG `search_files` branch, so one port serves two.
+
+**A measured defect in the oracle.** `query_tokens` ends with
+`sorted(tokens, key=len, reverse=True)[:80]` over a **set**. Python's sort is stable,
+so equal-length tokens keep the set's iteration order, which depends on
+`PYTHONHASHSEED`; when more than 80 tokens survive, *which* 80 are kept changes every
+run. Measured:
+
+    100 equal-length tokens, seed 1 -> x70,x17,x04,x11,...
+    100 equal-length tokens, seed 2 -> x78,x43,x17,x67,...
+    weighted case: seed 1 -> score 360; seed 5 -> score 390
+
+The score ranks memories, so this leaks into tool output. The port therefore orders
+by **length descending, then lexicographically** — deterministic where the oracle is
+not. That is a deliberate divergence: there is no single oracle behaviour to
+preserve, and CPython's set order is impossible to reproduce by construction. It
+narrows a varying result to a fixed one and weakens nothing.
+
+The probe matches that reality instead of hiding it: token lists are compared
+**sorted**; inputs where more than 80 tokens survive report **only the count** (the
+subset itself differs run to run); and a unit test pins the determinism as a property
+of this port.
+
+Signature difference, documented: `utc_now_iso()` reads the clock and takes no
+argument in the oracle; this port is `utc_now_iso(epoch_seconds)`, so the clock is
+supplied and can be pinned. The probe compares the *rendering* for four epochs.
+
+Details that are easy to conflate: the tokenizer's character classes need **two or
+more** characters while the weight is `max(2, min(len, 10))`; CJK bigrams are added
+**on top of** the run itself; and a `set` dedupes windows, so `"中" * 60` yields
+exactly two tokens.
+
+Also fixed: a unit test asserted `query_tokens("Rust   OWNERSHIP") == ["rust",
+"ownership"]`, the wrong order — `ownership` is longer and comes first. Same mistake
+class as the previous six; the ordering rule now has its own test.
+
+Verified locally:
+- Byte-level parity: **identical MD5 `2170fb900a543b67163f1417d8af2c15`**, 37 keys,
+  no differences — 13 tokenizer inputs, 2 capped inputs, 10 scoring inputs with token
+  lists, 4 epoch renderings, 8 `latest_user_query` payloads.
+- `cargo test -p deepseek-policy` -> 180 tests, all pass (9 new).
+- `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings` ->
+  clean; `cargo fmt` applied.
+
+Next: slice D, the memory triple (`suggest_memory`, `recall_memory`, `forget_memory`)
+— store + scorer + the fingerprint/category/conflict/sensitive logic. Nothing is
+wired; `Branch::is_ported()` is unchanged for every data-layer branch.
