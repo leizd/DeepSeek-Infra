@@ -8,6 +8,7 @@ use crate::capability::{Capability, RiskLevel};
 
 pub mod audit;
 pub mod capability;
+pub mod mutation_gate;
 pub mod path_guard;
 pub mod python_json;
 pub mod tool_batch;

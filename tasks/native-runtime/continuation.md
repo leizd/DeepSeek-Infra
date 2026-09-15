@@ -559,3 +559,62 @@ Verified locally:
 Branch status: **4 of 18 ported** (`generate_chart`, `data_transform`,
 `web_search`, `compare_search_results`). 14 remain, each with `Branch::blocker()`
 naming its package. Nothing is wired; the round loop stays blocked on them.
+
+**Layer 2 / data layer slice A1: the workspace mutation gate (2026-09-15 七轮，uncommitted).**
+
+Prerequisite chosen by the user (A1 over A2). `rust/crates/deepseek-policy/src/mutation_gate.rs`
+ports `infra/workspace/mutation_gate.py` — the fence, the exclusive OS lock, and the
+durable generation counter. Every memory/reminder write is wrapped in it, so no
+data-layer branch could be faithful without it.
+
+**It is not a mutex.** `mutation_scope` (1) asserts no restore owns the workspace
+(423, checked twice to close the race with a newly-created fence), (2) takes an
+exclusive OS lock for the whole mutation, (3) bumps the generation **before and
+after**, fsync'd. The lock and the fence are deliberately separate: a crash
+releases the lock, but mutations stay blocked until recovery reconciles the
+transaction.
+
+Shape differences, each with a reason: `root: &Path` instead of a `config.ROOT`
+global; `LockFileEx` with the oracle's ten-attempts-one-second-apart retry policy
+(plain `LockFileEx` would block **forever** where `msvcrt.LK_LOCK` raises); `flock`
+on Unix; `Mutex` + thread-local depth instead of `RLock` (Rust's `Mutex` is not
+reentrant); hand-written `extern "C"` because this workspace pins deps to what is
+already in `Cargo.lock`.
+
+Quirks reproduced rather than fixed: `fsync_directory` stays **best-effort** (the
+directory open normally fails on Windows); the lock file is created with `b"0"`
+only if absent; temp-file cleanup failure is ignored after a committed replace;
+`write_fence` and `bump_generation` build temp names differently (suffix preserved
+vs dropped); the unreadable-fence message is **fixed** because the oracle chains
+the cause with `raise ... from exc` rather than interpolating it.
+
+Errors: `GateKind` distinguishes the oracle's `AppError` / `RuntimeError` /
+`OSError`, and **`code`/`status` are `Option`** — a `RuntimeError` has neither, and
+inventing `internal`/500 would let a caller read a programming error as a routine
+refusal. That was my first draft's mistake.
+
+Three probe bugs this slice exposed (all mine):
+1. `ast.get_source_segment` drops decorators, so `exclusive_gate`/`mutation_scope`
+   came back as bare generators, not context managers.
+2. `@contextmanager` is **lazy** — `mutation_scope()` alone asserts nothing and
+   bumps nothing; the body only runs on `__enter__`. A probe that merely called it
+   would have shown a green tick over no behaviour.
+3. `_GATE_STATE` is a module-level global, so the nested-different-root check only
+   fires within one module instance. Building a second namespace for the "other
+   root" gave the inner gate its own thread-local state and — correctly — no error.
+   The Rust behaviour was right; the probe was wrong.
+4. `json!` reads `[...]` as an array literal, so a `.iter()` chain cannot follow it.
+
+Verified locally:
+- Byte-level parity: **identical MD5 `57e0ede25273693e03863bffe024aadb`**, 32 keys,
+  no differences — paths, generation read/bump/clamp, fence write/read/clear, both
+  refusal paths, the scope's double bump, nesting (same and different root),
+  malformed fences, temp-file hygiene, lock-file content.
+- `cargo test -p deepseek-policy` -> 155 tests, all pass (14 new), including a
+  multi-threaded case asserting the generation ends at exactly `scopes * 2`.
+- `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings`
+  -> clean; `cargo fmt` applied.
+
+Next: **slice B, the reminders pair** (`create_reminder`, `list_reminders`) — 138
+lines, one JSON file, no retrieval, no RAG. `Branch::is_ported()` is unchanged for
+every data-layer branch; nothing is wired.
