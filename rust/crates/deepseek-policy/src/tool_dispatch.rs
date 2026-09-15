@@ -11,8 +11,9 @@
 //!
 //! # What this is not
 //!
-//! **Only two branches are implemented** ([`Branch::GenerateChart`] and
-//! [`Branch::DataTransform`]); the rest are marked [`Branch::is_ported`] `false`
+//! **Only four of the eighteen branches are implemented** — `generate_chart`,
+//! `data_transform`, `web_search` and `compare_search_results`, the four with no
+//! external package behind them. The rest are marked [`Branch::is_ported`] `false`
 //! and can never produce output. That is deliberate: [`DispatchOutcome::Unported`]
 //! has no envelope at all, so a branch that has not been ported cannot be mistaken
 //! for one that ran. Nothing in this module is wired to a route.
@@ -155,7 +156,9 @@ fn python_truncate(text: &str, limit: usize) -> String {
 }
 
 /// Python's `str(value or fallback)` for the narrow case of a text field.
-fn python_str_or(value: Option<&Value>, fallback: &str) -> String {
+///
+/// Public because the branch modules stringify arguments the same way.
+pub fn python_str_or(value: Option<&Value>, fallback: &str) -> String {
     match value {
         Some(Value::String(text)) if !text.is_empty() => text.clone(),
         Some(Value::Number(number)) => number.to_string(),
@@ -227,20 +230,26 @@ impl Branch {
     /// Whether the branch actually runs. Only `generate_chart` is pure enough to
     /// port without the packages the others depend on.
     pub fn is_ported(self) -> bool {
-        matches!(self, Branch::GenerateChart | Branch::DataTransform)
+        matches!(
+            self,
+            Branch::GenerateChart
+                | Branch::DataTransform
+                | Branch::WebSearch
+                | Branch::CompareSearchResults
+        )
     }
 
     /// Why a branch is not ported, or `None` when it is.
     pub fn blocker(self) -> Option<&'static str> {
         match self {
             Branch::GenerateChart => None,
+            Branch::WebSearch | Branch::CompareSearchResults => None,
             Branch::BrowserFamily => Some("infra.browser.actions"),
             Branch::PythonEval => {
                 Some("needs a real sandbox; the oracle shells out to a Python interpreter")
             }
             Branch::SearchFiles => Some("infra.rag / search"),
             Branch::FetchUrl => Some("http client + DNS-time SSRF guard"),
-            Branch::WebSearch | Branch::CompareSearchResults => Some("web_search callback"),
             Branch::SuggestMemory | Branch::RecallMemory | Branch::ForgetMemory => {
                 Some("infra.data.memory")
             }
@@ -508,6 +517,7 @@ pub fn dispatch(
     arguments: &Value,
     mut policy: Option<&mut ToolPolicy>,
     schema: Option<&Value>,
+    context: &crate::tool_search::ExecutorContext<'_>,
 ) -> DispatchOutcome {
     let tool = name.trim().to_string();
     let fields = Value::Object(parse_tool_arguments(Some(arguments)));
@@ -545,6 +555,10 @@ pub fn dispatch(
             &python_str_or(object.get("path"), ""),
             &python_str_or(object.get("delimiter"), ","),
         ),
+        Branch::WebSearch => crate::tool_search::web_search(&object, context),
+        Branch::CompareSearchResults => {
+            crate::tool_search::compare_search_results_branch(&object, context)
+        }
         // Unreachable: `is_ported` was checked above.
         other => {
             return DispatchOutcome::Unported {
@@ -569,6 +583,17 @@ pub fn dispatch(
 mod tests {
     use super::*;
     use crate::tool_policy::{ToolPolicy, ToolPolicyConfig};
+    use crate::tool_search::ExecutorContext;
+
+    /// [`dispatch`] with no per-request dependencies — what every test here wants.
+    fn run(
+        name: &str,
+        arguments: &Value,
+        policy: Option<&mut ToolPolicy>,
+        schema: Option<&Value>,
+    ) -> DispatchOutcome {
+        dispatch(name, arguments, policy, schema, &ExecutorContext::default())
+    }
 
     fn args(value: Value) -> Value {
         value
@@ -683,8 +708,16 @@ mod tests {
             .filter(|branch| branch.is_ported())
             .map(|branch| branch.name())
             .collect();
-        // The only two branches with no external package behind them.
-        assert_eq!(ported, vec!["data_transform", "generate_chart"]);
+        // The four branches with no external package behind them.
+        assert_eq!(
+            ported,
+            vec![
+                "web_search",
+                "compare_search_results",
+                "data_transform",
+                "generate_chart"
+            ]
+        );
         for branch in BRANCHES {
             assert_eq!(branch.blocker().is_none(), branch.is_ported(), "{branch:?}");
         }
@@ -780,7 +813,7 @@ mod tests {
 
     #[test]
     fn without_a_policy_an_unknown_tool_reaches_the_unsupported_envelope() {
-        let outcome = dispatch("not_a_tool", &args(json!({})), None, None);
+        let outcome = run("not_a_tool", &args(json!({})), None, None);
         let DispatchOutcome::Unsupported(output) = outcome else {
             panic!("expected Unsupported, got {outcome:?}");
         };
@@ -798,7 +831,7 @@ mod tests {
             audit: false,
             ..ToolPolicyConfig::default()
         });
-        let outcome = dispatch("not_a_tool", &args(json!({})), Some(&mut policy), None);
+        let outcome = run("not_a_tool", &args(json!({})), Some(&mut policy), None);
         let DispatchOutcome::Denied(output) = outcome else {
             panic!("expected Denied, got {outcome:?}");
         };
@@ -808,7 +841,7 @@ mod tests {
 
     #[test]
     fn a_ported_branch_runs_and_returns_the_success_envelope() {
-        let outcome = dispatch(
+        let outcome = run(
             "generate_chart",
             &args(json!({"data": [{"label": "a", "value": 1}]})),
             None,
@@ -824,7 +857,7 @@ mod tests {
 
     #[test]
     fn a_branch_failure_uses_the_error_envelope() {
-        let outcome = dispatch("generate_chart", &args(json!({"data": []})), None, None);
+        let outcome = run("generate_chart", &args(json!({"data": []})), None, None);
         let DispatchOutcome::Unsupported(output) = outcome else {
             panic!("expected Unsupported, got {outcome:?}");
         };
@@ -838,7 +871,7 @@ mod tests {
     #[test]
     fn an_unported_branch_has_no_envelope_at_all() {
         for name in ["fetch_url", "search_files", "browser_click", "create_pptx"] {
-            let outcome = dispatch(name, &args(json!({})), None, None);
+            let outcome = run(name, &args(json!({})), None, None);
             let DispatchOutcome::Unported { tool, branch } = &outcome else {
                 panic!("expected Unported for {name}, got {outcome:?}");
             };
@@ -859,7 +892,7 @@ mod tests {
             audit: false,
             ..ToolPolicyConfig::default()
         });
-        let outcome = dispatch(
+        let outcome = run(
             "fetch_url",
             &args(json!({"url": "http://169.254.169.254/"})),
             Some(&mut policy),
@@ -882,7 +915,7 @@ mod tests {
             audit: false,
             ..ToolPolicyConfig::default()
         });
-        let outcome = dispatch(
+        let outcome = run(
             "fetch_url",
             &args(json!("{\"url\": \"http://169.254.169.254/\"}")),
             Some(&mut policy),
@@ -901,7 +934,7 @@ mod tests {
     #[test]
     fn string_encoded_arguments_reach_a_ported_branch() {
         // The same parsing rule feeds the chart branch.
-        let outcome = dispatch(
+        let outcome = run(
             "generate_chart",
             &args(json!("{\"data\": [{\"label\": \"a\", \"value\": 1}]}")),
             None,

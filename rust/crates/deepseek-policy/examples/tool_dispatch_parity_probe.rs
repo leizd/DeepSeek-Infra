@@ -19,10 +19,11 @@
 
 use deepseek_policy::tool_batch::execute_tool_calls;
 use deepseek_policy::tool_dispatch::{
-    DispatchOutcome, SERIAL_TOOL_NAMES, chart_markdown_table, dispatch, generate_chart,
-    is_parallel_safe_tool, parse_tool_arguments, safe_limit, tool_call_name,
+    DispatchOutcome, SERIAL_TOOL_NAMES, ToolFailure, chart_markdown_table, dispatch,
+    generate_chart, is_parallel_safe_tool, parse_tool_arguments, safe_limit, tool_call_name,
 };
 use deepseek_policy::tool_policy::ToolPolicy;
+use deepseek_policy::tool_search::{ExecutorContext, compare_search_results, search_result_key};
 use deepseek_policy::tool_transform::data_transform;
 use serde_json::{Map, Value, json};
 
@@ -181,6 +182,17 @@ fn dispatch_cases() -> Vec<(&'static str, Value, bool)> {
             false,
         ),
         (
+            "web-search-not-enabled",
+            json!({"function": {"name": "web_search", "arguments": "{\"query\": \"x\"}"}}),
+            false,
+        ),
+        (
+            "compare-not-enabled",
+            json!({"function": {"name": "compare_search_results",
+                "arguments": "{\"queries\": [\"x\"]}"}}),
+            false,
+        ),
+        (
             "ssrf-denied-with-policy",
             json!({"function": {"name": "fetch_url",
                 "arguments": "{\"url\": \"http://169.254.169.254/\"}"}}),
@@ -193,6 +205,56 @@ fn dispatch_cases() -> Vec<(&'static str, Value, bool)> {
             true,
         ),
     ]
+}
+
+/// `(label, url)`
+fn search_key_cases() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("plain", "https://example.com/a"),
+        ("trailing-slash", "https://Example.COM/a/"),
+        ("root", "https://example.com"),
+        ("root-slash", "https://example.com/"),
+        ("query", "https://example.com/a?q=1"),
+        ("fragment", "https://example.com/a?q=1#frag"),
+        ("port", "https://example.com:8443/x"),
+        ("userinfo", "https://user:pw@Example.com/x"),
+        ("uppercase-scheme", "HTTPS://example.com/x"),
+        ("malformed-bracket", "http://[::1/"),
+        ("no-scheme", "example.com/x"),
+        ("blank", "   "),
+        ("surrounding-spaces", "  HTTP://X  "),
+    ]
+}
+
+/// `(label, queries, intent)`
+fn compare_cases() -> Vec<(&'static str, Value, &'static str)> {
+    vec![
+        ("two-queries", json!(["a b", "c"]), "general"),
+        ("collapses-whitespace", json!(["  a   b  ", "c"]), "news"),
+        ("dedupes-queries", json!(["x", "x", "y"]), ""),
+        ("caps-at-two", json!(["a", "b", "c", "d"]), "general"),
+        ("single", json!(["only"]), "general"),
+        ("not-a-list", json!("x"), "general"),
+        ("empty-list", json!([]), "general"),
+        ("all-blank", json!(["", "   "]), "general"),
+        ("blank-intent", json!(["a"]), ""),
+    ]
+}
+
+/// The deterministic stand-in for the injected `web_search_callback`, mirroring
+/// the Python probe's `_search_stub` exactly.
+fn search_stub(query: &str, intent: &str) -> Result<Value, ToolFailure> {
+    Ok(json!({
+        "query": query,
+        "intent": intent,
+        "results": [
+            {"url": format!("https://example.com/{query}/")},
+            {"url": format!("https://EXAMPLE.com/{query}/#frag")},
+            {"url": ""},
+            "not-an-object",
+        ],
+        "cached": true,
+    }))
 }
 
 fn outcome_label(outcome: &DispatchOutcome) -> &'static str {
@@ -519,11 +581,15 @@ fn main() {
         // does — not a default-configured one. Passing a policy here would make
         // the unknown-tool case deny instead of reaching the `Unsupported tool:`
         // envelope, which is the difference between the two error paths.
+        //
+        // No `web_search` callback either: the search branches then take their
+        // "not enabled for this request" path, which is what the probe compares.
+        let context = ExecutorContext::default();
         let mut permissive = ToolPolicy::permissive();
         let outcome = if use_policy {
-            dispatch(&name, &arguments, Some(&mut permissive), None)
+            dispatch(&name, &arguments, Some(&mut permissive), None, &context)
         } else {
-            dispatch(&name, &arguments, None, None)
+            dispatch(&name, &arguments, None, None, &context)
         };
 
         out.insert(
@@ -555,11 +621,36 @@ fn main() {
         );
     }
 
+    // --- the search family ----------------------------------------------------
+
+    for (label, url) in search_key_cases() {
+        out.insert(
+            format!("search::key::{label}"),
+            Value::String(search_result_key(url)),
+        );
+    }
+
+    for (label, queries, intent) in compare_cases() {
+        let result = compare_search_results(Some(&queries), intent, &search_stub);
+        out.insert(
+            format!("compare::{label}"),
+            match result {
+                Ok(value) => json!({"ok": true, "result": value}),
+                Err(failure) => json!({
+                    "ok": false,
+                    "error": mask_engine_error(&failure.error),
+                    "code": failure.code,
+                }),
+            },
+        );
+    }
+
     // --- execute_tool_calls ---------------------------------------------------
 
     for (label, calls, cancelled) in batch_cases() {
         let calls: Vec<Value> = calls;
         let should_cancel = move || cancelled;
+        let context = ExecutorContext::default();
         let messages = execute_tool_calls(&calls, &should_cancel, &|call| {
             let name = tool_call_name(call);
             let arguments = call
@@ -567,7 +658,7 @@ fn main() {
                 .and_then(|function| function.get("arguments"))
                 .cloned()
                 .unwrap_or(Value::Null);
-            dispatch(&name, &arguments, None, None)
+            dispatch(&name, &arguments, None, None, &context)
         });
         out.insert(
             format!("batch::{label}"),

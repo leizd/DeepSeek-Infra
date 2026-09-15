@@ -260,3 +260,61 @@ silent. They are blocked on real subsystems:
 Wiring the round loop (and deleting `ToolRoundsUnwired`) stays blocked on these —
 wiring it now would replace the oracle's terminating tool loop with a permanently
 failing one that still answers `200`.
+
+---
+
+# Slice 3: the search family (`web_search`, `compare_search_results`)
+
+The next-smallest dependency after `data_transform`: neither branch needs a
+package. The oracle injects a `web_search_callback` per request (the gateway owns
+the actual search provider), so what is left is argument handling, query cleaning,
+cross-round de-duplication and the result cap — all pure given the callback.
+
+`tool_search.rs` ports:
+
+- `web_search` and `compare_search_results_branch` — the two branch bodies,
+  including their distinct "not enabled for this request" errors;
+- `compare_search_results` — up to **two** cleaned queries (whitespace collapsed,
+  de-duplicated, 500-character cap), one round each, results de-duplicated across
+  rounds and capped at 20;
+- `search_result_key` — the de-duplication key.
+
+`ExecutorContext` carries the optional callback, mirroring the keyword arguments
+`execute_tool_call` takes. `dispatch` now threads it through, which is the one
+signature change in this slice; the test module and the probe example supply a
+default context, and the search branches then take their "not enabled" path — a
+path the probe compares directly.
+
+## `search_result_key` is a different projection on purpose
+
+It is `urlsplit`/`urlunsplit` based, which is **not** the same projection as
+`tool_policy`'s SSRF host extraction: the guard wants a hostname to classify
+against the IP tables, while this wants the raw netloc (lowercased, port and
+userinfo included) so two results differing only in case or in a fragment collapse
+to one key. They are kept separate rather than forced through one parser.
+
+Two measured behaviours, both of which corrected a wrong guess of mine:
+
+- `urlsplit` strips **leading** C0 controls and spaces but never trailing ones, so
+  `"  HTTP://X  "` keys to `"http://x  /"`.
+- An **empty** URL is not an empty key. `urlsplit("")` normalises to the path `/`,
+  so the key is `"/"` — which is why an empty-URL result is kept, not skipped.
+  Only a non-object entry is dropped.
+
+That is the sixth time on this project that measuring beat reasoning; the unit
+tests now carry the measured values with a note saying so.
+
+## Evidence
+
+- Byte-level parity: **identical MD5 `a6aa9b0ed707966a641940b47fdade55`**, 104 keys,
+  no differences.
+- `cargo test -p deepseek-policy` → 141 tests, all pass.
+- `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings`
+  → clean; `cargo fmt` applied.
+
+## Branch status after this slice
+
+**Four of eighteen branches are ported**: `generate_chart`, `data_transform`,
+`web_search`, `compare_search_results`. The remaining fourteen are still marked
+`false` by `Branch::is_ported()` with their blocker named; nothing is wired, and
+wiring the round loop stays blocked on them.

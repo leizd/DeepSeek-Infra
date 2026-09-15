@@ -70,6 +70,8 @@ EXTRACT_NAMES = (
     "transform_csv_summary",
     "transform_number_summary",
     "number_summary_payload",
+    "search_result_key",
+    "compare_search_results",
 )
 
 EXTRACT_CONSTANTS = ("SERIAL_TOOL_NAMES", "MAX_TOOL_RESULT_CHARS", "MAX_TOOL_CALLS_PER_RESPONSE")
@@ -108,6 +110,7 @@ def build_namespace() -> dict:
     import statistics  # noqa: E402
     import threading  # noqa: E402
     from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: E402
+    from urllib.parse import urlsplit, urlunsplit  # noqa: E402
 
     # The extracted functions reference these as module globals.
     namespace.update(
@@ -122,6 +125,8 @@ def build_namespace() -> dict:
             "statistics": statistics,
             "ThreadPoolExecutor": ThreadPoolExecutor,
             "as_completed": as_completed,
+            "urlsplit": urlsplit,
+            "urlunsplit": urlunsplit,
         }
     )
 
@@ -153,7 +158,6 @@ def build_namespace() -> dict:
         "python_eval",
         "search_files",
         "fetch_url",
-        "compare_search_results",
         "build_memory_suggestion",
         "create_reminder_tool",
         "list_reminders_tool",
@@ -245,6 +249,10 @@ DISPATCH_CASES: list[tuple[str, dict, str]] = [
     ("chart-arguments-as-object", {"function": {"name": "generate_chart", "arguments": {"data": [{"label": "a", "value": 2}]}}}, "none"),
     ("transform-number-summary", {"function": {"name": "data_transform", "arguments": '{"operation": "number_summary", "input": "1 2 3"}'}}, "none"),
     ("transform-unknown-operation", {"function": {"name": "data_transform", "arguments": '{"operation": "nope", "input": "x"}'}}, "none"),
+    # The search branches with no callback injected: the oracle's explicit
+    # "not enabled for this request" error, which is a comparable path.
+    ("web-search-not-enabled", {"function": {"name": "web_search", "arguments": '{"query": "x"}'}}, "none"),
+    ("compare-not-enabled", {"function": {"name": "compare_search_results", "arguments": '{"queries": ["x"]}'}}, "none"),
     # Denied by the gate, so the branch must never be invoked.
     ("ssrf-denied-with-policy", {"function": {"name": "fetch_url", "arguments": '{"url": "http://169.254.169.254/"}'}}, "permissive"),
     ("path-denied-with-policy", {"function": {"name": "search_files", "arguments": '{"path": "../../etc/passwd"}'}}, "permissive"),
@@ -334,6 +342,57 @@ def _mask_engine_error(error: str) -> str:
     return error
 
 
+# (label, url)
+SEARCH_KEY_CASES: list[tuple[str, str]] = [
+    ("plain", "https://example.com/a"),
+    ("trailing-slash", "https://Example.COM/a/"),
+    ("root", "https://example.com"),
+    ("root-slash", "https://example.com/"),
+    ("query", "https://example.com/a?q=1"),
+    ("fragment", "https://example.com/a?q=1#frag"),
+    ("port", "https://example.com:8443/x"),
+    ("userinfo", "https://user:pw@Example.com/x"),
+    ("uppercase-scheme", "HTTPS://example.com/x"),
+    ("malformed-bracket", "http://[::1/"),
+    ("no-scheme", "example.com/x"),
+    ("blank", "   "),
+    ("surrounding-spaces", "  HTTP://X  "),
+]
+
+# (label, queries, intent)
+COMPARE_CASES: list[tuple[str, object, str]] = [
+    ("two-queries", ["a b", "c"], "general"),
+    ("collapses-whitespace", ["  a   b  ", "c"], "news"),
+    ("dedupes-queries", ["x", "x", "y"], ""),
+    ("caps-at-two", ["a", "b", "c", "d"], "general"),
+    ("single", ["only"], "general"),
+    ("not-a-list", "x", "general"),
+    ("empty-list", [], "general"),
+    ("all-blank", ["", "   "], "general"),
+    ("blank-intent", ["a"], ""),
+]
+
+
+def _search_stub(query: str, intent: str) -> dict:
+    """A deterministic stand-in for the injected `web_search_callback`.
+
+    Includes a duplicate URL that differs only in case and fragment, an empty
+    URL, and a non-object entry, so the de-duplication and skip rules are
+    exercised.
+    """
+    return {
+        "query": query,
+        "intent": intent,
+        "results": [
+            {"url": f"https://example.com/{query}/"},
+            {"url": f"https://EXAMPLE.com/{query}/#frag"},
+            {"url": ""},
+            "not-an-object",
+        ],
+        "cached": True,
+    }
+
+
 def _policy(namespace: dict, mode: str):
     if mode == "none":
         return None
@@ -358,6 +417,8 @@ def main() -> int:
     execute_tool_call = namespace["execute_tool_call"]
     execute_tool_calls = namespace["execute_tool_calls"]
     data_transform = namespace["data_transform"]
+    search_result_key = namespace["search_result_key"]
+    compare_search_results = namespace["compare_search_results"]
     AppError = namespace["AppError"]
 
     for label, value in PARSE_CASES:
@@ -417,6 +478,22 @@ def main() -> int:
             }
         except AppError as exc:
             out[f"transform::{label}"] = {
+                "ok": False,
+                "error": _mask_engine_error(str(exc)),
+                "code": exc.code.value,
+            }
+
+    for label, url in SEARCH_KEY_CASES:
+        out[f"search::key::{label}"] = search_result_key(url)
+
+    for label, queries, intent in COMPARE_CASES:
+        try:
+            out[f"compare::{label}"] = {
+                "ok": True,
+                "result": compare_search_results(queries, intent, _search_stub),
+            }
+        except AppError as exc:
+            out[f"compare::{label}"] = {
                 "ok": False,
                 "error": _mask_engine_error(str(exc)),
                 "code": exc.code.value,

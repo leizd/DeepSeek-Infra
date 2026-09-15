@@ -13,6 +13,7 @@ pub mod python_json;
 pub mod tool_batch;
 pub mod tool_dispatch;
 pub mod tool_policy;
+pub mod tool_search;
 pub mod tool_transform;
 pub mod url_guard;
 

@@ -519,3 +519,43 @@ Verified locally:
 - `cargo test -p deepseek-policy` -> 131 tests, all pass.
 - `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings`
   -> clean; `cargo fmt` applied.
+
+**Layer 2 slice 3: the search family, callback injected (2026-09-15 六轮，uncommitted).**
+
+The next-smallest dependency after `data_transform`: `web_search` and
+`compare_search_results` need no package, only the per-request
+`web_search_callback` the gateway owns.
+
+- `tool_search.rs` ports both branch bodies (with their distinct "not enabled for
+  this request" errors), `compare_search_results` (two cleaned queries, whitespace
+  collapsed / de-duplicated / 500-char cap; one round each; results de-duplicated
+  across rounds and capped at 20), and `search_result_key`.
+- `ExecutorContext` carries the optional callback, mirroring the oracle's keyword
+  arguments. `dispatch` now threads it through — the one signature change; tests
+  and the probe example pass a default context, which makes the search branches
+  take their "not enabled" path, and that path is compared directly.
+
+**`search_result_key` is deliberately a different projection** from
+`tool_policy`'s SSRF host extraction: the guard wants a hostname to classify
+against the IP tables, this wants the raw netloc (lowercased, port and userinfo
+included) so results differing only in case or fragment collapse to one key.
+
+Two measured behaviours that corrected wrong guesses of mine (**sixth time on this
+project that measuring beat reasoning**):
+
+- `urlsplit` strips **leading** C0 controls and spaces but never trailing ones, so
+  `"  HTTP://X  "` keys to `"http://x  /"`.
+- An **empty** URL is not an empty key: `urlsplit("")` normalises to path `/`, so
+  the key is `"/"` — which is why an empty-URL result is **kept**, not skipped.
+  Only a non-object entry is dropped.
+
+Verified locally:
+- Byte-level parity: **identical MD5 `a6aa9b0ed707966a641940b47fdade55`**, 104 keys,
+  no differences.
+- `cargo test -p deepseek-policy` -> 141 tests, all pass.
+- `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings`
+  -> clean; `cargo fmt` applied.
+
+Branch status: **4 of 18 ported** (`generate_chart`, `data_transform`,
+`web_search`, `compare_search_results`). 14 remain, each with `Branch::blocker()`
+naming its package. Nothing is wired; the round loop stays blocked on them.
