@@ -9,8 +9,11 @@ use crate::capability::{Capability, RiskLevel};
 pub mod audit;
 pub mod capability;
 pub mod path_guard;
+pub mod python_json;
+pub mod tool_batch;
 pub mod tool_dispatch;
 pub mod tool_policy;
+pub mod tool_transform;
 pub mod url_guard;
 
 pub fn policy_version() -> &'static str {

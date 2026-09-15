@@ -478,3 +478,44 @@ Next concrete action for this line: port `execute_tool_calls` (the parallel batc
 + cancellation) and the remaining branches one at a time, each behind the gate,
 starting with the ones whose packages are smallest. Only after enough branches
 exist does wiring the round loop (and deleting `ToolRoundsUnwired`) become safe.
+
+**Layer 2 slice 2: `data_transform` branch, batch orchestration, shared Python-JSON (2026-09-15 五轮，uncommitted).**
+
+- `tool_transform.rs` ports `data_transform` and its four pure operations
+  (`extract_regex`, `json_path`, `csv_summary`, `number_summary`) plus helpers
+  (`read_simple_json_path`, `compact_json_value`, `number_summary_payload`, and a
+  hand-rolled `csv_read` for Python's default CSV dialect).
+- `tool_batch.rs` ports `execute_tool_calls`: selection capped at 6, serial/parallel
+  batching (exposed as `plan_batches` data), cancellation at the four points,
+  None → cancelled / None → "did not run", and the `role: "tool"` message with
+  compact-JSON content truncated to `MAX_TOOL_RESULT_CHARS`. `strip_volatile_tool_fields`
+  and `stable_tool_output_for_model` ported; artifact-compaction deferred (those 3
+  branches unported, path unreachable, a test pins the pass-through).
+- `python_json.rs` owns `dumps_default_separators`/`dumps_compact`/`float_str`/`value_str`
+  — the rendering rules `tool_rounds`/`tool_policy`/`tool_dispatch` each had a
+  private copy of. `tool_policy::normalized_args_hash` and `tool_dispatch::python_float_str`
+  now delegate to it (two duplicates removed; gateway's `tool_rounds` copy noted
+  as a follow-up, out of this crate's boundary).
+
+**Honest state of the remaining 15 branches**: `Branch::blocker()` still names each
+one's package and a test asserts none is silent. They are blocked on real subsystems
+(browser engine, RAG, data layer, media/doc generation, an HTTP client, a real
+sandbox for `python_eval`). Wiring the round loop and deleting `ToolRoundsUnwired`
+stays blocked on these.
+
+Two parity substitutions recorded in docs:
+- JSON-path splitter: Python uses a lookahead the `regex` crate lacks; a plain
+  split on `.` is equivalent for every *acceptable* path (well-formed parts have
+  digits-only indices, so no dot lives inside brackets; the two disagree only on
+  paths that fail the fullmatch and raise "Unsupported JSON path" either way).
+- Engine-specific diagnostics: `Invalid JSON: …` / `Invalid regex: …` embed the
+  engine's own error text. The prefix is the oracle's and identical; the suffix is
+  masked on both sides like the audit `ts`. Divergence on record in the doc and a
+  unit test, not behind a green diff.
+
+Verified locally:
+- Byte-level parity: **identical MD5 `3f088f27bcf1dda772cf3fb18d318cf5`**, 80 keys,
+  no differences (helpers, both ported branches, batch layer, volatile-strip).
+- `cargo test -p deepseek-policy` -> 131 tests, all pass.
+- `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings`
+  -> clean; `cargo fmt` applied.

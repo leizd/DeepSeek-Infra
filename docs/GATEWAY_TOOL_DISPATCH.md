@@ -162,3 +162,101 @@ Result: **49 keys, byte-identical**, normalized MD5
 
 Additive and inert: a new module with no production caller. Reverting the commit
 restores the previous tree.
+
+---
+
+# Slice 2: the batch layer, `data_transform`, and a shared Python-JSON module
+
+Two of the remaining 18 branches had no external package behind them, so they
+could be ported in this slice; the other 15 still cannot (browser engine, RAG,
+data layer, media/doc generation, an HTTP client, and a real sandbox for
+`python_eval`).
+
+## `data_transform` — a complete, pure branch
+
+`tool_transform.rs` mirrors `data_transform` and its four operations
+(`extract_regex`, `json_path`, `csv_summary`, `number_summary`) plus the helpers
+(`read_simple_json_path`, `compact_json_value`, `number_summary_payload`, and a
+hand-rolled `csv_read` for Python's default CSV dialect).
+
+Two substitutions worth recording:
+
+- Python's JSON-path splitter uses a **lookahead** (`re.split(r"\.(?![^\[]*\])", …)`),
+  which the `regex` crate does not support. It is replaced by a plain split on `.`,
+  which is equivalent for every path this function can accept — a well-formed part
+  is `key[index]` with a digits-only index, so no dot can appear inside brackets.
+  Paths where the two disagree are exactly the paths that fail the per-part
+  fullmatch and raise "Unsupported JSON path" either way.
+- `statistics.fmean` / `statistics.median` are reproduced: mean as `sum/count`,
+  median as the middle value (or the mean of the two middles).
+
+## `execute_tool_calls` — the batch layer
+
+`tool_batch.rs` ports the orchestration: selection capped at
+`MAX_TOOL_CALLS_PER_RESPONSE`, the serial/parallel batching, cancellation at the
+four points the oracle polls it, the None → cancelled / None → "did not run"
+assembly, and the `role: "tool"` message including the compact-JSON content
+truncated to `MAX_TOOL_RESULT_CHARS`.
+
+The batching plan is exposed as data (`plan_batches` → `Vec<BatchStep>`) so the
+serial/parallel split is assertable without execution. Concurrency is **not**
+reproduced: the oracle runs a parallel group on a thread pool, but every result is
+written back by its original index, so running a group sequentially produces the
+same list. What *is* reproduced is the cancellation post-condition — a group
+interrupted part-way leaves its remaining slots empty, which the assembly turns
+into cancelled envelopes rather than "did not run".
+
+`stable_tool_output_for_model` and `strip_volatile_tool_fields` are ported in full.
+The artifact-compaction path (`compact_artifact_tool_output`) for `create_pptx` /
+`create_document` / `create_mindmap` is **deferred**: those branches are not
+ported, so the path is unreachable, and a test pins that their output currently
+passes through unchanged so the gap stays visible rather than silent.
+
+## A shared Python-JSON module
+
+`python_json.rs` now owns `dumps_default_separators`, `dumps_compact`, `float_str`
+and `value_str` — the rendering rules that `tool_rounds` (gateway), `tool_policy`
+and `tool_dispatch` each had a private copy of. `tool_policy::normalized_args_hash`
+and `tool_dispatch::python_float_str` now delegate to it, removing two duplicates.
+(The gateway's `tool_rounds` copy is noted as a follow-up consolidation; touching
+it is out of this slice's crate boundary.)
+
+## One parity rule for engine-specific diagnostics
+
+`Invalid JSON: …` and `Invalid regex: …` embed the *engine's* own error text
+(CPython's, or serde_json's/regex's on this side). The prefix is the oracle's own
+message and is identical; the suffix is not. The probe masks the suffix on both
+sides, the same way the audit `ts` is masked — the divergence is on record in this
+doc and in a unit test, not hidden behind a green diff.
+
+## Evidence
+
+The probe now covers 80 keys across the helpers, both ported branches, the batch
+layer, and `strip_volatile_tool_fields`:
+
+- Byte-level parity: **identical MD5 `3f088f27bcf1dda772cf3fb18d318cf5`**, 80 keys,
+  no differences.
+- `cargo test -p deepseek-policy` → 131 tests, all pass.
+- `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings`
+  → clean; `cargo fmt` applied.
+
+## Honest state of the remaining 15 branches
+
+`Branch::blocker()` still names each one's package, and a test asserts none is
+silent. They are blocked on real subsystems:
+
+| Branch | Blocker |
+| --- | --- |
+| `browser_*` | a browser engine (`infra.browser.actions`) |
+| `python_eval` | a real sandbox — the oracle shells out to a Python interpreter, which the migrated runtime must not |
+| `search_files` | `infra.rag` |
+| `fetch_url` | an HTTP client + the DNS-time SSRF guard |
+| `web_search`, `compare_search_results` | the `web_search` callback |
+| `suggest_memory`, `recall_memory`, `forget_memory` | `infra.data.memory` |
+| `create_reminder`, `list_reminders` | `infra.data.reminders` |
+| `list_project_files`, `read_file_chunk` | `infra.data.projects` |
+| `create_mindmap`, `create_pptx`, `create_document` | `infra.tool_runtime` media modules |
+
+Wiring the round loop (and deleting `ToolRoundsUnwired`) stays blocked on these —
+wiring it now would replace the oracle's terminating tool loop with a permanently
+failing one that still answers `200`.

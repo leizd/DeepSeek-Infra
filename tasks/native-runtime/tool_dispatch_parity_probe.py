@@ -40,6 +40,7 @@ from __future__ import annotations
 import ast
 import json
 import sys
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -57,7 +58,21 @@ EXTRACT_NAMES = (
     "generate_chart",
     "chart_markdown_table",
     "execute_tool_call",
+    "execute_tool_calls",
+    "tool_result_message",
+    "stable_tool_output_for_model",
+    "strip_volatile_tool_fields",
+    "data_transform",
+    "transform_extract_regex",
+    "transform_json_path",
+    "read_simple_json_path",
+    "compact_json_value",
+    "transform_csv_summary",
+    "transform_number_summary",
+    "number_summary_payload",
 )
+
+EXTRACT_CONSTANTS = ("SERIAL_TOOL_NAMES", "MAX_TOOL_RESULT_CHARS", "MAX_TOOL_CALLS_PER_RESPONSE")
 
 # Recorded branch invocations, so a gate short-circuit is observable.
 CALLS: list[str] = []
@@ -87,12 +102,27 @@ def build_namespace() -> dict:
     exec(compile(ERRORS.read_text(encoding="utf-8"), str(ERRORS), "exec"), namespace)  # noqa: S102
 
     from typing import Any, Callable  # noqa: E402
+    import csv  # noqa: E402
+    import io  # noqa: E402
     import re  # noqa: E402
+    import statistics  # noqa: E402
     import threading  # noqa: E402
+    from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: E402
 
     # The extracted functions reference these as module globals.
     namespace.update(
-        {"Any": Any, "Callable": Callable, "json": json, "re": re, "threading": threading}
+        {
+            "Any": Any,
+            "Callable": Callable,
+            "json": json,
+            "re": re,
+            "threading": threading,
+            "csv": csv,
+            "io": io,
+            "statistics": statistics,
+            "ThreadPoolExecutor": ThreadPoolExecutor,
+            "as_completed": as_completed,
+        }
     )
 
     # The real policy objects, reused from the tool-policy probe. Audit is turned
@@ -103,7 +133,8 @@ def build_namespace() -> dict:
     for key in ("ToolPolicy", "tool_metadata", "PolicyDecision", "DENY"):
         namespace[key] = policy_ns[key]
 
-    namespace["SERIAL_TOOL_NAMES"] = _extract_assignment(tools_source, "SERIAL_TOOL_NAMES")
+    for constant in EXTRACT_CONSTANTS:
+        namespace[constant] = _extract_assignment(tools_source, constant)
 
     for name in EXTRACT_NAMES:
         found = _extract_function(tools_source, name)
@@ -130,7 +161,6 @@ def build_namespace() -> dict:
         "forget_memory_tool",
         "list_project_files_tool",
         "read_file_chunk_tool",
-        "data_transform",
         "create_mindmap",
         "create_presentation",
         "create_document",
@@ -213,10 +243,95 @@ DISPATCH_CASES: list[tuple[str, dict, str]] = [
     ("chart-with-policy", {"function": {"name": "generate_chart", "arguments": '{"data": [{"label": "a", "value": 1}]}'}}, "permissive"),
     ("chart-empty-args", {"function": {"name": "generate_chart", "arguments": "{}"}}, "none"),
     ("chart-arguments-as-object", {"function": {"name": "generate_chart", "arguments": {"data": [{"label": "a", "value": 2}]}}}, "none"),
+    ("transform-number-summary", {"function": {"name": "data_transform", "arguments": '{"operation": "number_summary", "input": "1 2 3"}'}}, "none"),
+    ("transform-unknown-operation", {"function": {"name": "data_transform", "arguments": '{"operation": "nope", "input": "x"}'}}, "none"),
     # Denied by the gate, so the branch must never be invoked.
     ("ssrf-denied-with-policy", {"function": {"name": "fetch_url", "arguments": '{"url": "http://169.254.169.254/"}'}}, "permissive"),
     ("path-denied-with-policy", {"function": {"name": "search_files", "arguments": '{"path": "../../etc/passwd"}'}}, "permissive"),
 ]
+
+# (label, operation, input, pattern, path, delimiter)
+TRANSFORM_CASES: list[tuple[str, str, str, str, str, str]] = [
+    ("extract-simple", "extract_regex", "a1 b2 c3", r"([a-z])(\d)", "", ","),
+    ("extract-no-groups", "extract_regex", "xx yy", "x+", "", ","),
+    ("extract-optional-group", "extract_regex", "ab a", r"a(b)?", "", ","),
+    ("extract-missing-pattern", "extract_regex", "x", "", "", ","),
+    ("extract-unicode", "extract_regex", "中文 abc", r"[a-z]+", "", ","),
+    ("json-whole", "json_path", '{"a": {"b": [10, 20]}}', "", "$", ","),
+    ("json-nested", "json_path", '{"a": {"b": [10, 20]}}', "", "$.a.b[1]", ","),
+    ("json-no-prefix", "json_path", '{"a": {"b": [10, 20]}}', "", "a.b[0]", ","),
+    ("json-missing", "json_path", '{"a": 1}', "", "$.nope", ","),
+    ("json-unsupported", "json_path", '{"a": 1}', "", "$.a[*]", ","),
+    ("json-out-of-range", "json_path", '{"a": [1]}', "", "$.a[5]", ","),
+    ("json-invalid", "json_path", "not json", "", "$", ","),
+    ("json-oversized", "json_path", '{"a": "' + "x" * 5000 + '"}', "", "$.a", ","),
+    ("csv-basic", "csv_summary", "name,value\nx,1\ny,2.5\n", "", "", ","),
+    ("csv-quoted-delimiter", "csv_summary", 'a,b\n"x,y",2\n', "", "", ","),
+    ("csv-doubled-quotes", "csv_summary", 'a\n"say ""hi"""\n', "", "", ","),
+    ("csv-multiline-field", "csv_summary", 'a\n"one\ntwo"\n', "", "", ","),
+    ("csv-thousands", "csv_summary", ',v\n,"1,000"\n', "", "", ","),
+    ("csv-empty", "csv_summary", "", "", "", ","),
+    ("csv-header-only", "csv_summary", "a,b\n", "", "", ","),
+    ("csv-semicolon", "csv_summary", "a;b\n1;2\n", "", "", ";"),
+    ("numbers-simple", "number_summary", "1 2 3 4", "", "", ","),
+    ("numbers-signed-decimal", "number_summary", "-1.5 and +2 and .5", "", "", ","),
+    ("numbers-none", "number_summary", "no digits here", "", "", ","),
+    ("unknown-operation", "nope", "x", "", "", ","),
+]
+
+# (label, tool_calls, cancelled) — cancellation goes through the oracle's
+# `cancel_event`, so only the *deterministic* states are comparable: never
+# cancelled, and cancelled before the first call. The mid-group interruption case
+# depends on thread timing and is covered by Rust unit tests instead.
+BATCH_CASES: list[tuple[str, list[dict], bool]] = [
+    (
+        "two-parallel",
+        [
+            {"id": "a", "function": {"name": "generate_chart", "arguments": '{"data": [{"label": "a", "value": 1}]}'}},
+            {"id": "b", "function": {"name": "data_transform", "arguments": '{"operation": "number_summary", "input": "1 2"}'}},
+        ],
+        False,
+    ),
+    (
+        "mixed-with-unknown",
+        [
+            {"id": "a", "function": {"name": "generate_chart", "arguments": '{"data": [{"label": "a", "value": 1}]}'}},
+            {"id": "b", "function": {"name": "not_a_tool", "arguments": "{}"}},
+        ],
+        False,
+    ),
+    (
+        "cancelled-from-start",
+        [
+            {"id": "a", "function": {"name": "generate_chart", "arguments": '{"data": [{"label": "a", "value": 1}]}'}},
+            {"id": "b", "function": {"name": "generate_chart", "arguments": '{"data": [{"label": "b", "value": 2}]}'}},
+        ],
+        True,
+    ),
+    (
+        "capped-at-six",
+        [
+            {"id": f"id{i}", "function": {"name": "generate_chart", "arguments": '{"data": [{"label": "a", "value": 1}]}'}}
+            for i in range(9)
+        ],
+        False,
+    ),
+]
+
+
+def _mask_engine_error(error: str) -> str:
+    """Mask the engine-specific suffix of a parse-error message.
+
+    `Invalid JSON: …` and `Invalid regex: …` embed the *engine's* own diagnostic
+    (CPython's here, serde_json's/regex's on the Rust side). The prefix is the
+    oracle's own message and is compared; the suffix is engine-specific and is
+    masked, the same way the audit `ts` is. The divergence is recorded in
+    docs/GATEWAY_TOOL_DISPATCH.md.
+    """
+    for prefix in ("Invalid JSON", "Invalid regex"):
+        if error.startswith(prefix):
+            return prefix + ": <engine>"
+    return error
 
 
 def _policy(namespace: dict, mode: str):
@@ -241,6 +356,8 @@ def main() -> int:
     generate_chart = namespace["generate_chart"]
     chart_markdown_table = namespace["chart_markdown_table"]
     execute_tool_call = namespace["execute_tool_call"]
+    execute_tool_calls = namespace["execute_tool_calls"]
+    data_transform = namespace["data_transform"]
     AppError = namespace["AppError"]
 
     for label, value in PARSE_CASES:
@@ -282,6 +399,37 @@ def main() -> int:
         out[f"dispatch::{label}"] = {
             "outcome": outcome,
             "output": output,
+            "branches": sorted(set(CALLS)),
+        }
+
+    for label, operation, input_text, pattern, path, delimiter in TRANSFORM_CASES:
+        try:
+            out[f"transform::{label}"] = {
+                "ok": True,
+                # `pattern`/`path`/`delimiter` are keyword-only in the oracle.
+                "result": data_transform(
+                    operation,
+                    input_text,
+                    pattern=pattern,
+                    path=path,
+                    delimiter=delimiter,
+                ),
+            }
+        except AppError as exc:
+            out[f"transform::{label}"] = {
+                "ok": False,
+                "error": _mask_engine_error(str(exc)),
+                "code": exc.code.value,
+            }
+
+    for label, calls, cancelled in BATCH_CASES:
+        CALLS.clear()
+        cancel_event = threading.Event()
+        if cancelled:
+            cancel_event.set()
+        messages = execute_tool_calls(calls, cancel_event=cancel_event)
+        out[f"batch::{label}"] = {
+            "messages": messages,
             "branches": sorted(set(CALLS)),
         }
 

@@ -11,11 +11,11 @@
 //!
 //! # What this is not
 //!
-//! **Only one branch is implemented** ([`Branch::GenerateChart`]); the rest are
-//! marked [`Branch::is_ported`] `false` and can never produce output. That is
-//! deliberate: [`DispatchOutcome::Unported`] has no envelope at all, so a branch
-//! that has not been ported cannot be mistaken for one that ran. Nothing in this
-//! module is wired to a route.
+//! **Only two branches are implemented** ([`Branch::GenerateChart`] and
+//! [`Branch::DataTransform`]); the rest are marked [`Branch::is_ported`] `false`
+//! and can never produce output. That is deliberate: [`DispatchOutcome::Unported`]
+//! has no envelope at all, so a branch that has not been ported cannot be mistaken
+//! for one that ran. Nothing in this module is wired to a route.
 //!
 //! The remaining branches are not blocked on this module's shape. They are
 //! blocked on packages: `search` / `rag`, `data` (projects, reminders, memory),
@@ -40,6 +40,12 @@ use crate::tool_policy::{ToolPolicy, ToolPolicyDecision};
 pub const INVALID_PAYLOAD: &str = "invalid_payload";
 /// `ErrorCode.INTERNAL`.
 pub const INTERNAL: &str = "internal";
+
+/// `MAX_TOOL_CALLS_PER_RESPONSE` — how many calls of one model response are run.
+///
+/// Defined in `tools.py` alongside the dispatcher, not in the policy module,
+/// because it bounds *execution* rather than gating.
+pub const MAX_TOOL_CALLS_PER_RESPONSE: usize = 6;
 
 /// Tools that must not run in the parallel batch, mirroring `SERIAL_TOOL_NAMES`.
 ///
@@ -140,33 +146,7 @@ pub fn is_parallel_safe_tool(tool_call: &Value) -> bool {
 /// switches to exponent form, so the values interpolated into chart markdown
 /// would otherwise differ.
 pub fn python_float_str(value: f64) -> String {
-    if value.is_nan() {
-        return "nan".to_string();
-    }
-    if value.is_infinite() {
-        return if value.is_sign_positive() {
-            "inf"
-        } else {
-            "-inf"
-        }
-        .to_string();
-    }
-    let magnitude = value.abs();
-    if value != 0.0 && !(1e-4..1e16).contains(&magnitude) {
-        let raw = format!("{value:e}");
-        let (mantissa, exponent) = raw.split_once('e').unwrap_or((raw.as_str(), "0"));
-        let (sign, digits) = match exponent.strip_prefix('-') {
-            Some(rest) => ('-', rest),
-            None => ('+', exponent),
-        };
-        return format!("{mantissa}e{sign}{digits:0>2}");
-    }
-    let text = format!("{value}");
-    if text.contains('.') {
-        text
-    } else {
-        format!("{text}.0")
-    }
+    crate::python_json::float_str(value)
 }
 
 /// Python's `s[:n]` — a truncation by **code point**, not by byte.
@@ -247,7 +227,7 @@ impl Branch {
     /// Whether the branch actually runs. Only `generate_chart` is pure enough to
     /// port without the packages the others depend on.
     pub fn is_ported(self) -> bool {
-        matches!(self, Branch::GenerateChart)
+        matches!(self, Branch::GenerateChart | Branch::DataTransform)
     }
 
     /// Why a branch is not ported, or `None` when it is.
@@ -266,7 +246,7 @@ impl Branch {
             }
             Branch::CreateReminder | Branch::ListReminders => Some("infra.data.reminders"),
             Branch::ListProjectFiles | Branch::ReadFileChunk => Some("infra.data.projects"),
-            Branch::DataTransform => Some("data_transform helpers"),
+            Branch::DataTransform => None,
             Branch::CreateMindmap => Some("infra.tool_runtime.mindmaps"),
             Branch::CreatePptx => Some("infra.tool_runtime.presentations"),
             Branch::CreateDocument => Some("infra.tool_runtime.documents"),
@@ -553,7 +533,27 @@ pub fn dispatch(
         return DispatchOutcome::Unported { tool, branch };
     }
 
-    match generate_chart(&fields.as_object().cloned().unwrap_or_default()) {
+    let object = fields.as_object().cloned().unwrap_or_default();
+    // The oracle stringifies each argument with `str(value or default)` before
+    // handing it to the branch.
+    let result = match branch {
+        Branch::GenerateChart => generate_chart(&object),
+        Branch::DataTransform => crate::tool_transform::data_transform(
+            &python_str_or(object.get("operation"), ""),
+            &python_str_or(object.get("input"), ""),
+            &python_str_or(object.get("pattern"), ""),
+            &python_str_or(object.get("path"), ""),
+            &python_str_or(object.get("delimiter"), ","),
+        ),
+        // Unreachable: `is_ported` was checked above.
+        other => {
+            return DispatchOutcome::Unported {
+                tool,
+                branch: other,
+            };
+        }
+    };
+    match result {
         Ok(result) => {
             let mut output = json!({"ok": true, "tool": tool, "result": result});
             if let Some(gate) = policy.as_mut() {
@@ -677,13 +677,14 @@ mod tests {
     }
 
     #[test]
-    fn exactly_one_branch_is_ported_and_every_other_names_its_blocker() {
+    fn ported_branches_are_exactly_the_pure_ones_and_the_rest_name_a_blocker() {
         let ported: Vec<&str> = BRANCHES
             .iter()
             .filter(|branch| branch.is_ported())
             .map(|branch| branch.name())
             .collect();
-        assert_eq!(ported, vec!["generate_chart"]);
+        // The only two branches with no external package behind them.
+        assert_eq!(ported, vec!["data_transform", "generate_chart"]);
         for branch in BRANCHES {
             assert_eq!(branch.blocker().is_none(), branch.is_ported(), "{branch:?}");
         }

@@ -1326,7 +1326,7 @@ pub fn build_external_audit_entry(
 pub fn normalized_args_hash(arguments: Option<&Value>) -> String {
     let empty = Value::Object(Map::new());
     let value = arguments.unwrap_or(&empty);
-    let canonical = compact_sorted_json(value);
+    let canonical = crate::python_json::dumps_compact(value);
     let digest = Sha256::digest(canonical.as_bytes());
     let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
     format!("sha256:{}", &hex[..16])
@@ -1337,30 +1337,6 @@ pub fn normalized_args_hash(arguments: Option<&Value>) -> String {
 /// Key sorting is already how this workspace's `serde_json` behaves, and
 /// `ensure_ascii=False` is Rust's default, so only the separator style needs
 /// reproducing.
-fn compact_sorted_json(value: &Value) -> String {
-    match value {
-        Value::Array(items) => {
-            let rendered: Vec<String> = items.iter().map(compact_sorted_json).collect();
-            format!("[{}]", rendered.join(","))
-        }
-        Value::Object(fields) => {
-            let rendered: Vec<String> = fields
-                .iter()
-                .map(|(key, value)| {
-                    format!(
-                        "{}:{}",
-                        Value::String(key.clone()),
-                        compact_sorted_json(value)
-                    )
-                })
-                .collect();
-            format!("{{{}}}", rendered.join(","))
-        }
-        Value::String(text) => Value::String(text.clone()).to_string(),
-        other => other.to_string(),
-    }
-}
-
 /// Read the audit tail, mirroring `read_recent_audit`.
 ///
 /// Missing file yields an empty list; unparseable lines are skipped; `limit` is
