@@ -6,11 +6,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::capability::{Capability, RiskLevel};
 
+pub mod app_error;
 pub mod audit;
 pub mod capability;
 pub mod mutation_gate;
 pub mod path_guard;
 pub mod python_json;
+pub mod reminders;
 pub mod tool_batch;
 pub mod tool_dispatch;
 pub mod tool_policy;

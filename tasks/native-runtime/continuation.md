@@ -618,3 +618,66 @@ Verified locally:
 Next: **slice B, the reminders pair** (`create_reminder`, `list_reminders`) — 138
 lines, one JSON file, no retrieval, no RAG. `Branch::is_ported()` is unchanged for
 every data-layer branch; nothing is wired.
+
+**Data layer slice B: the reminders store and its branches (2026-09-15 八轮，uncommitted).**
+
+`rust/crates/deepseek-policy/src/reminders.rs` ports
+`infra/data/reminders.py` plus the `create_reminder_tool` / `list_reminders_tool`
+wrappers: the JSON store, `parse_due_at`, `create_reminder`, `list_reminders`,
+`delete_reminder`, `due_reminders`. First slice that exercises the slice-A1 gate
+from a data path — the probe records the generation advancing **two per create** as
+evidence the write really goes through the fence.
+
+**Key order is part of the on-disk contract.** `serde_json` here has no
+`preserve_order`, so object keys iterate sorted, while Python dicts keep insertion
+order and the store file carries it. Writing from a plain `Value` would give
+different bytes for equivalent JSON — and this repository's subject is a backup
+system. Added `python_json::OrderedJson` to spell the order out, with a test pinning
+the exact expected file text.
+
+**Quirks reproduced, not fixed:** the temp file is
+`REMINDERS_FILE.with_suffix(".tmp")`, which *replaces* the suffix
+(`reminders.json` -> `reminders.tmp`), so two writers collide on one name; and reads
+are silent (missing/unreadable/malformed/wrong-top-level-type all degrade to empty,
+non-dict entries dropped).
+
+**`parse_due_at`** reproduces the subset of `datetime.fromisoformat` this module
+meets plus Python's `isoformat()`: `YYYY-MM-DD`, `YYYYMMDD`, `YYYY-Www-D`, `T`/`t`/
+space separator, `HH` through `HH:MM:SS.ffffff`, compact time, and `Z`/`+HH`/`+HH:MM`/
+`+HHMM` offsets. A **lowercase `z` is rejected** (only an uppercase trailing `Z` is
+rewritten). Anything outside the measured set raises the oracle's own message rather
+than being guessed at.
+
+**Seventh "guessed instead of measured".** My first ISO-week implementation validated
+the week by checking the resulting date's *year* matched the stated year. Wrong in
+both directions; `date.fromisocalendar` settled it:
+
+| Input | Oracle | My first version |
+| --- | --- | --- |
+| `2026-W01-1` | `2025-12-29` (week 1 starts in December) | rejected |
+| `2026-W53-1` | `2026-12-28` (2026 has 53 ISO weeks) | rejected |
+| `2025-W53-1` | error (2025 has 52) | (would have accepted) |
+
+The rule is: validate against *how many ISO weeks that year actually has*, from the
+distance between consecutive week-1 Mondays. The unit test asserted the wrong
+expectation too and now carries the measured values.
+
+**Non-determinism is injected.** `secrets.token_hex(8)` and `int(time.time()*1000)`
+arrive through an `Entropy` trait; production uses the OS CSPRNG (`BCryptGenRandom` /
+`/dev/urandom`) and **fails loudly rather than falling back** to a weaker source,
+since `secrets` is explicitly the secure option and a reminder id reaches the model
+in tool output.
+
+Verified locally:
+- Byte-level parity: **identical MD5 `a636cd4590cff26d7809e8866fb3e500`**, 74 keys,
+  no differences — 41 date forms, 8 create shapes, the exact store bytes, generation
+  and lock file, temp hygiene, 8 status variants over two store states, 5 tolerant-read
+  shapes, delete outcomes.
+- `cargo test -p deepseek-policy` -> 171 tests, all pass (16 new).
+- `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings` ->
+  clean; `cargo fmt` applied.
+
+Next: slice C, the scorer (`query_tokens` / `score_chunk` / `utc_now_iso` /
+`latest_user_query`) — pure, and shared with `search_files`, so one port unblocks two
+branches. `due_reminders` is ported and unit-tested but not yet in a compared corpus
+(calling it mutates the store past the probe's last observation).

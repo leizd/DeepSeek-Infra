@@ -124,6 +124,100 @@ pub fn value_str(value: &Value) -> String {
     }
 }
 
+/// A JSON value that remembers its **key order**.
+///
+/// `serde_json` is compiled here without `preserve_order`, so a `Value`'s object
+/// keys iterate sorted. Python dicts iterate in insertion order, and the on-disk
+/// store files carry that order — so a store written from a plain `Value` would
+/// differ from the oracle byte-for-byte even though the JSON is equivalent. Since
+/// this repository's whole subject is a backup system, file bytes are part of the
+/// contract, so callers spell the order out.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OrderedJson {
+    Scalar(Value),
+    Object(Vec<(String, OrderedJson)>),
+    List(Vec<OrderedJson>),
+}
+
+impl OrderedJson {
+    /// Build from a `Value`, taking the given key order for the top-level object.
+    ///
+    /// Keys missing from `order` are appended in sorted order, so a schema drift
+    /// is visible in the output rather than silently dropped.
+    pub fn from_value_with_order(value: &Value, order: &[&str]) -> Self {
+        match value {
+            Value::Object(fields) => {
+                let mut pairs: Vec<(String, OrderedJson)> = Vec::new();
+                for key in order {
+                    if let Some(item) = fields.get(*key) {
+                        pairs.push(((*key).to_string(), OrderedJson::Scalar(item.clone())));
+                    }
+                }
+                for (key, item) in fields {
+                    if !order.contains(&key.as_str()) {
+                        pairs.push((key.clone(), OrderedJson::Scalar(item.clone())));
+                    }
+                }
+                OrderedJson::Object(pairs)
+            }
+            Value::Array(items) => OrderedJson::List(
+                items
+                    .iter()
+                    .map(|item| OrderedJson::from_value_with_order(item, order))
+                    .collect(),
+            ),
+            other => OrderedJson::Scalar(other.clone()),
+        }
+    }
+
+    /// `json.dumps(value, ensure_ascii=False, indent=2)`.
+    ///
+    /// Python switches the separators to `(',', ': ')` whenever `indent` is set,
+    /// puts each item on its own line, and renders an empty container inline.
+    pub fn render_indent_2(&self) -> String {
+        self.render(0)
+    }
+
+    fn render(&self, depth: usize) -> String {
+        match self {
+            OrderedJson::Scalar(value) => match value {
+                Value::String(text) => Value::String(text.clone()).to_string(),
+                other => other.to_string(),
+            },
+            OrderedJson::List(items) => {
+                if items.is_empty() {
+                    return "[]".to_string();
+                }
+                let inner = " ".repeat((depth + 1) * 2);
+                let closing = " ".repeat(depth * 2);
+                let rendered: Vec<String> = items
+                    .iter()
+                    .map(|item| format!("{inner}{}", item.render(depth + 1)))
+                    .collect();
+                format!("[\n{}\n{closing}]", rendered.join(",\n"))
+            }
+            OrderedJson::Object(pairs) => {
+                if pairs.is_empty() {
+                    return "{}".to_string();
+                }
+                let inner = " ".repeat((depth + 1) * 2);
+                let closing = " ".repeat(depth * 2);
+                let rendered: Vec<String> = pairs
+                    .iter()
+                    .map(|(key, item)| {
+                        format!(
+                            "{inner}{}: {}",
+                            Value::String(key.clone()),
+                            item.render(depth + 1)
+                        )
+                    })
+                    .collect();
+                format!("{{\n{}\n{closing}}}", rendered.join(",\n"))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
