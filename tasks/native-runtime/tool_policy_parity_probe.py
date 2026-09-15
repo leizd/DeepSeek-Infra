@@ -114,6 +114,7 @@ def build_namespace() -> dict:
         "_normalized_args_hash",
         "write_external_audit_entry",
         "read_recent_audit",
+        "tool_policy_status",
     ):
         found = _extract_function(source, name)
         if found is None:
@@ -458,6 +459,9 @@ def main() -> int:
     for label, url in URL_CASES:
         safe, reason = evaluate_url_safety(url)
         out[f"url::{label}"] = {"safe": bool(safe), "reason": reason}
+        # The `/policy/url` route must reach the same verdict as this guard, so
+        # the Rust `validate_url_access` is compared against it case by case.
+        out[f"guard::{label}"] = bool(safe)
 
     for label, args in PATH_CASES:
         safe, reason = evaluate_path_safety(args)
@@ -563,6 +567,12 @@ def main() -> int:
         for entry in recent:
             entry["ts"] = "<ts>"
         out["audit::recent-2"] = recent
+
+    # The status payload reads the module-level path global, so point it at the
+    # same fixed relative path the Rust side is given. A relative path keeps the
+    # comparison about the rendering rule rather than about a machine's temp dir.
+    namespace["TOOL_POLICY_AUDIT_LOG"] = Path(".tool-audit") / "audit.jsonl"
+    out["status"] = namespace["tool_policy_status"]()
 
     json.dump(out, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
     sys.stdout.write("\n")

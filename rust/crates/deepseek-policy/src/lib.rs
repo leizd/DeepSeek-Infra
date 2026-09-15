@@ -22,6 +22,9 @@ pub mod codes {
     pub const LOCALHOST_BLOCKED: &str = "localhost_blocked";
     pub const PRIVATE_NETWORK_BLOCKED: &str = "private_network_blocked";
     pub const LINK_LOCAL_BLOCKED: &str = "link_local_blocked";
+    /// URL userinfo (`user:pass@host`) — the oracle denies these outright rather
+    /// than stripping them, so a credential-bearing URL is never a valid target.
+    pub const URL_CREDENTIALS_BLOCKED: &str = "url_credentials_blocked";
     pub const PATH_TRAVERSAL: &str = "path_traversal";
     pub const PROTECTED_PATH: &str = "protected_path";
     pub const MISSING_CAPABILITY: &str = "missing_capability";

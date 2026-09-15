@@ -17,11 +17,13 @@
 
 use deepseek_policy::tool_policy::{
     AuditSink, JsonlAuditSink, MetadataProvider, ToolMetadata, ToolPolicy, ToolPolicyConfig,
-    all_tool_names, arguments_contain_secret, build_external_audit_entry, capability_tools,
-    evaluate_network_argument_safety, evaluate_path_safety, evaluate_url_safety, max_risk,
-    normalized_args_hash, read_recent_audit, sanitize_external_text, sanitize_tool_result,
-    tool_metadata, utc_isoformat_seconds, validate_arguments,
+    ToolPolicySettings, all_tool_names, arguments_contain_secret, build_external_audit_entry,
+    capability_tools, evaluate_network_argument_safety, evaluate_path_safety, evaluate_url_safety,
+    max_risk, normalized_args_hash, read_recent_audit, sanitize_external_text,
+    sanitize_tool_result, tool_metadata, tool_policy_status, utc_isoformat_seconds,
+    validate_arguments,
 };
+use deepseek_policy::url_guard::{UrlPolicy, validate_url_access};
 use serde_json::{Map, Value, json};
 
 fn url_cases() -> Vec<(&'static str, &'static str)> {
@@ -701,6 +703,12 @@ fn main() {
             format!("url::{label}"),
             json!({"safe": safe, "reason": reason}),
         );
+        // The `/policy/url` route must reach the same verdict as the guard, so
+        // it is compared against the oracle case by case.
+        out.insert(
+            format!("guard::{label}"),
+            Value::Bool(validate_url_access(url, &UrlPolicy::default()).is_allowed()),
+        );
     }
 
     for (label, arguments) in path_cases() {
@@ -903,6 +911,15 @@ fn main() {
         set_ts(entry, "<ts>");
     }
     out.insert("audit::recent-2".to_string(), Value::Array(recent));
+
+    // The status payload reads the configured log path, so point it at the same
+    // fixed relative path the Python side is given. A relative path keeps the
+    // comparison about the rendering rule rather than about a machine's temp dir.
+    let status_log = std::path::Path::new(".tool-audit").join("audit.jsonl");
+    out.insert(
+        "status".to_string(),
+        tool_policy_status(&ToolPolicySettings::default(), &status_log),
+    );
 
     let mut encoded =
         serde_json::to_string_pretty(&Value::Object(out)).expect("serialize probe output");

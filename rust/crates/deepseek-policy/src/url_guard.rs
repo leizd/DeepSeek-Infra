@@ -1,7 +1,33 @@
+//! URL guard for the `/policy/url` route.
+//!
+//! **This delegates to [`crate::tool_policy::evaluate_url_safety`]**, the
+//! oracle-parity guard, rather than carrying its own rules. The earlier
+//! standalone implementation was strictly weaker than the Python it stands in
+//! for:
+//!
+//! - it never checked the `.local` / `.localhost` / `.internal` suffixes, nor
+//!   stripped a trailing dot, so `http://printer.local/` and
+//!   `http://localhost./` passed;
+//! - it *stripped* URL credentials and allowed the request, where the oracle
+//!   denies `user:pass@host` outright;
+//! - it rejected only loopback / link-local / private / unspecified addresses,
+//!   so multicast, reserved, CGNAT (`100.64.0.0/10`) and every other
+//!   non-global IPv4 range — plus the whole IPv6 reserved set — passed.
+//!
+//! That matters because `deepseek_infra.infra.rust_core.policy_client` can
+//! delegate the tool gate to these routes (`DEEPSEEK_RUST_POLICY`). Delegating to
+//! a weaker guard would have *lowered* the security posture on the flip of that
+//! flag. The response envelope is unchanged; only the verdict is now the
+//! oracle's.
+//!
+//! The guard can only be *tightened* by [`UrlPolicy`], never loosened: the oracle
+//! accepts http(s) only, so `allowed_schemes` cannot reintroduce a scheme the
+//! oracle rejects.
+
 use serde::{Deserialize, Serialize};
-use std::net::IpAddr;
 
 use crate::capability::{Capability, RiskLevel};
+use crate::tool_policy::evaluate_url_safety;
 use crate::{PolicyDecision, codes};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,175 +43,216 @@ impl Default for UrlPolicy {
     }
 }
 
+/// Validate a target URL the way the oracle's tool gate does.
+///
+/// The returned `code` is derived from the oracle's denial reason. The bridge
+/// treats the code as opaque — `policy_client._parse_response` only requires a
+/// non-empty string — so mapping the oracle's messages onto codes leaves the wire
+/// contract intact. It does mean the oracle's single "private or local ip"
+/// verdict now covers loopback, link-local, reserved and multicast alike, exactly
+/// as the oracle reports them.
 pub fn validate_url_access(url: &str, policy: &UrlPolicy) -> PolicyDecision {
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return deny(
-            codes::UNSUPPORTED_SCHEME,
-            "URL scheme is missing or unsupported",
-        );
-    };
-
-    if !policy
-        .allowed_schemes
-        .iter()
-        .any(|s| s.eq_ignore_ascii_case(scheme))
-    {
-        return deny(codes::UNSUPPORTED_SCHEME, "URL scheme is not allowed");
+    let (safe, reason) = evaluate_url_safety(url);
+    if !safe {
+        return deny(code_for_reason(&reason), &reason);
     }
 
-    let host = extract_host(rest);
-    if host.is_empty() {
-        return deny(codes::INVALID_POLICY_REQUEST, "URL host is required");
-    }
-
-    if host.eq_ignore_ascii_case("localhost") {
-        return deny(
-            codes::LOCALHOST_BLOCKED,
-            "localhost addresses are not allowed",
-        );
-    }
-
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        if let Some((code, reason)) = blocked_ip_reason(&ip) {
-            return deny(code, reason);
+    // The oracle already restricted the scheme to http(s); a caller policy may
+    // still be stricter, which is the only direction this knob may move.
+    match scheme_lower(url) {
+        Some(scheme)
+            if policy
+                .allowed_schemes
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(&scheme)) =>
+        {
+            PolicyDecision::allow(Capability::NetworkFetch, RiskLevel::High)
         }
+        _ => deny(codes::UNSUPPORTED_SCHEME, "URL scheme is not allowed"),
     }
+}
 
-    PolicyDecision::allow(Capability::NetworkFetch, RiskLevel::High)
+/// Map an oracle denial reason onto the crate's decision codes.
+fn code_for_reason(reason: &str) -> &'static str {
+    if reason.starts_with("scheme not allowed") {
+        codes::UNSUPPORTED_SCHEME
+    } else if reason == "url credentials are not allowed" {
+        codes::URL_CREDENTIALS_BLOCKED
+    } else if reason == "local host is not allowed" {
+        codes::LOCALHOST_BLOCKED
+    } else if reason.starts_with("private or local ip is not allowed") {
+        codes::PRIVATE_NETWORK_BLOCKED
+    } else {
+        // "empty url", "invalid url", "missing host" — none of these is a valid
+        // request target.
+        codes::INVALID_POLICY_REQUEST
+    }
+}
+
+/// The lowercased scheme, mirroring `urlsplit`'s scheme detection.
+fn scheme_lower(url: &str) -> Option<String> {
+    let colon = url.find(':')?;
+    let prefix = &url[..colon];
+    let mut chars = prefix.chars();
+    if !chars.next()?.is_ascii_alphabetic() {
+        return None;
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
+        return None;
+    }
+    Some(prefix.to_ascii_lowercase())
 }
 
 fn deny(code: &str, reason: &str) -> PolicyDecision {
     PolicyDecision::deny(code, reason, Capability::NetworkFetch, RiskLevel::High)
 }
 
-fn extract_host(rest: &str) -> String {
-    let without_path = rest.split('/').next().unwrap_or(rest);
-    let without_credentials = without_path.split('@').next_back().unwrap_or(without_path);
-
-    if let (Some(start), Some(end)) = (without_credentials.find('['), without_credentials.find(']'))
-    {
-        if start < end {
-            return without_credentials[start + 1..end].to_string();
-        }
-    }
-
-    let without_port = without_credentials
-        .split(':')
-        .next()
-        .unwrap_or(without_credentials);
-    without_port.to_string()
-}
-
-fn blocked_ip_reason(ip: &IpAddr) -> Option<(&'static str, &'static str)> {
-    match ip {
-        IpAddr::V4(v4) if v4.is_loopback() => Some((
-            codes::LOCALHOST_BLOCKED,
-            "loopback addresses are not allowed",
-        )),
-        IpAddr::V4(v4) if v4.is_link_local() => Some((
-            codes::LINK_LOCAL_BLOCKED,
-            "link-local addresses are not allowed",
-        )),
-        IpAddr::V4(v4) if v4.is_private() || v4.is_unspecified() => Some((
-            codes::PRIVATE_NETWORK_BLOCKED,
-            "private network addresses are not allowed",
-        )),
-        IpAddr::V4(_) => None,
-        IpAddr::V6(v6) if v6.is_loopback() => Some((
-            codes::LOCALHOST_BLOCKED,
-            "loopback addresses are not allowed",
-        )),
-        IpAddr::V6(v6) if v6.is_unicast_link_local() => Some((
-            codes::LINK_LOCAL_BLOCKED,
-            "link-local addresses are not allowed",
-        )),
-        IpAddr::V6(v6) if v6.is_unique_local() || v6.is_unspecified() => Some((
-            codes::PRIVATE_NETWORK_BLOCKED,
-            "private network addresses are not allowed",
-        )),
-        IpAddr::V6(v6) => {
-            let _ = v6;
-            None
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn blocked(url: &str) -> PolicyDecision {
+        let decision = validate_url_access(url, &UrlPolicy::default());
+        assert!(!decision.is_allowed(), "{url} should be blocked");
+        decision
+    }
+
     #[test]
     fn url_guard_allows_https_public_host() {
         let policy = UrlPolicy::default();
-        let decision = validate_url_access("https://example.com/path", &policy);
-        assert!(decision.is_allowed());
+        assert!(validate_url_access("https://example.com/path", &policy).is_allowed());
+        assert!(validate_url_access("http://example.com:8080/", &policy).is_allowed());
     }
 
     #[test]
     fn url_guard_denies_file_scheme() {
-        let policy = UrlPolicy::default();
-        let decision = validate_url_access("file:///etc/passwd", &policy);
-        assert!(!decision.is_allowed());
-        assert_eq!(decision.code, codes::UNSUPPORTED_SCHEME);
+        assert_eq!(
+            blocked("file:///etc/passwd").code,
+            codes::UNSUPPORTED_SCHEME
+        );
+        assert_eq!(
+            blocked("ftp://example.com/").code,
+            codes::UNSUPPORTED_SCHEME
+        );
+        // "No scheme" is reported by the oracle as `scheme not allowed: (none)`,
+        // so it maps to the scheme code rather than to an invalid request.
+        assert_eq!(blocked("example.com/path").code, codes::UNSUPPORTED_SCHEME);
+        assert_eq!(blocked("//example.com/").code, codes::UNSUPPORTED_SCHEME);
+        assert_eq!(blocked("").code, codes::INVALID_POLICY_REQUEST);
     }
 
     #[test]
     fn url_guard_denies_localhost() {
-        let policy = UrlPolicy::default();
-        let decision = validate_url_access("http://localhost:8080/", &policy);
-        assert!(!decision.is_allowed());
-        assert_eq!(decision.code, codes::LOCALHOST_BLOCKED);
+        assert_eq!(
+            blocked("http://localhost:8080/").code,
+            codes::LOCALHOST_BLOCKED
+        );
+        assert_eq!(blocked("http://LOCALHOST/").code, codes::LOCALHOST_BLOCKED);
+    }
+
+    /// These all passed before the guard delegated to the oracle. Each is a real
+    /// hole the standalone implementation left open.
+    #[test]
+    fn url_guard_denies_local_host_suffixes_and_a_trailing_dot() {
+        for url in [
+            "http://localhost./",
+            "http://printer.local/",
+            "http://svc.internal/",
+            "http://x.localhost/",
+        ] {
+            assert_eq!(blocked(url).code, codes::LOCALHOST_BLOCKED, "{url}");
+        }
+        // A name that merely contains "local" is not a suffix match.
+        assert!(validate_url_access("http://notlocal/", &UrlPolicy::default()).is_allowed());
+    }
+
+    /// Previously the guard split userinfo off at `@` and allowed the request.
+    #[test]
+    fn url_guard_denies_url_credentials() {
+        assert_eq!(
+            blocked("http://user:pass@example.com/").code,
+            codes::URL_CREDENTIALS_BLOCKED
+        );
+        assert_eq!(
+            blocked("http://user@example.com/").code,
+            codes::URL_CREDENTIALS_BLOCKED
+        );
     }
 
     #[test]
-    fn url_guard_denies_ipv4_private_ranges() {
-        let policy = UrlPolicy::default();
-        let blocked = [
+    fn url_guard_denies_ipv4_private_and_non_global_ranges() {
+        // The oracle reports one verdict for every blocked address, so loopback
+        // and link-local land on the same code as private ranges.
+        for url in [
             "http://127.0.0.1/",
             "http://10.0.0.1/",
             "http://172.16.0.1/",
             "http://192.168.1.1/",
-            "http://169.254.0.1/",
-        ];
-        for url in blocked {
-            let decision = validate_url_access(url, &policy);
-            assert!(!decision.is_allowed(), "{url} should be blocked");
+            "http://169.254.169.254/",
+            // Previously all allowed:
+            "http://224.0.0.1/",
+            "http://240.0.0.1/",
+            "http://255.255.255.255/",
+            "http://100.64.0.1/",
+            "http://0.1.2.3/",
+            "http://192.0.2.1/",
+            "http://198.51.100.1/",
+            "http://203.0.113.1/",
+            "http://198.18.0.1/",
+        ] {
+            assert_eq!(blocked(url).code, codes::PRIVATE_NETWORK_BLOCKED, "{url}");
         }
+        // A short IPv4 form is a hostname to the oracle, so it stays allowed.
+        assert!(validate_url_access("http://127.1/", &UrlPolicy::default()).is_allowed());
     }
 
     #[test]
-    fn url_guard_denies_ipv6_loopback() {
-        let policy = UrlPolicy::default();
-        let decision = validate_url_access("http://[::1]/", &policy);
-        assert!(!decision.is_allowed());
+    fn url_guard_denies_ipv6_loopback_unique_local_and_link_local() {
+        for url in [
+            "http://[::1]/",
+            "http://[::]/",
+            "http://[fc00::1]/",
+            "http://[fe80::1]/",
+            // Previously all allowed:
+            "http://[2002::1]/",
+            "http://[64:ff9b::1]/",
+            "http://[100::1]/",
+            "http://[2001:db8::1]/",
+            "http://[ff00::1]/",
+            "http://[4000::1]/",
+        ] {
+            assert_eq!(blocked(url).code, codes::PRIVATE_NETWORK_BLOCKED, "{url}");
+        }
+        // `fec0::/10` is allowed by the oracle, so it is allowed here too.
+        assert!(validate_url_access("http://[fec0::1]/", &UrlPolicy::default()).is_allowed());
     }
 
     #[test]
-    fn url_guard_denies_ipv6_unique_local() {
+    fn url_guard_allows_public_ipv4_and_ipv6() {
         let policy = UrlPolicy::default();
-        let decision = validate_url_access("http://[fc00::1]/", &policy);
-        assert!(!decision.is_allowed());
+        assert!(validate_url_access("http://8.8.8.8/", &policy).is_allowed());
+        assert!(validate_url_access("http://[2001:4860:4860::8888]/", &policy).is_allowed());
     }
 
+    /// A caller policy can be stricter than the oracle, but never looser.
     #[test]
-    fn url_guard_denies_ipv6_link_local() {
-        let policy = UrlPolicy::default();
-        let decision = validate_url_access("http://[fe80::1]/", &policy);
-        assert!(!decision.is_allowed());
-        assert_eq!(decision.code, codes::LINK_LOCAL_BLOCKED);
-    }
+    fn a_custom_policy_can_only_tighten_the_scheme_set() {
+        let https_only = UrlPolicy {
+            allowed_schemes: vec!["https".to_string()],
+        };
+        assert_eq!(
+            validate_url_access("http://example.com/", &https_only).code,
+            codes::UNSUPPORTED_SCHEME
+        );
+        assert!(validate_url_access("https://example.com/", &https_only).is_allowed());
 
-    #[test]
-    fn url_guard_allows_public_ipv4() {
-        let policy = UrlPolicy::default();
-        let decision = validate_url_access("http://8.8.8.8/", &policy);
-        assert!(decision.is_allowed());
-    }
-
-    #[test]
-    fn url_guard_allows_public_ipv6() {
-        let policy = UrlPolicy::default();
-        let decision = validate_url_access("http://[2001:4860:4860::8888]/", &policy);
-        assert!(decision.is_allowed());
+        // Listing a scheme the oracle rejects does not reintroduce it.
+        let permissive = UrlPolicy {
+            allowed_schemes: vec!["http".to_string(), "https".to_string(), "ftp".to_string()],
+        };
+        assert_eq!(
+            validate_url_access("ftp://example.com/", &permissive).code,
+            codes::UNSUPPORTED_SCHEME
+        );
     }
 }

@@ -152,13 +152,13 @@ use `sanitize_tool_result_for_external`, which skips the lookup.
 
 ## Known divergences
 
-### The pre-existing generic guards are weaker than the oracle
+### The pre-existing generic guards were weaker than the oracle
 
 `url_guard.rs` and `path_guard.rs` back the gateway's `/policy/*` routes. They
-are a *different model* (`Capability`/`RiskLevel`/`decision_id`) and they do not
+are a *different model* (`Capability`/`RiskLevel`/`decision_id`) and they did not
 match the oracle:
 
-| Gap | `url_guard` | oracle |
+| Gap | `url_guard` (before) | oracle |
 | --- | --- | --- |
 | `.local` / `.localhost` / `.internal` suffix | not checked | blocked |
 | trailing dot (`http://localhost./`) | not stripped | blocked |
@@ -166,10 +166,10 @@ match the oracle:
 | multicast / reserved / CGNAT / non-global IPv4 | not checked | blocked |
 | IPv6 reserved ranges (`4000::/3`, `e000::/4`, …) | not checked | blocked |
 
-This is **not** fixed here: tightening it changes a registered route's behavior,
-which deserves its own slice with its own evidence. It is recorded as a real
-finding and a follow-up. No production path depends on it yet (the Rust gateway
-is not the authority), so the exposure is currently latent.
+**The URL half of this is now fixed** — see "Aligning the URL guard" below.
+`path_guard.rs` is a different operation (workspace containment over a
+`{root, requested}` pair, not an argument-key scan) and is untouched; it needs its
+own analysis rather than a straight delegation.
 
 ### Object key order
 
@@ -339,3 +339,95 @@ comes from config, then 2 policy verdicts and 1 external-MCP entry).
 
 Additive and inert: the engine has no production caller and the audit sink writes
 only where a caller points it. Reverting the commit restores the previous tree.
+
+---
+
+# Aligning the URL guard, and the status endpoint
+
+## The finding that reframed this work
+
+While scoping the executor slice, the oracle's own Rust delegation turned out to
+be the risk:
+
+```
+execute_tool_call  ->  _evaluate_rust_policy(...)   (tools.py)
+                   ->  rust_core.policy_client.check_url / check_path
+                   ->  POST /policy/url, /policy/path   (gateway)
+                   ->  url_guard::validate_url_access, path_guard::...
+```
+
+`DEEPSEEK_RUST_POLICY` defaults to **false** (`infra/rust_core/config.py`), so
+today the Python guards decide. But flipping that flag would have moved SSRF and
+path decisions onto the **weaker** guard documented above — `.local`/`.internal`
+hosts, trailing-dot localhost, credential-bearing URLs, multicast, reserved,
+CGNAT and the IPv6 reserved ranges would all have started passing.
+
+That is the "migration must not weaken security" line, so wiring execution onto
+that gate first would have been the wrong order. The gate had to become correct
+before anything was allowed to depend on it.
+
+## The fix
+
+`url_guard::validate_url_access` now delegates to
+`tool_policy::evaluate_url_safety` — the oracle-parity guard — and maps the
+oracle's denial reason onto the crate's decision codes.
+
+The response envelope is unchanged, so the bridge contract holds:
+`policy_client._parse_response` requires `allowed` (bool) plus non-empty string
+`code`, `reason`, `decision_id`, `capability`, `risk_level`, and treats `code` as
+**opaque** — no branch depends on its value.
+
+One consequence is deliberate and worth stating: the oracle reports a single
+`private or local ip is not allowed: …` verdict, so loopback, link-local, reserved
+and multicast now all return `PRIVATE_NETWORK_BLOCKED` from the URL route.
+`codes::LINK_LOCAL_BLOCKED` therefore stops being emitted *by this guard*; the
+constant remains for callers that distinguish the two. Reproducing the oracle
+means reproducing its collapsing, not inventing a finer taxonomy.
+
+`UrlPolicy` can only **tighten**: the oracle accepts http(s) only, so listing
+another scheme cannot reintroduce it. There is a test for exactly that.
+
+`path_guard` is deliberately untouched. `validate_workspace_path` solves a
+different problem — containment of a `{root, requested}` pair — and the oracle's
+`evaluate_path_safety` is an argument-key scan over tool arguments. They are
+complementary, not interchangeable, and merging them would change what the route
+means. It needs its own slice.
+
+## The status endpoint
+
+`tool_policy_status` is ported together with the settings it reads, modelled as
+`ToolPolicySettings` (the five knobs, with the config module's defaults) and
+`ToolAuditPaths::under(root)` (mirroring `tool_audit_dir = root / ".tool-audit"`).
+
+`ToolPolicyConfig::default()` now reads its four strictness fields *through*
+`ToolPolicySettings::default()`, so the engine and the status payload cannot drift
+apart — a test asserts the two agree.
+
+`auditLogPath` is `str(pathlib.Path(...))`, which on Windows uses backslashes while
+`PathBuf::display()` keeps whatever the caller wrote, so `render_path_like_python`
+normalises the separator. Python additionally collapses `..` and repeated
+separators; that is not reproduced because the config never produces such a path.
+
+## Evidence
+
+The URL corpus is now checked **two ways**, so the route cannot silently drift from
+the guard it delegates to:
+
+- `url::<label>` — the guard verdict and reason;
+- `guard::<label>` — the `/policy/url` route's verdict, compared case by case
+  against the oracle's `evaluate_url_safety`.
+
+Result: **257 keys, byte-identical**, normalized MD5
+`bae3a9e5eb30cdd80a7a28b31e1f433b`, covering the 59 URL cases twice, plus
+`status` (settings, all six capability profiles, the 28-card catalog, and the
+rendered audit path).
+
+`cargo test -p deepseek-policy` → 82 tests, all pass. `cargo clippy
+-p deepseek-policy --all-targets --all-features -- -D warnings` → clean.
+`cargo check -p deepseek-gateway --all-targets` → still compiles.
+
+## What this does *not* do
+
+It does not enable `DEEPSEEK_RUST_POLICY`, and it does not wire tool execution. The
+flag stays off; enabling it is a separate, explicit cutover that also needs
+`path_guard` aligned and the failure-mode policy reviewed.

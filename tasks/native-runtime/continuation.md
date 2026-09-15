@@ -338,3 +338,79 @@ Design points worth keeping:
 Next concrete action for this line: port `tool_policy_status` + the config reader,
 then implement layer 2 execution against this gate, then wire the round loop and
 delete the `ToolRoundsUnwired` refusal.
+
+**Status endpoint ported, and the `/policy/url` gate aligned to the oracle (2026-09-15 三轮，uncommitted).**
+
+Step 1 of the planned sequence (`tool_policy_status` + config) is done:
+`ToolPolicySettings` (the five knobs, config defaults), `ToolAuditPaths::under(root)`
+(mirroring `tool_audit_dir = root / ".tool-audit"`), `tool_policy_status`, and
+`render_path_like_python` for the `auditLogPath` field. `ToolPolicyConfig::default()`
+now reads its four strictness fields *through* `ToolPolicySettings::default()`, so
+the engine and the status payload cannot drift apart (asserted by a test).
+
+**The scoping of step 2 turned up something that reordered the work.** The oracle's
+own Rust delegation is the risk:
+
+```
+execute_tool_call -> _evaluate_rust_policy (tools.py)
+                  -> rust_core.policy_client.check_url / check_path
+                  -> POST /policy/url, /policy/path (gateway)
+                  -> url_guard::validate_url_access  <-- weaker than Python
+```
+
+`DEEPSEEK_RUST_POLICY` defaults to **false** (`infra/rust_core/config.py`), so
+Python still decides. But flipping it would have moved SSRF decisions onto the
+guard flagged in the previous round: `.local` / `.internal` hosts, trailing-dot
+localhost, credential-bearing URLs, multicast, reserved, CGNAT and the whole IPv6
+reserved set would all have started passing. Wiring execution onto that gate first
+would have been the wrong order — the gate had to be correct before anything was
+allowed to depend on it.
+
+So `url_guard::validate_url_access` now **delegates to
+`tool_policy::evaluate_url_safety`** and maps the oracle's denial reason onto the
+crate's codes. The bridge contract is unaffected: `policy_client._parse_response`
+requires the `allowed` bool plus non-empty string `code`/`reason`/`decision_id`/
+`capability`/`risk_level`, and treats `code` as **opaque** — nothing branches on it.
+
+Two deliberate consequences:
+
+- The oracle reports one `private or local ip is not allowed: …` verdict, so
+  loopback, link-local, reserved and multicast now all return
+  `PRIVATE_NETWORK_BLOCKED` from this route. `codes::LINK_LOCAL_BLOCKED` is no
+  longer emitted *by this guard*. Mirroring the oracle means mirroring its
+  collapsing, not inventing a finer taxonomy.
+- `UrlPolicy` can only **tighten**. The oracle accepts http(s) only, so listing
+  another scheme cannot reintroduce it — there is a test for exactly that.
+
+`path_guard` is deliberately **not** touched: `validate_workspace_path` is
+root-containment over a `{root, requested}` pair, while the oracle's
+`evaluate_path_safety` is an argument-key scan. Complementary, not
+interchangeable; merging them would change what the route means.
+
+Verified locally:
+
+- Byte-level parity: **identical MD5 `bae3a9e5eb30cdd80a7a28b31e1f433b`**, 257
+  keys, no differences. The URL corpus is checked **twice** — `url::<label>` (the
+  guard) and `guard::<label>` (the route), so the route cannot silently drift from
+  the guard it delegates to.
+- `cargo test -p deepseek-policy` -> 82 tests, all pass.
+- `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings`
+  -> clean; `cargo fmt` applied.
+- `cargo check -p deepseek-gateway --all-targets` -> still compiles.
+
+**NOT done, and the honest state of the remaining two steps:**
+
+- **Step 2 (layer 2 tool execution) is not started.** `execute_tool_call` dispatches
+  to 17 local branches plus `browser_*`, and those depend on the `search`, `rag`,
+  `data` (projects/reminders/memory), `media` (presentations, mindmaps, documents,
+  slides) and `browser` packages — several thousand lines with their own
+  side-effect and sandbox semantics. It is a multi-slice effort, not one commit.
+  A sensible first slice is the **dispatch skeleton + the branches with no external
+  package** (e.g. `python_eval`'s sandbox envelope, `data_transform`,
+  `list_reminders`), each behind the gate just aligned, with the package-backed
+  branches added one at a time.
+- **Step 3 (wire the round loop, delete `ToolRoundsUnwired`) is not started** and
+  is correctly blocked on step 2 — wiring it now would replace the oracle's
+  terminating tool loop with a permanently failing one that still answers `200`.
+- `DEEPSEEK_RUST_POLICY` remains **off**, deliberately. Enabling it is an explicit
+  cutover that needs `path_guard` aligned and the failure-mode policy reviewed.

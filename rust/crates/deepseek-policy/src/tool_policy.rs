@@ -22,6 +22,7 @@
 //! write an audit log, and belong to a separate stateful slice.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -1464,16 +1465,18 @@ pub struct ToolPolicyConfig {
 
 impl Default for ToolPolicyConfig {
     fn default() -> Self {
+        // The four strictness knobs mirror `deepseek_infra.core.config`, read
+        // through `ToolPolicySettings` so the two cannot drift apart.
+        let settings = ToolPolicySettings::default();
         Self {
             capability: "full".to_string(),
             allowed_tools: None,
             approvals: Vec::new(),
-            // Mirrors the `deepseek_infra.core.config` defaults.
-            enabled: true,
-            enforce_schema: false,
-            require_confirm: false,
-            sanitize: true,
-            audit: true,
+            enabled: settings.enabled,
+            enforce_schema: settings.enforce_schema,
+            require_confirm: settings.require_confirm,
+            sanitize: settings.sanitize_results,
+            audit: settings.audit_enabled,
             scope: "global".to_string(),
             secrets: Vec::new(),
             taint_escalation: false,
@@ -1915,6 +1918,113 @@ impl ToolPolicy {
             "blockedTools": blocked,
         })
     }
+}
+
+// --- Settings, paths, and the status payload -------------------------------------
+
+/// The engine's strictness knobs, mirroring `ToolPolicySettings` in
+/// `deepseek_infra.core.config`.
+///
+/// `enforce_schema` and `require_confirm` are the two *stricter* gates and are
+/// opt-in so default behavior is unchanged. The guards themselves are not
+/// optional — they run whenever a policy is attached.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolPolicySettings {
+    pub enabled: bool,
+    pub enforce_schema: bool,
+    pub require_confirm: bool,
+    pub sanitize_results: bool,
+    pub audit_enabled: bool,
+}
+
+impl Default for ToolPolicySettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            enforce_schema: false,
+            require_confirm: false,
+            sanitize_results: true,
+            audit_enabled: true,
+        }
+    }
+}
+
+/// The roles in `CAPABILITY_PROFILES`, in declaration order.
+///
+/// Order is part of the status payload, so it lives here as the single source
+/// rather than being re-listed at each use site.
+pub const CAPABILITY_ROLES: [&str; 6] = [
+    "full",
+    "researcher",
+    "browser_reader",
+    "coder",
+    "reasoner",
+    "critic",
+];
+
+/// Audit paths derived the way the oracle's config derives them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolAuditPaths {
+    pub dir: PathBuf,
+    pub log: PathBuf,
+}
+
+impl ToolAuditPaths {
+    /// Mirrors `tool_audit_dir = root / ".tool-audit"` and
+    /// `tool_audit_log = tool_audit_dir / "audit.jsonl"`.
+    pub fn under(root: impl AsRef<Path>) -> Self {
+        let dir = root.as_ref().join(".tool-audit");
+        let log = dir.join("audit.jsonl");
+        Self { dir, log }
+    }
+
+    /// A sink writing to these paths.
+    pub fn sink(&self) -> JsonlAuditSink {
+        JsonlAuditSink::new(self.dir.clone(), self.log.clone())
+    }
+}
+
+/// Render a path the way Python's `str(pathlib.Path)` does.
+///
+/// On Windows `str(Path(".tool-audit") / "audit.jsonl")` is
+/// `.tool-audit\audit.jsonl`, while `PathBuf::display()` keeps whatever
+/// separators the caller wrote. Only the separator differs for the shapes this
+/// endpoint reports; Python additionally collapses `..` and repeated separators,
+/// which is not reproduced here because the config never produces such a path.
+pub fn render_path_like_python(path: &Path) -> String {
+    let text = path.to_string_lossy().to_string();
+    if cfg!(windows) {
+        text.replace('/', "\\")
+    } else {
+        text
+    }
+}
+
+/// Mirrors `tool_policy_status`, the payload behind the status endpoint.
+pub fn tool_policy_status(settings: &ToolPolicySettings, audit_log: &Path) -> Value {
+    let mut capabilities = Map::new();
+    for role in CAPABILITY_ROLES {
+        capabilities.insert(
+            role.to_string(),
+            Value::Array(
+                capability_tools(role)
+                    .into_iter()
+                    .map(|name| Value::String(name.to_string()))
+                    .collect(),
+            ),
+        );
+    }
+    let tools: Vec<Value> = TOOL_METADATA.iter().map(|meta| meta.to_dict()).collect();
+    json!({
+        "enabled": settings.enabled,
+        "enforceSchema": settings.enforce_schema,
+        "requireConfirm": settings.require_confirm,
+        "sanitizeResults": settings.sanitize_results,
+        "auditEnabled": settings.audit_enabled,
+        "auditLogPath": render_path_like_python(audit_log),
+        "capabilities": Value::Object(capabilities),
+        "tools": tools,
+    })
 }
 
 #[cfg(test)]
@@ -3037,5 +3147,90 @@ mod tests {
         assert_eq!(entries[0]["a"], 1);
         assert_eq!(entries[1]["b"], 2);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- settings, paths, and status -----------------------------------------
+
+    #[test]
+    fn settings_defaults_match_the_config_module() {
+        let settings = ToolPolicySettings::default();
+        assert!(settings.enabled);
+        assert!(!settings.enforce_schema);
+        assert!(!settings.require_confirm);
+        assert!(settings.sanitize_results);
+        assert!(settings.audit_enabled);
+
+        // `ToolPolicyConfig` reads through the same source, so the two cannot
+        // drift apart.
+        let config = ToolPolicyConfig::default();
+        assert_eq!(config.enabled, settings.enabled);
+        assert_eq!(config.enforce_schema, settings.enforce_schema);
+        assert_eq!(config.require_confirm, settings.require_confirm);
+        assert_eq!(config.sanitize, settings.sanitize_results);
+        assert_eq!(config.audit, settings.audit_enabled);
+    }
+
+    #[test]
+    fn audit_paths_derive_from_the_root_like_the_config() {
+        let root = std::path::Path::new("/srv/app");
+        let paths = ToolAuditPaths::under(root);
+        assert_eq!(paths.dir, root.join(".tool-audit"));
+        assert_eq!(paths.log, root.join(".tool-audit").join("audit.jsonl"));
+    }
+
+    /// `str(pathlib.Path(...))` normalises separators to the platform's, while
+    /// `PathBuf::display()` keeps whatever the caller wrote.
+    #[test]
+    fn paths_render_like_python() {
+        let rendered = render_path_like_python(std::path::Path::new(".tool-audit/audit.jsonl"));
+        if cfg!(windows) {
+            assert_eq!(rendered, ".tool-audit\\audit.jsonl");
+        } else {
+            assert_eq!(rendered, ".tool-audit/audit.jsonl");
+        }
+    }
+
+    #[test]
+    fn status_payload_reports_settings_profiles_and_the_full_catalog() {
+        let log = std::path::Path::new(".tool-audit").join("audit.jsonl");
+        let status = tool_policy_status(&ToolPolicySettings::default(), &log);
+
+        assert_eq!(status["enabled"], true);
+        assert_eq!(status["enforceSchema"], false);
+        assert_eq!(status["requireConfirm"], false);
+        assert_eq!(status["sanitizeResults"], true);
+        assert_eq!(status["auditEnabled"], true);
+        assert_eq!(
+            status["auditLogPath"],
+            render_path_like_python(&log).as_str()
+        );
+
+        // Every role appears, in declaration order, with its exact slice.
+        let capabilities = status["capabilities"].as_object().unwrap();
+        assert_eq!(capabilities.len(), CAPABILITY_ROLES.len());
+        assert_eq!(capabilities["full"].as_array().unwrap().len(), 28);
+        assert_eq!(
+            capabilities["researcher"],
+            json!(["web_search", "compare_search_results", "fetch_url"])
+        );
+        assert_eq!(capabilities["reasoner"], json!([]));
+
+        // The catalog is the whole table, in table order.
+        let tools = status["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), TOOL_METADATA.len());
+        assert_eq!(tools[0]["name"], "web_search");
+        assert_eq!(tools[27]["name"], "browser_close_session");
+    }
+
+    #[test]
+    fn settings_can_turn_the_stricter_gates_on() {
+        let settings = ToolPolicySettings {
+            enforce_schema: true,
+            require_confirm: true,
+            ..ToolPolicySettings::default()
+        };
+        let status = tool_policy_status(&settings, std::path::Path::new("audit.jsonl"));
+        assert_eq!(status["enforceSchema"], true);
+        assert_eq!(status["requireConfirm"], true);
     }
 }
