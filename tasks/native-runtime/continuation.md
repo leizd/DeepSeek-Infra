@@ -189,3 +189,81 @@ Next concrete action for this line: implement layer 2 (`execute_tool_call`'s 17
 branches + `browser_*`) and layer 3 (`ToolPolicy.evaluate`/`sanitize_result`),
 then wire `tool_rounds` into `chat_execution`/`chat_stream` and delete the
 `ToolRoundsUnwired` refusal.
+
+**Tool-policy pure core ported and byte-verified (2026-09-15, uncommitted).**
+`rust/crates/deepseek-policy/src/tool_policy.rs` mirrors the side-effect-free half
+of `deepseek_infra/infra/tool_runtime/tool_policy.py`: the SSRF guard
+(`evaluate_url_safety`), the path-escape guard (`evaluate_path_safety`), the
+recursive network-argument guard, the secret-exfiltration guard
+(`arguments_contain_secret`), the prompt-injection sanitizers
+(`sanitize_external_text` / `sanitize_tool_result` /
+`sanitize_tool_result_for_external`), `validate_arguments`, `_max_risk`, and the
+`ToolMetadata` / capability-profile tables.
+
+This is the gate the oracle applies **before** a tool runs, so it is a
+prerequisite for layer 2 (tool execution): porting execution first would mean
+running model-chosen side effects with no SSRF, path-escape, secret-exfil, or
+injection guard — strictly weaker than the Python being replaced.
+
+Still **not** ported: `ToolPolicy.evaluate` (reads config + audit state) and the
+audit writers. Until those land, nothing may execute a tool on this module alone,
+and the route keeps refusing tool rounds with
+`NATIVE_CHAT_TOOL_ROUNDS_NOT_READY`.
+
+Verified locally:
+
+- Byte-level parity: `tasks/native-runtime/tool_policy_parity_probe.py` slices the
+  contiguous pure region of the oracle (lines 59–563) and `exec`s it (so the
+  definitions being compared are the oracle's own, including the import-time
+  derivations) vs `deepseek-policy/examples/tool_policy_parity_probe.rs` over the
+  same corpus -> **identical MD5 `26c7723c89a4fb59c7ef9e412f1b4b97`**, 158 keys,
+  no differences.
+- `cargo test -p deepseek-policy --lib tool_policy` -> 30 tests, all pass.
+- `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings`
+  -> clean. `cargo fmt` applied.
+- `cargo check -p deepseek-gateway --all-targets` -> still compiles.
+
+Two defects the probe caught, both from **guessing** the IP classifier instead of
+reading CPython's tables (the first pass was wrong in both directions):
+
+1. false negative — `1:0:0:2::3` was allowed; Python's `is_reserved` covers
+   `::/8` (and much more: `4000::/3`, `e000::/4`, …), so the oracle blocks it.
+2. false positive — `192.88.99.1` was blocked; that range is in none of Python's
+   tables, so the oracle allows it.
+
+Derived facts, now encoded and tested:
+
+- IPv4 `is_global` = `not in 100.64.0.0/10 and not is_private`, so `not is_global`
+  adds only the shared range; `is_reserved` is `240.0.0.0/4` (already private).
+  Blocking set = 14 ranges.
+- IPv6 `is_global` is literally `not is_private`, so `not is_global` adds nothing.
+  Blocking set = `_private_networks` ∪ `_reserved_networks` ∪ multicast = 23 ranges.
+- IPv4-mapped IPv6 delegates **every** predicate to the underlying IPv4 address,
+  so `::ffff:1.2.3.4` is *allowed* while `::ffff:0:1` is blocked — even though
+  `_private_networks` lists `::ffff:0.0.0.0/96`. Rust's `to_ipv4_mapped()` matches
+  CPython's `ipv4_mapped` exactly.
+- `fec0::/10` (deprecated site-local) is allowed by the oracle; `fe00::/9` stops
+  at `fe7f::`. Mirroring that hole is correctness, not a bug to "fix".
+
+Message-parity surfaces that look like formatting but are not: the blocked-IP
+reason embeds Python's `str(ip)` (so IPv4-mapped must render dotted, not
+`::ffff:0:1`), and the enum violation embeds Python's `repr` of the list
+(`['x', 'y']`).
+
+Dependency change is minimal: `regex 1.13.0` was already in `Cargo.lock`
+transitively, so it is pinned exactly and promoted to a direct dep of
+`deepseek-policy`; the lockfile gains one edge and no new crate version.
+
+**Real finding, deliberately not fixed here.** The crate's pre-existing generic
+guards (`url_guard.rs` / `path_guard.rs`, behind the gateway's `/policy/*` routes)
+are **weaker than the oracle** and are a different model: no
+`.local`/`.localhost`/`.internal` suffix check, no trailing-dot strip, URL
+credentials are **stripped and allowed** (the oracle denies them), and
+multicast/reserved/CGNAT/non-global IPv4 plus the IPv6 reserved ranges are not
+checked at all. Tightening them changes a registered route's behavior, so it
+deserves its own slice with its own evidence. Exposure is latent — the Rust
+gateway is not the production authority — but it should not ship as-is.
+
+Next concrete action for this line: port `ToolPolicy.evaluate` + the audit log
+(layer 3b), then implement layer 2 execution against this gate, then wire the
+round loop and delete the `ToolRoundsUnwired` refusal.
