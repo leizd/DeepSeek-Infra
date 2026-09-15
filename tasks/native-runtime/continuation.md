@@ -414,3 +414,67 @@ Verified locally:
   terminating tool loop with a permanently failing one that still answers `200`.
 - `DEEPSEEK_RUST_POLICY` remains **off**, deliberately. Enabling it is an explicit
   cutover that needs `path_guard` aligned and the failure-mode policy reviewed.
+
+**Layer 2 slice 1: the executor seam, with one branch ported (2026-09-15 四轮，uncommitted).**
+
+`rust/crates/deepseek-policy/src/tool_dispatch.rs` ports the *seam* of
+`execute_tool_call` in `infra/tool_runtime/tools.py`:
+
+- the envelope contract (success `{"ok": true, "tool", "result"}` + `sanitize_result`;
+  the `AppError` and catch-all error arms; the `Unsupported tool:` fallback);
+- the normalization the branches rely on — `tool_call_name`,
+  `parse_tool_arguments`, `safe_limit`, `is_parallel_safe_tool`, `SERIAL_TOOL_NAMES`;
+- the **complete branch inventory** (`Branch`, 18 entries) with `branch_for`
+  routing, `is_ported`, and `blocker()` naming the package each unported branch
+  waits on — a test asserts no branch is silently missing;
+- `generate_chart` + `chart_markdown_table`, the one branch that needs no package.
+
+**Nothing is wired.** `DispatchOutcome::Unported` deliberately carries **no
+envelope** and `to_output()` returns `None` for it, so a caller cannot report
+success (or even a tidy error) for a tool that was never implemented. 17 of 18
+branches remain unported; `python_eval` in particular needs a real sandbox
+because the oracle shells out to a Python interpreter, which the migrated runtime
+must not do.
+
+Verified locally:
+
+- Byte-level parity: **identical MD5 `9d491ef3f97c9f079ad9d7761a815ec4`**, 49 keys,
+  no differences, re-confirmed after the clippy fixes.
+- `cargo test -p deepseek-policy` -> 102 tests, all pass.
+- `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings`
+  -> clean; `cargo fmt` applied.
+
+Three orderings the probe pinned, and the bugs they caught:
+
+1. **Parse before gate.** My first draft gated the raw `arguments` value. The
+   model sends arguments as a JSON *string*, and the guards read fields inside it —
+   so gating the raw string left every argument guard looking at an empty object
+   and the SSRF/path checks **silently passed**. The oracle parses first; there is
+   now a test that fails if the order is reversed
+   (`dispatch("fetch_url", "{\"url\": \"http://169.254.169.254/\"}")` must be
+   Denied with `risk = "critical"`).
+2. **Gate before branch.** A denial short-circuits; the probe records branch
+   invocations, and every denied case reports `branches: []`.
+3. **The unknown-tool fallback is a no-policy path.** With a policy attached an
+   unregistered name is denied as `unknown_tool` first, so `Unsupported tool:` is
+   only reachable without one. The Rust probe example's first version gated every
+   case, which made the `no-policy` case deny where the oracle reached the
+   fallback — the diff exposed it.
+
+Two behaviours the corpus settled, both from **guessing instead of measuring**
+(that is now four times on this project):
+
+- `data[:12]` is applied **before** the point filter, so the cap counts raw items,
+  not usable points. My first test asserted 12 points for a 26-item input; the
+  real answer is 7.
+- `int("7.9")` raises in Python (falls back to the default) while `int(7.9)`
+  truncates to 7 — the string and number paths had to be handled separately.
+
+Also reproduced: `python_float_str` for `str(float)` (`1.0` not `1`; signed
+zero-padded exponents outside `1e-4..1e16`), because those values are interpolated
+into the model-facing markdown table.
+
+Next concrete action for this line: port `execute_tool_calls` (the parallel batch
++ cancellation) and the remaining branches one at a time, each behind the gate,
+starting with the ones whose packages are smallest. Only after enough branches
+exist does wiring the round loop (and deleting `ToolRoundsUnwired`) become safe.

@@ -9,6 +9,7 @@ use crate::capability::{Capability, RiskLevel};
 pub mod audit;
 pub mod capability;
 pub mod path_guard;
+pub mod tool_dispatch;
 pub mod tool_policy;
 pub mod url_guard;
 
