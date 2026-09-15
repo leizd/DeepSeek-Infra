@@ -10,6 +10,8 @@ pub mod app_error;
 pub mod audit;
 pub mod capability;
 pub mod core_utils;
+pub mod file_lock;
+pub mod memory;
 pub mod mutation_gate;
 pub mod path_guard;
 pub mod python_json;

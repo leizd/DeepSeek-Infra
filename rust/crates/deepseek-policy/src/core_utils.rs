@@ -116,6 +116,41 @@ pub fn utc_now_iso(epoch_seconds: i64) -> String {
     )
 }
 
+/// The wall clock, injected.
+///
+/// The oracle's `utc_now_iso()` reads the clock itself and takes no argument. This
+/// port supplies it instead, so a store write is reproducible in tests and in the
+/// parity probe while production keeps using the real clock.
+pub trait Clock {
+    /// The current instant as `utc_now_iso` would render it.
+    fn now_iso(&self) -> String;
+}
+
+/// The production clock.
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now_iso(&self) -> String {
+        let seconds = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs() as i64)
+            .unwrap_or(0);
+        utc_now_iso(seconds)
+    }
+}
+
+/// A clock frozen at a fixed instant, for tests and the parity probe.
+#[derive(Debug, Clone, Copy)]
+pub struct FixedClock {
+    pub epoch_seconds: i64,
+}
+
+impl Clock for FixedClock {
+    fn now_iso(&self) -> String {
+        utc_now_iso(self.epoch_seconds)
+    }
+}
+
 /// Mirrors `latest_user_query`: the most recent user message whose content is a
 /// non-blank string, trimmed.
 pub fn latest_user_query(payload: &Value) -> String {

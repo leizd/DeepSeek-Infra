@@ -733,3 +733,58 @@ Verified locally:
 Next: slice D, the memory triple (`suggest_memory`, `recall_memory`, `forget_memory`)
 — store + scorer + the fingerprint/category/conflict/sensitive logic. Nothing is
 wired; `Branch::is_ported()` is unchanged for every data-layer branch.
+
+**Data layer slice D: the memory triple (2026-09-15 十轮，uncommitted).**
+
+`memory.rs` ports `infra/data/memory.py` plus the `suggest_memory` /
+`recall_memory` / `forget_memory` branches; `file_lock.rs` factors out the OS lock
+that both this module and the mutation gate need (the platform split now lives in one
+place). A memory write passes through **three** layers, each doing a different job: a
+process-wide mutex, a cross-process file lock on `.memory/memories.lock`, and the
+workspace mutation gate.
+
+**The bug this slice found, and how.** The first version put `mutation_scope` around
+the *delete* path only, because that was the path I was reading. The oracle puts it
+inside `_save_memories_unlocked`, so **every** save is fenced — including the
+migration save. The probe caught it as a generation counter off by exactly two:
+
+    delete::no-write-generation   Python 6   Rust 4
+
+Six means three scopes had run (migration + two deletes), four means two. Fixed by
+moving the gate into `save_unlocked`, where the oracle has it.
+
+**A truthiness detail.** `_save_memories_unlocked` normalises `source` through two
+Python `or` chains. My first version stringified any number and fell back otherwise,
+which is wrong at both ends: `0` and `false` are falsy and become `"manual"`, while a
+non-zero number and `true` become `"5"` / `"True"`. Fixed with an explicit
+`python_truthy` covering `""`, `[]` and `{}` too.
+
+**One deliberate gap, stated everywhere it matters.** `retrieve_memories` adds a
+vector-search bonus from `local_rag.search_memories_index`. `local_rag` is 2,676 lines
+and belongs to the RAG slice, so the bonus arrives through an injectable `VectorHits`
+provider defaulting to none. The oracle wraps the call in `try/except Exception` and
+falls back to an empty map, so the default reproduces the oracle's **own degradation
+path** and the probe compares that. But when the vector index is populated the
+oracle's scores include a bonus this does not. **`recall_memory`'s ranking is verified
+only where the vector index contributes nothing** — recorded in the docs, the matrix
+and the module docs.
+
+Also ported faithfully from the write path (it doubles as the migration): non-objects
+and empty content dropped; `id` falls back `memoryId` -> `id` -> a **content-addressed**
+`sha256(...)[:20]`; `confidence` default 0.9 clamped to [0,1]; `type` derived from
+`type` -> `category` -> `"fact"`; timestamps through the injected clock; cap 400.
+Reads stay silent on corruption.
+
+Verified locally:
+- Byte-level parity: **identical MD5 `4261dd06c31ec2de180601f8d80e5cca`**, 92 keys, no
+  differences (text/scope/fingerprint/sensitive/category/conflict helpers, tool scopes,
+  suggest, the loaded and migrated store bytes, tolerant reads, recall, forget, delete
+  semantics with generation counters, conflict queries).
+- `cargo test -p deepseek-policy` -> 206 tests, all pass (26 new).
+- `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings` ->
+  clean; `cargo fmt` applied.
+
+Last data slice is E (`projects`, blocked on `rag/files.py`'s `load_cached_file`).
+`suggest_memory` does not persist: it builds a suggestion and fires a callback, so
+`upsert_memory`, `clear_memories` and `delete_memory_by_id` are not ported and are not
+needed here. Nothing is wired.

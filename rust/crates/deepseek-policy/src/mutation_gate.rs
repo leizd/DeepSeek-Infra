@@ -24,7 +24,7 @@
 //!   `&Path` everywhere so the caller supplies it. No hidden global.
 //! - **The OS lock is Win32/`flock` directly.** The oracle calls
 //!   `msvcrt.locking(fd, LK_LOCK, 1)`, which wraps `LockFileEx` with a retry loop;
-//!   [`os_lock`] calls `LockFileEx` with the same ten-attempts-one-second-apart
+//!   [`crate::file_lock`] calls `LockFileEx` with the same ten-attempts-one-second-apart
 //!   policy, so the *retry semantics match* rather than becoming an indefinite
 //!   block. On Unix both sides call `flock(LOCK_EX)`, which blocks.
 //! - **Reentrancy is a `Mutex` plus a thread-local depth**, not an `RLock`. The
@@ -211,133 +211,6 @@ fn thread_tag() -> u64 {
     })
 }
 
-// --- the OS lock -----------------------------------------------------------------
-
-#[cfg(windows)]
-mod os_lock {
-    use std::ffi::c_void;
-    use std::fs::File;
-    use std::io;
-    use std::os::windows::io::AsRawHandle;
-    use std::thread::sleep;
-    use std::time::Duration;
-
-    #[repr(C)]
-    struct Overlapped {
-        internal: usize,
-        internal_high: usize,
-        offset: u32,
-        offset_high: u32,
-        event: *mut c_void,
-    }
-
-    impl Overlapped {
-        fn at_start() -> Self {
-            Self {
-                internal: 0,
-                internal_high: 0,
-                offset: 0,
-                offset_high: 0,
-                event: std::ptr::null_mut(),
-            }
-        }
-    }
-
-    unsafe extern "C" {
-        fn LockFileEx(
-            handle: *mut c_void,
-            flags: u32,
-            reserved: u32,
-            low: u32,
-            high: u32,
-            overlapped: *mut Overlapped,
-        ) -> i32;
-        fn UnlockFileEx(
-            handle: *mut c_void,
-            reserved: u32,
-            low: u32,
-            high: u32,
-            overlapped: *mut Overlapped,
-        ) -> i32;
-    }
-
-    const LOCKFILE_FAIL_IMMEDIATELY: u32 = 0x0000_0001;
-    const LOCKFILE_EXCLUSIVE_LOCK: u32 = 0x0000_0002;
-
-    /// `msvcrt.LK_LOCK`: retry once a second, and give up after ten attempts.
-    ///
-    /// Reproducing the retry policy matters — `LockFileEx` without
-    /// `LOCKFILE_FAIL_IMMEDIATELY` would block forever where the oracle raises.
-    const ATTEMPTS: u32 = 10;
-
-    pub fn lock_exclusive(file: &File) -> io::Result<()> {
-        let handle = file.as_raw_handle();
-        for attempt in 0..ATTEMPTS {
-            let mut overlapped = Overlapped::at_start();
-            // One byte at offset zero, matching `handle.seek(0)` then `locking(fd, …, 1)`.
-            let locked = unsafe {
-                LockFileEx(
-                    handle,
-                    LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
-                    0,
-                    1,
-                    0,
-                    &mut overlapped,
-                )
-            };
-            if locked != 0 {
-                return Ok(());
-            }
-            if attempt + 1 < ATTEMPTS {
-                sleep(Duration::from_secs(1));
-            }
-        }
-        Err(io::Error::last_os_error())
-    }
-
-    pub fn unlock(file: &File) -> io::Result<()> {
-        let handle = file.as_raw_handle();
-        let mut overlapped = Overlapped::at_start();
-        let unlocked = unsafe { UnlockFileEx(handle, 0, 1, 0, &mut overlapped) };
-        if unlocked == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
-    }
-}
-
-#[cfg(unix)]
-mod os_lock {
-    use std::ffi::c_int;
-    use std::fs::File;
-    use std::io;
-    use std::os::fd::AsRawFd;
-
-    unsafe extern "C" {
-        fn flock(fd: c_int, operation: c_int) -> c_int;
-    }
-
-    // `flock` blocks, exactly as the oracle's `fcntl.flock(..., LOCK_EX)` does.
-    const LOCK_EX: c_int = 2;
-    const LOCK_UN: c_int = 8;
-
-    pub fn lock_exclusive(file: &File) -> io::Result<()> {
-        let result = unsafe { flock(file.as_raw_fd(), LOCK_EX) };
-        if result != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
-    }
-
-    pub fn unlock(file: &File) -> io::Result<()> {
-        let result = unsafe { flock(file.as_raw_fd(), LOCK_UN) };
-        if result != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
-    }
-}
-
 // --- the gate --------------------------------------------------------------------
 
 /// Mirrors `_PROCESS_LOCK`: serializes threads inside this process.
@@ -381,7 +254,7 @@ impl Drop for ExclusiveGate {
             }
         });
         if let Some(file) = self.file.take() {
-            let _ = os_lock::unlock(&file);
+            let _ = crate::file_lock::unlock(&file);
         }
     }
 }
@@ -448,7 +321,7 @@ pub fn exclusive_gate(root: &Path) -> Result<ExclusiveGate, GateError> {
         .write(true)
         .open(&target)
         .map_err(|error| GateError::misuse(error.to_string()))?;
-    if let Err(error) = os_lock::lock_exclusive(&file) {
+    if let Err(error) = crate::file_lock::lock_exclusive(&file) {
         // Release the process lock before reporting, so a failed OS lock does not
         // wedge every later writer in this process.
         drop(process);

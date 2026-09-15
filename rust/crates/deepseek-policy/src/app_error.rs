@@ -19,6 +19,8 @@ pub mod codes {
     pub const NOT_FOUND: &str = "not_found";
     /// `ErrorCode.INVALID_REQUEST`
     pub const INVALID_REQUEST: &str = "invalid_request";
+    /// `ErrorCode.SENSITIVE_CONTENT`
+    pub const SENSITIVE_CONTENT: &str = "sensitive_content";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
