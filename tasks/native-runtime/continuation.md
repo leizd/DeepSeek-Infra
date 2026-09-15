@@ -267,3 +267,74 @@ gateway is not the production authority — but it should not ship as-is.
 Next concrete action for this line: port `ToolPolicy.evaluate` + the audit log
 (layer 3b), then implement layer 2 execution against this gate, then wire the
 round loop and delete the `ToolRoundsUnwired` refusal.
+
+**Tool-policy engine + audit layer ported and byte-verified (2026-09-15 二轮，uncommitted).**
+`deepseek-policy::tool_policy` now also carries the decision engine and the audit
+log, completing the policy gate:
+
+- `ToolPolicy` + `ToolPolicyConfig` with the oracle's own defaults,
+  `ToolPolicy::new` / `permissive()`, `evaluate`, `_record` semantics
+  (counters + `blocked_tools`), `mark_tainted` / `is_tainted`,
+  `sanitize_result` (scrubs and taints the turn on a hit), `denial_output`,
+  `diagnostics`.
+- `ToolPolicyDecision` — deliberately **not** named `PolicyDecision`, because this
+  crate already exports a different `PolicyDecision` (the
+  `Capability`/`RiskLevel` model behind `/policy/*`). Sharing the name would make
+  importing the wrong one an easy, security-relevant mistake.
+- `is_sensitive_memory` (extracted from `infra/data/memory.py`, not re-written).
+- Audit: `AuditSink` trait with `NullAuditSink` / `InMemoryAuditSink` /
+  `JsonlAuditSink`, `build_audit_entry`, `build_external_audit_entry`,
+  `normalized_args_hash`, `read_recent_audit`, and a hand-rolled
+  `utc_isoformat_seconds` (no date dependency).
+
+**Not ported:** `tool_policy_status` (reads the audit-path global and the config
+object) and the `deepseek_infra.core.config` env reader — a config-layer concern,
+not a policy one. Nothing may execute a tool until layer 2 exists and is wired;
+the route still refuses tool rounds with `NATIVE_CHAT_TOOL_ROUNDS_NOT_READY`.
+
+Verified locally:
+
+- Byte-level parity across **both** regions of the same oracle file: the
+  contiguous constants+guards+engine slice (lines 59–901, `exec`ed verbatim with
+  only the config globals and audit path rebound) plus the audit functions lifted
+  individually and driven against a **real temporary JSONL file** (so the writer
+  that ships is the writer measured, not a re-implementation of its entry dict) ->
+  **identical MD5 `d51462e06a0e6ccd03db7ed05ab77d71`**, 197 keys, no differences,
+  re-confirmed after `cargo fmt`.
+- `cargo test -p deepseek-policy` -> 77 tests, all pass.
+- `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings`
+  -> clean.
+- Dependency: `sha2 0.10.9` was already in `Cargo.lock`; the lockfile gains one
+  edge and no new crate version.
+
+Design points worth keeping:
+
+- **The decision order is the contract.** `evaluate` returns on the first failing
+  check, so reordering any pair changes which reason a call reports when it fails
+  several (unknown → capability → schema → SSRF → path → sensitive → secret →
+  confirm → taint → allow).
+- **`fetch_url` bypasses the recursive guard** and calls `evaluate_url_safety` on
+  `args["url"]` directly; every other network tool goes through
+  `evaluate_network_argument_safety`, which **prefixes the offending key**. So the
+  same private host yields `ssrf_blocked:private or local ip is not allowed: …`
+  for `fetch_url` but `ssrf_blocked:host: …` for `web_search`. My first unit-test
+  expectation used the unprefixed form for `web_search` and was wrong; the probe
+  settled it. (Third time this pattern has caught me — measure, don't infer.)
+- **`denial_output` does not check the action.** Called on an allow it still
+  returns a denial-shaped payload with `code: "forbidden"` and
+  `error: "… blocked by tool policy (allow)"`. That looks like a bug and is not;
+  it has an explicit test so nobody "fixes" it.
+- **Best-effort audit is the contract.** The oracle swallows every write error so
+  an unwritable log can never break a tool call. The port keeps that but records
+  the failure in `last_error()` so it stays observable instead of vanishing.
+  Splitting the write behind `AuditSink` is also what keeps `evaluate`
+  deterministic enough to compare byte-for-byte, and lets shadow runs capture
+  decisions without touching the authoritative log.
+- The audit entry is `{"ts", "scope", **decision.to_dict()}` with `sort_keys=True`.
+  `ts` is the only non-deterministic field, so the probe injects a fixed clock and
+  masks it on both sides; its *shape* is pinned by unit tests with hand-checked
+  anchors (epoch, day boundary, Unix 1e9).
+
+Next concrete action for this line: port `tool_policy_status` + the config reader,
+then implement layer 2 execution against this gate, then wire the round loop and
+delete the `ToolRoundsUnwired` refusal.

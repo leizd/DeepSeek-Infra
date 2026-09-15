@@ -11,5 +11,6 @@ deepseek-core = { path = "../deepseek-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 regex = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]

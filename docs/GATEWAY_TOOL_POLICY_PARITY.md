@@ -1,6 +1,7 @@
-# Gateway tool-policy parity (pure core)
+# Gateway tool-policy parity
 
-Status: **pure policy core ported and byte-verified; tool execution still refuses.**
+Status: **guards, engine, and audit layer ported and byte-verified; tool execution
+still refuses.**
 
 This document records how the Rust port of the oracle's tool policy is proven
 equivalent to `deepseek_infra/infra/tool_runtime/tool_policy.py`, what is
@@ -212,3 +213,129 @@ length bounds, generic path escapes, recursive network arguments, secret
 detection in string leaves, injection redaction and counting, external-output
 gating, nested scrubbing with non-text keys preserved, and schema validation
 messages including Python `repr` rendering.
+
+---
+
+# Layer 3b: the engine and the audit layer
+
+The pure guards above are the *predicates*. Layer 3b adds the thing that actually
+decides — `ToolPolicy.evaluate` — plus the audit log that records every verdict.
+
+## Scope
+
+| Part of `tool_policy.py` | Status |
+| --- | --- |
+| `ToolPolicy.__init__`, `permissive`, `evaluate`, `_record`, `mark_tainted`, `is_tainted` | ported |
+| `ToolPolicy.sanitize_result`, `denial_output`, `diagnostics` | ported |
+| `is_sensitive_memory` (from `infra/data/memory.py`) | ported |
+| `write_audit_entry`, `write_external_audit_entry` (entry construction + JSONL append) | ported |
+| `_normalized_args_hash` | ported |
+| `read_recent_audit` | ported |
+| `tool_policy_status` | **not ported** — reads the audit path global and the config object |
+| the `deepseek_infra.core.config` env reader itself | **not ported** — this is a config-layer concern, not a policy one |
+
+## The decision order is the contract
+
+`evaluate` returns on the first failing check, so the *order* determines which
+reason a call reports when it fails several. Reordering any pair changes observable
+output:
+
+1. unknown tool → `unknown_tool`
+2. capability → `capability_denied:{capability}`
+3. schema (only denying when `enforce_schema`) → `schema_invalid`
+4. SSRF → `ssrf_blocked:{why}`
+5. path escape → `path_blocked:{why}`
+6. sensitive memory → `sensitive_memory_blocked`
+7. secret exfiltration → `secret_exfiltration_blocked`
+8. confirmation → `requires_confirmation`
+9. taint escalation → `taint_escalated_confirmation`
+10. otherwise → `allow`, with `schema_warning` appended when soft violations exist
+
+Two details that are easy to get wrong:
+
+- **`fetch_url` bypasses the recursive guard.** It calls `evaluate_url_safety` on
+  `args["url"]` directly, while every other network tool goes through
+  `evaluate_network_argument_safety`, which *prefixes the offending key*. So the
+  same private host yields `ssrf_blocked:private or local ip is not allowed: …`
+  for `fetch_url` but `ssrf_blocked:host: private or local ip is not allowed: …`
+  for `web_search`. The first draft of the unit test asserted the unprefixed form
+  for `web_search` and was wrong; the probe settled it.
+- **`denial_output` does not check the action.** Called on an allow it still
+  returns a denial-shaped payload with `code: "forbidden"` and
+  `error: "… blocked by tool policy (allow)"`. That looks like a bug and is not:
+  it is the oracle's behaviour, and there is an explicit test so nobody "fixes" it.
+
+## The audit layer
+
+`_record` calls `write_audit_entry` inline. That is a side effect inside the
+decision path, which makes the decision itself hard to compare. The port splits it
+behind an `AuditSink`:
+
+- `NullAuditSink` — the default; drops entries.
+- `InMemoryAuditSink` — captures them, for tests and for shadow evaluation where
+  decisions must be observable without touching the authoritative log.
+- `JsonlAuditSink` — mirrors `write_audit_entry`: `create_dir_all` + append one
+  line, JSON with sorted keys and unescaped non-ASCII.
+
+**Best-effort is the contract, not laziness.** The oracle swallows every write
+error so an unwritable audit log can never break a tool call. This port keeps that
+behaviour but records the failure in `last_error()`, so the same non-fatal
+semantics stay observable instead of vanishing. There is a test that points the
+sink at a directory where the log file should be and asserts the failure is
+recorded rather than propagated.
+
+The entry is `{"ts": …, "scope": …, **decision.to_dict()}`, written with
+`sort_keys=True`. The only non-deterministic field is `ts`, so the probe injects a
+fixed clock and masks `ts` on both sides before comparing — everything else is
+byte-compared, and the timestamp's own shape is pinned by unit tests
+(`utc_isoformat_seconds`) with hand-checked anchors (epoch, day boundary, Unix 1e9).
+
+`normalized_args_hash` is the audit's redaction primitive: `sha256` of sorted
+compact JSON, truncated to 16 hex, prefixed `sha256:`. Four oracle-derived vectors
+are pinned in unit tests, including a non-ASCII payload that proves
+`ensure_ascii=False` is reproduced.
+
+## A naming decision worth recording
+
+The oracle's decision type is called `PolicyDecision`. This crate **already**
+exports a different `PolicyDecision` — the `Capability`/`RiskLevel` model behind
+the `/policy/*` routes. The port therefore names its type `ToolPolicyDecision`:
+the two are unrelated, and sharing a name would make importing the wrong one an
+easy mistake with security consequences.
+
+## Method
+
+The Python probe now measures two regions of the same file:
+
+1. the contiguous constants + guards + engine region (lines 59–901), `exec`ed
+   verbatim with only the config globals and the audit path rebound;
+2. the audit functions, lifted individually and driven against a **real temporary
+   JSONL file** — the writer that ships is the writer measured, not a
+   re-implementation of its entry dict.
+
+Result: **197 keys, byte-identical**, normalized MD5
+`d51462e06a0e6ccd03db7ed05ab77d71` on both sides — covering 59 URL cases, 25 path
+cases, 10 network cases, 6 secret cases, 12 text cases, 6 result cases, 13 schema
+cases, 11 metadata cards, 8 capability profiles, 7 risk-reduction cases, 25 engine
+evaluations (each with its decision, denial payload, and diagnostics), 5
+sanitization runs, 2 permissive runs, 4 argument hashes, and the 5 audit entries
+the run produced (2 from the permissive default, which audits because its `audit`
+comes from config, then 2 policy verdicts and 1 external-MCP entry).
+
+## Verification
+
+- `cargo test -p deepseek-policy` → 77 tests, all pass.
+- `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings` →
+  clean; `cargo fmt` applied.
+- Parity re-confirmed after formatting.
+
+## Explicit non-goals
+
+- Wiring the policy into any live route or executor.
+- `tool_policy_status` and the config/env reader.
+- The frozen wire contracts.
+
+## Rollback
+
+Additive and inert: the engine has no production caller and the audit sink writes
+only where a caller points it. Reverting the commit restores the previous tree.
