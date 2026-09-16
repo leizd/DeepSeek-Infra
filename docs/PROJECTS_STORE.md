@@ -1,5 +1,10 @@
 # The projects store, read path (slice E1)
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Status: **ported and byte-verified in full (E1 + E2). Nothing is wired.**
 
 This is the last data-layer domain, and it is split in two because the measurement

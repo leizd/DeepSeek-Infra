@@ -1,5 +1,10 @@
 # The data layer behind the remaining branches — measurement
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Scope: the seven dispatch branches that read or write local data —
 `suggest_memory`, `recall_memory`, `forget_memory`, `create_reminder`,
 `list_reminders`, `list_project_files`, `read_file_chunk`.

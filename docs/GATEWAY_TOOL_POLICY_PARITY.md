@@ -1,5 +1,10 @@
 # Gateway tool-policy parity
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Status: **guards, engine, and audit layer ported and byte-verified; tool execution
 still refuses.**
 

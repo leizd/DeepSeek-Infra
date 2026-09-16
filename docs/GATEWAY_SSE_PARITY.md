@@ -1,5 +1,10 @@
 # Gateway OpenAI SSE parity
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Status: **locally verified byte-identical**. Not yet exercised by exact-head CI.
 
 This document records what the native Rust gateway reproduces of the Python

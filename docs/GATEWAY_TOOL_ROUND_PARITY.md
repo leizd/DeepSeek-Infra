@@ -1,5 +1,10 @@
 # Gateway tool-round parity (layer 1)
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Status: **layer 1 implemented and byte-verified; route stays fail-closed.**
 
 This document records how the Rust gateway's tool-round *bookkeeping* is proven

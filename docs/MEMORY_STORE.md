@@ -1,5 +1,10 @@
 # The memory store and its branches (slice D)
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Status: **ported and byte-verified; not wired.** One known gap, stated below.
 
 `memory.rs` mirrors `infra/data/memory.py` plus the `suggest_memory` /

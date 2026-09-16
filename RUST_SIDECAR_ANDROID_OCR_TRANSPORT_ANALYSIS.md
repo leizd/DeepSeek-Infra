@@ -1,5 +1,10 @@
 # Rust Sidecar 与 Android OCR / 多模态输入的传输协同分析
 
+<!-- docs-language-switcher:start -->
+[中文](README.md) / [English](README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 > 分析基准：工作区 `D:\deepseek` 当前工作树（`VERSION` 主线 4.8.0，4.4.15 基础切片已在树内）。
 > 方法：以源码与 `docs/ARCHITECTURE.md`、`docs/adr/ADR-0040-*` 为准，逐文件核对，不引用规划中的能力。
 > 结论口径：**只描述已落地并可验证的行为**；未落地部分单独列在「缺口」一节。

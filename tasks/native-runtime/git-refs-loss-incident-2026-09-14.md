@@ -1,5 +1,10 @@
 # Git refs 目录丢失事件与修复记录（2026-09-14 18:20）
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 ## 现象
 
 ```
@@ -150,4 +155,3 @@ native-migration 改动同属用户此前的工作，出现在这里是因为工
 3. **绝不在工作树有未提交改动时执行任何带 `--hard` 或 stash 挪动的复合命令。**
    本次 `git stash push` 被 SIGTERM 打断，虽未造成损失，但属于不必要风险 ——
    验证"某失败是否预先存在"应改用 `git stash` 之外的手段，或先确认工作树干净。
-

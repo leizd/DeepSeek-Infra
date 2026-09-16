@@ -1,5 +1,10 @@
 # The workspace mutation gate (slice A1)
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Status: **ported and byte-verified; not wired.**
 
 This is the prerequisite the data-layer measurement identified. It came before any

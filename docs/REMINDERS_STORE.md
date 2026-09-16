@@ -1,5 +1,10 @@
 # The reminders store and its branches (slice B)
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Status: **ported and byte-verified; not wired.**
 
 The smallest data-layer domain: one JSON file, no retrieval, no RAG. It is the

@@ -1,5 +1,10 @@
 # Tool dispatch parity (executor seam, slice 1)
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Status: **seam ported and byte-verified; one of 18 branches implemented; nothing
 wired.**
 

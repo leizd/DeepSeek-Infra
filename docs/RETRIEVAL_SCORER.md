@@ -1,5 +1,10 @@
 # The retrieval scorer (slice C)
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Status: **ported and byte-verified; not wired.**
 
 `core_utils.rs` mirrors four functions from `deepseek_infra/core/utils.py`:
