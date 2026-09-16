@@ -16,7 +16,11 @@ use sha2::Digest;
 mod authority_request;
 mod authority_store;
 mod mutation_request;
+mod operation_grant;
+#[cfg(test)]
+mod operation_grant_replay_tests;
 mod service;
+mod transport;
 
 pub use authority_request::{
     AUTHORITY_REQUEST_SCHEMA, AuthorityRequestContext, AuthorityRequestError,
@@ -26,9 +30,19 @@ pub use mutation_request::{
     MAX_MUTATION_REQUEST_BYTES, MUTATION_REQUEST_SCHEMA, MutationRequestContext,
     MutationRequestError, verify_mutation_request_document,
 };
+pub use operation_grant::{
+    MAX_STORAGE_OPERATION_GRANT_BYTES, STORAGE_OPERATION_GRANT_SCHEMA, StorageOperationCommand,
+    StorageOperationGrantContext, StorageOperationGrantError, bind_storage_operation_grant,
+    verify_storage_operation_grant,
+};
 pub use service::{
-    AuthError, CallerIdentity, ProductionFailClosedAuthenticator, StaticTokenAuthenticator,
-    TransportAuthenticator, WorkerRpcService,
+    AuthError, CallerIdentity, ProductionFailClosedAuthenticator, ServiceBearerAuthenticator,
+    StaticTokenAuthenticator, TransportAuthenticator, WorkerRpcService,
+};
+pub use transport::{
+    LoadedWorkerTransport, WORKER_SERVICE_BEARER, WORKER_SERVICE_BEARER_EXPIRES_AT,
+    WORKER_SERVICE_NAME, WORKER_SERVICE_ROLE, WORKER_TLS_CERT_FILE, WORKER_TLS_KEY_FILE,
+    WorkerTlsIdentity, load_worker_transport,
 };
 
 const AUTH_SIGNER_PUBLIC_KEY: &str = "DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY";
@@ -169,6 +183,8 @@ struct WorkerAuthority {
     now: Option<String>,
     seen_request_ids: HashSet<String>,
     seen_nonces: HashSet<String>,
+    seen_operation_digests: HashMap<String, String>,
+    seen_grant_blobs: HashMap<String, Vec<u8>>,
 }
 
 #[derive(Debug, Default)]
@@ -236,6 +252,8 @@ impl Worker {
             now: config.now,
             seen_request_ids: HashSet::new(),
             seen_nonces: HashSet::new(),
+            seen_operation_digests: HashMap::new(),
+            seen_grant_blobs: HashMap::new(),
         });
         Ok(())
     }
@@ -330,6 +348,125 @@ impl Worker {
         }
         let live = self.live_epochs.get(&fence.action_id).copied().unwrap_or(0);
         admit_command(fence, live)
+    }
+
+    pub fn admit_storage_operation_grant(
+        &mut self,
+        raw: &[u8],
+        command: &operation_grant::StorageOperationCommand<'_>,
+    ) -> Result<(), operation_grant::StorageOperationGrantError> {
+        use operation_grant::{
+            StorageOperationGrantContext, StorageOperationGrantError, bind_storage_operation_grant,
+            verify_storage_operation_grant,
+        };
+        if raw.is_empty() {
+            return Err(StorageOperationGrantError::new(
+                "STORAGE_OPERATION_GRANT_MISSING",
+            ));
+        }
+        if raw.len() > operation_grant::MAX_STORAGE_OPERATION_GRANT_BYTES {
+            return Err(StorageOperationGrantError::new(
+                "STORAGE_OPERATION_GRANT_TOO_LARGE",
+            ));
+        }
+        if let Some(store) = self.authority_store.as_mut() {
+            let authority = self.authority.as_ref().ok_or_else(|| {
+                StorageOperationGrantError::new("STORAGE_OPERATION_GRANT_AUTHORITY_MISSING")
+            })?;
+            return store.admit_grant(authority, raw, command);
+        }
+        let live = self
+            .live_epochs
+            .get(command.action_id)
+            .copied()
+            .unwrap_or(0) as i64;
+        let parsed: serde_json::Value = serde_json::from_slice(raw)
+            .map_err(|_| StorageOperationGrantError::new("STORAGE_OPERATION_GRANT_INVALID"))?;
+        let request_id = parsed
+            .get("requestId")
+            .and_then(|id| id.as_str())
+            .unwrap_or("");
+        let mut exact_retry = false;
+        if let Some(authority) = self.authority.as_ref() {
+            if let Some(previous) = authority.seen_grant_blobs.get(request_id) {
+                if previous.as_slice() != raw {
+                    return Err(StorageOperationGrantError::new(
+                        "STORAGE_OPERATION_GRANT_REPLAY",
+                    ));
+                }
+                exact_retry = true;
+            }
+        }
+        let now_owned;
+        let document = {
+            let authority = self.authority.as_ref().ok_or_else(|| {
+                StorageOperationGrantError::new("STORAGE_OPERATION_GRANT_AUTHORITY_MISSING")
+            })?;
+            let now = if let Some(now) = authority.now.as_deref() {
+                now
+            } else {
+                now_owned = authority_request::utc_z_now().map_err(|_| {
+                    StorageOperationGrantError::new("STORAGE_OPERATION_GRANT_INVALID")
+                })?;
+                now_owned.as_str()
+            };
+            let mut context = StorageOperationGrantContext {
+                now,
+                signer_public_key: &authority.signer_public_key,
+                signer_key_id: &authority.signer_key_id,
+                expected_domain: "action",
+                expected_operation: "execute-storage-put",
+                expected_runtime: "go",
+                expected_mode: "shadow",
+                expected_fleet_id: &authority.fleet_id,
+                expected_environment: &authority.environment,
+                expected_role: "control-plane",
+                current_fencing_token: authority.fencing_token,
+                live_epoch: live,
+                seen_request_ids: authority.seen_request_ids.clone(),
+                seen_nonces: authority.seen_nonces.clone(),
+                seen_operation_digests: authority.seen_operation_digests.clone(),
+                max_future_skew_seconds: 30,
+            };
+            if exact_retry {
+                // Only this exact previously verified document may repeat its
+                // own request/nonce. Recheck time, live epoch, authority, signed
+                // scope and operation binding on every attempt, including ACK retries.
+                context.seen_request_ids.remove(request_id);
+                if let Some(nonce) = parsed.get("nonce").and_then(|value| value.as_str()) {
+                    context.seen_nonces.remove(nonce);
+                }
+            }
+            verify_storage_operation_grant(raw, &context)?
+        };
+        bind_storage_operation_grant(&document, command)?;
+        if let Some(authority) = self.authority.as_mut() {
+            let request_id = document
+                .get("requestId")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let nonce = document
+                .get("nonce")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let operation_id = document
+                .get("operationId")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let payload_digest = document
+                .get("payloadDigest")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            authority.seen_request_ids.insert(request_id.to_string());
+            authority.seen_nonces.insert(nonce.to_string());
+            authority
+                .seen_operation_digests
+                .insert(operation_id.to_string(), payload_digest.to_string());
+            authority
+                .seen_grant_blobs
+                .insert(request_id.to_string(), raw.to_vec());
+        }
+        Ok(())
     }
 
     pub fn query_effect(&self, fence: &ActionFence) -> Result<EffectState, AdmitError> {

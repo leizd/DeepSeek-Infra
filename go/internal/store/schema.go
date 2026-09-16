@@ -47,7 +47,8 @@ const (
 	SchemaV4      = 4
 	SchemaV5      = 5
 	SchemaV6      = 6
-	CurrentSchema = SchemaV6
+	SchemaV7      = 7
+	CurrentSchema = SchemaV7
 )
 
 var controlTableNames = [...]string{

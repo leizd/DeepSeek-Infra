@@ -342,13 +342,16 @@ async fn v1_migration_preserves_legacy_journal_and_rolls_back_on_identity_failur
             .unwrap(),
         0
     );
-    let additions: Vec<String> = connection.prepare("SELECT name FROM sqlite_schema WHERE type='trigger' AND (name LIKE 'storage_binding_%' OR name LIKE 'storage_dispatch_%' OR name LIKE 'storage_effect_identity_%' OR name LIKE 'storage_rpc_%')").unwrap()
+    let additions: Vec<String> = connection.prepare("SELECT name FROM sqlite_schema WHERE type='trigger' AND (name LIKE 'storage_binding_%' OR name LIKE 'storage_dispatch_%' OR name LIKE 'storage_effect_identity_%' OR name LIKE 'storage_rpc_%' OR name LIKE 'storage_grant_%' OR name='epoch_grant_replay')").unwrap()
         .query_map([], |row| row.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
     for name in additions {
         connection
             .execute(&format!("DROP TRIGGER {name}"), [])
             .unwrap();
     }
+    connection
+        .execute("DROP TABLE storage_operation_grants", [])
+        .unwrap();
     connection
         .execute("DROP TABLE storage_rpc_operations", [])
         .unwrap();
@@ -370,7 +373,7 @@ async fn v1_migration_preserves_legacy_journal_and_rolls_back_on_identity_failur
     assert_eq!(
         connection
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_schema WHERE name IN ('storage_effect_bindings','storage_rpc_operations')",
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name IN ('storage_effect_bindings','storage_rpc_operations','storage_operation_grants')",
                 [],
                 |row| row.get::<_, i64>(0)
             )
@@ -382,7 +385,16 @@ async fn v1_migration_preserves_legacy_journal_and_rolls_back_on_identity_failur
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        3
+        4
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM storage_operation_grants", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        0,
+        "historical effects must not receive inferred grants"
     );
     assert_eq!(
         connection

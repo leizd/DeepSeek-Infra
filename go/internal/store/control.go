@@ -318,6 +318,12 @@ func expectedControlUserObjects(schema int) map[string]string {
 		}
 		objects["action_reconciliation_boundary"] = "table"
 	}
+	if schema >= SchemaV7 {
+		for name := range actionVerificationSchemaObjects {
+			objects[name] = "trigger"
+		}
+		objects["action_verification_boundary"] = "table"
+	}
 	if schema < SchemaV1 {
 		return objects
 	}
@@ -596,6 +602,11 @@ func (store *Control) migrateTx(tx *sql.Tx) error {
 	}
 	if store.schema == SchemaV5 {
 		if err := store.migrateToV6Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV6 {
+		if err := store.migrateToV7Tx(tx); err != nil {
 			return err
 		}
 	}
@@ -939,6 +950,11 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 			return err
 		}
 	}
+	if schema >= SchemaV7 {
+		if err := verifyActionVerificationSchemaTx(tx); err != nil {
+			return err
+		}
+	}
 	for _, table := range tables {
 		var marker int
 		if err := tx.QueryRow(
@@ -1246,9 +1262,12 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 			return err
 		}
 	}
-	if !LegalTransition(record.Domain, from, record.State) &&
-		!(write.allowBoundLease && record.Domain == "action" && store.schema >= SchemaV6 &&
-			reconciliationTransition(from, record.State, existing.ExecutionEpoch, record.ExecutionEpoch)) {
+	legal := LegalTransition(record.Domain, from, record.State)
+	if !legal && write.allowBoundLease && record.Domain == "action" {
+		legal = (store.schema >= SchemaV6 && reconciliationTransition(from, record.State, existing.ExecutionEpoch, record.ExecutionEpoch)) ||
+			(store.schema >= SchemaV7 && verificationTransition(from, record.State, existing.ExecutionEpoch, record.ExecutionEpoch))
+	}
+	if !legal {
 		return ErrIllegalTransition
 	}
 	if exists {
@@ -1459,10 +1478,10 @@ func validateNoControlHistory(tx *sql.Tx, domain, id string) error {
 }
 
 func validateControlHistory(tx *sql.Tx, latest Record) error {
-	boundary := int64(math.MaxInt64)
+	reconciliationBoundary, verificationBoundary := int64(math.MaxInt64), int64(math.MaxInt64)
 	if latest.Domain == "action" {
 		var err error
-		boundary, err = reconciliationHistoryBoundaryTx(tx)
+		reconciliationBoundary, verificationBoundary, err = actionHistoryBoundariesTx(tx)
 		if err != nil {
 			return err
 		}
@@ -1493,8 +1512,9 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 			return err
 		}
 		legal := LegalTransition(latest.Domain, previousState, event.State)
-		if !legal && latest.Domain == "action" && eventID > boundary &&
-			reconciliationTransition(previousState, event.State, previousEpoch, event.ExecutionEpoch) {
+		versionedEdge := (eventID > reconciliationBoundary && reconciliationTransition(previousState, event.State, previousEpoch, event.ExecutionEpoch)) ||
+			(eventID > verificationBoundary && verificationTransition(previousState, event.State, previousEpoch, event.ExecutionEpoch))
+		if !legal && latest.Domain == "action" && versionedEdge {
 			if err := validateReconciliationEventTx(tx, event, metadata); err != nil {
 				return err
 			}
@@ -1641,7 +1661,7 @@ func secretBearingControlKey(key string) bool {
 }
 
 func knownState(domain, state string) bool {
-	if domain == "action" && state == "RECONCILING" {
+	if domain == "action" && (state == "RECONCILING" || verificationActionState(state)) {
 		return true
 	}
 	edges, ok := transitions[domain]
@@ -1821,6 +1841,11 @@ func (store *Control) Rollback(version int) error {
 	}
 	if store.schema >= SchemaV5 {
 		if err := retireEmptyActionAdmissionTx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema >= SchemaV7 {
+		if _, err := tx.Exec("DROP TABLE action_verification_boundary"); err != nil {
 			return err
 		}
 	}

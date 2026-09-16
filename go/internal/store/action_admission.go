@@ -506,7 +506,7 @@ func (store *Control) evaluateAdmissionBudgetsTx(
 	// 1. MaxConcurrentActions
 	var activeCount int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM action_journal
-		WHERE state IN ('CLAIMED', 'EXECUTING', 'EFFECT_UNKNOWN', 'RECONCILING')
+		WHERE state IN ('CLAIMED', 'EXECUTING', 'EFFECT_UNKNOWN', 'RECONCILING', 'VERIFYING', 'ASSESSING_EFFECT')
 		  AND id != ?`, actionID).Scan(&activeCount); err != nil {
 		return err
 	}
@@ -546,7 +546,7 @@ func (store *Control) evaluateAdmissionBudgetsTx(
 	}
 
 	rows, err := tx.Query(`SELECT id, revision, execution_epoch, state, payload_json, record_digest, writer_fencing_token, updated_at FROM action_journal
-		WHERE state IN ('CLAIMED', 'EXECUTING', 'EFFECT_UNKNOWN', 'RECONCILING')
+		WHERE state IN ('CLAIMED', 'EXECUTING', 'EFFECT_UNKNOWN', 'RECONCILING', 'VERIFYING', 'ASSESSING_EFFECT')
 		  AND id != ?`, actionID)
 	if err != nil {
 		return err
@@ -922,7 +922,12 @@ func (store *Control) transitionLeasedAction(
 		return Record{}, ErrActionLeaseStale
 	}
 	recordPayload := payload
-	if len(recordPayload) == 0 {
+	if verificationActionState(targetState) {
+		recordPayload, err = actionVerificationPayload(existing.Payload, targetState, payload)
+		if err != nil {
+			return Record{}, err
+		}
+	} else if len(recordPayload) == 0 {
 		recordPayload = existing.Payload
 	}
 
@@ -944,9 +949,9 @@ func (store *Control) transitionLeasedAction(
 		return Record{}, err
 	}
 
-	// Unknown effects retain the exact live claim and all reservations. A local
-	// timeout/cancellation cannot authorize release or invent a no-effect result.
-	if targetState != "EFFECT_UNKNOWN" {
+	// Verification and unknown effects retain the live claim and reservations.
+	// An APPLIED observation alone cannot release resources or finish an action.
+	if targetState == "SUCCEEDED" || targetState == "FAILED_BEFORE_EFFECT" {
 		// 3. Mark action lease as terminal
 		if _, err := tx.Exec(`UPDATE action_leases
 		SET terminal_state = ?, updated_at = ?, writer_fencing_token = ?

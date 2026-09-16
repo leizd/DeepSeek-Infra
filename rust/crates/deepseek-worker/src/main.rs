@@ -2,7 +2,7 @@ use std::io;
 use std::net::SocketAddr;
 
 use deepseek_protocol::generated::deepseek::action::v1::worker_server::WorkerServer;
-use deepseek_worker::{Worker, WorkerRpcService, authority_config_from_env};
+use deepseek_worker::{Worker, WorkerRpcService, authority_config_from_env, load_worker_transport};
 use tonic::transport::Server;
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:50052";
@@ -82,15 +82,27 @@ fn configured_worker(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address = configured_listen_addr(std::env::var("DEEPSEEK_WORKER_LISTEN"))?;
+    let transport = load_worker_transport(|name| std::env::var(name))?;
     let worker = configured_worker(|name| std::env::var(name))?;
     let authority = if worker.authority_configured() {
         "configured"
     } else {
         "uninitialized"
     };
-    let service = WorkerRpcService::new(worker);
-    println!("deepseek-worker listening on {address} authority={authority} mutation=denied");
-    Server::builder()
+    let transport_name = if transport.tls_identity.is_some() {
+        "tls-server-auth"
+    } else {
+        "plaintext-loopback"
+    };
+    let service = WorkerRpcService::new_with_authenticator(worker, transport.authenticator);
+    println!(
+        "deepseek-worker listening on {address} authority={authority} mutation=denied transport={transport_name}"
+    );
+    let mut builder = Server::builder();
+    if let Some(identity) = transport.tls_identity {
+        builder = builder.tls_config(identity.server_tls_config())?;
+    }
+    builder
         .add_service(WorkerServer::new(service))
         .serve_with_shutdown(address, async {
             let _ = tokio::signal::ctrl_c().await;
@@ -141,5 +153,14 @@ mod tests {
         let worker = configured_worker(|_| Err(std::env::VarError::NotPresent))
             .expect("unconfigured worker");
         assert!(!worker.authority_configured());
+    }
+
+    #[test]
+    fn tls_listener_still_rejects_wildcard_without_opening_non_loopback() {
+        assert_eq!(
+            parse_listen_addr("0.0.0.0:50052").unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(parse_listen_addr("127.0.0.1:50052").is_ok());
     }
 }

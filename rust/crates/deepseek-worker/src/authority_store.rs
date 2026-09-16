@@ -6,6 +6,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, pa
 use serde_json::Value;
 
 use crate::{AuthorityRequestContext, AuthorityRequestError, WorkerAuthority, authority_request};
+mod grants;
 #[cfg(feature = "s3")]
 use crate::{StorageEffectBinding, StorageEffectRecord, StorageEffectState, WorkerStorageError};
 
@@ -153,6 +154,14 @@ impl AuthorityStore {
                 .pragma_update(None, "user_version", 3)
                 .map_err(|_| error())?;
         }
+        if schema_version < 4 {
+            for sql in grants::SCHEMA_V4 {
+                transaction.execute(sql, []).map_err(|_| error())?;
+            }
+            transaction
+                .pragma_update(None, "user_version", 4)
+                .map_err(|_| error())?;
+        }
         let (signer, fleet, environment, token): (String, String, String, i64) = transaction
             .query_row(
                 "SELECT signer,fleet,environment,fencing_token FROM worker_authority WHERE id=1",
@@ -263,7 +272,7 @@ impl AuthorityStore {
             .map_err(|_| error())?;
         let seen_request = transaction
             .query_row(
-                "SELECT request_id FROM epoch_installs WHERE request_id=?1",
+                "SELECT request_id FROM epoch_installs WHERE request_id=?1 UNION SELECT request_id FROM storage_operation_grants WHERE request_id=?1",
                 [request_id],
                 |row| row.get::<_, String>(0),
             )
@@ -271,7 +280,7 @@ impl AuthorityStore {
             .map_err(|_| error())?;
         let seen_nonce = transaction
             .query_row(
-                "SELECT nonce FROM epoch_installs WHERE nonce=?1",
+                "SELECT nonce FROM epoch_installs WHERE nonce=?1 UNION SELECT nonce FROM storage_operation_grants WHERE nonce=?1",
                 [nonce],
                 |row| row.get::<_, String>(0),
             )
@@ -709,7 +718,7 @@ fn validate_journal(
             return Err(error());
         }
     }
-    Ok(())
+    grants::validate_journal(connection, authority, head_token)
 }
 
 fn context<'a>(
@@ -764,8 +773,11 @@ fn validate_schema(
     if version >= 3 {
         expected.extend(SCHEMA_V3.iter().map(|sql| sql.to_string()));
     }
+    if version >= 4 {
+        expected.extend(grants::SCHEMA_V4.iter().map(|sql| sql.to_string()));
+    }
     expected.sort();
-    if !matches!(version, 1..=3) || application != APPLICATION_ID || actual != expected {
+    if !matches!(version, 1..=4) || application != APPLICATION_ID || actual != expected {
         return Err(error());
     }
     Ok(version as u8)

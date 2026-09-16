@@ -121,3 +121,70 @@ def test_media_json_register_list_segments_and_delete(tmp_settings: Path) -> Non
         status, deleted_raw, _ = _request(server, "DELETE", f"/api/media/{media_id}", headers=_auth_headers())
         assert status == 200
         assert json.loads(deleted_raw.decode("utf-8"))["deleted"] == 1
+
+
+def test_media_create_echoes_only_a_log_safe_request_correlation_id(tmp_settings: Path) -> None:
+    project = projects.create_project("Correlation Project")
+    body = json.dumps(
+        {
+            "projectId": project["projectId"],
+            "type": "webpage",
+            "title": "Traceable Snapshot",
+            "html": "<main><p>Traceable.</p></main>",
+            "process": True,
+        }
+    ).encode("utf-8")
+
+    with _running_server() as server:
+        status, _, supplied = _request(
+            server,
+            "POST",
+            "/api/media",
+            body=body,
+            headers={**_auth_headers(), "X-DeepSeek-Request-ID": "client-supplied-1"},
+        )
+        assert status == 200
+        assert supplied.getheader("X-DeepSeek-Request-ID") == "client-supplied-1"
+
+        status, _, unsafe = _request(
+            server,
+            "POST",
+            "/api/media",
+            body=body,
+            headers={**_auth_headers(), "X-DeepSeek-Request-ID": "bad id"},
+        )
+        assert status == 200
+        echoed = unsafe.getheader("X-DeepSeek-Request-ID")
+        assert echoed
+        assert echoed != "bad id"
+
+        status, _, generated = _request(server, "POST", "/api/media", body=body, headers=_auth_headers())
+        assert status == 200
+        assert generated.getheader("X-DeepSeek-Request-ID")
+
+
+def test_media_process_echoes_request_correlation_id(tmp_settings: Path) -> None:
+    project = projects.create_project("Correlation Process Project")
+    body = json.dumps(
+        {
+            "projectId": project["projectId"],
+            "type": "webpage",
+            "title": "Reprocessed Snapshot",
+            "html": "<main><p>Reprocessed.</p></main>",
+        }
+    ).encode("utf-8")
+
+    with _running_server() as server:
+        status, created_raw, _ = _request(server, "POST", "/api/media", body=body, headers=_auth_headers())
+        assert status == 200
+        media_id = json.loads(created_raw.decode("utf-8"))["media"]["mediaId"]
+
+        status, _, response = _request(
+            server,
+            "POST",
+            f"/api/media/{media_id}/process",
+            body=b"{}",
+            headers={**_auth_headers(), "X-DeepSeek-Request-ID": "process-1"},
+        )
+        assert status == 200
+        assert response.getheader("X-DeepSeek-Request-ID") == "process-1"

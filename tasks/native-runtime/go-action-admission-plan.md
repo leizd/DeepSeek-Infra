@@ -497,6 +497,48 @@ was killed and reaped in cleanup. It contacted no provider and enabled no
 production authority. Shadow checks passed 8/8 and frozen contract counts remain
 41 corpora, 30 versions, 43 domains, 9 command codes, 7 protos, 10 generated outputs.
 
+### Next phase: versioned verification lifecycle (2026-09-13)
+
+Implement schema v7 with a separate immutable boundary for verification-phase
+events, retaining the v6 boundary and all old records unchanged. Native APPLIED
+observations enter VERIFYING; outcome-verification observations enter
+ASSESSING_EFFECT; only the latter phase can subsequently reach SUCCEEDED along
+the new phase graph. These are durable claim-bound primitives, not validators of
+provider proof. Production wiring remains disabled until the actual outcome and
+scoped-risk verifiers and compensation branches are implemented and qualified.
+
+Both phases retain admission scope and resources, renew with the exact live
+claim, and expire into a new-epoch RECONCILING takeover. Phase observations are
+stored alongside, never in place of, original action parameters. Existing v6
+history cannot gain new legal transitions retroactively. The leased mutation and
+recovery coordinators will persist VERIFYING instead of directly settling APPLIED.
+The user confirmed the TLS design on 2026-09-13 for implementation and testing
+only; see `worker-execution-plan.md`. Production authority remains disabled.
+
+The 2026-09-12 isolated `-race -p 1` run also hit the store package's cumulative
+600-second timeout (14 other packages passed); no race warning preceded it. This
+supersedes the partial-progress updates, not the earlier normal-suite evidence.
+Do not record it as a passing full race gate or simply repeat it unchanged.
+
+### Schema v7 verification journal (2026-09-13, local)
+
+Implemented in this tree:
+
+- `CurrentSchema = SchemaV7` with immutable `action_verification_boundary`.
+- v6 upgrade captures `MAX(event_id)` without rewriting records, leases,
+  dispatches, or the v6 reconciliation boundary. Pre-v7 VERIFYING history stays
+  corrupt after upgrade. Rollback-to-empty still refuses retained admission.
+- `MarkActionVerifying` / `MarkActionAssessingEffect` keep original parameters
+  and reservations. APPLIED observations cannot skip to SUCCEEDED. VERIFYING and
+  ASSESSING_EFFECT count against admission budgets and expire into RECONCILING
+  with the original dispatch identity.
+- Leased execute and recover persist VERIFYING instead of SUCCEEDED.
+
+Local: `go test ./internal/store -count=1 -timeout=360s` exit 0;
+`go test ./internal/action -count=1` exit 0. This is not a full `-race` gate
+(prior store race hit the 600s aggregate timeout) and not provider proof.
+Outcome/risk verifiers and compensation remain unimplemented.
+
 ## Sources
 
 The existing Python admission and renewal semantics were inspected directly in

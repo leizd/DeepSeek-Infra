@@ -17,7 +17,7 @@ type leasedControlStore interface {
 	RenewActionLease(store.ActionLeaseRenewal) (store.ActionLease, error)
 	ClaimLeasedStorageDispatch(store.Record, store.StorageDispatchIntent, string) error
 	GetLeasedStorageDispatch(string, uint64, string) (store.StorageDispatch, bool, error)
-	CompleteAction(string, uint64, string, json.RawMessage) (store.Record, error)
+	MarkActionVerifying(string, uint64, string, json.RawMessage) (store.Record, error)
 	FailAction(string, uint64, string, json.RawMessage) (store.Record, error)
 	MarkActionEffectUnknown(string, uint64, string) (store.Record, error)
 }
@@ -102,7 +102,7 @@ func (c *Coordinator) ExecuteClaimedStorageAction(ctx context.Context, claim sto
 	if dispatchErr == nil && resp.Status == actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED && resp.State == commonv1.EffectState_EFFECT_STATE_APPLIED {
 		payload, _ := json.Marshal(map[string]any{"etag": resp.Etag, "effectId": resp.EffectId,
 			"providerMetadata": resp.ProviderMetadata, "operationId": intent.OperationID})
-		if _, err := owner.CompleteAction(claim.ActionID, claim.Epoch, claim.ClaimToken, payload); err != nil {
+		if _, err := owner.MarkActionVerifying(claim.ActionID, claim.Epoch, claim.ClaimToken, payload); err != nil {
 			return uncertain(err)
 		}
 		return resp, nil

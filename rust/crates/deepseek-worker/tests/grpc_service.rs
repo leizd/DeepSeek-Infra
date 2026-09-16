@@ -7,7 +7,8 @@ use deepseek_protocol::generated::deepseek::action::v1::{
 };
 use deepseek_protocol::generated::deepseek::common::v1::{ActionFence, EffectState};
 use deepseek_worker::{
-    CallerIdentity, StaticTokenAuthenticator, Worker, WorkerAuthorityConfig, WorkerRpcService,
+    CallerIdentity, ServiceBearerAuthenticator, StaticTokenAuthenticator, Worker,
+    WorkerAuthorityConfig, WorkerRpcService,
 };
 use tonic::Request;
 
@@ -495,11 +496,10 @@ async fn rpc_storage_mutation_rejects_mismatched_payload_digest() {
         .unwrap()
         .into_inner();
     assert_eq!(response.status(), StorageMutationStatus::Rejected);
-    if cfg!(feature = "s3") {
-        assert_eq!(response.error.unwrap().code, "DIGEST_MISMATCH");
-    } else {
-        assert_eq!(response.error.unwrap().code, "STORAGE_FEATURE_DISABLED");
-    }
+    assert_eq!(
+        response.error.unwrap().code,
+        "STORAGE_OPERATION_GRANT_MISSING"
+    );
 }
 
 #[tokio::test]
@@ -575,4 +575,332 @@ async fn rpc_query_storage_effect_fails_closed_without_auth_and_reports_unknown_
     assert_ne!(response.state(), EffectState::NotApplied);
     assert_eq!(response.error.unwrap().code, "EFFECT_UNKNOWN");
     assert!(response.effect_id.is_empty());
+}
+
+#[tokio::test]
+async fn rpc_storage_mutation_rejects_duplicate_and_expired_service_bearer() {
+    const SECRET: &str = "tls-bearer-secret-value-do-not-log";
+    let live = std::sync::Arc::new(ServiceBearerAuthenticator::new(
+        SECRET,
+        4_102_444_800,
+        CallerIdentity {
+            service_name: "go-control-plane".into(),
+            role: "controller".into(),
+        },
+    ));
+    let service = WorkerRpcService::new_with_authenticator(Worker::new(), live);
+    let mut duplicate = Request::new(StorageMutationRequest {
+        fence: Some(fence(1)),
+        operation_id: "op-1".into(),
+        ..Default::default()
+    });
+    duplicate.metadata_mut().append(
+        "authorization",
+        "Bearer tls-bearer-secret-value-do-not-log".parse().unwrap(),
+    );
+    duplicate.metadata_mut().append(
+        "authorization",
+        "Bearer tls-bearer-secret-value-do-not-log".parse().unwrap(),
+    );
+    let response = WorkerRpc::execute_storage_mutation(&service, duplicate)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.error.unwrap().code, "AUTHENTICATION_INVALID");
+
+    let expired = std::sync::Arc::new(ServiceBearerAuthenticator::new(
+        SECRET,
+        1,
+        CallerIdentity {
+            service_name: "go-control-plane".into(),
+            role: "controller".into(),
+        },
+    ));
+    let service = WorkerRpcService::new_with_authenticator(Worker::new(), expired);
+    let mut request = Request::new(StorageMutationRequest {
+        fence: Some(fence(1)),
+        operation_id: "op-1".into(),
+        ..Default::default()
+    });
+    request
+        .metadata_mut()
+        .insert("authorization", format!("Bearer {SECRET}").parse().unwrap());
+    let response = WorkerRpc::execute_storage_mutation(&service, request)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        response.error.as_ref().unwrap().code,
+        "AUTHENTICATION_INVALID"
+    );
+    assert!(!format!("{response:?}").contains(SECRET));
+}
+
+#[tokio::test]
+async fn rpc_admit_query_and_install_require_configured_service_bearer() {
+    const SECRET: &str = "tls-bearer-secret-value-do-not-log";
+    let expires = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+        + 600;
+    let live = std::sync::Arc::new(ServiceBearerAuthenticator::new(
+        SECRET,
+        expires,
+        CallerIdentity {
+            service_name: "go-control-plane".into(),
+            role: "controller".into(),
+        },
+    ));
+    let service = WorkerRpcService::new_with_authenticator(Worker::new(), live);
+    let missing = admit(&service, fence(1), 1).await;
+    assert_eq!(missing.error.unwrap().code, "AUTHENTICATION_MISSING");
+
+    let queried = WorkerRpc::query_effect(
+        &service,
+        Request::new(QueryEffectRequest {
+            fence: Some(fence(1)),
+        }),
+    )
+    .await
+    .unwrap()
+    .into_inner();
+    assert_eq!(queried.fence.as_ref(), Some(&fence(1)));
+    assert_eq!(queried.state(), EffectState::Unknown);
+    assert_eq!(queried.error.unwrap().code, "AUTHENTICATION_MISSING");
+
+    let denied = install(&service, fence(1), b"{}".to_vec()).await;
+    assert_eq!(denied.status(), AdmitStatus::Rejected);
+    assert!(denied.fence.is_none());
+    assert_eq!(denied.error.unwrap().code, "AUTHENTICATION_MISSING");
+
+    let mut authorized_admit = Request::new(AdmitCommandRequest {
+        kind: CommandKind::ExecuteBackup as i32,
+        fence: Some(fence(1)),
+        live_epoch: 1,
+    });
+    authorized_admit
+        .metadata_mut()
+        .insert("authorization", format!("Bearer {SECRET}").parse().unwrap());
+    let admitted = WorkerRpc::admit_command(&service, authorized_admit)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(admitted.status(), AdmitStatus::Rejected);
+    assert_eq!(admitted.error.unwrap().code, "FENCE_MISMATCH");
+
+    let mut query = Request::new(QueryEffectRequest {
+        fence: Some(fence(1)),
+    });
+    query
+        .metadata_mut()
+        .insert("authorization", format!("Bearer {SECRET}").parse().unwrap());
+    let authorized_query = WorkerRpc::query_effect(&service, query)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(authorized_query.state(), EffectState::Unknown);
+    assert_ne!(
+        authorized_query.error.as_ref().unwrap().code,
+        "AUTHENTICATION_MISSING"
+    );
+    assert_ne!(
+        authorized_query.error.as_ref().unwrap().code,
+        "AUTHENTICATION_INVALID"
+    );
+}
+
+#[test]
+fn authenticators_redact_tokens_in_debug() {
+    const SECRET: &str = "tls-bearer-secret-value-do-not-log";
+    let static_auth = StaticTokenAuthenticator::new(
+        SECRET,
+        CallerIdentity {
+            service_name: "test-caller".into(),
+            role: "controller".into(),
+        },
+    );
+    let timed = ServiceBearerAuthenticator::new(
+        SECRET,
+        4_102_444_800,
+        CallerIdentity {
+            service_name: "go-control-plane".into(),
+            role: "controller".into(),
+        },
+    );
+    let debug = format!("{static_auth:?}{timed:?}");
+    assert!(!debug.contains(SECRET));
+    assert!(debug.contains("<redacted>"));
+}
+
+// An unavailable configured authenticator is an outage, not permission to
+// downgrade to unauthenticated shadow RPCs. This fixture has no provider.
+#[tokio::test]
+async fn rpc_authenticator_outage_never_bypasses_identity_checks() {
+    struct UnavailableAuthenticator;
+    impl deepseek_worker::TransportAuthenticator for UnavailableAuthenticator {
+        fn authenticate(
+            &self,
+            _: &tonic::metadata::MetadataMap,
+        ) -> Result<CallerIdentity, deepseek_worker::AuthError> {
+            Err(deepseek_worker::AuthError::ServiceAuthenticationUnavailable)
+        }
+    }
+    let (config, canonical, installed) = frozen_authority();
+    let directory = tempfile::tempdir().unwrap();
+    let worker = Worker::open_with_authority(config.clone(), directory.path()).unwrap();
+    let service =
+        WorkerRpcService::new_with_authenticator(worker, Arc::new(UnavailableAuthenticator));
+    let installation = WorkerRpc::install_authoritative_epoch(
+        &service,
+        Request::new(InstallAuthoritativeEpochRequest {
+            fence: Some(installed.clone()),
+            canonical_request: canonical,
+        }),
+    )
+    .await
+    .unwrap()
+    .into_inner();
+    assert_eq!(
+        installation.error.as_ref().map(|error| error.code.as_str()),
+        Some("SERVICE_AUTHENTICATION_UNAVAILABLE")
+    );
+    let admission = admit(&service, installed.clone(), installed.execution_epoch).await;
+    assert_eq!(
+        admission.error.as_ref().map(|error| error.code.as_str()),
+        Some("SERVICE_AUTHENTICATION_UNAVAILABLE")
+    );
+    let query = WorkerRpc::query_effect(
+        &service,
+        Request::new(QueryEffectRequest {
+            fence: Some(installed.clone()),
+        }),
+    )
+    .await
+    .unwrap()
+    .into_inner();
+    assert_eq!(
+        query.error.as_ref().map(|error| error.code.as_str()),
+        Some("SERVICE_AUTHENTICATION_UNAVAILABLE")
+    );
+    drop(service);
+    let reopened = Worker::open_with_authority(config, directory.path()).unwrap();
+    assert_eq!(
+        reopened.admit(&installed),
+        Err(deepseek_protocol::AdmitError::FenceMismatch)
+    );
+}
+
+fn frozen_grant() -> Vec<u8> {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../compat/native-runtime/v31/control/storage_operation_grant_vector.json"
+    )))
+    .unwrap();
+    fixture["canonical_request"]
+        .as_str()
+        .unwrap()
+        .as_bytes()
+        .to_vec()
+}
+
+fn granted_put(object_key: &str, grant: Vec<u8>) -> StorageMutationRequest {
+    StorageMutationRequest {
+        fence: Some(fence(4)),
+        operation_id: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".into(),
+        mutation_type: "PUT_CHUNK".into(),
+        provider: "s3".into(),
+        target_identity: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".into(),
+        bucket: "backup-a".into(),
+        prefix: "native/".into(),
+        object_key: object_key.into(),
+        payload_digest: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81".into(),
+        expected_length: 3,
+        payload: vec![1, 2, 3],
+        precondition: Some(StoragePrecondition {
+            condition_type: StorageConditionType::CreateOnly as i32,
+            expected_etag: String::new(),
+        }),
+        canonical_authorization: grant,
+        schema_version: 1,
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn rpc_storage_mutation_requires_bound_signed_grant() {
+    let mut worker = Worker::new();
+    worker
+        .configure_authority(WorkerAuthorityConfig {
+            signer_public_key: "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo".into(),
+            fleet_id: "fleet-a".into(),
+            environment: "test".into(),
+            fencing_token: 4,
+            now: Some("2026-09-13T00:00:40Z".into()),
+        })
+        .unwrap();
+    worker.install_authoritative_epoch(&fence(4)).unwrap();
+    let auth = Arc::new(StaticTokenAuthenticator::new(
+        "secret-token",
+        CallerIdentity {
+            service_name: "test-caller".into(),
+            role: "controller".into(),
+        },
+    ));
+    let service = WorkerRpcService::new_with_authenticator(worker, auth);
+    let grant = frozen_grant();
+
+    let mut missing = Request::new(granted_put("objects/chunk-1", Vec::new()));
+    missing
+        .metadata_mut()
+        .insert("authorization", "Bearer secret-token".parse().unwrap());
+    let response = WorkerRpc::execute_storage_mutation(&service, missing)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        response.error.unwrap().code,
+        "STORAGE_OPERATION_GRANT_MISSING"
+    );
+
+    let mut substituted = Request::new(granted_put("objects/other", grant.clone()));
+    substituted
+        .metadata_mut()
+        .insert("authorization", "Bearer secret-token".parse().unwrap());
+    let response = WorkerRpc::execute_storage_mutation(&service, substituted)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        response.error.unwrap().code,
+        "STORAGE_OPERATION_GRANT_COMMAND_MISMATCH"
+    );
+
+    let mut bound = Request::new(granted_put("objects/chunk-1", grant));
+    bound
+        .metadata_mut()
+        .insert("authorization", "Bearer secret-token".parse().unwrap());
+    let response = WorkerRpc::execute_storage_mutation(&service, bound)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_ne!(
+        response.error.as_ref().unwrap().code,
+        "STORAGE_OPERATION_GRANT_MISSING"
+    );
+    assert_ne!(
+        response.error.as_ref().unwrap().code,
+        "STORAGE_OPERATION_GRANT_COMMAND_MISMATCH"
+    );
+    if cfg!(feature = "s3") {
+        assert_eq!(
+            response.error.as_ref().unwrap().code,
+            "STORAGE_TRANSPORT_UNAVAILABLE"
+        );
+    } else {
+        assert_eq!(
+            response.error.as_ref().unwrap().code,
+            "STORAGE_FEATURE_DISABLED"
+        );
+    }
 }

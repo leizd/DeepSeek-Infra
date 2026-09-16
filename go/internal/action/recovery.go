@@ -22,8 +22,8 @@ const (
 // ReconcileClaimedStorageAction inspects the original provider effect under a
 // live native claim. It never executes a write, never rebinds dispatch, and
 // never treats the current claim epoch as the original storage identity.
-// This remains a non-authoritative qualification path: its APPLIED settlement
-// must migrate to the baseline verification lifecycle before production wiring.
+// This remains non-authoritative: APPLIED starts VERIFYING, not success.
+// Native outcome/risk verifiers and compensation must qualify before cutover.
 func (c *Coordinator) ReconcileClaimedStorageAction(ctx context.Context, claim store.ActionLease, assertedOperationID string) (*actionv1.StorageMutationResponse, error) {
 	if c == nil || c.store == nil || c.worker == nil || ctx == nil {
 		return nil, internalprotocol.ErrUnknownEffect
@@ -99,7 +99,7 @@ func (c *Coordinator) ReconcileClaimedStorageAction(ctx context.Context, claim s
 			"etag": resp.Etag, "effectId": resp.EffectId, "providerMetadata": resp.ProviderMetadata,
 			"operationId": dispatch.Intent.OperationID, "dispatchEpoch": dispatch.Intent.ExecutionEpoch, "reconciled": true,
 		})
-		if _, err := owner.CompleteAction(claim.ActionID, claim.Epoch, claim.ClaimToken, payload); err != nil {
+		if _, err := owner.MarkActionVerifying(claim.ActionID, claim.Epoch, claim.ClaimToken, payload); err != nil {
 			return resp, err
 		}
 		return resp, nil

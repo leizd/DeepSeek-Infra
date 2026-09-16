@@ -11,7 +11,15 @@ from fastapi.responses import JSONResponse
 
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.media import ingestion, library, schema
+from deepseek_infra.infra.tool_runtime.ocr_trace import (
+    OcrTrace,
+    derive_ocr_correlation_id,
+    new_ocr_correlation_id,
+    sanitize_correlation_id,
+)
 from deepseek_infra.web.http_utils import json_response, read_json_body, require_api_auth, truthy
+
+REQUEST_ID_HEADER = "X-DeepSeek-Request-ID"
 
 
 @dataclass(frozen=True)
@@ -25,6 +33,7 @@ def create_media_router(deps: MediaRouteDeps) -> APIRouter:
     @router.post("/api/media")
     async def api_media_create(request: Request) -> JSONResponse:
         require_api_auth(request)
+        request_id = _incoming_correlation_id(request)
         content_type = request.headers.get("Content-Type", "")
         if "multipart/form-data" in content_type:
             fields, uploads = await deps.read_multipart_form(request)
@@ -37,7 +46,7 @@ def create_media_router(deps: MediaRouteDeps) -> APIRouter:
             ocr_enabled = _truthy_field(fields, "ocrEnabled")
             ocr_api_key = _first(fields, "apiKey")
             media_items = []
-            for upload in uploads:
+            for ordinal, upload in enumerate(uploads, start=1):
                 data = upload.get("data")
                 schema.validate_media_upload_size(len(data) if isinstance(data, bytes) else 0)
                 schema.validate_media_mime_type(upload.get("content_type"), filename=str(upload.get("filename") or ""))
@@ -51,13 +60,17 @@ def create_media_router(deps: MediaRouteDeps) -> APIRouter:
                         process=process,
                         ocr_enabled=ocr_enabled,
                         ocr_api_key=ocr_api_key,
+                        ocr_trace=_upload_trace(request_id, ordinal=ordinal, total=len(uploads)),
                     )
                 )
-            return json_response({"ok": True, "media": media_items[0], "mediaItems": media_items})
+            return json_response(
+                {"ok": True, "media": media_items[0], "mediaItems": media_items},
+                headers={REQUEST_ID_HEADER: request_id},
+            )
 
         payload = await read_json_body(request, max_bytes=16_000_000)
-        media = ingestion.register_from_payload(payload)
-        return json_response({"ok": True, "media": media})
+        media = ingestion.register_from_payload(payload, ocr_trace=OcrTrace(correlation_id=request_id))
+        return json_response({"ok": True, "media": media}, headers={REQUEST_ID_HEADER: request_id})
 
     @router.get("/api/media")
     async def api_media_list(request: Request) -> JSONResponse:
@@ -92,6 +105,7 @@ def create_media_router(deps: MediaRouteDeps) -> APIRouter:
     @router.post("/api/media/{media_id}/process")
     async def api_media_process(request: Request, media_id: str) -> JSONResponse:
         require_api_auth(request)
+        request_id = _incoming_correlation_id(request)
         payload = await read_json_body(request) if int(request.headers.get("Content-Length") or "0") > 0 else {}
         return json_response(
             ingestion.process_media(
@@ -99,7 +113,9 @@ def create_media_router(deps: MediaRouteDeps) -> APIRouter:
                 ocr_enabled=truthy(payload.get("ocrEnabled")) if "ocrEnabled" in payload else None,
                 ocr_api_key=str(payload.get("apiKey") or ""),
                 force=truthy(request.query_params.get("force", "")) or truthy(payload.get("force")),
-            )
+                ocr_trace=OcrTrace(correlation_id=request_id),
+            ),
+            headers={REQUEST_ID_HEADER: request_id},
         )
 
     @router.get("/api/media/{media_id}/segments")
@@ -123,3 +139,19 @@ def _first(fields: dict[str, list[str]], name: str) -> str:
 
 def _truthy_field(fields: dict[str, list[str]], name: str) -> bool:
     return any(truthy(value) for value in fields.get(name, []))
+
+
+def _incoming_correlation_id(request: Request) -> str:
+    """Reuse a caller-supplied request identifier when it is log-safe.
+
+    The header name matches the one the optional Rust sidecar echoes outbound, so
+    one identifier can span both planes. An unusable or absent value falls back to
+    a system-generated id rather than being echoed back unvalidated.
+    """
+    return sanitize_correlation_id(request.headers.get(REQUEST_ID_HEADER, "")) or new_ocr_correlation_id()
+
+
+def _upload_trace(request_id: str, *, ordinal: int, total: int) -> OcrTrace:
+    if total <= 1:
+        return OcrTrace(correlation_id=request_id)
+    return OcrTrace(correlation_id=derive_ocr_correlation_id(request_id, ordinal))

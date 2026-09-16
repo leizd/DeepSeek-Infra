@@ -12,11 +12,14 @@ use serde_json::json;
 use std::{io, path::Path as FsPath};
 
 mod auth;
+pub mod chat_execution;
+pub mod chat_stream;
 mod control_proxy;
 pub mod observability;
 pub mod policy_routes;
 pub mod request_preparation;
 pub mod static_files;
+pub mod tool_rounds;
 
 pub fn gateway_version() -> &'static str {
     deepseek_core::version_info().version
@@ -490,54 +493,114 @@ async fn models() -> (StatusCode, Json<serde_json::Value>) {
 
 async fn chat_completions(
     Json(req): Json<ChatCompletionRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    validate_chat_request(&req)?;
-    Ok(unavailable(
-        "NATIVE_CHAT_NOT_READY",
-        "native chat execution is not wired",
-    ))
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    // Run the same preparation layer `/gateway/request/prepare` exposes instead
+    // of a second, thinner validation path. The typed request is re-encoded so
+    // both entry points share one normalization and one set of rules; the
+    // contract (`model` required, non-empty `messages`, a user turn, a boolean
+    // `stream`) therefore cannot drift between the two.
+    let raw = serde_json::to_value(&req).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": {
+                    "message": "request must be valid JSON",
+                    "type": "invalid_request_error"
+                }
+            })),
+        )
+    })?;
+    let prepared =
+        request_preparation::prepare_chat_request(&raw).map_err(chat_preparation_error)?;
+    let model = prepared
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    // The upstream credential is read from the server environment, never from
+    // the request: preparation already rejects client-supplied credential keys.
+    let config = chat_execution::UpstreamConfig::from_env();
+    let streaming = prepared
+        .get("stream")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if streaming {
+        // The upstream turn is opened *before* the response is built so a
+        // non-success upstream status can surface as an HTTP error. Once the
+        // stream is open the status line is already on the wire, so any later
+        // failure has to travel as an SSE error frame instead.
+        let upstream = chat_execution::open_chat_stream(&config, &prepared)
+            .await
+            .map_err(chat_execution_error)?;
+        let created = now_unix_seconds();
+        return Ok(chat_stream::streaming_response(upstream, &model, created));
+    }
+    match chat_execution::execute_chat_completion(&config, &prepared).await {
+        Ok(result) => Ok(Json(chat_execution::openai_completion_response(
+            &result,
+            &model,
+            now_unix_seconds(),
+        ))
+        .into_response()),
+        Err(error) => Err(chat_execution_error(error)),
+    }
 }
 
-fn validate_chat_request(
-    req: &ChatCompletionRequest,
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if req.model.trim().is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": {
-                    "message": "model is required",
-                    "type": "invalid_request_error"
-                }
-            })),
-        ));
-    }
+fn now_unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
 
-    if req.messages.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": {
-                    "message": "messages must not be empty",
-                    "type": "invalid_request_error"
-                }
-            })),
-        ));
-    }
+/// Report a native execution failure with the OpenAI-compatible envelope and a
+/// status that distinguishes local misconfiguration from upstream trouble.
+fn chat_execution_error(
+    error: chat_execution::ChatExecutionError,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let status = StatusCode::from_u16(error.status()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let message = match &error {
+        chat_execution::ChatExecutionError::UpstreamStatus { status } => {
+            format!("upstream completion failed with status {status}")
+        }
+        other => other.code().to_ascii_lowercase().replace('_', " "),
+    };
+    (
+        status,
+        Json(json!({
+            "error": {
+                "code": error.code(),
+                "message": message,
+                "type": "upstream_error"
+            }
+        })),
+    )
+}
 
-    if req.stream == Some(true) {
-        return Err((
-            StatusCode::NOT_IMPLEMENTED,
-            Json(json!({
-                "error": {
-                    "message": "streaming is not supported in this MVP",
-                    "type": "not_supported"
-                }
-            })),
-        ));
-    }
-
-    Ok(())
+/// Map a preparation failure onto the OpenAI-compatible error envelope this
+/// route already returns, keeping the pre-existing status codes for the cases
+/// that were previously handled inline.
+fn chat_preparation_error(
+    error: request_preparation::PreparationError,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let (status, error_type) = match error.code {
+        // Preserved behavior: streaming is refused as "not implemented".
+        "invalid_request" if error.message.contains("streaming") => {
+            (StatusCode::NOT_IMPLEMENTED, "not_supported")
+        }
+        "request_too_large" => (StatusCode::PAYLOAD_TOO_LARGE, "invalid_request_error"),
+        "context_compression_required" => (StatusCode::CONFLICT, "invalid_request_error"),
+        _ => (StatusCode::BAD_REQUEST, "invalid_request_error"),
+    };
+    (
+        status,
+        Json(json!({
+            "error": {
+                "message": error.message,
+                "type": error_type
+            }
+        })),
+    )
 }
 
 #[cfg(test)]
@@ -891,15 +954,75 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chat_never_returns_a_stubbed_success() {
+    async fn chat_reports_missing_upstream_credential_instead_of_a_stub() {
+        // The route is wired to real execution now, so with no server-side
+        // credential it must fail closed on the credential check and never
+        // emit a fabricated completion.
         let app = create_app();
         let body = r#"{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}]}"#;
         let (status, response_body) =
             send_request(app, "POST", "/v1/chat/completions", Some(body.to_string())).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         let response: serde_json::Value = serde_json::from_str(&response_body).unwrap();
-        assert_eq!(response["error"]["code"], "NATIVE_CHAT_NOT_READY");
+        assert_eq!(
+            response["error"]["code"],
+            "NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING"
+        );
         assert!(!response_body.contains("chatcmpl-stub"));
+        assert!(
+            response.get("choices").is_none(),
+            "a failed request must not carry a completion: {response_body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_enforces_the_shared_preparation_rules() {
+        // `/v1/chat/completions` now runs the same preparation layer as
+        // `/gateway/request/prepare`. These cases only pass if the route really
+        // reuses it rather than a second, thinner validator.
+        let app = create_app();
+
+        // No user turn -> the oracle's user-message requirement.
+        let body =
+            r#"{"model":"deepseek-v4-pro","messages":[{"role":"assistant","content":"hi"}]}"#;
+        let (status, response_body) = send_request(
+            app.clone(),
+            "POST",
+            "/v1/chat/completions",
+            Some(body.to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            response_body.contains("a user message is required"),
+            "unexpected body: {response_body}"
+        );
+
+        // Unsupported model -> the shared model allowlist, not a free-form string.
+        let body = r#"{"model":"gpt-9","messages":[{"role":"user","content":"hi"}]}"#;
+        let (status, _) = send_request(
+            app.clone(),
+            "POST",
+            "/v1/chat/completions",
+            Some(body.to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // More than MESSAGE_HARD_LIMIT turns without a context summary -> 409,
+        // matching the oracle's CONTEXT_COMPRESSION_REQUIRED conflict.
+        let mut messages = Vec::new();
+        for index in 0..=request_preparation::MESSAGE_HARD_LIMIT {
+            messages.push(json!({"role": "user", "content": format!("turn {index}")}));
+        }
+        let body = json!({"model": "deepseek-v4-pro", "messages": messages}).to_string();
+        let (status, response_body) =
+            send_request(app, "POST", "/v1/chat/completions", Some(body)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(
+            response_body.contains("context compression is required"),
+            "unexpected body: {response_body}"
+        );
     }
 
     #[tokio::test]
@@ -1081,13 +1204,29 @@ mod tests {
         );
     }
 
+    /// Streaming is a first-class transport now, so the route must no longer
+    /// answer `501`. Without an upstream credential the honest answer is `503`
+    /// from the credential check, *before* any streaming frame is written — the
+    /// request is accepted and prepared, then refused for a real reason.
     #[tokio::test]
-    async fn chat_rejects_streaming_for_mvp() {
+    async fn chat_accepts_streaming_and_fails_only_on_the_upstream() {
         let app = create_app();
         let body = r#"{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}],"stream":true}"#;
-        let (status, _body) =
+        let (status, response) =
             send_request(app, "POST", "/v1/chat/completions", Some(body.to_string())).await;
-        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        assert_ne!(
+            status,
+            StatusCode::NOT_IMPLEMENTED,
+            "streaming must not be refused as unimplemented: {response}"
+        );
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            parsed["error"]["code"],
+            "NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING"
+        );
+        // The refusal happened before the body, so it is ordinary JSON, not SSE.
+        assert!(!response.starts_with("data: "));
     }
 
     #[tokio::test]

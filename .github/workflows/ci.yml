@@ -1361,6 +1361,10 @@ jobs:
           go test -tags=integration ./internal/worker \
             -run '^TestRustWorkerWithoutAuthorityFailsClosedAndKeepsMissingEffectUnknown$|^TestRustWorkerUnconfiguredInstallRemainsFailClosed$|^TestRustWorkerStorageMutationFailsClosedWithoutAuth$|^TestRustCoordinatorStorageActionAgainstRealWorker$' \
             -count=1 -timeout=30s
+      - name: Run real Go-to-Rust TLS worker boundary
+        env:
+          DEEPSEEK_TEST_RUST_WORKER_BINARY: ${{ github.workspace }}/rust/target/debug/deepseek-worker
+        run: go test -tags=integration ./internal/worker -run '^TestRustWorkerTLSRealBoundary$' -count=1 -timeout=30s
       - name: Run authenticated Go-to-Rust epoch install boundary
         shell: bash
         env:

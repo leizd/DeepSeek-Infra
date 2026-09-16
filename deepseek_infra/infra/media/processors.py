@@ -8,16 +8,17 @@ from typing import Any
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.media import library, schema
 from deepseek_infra.infra.rag import files as rag_files
+from deepseek_infra.infra.tool_runtime.ocr_trace import OcrTrace
 
 TRANSCRIPT_CHUNK_CHARS = 1_200
 
 
-def extract_segments(media: dict[str, Any], *, ocr_enabled: bool | None = None, ocr_api_key: str | None = None) -> list[dict[str, Any]]:
+def extract_segments(media: dict[str, Any], *, ocr_enabled: bool | None = None, ocr_api_key: str | None = None, ocr_trace: OcrTrace | None = None) -> list[dict[str, Any]]:
     media_type = str(media.get("type") or "")
     if media_type in {"image", "screenshot"}:
-        return image_segments(media, ocr_enabled=ocr_enabled, ocr_api_key=ocr_api_key)
+        return image_segments(media, ocr_enabled=ocr_enabled, ocr_api_key=ocr_api_key, ocr_trace=ocr_trace)
     if media_type == "pdf":
-        return pdf_segments(media, ocr_enabled=ocr_enabled, ocr_api_key=ocr_api_key)
+        return pdf_segments(media, ocr_enabled=ocr_enabled, ocr_api_key=ocr_api_key, ocr_trace=ocr_trace)
     if media_type == "webpage":
         return webpage_segments(media)
     if media_type == "audio":
@@ -27,13 +28,13 @@ def extract_segments(media: dict[str, Any], *, ocr_enabled: bool | None = None, 
     raise AppError("Unsupported media type", code=ErrorCode.INVALID_PAYLOAD, status=400)
 
 
-def image_segments(media: dict[str, Any], *, ocr_enabled: bool | None = None, ocr_api_key: str | None = None) -> list[dict[str, Any]]:
+def image_segments(media: dict[str, Any], *, ocr_enabled: bool | None = None, ocr_api_key: str | None = None, ocr_trace: OcrTrace | None = None) -> list[dict[str, Any]]:
     metadata = _metadata(media)
     text = str(metadata.get("ocrText") or metadata.get("text") or "").strip()
     source = _source_bytes(media)
     if source and ocr_enabled:
         try:
-            text = rag_files.extract_image_text(source, ocr_enabled=True, ocr_api_key=ocr_api_key) or text
+            text = rag_files.extract_image_text(source, ocr_enabled=True, ocr_api_key=ocr_api_key, ocr_trace=ocr_trace) or text
         except AppError:
             if not text:
                 raise
@@ -46,7 +47,7 @@ def image_segments(media: dict[str, Any], *, ocr_enabled: bool | None = None, oc
     return segments
 
 
-def pdf_segments(media: dict[str, Any], *, ocr_enabled: bool | None = None, ocr_api_key: str | None = None) -> list[dict[str, Any]]:
+def pdf_segments(media: dict[str, Any], *, ocr_enabled: bool | None = None, ocr_api_key: str | None = None, ocr_trace: OcrTrace | None = None) -> list[dict[str, Any]]:
     metadata = _metadata(media)
     page_texts = _page_texts_from_metadata(metadata)
     source = _source_bytes(media)
@@ -55,7 +56,7 @@ def pdf_segments(media: dict[str, Any], *, ocr_enabled: bool | None = None, ocr_
             page_texts = rag_files.extract_pdf_page_texts_native(source)
         except AppError:
             if ocr_enabled:
-                text = rag_files.extract_pdf_text(source, ocr_enabled=True, ocr_api_key=ocr_api_key)
+                text = rag_files.extract_pdf_text(source, ocr_enabled=True, ocr_api_key=ocr_api_key, ocr_trace=ocr_trace)
                 page_count = int(metadata.get("pageCount") or rag_files.count_pdf_pages(source) or 1)
                 page_texts = rag_files.fallback_page_texts_from_text(text, page_count=page_count)
             else:

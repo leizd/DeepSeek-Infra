@@ -75,31 +75,38 @@ func verifyActionReconciliationSchemaTx(tx *sql.Tx) error {
 	return nil
 }
 
-func reconciliationHistoryBoundaryTx(tx *sql.Tx) (int64, error) {
+func actionHistoryBoundariesTx(tx *sql.Tx) (reconciliation, verification int64, err error) {
+	reconciliation, verification = math.MaxInt64, math.MaxInt64
 	var schema int
-	if err := tx.QueryRow("SELECT schema_version FROM control_store_meta WHERE singleton=1").Scan(&schema); err != nil {
-		return 0, err
+	if err = tx.QueryRow("SELECT schema_version FROM control_store_meta WHERE singleton=1").Scan(&schema); err != nil {
+		return
 	}
-	if schema < SchemaV6 {
-		return math.MaxInt64, nil
+	if schema >= SchemaV6 {
+		err = tx.QueryRow("SELECT last_legacy_event_id FROM action_reconciliation_boundary WHERE singleton=1").Scan(&reconciliation)
+		if err != nil {
+			return
+		}
 	}
-	var boundary int64
-	err := tx.QueryRow("SELECT last_legacy_event_id FROM action_reconciliation_boundary WHERE singleton=1").Scan(&boundary)
-	return boundary, err
+	if schema >= SchemaV7 {
+		err = tx.QueryRow("SELECT last_legacy_event_id FROM action_verification_boundary WHERE singleton=1").Scan(&verification)
+	}
+	return
 }
 
 // Only typed native lease operations may write these edges. Generic shadow
 // records and pre-v6 histories retain LegalTransition's original small graph.
 func reconciliationTransition(from, to string, previousEpoch, epoch uint64) bool {
 	if to == "RECONCILING" {
-		return activeLeasedActionState(from) && previousEpoch < math.MaxInt64 && epoch == previousEpoch+1
+		// Frozen v6 sources: later active states belong to their own boundary.
+		activeV6 := from == "CLAIMED" || from == "EXECUTING" || from == "EFFECT_UNKNOWN" || from == "RECONCILING"
+		return activeV6 && previousEpoch < math.MaxInt64 && epoch == previousEpoch+1
 	}
 	return from == "RECONCILING" && epoch == previousEpoch &&
 		(to == "EFFECT_UNKNOWN" || to == "SUCCEEDED" || to == "FAILED_BEFORE_EFFECT")
 }
 
 func activeLeasedActionState(state string) bool {
-	return state == "CLAIMED" || state == "EXECUTING" || state == "EFFECT_UNKNOWN" || state == "RECONCILING"
+	return state == "CLAIMED" || state == "EXECUTING" || state == "EFFECT_UNKNOWN" || state == "RECONCILING" || verificationActionState(state)
 }
 
 func validateReconciliationEventTx(tx *sql.Tx, event Record, metadata storedRecordMetadata) error {

@@ -6,9 +6,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::capability::{Capability, RiskLevel};
 
+pub mod app_error;
 pub mod audit;
 pub mod capability;
+pub mod core_utils;
+pub mod entropy;
+pub mod file_cache;
+pub mod file_lock;
+pub mod memory;
+pub mod mutation_gate;
 pub mod path_guard;
+pub mod projects;
+pub mod python_json;
+pub mod reminders;
+pub mod tool_batch;
+pub mod tool_dispatch;
+pub mod tool_policy;
+pub mod tool_search;
+pub mod tool_transform;
 pub mod url_guard;
 
 pub fn policy_version() -> &'static str {
@@ -21,6 +36,9 @@ pub mod codes {
     pub const LOCALHOST_BLOCKED: &str = "localhost_blocked";
     pub const PRIVATE_NETWORK_BLOCKED: &str = "private_network_blocked";
     pub const LINK_LOCAL_BLOCKED: &str = "link_local_blocked";
+    /// URL userinfo (`user:pass@host`) — the oracle denies these outright rather
+    /// than stripping them, so a credential-bearing URL is never a valid target.
+    pub const URL_CREDENTIALS_BLOCKED: &str = "url_credentials_blocked";
     pub const PATH_TRAVERSAL: &str = "path_traversal";
     pub const PROTECTED_PATH: &str = "protected_path";
     pub const MISSING_CAPABILITY: &str = "missing_capability";

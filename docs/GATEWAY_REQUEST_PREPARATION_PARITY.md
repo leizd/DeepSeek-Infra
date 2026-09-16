@@ -25,7 +25,7 @@ POST /gateway/request/prepare
 
 Rust performs only pure input-to-output work: model and message validation, role/content checks, tool-definition filtering, `tool_choice` validation, bounded numeric normalization, JSON/depth/size checks, and deterministic assembly of the non-streaming body. A successful response contains `ok`, `request`, and Rust diagnostics. An invalid user request contains a stable code such as `invalid_message_role`; natural-language error wording is not a parity surface.
 
-Python continues to own:
+When Python invokes this preparation delegate, Python continues to own:
 
 - API keys, local authorization, and other credentials;
 - provider routing and real upstream HTTP;
@@ -36,7 +36,7 @@ Python continues to own:
 - real tool execution;
 - tracing lifecycle and all database or filesystem writes.
 
-The sidecar never receives an API key or `Authorization` header. `/v1/models` and streaming chat remain Python-owned.
+The preparation request never contains an API key or `Authorization` header. The native `/v1/models` and `/v1/chat/completions` routes are separate surfaces; streaming chat uses `prepare_chat_request` rather than widening this non-streaming delegate contract.
 
 ## Defensive validation and fallback
 
@@ -55,6 +55,36 @@ Safe diagnostics are attached as `gatewayRequestPreparation`:
 ```
 
 Fallback uses `runtime: "python"`, `fallback: true`, and a stable reason such as `rust_backend_unavailable`. Diagnostics do not record credentials, full sensitive prompts, full tool arguments, or local absolute paths.
+
+## Caller `system` turns are preserved (measured correction)
+
+An earlier revision of `normalize_chat_messages` (the Python assembly layer, not
+the Rust preparation layer) silently `continue`-ed past every turn it could not
+represent: non-object entries, blank or `None` content, `tool` turns missing
+`tool_call_id`, and **every `system` turn**.
+
+Dropping `system` was the consequential one. Both layers build the authoritative
+system prefix themselves — `build_deepseek_request` composes it from
+`payload["systemPrompt"]` plus the tool-parallel hint, and Rust `prepare_request`
+accepts `system` as a first-class role. So a `system` turn arriving in `messages`
+was not a duplicate to prune; it was caller intent being discarded, and the
+request still returned `200`. Measured on the real assembly path, a caller-supplied
+`{"role": "system", "content": "be concise"}` never appeared in the upstream body
+in any position, so the model could not honour it.
+
+Both layers now fail closed with the same codes, so the two paths agree:
+
+| Caller input | Python assembly (now) | Rust preparation |
+| --- | --- | --- |
+| `system` turn + `user` turn | kept → reaches upstream body | `ok`, role kept |
+| non-object entry | `invalid_messages` | `invalid_messages` |
+| blank / `None` content | `invalid_message_content` | `invalid_message_content` |
+| `tool` turn without `tool_call_id` | `invalid_message_content` | `invalid_message_content` |
+
+Error wording is still not a parity surface; only the code is. A caller `system`
+turn is a *variable* message for slide-window purposes — the leading stable prefix
+and the trailing dynamic-context message remain the only protected positions, so a
+`system` turn far back in a conversation can still be windowed out on long inputs.
 
 ## Shared corpus and CI
 

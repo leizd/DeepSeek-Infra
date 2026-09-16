@@ -25,6 +25,13 @@ async def _read_multipart_too_many(_request: Any) -> tuple[dict[str, list[str]],
     return {}, uploads
 
 
+async def _read_multipart_two(_request: Any) -> tuple[dict[str, list[str]], list[dict[str, Any]]]:
+    return {}, [
+        {"filename": "a.png", "content_type": "image/png", "data": b"a"},
+        {"filename": "b.png", "content_type": "image/png", "data": b"b"},
+    ]
+
+
 @pytest.fixture
 def client(tmp_settings: Path) -> Iterator[TestClient]:
     deps = MediaRouteDeps(read_multipart_form=_read_multipart_form)
@@ -69,6 +76,75 @@ def test_media_upload_via_multipart(client: TestClient) -> None:
             headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
         )
     assert resp.status_code == 200
+
+
+def test_media_multipart_upload_derives_one_trace_per_file(tmp_settings: Path) -> None:
+    deps = MediaRouteDeps(read_multipart_form=_read_multipart_two)
+    app = FastAPI()
+
+    @app.exception_handler(AppError)
+    async def _app_error_handler(request: Any, exc: AppError) -> JSONResponse:
+        return JSONResponse({"error": str(exc), "code": exc.code.value}, status_code=exc.status or 400)
+
+    app.include_router(create_media_router(deps))
+    captured: list[Any] = []
+
+    def fake_ingest(file_info: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        captured.append(kwargs["ocr_trace"])
+        return {"mediaId": f"m{len(captured)}"}
+
+    with (
+        patch("deepseek_infra.web.routes.media.require_api_auth", lambda request: None),
+        patch("deepseek_infra.web.routes.media.ingestion.ingest_upload", fake_ingest),
+    ):
+        client = TestClient(app)
+        boundary = "----WebKitFormBoundary"
+        resp = client.post(
+            "/api/media",
+            content=f"--{boundary}--\r\n".encode("utf-8"),
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "X-DeepSeek-Request-ID": "multi-1",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.headers["X-DeepSeek-Request-ID"] == "multi-1"
+    assert [trace.correlation_id for trace in captured] == ["multi-1.1", "multi-1.2"]
+
+
+def test_media_multipart_upload_reuses_one_trace_for_a_single_file(tmp_settings: Path) -> None:
+    deps = MediaRouteDeps(read_multipart_form=_read_multipart_form)
+    app = FastAPI()
+
+    @app.exception_handler(AppError)
+    async def _app_error_handler(request: Any, exc: AppError) -> JSONResponse:
+        return JSONResponse({"error": str(exc), "code": exc.code.value}, status_code=exc.status or 400)
+
+    app.include_router(create_media_router(deps))
+    captured: list[Any] = []
+
+    def fake_ingest(file_info: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        captured.append(kwargs["ocr_trace"])
+        return {"mediaId": "m1"}
+
+    with (
+        patch("deepseek_infra.web.routes.media.require_api_auth", lambda request: None),
+        patch("deepseek_infra.web.routes.media.ingestion.ingest_upload", fake_ingest),
+    ):
+        client = TestClient(app)
+        boundary = "----WebKitFormBoundary"
+        resp = client.post(
+            "/api/media",
+            content=f"--{boundary}--\r\n".encode("utf-8"),
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "X-DeepSeek-Request-ID": "single-1",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert [trace.correlation_id for trace in captured] == ["single-1"]
 
 
 def test_media_upload_too_many(client_too_many: TestClient) -> None:

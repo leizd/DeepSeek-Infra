@@ -39,11 +39,8 @@ def test_sse_error_message_handles_malformed_and_structured_errors(raw: str, exp
     assert client.sse_error_message(raw) == expected
 
 
-def test_chat_message_normalization_rejects_malformed_entries() -> None:
+def test_chat_message_normalization_keeps_representable_entries() -> None:
     messages: list[Any] = [
-        None,
-        {"role": "system", "content": "ignored"},
-        {"role": "tool", "content": "missing id"},
         {"role": "tool", "tool_call_id": "call-1", "content": " ok "},
         {"role": "assistant", "content": "", "tool_calls": [{"name": "fetch_url", "arguments": {"url": "x"}}]},
         {"role": "user", "content": "", "attachments": [{"imageData": "data:image/png;base64," + "a" * 40}]},
@@ -54,6 +51,50 @@ def test_chat_message_normalization_rejects_malformed_entries() -> None:
     assert normalized[0] == {"role": "tool", "tool_call_id": "call-1", "content": "ok"}
     assert normalized[1]["tool_calls"][0]["function"]["name"] == "fetch_url"
     assert normalized[2]["content"][0]["type"] == "image_url"
+
+
+@pytest.mark.parametrize(
+    ("message", "code"),
+    [
+        (None, ErrorCode.INVALID_MESSAGES),
+        ("nope", ErrorCode.INVALID_MESSAGES),
+        ({"role": "owner", "content": "x"}, ErrorCode.INVALID_MESSAGE_CONTENT),
+        ({"role": "user", "content": ""}, ErrorCode.INVALID_MESSAGE_CONTENT),
+        ({"role": "user", "content": "   "}, ErrorCode.INVALID_MESSAGE_CONTENT),
+        ({"role": "assistant", "content": None}, ErrorCode.INVALID_MESSAGE_CONTENT),
+        ({"role": "tool", "content": "missing id"}, ErrorCode.INVALID_MESSAGE_CONTENT),
+        ({"role": "tool", "tool_call_id": "call-1", "content": "  "}, ErrorCode.INVALID_MESSAGE_CONTENT),
+    ],
+)
+def test_chat_message_normalization_rejects_unrepresentable_turns(
+    message: Any, code: ErrorCode
+) -> None:
+    """A turn we cannot represent is refused, never silently dropped.
+
+    Silently dropping a turn made the call succeed while the model quietly
+    ignored what the caller had said — the request looked healthy and the
+    answer was wrong. Refusing surfaces the offending turn instead.
+    """
+    with pytest.raises(AppError) as exc_info:
+        client.normalize_chat_messages([message, {"role": "user", "content": "real"}])
+
+    assert exc_info.value.code == code
+
+
+def test_chat_message_normalization_keeps_system_turns() -> None:
+    """A caller-supplied `system` turn must survive into the upstream body.
+
+    The authoritative system prefix is built separately from
+    ``payload["systemPrompt"]``; a `system` turn arriving in ``messages`` is not
+    a duplicate to prune but caller intent, and dropping it meant the model
+    never saw the instruction.
+    """
+    normalized = client.normalize_chat_messages(
+        [{"role": "system", "content": " be terse "}, {"role": "user", "content": "hi"}]
+    )
+
+    assert [item["role"] for item in normalized] == ["system", "user"]
+    assert normalized[0]["content"] == "be terse"
 
 
 def test_tool_call_normalization_and_delta_merge_cover_invalid_shapes() -> None:

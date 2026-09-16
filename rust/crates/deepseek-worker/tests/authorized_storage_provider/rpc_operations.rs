@@ -1,6 +1,7 @@
 //! Real providers and RPC handlers; not a process-kill or production-auth proof.
 use super::{
-    PutFault, endpoints, faulted_put_relay, minio_configured, sign_request, store, test_signer,
+    PutFault, endpoints, faulted_put_relay, minio_configured, sign_grant, sign_request, store,
+    test_signer,
 };
 use std::sync::Arc;
 
@@ -42,12 +43,13 @@ async fn query(
 }
 
 fn assert_mismatch(response: &StorageMutationResponse) {
+    assert_rejected(response, "STORAGE_OPERATION_MISMATCH");
+}
+
+fn assert_rejected(response: &StorageMutationResponse, code: &str) {
     assert_eq!(response.status(), StorageMutationStatus::Rejected);
     assert_eq!(response.state(), EffectState::Unknown);
-    assert_eq!(
-        response.error.as_ref().unwrap().code,
-        "STORAGE_OPERATION_MISMATCH"
-    );
+    assert_eq!(response.error.as_ref().unwrap().code, code);
     assert!(response.effect_id.is_empty());
     assert!(response.etag.is_empty());
     assert!(response.provider_metadata.is_empty());
@@ -86,11 +88,14 @@ async fn rpc_created_intent_preserves_operation_identity_on_three_real_providers
             use std::fmt::Write as _;
             write!(target_identity, "{byte:02x}").unwrap();
         }
-        let request = StorageMutationRequest {
+        let mut request = StorageMutationRequest {
             fence: Some(fence.clone()),
             operation_id: operation.into(),
             mutation_type: "PUT_CHUNK".into(),
+            provider: "s3".into(),
             target_identity,
+            bucket: std::env::var("DEEPSEEK_NATIVE_S3_BUCKET").unwrap(),
+            prefix: "worker-authorized-e2e".into(),
             object_key: "rpc-operation-identity".into(),
             payload_digest: format!("{:x}", Sha256::digest(payload)),
             expected_length: payload.len() as u64,
@@ -101,6 +106,7 @@ async fn rpc_created_intent_preserves_operation_identity_on_three_real_providers
             }),
             ..Default::default()
         };
+        request.canonical_authorization = sign_grant(&key, &request);
         // The actual mutation handler creates and dispatches the intent. No
         // effect row or remote object is manually inserted for this operation.
         let result = WorkerRpc::execute_storage_mutation(&service, authenticated(request.clone()))
@@ -131,6 +137,16 @@ async fn rpc_created_intent_preserves_operation_identity_on_three_real_providers
             assert_mismatch(&query(&service, &fence, substitute).await);
             let mut retry = request.clone();
             retry.operation_id = substitute.into();
+            assert_rejected(
+                &WorkerRpc::execute_storage_mutation(&service, authenticated(retry.clone()))
+                    .await
+                    .unwrap()
+                    .into_inner(),
+                "STORAGE_OPERATION_GRANT_COMMAND_MISMATCH",
+            );
+            // A valid grant for the replacement still cannot reuse the durable
+            // effect belonging to the original operation ID.
+            retry.canonical_authorization = sign_grant(&key, &retry);
             assert_mismatch(
                 &WorkerRpc::execute_storage_mutation(&service, authenticated(retry))
                     .await
@@ -150,6 +166,14 @@ async fn rpc_created_intent_preserves_operation_identity_on_three_real_providers
         assert_mismatch(&query(&service, &fence, "Operation-A").await);
         let mut retry = request.clone();
         retry.operation_id = "Operation-A".into();
+        assert_rejected(
+            &WorkerRpc::execute_storage_mutation(&service, authenticated(retry.clone()))
+                .await
+                .unwrap()
+                .into_inner(),
+            "STORAGE_OPERATION_GRANT_COMMAND_MISMATCH",
+        );
+        retry.canonical_authorization = sign_grant(&key, &retry);
         assert_mismatch(
             &WorkerRpc::execute_storage_mutation(&service, authenticated(retry))
                 .await
@@ -203,10 +227,19 @@ async fn rpc_unknown_effect_reconciles_only_for_its_persisted_operation() {
     let service = WorkerRpcService::new_with_authenticator(worker, auth.clone())
         .with_transport(transport.clone());
     let payload = b"real PUT committed but RPC handler did not receive its ACK";
-    let request = StorageMutationRequest {
+    let mut target_identity = String::with_capacity(64);
+    for byte in transport.target_identity() {
+        use std::fmt::Write as _;
+        write!(target_identity, "{byte:02x}").unwrap();
+    }
+    let mut request = StorageMutationRequest {
         fence: Some(fence.clone()),
         operation_id: "uncertain-operation".into(),
         mutation_type: "PUT_CHUNK".into(),
+        provider: "s3".into(),
+        target_identity,
+        bucket: std::env::var("DEEPSEEK_NATIVE_S3_BUCKET").unwrap(),
+        prefix: "worker-authorized-e2e".into(),
         object_key: "rpc-operation-dropped-ack".into(),
         payload_digest: format!("{:x}", Sha256::digest(payload)),
         expected_length: payload.len() as u64,
@@ -217,6 +250,7 @@ async fn rpc_unknown_effect_reconciles_only_for_its_persisted_operation() {
         }),
         ..Default::default()
     };
+    request.canonical_authorization = sign_grant(&key, &request);
     let unknown = WorkerRpc::execute_storage_mutation(&service, authenticated(request.clone()))
         .await
         .unwrap()

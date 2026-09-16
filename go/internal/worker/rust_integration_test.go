@@ -158,8 +158,8 @@ func TestRustWorkerStorageMutationWithBearerToken(t *testing.T) {
 		OperationId: "op-storage-auth-1",
 	}
 	_, err = client.ExecuteStorageMutation(ctx, req, "invalid-token-value")
-	if !errors.Is(err, internalprotocol.ErrAuthenticationInvalid) {
-		t.Fatalf("invalid bearer token must be rejected: %v", err)
+	if !errors.Is(err, ErrWorkerPlaintextCredential) {
+		t.Fatalf("plaintext must not send a bearer credential: %v", err)
 	}
 }
 
