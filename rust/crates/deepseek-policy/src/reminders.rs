@@ -37,6 +37,10 @@ use crate::app_error::AppError;
 use crate::mutation_gate::mutation_scope;
 use crate::python_json::OrderedJson;
 
+// The entropy source now lives in its own module, because `projects` needs it too.
+// Re-exported here so this module's public API is unchanged.
+pub use crate::entropy::{Entropy, SystemEntropy};
+
 /// `MAX_REMINDERS`. A tail slice after sorting by `dueAt`, so it keeps the
 /// latest-due entries.
 pub const MAX_REMINDERS: usize = 200;
@@ -71,77 +75,6 @@ pub fn reminders_file(root: &Path) -> PathBuf {
 /// `REMINDERS_FILE.with_suffix(".tmp")` — note this **replaces** `.json`.
 fn temp_file(root: &Path) -> PathBuf {
     reminders_dir(root).join("reminders.tmp")
-}
-
-// --- entropy ---------------------------------------------------------------------
-
-/// The two non-deterministic inputs, injected so the store is testable and the
-/// parity probe can pin them.
-pub trait Entropy {
-    /// Mirrors `secrets.token_hex(8)` — 16 lowercase hex characters.
-    fn new_id(&self) -> Result<String, AppError>;
-    /// Mirrors `int(time.time() * 1000)`.
-    fn now_millis(&self) -> i64;
-}
-
-/// The production source: an OS CSPRNG and the wall clock.
-pub struct SystemEntropy;
-
-impl Entropy for SystemEntropy {
-    fn new_id(&self) -> Result<String, AppError> {
-        let mut bytes = [0u8; 8];
-        os_random(&mut bytes)?;
-        Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
-    }
-
-    fn now_millis(&self) -> i64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_millis() as i64)
-            .unwrap_or(0)
-    }
-}
-
-/// Fill `buffer` from the OS CSPRNG.
-///
-/// `secrets.token_hex` is explicitly a *secure* source, so this does not fall back
-/// to a seeded but non-cryptographic generator: a reminder id is handed to the
-/// model in tool output, and making it guessable would be a real regression.
-#[cfg(unix)]
-fn os_random(buffer: &mut [u8]) -> Result<(), AppError> {
-    use std::io::Read;
-    let mut file = std::fs::File::open("/dev/urandom")
-        .map_err(|error| AppError::invalid_payload(format!("no secure random source: {error}")))?;
-    file.read_exact(buffer)
-        .map_err(|error| AppError::invalid_payload(format!("no secure random source: {error}")))
-}
-
-#[cfg(windows)]
-fn os_random(buffer: &mut [u8]) -> Result<(), AppError> {
-    use std::ffi::c_void;
-
-    #[link(name = "bcrypt")]
-    unsafe extern "C" {
-        fn BCryptGenRandom(algorithm: *mut c_void, buffer: *mut u8, length: u32, flags: u32)
-        -> i32;
-    }
-
-    // BCRYPT_USE_SYSTEM_PREFERRED_RNG
-    const USE_SYSTEM_PREFERRED_RNG: u32 = 0x0000_0002;
-    let status = unsafe {
-        BCryptGenRandom(
-            std::ptr::null_mut(),
-            buffer.as_mut_ptr(),
-            buffer.len() as u32,
-            USE_SYSTEM_PREFERRED_RNG,
-        )
-    };
-    if status != 0 {
-        return Err(AppError::invalid_payload(format!(
-            "no secure random source: BCryptGenRandom returned {status}"
-        )));
-    }
-    Ok(())
 }
 
 // --- the store -------------------------------------------------------------------

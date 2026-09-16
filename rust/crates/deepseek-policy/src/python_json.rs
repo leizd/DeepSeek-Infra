@@ -139,6 +139,17 @@ pub enum OrderedJson {
     List(Vec<OrderedJson>),
 }
 
+/// A nested value becomes a real node so containers render with indentation, as
+/// Python's `indent=2` does at every level.
+///
+/// Nested object **keys** come out sorted, because `serde_json` here has no
+/// `preserve_order` and Python's insertion order for a nested dict is therefore not
+/// recoverable. Callers that need a nested order must flatten the value or take the
+/// order at the top level, where [`OrderedJson::from_value_with_order`] accepts one.
+fn nested(value: &Value) -> OrderedJson {
+    OrderedJson::from_value_with_order(value, &[])
+}
+
 impl OrderedJson {
     /// Build from a `Value`, taking the given key order for the top-level object.
     ///
@@ -150,12 +161,12 @@ impl OrderedJson {
                 let mut pairs: Vec<(String, OrderedJson)> = Vec::new();
                 for key in order {
                     if let Some(item) = fields.get(*key) {
-                        pairs.push(((*key).to_string(), OrderedJson::Scalar(item.clone())));
+                        pairs.push(((*key).to_string(), nested(item)));
                     }
                 }
                 for (key, item) in fields {
                     if !order.contains(&key.as_str()) {
-                        pairs.push((key.clone(), OrderedJson::Scalar(item.clone())));
+                        pairs.push((key.clone(), nested(item)));
                     }
                 }
                 OrderedJson::Object(pairs)

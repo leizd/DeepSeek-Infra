@@ -788,3 +788,57 @@ Last data slice is E (`projects`, blocked on `rag/files.py`'s `load_cached_file`
 `suggest_memory` does not persist: it builds a suggestion and fires a callback, so
 `upsert_memory`, `clear_memories` and `delete_memory_by_id` are not ported and are not
 needed here. Nothing is wired.
+
+**Data layer slice E1: the projects read path (2026-09-16，uncommitted).**
+
+The last data domain, split in two because the measurement showed the halves have very
+different dependencies. **E1 is done**: the projects store — `validate_project_id`, the
+whole `normalize_*` family, `read_project`, `public_project`, `list_projects`.
+**E2 is not started**: `load_cached_file` plus the two branch wrappers.
+
+`read_project` re-normalises **six** collection fields on every read, so the normaliser
+family is on the critical path even for a branch that only looks at `documents` — and
+`normalize_skill_run` alone has **thirty fields**. That is why a ~45-line pair of
+branches needs a store-sized slice.
+
+**A real finding: the read path mints random ids.** `normalize_skill_run` and
+`normalize_saved_items` generate `f"run-{secrets.token_hex(8)}"` / `f"saved-…"` whenever a
+stored entry has none, and `read_project` calls them — so **reading the same malformed
+project twice returns different values**. Measured: `run-d9d3e527ae4f29df` then
+`run-5acb6344a2c0e2bf`. Not persisted (read never writes back), so it is a phantom id, but
+it is observable through `public_project`, which `list_projects` returns to the model. The
+port keeps the behaviour and takes the source through the shared `entropy::Entropy` trait.
+That is why `Entropy` moved out of `reminders` into its own module — a second user appeared.
+
+**`OrderedJson` had a real bug, exposed here.** Store records ported so far were flat, so
+nested containers were being written **compactly** where Python's `indent=2` indents at
+every level. A project record is not flat. Fixed by converting nested values into real
+nodes — and this mattered beyond the probe, since a memory `source` object would have hit
+the same bug. Residual limit stated rather than hidden: nested object **keys** come out
+sorted, because `serde_json` here has no `preserve_order`.
+
+**Two error-shape details.** `unique_strings(None)` **raises** in the oracle (`list(None)`
+is a `TypeError`), so the port reproduces that and restores the `or []` guard at all six
+call sites — which is what makes the raise unreachable from ported code. And that
+`TypeError` has **no code**; this port reports `invalid_payload` with a matching message, a
+documented mapping rather than an invented code, so the probe compares the message and
+deliberately not the code.
+
+Verified locally:
+- Byte-level parity: **identical MD5 `787f519d69e6b4a295732891fa84777b`**, 76 keys, no
+  differences (11 id shapes, 7 name shapes, 8 document shapes, 13 `_safe_int` shapes, 5
+  `unique_strings` shapes incl. both raises, 9 skills shapes, 6 skill runs incl. one with
+  all thirty fields, saved items and artifacts with generated ids, 5 tolerant reads,
+  `require_project` hit and miss, `list_projects` ordering with an invalid dir and a loose
+  file).
+- `cargo test -p deepseek-policy -- --test-threads=1` -> 206 tests, all pass.
+  **Note:** `mutation_gate::tests::concurrent_scopes_serialize_and_count_exactly` is flaky
+  under the default parallel harness (passes in isolation and serially, twice). This crate
+  already has a known class of process-level shared-state interactions; run the suite with
+  `--test-threads=1` when it matters.
+- `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings` -> clean.
+
+Next: **E2** — `load_cached_file` (self-contained: 32-hex id check, `PROJECTS_DIR/<id>/files`
+path, JSON read, `lru_cache(64)` keyed on `(file_id, mtime_ns)`, `file_index_expired` 410)
+and the two wrappers. Then the data layer is complete and `Branch::is_ported()` can be
+revisited. Nothing is wired.
