@@ -313,9 +313,14 @@ pub fn exclusive_gate(root: &Path) -> Result<ExclusiveGate, GateError> {
         });
     }
 
+    // Recover from poisoning rather than turning it into an error: the oracle's
+    // `threading.RLock` has no poisoning, so treating a poisoned mutex as a gate
+    // failure would introduce a failure mode the oracle does not have. That is the
+    // most likely cause of this test's rare, order-dependent failure, and it is a
+    // fidelity gap either way.
     let process = PROCESS_LOCK
         .lock()
-        .map_err(|error| GateError::misuse(error.to_string()))?;
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let file = OpenOptions::new()
         .read(true)
         .write(true)

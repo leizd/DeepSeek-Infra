@@ -128,24 +128,34 @@ Also faithful: `preview` is capped at **500** in the tool projection but **1800*
 the store; `count` is the sum of the *emitted* files, so it is the count after both
 caps; and `chunks[index]` that is not an object is a 404, not a skip.
 
-## One open item, stated plainly
+## The intermittent gate failure, and the fidelity gap behind it
 
 `mutation_gate::tests::concurrent_scopes_serialize_and_count_exactly` failed **once**
-during this slice and passed on every other run — in isolation, serially, and in two
-full serial runs (214 tests each). The symptom is a thread panicking inside its scope.
+during slice E2 and passed on every other run: in isolation, ten-plus full serial runs
+(214 tests each). The symptom is a thread panicking inside its scope.
 
-The likely cause is parity, not a defect: `lock_exclusive` faithfully reproduces
-`LK_LOCK`'s "retry once a second, give up after ten attempts", so under contention the
-gate **errors** after roughly ten seconds where a plain blocking lock would have waited.
-The oracle behaves the same way. The test's `.unwrap()` turns that refusal into a panic
-instead of a clean assertion.
+It did not reproduce on demand, so rather than shrug I looked for a failure mode this
+port has and the oracle does not. There was one:
 
-This is recorded rather than smoothed over. It is not root-caused, it is not a reason to
-change the lock semantics, and it should be re-examined before the data layer is wired:
+**`std::sync::Mutex` poisons; Python's `threading.RLock` does not.**
 
-- if it is the retry budget, the fix belongs in the *test* (assert on the error instead
-  of unwrapping, or reduce contention);
-- if it is not, something else is sharing state between tests and that matters.
+`exclusive_gate` acquired `PROCESS_LOCK` with `.lock().map_err(...)?`, so once *any*
+thread panicked while holding that mutex, every later acquisition in the process
+returned an error — and `mutation_scope(...).unwrap()` in the test would panic with
+exactly the observed shape. That is a failure mode the oracle cannot have, which makes
+it a fidelity gap regardless of whether it explains this particular failure.
+
+Fixed by **recovering** from poisoning instead of reporting it. The same reasoning
+applies to `MEMORY_LOCK` and `STORE_LOCK`; those call sites already bound the whole
+`LockResult` rather than unwrapping it, so they were tolerant by accident of style —
+now documented as intentional, because it is load-bearing.
+
+**This does not prove it was the cause.** Eleven subsequent full runs pass, which is
+evidence, not proof, so the honest status is "narrowed, not closed". If it recurs, the
+remaining candidate is the gate's `lock_exclusive` retry budget (ten attempts a second
+apart, faithful to `msvcrt.LK_LOCK`, but it means the gate *errors* under sustained
+contention where a plain blocking lock would wait) — in which case the fix belongs in
+the test, not in the lock semantics.
 
 ## What is left
 

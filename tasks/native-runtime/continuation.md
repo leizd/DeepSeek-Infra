@@ -890,3 +890,36 @@ where a plain blocking lock would have waited — the oracle does the same. The 
 `.unwrap()` turns that refusal into a panic. **Not root-caused.** If it is the retry
 budget the fix belongs in the test, not the lock semantics; if it is not, something else
 is sharing state between tests, and that matters. Re-examine before wiring.
+
+**Gate fidelity fix: poisoning is a failure mode the oracle does not have (2026-09-16，uncommitted).**
+
+Follow-up to the open item recorded in E2. The intermittent failure of
+`concurrent_scopes_serialize_and_count_exactly` did **not** reproduce on demand (5 further
+full serial runs, all 214-green), so instead of shrugging I looked for a failure mode this
+port has and the oracle does not. There was one:
+
+**`std::sync::Mutex` poisons; Python's `threading.RLock` does not.**
+
+`exclusive_gate` acquired `PROCESS_LOCK` with `.lock().map_err(...)?`, so once **any**
+thread panicked while holding that mutex, every later acquisition in the process returned
+an error — and `mutation_scope(...).unwrap()` in the test would panic with exactly the
+observed shape. That was a real fidelity gap whether or not it explains this failure.
+
+Fixed: recover from poisoning (`unwrap_or_else(PoisonError::into_inner)`) instead of
+reporting it. The same applies to `MEMORY_LOCK` / `STORE_LOCK`; those call sites already
+bound the whole `LockResult` and so were tolerant by accident of style — now documented as
+intentional, because it is load-bearing.
+
+**Narrowed, not closed.** Eleven subsequent full runs pass. If it recurs, the remaining
+candidate is the gate's `lock_exclusive` retry budget (ten attempts a second apart,
+faithful to `msvcrt.LK_LOCK`, but it means the gate *errors* under sustained contention
+where a plain blocking lock would wait) — in which case the fix belongs in the test, not
+in the lock semantics.
+
+**Wiring-surface measurement (for the next slice).** `deepseek-gateway` already depends on
+`deepseek-policy`, but only uses `PolicyDecision`/`codes` — it does **not** reference
+`tool_dispatch` or `is_ported`. The `Branch` enum already carries all seven data variants
+with `tool_name()` and `branch()` mappings. But **nothing executes them**: no caller
+anywhere invokes `reminders::create_reminder` or `projects::list_project_files`. So wiring
+is not "flip `is_ported()`" — it needs an executor plus routing, and end-to-end
+verification. That is its own slice.

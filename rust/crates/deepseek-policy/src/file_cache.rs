@@ -73,7 +73,10 @@ impl FileCache {
     }
 
     fn get(&self, key: &str) -> Option<Value> {
-        let mut entries = self.entries.lock().ok()?;
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let position = entries.iter().position(|(stored, _)| stored == key)?;
         // `lru_cache` promotes a hit to most-recently-used.
         let entry = entries.remove(position);
@@ -83,9 +86,10 @@ impl FileCache {
     }
 
     fn put(&self, key: String, value: Value) {
-        let Ok(mut entries) = self.entries.lock() else {
-            return;
-        };
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(position) = entries.iter().position(|(stored, _)| *stored == key) {
             entries.remove(position);
         }
@@ -95,9 +99,10 @@ impl FileCache {
 
     /// Drop everything. The oracle has no equivalent; exposed for tests.
     pub fn clear(&self) {
-        if let Ok(mut entries) = self.entries.lock() {
-            entries.clear();
-        }
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 }
 

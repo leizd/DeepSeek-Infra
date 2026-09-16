@@ -72,6 +72,10 @@ pub const RECORD_KEYS_WITH_EXPIRY: [&str; 12] = [
 ];
 
 /// Mirrors `_memory_lock`.
+///
+/// Call sites bind the whole `LockResult` rather than unwrapping it, so a poisoned
+/// mutex is **deliberately** not an error: Python's `threading.RLock` has no poisoning,
+/// so turning one into a failure would add a failure mode the oracle lacks.
 static MEMORY_LOCK: Mutex<()> = Mutex::new(());
 
 /// The scopes `normalize_memory_scope` accepts.

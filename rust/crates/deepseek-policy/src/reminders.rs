@@ -60,6 +60,10 @@ pub const RECORD_KEYS_NOTIFIED: [&str; 7] = [
 
 /// Mirrors `_LOCK`: serializes threads for this process. The cross-process part is
 /// the mutation gate.
+///
+/// Call sites bind the whole `LockResult` rather than unwrapping it, so a poisoned
+/// mutex is **deliberately** not an error: Python's `RLock` has no poisoning, so
+/// turning one into a failure would add a failure mode the oracle lacks.
 static STORE_LOCK: Mutex<()> = Mutex::new(());
 
 // --- paths -----------------------------------------------------------------------
