@@ -842,3 +842,51 @@ Next: **E2** — `load_cached_file` (self-contained: 32-hex id check, `PROJECTS_
 path, JSON read, `lru_cache(64)` keyed on `(file_id, mtime_ns)`, `file_index_expired` 410)
 and the two wrappers. Then the data layer is complete and `Branch::is_ported()` can be
 revisited. Nothing is wired.
+
+**Data layer slice E2: the file-cache read path and the two branch wrappers (2026-09-16，uncommitted).**
+
+`file_cache.rs` + the `list_project_files` / `read_file_chunk` branches in `projects.rs`.
+The measurement held up: `load_cached_file` really is an id-shape check, a path
+derivation, a JSON read and a cache, so the rest of that 1,494-line RAG module stays
+untouched. **The data layer is now complete** — reminders, memory, the shared scorer,
+projects.
+
+Three details that are easy to get wrong, and were:
+
+1. **The `lru_cache(64)` only applies without a project id** — a project-scoped read
+   always re-reads. Key is `(file_id, mtime_ns)`, which is what stops a changed file
+   hitting a stale entry. `FileCache` reproduces the bound and move-to-front-on-hit.
+2. **`if project_id` tests the RAW value, not the stripped one.** A whitespace-only
+   project id is truthy, so it reaches `project_file_cache_dir`'s shape check and fails
+   with a 400 — it does **not** fall back to the global cache. The wrapper
+   (`read_file_chunk`) strips first and passes `None`, so a blank id from the tool *does*
+   use the global path. **Two different behaviours for a blank id, one call apart**; the
+   probe caught my first version collapsing them.
+3. **`int()` here is the bare one, not the store's `_safe_int`.** `"3.7"` and `"abc"`
+   **raise** rather than falling back; a float truncates toward zero; `"1_0"` and
+   `"  8  "` parse. `python_int` is deliberately separate from `safe_int`, with the same
+   documented mapping as the projects `TypeError`.
+
+Also faithful: `preview` is capped at **500** in the tool projection but **1800** in the
+store; `count` sums the *emitted* files (after both caps); a `chunks[index]` that is not
+an object is a 404, not a skip.
+
+Verified locally:
+- Byte-level parity: **identical MD5 `5baaaba2565bed0542b652627891039d`**, 29 keys, no
+  differences — 4 file-id shapes, missing/malformed/scalar indexes, the project-scoped
+  path, the blank-id 400, the `project_file_cache_dir` path, 13 chunk cases (default,
+  explicit, zero, negative, out of range, non-dict chunk, missing/非-list `chunks`,
+  project-scoped, invalid project id), and `list_project_files` named/missing/invalid-id
+  plus the full `list_projects` payload shape with its two caps.
+- `cargo test -p deepseek-policy -j 1 -- --test-threads=1` -> **214 tests, all pass**, run
+  twice.
+
+**One open item, stated plainly.** `mutation_gate::tests::concurrent_scopes_serialize_and_count_exactly`
+failed **once** during this slice and passed on every other run — in isolation, serially,
+and in two full serial runs. The symptom is a thread panicking inside its scope. Likely
+cause is **parity, not a defect**: `lock_exclusive` reproduces `LK_LOCK`'s "retry once a
+second, give up after ten attempts", so under contention the gate **errors** after ~10s
+where a plain blocking lock would have waited — the oracle does the same. The test's
+`.unwrap()` turns that refusal into a panic. **Not root-caused.** If it is the retry
+budget the fix belongs in the test, not the lock semantics; if it is not, something else
+is sharing state between tests, and that matters. Re-examine before wiring.

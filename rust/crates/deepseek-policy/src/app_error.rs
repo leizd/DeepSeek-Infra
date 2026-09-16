@@ -21,6 +21,10 @@ pub mod codes {
     pub const INVALID_REQUEST: &str = "invalid_request";
     /// `ErrorCode.SENSITIVE_CONTENT`
     pub const SENSITIVE_CONTENT: &str = "sensitive_content";
+    /// `ErrorCode.FILE_INDEX_EXPIRED`
+    pub const FILE_INDEX_EXPIRED: &str = "file_index_expired";
+    /// `ErrorCode.INTERNAL`
+    pub const INTERNAL: &str = "internal";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

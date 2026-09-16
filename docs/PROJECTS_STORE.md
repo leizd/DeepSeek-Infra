@@ -1,6 +1,6 @@
 # The projects store, read path (slice E1)
 
-Status: **E1 ported and byte-verified; E2 not started. Nothing is wired.**
+Status: **ported and byte-verified in full (E1 + E2). Nothing is wired.**
 
 This is the last data-layer domain, and it is split in two because the measurement
 showed the two halves have very different dependencies.
@@ -8,7 +8,7 @@ showed the two halves have very different dependencies.
 | | Scope | State |
 | --- | --- | --- |
 | **E1** | the projects store: id validation, the `normalize_*` family, `read_project`, `public_project`, `list_projects` | **ported, byte-verified** |
-| **E2** | `load_cached_file` (the file-cache read path) and the two branch wrappers `list_project_files_tool` / `read_file_chunk_tool` | **not started** |
+| **E2** | `load_cached_file` (the file-cache read path) and the two branch wrappers `list_project_files_tool` / `read_file_chunk_tool` | **ported, byte-verified** |
 
 ## Why the split
 
@@ -99,9 +99,56 @@ top level only.
 - `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings` →
   clean; `cargo fmt` applied.
 
+## E2: the file-cache read path
+
+`load_cached_file` turned out to be what the measurement promised — an id-shape check,
+a path derivation, a JSON read and a cache — so `file_cache.rs` is small and the rest
+of that 1,494-line module stays untouched.
+
+Three details that are easy to get wrong, and were:
+
+- **The `lru_cache(64)` only applies without a project id.** A project-scoped read
+  always re-reads. The cache key is `(file_id, mtime_ns)`, which is what stops a
+  changed file hitting a stale entry, and `FileCache` reproduces both the bound and the
+  move-to-front-on-hit behaviour because the whole point of this migration is that a
+  difference is stated rather than assumed harmless.
+- **`if project_id` tests the raw value, not the stripped one.** A whitespace-only
+  project id is *truthy*, so it reaches `project_file_cache_dir`'s shape check and
+  fails with a 400 — it does **not** fall back to the global cache. The wrapper
+  (`read_file_chunk`) strips before calling and passes `None`, so a blank id from the
+  tool *does* use the global path. Two different behaviours for a blank id, one call
+  apart; the probe caught my first version collapsing them.
+- **`int()` here is the bare one, not the store's `_safe_int`.** So `"3.7"` and `"abc"`
+  **raise** rather than falling back, a float truncates toward zero, and `"1_0"` and
+  `"  8  "` parse. `python_int` is deliberately a separate function from `safe_int`,
+  with the same documented mapping as the projects `TypeError`: a bare Python exception
+  becomes `internal`/500 with a matching message rather than an invented code.
+
+Also faithful: `preview` is capped at **500** in the tool projection but **1800** in
+the store; `count` is the sum of the *emitted* files, so it is the count after both
+caps; and `chunks[index]` that is not an object is a 404, not a skip.
+
+## One open item, stated plainly
+
+`mutation_gate::tests::concurrent_scopes_serialize_and_count_exactly` failed **once**
+during this slice and passed on every other run — in isolation, serially, and in two
+full serial runs (214 tests each). The symptom is a thread panicking inside its scope.
+
+The likely cause is parity, not a defect: `lock_exclusive` faithfully reproduces
+`LK_LOCK`'s "retry once a second, give up after ten attempts", so under contention the
+gate **errors** after roughly ten seconds where a plain blocking lock would have waited.
+The oracle behaves the same way. The test's `.unwrap()` turns that refusal into a panic
+instead of a clean assertion.
+
+This is recorded rather than smoothed over. It is not root-caused, it is not a reason to
+change the lock semantics, and it should be re-examined before the data layer is wired:
+
+- if it is the retry budget, the fix belongs in the *test* (assert on the error instead
+  of unwrapping, or reduce contention);
+- if it is not, something else is sharing state between tests and that matters.
+
 ## What is left
 
-**E2**: `load_cached_file` plus the two wrappers. It needs `write_project` (already
-possible), `project_file_cache_dir`'s `PROJECTS_DIR/<id>/files` layout, the
-`file_index_expired` 410, and the `lru_cache` keyed on mtime. Then the data layer is
-complete and `Branch::is_ported()` can finally be revisited.
+The data layer is now **complete**: reminders, memory, the shared scorer, and projects.
+Nothing is wired, and `Branch::is_ported()` has not been revisited — that, and the round
+loop, is the next piece of work.

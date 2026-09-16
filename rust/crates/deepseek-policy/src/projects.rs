@@ -36,6 +36,7 @@ use serde_json::{Map, Value, json};
 
 use crate::app_error::AppError;
 use crate::entropy::Entropy;
+use crate::file_cache::{FileCache, int_field, load_cached_file, python_int};
 
 /// `MAX_PROJECTS`.
 pub const MAX_PROJECTS: usize = 40;
@@ -290,7 +291,12 @@ fn is_file_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-/// Python truthiness.
+/// Python truthiness, shared with the file-cache read path.
+pub fn is_truthy(value: &Value) -> bool {
+    truthy(Some(value))
+}
+
+/// Python truthiness for an optional value.
 fn truthy(value: Option<&Value>) -> bool {
     match value {
         None | Some(Value::Null) => false,
@@ -703,5 +709,146 @@ pub fn public_project(project: &Value, entropy: &dyn Entropy) -> Result<Value, A
         "artifacts": twenty(normalize_project_artifacts(fields.get("artifacts"))),
         "createdAt": safe_int(fields.get("createdAt"), 0),
         "updatedAt": safe_int(fields.get("updatedAt"), 0),
+    }))
+}
+
+// --- the branches ----------------------------------------------------------------
+
+/// Mirrors `project_document_for_tool`.
+///
+/// The `preview` cap is **500** here, not the store's 1800 — the tool sees less than
+/// the record holds.
+pub fn project_document_for_tool(document: &Value) -> Value {
+    let empty = Map::new();
+    let fields = document.as_object().unwrap_or(&empty);
+    let count = |key: &str| int_field(document, key, 0).unwrap_or(0);
+    json!({
+        "name": python_str(fields.get("name")),
+        "fileId": python_str(fields.get("fileId")),
+        "projectId": python_str(fields.get("projectId")),
+        "kind": python_str(fields.get("kind")).if_empty("text"),
+        "pageCount": count("pageCount"),
+        "charCount": count("charCount"),
+        "chunkCount": count("chunkCount"),
+        "preview": truncate_chars(&python_str(fields.get("preview")), 500),
+    })
+}
+
+/// Mirrors `list_project_files_tool`.
+///
+/// Note the two different caps: at most `MAX_PROJECTS` projects, and within each at
+/// most `MAX_PROJECT_DOCUMENTS` documents. `count` is the sum of the **emitted**
+/// files, so it is the count after both caps.
+pub fn list_project_files(
+    arguments: &Map<String, Value>,
+    root: &Path,
+    entropy: &dyn Entropy,
+) -> Result<Value, AppError> {
+    let safe_project_id = python_str(arguments.get("projectId")).trim().to_string();
+    let projects: Vec<Value> = if safe_project_id.is_empty() {
+        list_projects(root, entropy)?
+    } else {
+        match read_project(&safe_project_id, root, entropy)? {
+            Some(project) => vec![project],
+            // An invalid id already raised a 400 inside `read_project`.
+            None => return Err(AppError::not_found("Project not found")),
+        }
+    };
+
+    let mut payload: Vec<Value> = Vec::new();
+    for project in projects.iter().take(MAX_PROJECTS) {
+        let empty = Map::new();
+        let fields = project.as_object().unwrap_or(&empty);
+        let raw_documents = match fields.get("documents") {
+            Some(Value::Array(items)) => items.clone(),
+            _ => Vec::new(),
+        };
+        let mut documents: Vec<Value> = Vec::new();
+        for document in raw_documents.iter().take(MAX_PROJECT_DOCUMENTS) {
+            if document.is_object() {
+                documents.push(project_document_for_tool(document));
+            }
+        }
+        payload.push(json!({
+            "id": python_str(fields.get("id")),
+            "name": python_str(fields.get("name")),
+            "files": documents,
+        }));
+    }
+    let count: usize = payload
+        .iter()
+        .map(|project| {
+            project
+                .get("files")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0)
+        })
+        .sum();
+    Ok(json!({"projects": payload, "count": count}))
+}
+
+/// Mirrors `read_file_chunk_tool`.
+pub fn read_file_chunk(
+    arguments: &Map<String, Value>,
+    root: &Path,
+    cache: &FileCache,
+) -> Result<Value, AppError> {
+    let file_id = python_str(arguments.get("fileId"));
+    let project_id = python_str(arguments.get("projectId")).trim().to_string();
+    let scoped = if project_id.is_empty() {
+        None
+    } else {
+        Some(project_id.as_str())
+    };
+    let cached = load_cached_file(root, &file_id, scoped, cache)?;
+
+    let chunks: Vec<Value> = match cached.get("chunks") {
+        Some(Value::Array(items)) => items.clone(),
+        _ => Vec::new(),
+    };
+    // `max(1, int(chunk_index or 1)) - 1`: zero and absent both mean the first chunk.
+    let requested = match arguments.get("chunkIndex") {
+        Some(value) if is_truthy(value) => python_int(Some(value))?,
+        _ => 1,
+    };
+    let index = requested.max(1) - 1;
+    if index < 0 || index as usize >= chunks.len() {
+        return Err(AppError::not_found("Chunk not found"));
+    }
+    let chunk = &chunks[index as usize];
+    if !chunk.is_object() {
+        return Err(AppError::not_found("Chunk not found"));
+    }
+
+    // `json!` does not accept a block expression as a value, so the two fallbacks
+    // are computed first.
+    let stored_file_id = python_str(cached.get("id"));
+    let reported_file_id = if stored_file_id.is_empty() {
+        file_id
+    } else {
+        stored_file_id
+    };
+    let stored_project_id = python_str(cached.get("projectId"));
+    let reported_project_id = if stored_project_id.is_empty() {
+        project_id
+    } else {
+        stored_project_id
+    };
+
+    Ok(json!({
+        "file": {
+            "name": python_str(cached.get("name")),
+            "kind": python_str(cached.get("kind")).if_empty("text"),
+            "fileId": reported_file_id,
+            "projectId": reported_project_id,
+            "chunkCount": chunks.len(),
+        },
+        "chunk": {
+            "index": index + 1,
+            "lineStart": int_field(chunk, "lineStart", 0)?,
+            "lineEnd": int_field(chunk, "lineEnd", 0)?,
+            "text": truncate_chars(&python_str(chunk.get("text")), 6000),
+        },
     }))
 }

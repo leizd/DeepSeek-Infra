@@ -11,6 +11,7 @@ pub mod audit;
 pub mod capability;
 pub mod core_utils;
 pub mod entropy;
+pub mod file_cache;
 pub mod file_lock;
 pub mod memory;
 pub mod mutation_gate;
