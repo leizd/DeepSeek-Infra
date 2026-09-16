@@ -195,7 +195,12 @@ class _SidecarHandler(BaseHTTPRequestHandler):
         if self.path == "/v1/chat/completions":
             assert request["stream"] is False
             self._send(
-                {"error": {"code": "NATIVE_CHAT_NOT_READY", "message": "native chat execution is not wired"}},
+                {
+                    "error": {
+                        "code": "NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING",
+                        "message": "native chat upstream credential missing",
+                    }
+                },
                 status=503,
             )
             return
@@ -267,7 +272,7 @@ def test_smoke_exercises_all_offline_sidecar_contracts(sidecar_url: str) -> None
         "metrics",
         "frontend",
         "models_catalog",
-        "chat_fail_closed",
+        "chat_missing_credential",
         "mcp_protocol_preparation",
         "policy",
         "rag",
