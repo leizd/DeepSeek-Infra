@@ -1001,3 +1001,61 @@ root, `""` vs `null` assistant replay, no `memorySuggestions` channel).
 **Next.** The streaming tool loop (SSE round continuation interleaved with
 `system_note`), the web-search provider behind `ExecutorContext.web_search`, and
 the `schema_for_tool` catalog.
+
+**Bug fix: the streamed tool-call accumulator coerced values the Rust way, not Python's
+(2026-09-16，uncommitted).**
+
+Found while checking whether E7's `ToolCallAccumulator` needed anything before the
+streaming loop is built on it. It did — and the accumulator is **committed code from an
+earlier slice**, so these are pre-existing bugs, not fallout from E7.
+
+The oracle reads the delta index through a bare `int()`:
+
+```python
+index = len(accumulator) if index_value is None else int(index_value)
+```
+
+This port read it with `as_i64()`, which is strictly narrower. Measured against the real
+`merge_stream_tool_call_deltas` before changing anything:
+
+| delta | oracle | this port (before) |
+| --- | --- | --- |
+| `"index": "2"` | slot **2** | `len(accumulator)` = 0 |
+| `"index": true` | slot **1** | `len(accumulator)` = 0 |
+| `"index": 2.7` | slot **2** | `len(accumulator)` = 0 |
+| `"id": 123` | `"123"` | placeholder `call_1` |
+
+**The index decides which tool call a fragment lands in.** Sending three of those to
+`len(accumulator)` merges the arguments of unrelated calls into one slot — a wrong tool
+invocation, not a cosmetic difference. The id case is the same class the lenient
+normalizer already guards with a comment ("Reading only string ids here would silently
+renumber such calls"); the accumulator had the gap.
+
+Fixed by using Python's semantics rather than Rust's: `python_int_opt` for the index,
+`python_truthy` + `value_str` for `id` / `type` / `function.name` / `function.arguments`.
+The slot key widened from `usize` to `i64` because `int()` accepts a negative index and
+Python's dict holds one; `sorted()` then orders it first, which the new test pins.
+
+**Consolidation this forced, and that is the real win.** `deepseek-policy` now has one
+implementation of each Python coercion in `core_utils`, used by three call sites:
+`python_int_opt` (the file-cache read path maps its failure to the documented 500; the
+accumulator falls back to the running slot count) and `python_truthy` (the stores,
+the file cache, the accumulator). `file_cache::python_int` and `projects::is_truthy`
+delegate, so their committed APIs are unchanged. Two small corrections fell out of
+writing the shared version: `"1__0"` and a non-finite float are both rejected by Python's
+`int()` and were previously accepted.
+
+Verified:
+- Three new gateway tests pin the measured divergences and the negative-index ordering
+  (`the_index_coerces_the_way_pythons_int_does`,
+  `a_negative_index_orders_before_the_others`,
+  `a_non_string_id_is_stringified_and_a_falsy_one_is_ignored`), plus one in
+  `core_utils` for the shared coercion.
+- `cargo test -p deepseek-gateway -j 1` -> 132 lib + 7 + 6 + 2, all pass.
+- `cargo test -p deepseek-policy -j 1 -- --test-threads=1` -> 224 pass.
+- `cargo clippy` -> only the pre-existing `control_proxy.rs:20`; `cargo fmt --check` clean.
+
+**Not reachable from DeepSeek's own API today** — it sends `index` as a JSON number and
+`id` as a string, so the two implementations agree in practice. That is exactly why it
+was worth fixing rather than noting: the divergence is invisible until a provider
+changes shape, and then it corrupts tool-call assembly instead of failing.

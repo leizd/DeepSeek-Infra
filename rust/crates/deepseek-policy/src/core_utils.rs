@@ -126,6 +126,25 @@ pub fn utc_now_iso(epoch_seconds: i64) -> String {
     )
 }
 
+/// Python truthiness for a JSON value.
+///
+/// Needed wherever the oracle writes `if x:` or `x or fallback` — a shape that
+/// appears in the stores, the file cache and the streaming tool-call accumulator.
+/// Getting it wrong by "obvious" reasoning goes both ways: `0`, `false`, `""`, `[]`
+/// and `{}` are **falsy** (so an `or` chain replaces them), while a non-zero number
+/// and `true` are truthy (so an `or` chain keeps them, and `str()` renders `"5"` /
+/// `"True"`).
+pub fn python_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(flag) => *flag,
+        Value::Number(number) => number.as_f64().is_some_and(|float| float != 0.0),
+        Value::String(text) => !text.is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(fields) => !fields.is_empty(),
+    }
+}
+
 /// The wall clock, injected.
 ///
 /// The oracle's `utc_now_iso()` reads the clock itself and takes no argument. This
@@ -134,6 +153,54 @@ pub fn utc_now_iso(epoch_seconds: i64) -> String {
 pub trait Clock {
     /// The current instant as `utc_now_iso` would render it.
     fn now_iso(&self) -> String;
+}
+
+/// Python's bare `int()`, or `None` where it would raise.
+///
+/// One implementation for the three places that need it: the file-cache read path
+/// (which turns a failure into the documented 500), the streaming tool-call merge
+/// (which falls back to a running count), and anything else that meets a
+/// `lineStart`-style field.
+///
+/// The coercions are the whole point and are easy to get wrong by "doing the
+/// obvious thing":
+///
+/// - a bool is an int (`True` -> 1, `False` -> 0), because `bool` subclasses `int`;
+/// - a float **truncates toward zero**, so `-3.7` -> `-3`, not `-4`;
+/// - a string is trimmed, may carry a sign, and may use single underscores between
+///   digits (`"1_0"` -> 10), but `"3.7"` and `"True"` **raise**;
+/// - `None`, a list and a dict all raise.
+pub fn python_int_opt(value: Option<&Value>) -> Option<i64> {
+    match value? {
+        Value::Bool(flag) => Some(i64::from(*flag)),
+        Value::Number(number) => match number.as_i64() {
+            Some(int) => Some(int),
+            // `int(2.7)` truncates toward zero; `int(nan)`/`int(inf)` raise.
+            None => number
+                .as_f64()
+                .filter(|float| float.is_finite())
+                .map(|float| float.trunc() as i64),
+        },
+        Value::String(text) => {
+            let trimmed = text.trim();
+            let (sign, digits) = match trimmed.strip_prefix('-') {
+                Some(rest) => (-1i64, rest),
+                None => (1i64, trimmed.strip_prefix('+').unwrap_or(trimmed)),
+            };
+            // Python allows `1_0` but not a leading, trailing or doubled underscore.
+            let normalised = digits.replace('_', "");
+            let shape_ok = !normalised.is_empty()
+                && normalised.bytes().all(|byte| byte.is_ascii_digit())
+                && !digits.starts_with('_')
+                && !digits.ends_with('_')
+                && !digits.contains("__");
+            if !shape_ok {
+                return None;
+            }
+            normalised.parse::<i64>().ok().map(|parsed| sign * parsed)
+        }
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
 }
 
 /// The production clock.
@@ -289,6 +356,40 @@ mod tests {
         assert_eq!(score_chunk("rust\n#Title", &tokens), 4);
         // Too many hashes is not a heading.
         assert_eq!(score_chunk("rust\n####### deep", &tokens), 4);
+    }
+
+    /// Pinned against CPython's own `int()`: a bool is an int, a float truncates
+    /// toward zero, and a string may carry a sign and single underscores between
+    /// digits — but `"3.7"`, `"1__0"`, `nan` and `inf` all raise.
+    #[test]
+    fn python_int_opt_matches_pythons_int() {
+        assert_eq!(python_int_opt(Some(&json!(5))), Some(5));
+        assert_eq!(python_int_opt(Some(&json!(-3))), Some(-3));
+        assert_eq!(python_int_opt(Some(&json!(true))), Some(1));
+        assert_eq!(python_int_opt(Some(&json!(false))), Some(0));
+        // Truncation is toward zero, so a negative float is not floored.
+        assert_eq!(python_int_opt(Some(&json!(3.7))), Some(3));
+        assert_eq!(python_int_opt(Some(&json!(-3.7))), Some(-3));
+        assert_eq!(python_int_opt(Some(&json!("12"))), Some(12));
+        assert_eq!(python_int_opt(Some(&json!("  8  "))), Some(8));
+        assert_eq!(python_int_opt(Some(&json!("-4"))), Some(-4));
+        assert_eq!(python_int_opt(Some(&json!("+9"))), Some(9));
+        assert_eq!(python_int_opt(Some(&json!("1_0"))), Some(10));
+        // Everything `int()` rejects.
+        for bad in [
+            json!("3.7"),
+            json!("abc"),
+            json!(""),
+            json!("1__0"),
+            json!("_1"),
+            json!("1_"),
+            Value::Null,
+            json!([1]),
+            json!({"a": 1}),
+        ] {
+            assert_eq!(python_int_opt(Some(&bad)), None, "{bad}");
+        }
+        assert_eq!(python_int_opt(None), None);
     }
 
     #[test]

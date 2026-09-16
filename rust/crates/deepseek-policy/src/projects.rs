@@ -293,19 +293,12 @@ fn is_file_id(value: &str) -> bool {
 
 /// Python truthiness, shared with the file-cache read path.
 pub fn is_truthy(value: &Value) -> bool {
-    truthy(Some(value))
+    crate::core_utils::python_truthy(value)
 }
 
 /// Python truthiness for an optional value.
 fn truthy(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(flag)) => *flag,
-        Some(Value::Number(number)) => number.as_f64().is_some_and(|float| float != 0.0),
-        Some(Value::String(text)) => !text.is_empty(),
-        Some(Value::Array(items)) => !items.is_empty(),
-        Some(Value::Object(fields)) => !fields.is_empty(),
-    }
+    value.is_some_and(crate::core_utils::python_truthy)
 }
 
 /// `_safe_int`, exposed because the parity probe compares it directly.

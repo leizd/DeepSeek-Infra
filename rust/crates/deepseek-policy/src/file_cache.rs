@@ -184,51 +184,31 @@ fn unreadable() -> AppError {
 /// `internal`/500 with a matching message, the same documented mapping used for the
 /// projects `TypeError`.
 pub fn python_int(value: Option<&Value>) -> Result<i64, AppError> {
-    let invalid = || AppError {
-        message: format!(
-            "invalid literal for int() with base 10: '{}'",
-            crate::python_json::value_str(value.unwrap_or(&Value::Null))
-        ),
-        code: codes::INTERNAL,
-        status: 500,
-    };
+    match crate::core_utils::python_int_opt(value) {
+        Some(parsed) => Ok(parsed),
+        None => Err(python_int_failure(value)),
+    }
+}
+
+/// The documented 500 for a value Python's `int()` would reject.
+///
+/// The oracle lets the `ValueError` escape; this reports `internal`/500 with a
+/// matching message, the same documented mapping used for the projects `TypeError`.
+fn python_int_failure(value: Option<&Value>) -> AppError {
     match value {
-        None | Some(Value::Null) => Err(AppError {
+        None | Some(Value::Null) => AppError {
             message: "int() argument must be a string or a number, not 'NoneType'".to_string(),
             code: codes::INTERNAL,
             status: 500,
-        }),
-        Some(Value::Bool(flag)) => Ok(i64::from(*flag)),
-        Some(Value::Number(number)) => {
-            if let Some(int) = number.as_i64() {
-                return Ok(int);
-            }
-            // Python truncates a float toward zero.
-            number
-                .as_f64()
-                .map(|float| float as i64)
-                .ok_or_else(invalid)
-        }
-        Some(Value::String(text)) => {
-            let trimmed = text.trim();
-            let (sign, digits) = match trimmed.strip_prefix('-') {
-                Some(rest) => (-1i64, rest),
-                None => (1i64, trimmed.strip_prefix('+').unwrap_or(trimmed)),
-            };
-            let normalised = digits.replace('_', "");
-            let parseable = !normalised.is_empty()
-                && normalised.chars().all(|c| c.is_ascii_digit())
-                && !digits.starts_with('_')
-                && !digits.ends_with('_');
-            if !parseable {
-                return Err(invalid());
-            }
-            normalised
-                .parse::<i64>()
-                .map(|parsed| sign * parsed)
-                .map_err(|_| invalid())
-        }
-        Some(_) => Err(invalid()),
+        },
+        other => AppError {
+            message: format!(
+                "invalid literal for int() with base 10: '{}'",
+                crate::python_json::value_str(other.unwrap_or(&Value::Null))
+            ),
+            code: codes::INTERNAL,
+            status: 500,
+        },
     }
 }
 

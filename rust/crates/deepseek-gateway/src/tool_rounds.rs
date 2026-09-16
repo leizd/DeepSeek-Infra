@@ -35,6 +35,9 @@
 
 use serde_json::{Map, Value, json};
 
+use deepseek_policy::core_utils::{python_int_opt, python_truthy};
+use deepseek_policy::python_json::value_str;
+
 /// Mirrors `tool_runtime.tools.MAX_TOOL_ROUNDS`.
 ///
 /// The oracle's loop is `for tool_round in range(max_tool_rounds + 2)`, and it
@@ -70,9 +73,20 @@ pub const TOOL_BUDGET_EXHAUSTED_PROMPT: &str = "本轮可用的本地工具调�
 ///   fragments);
 /// - a call slot is created on first sight with the placeholder id
 ///   `call_{index + 1}` and empty name/arguments, and a later delta fills it in.
+///
+/// The coercions are Python's, not Rust's, and the difference is measurable. The
+/// oracle reads the index through a bare `int()`, so `"2"` is slot 2, `true` is slot
+/// 1 and `2.7` is slot 2 — reading only JSON integers would send all three to
+/// `len(accumulator)` and **merge unrelated calls into one slot**. Likewise
+/// `if item.get("id")` is a truthiness test followed by `str()`, so an integer id
+/// `123` becomes `"123"` while `""` leaves the placeholder alone. Both were measured
+/// against `merge_stream_tool_call_deltas` before being fixed here.
+///
+/// The slot key is `i64` rather than `usize` because `int()` accepts a negative
+/// index and Python's dict does too; `sorted()` then orders it first.
 #[derive(Debug, Clone, Default)]
 pub struct ToolCallAccumulator {
-    slots: Vec<(usize, Value)>,
+    slots: Vec<(i64, Value)>,
 }
 
 impl ToolCallAccumulator {
@@ -95,26 +109,18 @@ impl ToolCallAccumulator {
             let Some(object) = item.as_object() else {
                 continue;
             };
-            let index = match object.get("index") {
-                None => self.slots.len(),
-                Some(value) => value
-                    .as_i64()
-                    .and_then(|value| usize::try_from(value).ok())
-                    .unwrap_or(self.slots.len()),
-            };
+            // `int(index_value)`, with `None` and an unparseable value both falling
+            // back to the current slot count.
+            let index = python_int_opt(object.get("index")).unwrap_or(self.slots.len() as i64);
             let slot = self.slot_mut(index);
             let Some(slot_object) = slot.as_object_mut() else {
                 continue;
             };
-            if let Some(id) = object.get("id").and_then(Value::as_str) {
-                if !id.is_empty() {
-                    slot_object.insert("id".to_string(), Value::String(id.to_string()));
-                }
+            if let Some(id) = object.get("id").filter(|value| python_truthy(value)) {
+                slot_object.insert("id".to_string(), Value::String(value_str(id)));
             }
-            if let Some(kind) = object.get("type").and_then(Value::as_str) {
-                if !kind.is_empty() {
-                    slot_object.insert("type".to_string(), Value::String(kind.to_string()));
-                }
+            if let Some(kind) = object.get("type").filter(|value| python_truthy(value)) {
+                slot_object.insert("type".to_string(), Value::String(value_str(kind)));
             }
             let Some(incoming) = object.get("function").and_then(Value::as_object) else {
                 continue;
@@ -125,28 +131,26 @@ impl ToolCallAccumulator {
             else {
                 continue;
             };
-            if let Some(name) = incoming.get("name").and_then(Value::as_str) {
-                if !name.is_empty() {
-                    function.insert("name".to_string(), Value::String(name.to_string()));
-                }
+            if let Some(name) = incoming.get("name").filter(|value| python_truthy(value)) {
+                function.insert("name".to_string(), Value::String(value_str(name)));
             }
-            if let Some(fragment) = incoming.get("arguments").and_then(Value::as_str) {
-                if !fragment.is_empty() {
-                    let existing = function
-                        .get("arguments")
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-                    let mut joined = String::with_capacity(existing.len() + fragment.len());
-                    joined.push_str(existing);
-                    joined.push_str(fragment);
-                    function.insert("arguments".to_string(), Value::String(joined));
-                }
+            if let Some(fragment) = incoming
+                .get("arguments")
+                .filter(|value| python_truthy(value))
+            {
+                let mut joined = function
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                joined.push_str(&value_str(fragment));
+                function.insert("arguments".to_string(), Value::String(joined));
             }
         }
     }
 
     /// The slot for `index`, created with the oracle's placeholder shape.
-    fn slot_mut(&mut self, index: usize) -> &mut Value {
+    fn slot_mut(&mut self, index: i64) -> &mut Value {
         if let Some(position) = self.slots.iter().position(|(slot, _)| *slot == index) {
             return &mut self.slots[position].1;
         }
@@ -171,7 +175,7 @@ impl ToolCallAccumulator {
     /// byte-for-byte so the next request's prefix matches the model's own output
     /// and DeepSeek's prompt cache can reuse it.
     pub fn finalize(&self) -> Vec<Value> {
-        let mut ordered: Vec<&(usize, Value)> = self.slots.iter().collect();
+        let mut ordered: Vec<&(i64, Value)> = self.slots.iter().collect();
         ordered.sort_by_key(|(index, _)| *index);
         let raw: Vec<Value> = ordered.iter().map(|(_, value)| (*value).clone()).collect();
         normalize_tool_calls_lenient(&raw)
@@ -550,6 +554,65 @@ mod tests {
         let calls = accumulator.finalize();
         assert_eq!(calls[0]["id"], "call_3");
         assert_eq!(calls[0]["type"], "function");
+    }
+
+    /// The index goes through Python's bare `int()`, not a JSON-integer reader.
+    ///
+    /// Each of these was measured against `merge_stream_tool_call_deltas` before the
+    /// port was corrected: reading only integers sent all three to
+    /// `len(accumulator)`, which **merges fragments of different calls into one
+    /// slot** — a wrong tool invocation rather than a cosmetic difference.
+    #[test]
+    fn the_index_coerces_the_way_pythons_int_does() {
+        for (index, expected_id) in [
+            (json!("2"), "call_3"),  // int("2") == 2
+            (json!(true), "call_2"), // int(True) == 1
+            (json!(2.7), "call_3"),  // int(2.7) == 2, truncating toward zero
+            (json!(2), "call_3"),
+        ] {
+            let mut accumulator = ToolCallAccumulator::new();
+            accumulator.merge(&json!([{
+                "index": index,
+                "function": {"name": "x", "arguments": "{}"}
+            }]));
+            let calls = accumulator.finalize();
+            assert_eq!(calls.len(), 1, "{index}");
+            assert_eq!(calls[0]["id"], expected_id, "{index}");
+            assert_eq!(calls[0]["function"]["name"], "x", "{index}");
+        }
+    }
+
+    /// A negative index is a valid dict key in Python, so `sorted()` puts it first.
+    #[test]
+    fn a_negative_index_orders_before_the_others() {
+        let mut accumulator = ToolCallAccumulator::new();
+        accumulator.merge(&json!([{"index": 3, "function": {"name": "later", "arguments": "{}"}}]));
+        accumulator
+            .merge(&json!([{"index": -1, "function": {"name": "first", "arguments": "{}"}}]));
+        let names = tool_names(&accumulator.finalize());
+        assert_eq!(names, vec!["first", "later"]);
+    }
+
+    /// `if item.get("id")` is a truthiness test followed by `str()`.
+    ///
+    /// So an integer id is stringified — reading only string ids would silently
+    /// renumber the call — while a falsy id leaves the placeholder alone.
+    #[test]
+    fn a_non_string_id_is_stringified_and_a_falsy_one_is_ignored() {
+        let mut accumulator = ToolCallAccumulator::new();
+        accumulator
+            .merge(&json!([{"index": 0, "id": 123, "function": {"name": "x", "arguments": "{}"}}]));
+        assert_eq!(accumulator.finalize()[0]["id"], "123");
+
+        for falsy in [json!(""), json!(0), json!(false), Value::Null] {
+            let mut accumulator = ToolCallAccumulator::new();
+            accumulator.merge(&json!([{
+                "index": 0,
+                "id": falsy,
+                "function": {"name": "x", "arguments": "{}"}
+            }]));
+            assert_eq!(accumulator.finalize()[0]["id"], "call_1", "{falsy}");
+        }
     }
 
     #[test]
