@@ -34,12 +34,24 @@ pub type WebSearchCallback = dyn Fn(&str, &str) -> Result<Value, ToolFailure>;
 #[derive(Default)]
 pub struct ExecutorContext<'a> {
     pub web_search: Option<&'a WebSearchCallback>,
+    /// The workspace the data branches run against. `None` means the request
+    /// carries no workspace, which the data branches report as "not enabled for
+    /// this request" rather than silently doing nothing.
+    pub workspace: Option<&'a crate::tool_dispatch::WorkspaceContext<'a>>,
 }
 
 impl<'a> ExecutorContext<'a> {
     pub fn with_web_search(callback: &'a WebSearchCallback) -> Self {
         Self {
             web_search: Some(callback),
+            workspace: None,
+        }
+    }
+
+    pub fn with_workspace(workspace: &'a crate::tool_dispatch::WorkspaceContext<'a>) -> Self {
+        Self {
+            web_search: None,
+            workspace: Some(workspace),
         }
     }
 }

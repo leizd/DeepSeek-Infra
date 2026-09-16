@@ -227,8 +227,12 @@ impl Branch {
         }
     }
 
-    /// Whether the branch actually runs. Only `generate_chart` is pure enough to
-    /// port without the packages the others depend on.
+    /// Whether the branch actually runs.
+    ///
+    /// The data-layer branches are the first group that is ported **and reachable
+    /// from the dispatcher**: each one runs against the injected
+    /// [`WorkspaceContext`], so nothing here is a declaration without an
+    /// implementation behind it.
     pub fn is_ported(self) -> bool {
         matches!(
             self,
@@ -236,6 +240,13 @@ impl Branch {
                 | Branch::DataTransform
                 | Branch::WebSearch
                 | Branch::CompareSearchResults
+                | Branch::CreateReminder
+                | Branch::ListReminders
+                | Branch::SuggestMemory
+                | Branch::RecallMemory
+                | Branch::ForgetMemory
+                | Branch::ListProjectFiles
+                | Branch::ReadFileChunk
         )
     }
 
@@ -250,11 +261,13 @@ impl Branch {
             }
             Branch::SearchFiles => Some("infra.rag / search"),
             Branch::FetchUrl => Some("http client + DNS-time SSRF guard"),
-            Branch::SuggestMemory | Branch::RecallMemory | Branch::ForgetMemory => {
-                Some("infra.data.memory")
-            }
-            Branch::CreateReminder | Branch::ListReminders => Some("infra.data.reminders"),
-            Branch::ListProjectFiles | Branch::ReadFileChunk => Some("infra.data.projects"),
+            Branch::SuggestMemory
+            | Branch::RecallMemory
+            | Branch::ForgetMemory
+            | Branch::CreateReminder
+            | Branch::ListReminders
+            | Branch::ListProjectFiles
+            | Branch::ReadFileChunk => None,
             Branch::DataTransform => None,
             Branch::CreateMindmap => Some("infra.tool_runtime.mindmaps"),
             Branch::CreatePptx => Some("infra.tool_runtime.presentations"),
@@ -332,6 +345,19 @@ impl ToolFailure {
             tool: display_tool(name),
             error: error.into(),
             code: INVALID_PAYLOAD.to_string(),
+        }
+    }
+
+    /// A data-layer [`crate::app_error::AppError`].
+    ///
+    /// The oracle's `execute_tool_call` catches `AppError` and builds
+    /// `{ok: false, tool, error: str(exc), code: exc.code.value}`, so the code is
+    /// carried through rather than replaced with `invalid_payload`.
+    pub fn from_app_error(name: &str, error: &crate::app_error::AppError) -> Self {
+        Self {
+            tool: display_tool(name),
+            error: error.message.clone(),
+            code: error.code.to_string(),
         }
     }
 
@@ -503,6 +529,103 @@ impl DispatchOutcome {
     }
 }
 
+// --- the data-layer execution context --------------------------------------------
+
+/// The workspace dependencies the data branches need.
+///
+/// In the oracle these are module-level globals (`config.ROOT`, `secrets`, the
+/// request's `default_memory_scope`, the `local_rag` index) plus per-request keyword
+/// arguments to `execute_tool_call`. Here they are injected, for the same reason
+/// every store in this crate takes its root: a global makes the behaviour untestable
+/// and hides what a branch actually depends on.
+pub struct WorkspaceContext<'a> {
+    /// `config.ROOT` — the store root the data branches read and write under.
+    pub root: &'a std::path::Path,
+    /// `secrets` — ids for reminders, skill runs and saved items.
+    pub entropy: &'a dyn crate::entropy::Entropy,
+    /// `utc_now_iso` — timestamps written into the stores.
+    pub clock: &'a dyn crate::core_utils::Clock,
+    /// The uploaded-file cache, which must persist across calls in a request.
+    pub file_cache: &'a crate::file_cache::FileCache,
+    /// The `local_rag.search_memories_index` bonus. **Not ported**, so this is
+    /// normally `None`, which reproduces the oracle's own `except Exception`
+    /// degradation path. See `docs/MEMORY_STORE.md`.
+    pub vector_hits: Option<&'a crate::memory::VectorHits>,
+    /// The `memory_suggestion_callback`. `None` is not "no suggestion" — the branch
+    /// still builds and returns one; it simply is not notified.
+    pub on_memory_suggestion: Option<&'a dyn Fn(&Value)>,
+    /// The `default_memory_scope` request argument, which the memory branches fall
+    /// back to when the tool call names no scope.
+    pub default_memory_scope: &'a str,
+}
+
+/// The error a data branch reports when the request carries no workspace context.
+///
+/// The oracle has no equivalent — its stores are module globals, so a data branch
+/// always has a root. This is the same shape as `web_search` without its callback:
+/// an explicit "not enabled for this request" rather than a silent no-op.
+fn missing_workspace(tool: &str, branch: Branch) -> ToolFailure {
+    ToolFailure::app(
+        tool,
+        format!(
+            "{} is not enabled for this request: no workspace context",
+            branch.name()
+        ),
+    )
+}
+
+/// Run one data-layer branch, mapping its `AppError` onto the tool envelope.
+fn run_workspace_branch(
+    tool: &str,
+    branch: Branch,
+    object: &Map<String, Value>,
+    context: &crate::tool_search::ExecutorContext<'_>,
+) -> Result<Value, ToolFailure> {
+    let Some(workspace) = context.workspace else {
+        return Err(missing_workspace(tool, branch));
+    };
+    let mapped = |result: Result<Value, crate::app_error::AppError>| {
+        result.map_err(|error| ToolFailure::from_app_error(tool, &error))
+    };
+    match branch {
+        Branch::CreateReminder => mapped(crate::reminders::create_reminder(
+            object,
+            workspace.root,
+            workspace.entropy,
+        )),
+        Branch::ListReminders => Ok(crate::reminders::list_reminders(object, workspace.root)),
+        Branch::SuggestMemory => mapped(crate::memory::suggest_memory(
+            object,
+            workspace.default_memory_scope,
+            workspace.root,
+            workspace.on_memory_suggestion,
+        )),
+        Branch::RecallMemory => Ok(crate::memory::recall_memory(
+            object,
+            workspace.default_memory_scope,
+            workspace.root,
+            workspace.vector_hits,
+        )),
+        Branch::ForgetMemory => mapped(crate::memory::forget_memory(
+            object,
+            workspace.default_memory_scope,
+            workspace.root,
+            workspace.clock,
+        )),
+        Branch::ListProjectFiles => mapped(crate::projects::list_project_files(
+            object,
+            workspace.root,
+            workspace.entropy,
+        )),
+        Branch::ReadFileChunk => mapped(crate::projects::read_file_chunk(
+            object,
+            workspace.root,
+            workspace.file_cache,
+        )),
+        other => Err(missing_workspace(tool, other)),
+    }
+}
+
 /// Run one tool call, mirroring `execute_tool_call`.
 ///
 /// Order: parse arguments, gate, route, envelope + sanitization.
@@ -559,6 +682,13 @@ pub fn dispatch(
         Branch::CompareSearchResults => {
             crate::tool_search::compare_search_results_branch(&object, context)
         }
+        Branch::CreateReminder
+        | Branch::ListReminders
+        | Branch::SuggestMemory
+        | Branch::RecallMemory
+        | Branch::ForgetMemory
+        | Branch::ListProjectFiles
+        | Branch::ReadFileChunk => run_workspace_branch(&tool, branch, &object, context),
         // Unreachable: `is_ported` was checked above.
         other => {
             return DispatchOutcome::Unported {
@@ -708,12 +838,20 @@ mod tests {
             .filter(|branch| branch.is_ported())
             .map(|branch| branch.name())
             .collect();
-        // The four branches with no external package behind them.
+        // The pure branches plus the data-layer branches, which run against the
+        // injected [`WorkspaceContext`]. Order follows `BRANCHES`' declaration.
         assert_eq!(
             ported,
             vec![
                 "web_search",
                 "compare_search_results",
+                "suggest_memory",
+                "create_reminder",
+                "list_reminders",
+                "recall_memory",
+                "forget_memory",
+                "list_project_files",
+                "read_file_chunk",
                 "data_transform",
                 "generate_chart"
             ]
@@ -947,5 +1085,261 @@ mod tests {
             output["result"]["data"][0],
             json!({"label": "a", "value": 1.0})
         );
+    }
+
+    // --- the data branches are reachable from the dispatcher -----------------
+
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct FixedEntropy {
+        ids: AtomicU64,
+    }
+    impl crate::entropy::Entropy for FixedEntropy {
+        fn new_id(&self) -> Result<String, crate::app_error::AppError> {
+            let value = self.ids.fetch_add(1, Ordering::Relaxed) + 1;
+            Ok(format!("{value:016x}"))
+        }
+        fn now_millis(&self) -> i64 {
+            1_760_000_000_000
+        }
+    }
+
+    fn temp_root(label: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "dispatch-test-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create temp root");
+        root
+    }
+
+    macro_rules! ws {
+        ($root:expr, $entropy:expr, $clock:expr, $cache:expr) => {
+            WorkspaceContext {
+                root: $root,
+                entropy: $entropy,
+                clock: $clock,
+                file_cache: $cache,
+                vector_hits: None,
+                on_memory_suggestion: None,
+                default_memory_scope: "global",
+            }
+        };
+    }
+
+    #[test]
+    fn create_reminder_runs_through_dispatch() {
+        let root = temp_root("create-reminder");
+        let entropy = FixedEntropy {
+            ids: AtomicU64::new(0),
+        };
+        let clock = crate::core_utils::FixedClock {
+            epoch_seconds: 1_760_000_000,
+        };
+        let cache = crate::file_cache::FileCache::new();
+        let ws = ws!(&root, &entropy, &clock, &cache);
+        let context = ExecutorContext::with_workspace(&ws);
+        let outcome = dispatch(
+            "create_reminder",
+            &args(json!({"title": "Test", "dueAt": "2026-09-15T10:30:00Z"})),
+            None,
+            None,
+            &context,
+        );
+        let DispatchOutcome::Executed(output) = outcome else {
+            panic!("expected Executed, got {outcome:?}");
+        };
+        assert_eq!(output["ok"], true);
+        assert_eq!(output["tool"], "create_reminder");
+        assert_eq!(output["result"]["title"], "Test");
+        assert_eq!(output["result"]["notified"], false);
+        assert_eq!(
+            std::fs::read_to_string(root.join(".workspace-generation")).unwrap(),
+            "2"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn list_reminders_runs_through_dispatch() {
+        let root = temp_root("list-reminders");
+        let entropy = FixedEntropy {
+            ids: AtomicU64::new(0),
+        };
+        let clock = crate::core_utils::FixedClock {
+            epoch_seconds: 1_760_000_000,
+        };
+        let cache = crate::file_cache::FileCache::new();
+        let ws = ws!(&root, &entropy, &clock, &cache);
+        let context = ExecutorContext::with_workspace(&ws);
+        dispatch(
+            "create_reminder",
+            &args(json!({"title": "Existing", "dueAt": "2026-09-15T10:30:00Z"})),
+            None,
+            None,
+            &context,
+        );
+        let outcome = dispatch("list_reminders", &args(json!({})), None, None, &context);
+        let DispatchOutcome::Executed(output) = outcome else {
+            panic!("expected Executed, got {outcome:?}");
+        };
+        assert_eq!(output["result"]["count"], 1);
+        assert_eq!(output["result"]["reminders"][0]["title"], "Existing");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn suggest_memory_runs_through_dispatch() {
+        let root = temp_root("suggest-memory");
+        let entropy = FixedEntropy {
+            ids: AtomicU64::new(0),
+        };
+        let clock = crate::core_utils::FixedClock {
+            epoch_seconds: 1_760_000_000,
+        };
+        let cache = crate::file_cache::FileCache::new();
+        let ws = ws!(&root, &entropy, &clock, &cache);
+        let context = ExecutorContext::with_workspace(&ws);
+        let outcome = dispatch(
+            "suggest_memory",
+            &args(json!({"content": "I prefer concise answers"})),
+            None,
+            None,
+            &context,
+        );
+        let DispatchOutcome::Executed(output) = outcome else {
+            panic!("expected Executed, got {outcome:?}");
+        };
+        assert_eq!(output["result"]["category"], "preference");
+        assert_eq!(output["result"]["scope"], "global");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn recall_memory_runs_through_dispatch() {
+        let root = temp_root("recall-memory");
+        let entropy = FixedEntropy {
+            ids: AtomicU64::new(0),
+        };
+        let clock = crate::core_utils::FixedClock {
+            epoch_seconds: 1_760_000_000,
+        };
+        let cache = crate::file_cache::FileCache::new();
+        let ws = ws!(&root, &entropy, &clock, &cache);
+        let context = ExecutorContext::with_workspace(&ws);
+        let outcome = dispatch(
+            "recall_memory",
+            &args(json!({"query": "React"})),
+            None,
+            None,
+            &context,
+        );
+        let DispatchOutcome::Executed(output) = outcome else {
+            panic!("expected Executed, got {outcome:?}");
+        };
+        assert_eq!(output["result"]["query"], "React");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn forget_memory_runs_through_dispatch() {
+        let root = temp_root("forget-memory");
+        let entropy = FixedEntropy {
+            ids: AtomicU64::new(0),
+        };
+        let clock = crate::core_utils::FixedClock {
+            epoch_seconds: 1_760_000_000,
+        };
+        let cache = crate::file_cache::FileCache::new();
+        let ws = ws!(&root, &entropy, &clock, &cache);
+        let context = ExecutorContext::with_workspace(&ws);
+        let outcome = dispatch(
+            "forget_memory",
+            &args(json!({"query": "React"})),
+            None,
+            None,
+            &context,
+        );
+        let DispatchOutcome::Executed(output) = outcome else {
+            panic!("expected Executed, got {outcome:?}");
+        };
+        assert_eq!(output["ok"], true);
+        assert_eq!(output["result"]["deleted"], 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn list_project_files_runs_through_dispatch() {
+        let root = temp_root("list-project-files");
+        let entropy = FixedEntropy {
+            ids: AtomicU64::new(0),
+        };
+        let clock = crate::core_utils::FixedClock {
+            epoch_seconds: 1_760_000_000,
+        };
+        let cache = crate::file_cache::FileCache::new();
+        let ws = ws!(&root, &entropy, &clock, &cache);
+        let context = ExecutorContext::with_workspace(&ws);
+        let outcome = dispatch("list_project_files", &args(json!({})), None, None, &context);
+        let DispatchOutcome::Executed(output) = outcome else {
+            panic!("expected Executed, got {outcome:?}");
+        };
+        assert_eq!(output["result"]["projects"], json!([]));
+        assert_eq!(output["result"]["count"], 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn read_file_chunk_runs_through_dispatch() {
+        let root = temp_root("read-file-chunk");
+        let entropy = FixedEntropy {
+            ids: AtomicU64::new(0),
+        };
+        let clock = crate::core_utils::FixedClock {
+            epoch_seconds: 1_760_000_000,
+        };
+        let cache = crate::file_cache::FileCache::new();
+        let file_id = "a".repeat(32);
+        let dir = crate::file_cache::file_cache_dir(&root);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{file_id}.json")),
+            r#"{"name":"f","chunks":[{"lineStart":1,"lineEnd":2,"text":"hello"}]}"#,
+        )
+        .unwrap();
+        let ws = ws!(&root, &entropy, &clock, &cache);
+        let context = ExecutorContext::with_workspace(&ws);
+        let outcome = dispatch(
+            "read_file_chunk",
+            &args(json!({"fileId": file_id, "chunkIndex": 1})),
+            None,
+            None,
+            &context,
+        );
+        let DispatchOutcome::Executed(output) = outcome else {
+            panic!("expected Executed, got {outcome:?}");
+        };
+        assert_eq!(output["result"]["chunk"]["text"], "hello");
+        assert_eq!(output["result"]["file"]["chunkCount"], 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_data_branch_without_a_workspace_reports_not_enabled() {
+        let outcome = dispatch(
+            "create_reminder",
+            &args(json!({})),
+            None,
+            None,
+            &ExecutorContext::default(),
+        );
+        let DispatchOutcome::Unsupported(output) = outcome else {
+            panic!("expected Unsupported, got {outcome:?}");
+        };
+        assert_eq!(output["ok"], false);
+        assert!(output["error"].as_str().unwrap().contains("not enabled"));
     }
 }
