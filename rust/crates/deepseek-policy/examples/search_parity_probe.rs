@@ -10,11 +10,13 @@
 //!     diff <(tr -d '\r' < python.json) <(tr -d '\r' < rust.json)
 
 use deepseek_policy::search::{
-    aggregate_search_rounds, compact_search_tool_result, domain_from_url,
-    normalize_search_query_text, normalize_search_response, normalize_search_url,
-    rerank_search_results, rounds_in_order, search_cache_key, search_domain_filters, search_intent,
-    search_queries_for, search_reason_for_query, search_result_score, search_round_from_cache,
-    search_round_status, should_search_for_query, simplified_retry_query, tavily_options_for_query,
+    Transport, TransportOutcome, aggregate_search_rounds, compact_search_tool_result,
+    domain_from_url, format_upstream_error, normalize_search_query_text, normalize_search_response,
+    normalize_search_url, rerank_search_results, rounds_in_order, search_cache_key,
+    search_domain_filters, search_intent, search_queries_for, search_reason_for_query,
+    search_result_score, search_round_from_cache, search_round_status, search_tavily_with_retry,
+    should_search_for_query, simplified_retry_query, tavily_options_for_query,
+    tavily_request_body_json,
 };
 use serde_json::{Map, Value, json};
 
@@ -256,6 +258,113 @@ fn main() {
     out.insert(
         "round-from-cache::empty".to_string(),
         search_round_from_cache("fallback", &json!({}), 1),
+    );
+
+    // --- the HTTP layer's non-transport half ---------------------------------------
+    //
+    // `search_tavily` is driven through a stub transport: what is compared is the request
+    // that would be sent, the error mapping, and the retry policy — which is where the
+    // logic lives. No network is touched.
+    for (index, query) in [
+        "deepseek",
+        "最新消息",
+        &"x".repeat(600),
+        "python 报错",
+        "政策法规",
+    ]
+    .iter()
+    .enumerate()
+    {
+        out.insert(
+            format!("body::{index}"),
+            json!(tavily_request_body_json(query)),
+        );
+    }
+
+    for (index, raw) in [
+        r#"{"error": {"message": "quota exhausted"}}"#,
+        r#"{"error": {"type": "rate_limited"}}"#,
+        r#"{"error": {"message": "", "type": "x"}}"#,
+        "plain text",
+        "",
+        &"y".repeat(700),
+    ]
+    .iter()
+    .enumerate()
+    {
+        out.insert(
+            format!("format-error::{index}"),
+            json!(format_upstream_error(raw)),
+        );
+    }
+
+    // Each arm of the retry policy, with the transport stubbed. `drive` records the query
+    // each attempt used, so the probe can see the simplified retry query.
+    fn drive(outcomes: Vec<(Option<&'static str>, u16)>) -> Value {
+        // `AppError.code` is `&'static str`; the codes here are literals.
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let observed = std::rc::Rc::clone(&calls);
+        let transport = move |_url: &str, body: &[u8], _headers: &[(&str, &str)]| {
+            let parsed: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let query = parsed
+                .get("query")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let mut recorded = calls.borrow_mut();
+            recorded.push(query.clone());
+            let position = recorded.len() - 1;
+            drop(recorded);
+            let (code, status) = outcomes[position.min(outcomes.len() - 1)];
+            match code {
+                // `Rejected` injects the exact `AppError` a Python stub raises, so the
+                // arm under test is the retry policy rather than the error mapping.
+                Some(code) => TransportOutcome::Rejected(deepseek_policy::app_error::AppError {
+                    message: format!("boom {code}"),
+                    code,
+                    status,
+                }),
+                // The same payload the Python fake feeds through
+                // `normalize_search_response`, keyed on the attempt's own query.
+                None => TransportOutcome::Response {
+                    status,
+                    body: json!({
+                        "query": query,
+                        "answer": "",
+                        "results": [{"url": "https://a.com", "title": "t"}],
+                    })
+                    .to_string()
+                    .into_bytes(),
+                },
+            }
+        };
+        match search_tavily_with_retry("最新消息 价格", "k", &transport as &Transport) {
+            Ok(result) => json!({"calls": *observed.borrow(), "result": result}),
+            Err(error) => {
+                json!({"calls": *observed.borrow(), "raised": error.message, "code": error.code})
+            }
+        }
+    }
+
+    out.insert("retry::ok-first".to_string(), drive(vec![(None, 200)]));
+    out.insert(
+        "retry::ok-after-timeout".to_string(),
+        drive(vec![(Some("upstream_timeout"), 502), (None, 200)]),
+    );
+    out.insert(
+        "retry::ok-after-503".to_string(),
+        drive(vec![(Some("upstream_failure"), 503), (None, 200)]),
+    );
+    out.insert(
+        "retry::both-fail".to_string(),
+        drive(vec![
+            (Some("upstream_timeout"), 502),
+            (Some("upstream_timeout"), 502),
+        ]),
+    );
+    out.insert(
+        "retry::no-retry-on-missing-key".to_string(),
+        drive(vec![(Some("missing_api_key"), 503), (None, 200)]),
     );
 
     let mut encoded =

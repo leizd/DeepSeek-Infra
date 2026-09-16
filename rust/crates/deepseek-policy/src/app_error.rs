@@ -29,6 +29,8 @@ pub mod codes {
     pub const MISSING_API_KEY: &str = "missing_api_key";
     /// `ErrorCode.UPSTREAM_TIMEOUT`
     pub const UPSTREAM_TIMEOUT: &str = "upstream_timeout";
+    /// `ErrorCode.UPSTREAM_FAILURE`
+    pub const UPSTREAM_FAILURE: &str = "upstream_failure";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

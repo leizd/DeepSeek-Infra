@@ -72,6 +72,50 @@ pub fn dumps_compact(value: &Value) -> String {
     }
 }
 
+/// `json.dumps(value)` — default separators **and** `ensure_ascii=True`.
+///
+/// Python's `json.dumps` escapes every non-ASCII character by default, so
+/// `{"query": "最新消息"}` is sent as `{"query": "\u6700\u65b0\u6d88\u606f"}`. That is a
+/// byte-level property of any request body built this way, not a cosmetic one.
+///
+/// The escaping matches CPython exactly: BMP characters become a lowercase `\uXXXX`,
+/// and an astral character becomes a lowercase surrogate **pair**
+/// (`\ud83d\ude00` for U+1F600). Everything ASCII is passed through untouched, and no
+/// escape is ever applied twice because JSON's own escape sequences are ASCII.
+pub fn dumps_default_separators_ascii(value: &Value) -> String {
+    escape_non_ascii(&dumps_default_separators(value))
+}
+
+/// `str`'s rendering with `ensure_ascii=True`, for one value.
+pub fn escaped_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    escape_non_ascii_into(text, &mut out);
+    out
+}
+
+/// Replace every non-ASCII `char` with CPython's `\uXXXX` (or surrogate pair) form.
+pub fn escape_non_ascii(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    escape_non_ascii_into(text, &mut out);
+    out
+}
+
+fn escape_non_ascii_into(text: &str, out: &mut String) {
+    for character in text.chars() {
+        let code = character as u32;
+        if code < 0x80 {
+            out.push(character);
+        } else if code <= 0xFFFF {
+            out.push_str(&format!("\\u{code:04x}"));
+        } else {
+            let adjusted = code - 0x1_0000;
+            let high = 0xD800 + (adjusted >> 10);
+            let low = 0xDC00 + (adjusted & 0x3FF);
+            out.push_str(&format!("\\u{high:04x}\\u{low:04x}"));
+        }
+    }
+}
+
 /// Python's `str(float)` — the shortest round-tripping form.
 ///
 /// Integral values keep a decimal point (`1.0`, not `1`), and values outside

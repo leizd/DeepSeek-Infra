@@ -802,6 +802,242 @@ pub fn save_search_cache(
     std::fs::rename(&temp_path, &path)
 }
 
+// --- the transport ---------------------------------------------------------------
+
+/// `TAVILY_URL`.
+pub const TAVILY_URL: &str = "https://api.tavily.com/search";
+/// `TAVILY_TIMEOUT_SECONDS`.
+pub const TAVILY_TIMEOUT_SECONDS: u64 = 45;
+
+/// What a transport attempt produced.
+///
+/// The two arms mirror the oracle's two `except` clauses, because the *mapping* to an
+/// `AppError` is part of `search_tavily` rather than of the HTTP client. Keeping them
+/// separate is what lets the mapping be verified offline.
+pub enum TransportOutcome {
+    /// A response arrived — any status, with its body.
+    Response { status: u16, body: Vec<u8> },
+    /// The request never completed. `reason` is the transport's own message.
+    Failure { reason: String, timed_out: bool },
+    /// The transport itself already classified the attempt as an `AppError`.
+    ///
+    /// This is the seam the parity probe uses: the Python probe drives the retry policy
+    /// by raising an `AppError` from a stubbed `search_tavily`, so the Rust side has to be
+    /// able to inject one at the same point. Without it the probe would be comparing
+    /// "mapping **and** policy" against Python's "policy alone".
+    Rejected(AppError),
+}
+
+/// Perform one POST. Injected so `search_tavily` stays testable without a network.
+pub type Transport = dyn Fn(&str, &[u8], &[(&str, &str)]) -> TransportOutcome;
+
+/// Mirrors `format_upstream_error`.
+///
+/// An `error.message` (or `error.type`) wins; otherwise the **first 500 characters** of
+/// the raw text, or `DeepSeek API error` when that is empty.
+pub fn format_upstream_error(raw: &str) -> String {
+    if let Ok(parsed) = serde_json::from_str::<Value>(raw) {
+        if let Some(error) = parsed.get("error").and_then(Value::as_object) {
+            // `error.get("message") or error.get("type")` — the `or` tests the **values**'
+            // truthiness, so an empty-string `message` falls through to `type`. Checking
+            // only for the key's presence (or for the rendered text being empty) misses
+            // that: the probe caught `{"message": "", "type": "x"}` returning the whole raw
+            // text instead of `x`.
+            let message = error
+                .get("message")
+                .filter(|value| python_truthy(value))
+                .or_else(|| error.get("type").filter(|value| python_truthy(value)));
+            if let Some(message) = message {
+                return crate::python_json::value_str(message);
+            }
+        }
+    }
+    let truncated: String = raw.chars().take(500).collect();
+    if truncated.is_empty() {
+        "DeepSeek API error".to_string()
+    } else {
+        truncated
+    }
+}
+
+/// Mirrors the request body `search_tavily` assembles.
+///
+/// The key order is the oracle's dict-merge order — `query` first, then the options in
+/// their insertion order, then the domain filters — because the body is serialized and
+/// sent. `search_depth`, `include_answer` and `include_raw_content` are **updated in
+/// place** by the intent rules, so they keep their original positions rather than moving
+/// to the end.
+///
+/// Serialized with default separators and `ensure_ascii=True`, matching
+/// `json.dumps(request_body)`.
+pub fn tavily_request_body_json(query: &str) -> String {
+    let options = tavily_options_for_query(query);
+    let filters = search_domain_filters(query);
+    let order = [
+        "query",
+        "topic",
+        "search_depth",
+        "max_results",
+        "include_answer",
+        "include_raw_content",
+        "include_images",
+        "include_favicon",
+    ];
+
+    let mut merged = Map::new();
+    // `query[:500]` — truncated by characters, as Python slices strings.
+    merged.insert(
+        "query".to_string(),
+        json!(query.chars().take(500).collect::<String>()),
+    );
+    if let Some(fields) = options.as_object() {
+        for (key, value) in fields {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    if let Some(fields) = filters.as_object() {
+        for (key, value) in fields {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    let mut emitted: Vec<&str> = Vec::new();
+    for key in order {
+        if let Some(value) = merged.get(key) {
+            parts.push(format!(
+                "{}: {}",
+                crate::python_json::escaped_string(&format!("\"{key}\"")),
+                crate::python_json::dumps_default_separators_ascii(value)
+            ));
+            emitted.push(key);
+        }
+    }
+    // Anything the options or filters added that is not in the declared order goes last,
+    // in sorted order — so a schema drift shows up instead of being dropped.
+    for (key, value) in &merged {
+        if emitted.contains(&key.as_str()) {
+            continue;
+        }
+        parts.push(format!(
+            "{}: {}",
+            crate::python_json::dumps_default_separators_ascii(&json!(key)),
+            crate::python_json::dumps_default_separators_ascii(value)
+        ));
+    }
+    format!("{{{}}}", parts.join(", "))
+}
+
+/// Mirrors `search_tavily`.
+///
+/// A missing key is a 503 `missing_api_key`; a non-2xx response is an
+/// `upstream_failure` whose status is `min(status, 502)`; and a transport failure is
+/// `upstream_timeout` when the reason mentions a timeout, otherwise `upstream_failure`,
+/// both at 502. The successful body is passed through [`normalize_search_response`].
+pub fn search_tavily(
+    query: &str,
+    tavily_api_key: &str,
+    transport: &Transport,
+) -> Result<Value, AppError> {
+    let api_key = tavily_api_key.trim();
+    if api_key.is_empty() {
+        return Err(AppError {
+            message: "Tavily search is not configured. Set TAVILY_API_KEY or provide tavilyApiKey in the request."
+                .to_string(),
+            code: codes::MISSING_API_KEY,
+            status: 503,
+        });
+    }
+
+    let body = tavily_request_body_json(query);
+    let headers = [
+        ("Authorization", format!("Bearer {api_key}")),
+        ("Content-Type", "application/json".to_string()),
+        ("Accept", "application/json".to_string()),
+    ];
+    let header_refs: Vec<(&str, &str)> = headers
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect();
+
+    match transport(TAVILY_URL, body.as_bytes(), &header_refs) {
+        TransportOutcome::Response { status, body } => {
+            if !(200..300).contains(&status) {
+                let detail = String::from_utf8_lossy(&body);
+                return Err(AppError {
+                    message: format!("Tavily search failed: {}", format_upstream_error(&detail)),
+                    code: codes::UPSTREAM_FAILURE,
+                    status: status.min(502),
+                });
+            }
+            let parsed: Value = serde_json::from_slice(&body).map_err(|_| AppError {
+                message: "Tavily search failed: malformed response".to_string(),
+                code: codes::UPSTREAM_FAILURE,
+                status: 502,
+            })?;
+            Ok(normalize_search_response(query, &parsed))
+        }
+        TransportOutcome::Rejected(error) => Err(error),
+        TransportOutcome::Failure { reason, timed_out } => Err(AppError {
+            message: format!("Cannot reach Tavily API: {reason}"),
+            code: if timed_out {
+                codes::UPSTREAM_TIMEOUT
+            } else {
+                codes::UPSTREAM_FAILURE
+            },
+            status: 502,
+        }),
+    }
+}
+
+/// Mirrors `search_tavily_with_retry`.
+///
+/// One retry, on a simplified query, and only when [`should_retry_tavily_error`] says so
+/// and the simplification actually differs from the original. Note the two different
+/// failure shapes: if the retry **also** fails this returns an error *round status* as a
+/// value (so the caller records it as a round), whereas a retry that is not worth
+/// attempting re-raises the original error.
+pub fn search_tavily_with_retry(
+    query: &str,
+    tavily_api_key: &str,
+    transport: &Transport,
+) -> Result<Value, AppError> {
+    let first = match search_tavily(query, tavily_api_key, transport) {
+        Ok(value) => return Ok(value),
+        Err(error) => error,
+    };
+
+    let retry_query = simplified_retry_query(query);
+    if retry_query.is_empty()
+        || retry_query.to_lowercase() == normalize_search_query_text(query).to_lowercase()
+        || !should_retry_tavily_error(&first)
+    {
+        return Err(first);
+    }
+
+    match search_tavily(&retry_query, tavily_api_key, transport) {
+        Ok(mut retried) => {
+            retried["query"] = json!(normalize_search_query_text(query));
+            retried["retried"] = json!(true);
+            retried["retryQuery"] = json!(retry_query);
+            retried["originalError"] = json!(first.message);
+            Ok(retried)
+        }
+        Err(retry_error) => {
+            let mut status = search_round_status(
+                query,
+                0,
+                "error",
+                &format!("{}; retry failed: {}", first.message, retry_error.message),
+            );
+            status["retried"] = json!(true);
+            status["retryQuery"] = json!(retry_query);
+            status["retryError"] = json!(retry_error.message);
+            Ok(status)
+        }
+    }
+}
+
 // --- helpers ---------------------------------------------------------------------
 
 /// `str(value or "")`, the oracle's stringification.

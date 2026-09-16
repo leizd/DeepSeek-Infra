@@ -1365,3 +1365,67 @@ so only the wiring is missing). Verification for that slice is a **stub upstream
 the live path measured ~5% availability — one clean `http=200` in roughly forty attempts,
 amid 308/405/400/301/502/522 from the proxy and its intermediaries. A real-call check stays
 a one-off confirmation, not a regression test.
+
+**Tavily HTTP layer ported, with the transport injected (2026-09-16，uncommitted).**
+
+`search.rs` now carries `search_tavily`, `search_tavily_with_retry`, `format_upstream_error`
+and the request-body assembly. That completes the module's non-cryptographic surface: what
+is still missing is only the **client**, not the logic.
+
+**The transport is a parameter, not a call.** `search_tavily(query, api_key, transport)`
+takes a `dyn Fn(&str, &[u8], &[(&str, &str)]) -> TransportOutcome`, so the whole path —
+body assembly, header construction, status mapping, response normalization, retry policy —
+runs offline. That is what made the parity probe possible without a network, and it is why
+the measured ~5% link availability does not block this slice.
+
+`TransportOutcome` has three arms on purpose: `Response` (any status, with its body),
+`Failure { reason, timed_out }` (the request never completed — the oracle's `URLError`
+branch), and `Rejected(AppError)`. The third exists **for the probe**: the Python probe
+drives the retry policy by raising an `AppError` from a stubbed `search_tavily`, so without
+it the Rust side would be comparing "error mapping **and** retry policy" against Python's
+"retry policy alone". The arm makes the layers line up.
+
+**A real divergence, caught by the probe.** `format_upstream_error` is:
+
+```python
+message = error.get("message") or error.get("type")
+if message: return str(message)
+```
+
+The `or` tests the **values' truthiness**, so `{"error": {"message": "", "type": "x"}}`
+returns `"x"`. My first version checked the key's presence and then whether the rendered
+text was empty, which fell through to the raw text instead. Fixed to filter both lookups
+through `python_truthy`.
+
+**A byte-level detail worth naming: `json.dumps` defaults to `ensure_ascii=True`.** The
+request body sends `{"query": "\u6700\u65b0\u6d88\u606f"}`, not the raw UTF-8. Escaping is
+CPython's exactly — BMP as a lowercase `\uXXXX`, an astral character as a lowercase
+surrogate **pair** (`\ud83d\ude00`). Added `dumps_default_separators_ascii` /
+`escape_non_ascii` to `python_json` for it. This is not cosmetic for a request body: the
+bytes are what leave the process.
+
+The body's **key order** is the oracle's dict-merge order — `query`, then the options in
+their insertion order, then the filters — and `search_depth` / `include_answer` /
+`include_raw_content` are *updated in place* by the intent rules, so they keep their
+positions rather than moving to the end. `tavily_request_body_json` renders that order
+explicitly, so the probe compares the bytes rather than a re-serialization.
+
+**Two probe-side fixes, so the comparison is honest.** Python's f-string renders an enum
+*member* (`ErrorCode.UPSTREAM_TIMEOUT`), not its value, so the stub messages had to use
+`code.value`. And the Python fake replaces the whole `search_tavily`, so it has to apply
+`normalize_search_response` itself — otherwise the two sides are compared at different
+layers and the response bodies diverge for a reason that is not the implementation's.
+
+Verified:
+- **Search parity holds**: identical MD5 `b5077e1e730dfac3ffde3e024c6094cf`, **113 keys**
+  (up from 97), no differences. The HTTP additions are five request bodies — including a
+  600-character query, which exercises the `[:500]` truncation — six
+  `format_upstream_error` inputs, and five retry-policy drives (first-call success, retry
+  after a timeout, retry after a 503, both attempts failing, and a missing key that must
+  **not** be retried).
+
+**What is left.** A concrete `Transport` (a `reqwest::blocking` client honouring
+`TAVILY_TIMEOUT_SECONDS`), the shared clock for the three cache functions, and the
+`ExecutorContext.web_search` callback that binds them — the seam already exists, so this is
+wiring rather than logic. Verification stays a **stub upstream**; a live call is a one-off
+confirmation, since the measured link was one clean `http=200` in roughly forty attempts.
