@@ -1117,3 +1117,50 @@ Verified:
   the oracle continues. The unit tests are the right level for it.
 - `cargo clippy -p deepseek-gateway --all-targets -- -D warnings` -> only the
   pre-existing `control_proxy.rs:20`; `cargo fmt --check` clean.
+
+**Streaming slice, step 2: the round loop. The refusal is gone (2026-09-16，uncommitted).**
+
+`streaming_response` now runs the tool rounds, so `NATIVE_CHAT_TOOL_ROUNDS_NOT_READY` is
+deleted rather than kept as a seam. Streaming clients get the same round continuation the
+non-streaming path has had since E7.
+
+The shape mirrors `stream_deepseek`'s `for tool_round in range(max_tool_rounds + 2)`:
+
+- each round streams one upstream turn, forwarding `content` as it arrives while
+  accumulating the `tool_calls` fragments into the existing `ToolCallAccumulator`;
+- at the end of the round `finalize()` + `decide_round` decide: no calls → the stop frame
+  and the loop ends; budget spent → `force_final_answer_without_tools` and one more turn;
+  otherwise → `executor.run_round` + `append_tool_exchange` and **a fresh upstream request
+  opened from inside the generator** (a response body is single-shot, so every further
+  round is a new request);
+- `decode_event`'s per-chunk deltas are handled inline rather than through a helper,
+  because the generator has to `yield` between them and a helper cannot yield on its
+  behalf. That deleted `forward_line` and the refusal constant, and an obsolete test.
+
+The round decision, the exchange assembly, the tool execution and the usage merge are the
+**same functions** the non-streaming loop calls, so the two transports cannot drift.
+
+**What is deliberately not emitted.** The oracle's `system_note`s (`正在调用本地工具…`, the
+budget notice, the `finish_reason: "length"` truncation notice) never reach this endpoint:
+`openai_chat_stream` maps only `content`, `done` and `error`. Same for the per-round `usage`
+— the facade's frames carry no usage field. Both are still decoded, so the loop is not
+reading a shape it cannot see, but they have no wire effect here.
+
+**Verification.** The new `streaming_continues_a_tool_call_round` drives the real
+`/v1/chat/completions` route against a per-request stub upstream and asserts four things:
+both rounds' content arrives in order; there is no error frame; the reminder was actually
+written under `DEEPSEEK_INFRA_ROOT`; and **the second upstream request carries the
+exchange** — the assistant `tool_calls`, the `tool_call_id` and the tool result content.
+That last assertion is the one that would catch a loop that ran but replayed nothing.
+
+- `cargo test -p deepseek-gateway -j 1` -> 133 lib + 7 + 6 + 1 + 1, all pass.
+- `cargo clippy -p deepseek-gateway --all-targets -- -D warnings` -> only the pre-existing
+  `control_proxy.rs:20`.
+
+**The intermittent gate failure recurred, and the poisoning fix was not the cause.**
+`mutation_gate::tests::concurrent_scopes_serialize_and_count_exactly` failed once more
+(223 passed, 1 failed, `--test-threads=1`) and then passed three runs in a row. That was
+the honest label's payoff: it was recorded as "narrowed, not closed" precisely because the
+poisoning gap was a real fidelity bug but never proven to be *this* failure. Now it is
+disproven as the sole cause. Not captured this time (the reruns were green); the next
+occurrence needs the panic message, which the earlier note never managed to record.

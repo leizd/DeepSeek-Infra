@@ -499,46 +499,6 @@ async fn streaming_upstream_failure_surfaces_as_http_status_not_a_frame() {
     assert_eq!(parsed["error"]["type"], "upstream_error");
 }
 
-/// A streaming turn that ends in `tool_calls` cannot be continued by this slice,
-/// so it must fail rather than emit the tool round's prose as a final answer.
-#[tokio::test]
-async fn streaming_refuses_a_tool_call_turn_instead_of_flattening_it() {
-    let _env = EnvLock::acquire();
-    let sink: Sink = Arc::new(Mutex::new(Captured::default()));
-    let upstream = stub_sse_upstream(
-        vec![
-            concat!(
-                r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"id":"call-1"}]}}]}"#,
-                "\n\n"
-            )
-            .to_string(),
-            "data: [DONE]\n\n".to_string(),
-        ],
-        StatusCode::OK,
-        sink,
-    );
-    let url = start_stub(upstream).await;
-    let _guard = EnvGuard::set(&[
-        ("DEEPSEEK_API_URL", &url),
-        ("DEEPSEEK_API_KEY", "test-upstream-key"),
-    ]);
-
-    let response = post_streaming_chat(
-        r#"{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hi"}],"stream":true}"#,
-    )
-    .await;
-
-    // The role frame is already on the wire by the time the tool round is seen,
-    // so the refusal travels in-band as an error frame — not as a silent stop.
-    assert_eq!(response.status, StatusCode::OK);
-    assert!(
-        response.body.contains("\"type\":\"upstream_error\""),
-        "a tool round must be refused in-band: {}",
-        response.body
-    );
-    assert!(response.body.ends_with("data: [DONE]\n\n"));
-}
-
 /// Streaming is a transport choice on the native chat route. The route-level
 /// consequence is that the request is accepted and only fails on the real
 /// upstream condition, while the public non-streaming preparation contract is
@@ -576,5 +536,142 @@ async fn streaming_is_forwarded_by_chat_preparation_not_refused() {
             .and_then(|b| b.get("stream"))
             .and_then(|v| v.as_bool()),
         Some(true)
+    );
+}
+
+/// Upstream stand-in that serves a **different** SSE body per request.
+///
+/// The round loop opens a fresh upstream for every round, so a fixed-chunk stub
+/// can only ever exercise the first one. `bodies` is indexed by request number
+/// and every request body is captured, which is what lets a test assert what the
+/// loop actually replayed upstream.
+fn stub_sse_upstream_rounds(
+    bodies: Vec<Vec<String>>,
+    sink: Arc<Mutex<Vec<serde_json::Value>>>,
+) -> Router {
+    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    Router::new().route(
+        "/chat/completions",
+        post(move |body: String| {
+            let sink = sink.clone();
+            let bodies = bodies.clone();
+            let counter = counter.clone();
+            async move {
+                let index = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+                    sink.lock().unwrap().push(parsed);
+                }
+                let chunks = bodies
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| vec!["data: [DONE]\n\n".to_string()]);
+                let stream =
+                    futures_util::stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
+                (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/event-stream")],
+                    Body::from_stream(stream),
+                )
+                    .into_response()
+            }
+        }),
+    )
+}
+
+/// A streaming turn that ends in `tool_calls` **continues the round**: the tool
+/// runs, the exchange is replayed upstream, and the next round's content reaches
+/// the client.
+///
+/// This replaces a test that asserted the refusal. The oracle continues the round
+/// here (`for tool_round in range(max_tool_rounds + 2)`), so refusing was a
+/// degradation rather than a contract.
+#[tokio::test]
+async fn streaming_continues_a_tool_call_round() {
+    let _env = EnvLock::acquire();
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().to_path_buf();
+
+    let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let upstream = stub_sse_upstream_rounds(
+        vec![
+            // Round 1: the model asks for a reminder, then the round ends. The
+            // arguments arrive split across two chunks, as a provider streams them.
+            vec![
+                concat!(
+                    r#"data: {"choices":[{"index":0,"delta":{"content":"let me note that"}}]}"#,
+                    "\n\n"
+                )
+                .to_string(),
+                concat!(
+                    r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"create_reminder","arguments":"{\"title\":\"buy milk\""}}]}}]}"#,
+                    "\n\n"
+                )
+                .to_string(),
+                concat!(
+                    r#"data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":",\"dueAt\":\"2027-01-01T09:00:00Z\"}"}}]},"finish_reason":"tool_calls"}]}"#,
+                    "\n\n"
+                )
+                .to_string(),
+                "data: [DONE]\n\n".to_string(),
+            ],
+            // Round 2: the final answer, after the tool result came back.
+            vec![
+                concat!(
+                    r#"data: {"choices":[{"index":0,"delta":{"content":"Reminder saved."}}]}"#,
+                    "\n\n"
+                )
+                .to_string(),
+                "data: [DONE]\n\n".to_string(),
+            ],
+        ],
+        requests.clone(),
+    );
+    let url = start_stub(upstream).await;
+    let _guard = EnvGuard::set(&[
+        ("DEEPSEEK_API_URL", &url),
+        ("DEEPSEEK_API_KEY", "test-upstream-key"),
+        ("DEEPSEEK_INFRA_ROOT", root.to_str().unwrap()),
+    ]);
+
+    let response = post_streaming_chat(
+        r#"{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"remind me"}],"stream":true}"#,
+    )
+    .await;
+
+    assert_eq!(response.status, StatusCode::OK);
+    // Both rounds' content reached the client, in order.
+    let body = &response.body;
+    let first = body.find("let me note that").expect("round 1 content");
+    let second = body.find("Reminder saved.").expect("round 2 content");
+    assert!(first < second, "rounds must arrive in order: {body}");
+    // No refusal, and the stream still terminates properly.
+    assert!(
+        !body.contains("\"type\":\"upstream_error\""),
+        "a tool round must be continued, not refused: {body}"
+    );
+    assert!(body.ends_with("data: [DONE]\n\n"));
+
+    // The tool actually ran against the injected workspace.
+    let store = root.join(".reminders").join("reminders.json");
+    assert!(store.exists(), "the round must have written the reminder");
+    let stored = std::fs::read_to_string(&store).unwrap();
+    assert!(stored.contains("buy milk"), "stored: {stored}");
+
+    // Two upstream requests, and the second one carries the exchange: the
+    // assistant turn that called the tool, plus the tool result.
+    let sent = requests.lock().unwrap();
+    assert_eq!(sent.len(), 2, "one upstream request per round");
+    let second_body = serde_json::to_string(&sent[1]).unwrap();
+    assert!(
+        second_body.contains("\"tool_calls\""),
+        "the assistant turn must be replayed: {second_body}"
+    );
+    assert!(
+        second_body.contains("tool_call_id"),
+        "the tool result must be replayed: {second_body}"
+    );
+    assert!(
+        second_body.contains("buy milk"),
+        "the tool result content must be replayed: {second_body}"
     );
 }

@@ -518,7 +518,13 @@ async fn chat_completions(body: Bytes) -> Result<Response, (StatusCode, Json<ser
             .await
             .map_err(chat_execution_error)?;
         let created = now_unix_seconds();
-        return Ok(chat_stream::streaming_response(upstream, &model, created));
+        // Per request, exactly as on the non-streaming path: the executor's file
+        // cache has to persist across this request's tool rounds, and the
+        // workspace root and policy profile come from the server environment.
+        let executor = chat_tool_loop::ToolRoundExecutor::from_env();
+        return Ok(chat_stream::streaming_response(
+            config, prepared, executor, upstream, &model, created,
+        ));
     }
     // The tool executor is per request: its file cache persists across this
     // request's calls, which is the WorkspaceContext contract. The workspace

@@ -28,31 +28,23 @@
 //! - the `system_note`/`search`/`memory_suggestion` event kinds, which the
 //!   OpenAI facade drops anyway but `/api/chat` (NDJSON) does surface
 //!
-//! A streaming response whose upstream turn contains `tool_calls` is refused
-//! with `NATIVE_CHAT_TOOL_ROUNDS_NOT_READY` rather than emitting the tool-call
-//! round's prose as if it were the final answer, which would be a silent
-//! behavior change against the oracle. The *non-streaming* path runs the same
-//! rounds through `chat_tool_loop` now; continuing them mid-stream (where the
-//! round's frames interleave with the SSE emission the oracle interleaves them
-//! with) is the streaming slice's own seam.
+//! A streaming response whose upstream turn contains `tool_calls` continues the
+//! round, exactly as the non-streaming path does: [`streaming_response`] runs the
+//! same `decide_round` / `append_tool_exchange` machinery, opens a fresh upstream
+//! for each further round from inside the response body, and forwards every
+//! round's `content` as it arrives.
 //!
-//! One part of that seam is already in place: [`decode_event`] returns **every**
-//! delta a chunk carries, in the oracle's order, because the round loop will need
-//! the `tool_calls` fragments alongside the same chunk's `content`. The earlier
-//! single-delta shape had to choose, and it chose `tool_calls` — silently dropping
-//! the text that belongs in that round's assistant message. The refusal still
-//! happens, but it now comes *after* the content the model produced.
+//! [`decode_event`] returns **every** delta a chunk carries, in the oracle's order,
+//! because a round-ending chunk legitimately carries `tool_calls` *and* the content
+//! that belongs in that round's assistant message. The earlier single-delta shape
+//! had to choose, and it chose `tool_calls` — silently dropping text the model
+//! produced, which is also the text `append_tool_exchange` replays upstream.
 
 use axum::body::{Body, Bytes};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
-
-/// The refusal code for a streaming tool round: the one shape this transport
-/// still cannot continue. Kept as a literal so the wire contract is visible at
-/// the emission site.
-const STREAM_TOOL_ROUNDS_NOT_READY: &str = "NATIVE_CHAT_TOOL_ROUNDS_NOT_READY";
 
 /// One decoded upstream delta, in the vocabulary the OpenAI facade forwards.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,8 +73,8 @@ pub enum UpstreamDelta {
     /// the assistant message's `tool_calls`.
     ///
     /// Streamed to the client as nothing — a tool-call round is not forwarded — but
-    /// the round loop consumes it. Until that loop exists this chunk still ends the
-    /// stream, and [`forward_line`] says so after forwarding the chunk's own content.
+    /// the round loop consumes it to build the assistant message the next round
+    /// replays upstream.
     ToolCalls(Value),
     /// `usage` on this chunk, accumulated across rounds by the loop.
     Usage(Value),
@@ -438,7 +430,7 @@ fn push_json_field(out: &mut String, key: &str, value: &Value, first: bool) {
     out.push_str(&serde_json::to_string(value).expect("serializing a Value cannot fail"));
 }
 
-/// Build the downstream SSE response for an already-opened upstream stream.
+/// Build the downstream SSE response, running the tool rounds the stream needs.
 ///
 /// The frame sequence is exactly `openai_api.openai_chat_stream`'s:
 ///
@@ -455,121 +447,161 @@ fn push_json_field(out: &mut String, key: &str, value: &Value, first: bool) {
 /// Backpressure is real, not nominal: the body is an `async_stream` generator
 /// that only advances when the consumer polls it, so an upstream chunk is read
 /// only when the previous frames have been handed downstream. Memory therefore
-/// stays O(one line), not O(response).
+/// stays O(one line per round), not O(response).
 ///
 /// The `[DONE]` frame is *always* emitted — including after an error — because
 /// the oracle's generator reaches its `yield b"data: [DONE]\n\n"` statement
 /// after `break`-ing out of the error path too. Withholding it would make a
 /// client wait for a terminator that never arrives.
-pub fn streaming_response(upstream: reqwest::Response, model: &str, created: i64) -> Response {
+///
+/// # The round loop
+///
+/// Mirrors `stream_deepseek`'s `for tool_round in range(max_tool_rounds + 2)`.
+/// Each round streams one upstream turn, forwarding its `content` as it arrives,
+/// while accumulating the `tool_calls` fragments. When the round ends the calls
+/// are finalized and [`crate::tool_rounds::decide_round`] decides:
+///
+/// - no calls — the answer is final, so the stop frame goes out and the loop ends;
+/// - the budget is spent — one more turn with tools disabled, then its content
+///   streams like any other round;
+/// - otherwise — the tools run, the exchange is appended to the body, and the
+///   **next upstream request is opened from inside the generator**. A response
+///   body is single-shot, so every further round is a fresh request.
+///
+/// The round decision, the exchange assembly and the tool execution are the same
+/// functions the non-streaming loop uses, so the two transports cannot drift.
+///
+/// # What is deliberately not emitted
+///
+/// The oracle's `system_note`s (`正在调用本地工具…`, the budget notice, the
+/// `finish_reason: "length"` truncation notice) are **not** forwarded, because
+/// `openai_chat_stream` maps only `content`, `done` and `error` — everything else
+/// it consumes. For the same reason the per-round `usage` merge has no wire
+/// effect here: the facade's frames carry no usage field. Both are still decoded
+/// (see [`decode_event`]) so the loop is not reading a shape it cannot see.
+pub fn streaming_response(
+    config: crate::chat_execution::UpstreamConfig,
+    prepared: Value,
+    executor: crate::chat_tool_loop::ToolRoundExecutor,
+    upstream: reqwest::Response,
+    model: &str,
+    created: i64,
+) -> Response {
     let encoder =
         StreamChunkEncoder::new(format!("chatcmpl-{created}"), created, model.to_string());
     let body_stream = async_stream::stream! {
+        use crate::tool_rounds::{RoundDecision, ToolCallAccumulator};
+
         yield Ok::<Bytes, std::io::Error>(Bytes::from(encoder.role_frame()));
-        let mut pending = Vec::<u8>::new();
-        let mut event_name = String::from("message");
-        let mut finished = false;
-        let mut stream = upstream.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = match chunk {
-                Ok(chunk) => chunk,
+        let mut body = prepared;
+        let mut current = upstream;
+        // Set when the error frame has gone out: the oracle `return`s from there,
+        // so neither the stop frame nor a further round follows.
+        let mut terminated = false;
+
+        for tool_round in 0..(crate::tool_rounds::MAX_TOOL_ROUNDS + 2) {
+            let mut accumulator = ToolCallAccumulator::new();
+            let mut round_content = String::new();
+            let mut round_reasoning = String::new();
+            let mut pending = Vec::<u8>::new();
+            let mut event_name = String::from("message");
+            // `[DONE]` or an error ends *this round's* read, not the whole stream.
+            let mut round_over = false;
+            let mut stream = current.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = match chunk {
+                    Ok(chunk) => chunk,
+                    Err(_) => {
+                        // A transport failure after the headers is not an upstream
+                        // status; report it in-band and stop, as the oracle does.
+                        yield Ok(Bytes::from(StreamChunkEncoder::error_frame(
+                            "Upstream stream error",
+                        )));
+                        terminated = true;
+                        break;
+                    }
+                };
+                pending.extend_from_slice(&chunk);
+                // SSE frames are newline-delimited. Decode with `from_utf8_lossy`
+                // over whole lines; a multi-byte character split across two chunks
+                // is reassembled by the buffering, since only complete lines are
+                // consumed here.
+                while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
+                    let line_bytes: Vec<u8> = pending.drain(..=newline).collect();
+                    let line = String::from_utf8_lossy(&line_bytes);
+                    for delta in decode_event(&line, &mut event_name) {
+                        match delta {
+                            UpstreamDelta::Content(text) => {
+                                round_content.push_str(&text);
+                                yield Ok(Bytes::from(encoder.content_frame(&text)));
+                            }
+                            // Accumulated for the exchange the next round needs,
+                            // never streamed — the facade has no reasoning channel.
+                            UpstreamDelta::Reasoning(text) => round_reasoning.push_str(&text),
+                            UpstreamDelta::ToolCalls(fragments) => accumulator.merge(&fragments),
+                            // Decoded so the loop sees every field the oracle sees;
+                            // the facade's frames carry neither of them.
+                            UpstreamDelta::Usage(_) | UpstreamDelta::FinishReason(_) => {}
+                            UpstreamDelta::ResponseId(_) | UpstreamDelta::Model(_) => {}
+                            UpstreamDelta::Done => round_over = true,
+                            UpstreamDelta::Error { message } => {
+                                yield Ok(Bytes::from(StreamChunkEncoder::error_frame(&message)));
+                                terminated = true;
+                            }
+                        }
+                    }
+                }
+                if round_over || terminated {
+                    break;
+                }
+            }
+            if terminated {
+                break;
+            }
+
+            // `finalized_stream_tool_calls`: sorted by slot index, then normalized.
+            let calls = accumulator.finalize();
+            match crate::tool_rounds::decide_round(
+                calls.len(),
+                tool_round,
+                crate::tool_rounds::MAX_TOOL_ROUNDS,
+            ) {
+                RoundDecision::Finish => break,
+                RoundDecision::ForceFinalAnswer => {
+                    body = crate::tool_rounds::force_final_answer_without_tools(&body);
+                }
+                RoundDecision::Continue => {
+                    let results = executor.run_round(calls.clone()).await;
+                    body = crate::tool_rounds::append_tool_exchange(
+                        &body,
+                        &round_content,
+                        &round_reasoning,
+                        &calls,
+                        &results,
+                    );
+                }
+            }
+            // A response body is single-shot, so a further round is a fresh
+            // request. A failure to open it is an in-band error, because the
+            // status line is already on the wire.
+            match crate::chat_execution::open_chat_stream(&config, &body).await {
+                Ok(next) => current = next,
                 Err(_) => {
-                    // A transport failure after the headers is not an upstream
-                    // status; report it in-band and stop, as the oracle does.
                     yield Ok(Bytes::from(StreamChunkEncoder::error_frame(
                         "Upstream stream error",
                     )));
-                    finished = true;
+                    terminated = true;
                     break;
                 }
-            };
-            pending.extend_from_slice(&chunk);
-            // SSE frames are newline-delimited. Decode with `from_utf8_lossy`
-            // over whole lines; a multi-byte character split across two chunks
-            // is reassembled by the buffering, since only complete lines are
-            // consumed here.
-            while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
-                let line_bytes: Vec<u8> = pending.drain(..=newline).collect();
-                let line = String::from_utf8_lossy(&line_bytes);
-                let frames = forward_line(&line, &encoder, &mut event_name, &mut finished);
-                if !frames.is_empty() {
-                    yield Ok(Bytes::from(frames));
-                }
-            }
-            if finished {
-                break;
             }
         }
-        if !finished {
+
+        if !terminated {
             yield Ok(Bytes::from(encoder.stop_frame()));
         }
         yield Ok(Bytes::from(encoder.done_frame()));
     };
     sse_headers(Body::from_stream(body_stream))
-}
-
-/// Decode one upstream line and return the downstream frames for it.
-///
-/// Returns an empty vector for lines that produce no frame (heartbeats, unknown
-/// events, `response_id`/`model` bookkeeping, malformed JSON). Sets `*finished`
-/// when the upstream signalled completion or failure, so the caller stops reading.
-///
-/// **Ordering.** A round-ending chunk carries `tool_calls` *and* the content that
-/// belongs to that round's assistant message. The oracle forwards the content and
-/// consumes the tool calls silently; this transport cannot continue the round yet,
-/// so it refuses — but it forwards the content **first**, because emitting the
-/// refusal ahead of text the model did produce would read as the text being the
-/// problem.
-fn forward_line(
-    line: &str,
-    encoder: &StreamChunkEncoder,
-    event_name: &mut String,
-    finished: &mut bool,
-) -> Vec<u8> {
-    let mut out = Vec::new();
-    let mut refused = false;
-    for delta in decode_event(line, event_name) {
-        match delta {
-            UpstreamDelta::Reasoning(_) => {
-                // The OpenAI facade does not surface reasoning as a separate
-                // channel — `openai_chat_stream` only maps `content`. Reasoning
-                // deltas are therefore consumed and dropped here, exactly as the
-                // facade drops them. `/api/chat` (NDJSON) is what surfaces them,
-                // and that route is out of scope for this slice.
-            }
-            UpstreamDelta::Content(text) => out.extend_from_slice(&encoder.content_frame(&text)),
-            UpstreamDelta::ResponseId(_) | UpstreamDelta::Model(_) => {
-                // Bookkeeping the envelope does not carry through: the oracle
-                // emits its own id/model in every chunk. Consumed, not forwarded.
-            }
-            // Accumulated by the round loop, never streamed: the facade's chunks
-            // carry no usage or finish_reason field.
-            UpstreamDelta::Usage(_) | UpstreamDelta::FinishReason(_) => {}
-            UpstreamDelta::Done => {
-                *finished = true;
-                out.extend_from_slice(&encoder.stop_frame());
-            }
-            UpstreamDelta::Error { message } => {
-                *finished = true;
-                out.extend_from_slice(&StreamChunkEncoder::error_frame(&message));
-            }
-            UpstreamDelta::ToolCalls(_) => {
-                // This slice cannot run the tool round the oracle would run next,
-                // and emitting the round's prose as the final answer would be a
-                // silent behavior change. Fail loudly; the non-streaming loop in
-                // `chat_tool_loop` *can* continue the round, so the code says which
-                // transport is not ready rather than that the capability is missing.
-                refused = true;
-            }
-        }
-    }
-    if refused {
-        *finished = true;
-        out.extend_from_slice(&StreamChunkEncoder::error_frame(
-            STREAM_TOOL_ROUNDS_NOT_READY,
-        ));
-    }
-    out
 }
 
 /// SSE headers matching the oracle's streaming response.
@@ -787,30 +819,6 @@ mod tests {
                 UpstreamDelta::ToolCalls(json!([{"index": 0}])),
             ]
         );
-    }
-
-    /// Nothing is forwarded for a chunk that ends the stream on a tool round until
-    /// the content has gone out — the refusal must not read as the text's fault.
-    #[test]
-    fn the_refusal_is_emitted_after_the_rounds_content() {
-        let encoder = StreamChunkEncoder::new("id".to_string(), 0, "m".to_string());
-        let mut name = "message".to_string();
-        let mut finished = false;
-        let frames = forward_line(
-            r#"data: {"choices":[{"delta":{"content":"let me check","tool_calls":[{"id":"c1"}]}}]}"#,
-            &encoder,
-            &mut name,
-            &mut finished,
-        );
-        let text = String::from_utf8_lossy(&frames);
-        let content_at = text
-            .find("let me check")
-            .expect("content must be forwarded");
-        let refusal_at = text
-            .find("NATIVE_CHAT_TOOL_ROUNDS_NOT_READY")
-            .expect("the refusal must be present");
-        assert!(content_at < refusal_at, "content must precede the refusal");
-        assert!(finished, "a tool round still ends this transport's stream");
     }
 
     #[test]
