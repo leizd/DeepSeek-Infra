@@ -463,7 +463,7 @@ def main() -> int:
             "branches": sorted(set(CALLS)),
         }
 
-    for label, operation, input_text, pattern, path, delimiter in TRANSFORM_CASES:
+    for label, operation, input_text, pattern, json_path, delimiter in TRANSFORM_CASES:
         try:
             out[f"transform::{label}"] = {
                 "ok": True,
@@ -472,7 +472,7 @@ def main() -> int:
                     operation,
                     input_text,
                     pattern=pattern,
-                    path=path,
+                    path=json_path,
                     delimiter=delimiter,
                 ),
             }

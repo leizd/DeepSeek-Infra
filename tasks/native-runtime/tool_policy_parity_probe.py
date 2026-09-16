@@ -463,16 +463,16 @@ def main() -> int:
         # the Rust `validate_url_access` is compared against it case by case.
         out[f"guard::{label}"] = bool(safe)
 
-    for label, args in PATH_CASES:
-        safe, reason = evaluate_path_safety(args)
+    for label, path_args in PATH_CASES:
+        safe, reason = evaluate_path_safety(path_args)
         out[f"path::{label}"] = {"safe": bool(safe), "reason": reason}
 
-    for label, args in NET_CASES:
-        safe, reason = evaluate_network_argument_safety(args)
+    for label, network_args in NET_CASES:
+        safe, reason = evaluate_network_argument_safety(network_args)
         out[f"net::{label}"] = {"safe": bool(safe), "reason": reason}
 
-    for label, args, secrets in SECRET_CASES:
-        out[f"secret::{label}"] = bool(arguments_contain_secret(args, secrets))
+    for label, secret_args, secrets in SECRET_CASES:
+        out[f"secret::{label}"] = bool(arguments_contain_secret(secret_args, secrets))
 
     for label, text in TEXT_CASES:
         cleaned, hits = sanitize_external_text(text)

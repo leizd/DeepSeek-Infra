@@ -33,7 +33,10 @@ WANTED = {
 segments = []
 for node in module_ast.body:
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in WANTED:
-        segments.append(ast.get_source_segment(source_text, node))
+        segment = ast.get_source_segment(source_text, node)
+        if segment is None:
+            raise SystemExit(f"could not extract {node.name}")
+        segments.append(segment)
 
 code = "\n\n".join(segments)
 code = code.replace("from __future__ import annotations\n", "")

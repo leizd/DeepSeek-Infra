@@ -303,8 +303,10 @@ def main() -> int:
         out[f"normalize::{name}"] = normalize(value)
 
     # 3. Round-budget decisions, replayed with the oracle's branch order.
-    for calls, tool_round in ((0, 99), (1, 0), (1, 2), (1, 3), (3, 1)):
-        out[f"decide::{calls}@{tool_round}"] = _decide(calls, tool_round, namespace["MAX_TOOL_ROUNDS"])
+    for call_count, tool_round in ((0, 99), (1, 0), (1, 2), (1, 3), (3, 1)):
+        out[f"decide::{call_count}@{tool_round}"] = _decide(
+            call_count, tool_round, namespace["MAX_TOOL_ROUNDS"]
+        )
 
     # 4. Message assembly and the forced final answer.
     body = {
@@ -313,10 +315,14 @@ def main() -> int:
         "tools": [{"type": "function", "function": {"name": "f"}}],
         "tool_choice": {"type": "function", "function": {"name": "pinned"}},
     }
-    calls = [{"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]
+    tool_calls = [{"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]
     results = [{"role": "tool", "tool_call_id": "c1", "content": "ok"}]
     out["append::object-tool-choice-released"] = _append(
-        namespace, body, {"content": "thinking out loud", "reasoning_content": "why"}, calls, results
+        namespace,
+        body,
+        {"content": "thinking out loud", "reasoning_content": "why"},
+        tool_calls,
+        results,
     )
     out["append::string-tool-choice-kept"] = _append(
         namespace, {"messages": [], "tool_choice": "auto"}, {"content": "a"}, [], []
@@ -336,10 +342,10 @@ def main() -> int:
     )
 
     # 5. Notes and limits.
-    out["note::names"] = _tool_call_note(tool_names(calls))
+    out["note::names"] = _tool_call_note(tool_names(tool_calls))
     out["note::empty"] = _tool_call_note([])
     out["note::round-budget"] = _extract_round_budget_note()
-    out["note::budget"] = namespace["TOOL_BUDGET_EXHAUSTED_PROMPT"]  # type: ignore[index]
+    out["note::budget"] = namespace["TOOL_BUDGET_EXHAUSTED_PROMPT"]
     out["limits::per-response"] = namespace["MAX_TOOL_CALLS_PER_RESPONSE"]
     out["limits::rounds"] = namespace["MAX_TOOL_ROUNDS"]
 

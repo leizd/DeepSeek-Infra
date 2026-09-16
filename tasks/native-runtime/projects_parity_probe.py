@@ -144,6 +144,8 @@ def _extract(source: str, name: str) -> str:
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.FunctionDef) and node.name == name:
             segment = ast.get_source_segment(source, node)
+            if segment is None:
+                raise SystemExit(f"could not extract {name}")
             if node.decorator_list:
                 decorators = "\n".join(
                     "@" + ast.unparse(decorator) for decorator in node.decorator_list
@@ -240,32 +242,40 @@ def main() -> int:
         directory = ns["PROJECTS_DIR"]
 
         # --- ids --------------------------------------------------------------
-        for index, value in enumerate(ID_CASES):
-            out[f"id::{index}"] = outcome(lambda value=value: ns["validate_project_id"](value))
+        for index, project_id in enumerate(ID_CASES):
+            out[f"id::{index}"] = outcome(
+                lambda project_id=project_id: ns["validate_project_id"](project_id)
+            )
 
         # --- names ------------------------------------------------------------
-        for index, value in enumerate(NAME_CASES):
-            out[f"name::{index}"] = ns["normalize_project_name"](value)
+        for index, project_name in enumerate(NAME_CASES):
+            out[f"name::{index}"] = ns["normalize_project_name"](project_name)
 
         # --- documents --------------------------------------------------------
-        for label, value in DOC_CASES:
-            out[f"documents::{label}"] = ns["normalize_documents"](value)
+        for label, documents in DOC_CASES:
+            out[f"documents::{label}"] = ns["normalize_documents"](documents)
 
         # --- safe int ---------------------------------------------------------
-        for label, value, default in SAFE_INT_CASES:
-            out[f"safe-int::{label}"] = ns["_safe_int"](value, default=default)
+        for label, integer_value, default in SAFE_INT_CASES:
+            out[f"safe-int::{label}"] = ns["_safe_int"](integer_value, default=default)
 
         # --- unique strings ---------------------------------------------------
-        for label, value in UNIQUE_CASES:
-            out[f"unique::{label}"] = outcome_no_code(lambda value=value: ns["unique_strings"](value))
+        for label, unique_value in UNIQUE_CASES:
+            out[f"unique::{label}"] = outcome_no_code(
+                lambda unique_value=unique_value: ns["unique_strings"](unique_value)
+            )
 
         # --- skills -----------------------------------------------------------
-        for label, value in SKILL_CASES:
-            out[f"skills::{label}"] = outcome(lambda value=value: ns["normalize_project_skills"](value))
+        for label, skills in SKILL_CASES:
+            out[f"skills::{label}"] = outcome(
+                lambda skills=skills: ns["normalize_project_skills"](skills)
+            )
 
         # --- skill runs -------------------------------------------------------
-        for label, value in RUN_CASES:
-            out[f"run::{label}"] = outcome(lambda value=value: ns["normalize_skill_run"](value))
+        for label, skill_run in RUN_CASES:
+            out[f"run::{label}"] = outcome(
+                lambda skill_run=skill_run: ns["normalize_skill_run"](skill_run)
+            )
 
         # --- saved items and artifacts ----------------------------------------
         out["saved::minimal"] = ns["normalize_saved_items"]([{"title": "N"}])

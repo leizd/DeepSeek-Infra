@@ -85,6 +85,8 @@ def _extract(source: str, name: str) -> str:
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.FunctionDef) and node.name == name:
             segment = ast.get_source_segment(source, node)
+            if segment is None:
+                raise SystemExit(f"could not extract {name}")
             if node.decorator_list:
                 decorators = "\n".join(
                     "@" + ast.unparse(decorator) for decorator in node.decorator_list
