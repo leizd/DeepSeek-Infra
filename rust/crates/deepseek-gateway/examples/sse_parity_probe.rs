@@ -75,32 +75,35 @@ fn emit_case(name: &str, encoder: &StreamChunkEncoder, script: &[&str]) {
         if finished {
             break;
         }
-        let Some(delta) = decode_event(line, &mut event_name) else {
-            continue;
-        };
-        match delta {
-            UpstreamDelta::Content(text) => {
-                print_frame("content", &encoder.content_frame(&text));
-            }
-            UpstreamDelta::Reasoning(_)
-            | UpstreamDelta::ResponseId(_)
-            | UpstreamDelta::Model(_) => {
-                // Consumed and dropped, exactly as `forward_line` does.
-            }
-            UpstreamDelta::Done => {
-                finished = true;
-                print_frame("stop", &encoder.stop_frame());
-            }
-            UpstreamDelta::Error { message } => {
-                finished = true;
-                print_frame("error", &StreamChunkEncoder::error_frame(&message));
-            }
-            UpstreamDelta::ToolCalls => {
-                // Not part of the byte-parity scripts: a tool round is refused
-                // rather than encoded, and the refusal is covered by the
-                // integration test. Counting it here would make the probe report
-                // a frame the oracle never emits for the same input.
-                finished = true;
+        // `decode_event` returns every delta the chunk carries, in the oracle's order.
+        for delta in decode_event(line, &mut event_name) {
+            match delta {
+                UpstreamDelta::Content(text) => {
+                    print_frame("content", &encoder.content_frame(&text));
+                }
+                UpstreamDelta::Reasoning(_)
+                | UpstreamDelta::ResponseId(_)
+                | UpstreamDelta::Model(_) => {
+                    // Consumed and dropped, exactly as `forward_line` does.
+                }
+                UpstreamDelta::Done => {
+                    finished = true;
+                    print_frame("stop", &encoder.stop_frame());
+                }
+                UpstreamDelta::Error { message } => {
+                    finished = true;
+                    print_frame("error", &StreamChunkEncoder::error_frame(&message));
+                }
+                UpstreamDelta::ToolCalls(_) => {
+                    // Not part of the byte-parity scripts: a tool round is refused
+                    // rather than encoded, and the refusal is covered by the
+                    // integration test. Counting it here would make the probe
+                    // report a frame the oracle never emits for the same input.
+                    finished = true;
+                }
+                // Accumulated by the round loop, never encoded. A frame would make
+                // the probe report output the oracle does not emit here.
+                UpstreamDelta::Usage(_) | UpstreamDelta::FinishReason(_) => {}
             }
         }
     }

@@ -1059,3 +1059,61 @@ Verified:
 `id` as a string, so the two implementations agree in practice. That is exactly why it
 was worth fixing rather than noting: the divergence is invisible until a provider
 changes shape, and then it corrupts tool-call assembly instead of failing.
+
+**Streaming slice, step 1: the SSE decoder now yields every delta a chunk carries (2026-09-16，uncommitted).**
+
+Prerequisite for the streaming round loop, and a real divergence on its own.
+
+The oracle's per-chunk body in `stream_deepseek` does everything **in one pass** —
+it does not short-circuit:
+
+```python
+choices = chunk.get("choices") or []
+if not choices: continue
+delta = choices[0].get("delta") or {}
+if choices[0].get("finish_reason"): round_finish = str(...)
+if isinstance(chunk.get("usage"), dict): round_usage = chunk["usage"]
+merge_stream_tool_call_deltas(stream_tool_calls, delta.get("tool_calls"))   # always
+if delta_reasoning: ... forward reasoning ...
+if delta_content:   ... forward content  ...
+```
+
+This port's `decode_chunk` checked `chunk_has_tool_calls` **first** and returned
+`UpstreamDelta::ToolCalls`, dropping the same chunk's `content`, `reasoning`,
+`finish_reason` and `usage`. Confirmed by reading the oracle, not by inference.
+
+That is not cosmetic: the dropped `content` is the text `append_tool_exchange` replays
+to the provider as the round's assistant message. A round-ending chunk that also
+carried prose would have lost it.
+
+**Fix.** `decode_event` / `decode_chunk` return `Vec<UpstreamDelta>` in the oracle's
+order, and `UpstreamDelta` gained payloads: `ToolCalls(Value)` (the fragments the
+accumulator needs), `Usage(Value)` and `FinishReason(String)`. `forward_line` iterates
+and, when a tool round appears, forwards the chunk's content **first** and emits the
+refusal **last** — the earlier ordering would have put the refusal ahead of text the
+model did produce, which reads as the text being the problem.
+
+An existing test asserted the old behavior under a name that defended it
+(`a_tool_call_chunk_is_typed_as_tool_calls_even_with_content`, "forwarding the prose is
+the silent-flattening failure the refusal exists to prevent"). That reasoning was
+wrong: the oracle forwards the prose too. The test is replaced by one that pins the
+oracle's behavior, plus two more for the ordering and for the round-ending chunk's
+`usage` / `finish_reason`.
+
+**The refusal itself is unchanged and still loud.** Streaming clients still get
+`NATIVE_CHAT_TOOL_ROUNDS_NOT_READY` on a tool round; what changed is that they get the
+round's text first. The loop body (the `for tool_round in range(max_tool_rounds + 2)`
+structure, the `system_note`s, `append_tool_exchange` and the next upstream request) is
+the next step — the body is an `async_stream` generator, so awaiting a new upstream
+mid-stream is already possible.
+
+Verified:
+- `cargo test -p deepseek-gateway -j 1` -> 134 lib + 7 + 6 + 2, all pass (3 new, 1
+  replaced).
+- **SSE byte-parity holds**: `tasks/native-runtime/sse_parity_probe.py` against the Rust
+  example, identical MD5 `b9129475b6bae8b1239f4529e0a50932`. Note the corpus could not
+  have caught this divergence — it has no chunk carrying both `content` and
+  `tool_calls`, and it could not, because this transport refuses on a tool round where
+  the oracle continues. The unit tests are the right level for it.
+- `cargo clippy -p deepseek-gateway --all-targets -- -D warnings` -> only the
+  pre-existing `control_proxy.rs:20`; `cargo fmt --check` clean.

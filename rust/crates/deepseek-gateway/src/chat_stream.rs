@@ -35,6 +35,13 @@
 //! rounds through `chat_tool_loop` now; continuing them mid-stream (where the
 //! round's frames interleave with the SSE emission the oracle interleaves them
 //! with) is the streaming slice's own seam.
+//!
+//! One part of that seam is already in place: [`decode_event`] returns **every**
+//! delta a chunk carries, in the oracle's order, because the round loop will need
+//! the `tool_calls` fragments alongside the same chunk's `content`. The earlier
+//! single-delta shape had to choose, and it chose `tool_calls` — silently dropping
+//! the text that belongs in that round's assistant message. The refusal still
+//! happens, but it now comes *after* the content the model produced.
 
 use axum::body::{Body, Bytes};
 use axum::http::header;
@@ -66,13 +73,24 @@ pub enum UpstreamDelta {
     Done,
     /// An upstream `event: error` frame, already humanized into a message.
     Error { message: String },
-    /// The chunk announced `delta.tool_calls`.
+    /// `delta.tool_calls` on this chunk, verbatim.
     ///
-    /// Surfaced as its own delta rather than swallowed because a turn that ends
-    /// in tool calls is a *round* the oracle continues with `append_tool_exchange`,
-    /// and this slice cannot continue it. Detecting it here is what lets the
-    /// stream fail loudly instead of emitting the round's prose as the answer.
-    ToolCalls,
+    /// Carries the fragments rather than just announcing them, because the round
+    /// the oracle continues needs them: `merge_stream_tool_call_deltas` accumulates
+    /// the argument JSON in pieces and the result is replayed to the provider as
+    /// the assistant message's `tool_calls`.
+    ///
+    /// Streamed to the client as nothing — a tool-call round is not forwarded — but
+    /// the round loop consumes it. Until that loop exists this chunk still ends the
+    /// stream, and [`forward_line`] says so after forwarding the chunk's own content.
+    ToolCalls(Value),
+    /// `usage` on this chunk, accumulated across rounds by the loop.
+    Usage(Value),
+    /// `choices[0].finish_reason` on this chunk, when present.
+    ///
+    /// The loop keeps the last non-empty one so the final envelope can report a
+    /// `length` truncation; nothing is streamed for it.
+    FinishReason(String),
 }
 
 /// Decode one upstream SSE line into a delta, or `None` when the line carries
@@ -84,11 +102,18 @@ pub enum UpstreamDelta {
 ///
 /// `event_name` is threaded through as `(&mut String)` because the SSE spec
 /// makes it sticky across `data:` lines until the next blank line.
-pub fn decode_event(line: &str, event_name: &mut String) -> Option<UpstreamDelta> {
+///
+/// Returns a **list**, because one upstream chunk can legitimately carry several
+/// deltas at once. The oracle's loop merges `tool_calls`, records `usage` and
+/// `finish_reason`, and forwards `content` / `reasoning` **independently** — so a
+/// chunk that ends a round may also carry the text that belongs in that round's
+/// assistant message. Returning a single delta would force a choice between them,
+/// and the earlier version chose `tool_calls`, silently dropping the content.
+pub fn decode_event(line: &str, event_name: &mut String) -> Vec<UpstreamDelta> {
     let line = line.trim_end_matches(['\r', '\n']);
     if line.is_empty() {
         *event_name = "message".to_string();
-        return None;
+        return Vec::new();
     }
     if let Some(rest) = line.strip_prefix("event:") {
         let name = rest.trim();
@@ -97,24 +122,26 @@ pub fn decode_event(line: &str, event_name: &mut String) -> Option<UpstreamDelta
         } else {
             name.to_string()
         };
-        return None;
+        return Vec::new();
     }
-    let payload = line.strip_prefix("data:")?;
+    let Some(payload) = line.strip_prefix("data:") else {
+        return Vec::new();
+    };
     let payload = payload.trim();
     if payload == "[DONE]" {
-        return Some(UpstreamDelta::Done);
+        return vec![UpstreamDelta::Done];
     }
     // The oracle routes `event: error` frames through `sse_error_message` +
     // `humanize_upstream_error`; extracting the provider's own message is the
     // part that matters for parity, since the humanization text is not a
     // parity surface.
     if *event_name == "error" {
-        return Some(UpstreamDelta::Error {
+        return vec![UpstreamDelta::Error {
             message: upstream_error_message(payload),
-        });
+        }];
     }
     let Ok(chunk) = serde_json::from_str::<Value>(payload) else {
-        return None;
+        return Vec::new();
     };
     decode_chunk(&chunk)
 }
@@ -162,47 +189,86 @@ pub fn upstream_error_message(payload: &str) -> String {
 ///
 /// Returns `None` for a chunk carrying no forwarded delta (e.g. a
 /// usage-only final frame).
-fn decode_chunk(chunk: &Value) -> Option<UpstreamDelta> {
-    let object = chunk.as_object()?;
-    // A tool-call round is checked first: the round may also carry a `content`
-    // or `reasoning` field, and forwarding any of it would emit a partial answer
-    // that the model never meant as final.
-    if chunk_has_tool_calls(chunk) {
-        return Some(UpstreamDelta::ToolCalls);
-    }
+/// Decode one upstream chunk into every delta it carries.
+///
+/// Mirrors the oracle's per-chunk body in `stream_deepseek`, which does all of
+/// these **in one pass** rather than short-circuiting:
+///
+/// ```text
+/// response_id = chunk.get("id") or response_id
+/// response_model = chunk.get("model") or response_model
+/// choices = chunk.get("choices") or []
+/// if not choices: continue
+/// delta = choices[0].get("delta") or {}
+/// if choices[0].get("finish_reason"): round_finish = str(...)
+/// if isinstance(chunk.get("usage"), dict): round_usage = chunk["usage"]
+/// merge_stream_tool_call_deltas(stream_tool_calls, delta.get("tool_calls"))
+/// ... forward reasoning, then content, independently ...
+/// ```
+///
+/// So a chunk carrying `tool_calls` still contributes its `content` and
+/// `reasoning`, and a chunk with no `choices` contributes nothing at all.
+fn decode_chunk(chunk: &Value) -> Vec<UpstreamDelta> {
+    let Some(object) = chunk.as_object() else {
+        return Vec::new();
+    };
+    let mut deltas = Vec::new();
     if let Some(id) = object.get("id").and_then(Value::as_str) {
         if !id.is_empty() {
-            return Some(UpstreamDelta::ResponseId(id.to_string()));
+            deltas.push(UpstreamDelta::ResponseId(id.to_string()));
         }
     }
     if let Some(model) = object.get("model").and_then(Value::as_str) {
         if !model.is_empty() {
-            return Some(UpstreamDelta::Model(model.to_string()));
+            deltas.push(UpstreamDelta::Model(model.to_string()));
         }
     }
-    let delta = object
+    // `choices = chunk.get("choices") or []` — no choices means nothing further,
+    // not an empty delta.
+    let Some(first) = object
         .get("choices")
         .and_then(Value::as_array)
         .and_then(|choices| choices.first())
-        .and_then(|choice| choice.get("delta"))?;
+    else {
+        return deltas;
+    };
+    if let Some(reason) = first
+        .get("finish_reason")
+        .and_then(Value::as_str)
+        .filter(|reason| !reason.is_empty())
+    {
+        deltas.push(UpstreamDelta::FinishReason(reason.to_string()));
+    }
+    if let Some(usage) = object.get("usage").filter(|usage| usage.is_object()) {
+        deltas.push(UpstreamDelta::Usage(usage.clone()));
+    }
+    let delta = first.get("delta").and_then(Value::as_object);
+    // Merged unconditionally: `merge` ignores a non-list, so an absent
+    // `tool_calls` is not a special case.
+    if let Some(calls) = delta.and_then(|delta| delta.get("tool_calls")) {
+        deltas.push(UpstreamDelta::ToolCalls(calls.clone()));
+    }
     if let Some(text) = delta
-        .get("reasoning_content")
-        .or_else(|| delta.get("reasoning"))
-        .or_else(|| delta.get("thinking_content"))
-        .or_else(|| delta.get("thinking"))
+        .and_then(|delta| {
+            delta
+                .get("reasoning_content")
+                .or_else(|| delta.get("reasoning"))
+                .or_else(|| delta.get("thinking_content"))
+                .or_else(|| delta.get("thinking"))
+        })
         .and_then(Value::as_str)
         .filter(|text| !text.is_empty())
     {
-        return Some(UpstreamDelta::Reasoning(text.to_string()));
+        deltas.push(UpstreamDelta::Reasoning(text.to_string()));
     }
     if let Some(text) = delta
-        .get("content")
+        .and_then(|delta| delta.get("content"))
         .and_then(Value::as_str)
         .filter(|text| !text.is_empty())
     {
-        return Some(UpstreamDelta::Content(text.to_string()));
+        deltas.push(UpstreamDelta::Content(text.to_string()));
     }
-    None
+    deltas
 }
 
 /// Does this upstream chunk announce tool calls?
@@ -425,8 +491,9 @@ pub fn streaming_response(upstream: reqwest::Response, model: &str, created: i64
             while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
                 let line_bytes: Vec<u8> = pending.drain(..=newline).collect();
                 let line = String::from_utf8_lossy(&line_bytes);
-                if let Some(frame) = forward_line(&line, &encoder, &mut event_name, &mut finished) {
-                    yield Ok(Bytes::from(frame));
+                let frames = forward_line(&line, &encoder, &mut event_name, &mut finished);
+                if !frames.is_empty() {
+                    yield Ok(Bytes::from(frames));
                 }
             }
             if finished {
@@ -441,53 +508,68 @@ pub fn streaming_response(upstream: reqwest::Response, model: &str, created: i64
     sse_headers(Body::from_stream(body_stream))
 }
 
-/// Decode one upstream line and, when it carries a forwardable delta, return the
-/// downstream frame for it.
+/// Decode one upstream line and return the downstream frames for it.
 ///
-/// Returns `None` for lines that produce no frame (heartbeats, unknown events,
-/// `response_id`/`model` bookkeeping, malformed JSON). Sets `*finished` when the
-/// upstream signalled completion or failure, so the caller stops reading.
+/// Returns an empty vector for lines that produce no frame (heartbeats, unknown
+/// events, `response_id`/`model` bookkeeping, malformed JSON). Sets `*finished`
+/// when the upstream signalled completion or failure, so the caller stops reading.
+///
+/// **Ordering.** A round-ending chunk carries `tool_calls` *and* the content that
+/// belongs to that round's assistant message. The oracle forwards the content and
+/// consumes the tool calls silently; this transport cannot continue the round yet,
+/// so it refuses — but it forwards the content **first**, because emitting the
+/// refusal ahead of text the model did produce would read as the text being the
+/// problem.
 fn forward_line(
     line: &str,
     encoder: &StreamChunkEncoder,
     event_name: &mut String,
     finished: &mut bool,
-) -> Option<Vec<u8>> {
-    match decode_event(line, event_name)? {
-        UpstreamDelta::Reasoning(_) => {
-            // The OpenAI facade does not surface reasoning as a separate channel
-            // — `openai_chat_stream` only maps `content`. Reasoning deltas are
-            // therefore consumed and dropped here, exactly as the facade drops
-            // them. `/api/chat` (NDJSON) is what surfaces them, and that route
-            // is out of scope for this slice.
-            None
-        }
-        UpstreamDelta::Content(text) => Some(encoder.content_frame(&text)),
-        UpstreamDelta::ResponseId(_) | UpstreamDelta::Model(_) => {
-            // Bookkeeping the envelope does not carry through: the oracle emits
-            // its own id/model in every chunk. Consumed, not forwarded.
-            None
-        }
-        UpstreamDelta::Done => {
-            *finished = true;
-            Some(encoder.stop_frame())
-        }
-        UpstreamDelta::Error { message } => {
-            *finished = true;
-            Some(StreamChunkEncoder::error_frame(&message))
-        }
-        UpstreamDelta::ToolCalls => {
-            // This slice cannot run the tool round the oracle would run next, and
-            // emitting the round's prose as the final answer would be a silent
-            // behavior change. Fail loudly; the non-streaming loop in
-            // `chat_tool_loop` *can* continue the round, so the code says which
-            // transport is not ready rather than that the capability is missing.
-            *finished = true;
-            Some(StreamChunkEncoder::error_frame(
-                STREAM_TOOL_ROUNDS_NOT_READY,
-            ))
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut refused = false;
+    for delta in decode_event(line, event_name) {
+        match delta {
+            UpstreamDelta::Reasoning(_) => {
+                // The OpenAI facade does not surface reasoning as a separate
+                // channel — `openai_chat_stream` only maps `content`. Reasoning
+                // deltas are therefore consumed and dropped here, exactly as the
+                // facade drops them. `/api/chat` (NDJSON) is what surfaces them,
+                // and that route is out of scope for this slice.
+            }
+            UpstreamDelta::Content(text) => out.extend_from_slice(&encoder.content_frame(&text)),
+            UpstreamDelta::ResponseId(_) | UpstreamDelta::Model(_) => {
+                // Bookkeeping the envelope does not carry through: the oracle
+                // emits its own id/model in every chunk. Consumed, not forwarded.
+            }
+            // Accumulated by the round loop, never streamed: the facade's chunks
+            // carry no usage or finish_reason field.
+            UpstreamDelta::Usage(_) | UpstreamDelta::FinishReason(_) => {}
+            UpstreamDelta::Done => {
+                *finished = true;
+                out.extend_from_slice(&encoder.stop_frame());
+            }
+            UpstreamDelta::Error { message } => {
+                *finished = true;
+                out.extend_from_slice(&StreamChunkEncoder::error_frame(&message));
+            }
+            UpstreamDelta::ToolCalls(_) => {
+                // This slice cannot run the tool round the oracle would run next,
+                // and emitting the round's prose as the final answer would be a
+                // silent behavior change. Fail loudly; the non-streaming loop in
+                // `chat_tool_loop` *can* continue the round, so the code says which
+                // transport is not ready rather than that the capability is missing.
+                refused = true;
+            }
         }
     }
+    if refused {
+        *finished = true;
+        out.extend_from_slice(&StreamChunkEncoder::error_frame(
+            STREAM_TOOL_ROUNDS_NOT_READY,
+        ));
+    }
+    out
 }
 
 /// SSE headers matching the oracle's streaming response.
@@ -557,14 +639,14 @@ mod tests {
                 "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}",
                 &mut name
             ),
-            Some(UpstreamDelta::Content("hi".to_string()))
+            vec![UpstreamDelta::Content("hi".to_string())]
         );
         assert_eq!(
             decode_event(
                 "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"why\"}}]}",
                 &mut name
             ),
-            Some(UpstreamDelta::Reasoning("why".to_string()))
+            vec![UpstreamDelta::Reasoning("why".to_string())]
         );
     }
 
@@ -580,7 +662,7 @@ mod tests {
             let line = format!("data: {{\"choices\":[{{\"delta\":{{\"{key}\":\"x\"}}}}]}}");
             assert_eq!(
                 decode_event(&line, &mut name),
-                Some(UpstreamDelta::Reasoning("x".to_string())),
+                vec![UpstreamDelta::Reasoning("x".to_string())],
                 "alias {key} must be read"
             );
         }
@@ -589,25 +671,25 @@ mod tests {
     #[test]
     fn done_marker_and_blank_line_event_reset() {
         let mut name = "error".to_string();
-        assert_eq!(decode_event("", &mut name), None);
+        assert_eq!(decode_event("", &mut name), Vec::new());
         assert_eq!(name, "message", "a blank line resets the event name");
         assert_eq!(
             decode_event("data: [DONE]", &mut name),
-            Some(UpstreamDelta::Done)
+            vec![UpstreamDelta::Done]
         );
     }
 
     #[test]
     fn malformed_json_is_skipped_not_aborted() {
         let mut name = "message".to_string();
-        assert_eq!(decode_event("data: {not json", &mut name), None);
+        assert_eq!(decode_event("data: {not json", &mut name), Vec::new());
     }
 
     #[test]
     fn non_data_lines_are_ignored() {
         let mut name = "message".to_string();
-        assert_eq!(decode_event(": keep-alive comment", &mut name), None);
-        assert_eq!(decode_event("id: 42", &mut name), None);
+        assert_eq!(decode_event(": keep-alive comment", &mut name), Vec::new());
+        assert_eq!(decode_event("id: 42", &mut name), Vec::new());
     }
 
     #[test]
@@ -640,13 +722,13 @@ mod tests {
         let mut name = "message".to_string();
         let line = r#"data: {"error":{"message":"boom"}}"#;
         // Under `message`, an `error` field is not the SSE error channel.
-        assert_eq!(decode_event(line, &mut name), None);
+        assert_eq!(decode_event(line, &mut name), Vec::new());
         let mut name = "error".to_string();
         assert_eq!(
             decode_event(line, &mut name),
-            Some(UpstreamDelta::Error {
+            vec![UpstreamDelta::Error {
                 message: "boom".to_string()
-            })
+            }]
         );
     }
 
@@ -661,19 +743,74 @@ mod tests {
         assert!(!chunk_has_tool_calls(&plain));
     }
 
-    /// A tool round that also carries content must still be classified as a tool
-    /// round, not as content: forwarding the prose is the silent-flattening
-    /// failure the refusal exists to prevent.
+    /// A tool-call chunk **also** contributes its content.
+    ///
+    /// Measured against the oracle's per-chunk body: `merge_stream_tool_call_deltas`
+    /// runs first and unconditionally, then `delta_content` is forwarded *whatever*
+    /// the tool calls were. The earlier shape short-circuited on `tool_calls`, which
+    /// dropped the text that belongs in that round's assistant message — the very
+    /// text `append_tool_exchange` replays to the provider.
+    ///
+    /// Both deltas come back, in the oracle's order, so the round loop can consume
+    /// the calls and still forward the content.
     #[test]
-    fn a_tool_call_chunk_is_typed_as_tool_calls_even_with_content() {
+    fn a_tool_call_chunk_still_contributes_its_content() {
         let mut name = "message".to_string();
         assert_eq!(
             decode_event(
                 r#"data: {"choices":[{"delta":{"content":"let me check","tool_calls":[{"id":"c1"}]}}]}"#,
                 &mut name
             ),
-            Some(UpstreamDelta::ToolCalls)
+            vec![
+                UpstreamDelta::ToolCalls(json!([{"id": "c1"}])),
+                UpstreamDelta::Content("let me check".to_string()),
+            ]
         );
+    }
+
+    /// Every field a chunk can carry is decoded in the oracle's order, because the
+    /// round loop needs `finish_reason` and `usage` from the same chunk that ends
+    /// the round.
+    #[test]
+    fn a_round_ending_chunk_yields_its_usage_and_finish_reason() {
+        let mut name = "message".to_string();
+        assert_eq!(
+            decode_event(
+                r#"data: {"id":"resp","model":"m","usage":{"prompt_tokens":3},"choices":[{"finish_reason":"tool_calls","delta":{"tool_calls":[{"index":0}]}}]}"#,
+                &mut name
+            ),
+            vec![
+                UpstreamDelta::ResponseId("resp".to_string()),
+                UpstreamDelta::Model("m".to_string()),
+                UpstreamDelta::FinishReason("tool_calls".to_string()),
+                UpstreamDelta::Usage(json!({"prompt_tokens": 3})),
+                UpstreamDelta::ToolCalls(json!([{"index": 0}])),
+            ]
+        );
+    }
+
+    /// Nothing is forwarded for a chunk that ends the stream on a tool round until
+    /// the content has gone out — the refusal must not read as the text's fault.
+    #[test]
+    fn the_refusal_is_emitted_after_the_rounds_content() {
+        let encoder = StreamChunkEncoder::new("id".to_string(), 0, "m".to_string());
+        let mut name = "message".to_string();
+        let mut finished = false;
+        let frames = forward_line(
+            r#"data: {"choices":[{"delta":{"content":"let me check","tool_calls":[{"id":"c1"}]}}]}"#,
+            &encoder,
+            &mut name,
+            &mut finished,
+        );
+        let text = String::from_utf8_lossy(&frames);
+        let content_at = text
+            .find("let me check")
+            .expect("content must be forwarded");
+        let refusal_at = text
+            .find("NATIVE_CHAT_TOOL_ROUNDS_NOT_READY")
+            .expect("the refusal must be present");
+        assert!(content_at < refusal_at, "content must precede the refusal");
+        assert!(finished, "a tool round still ends this transport's stream");
     }
 
     #[test]
@@ -691,11 +828,11 @@ mod tests {
         let mut name = "message".to_string();
         assert_eq!(
             decode_event(r#"data: {"id":"chatcmpl-1"}"#, &mut name),
-            Some(UpstreamDelta::ResponseId("chatcmpl-1".to_string()))
+            vec![UpstreamDelta::ResponseId("chatcmpl-1".to_string())]
         );
         assert_eq!(
             decode_event(r#"data: {"model":"deepseek-v4-pro"}"#, &mut name),
-            Some(UpstreamDelta::Model("deepseek-v4-pro".to_string()))
+            vec![UpstreamDelta::Model("deepseek-v4-pro".to_string())]
         );
     }
 }
