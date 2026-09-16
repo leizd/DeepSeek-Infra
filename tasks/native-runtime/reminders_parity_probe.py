@@ -122,7 +122,6 @@ def build_namespace(root: Path) -> dict:
     namespace: dict = {}
     exec(compile(ERRORS.read_text(encoding="utf-8"), str(ERRORS), "exec"), namespace)  # noqa: S102
 
-    import contextlib
     import datetime as datetime_module
     import re
     import secrets

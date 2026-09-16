@@ -140,7 +140,6 @@ def main() -> int:
     ns = build_namespace()
     query_tokens = ns["query_tokens"]
     score_chunk = ns["score_chunk"]
-    utc_now_iso = ns["utc_now_iso"]
     latest_user_query = ns["latest_user_query"]
 
     out: dict = {}
