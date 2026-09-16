@@ -270,21 +270,28 @@ pub fn exclusive_gate(root: &Path) -> Result<ExclusiveGate, GateError> {
         fs::create_dir_all(parent).map_err(|error| GateError::misuse(error.to_string()))?;
     }
     // Create with `b"0"` only if absent; an existing lock file is fine.
-    if let Err(error) = OpenOptions::new()
+    //
+    // Create with `b"0"` only if absent; an existing lock file is fine.
+    //
+    // The byte is seeded through the **same handle that created the file**, which is
+    // what `os.open(O_CREAT | O_EXCL | O_WRONLY)` followed by `os.write(descriptor,
+    // b"0")` does. Reopening for write instead — as this did — is a race: a byte-range
+    // lock covers byte 0, and Windows rejects a *write-mode open* of a locked range
+    // with `ERROR_LOCK_VIOLATION` (os error 33). The window only opens while the file
+    // is being created, so it takes many workspaces to hit; it made
+    // `concurrent_scopes_serialize_and_count_exactly` fail about one run in seven of
+    // the full suite, with a `GateError::misuse` carrying that raw OS error.
+    match OpenOptions::new()
         .create_new(true)
         .write(true)
         .open(&target)
     {
-        if error.kind() != std::io::ErrorKind::AlreadyExists {
-            return Err(GateError::misuse(error.to_string()));
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(GateError::misuse(error.to_string())),
+        Ok(mut file) => {
+            file.write_all(b"0")
+                .map_err(|error| GateError::misuse(error.to_string()))?;
         }
-    } else {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .open(&target)
-            .map_err(|error| GateError::misuse(error.to_string()))?;
-        file.write_all(b"0")
-            .map_err(|error| GateError::misuse(error.to_string()))?;
     }
 
     let depth = GATE_STATE.with(|state| {
@@ -745,6 +752,45 @@ mod tests {
             handle.join().expect("thread must not panic");
         }
         assert_eq!(read_generation(&root), scopes * 2);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Racing threads must never fail on the lock file itself.
+    ///
+    /// Regression test for a real, reproducible failure (~1 run in 7 of the full
+    /// suite): `exclusive_gate` created the lock file and then **reopened it for
+    /// write** to seed the byte. A byte-range lock covers byte 0, and Windows
+    /// rejects a write-mode open of a locked range with `ERROR_LOCK_VIOLATION` (os
+    /// error 33), so a thread that reached the reopen while another held the lock
+    /// got `GateError::misuse("… (os error 33)")` and `mutation_scope` returned `Err`.
+    ///
+    /// The oracle writes the byte through the descriptor that created the file
+    /// (`os.write(descriptor, b"0")`) and never reopens, so this was a divergence
+    /// the port invented. The seed now uses the creating handle too.
+    ///
+    /// The window is between "the file exists" and "the byte is written", so it
+    /// only opens when the file is being created. Removing it every round and
+    /// racing eight threads through `mutation_scope` reproduces it densely — this
+    /// loop is the reason the fix is verifiable rather than a guess.
+    #[test]
+    fn racing_first_scopes_never_fail_on_the_lock_file() {
+        let root = temp_root("scope-create-race");
+        for round in 0..25 {
+            let _ = fs::remove_file(lock_path(&root));
+            let mut handles = Vec::new();
+            for _ in 0..8 {
+                let root = root.clone();
+                handles.push(std::thread::spawn(move || {
+                    assert!(
+                        mutation_scope(None, &root).is_ok(),
+                        "a concurrent first scope must not fail"
+                    );
+                }));
+            }
+            for handle in handles {
+                handle.join().unwrap_or_else(|_| panic!("round {round}"));
+            }
+        }
         let _ = fs::remove_dir_all(&root);
     }
 }

@@ -1164,3 +1164,79 @@ the honest label's payoff: it was recorded as "narrowed, not closed" precisely b
 poisoning gap was a real fidelity bug but never proven to be *this* failure. Now it is
 disproven as the sole cause. Not captured this time (the reruns were green); the next
 occurrence needs the panic message, which the earlier note never managed to record.
+
+**Root cause of the intermittent gate failure: the lock file was reopened to seed it
+(2026-09-16，uncommitted).**
+
+Three rounds of this. Round 1 recorded it as "narrowed, not closed" after fixing a mutex
+poisoning gap; round 2 saw it recur, which disproved poisoning as the sole cause. This
+round captured the panic, and the cause was in the port all along.
+
+**The evidence.** Reproduced on the 7th of 15 full serial runs:
+
+```
+thread '<unnamed>' panicked at mutation_gate.rs:741:58:
+called `Result::unwrap()` on an `Err` value: GateError { kind: RuntimeError,
+  message: "另一个程序已锁定文件的一部分，进程无法访问。 (os error 33)", code: None, status: None }
+```
+
+`os error 33` is `ERROR_LOCK_VIOLATION`: Windows refuses a **write-mode open** of a byte
+range that another handle has locked, and refuses writes into it.
+
+**The mechanism.** `exclusive_gate` created the lock file and then **reopened it for
+write** to seed the byte:
+
+```rust
+if let Err(error) = OpenOptions::new().create_new(true).write(true).open(&target) { … }
+else {
+    let mut file = OpenOptions::new().write(true).open(&target)?;   // ← reopen
+    file.write_all(b"0")?;
+}
+```
+
+Between the create and the reopen, another thread can reach the OS lock on byte 0. The
+reopen-for-write then fails with error 33, the code reports `GateError::misuse`, and
+`mutation_scope` returns `Err` — which the test unwraps. The lock file only exists once
+per workspace, so the window only opens while the file is being created, which is why it
+took the full suite (many workspaces) and roughly one run in seven to hit.
+
+**The fix is the oracle's shape, not a guess.** `_lock_file`/`exclusive_gate` in
+`infra/workspace/mutation_gate.py`:
+
+```python
+try:
+    descriptor = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+except FileExistsError:
+    pass
+else:
+    os.write(descriptor, b"0")     # the SAME descriptor, then closed
+    os.close(descriptor)
+with _PROCESS_LOCK:
+    ...
+    with target.open("r+b") as handle:   # the only open for locking
+        _lock_file(handle)
+```
+
+So the byte is written through the handle that created the file, and there is exactly one
+other open — inside the process lock, for locking. **The reopen was an invention of this
+port.** Fixed by writing through the creating handle.
+
+**The regression test had to be able to fail.** `racing_first_scopes_never_fail_on_the_lock_file`
+removes the lock file every round and races eight threads through `mutation_scope`, 25
+rounds, because the window only opens during creation. Verified in both directions: it
+passes with the fix, and it fails with the pre-fix reopen restored.
+
+**What this round changes about the record.** Rounds 1 and 2 both said "not root-caused",
+and that was right to say — the poisoning fix was a real fidelity bug, and describing it
+as *the* cause would have been a plausible story standing in for evidence. The lesson is
+the one already in the notes from the object-store work: a fixed bug is not a fixed
+symptom until the symptom stops.
+
+**The numbers.** Failure rate before: 1 in 7 full serial runs (run 7 of 15). After: **0 in
+15**. The regression test, run against the pre-fix code restored temporarily: **failed on
+run 2 of 5** at the thread's assert — so it is a test that can fail, not decoration. Run
+against the fix: 5 of 5 green. Both directions measured, not asserted.
+
+`cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings` -> clean
+(the only output is a transient `deepseek-core` incremental-artifact copy warning, which
+is not a lint). `cargo fmt --all -- --check` -> clean.
