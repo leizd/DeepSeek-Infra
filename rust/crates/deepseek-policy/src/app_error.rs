@@ -25,6 +25,10 @@ pub mod codes {
     pub const FILE_INDEX_EXPIRED: &str = "file_index_expired";
     /// `ErrorCode.INTERNAL`
     pub const INTERNAL: &str = "internal";
+    /// `ErrorCode.MISSING_API_KEY`
+    pub const MISSING_API_KEY: &str = "missing_api_key";
+    /// `ErrorCode.UPSTREAM_TIMEOUT`
+    pub const UPSTREAM_TIMEOUT: &str = "upstream_timeout";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

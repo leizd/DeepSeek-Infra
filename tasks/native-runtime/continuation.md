@@ -1304,3 +1304,64 @@ that plainly rather than half-wiring it.
 **Also measured while sizing this, now unblocked:** `search_tool_enabled` and
 `tools_for_payload` are pure and depend only on the catalog plus `search_mode`. They are
 the natural companions to this slice whenever the search provider lands.
+
+**Tavily search layers 1+2 ported: query planning, normalization, ranking, cache (2026-09-16，uncommitted).**
+
+`search.rs` now carries everything the `web_search` tool branch needs from
+`infra/tool_runtime/search.py` **except the HTTP call**. The boundary is a dependency
+closure, not taste:
+
+- **`format_search_context` / `format_search_failure_context` are not in it.** They build
+  the *prompt context* at request-assembly time; the tool branch returns a compiled tool
+  result and never calls them. Porting them would be porting a different consumer.
+- **`search_tavily` / `search_tavily_with_retry` are not in it either** — but their retry
+  *policy* is ([`should_retry_tavily_error`], [`simplified_retry_query`]). Only the request
+  itself is missing, which is the next slice.
+
+**One divergence, caught by the probe.** `domain_from_url` is
+`urlsplit(url).netloc.lower().removeprefix("www.")` — and `netloc` is the **whole
+authority, userinfo and port included**. Extracting just the host reads as the obvious
+cleanup and is wrong: for `https://user:pw@Host.COM:8443/x` the oracle returns
+`user:pw@host.com:8443` and my first version returned `host.com`. The probe diff was a
+single line out of 97 keys. It is now the whole netloc.
+
+This matters beyond the field itself: `search_result_score` feeds `domain` into
+`TRUSTED_DOMAIN_HINTS` with a `contains` check and `rerank_search_results` uses it as the
+per-domain diversity key, so a narrowed domain changes both ranking and the
+two-per-domain cap.
+
+**A recurring trap, hit a third time.** `serde_json`'s `json!` does not accept a **block
+expression** as a value, so `"retryQuery": { let v = ...; if ... { v } else { json!("") } }`
+fails with `unexpected end of macro invocation`. The fallbacks have to be hoisted into
+`let` bindings first. Same class as `.iter()` on a temporary and `&"x".repeat(n)` in a
+`Vec<&'static str>`: the macro's accepted grammar is narrower than the expression grammar.
+
+**What is reproduced rather than tidied:** `search_cache_key` lowercases while its callers
+pass the raw query (so the cache is case-insensitive by construction);
+`save_search_cache` **prunes before writing**; the temp file is `with_extension("tmp")`,
+which replaces `.json` rather than appending; `search_result_score`'s weights (score × 20,
+title token +8, body token +3, trusted domain +10, official-docs +6, empty snippet −8) and
+`rerank`'s two-per-domain cap run after the sort.
+
+Verified:
+- **Search parity holds**: identical MD5 `a425954350aeea8c6d935c476bda169e`, 97 keys, no
+  differences — six query shapes through nine distinct functions, nine `should_search_for_query`
+  cases across four modes, six intents, five URL authorities, three `normalize_search_response`
+  shapes, eight per-result scores, the reranked URL order, the full aggregation (status,
+  joined answer, reason, result URLs, normalized rounds), two compactions, round statuses,
+  round ordering, and two cache round-trips.
+
+**About the pasted credentials.** A live Tavily key and what appears to be an upstream API
+key were pasted into the chat. Neither was written to any file (verified with a repo-wide
+grep), neither was persisted as an environment variable, and all probe artifacts were
+deleted. They still appear in this conversation's transcript, so both should be **rotated**
+regardless of what this session did with them.
+
+**What is left.** The HTTP layer: `search_tavily` (request body assembly, the `TAVILY_URL`
+POST, `AppError` mapping for a missing key and for upstream failure) plus
+`search_tavily_with_retry`, and a shared clock for `load_search_cache` /
+`cleanup_search_cache` / `save_search_cache` (their `now_epoch` parameter is already there,
+so only the wiring is missing). Verification for that slice is a **stub upstream**, because
+the live path measured ~5% availability — one clean `http=200` in roughly forty attempts,
+amid 308/405/400/301/502/522 from the proxy and its intermediaries. A real-call check stays
+a one-off confirmation, not a regression test.
