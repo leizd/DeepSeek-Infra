@@ -401,6 +401,20 @@ fn finite_number(
 }
 
 pub fn prepare_request(value: &Value) -> Result<Value, PreparationError> {
+    prepare_request_with_stream(value, false)
+}
+
+/// Prepare a request for the native chat route, where the transport layer can
+/// consume `stream: true` directly. The public preparation delegate remains
+/// non-streaming so it stays byte-for-byte compatible with the Python oracle.
+pub fn prepare_chat_request(value: &Value) -> Result<Value, PreparationError> {
+    prepare_request_with_stream(value, true)
+}
+
+fn prepare_request_with_stream(
+    value: &Value,
+    allow_streaming: bool,
+) -> Result<Value, PreparationError> {
     let object = value
         .as_object()
         .ok_or_else(|| PreparationError::new("invalid_request", "request must be a JSON object"))?;
@@ -458,14 +472,14 @@ pub fn prepare_request(value: &Value) -> Result<Value, PreparationError> {
         ));
     }
     request.insert("messages".to_string(), messages);
-    // `stream` is a real upstream body field, exactly as the oracle builds it
-    // (`{"model": ..., "messages": ..., "stream": stream}`). It is normalized to
-    // a boolean and forwarded verbatim; the *transport* decision (single JSON
-    // body vs. an SSE read loop) belongs to the route, not to preparation. An
-    // earlier revision refused `stream: true` here, which made the preparation
-    // layer the arbiter of a transport concern it cannot see.
     if object.contains_key("stream") {
         match object.get("stream") {
+            Some(Value::Bool(true)) if !allow_streaming => {
+                return Err(PreparationError::new(
+                    "invalid_request",
+                    "streaming requests stay on the native chat path",
+                ));
+            }
             Some(Value::Bool(value)) => {
                 request.insert("stream".to_string(), Value::Bool(*value));
             }
@@ -597,6 +611,20 @@ mod tests {
     fn valid_minimal_request() {
         let prepared = prepare_request(&minimal()).unwrap();
         assert_eq!(prepared["messages"][0]["content"], "hello");
+    }
+
+    #[test]
+    fn public_preparation_refuses_streaming_while_chat_preparation_accepts_it() {
+        let request = json!({
+            "model": "deepseek-v4-pro",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": true,
+        });
+        assert_eq!(
+            prepare_request(&request).unwrap_err().code,
+            "invalid_request"
+        );
+        assert_eq!(prepare_chat_request(&request).unwrap()["stream"], true);
     }
 
     #[test]

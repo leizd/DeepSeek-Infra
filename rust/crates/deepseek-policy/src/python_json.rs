@@ -9,11 +9,17 @@
 //! - Python renders `float` as `1.0`, Rust's `Display` as `1`, and Python switches
 //!   to a signed, zero-padded exponent outside `1e-4..1e16` where Rust never does.
 //!
-//! Key sorting is not handled here: this workspace compiles `serde_json` without
-//! `preserve_order`, so maps already iterate in sorted key order, matching
-//! `sort_keys=True`.
+//! Key sorting is handled explicitly. Workspace feature unification can enable
+//! `serde_json/preserve_order`, so relying on the map implementation would make
+//! contract bytes depend on which crates are built together.
 
 use serde_json::Value;
+
+fn sorted_fields(fields: &serde_json::Map<String, Value>) -> Vec<(&String, &Value)> {
+    let mut entries: Vec<_> = fields.iter().collect();
+    entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    entries
+}
 
 /// `json.dumps(value, ensure_ascii=False)` with Python's **default** separators.
 ///
@@ -26,8 +32,8 @@ pub fn dumps_default_separators(value: &Value) -> String {
             format!("[{}]", rendered.join(", "))
         }
         Value::Object(fields) => {
-            let rendered: Vec<String> = fields
-                .iter()
+            let rendered: Vec<String> = sorted_fields(fields)
+                .into_iter()
                 .map(|(key, value)| {
                     format!(
                         "{}: {}",
@@ -51,8 +57,8 @@ pub fn dumps_compact(value: &Value) -> String {
             format!("[{}]", rendered.join(","))
         }
         Value::Object(fields) => {
-            let rendered: Vec<String> = fields
-                .iter()
+            let rendered: Vec<String> = sorted_fields(fields)
+                .into_iter()
                 .map(|(key, value)| {
                     format!("{}:{}", Value::String(key.clone()), dumps_compact(value))
                 })
@@ -126,12 +132,11 @@ pub fn value_str(value: &Value) -> String {
 
 /// A JSON value that remembers its **key order**.
 ///
-/// `serde_json` is compiled here without `preserve_order`, so a `Value`'s object
-/// keys iterate sorted. Python dicts iterate in insertion order, and the on-disk
-/// store files carry that order — so a store written from a plain `Value` would
-/// differ from the oracle byte-for-byte even though the JSON is equivalent. Since
-/// this repository's whole subject is a backup system, file bytes are part of the
-/// contract, so callers spell the order out.
+/// Python dicts iterate in insertion order, and the on-disk store files carry that
+/// order. A store written from a plain `Value` can therefore differ from the oracle
+/// byte-for-byte even though the JSON is equivalent. Since this repository's whole
+/// subject is a backup system, file bytes are part of the contract, so callers
+/// spell the order out.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OrderedJson {
     Scalar(Value),
@@ -142,10 +147,10 @@ pub enum OrderedJson {
 /// A nested value becomes a real node so containers render with indentation, as
 /// Python's `indent=2` does at every level.
 ///
-/// Nested object **keys** come out sorted, because `serde_json` here has no
-/// `preserve_order` and Python's insertion order for a nested dict is therefore not
-/// recoverable. Callers that need a nested order must flatten the value or take the
-/// order at the top level, where [`OrderedJson::from_value_with_order`] accepts one.
+/// Nested object **keys** come out sorted because Python's insertion order is not
+/// recoverable from every `serde_json::Value` configuration. Callers that need a
+/// nested order must flatten the value or take the order at the top level, where
+/// [`OrderedJson::from_value_with_order`] accepts one.
 fn nested(value: &Value) -> OrderedJson {
     OrderedJson::from_value_with_order(value, &[])
 }
@@ -164,7 +169,7 @@ impl OrderedJson {
                         pairs.push(((*key).to_string(), nested(item)));
                     }
                 }
-                for (key, item) in fields {
+                for (key, item) in sorted_fields(fields) {
                     if !order.contains(&key.as_str()) {
                         pairs.push((key.clone(), nested(item)));
                     }
@@ -260,6 +265,36 @@ mod tests {
             "{\"a\":1,\"b\":[1,2]}"
         );
         assert_eq!(dumps_compact(&json!({"名": "值"})), "{\"名\":\"值\"}");
+    }
+
+    #[test]
+    fn sorted_contracts_do_not_depend_on_serde_json_map_features() {
+        let mut nested = serde_json::Map::new();
+        nested.insert("z".to_string(), json!(1));
+        nested.insert("y".to_string(), json!(2));
+        let mut fields = serde_json::Map::new();
+        fields.insert("b".to_string(), Value::Object(nested));
+        fields.insert("a".to_string(), json!(0));
+        let value = Value::Object(fields);
+
+        assert_eq!(
+            dumps_default_separators(&value),
+            "{\"a\": 0, \"b\": {\"y\": 2, \"z\": 1}}"
+        );
+        assert_eq!(dumps_compact(&value), "{\"a\":0,\"b\":{\"y\":2,\"z\":1}}");
+        assert_eq!(
+            OrderedJson::from_value_with_order(&value, &["b"]),
+            OrderedJson::Object(vec![
+                (
+                    "b".to_string(),
+                    OrderedJson::Object(vec![
+                        ("y".to_string(), OrderedJson::Scalar(json!(2))),
+                        ("z".to_string(), OrderedJson::Scalar(json!(1))),
+                    ]),
+                ),
+                ("a".to_string(), OrderedJson::Scalar(json!(0))),
+            ])
+        );
     }
 
     #[test]

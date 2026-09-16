@@ -179,11 +179,12 @@ def run_smoke(base_url: str, *, wait_seconds: float = 60.0, timeout: float = 5.0
     )
     chat_error = chat.get("error")
     _require(
-        isinstance(chat_error, dict) and chat_error.get("code") == "NATIVE_CHAT_NOT_READY",
-        "unwired chat execution did not fail closed with NATIVE_CHAT_NOT_READY",
+        isinstance(chat_error, dict)
+        and chat_error.get("code") == "NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING",
+        "native chat did not fail closed when its server-side credential was absent",
     )
-    _require("choices" not in chat, "unwired chat execution returned a fabricated completion")
-    checks.append(CheckResult("chat_fail_closed", "POST /v1/chat/completions -> 503"))
+    _require("choices" not in chat, "native chat returned a fabricated completion")
+    checks.append(CheckResult("chat_missing_credential", "POST /v1/chat/completions -> 503"))
 
     mcp_request = {
         "jsonrpc": "2.0",

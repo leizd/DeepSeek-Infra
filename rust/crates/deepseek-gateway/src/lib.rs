@@ -510,7 +510,8 @@ async fn chat_completions(
             })),
         )
     })?;
-    let prepared = request_preparation::prepare_request(&raw).map_err(chat_preparation_error)?;
+    let prepared =
+        request_preparation::prepare_chat_request(&raw).map_err(chat_preparation_error)?;
     let model = prepared
         .get("model")
         .and_then(serde_json::Value::as_str)

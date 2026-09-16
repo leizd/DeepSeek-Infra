@@ -1328,7 +1328,7 @@ pub fn normalized_args_hash(arguments: Option<&Value>) -> String {
     let value = arguments.unwrap_or(&empty);
     let canonical = crate::python_json::dumps_compact(value);
     let digest = Sha256::digest(canonical.as_bytes());
-    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    let hex = crate::core_utils::encode_lower_hex(&digest);
     format!("sha256:{}", &hex[..16])
 }
 

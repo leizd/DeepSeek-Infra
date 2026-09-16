@@ -144,7 +144,7 @@ pub fn memory_fingerprint(content: &str, scope: &str) -> String {
         format!("{scope}\u{0}{normalized}")
     };
     let digest = Sha256::digest(source.as_bytes());
-    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    let hex = crate::core_utils::encode_lower_hex(&digest);
     hex[..20].to_string()
 }
 

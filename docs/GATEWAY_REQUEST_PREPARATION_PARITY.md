@@ -25,7 +25,7 @@ POST /gateway/request/prepare
 
 Rust performs only pure input-to-output work: model and message validation, role/content checks, tool-definition filtering, `tool_choice` validation, bounded numeric normalization, JSON/depth/size checks, and deterministic assembly of the non-streaming body. A successful response contains `ok`, `request`, and Rust diagnostics. An invalid user request contains a stable code such as `invalid_message_role`; natural-language error wording is not a parity surface.
 
-Python continues to own:
+When Python invokes this preparation delegate, Python continues to own:
 
 - API keys, local authorization, and other credentials;
 - provider routing and real upstream HTTP;
@@ -36,7 +36,7 @@ Python continues to own:
 - real tool execution;
 - tracing lifecycle and all database or filesystem writes.
 
-The sidecar never receives an API key or `Authorization` header. `/v1/models` and streaming chat remain Python-owned.
+The preparation request never contains an API key or `Authorization` header. The native `/v1/models` and `/v1/chat/completions` routes are separate surfaces; streaming chat uses `prepare_chat_request` rather than widening this non-streaming delegate contract.
 
 ## Defensive validation and fallback
 

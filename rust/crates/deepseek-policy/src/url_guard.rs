@@ -25,6 +25,7 @@
 //! oracle rejects.
 
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 
 use crate::capability::{Capability, RiskLevel};
 use crate::tool_policy::evaluate_url_safety;
@@ -80,8 +81,28 @@ fn code_for_reason(reason: &str) -> &'static str {
         codes::URL_CREDENTIALS_BLOCKED
     } else if reason == "local host is not allowed" {
         codes::LOCALHOST_BLOCKED
-    } else if reason.starts_with("private or local ip is not allowed") {
-        codes::PRIVATE_NETWORK_BLOCKED
+    } else if let Some(literal) = reason.strip_prefix("private or local ip is not allowed: ") {
+        match literal.parse::<IpAddr>() {
+            Ok(IpAddr::V4(ip)) if ip.is_loopback() => codes::LOCALHOST_BLOCKED,
+            Ok(IpAddr::V4(ip)) if ip.is_link_local() => codes::LINK_LOCAL_BLOCKED,
+            Ok(IpAddr::V6(ip)) if ip.is_loopback() => codes::LOCALHOST_BLOCKED,
+            Ok(IpAddr::V6(ip)) if ip.is_unicast_link_local() => codes::LINK_LOCAL_BLOCKED,
+            Ok(IpAddr::V6(ip))
+                if ip
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| mapped.is_loopback()) =>
+            {
+                codes::LOCALHOST_BLOCKED
+            }
+            Ok(IpAddr::V6(ip))
+                if ip
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| mapped.is_link_local()) =>
+            {
+                codes::LINK_LOCAL_BLOCKED
+            }
+            _ => codes::PRIVATE_NETWORK_BLOCKED,
+        }
     } else {
         // "empty url", "invalid url", "missing host" — none of these is a valid
         // request target.
@@ -181,14 +202,15 @@ mod tests {
 
     #[test]
     fn url_guard_denies_ipv4_private_and_non_global_ranges() {
-        // The oracle reports one verdict for every blocked address, so loopback
-        // and link-local land on the same code as private ranges.
+        assert_eq!(blocked("http://127.0.0.1/").code, codes::LOCALHOST_BLOCKED);
+        assert_eq!(
+            blocked("http://169.254.169.254/").code,
+            codes::LINK_LOCAL_BLOCKED
+        );
         for url in [
-            "http://127.0.0.1/",
             "http://10.0.0.1/",
             "http://172.16.0.1/",
             "http://192.168.1.1/",
-            "http://169.254.169.254/",
             // Previously all allowed:
             "http://224.0.0.1/",
             "http://240.0.0.1/",
@@ -208,11 +230,11 @@ mod tests {
 
     #[test]
     fn url_guard_denies_ipv6_loopback_unique_local_and_link_local() {
+        assert_eq!(blocked("http://[::1]/").code, codes::LOCALHOST_BLOCKED);
+        assert_eq!(blocked("http://[fe80::1]/").code, codes::LINK_LOCAL_BLOCKED);
         for url in [
-            "http://[::1]/",
             "http://[::]/",
             "http://[fc00::1]/",
-            "http://[fe80::1]/",
             // Previously all allowed:
             "http://[2002::1]/",
             "http://[64:ff9b::1]/",

@@ -539,11 +539,12 @@ async fn streaming_refuses_a_tool_call_turn_instead_of_flattening_it() {
     assert!(response.body.ends_with("data: [DONE]\n\n"));
 }
 
-/// Streaming is a transport choice, so preparation must forward `stream: true`
-/// rather than refuse it. The route-level consequence is that the request is
-/// *accepted* and only fails on the real upstream condition.
+/// Streaming is a transport choice on the native chat route. The route-level
+/// consequence is that the request is accepted and only fails on the real
+/// upstream condition, while the public non-streaming preparation contract is
+/// unchanged.
 #[tokio::test]
-async fn streaming_is_forwarded_by_preparation_not_refused() {
+async fn streaming_is_forwarded_by_chat_preparation_not_refused() {
     let _env = EnvLock::acquire();
     let sink: Sink = Arc::new(Mutex::new(Captured::default()));
     let upstream = stub_sse_upstream(

@@ -35,6 +35,16 @@
 use regex::Regex;
 use serde_json::Value;
 
+pub(crate) fn encode_lower_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(encoded, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    encoded
+}
+
 /// `query_tokens`: the capped token list.
 ///
 /// Deterministic: longest first, ties broken lexicographically. See the module

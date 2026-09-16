@@ -33,7 +33,7 @@ Both halves come from real Python source, and the native side mirrors each:
 | Upstream SSE decoding | `deepseek_client.stream_deepseek` (loop at `deepseek_client.py:2051-2116`) | `chat_stream::decode_event` / `decode_chunk` |
 | Downstream SSE encoding | `openai_api._sse` + `openai_chat_stream` (`openai_api.py:93-130`) | `chat_stream::StreamChunkEncoder` |
 | Event-to-frame mapping | `openai_chat_stream`'s `chunk()` closure | `chat_stream::forward_line` |
-| Upstream request | `build_deepseek_request(..., stream=True)` → `{"model", "messages", "stream"}` | `request_preparation` + `chat_execution::open_chat_stream` |
+| Upstream request | `build_deepseek_request(..., stream=True)` → `{"model", "messages", "stream"}` | `request_preparation::prepare_chat_request` + `chat_execution::open_chat_stream` |
 
 ### Decoding rules mirrored
 
@@ -102,7 +102,7 @@ Tower against a loopback upstream that writes actual `text/event-stream` bytes:
 | `streaming_error_frame_matches_the_oracle_and_still_terminates` | `event: error` frame shape; `[DONE]` still emitted; partial content kept |
 | `streaming_upstream_failure_surfaces_as_http_status_not_a_frame` | non-success upstream status is an HTTP status, not `200` + error frame |
 | `streaming_refuses_a_tool_call_turn_instead_of_flattening_it` | a `tool_calls` turn fails loudly instead of emitting its prose |
-| `streaming_is_forwarded_by_preparation_not_refused` | preparation forwards `stream: true` as a boolean |
+| `streaming_is_forwarded_by_chat_preparation_not_refused` | the chat-only preparation path forwards `stream: true` without widening `/gateway/request/prepare` |
 
 `chat_stream.rs` additionally carries 15 unit tests over the decoding and encoding
 matrix.

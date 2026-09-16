@@ -31,7 +31,7 @@ impl Entropy for SystemEntropy {
     fn new_id(&self) -> Result<String, AppError> {
         let mut bytes = [0u8; 8];
         os_random(&mut bytes)?;
-        Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+        Ok(crate::core_utils::encode_lower_hex(&bytes))
     }
 
     fn now_millis(&self) -> i64 {
