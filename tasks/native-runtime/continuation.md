@@ -1240,3 +1240,67 @@ against the fix: 5 of 5 green. Both directions measured, not asserted.
 `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings` -> clean
 (the only output is a transient `deepseek-core` incremental-artifact copy warning, which
 is not a lint). `cargo fmt --all -- --check` -> clean.
+
+**Tool catalog ported, generated rather than transcribed (2026-09-16，uncommitted).**
+
+`schema_for_tool` and the web-search provider were the two remaining items. Measuring
+them showed the catalog is the **shared** dependency — `schema_for_tool`,
+`tool_parameter_schemas`, `agent_tool_definitions` and `tools_for_payload` all sit on it —
+so it came first, and the web-search provider is its own slice (below).
+
+**The 28 definitions are not typed out by hand.** They are the oracle's own
+`json.dumps(available_tool_definitions(), ensure_ascii=False, indent=2)` bytes, 40,634 of
+them, committed as `rust/crates/deepseek-policy/assets/tool_catalog_v1.json` and embedded
+with `include_str!`. Hand-copying 40 KB of descriptions and JSON Schema is where typos
+live, and a typo inside a `parameters` block would silently change what the model may
+send. The probe's `asset::json` case is the guard: it compares the embedded text with the
+oracle's rendering, so the committed bytes cannot drift without the diff failing.
+
+**Three divergences caught by reading the oracle instead of guessing.** The appended
+external-MCP definition is not what a reasonable guess produces:
+
+```python
+tools.append({
+    "type": "function",
+    "function": {
+        "name": profile.bridged_name,     # a profile field, not derived from `tool`
+        "strict": True,                   # easy to miss entirely
+        "description": f"[External MCP: {profile.server}] {schema_desc}",
+        "parameters": parameters,
+    },
+})
+```
+
+and `parameters` is `raw_schema if raw_schema.get("type") == "object" else
+{"type": "object", "properties": raw_schema}` — the **whole** raw schema goes under
+`properties`, not its entries. My first version derived `mcp__{tool}` as the name, omitted
+`strict`, and spread the free-form schema's keys into `properties`. All three are now the
+measured shape.
+
+**The external arms are injected, with a documented default.** `schema_for_tool`'s
+`mcp__` branch and `agent_tool_definitions`' appending both need `infra.mcp.bridge`. They
+take an injected provider / profile list, and `None` reproduces the oracle's own
+`except Exception: pass` degrades-to-local arm — so the default is the oracle's behaviour
+rather than an invented one.
+
+Verified:
+- **Catalog parity holds**: identical MD5 `a2fa62de54c6f95e85065f6c008b8e58`, 18 keys, no
+  differences — the asset bytes, the 28 names in declaration order, the schema index
+  (count, sorted names, four full schemas), eight `schema_for_tool` cases including the
+  trim, the unknown name and the empty string, and `agent_tool_definitions` with no
+  bridge.
+- Six unit tests cover the arm the probe cannot reach: an `mcp__` name with a bridge, a
+  non-object profile schema (rejected by `schema_for_tool`, wrapped by
+  `agent_tool_definitions`), and an unknown external name.
+
+**The web-search provider is measured and left, on purpose.** It is not pure:
+`_perform_web_search` needs `search_single_round` (a real Tavily HTTP call),
+`tavily_api_key`, a per-request result cache, a citation counter, a turn limit and a
+shared `search_budget`. `ExecutorContext.web_search` is already the injection point, so
+the Rust side has the seam — what is missing is the HTTP integration and its config, which
+is a connector-shaped slice that needs either a live key or a stub upstream to verify. Say
+that plainly rather than half-wiring it.
+
+**Also measured while sizing this, now unblocked:** `search_tool_enabled` and
+`tools_for_payload` are pure and depend only on the catalog plus `search_mode`. They are
+the natural companions to this slice whenever the search provider lands.

@@ -20,6 +20,7 @@ pub mod projects;
 pub mod python_json;
 pub mod reminders;
 pub mod tool_batch;
+pub mod tool_catalog;
 pub mod tool_dispatch;
 pub mod tool_policy;
 pub mod tool_search;
