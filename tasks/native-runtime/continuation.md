@@ -923,3 +923,81 @@ with `tool_name()` and `branch()` mappings. But **nothing executes them**: no ca
 anywhere invokes `reminders::create_reminder` or `projects::list_project_files`. So wiring
 is not "flip `is_ported()`" — it needs an executor plus routing, and end-to-end
 verification. That is its own slice.
+
+---
+
+## E7 (2026-09-16): the gateway wiring — `dispatch()` has a production caller
+
+**HEAD before this slice: `d92953bb` (main). The slice follows the seven data branches
+being wired into the dispatcher (`432318d1`).**
+
+The executor-plus-routing slice the measurement called for. Three pieces:
+
+1. **`rust/crates/deepseek-gateway/src/chat_tool_loop.rs`** — the non-streaming tool
+   round loop, mirroring `call_deepseek`'s loop body in the oracle's order:
+   `exchange_turn` → `merge_usage_totals` → lenient `tool_calls` normalization →
+   `decide_round` → `execute_tool_calls` (runner = `dispatch`) →
+   `append_tool_exchange`; `force_final_answer_without_tools` at budget exhaustion;
+   `final_answer` from the last turn plus the merged usage.
+   - `WorkspaceBundle` (root + `FileCache` + `SystemEntropy` + `SystemClock`) is the
+     oracle's module globals as one injectable object; the root comes from
+     `DEEPSEEK_INFRA_ROOT`, and unset ⇒ the data branches answer
+     "not enabled for this request", never a silent no-op.
+   - `ToolRoundExecutor::from_env` builds the policy the oracle's
+     `build_tool_policy` produces for main chat: `ToolPolicyConfig::default()`
+     (capability `full`, `enforce_schema`/`require_confirm` off, `sanitize` on,
+     `TOOL_POLICY_ENABLED` default on with `_env_bool` spellings) plus the
+     process's `DEEPSEEK_API_KEY`/`AUTH_TOKEN` as the secrets blocklist. One
+     policy object lives across the request — counters accumulate like the
+     oracle's single `tool_policy`. The per-call lock recovers from poisoning
+     (`PoisonError::into_inner`) for the same reason the stores do.
+   - Execution runs on `spawn_blocking` (the data branches take OS file locks);
+     a panicked blocking task resolves every selected slot through the batch
+     layer's own "did not run" envelope rather than inventing results.
+
+2. **`chat_execution.rs` reworked around turns** — `UpstreamTurn` +
+   `turn_from_payload` (extraction does not refuse `tool_calls`; that is the
+   loop's data), `exchange_turn` (the POST), `merge_usage_totals` +
+   `usage_int` upgraded to Python `int()` coercion semantics (numeric strings,
+   float truncation, bool), `final_answer` (keeps the facade's pre-existing
+   empty-content refusal, now also covering the budget-exhausted partial turn).
+   `ToolRoundsUnwired` / `NATIVE_CHAT_TOOL_ROUNDS_NOT_READY` is **deleted** from
+   the non-streaming path; the SSE path keeps refusing in-band via
+   `STREAM_TOOL_ROUNDS_NOT_READY` (streaming round continuation is its own seam).
+
+3. **The route is actually reachable** — `/v1/chat/completions` now prepares the
+   raw body through `prepare_chat_request` instead of re-encoding through the
+   typed `ChatCompletionRequest` struct, which silently dropped every field it
+   did not enumerate — including `tools`, without which the model could never
+   have called anything and the loop would have been dead code on arrival.
+   Malformed JSON → 400 "request must be valid JSON"; a malformed-typed field
+   now surfaces as the preparation layer's own 400 instead of axum's 422.
+
+**Honest state.** Eleven of eighteen branches execute for real. The other seven
+(`browser_*`, `python_eval`, `search_files`, `fetch_url`, `create_mindmap`,
+`create_pptx`, `create_document`) resolve to the visible `Tool did not run`
+envelope — a degradation against the Python oracle for those tools, on an
+opt-in sidecar, stated in the loop's module docs and pinned by a boundary test.
+Also absent with owners: the web-search provider, `mcp__*` bridging, artifact
+terminal handling, and the loop's surrounding machinery (semantic cache, memory
+retrieval, scheduler, traces, budget ledger). Divergences kept on purpose are
+listed in `docs/GATEWAY_TOOL_DISPATCH.md` (empty-content refusal, env-injected
+root, `""` vs `null` assistant replay, no `memorySuggestions` channel).
+
+**Verification.**
+- `cargo test -p deepseek-gateway -j 1` → 129 lib + 7 `chat_execution` boundary
+  (four new: continuation through dispatch, data branch against the workspace
+  incl. the fence files landing under `DEEPSEEK_INFRA_ROOT`, budget exhaustion
+  incl. the `MAX_TOOL_ROUNDS + 2` turn count and `tool_choice: "none"`, unported
+  branch honesty) + 6 `chat_stream` + 2 control-boundary — all pass.
+- `cargo test -p deepseek-policy -j 1 -- --test-threads=1` → 223 pass.
+- `cargo clippy -p deepseek-gateway -p deepseek-policy --all-targets -- -D warnings`
+  → only the pre-existing `control_proxy.rs:20` `result_large_err` (byte-identical
+  to HEAD; local rustc 1.97.1 vs declared 1.85). One same-class local-toolchain
+  lint (`unnecessary_sort_by` in `python_json.rs`) fixed mechanically — the two
+  sort forms are identical.
+- `cargo fmt --all -- --check` clean.
+
+**Next.** The streaming tool loop (SSE round continuation interleaved with
+`system_note`), the web-search provider behind `ExecutorContext.web_search`, and
+the `schema_for_tool` catalog.

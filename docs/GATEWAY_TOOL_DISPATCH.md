@@ -323,3 +323,112 @@ tests now carry the measured values with a note saying so.
 `web_search`, `compare_search_results`. The remaining fourteen are still marked
 `false` by `Branch::is_ported()` with their blocker named; nothing is wired, and
 wiring the round loop stays blocked on them.
+
+---
+
+# Slice 7: the data layer, and slice 8: the gateway wiring
+
+(Slices 4–7 ported the mutation gate, the reminders store, the retrieval scorer,
+the memory store, the projects read path, the file cache and the projects branch
+wrappers, then wired the seven data branches into `dispatch` via the injected
+`WorkspaceContext` — recorded in `tasks/native-runtime/continuation.md`. This
+section covers the slice that followed: giving `dispatch()` a production caller.)
+
+## The wiring
+
+`rust/crates/deepseek-gateway/src/chat_tool_loop.rs` is the non-streaming tool
+round loop — the core of `call_deepseek`'s loop, in the oracle's order:
+`exchange_turn` → `merge_usage_totals` → lenient `tool_calls` normalization →
+`decide_round` (Finish / Continue / ForceFinalAnswer) → `execute_tool_calls`
+with `dispatch` as the runner → `append_tool_exchange` → next round;
+`force_final_answer_without_tools` once the round budget is spent.
+
+`ToolRoundExecutor` is the per-request bundle the runner needs:
+
+- **`WorkspaceBundle`** (root, `FileCache`, `SystemEntropy`, `SystemClock`) —
+  the oracle's module globals (`config.ROOT`, the `lru_cache`, `secrets`,
+  `utc_now_iso`) as one injectable object. The root comes from
+  `DEEPSEEK_INFRA_ROOT`; unset means no workspace, and the data branches then
+  answer *"not enabled for this request"* — the same explicit error as
+  `web_search` without its callback, never a silent no-op.
+- **the policy** — the oracle's `build_tool_policy` main-chat profile:
+  `ToolPolicyConfig::default()` (capability `full`, `enforce_schema` /
+  `require_confirm` off, `sanitize` on) plus the process's own
+  `DEEPSEEK_API_KEY` / `AUTH_TOKEN` as the secret-exfiltration blocklist,
+  gated by `TOOL_POLICY_ENABLED` (default on, `_env_bool` semantics). One
+  policy object lives across the request's rounds, so its counters accumulate
+  like the oracle's single `tool_policy` does.
+- the runner extracts name + raw `arguments` per call, locks the shared policy
+  (`PoisonError::into_inner` — poisoning is a failure mode the oracle's
+  `RLock` does not have), and calls `dispatch` with `schema: None` (the schema
+  catalog is not ported; with `enforce_schema` off the absence changes no
+  verdict).
+
+The route change that makes the loop *reachable*: `/v1/chat/completions` now
+prepares the raw body directly through `prepare_chat_request` instead of
+re-encoding through a typed struct first. The typed struct silently dropped every
+field it did not enumerate — including `tools`, which meant the model could never
+have called anything. Both entry points (`/v1/chat/completions` and
+`/gateway/request/prepare`) now share the one validator.
+
+## What runs, honestly
+
+Eleven of eighteen branches execute for real: the four request-independent ones
+plus the seven data branches. The other seven (`browser_*`, `python_eval`,
+`search_files`, `fetch_url`, `create_mindmap`, `create_pptx`,
+`create_document`) resolve to the `Tool did not run` envelope — visible to the
+model, never a success, never a route failure. Also absent, each with an owner:
+the web-search provider (branches answer "not enabled"), `mcp__*` bridging
+("Unsupported tool:"), the artifact terminal check, and the loop's surrounding
+machinery (semantic cache, memory retrieval, scheduler, traces, budget ledger).
+
+## Verification
+
+- `cargo test -p deepseek-gateway -j 1` → **129 lib + 7 `chat_execution`
+  boundary + 6 `chat_stream` + 2 control-boundary tests**, all pass. The
+  boundary tests drive the route against a scripted loopback upstream:
+  - `chat_route_runs_tool_rounds_through_dispatch` — the follow-up request
+    carries the replayed assistant turn (content + `reasoning_content` +
+    `tool_calls`) and the `role: "tool"` result; usage merges across rounds;
+    `tools` survived preparation;
+  - `chat_route_runs_a_data_branch_against_the_workspace` — `create_reminder`
+    writes through the mutation fence into `DEEPSEEK_INFRA_ROOT`
+    (`.reminders/reminders.json` + `.workspace-generation` both land there);
+  - `chat_route_exhausts_the_round_budget_and_forces_a_final_answer` —
+    exactly `MAX_TOOL_ROUNDS + 2` upstream turns; the last request carries the
+    budget prompt and `tool_choice: "none"` while keeping the `tools` prefix;
+  - `chat_route_reports_an_unported_branch_as_did_not_run` — `fetch_url` gets
+    the honest envelope and the loop still completes.
+- `cargo test -p deepseek-policy -j 1 -- --test-threads=1` → 223 pass.
+- `cargo clippy -p deepseek-gateway -p deepseek-policy --all-targets -- -D
+  warnings` → only the pre-existing `control_proxy.rs:20`
+  `result_large_err` (file byte-identical to HEAD; local rustc 1.97.1 vs the
+  declared 1.85). One same-class local-toolchain lint
+  (`unnecessary_sort_by`, `python_json.rs`) was fixed mechanically — the two
+  sort forms are identical.
+- `cargo fmt --all -- --check` clean.
+
+## Known divergences kept on purpose
+
+- An answer with empty content is refused (`NATIVE_CHAT_NO_ANSWER`, 502) where
+  the oracle returns `""` with 200 — a divergence this facade has always had;
+  now it also covers the budget-exhausted partial turn.
+- The workspace root is env-injected; the oracle's is `config.ROOT`.
+- `memorySuggestions` / `search` / `diagnostics` are not carried — the OpenAI
+  envelope has no channel for them; `on_memory_suggestion` is `None`, so a
+  suggestion is still built and returned as the tool result, just not notified.
+- The assistant replay always writes `content: ""` where the oracle writes
+  `null` when the model's turn carried an explicit `null` content.
+
+## Explicit non-goals
+
+- The **streaming** tool loop (SSE round continuation, `system_note`
+  interleaving) — `chat_stream` still refuses tool-call chunks in-band with
+  `STREAM_TOOL_ROUNDS_NOT_READY`.
+- `schema_for_tool` (the schema catalog).
+- The web-search provider, `mcp__*` bridging, artifact terminal handling.
+
+## Rollback
+
+Reverting the commit restores the fail-closed refusal; the deepseek-policy
+modules it calls are unchanged by this slice (one mechanical lint fix excepted).

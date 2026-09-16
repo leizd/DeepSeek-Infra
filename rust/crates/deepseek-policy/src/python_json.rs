@@ -17,7 +17,9 @@ use serde_json::Value;
 
 fn sorted_fields(fields: &serde_json::Map<String, Value>) -> Vec<(&String, &Value)> {
     let mut entries: Vec<_> = fields.iter().collect();
-    entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    // `by_key` rather than `by`: the local clippy (1.97) fires
+    // `unnecessary_sort_by` on the closure form, and the two are identical here.
+    entries.sort_unstable_by_key(|(key, _)| *key);
     entries
 }
 

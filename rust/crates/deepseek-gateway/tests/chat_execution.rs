@@ -2,10 +2,11 @@
 //!
 //! `create_app()` is driven through Tower against a real loopback HTTP upstream
 //! stand-in, so the whole wired path runs: preparation → credential check →
-//! HTTP request construction and headers → upstream exchange → response
-//! translation → OpenAI envelope. The pure-function units in
-//! `chat_execution::tests` cover the translation matrix; this file exists to
-//! prove the route is genuinely wired, which a unit test cannot show.
+//! HTTP request construction and headers → upstream exchange → **the tool round
+//! loop** (dispatch → tool results → follow-up request) → response translation →
+//! OpenAI envelope. The pure-function units in `chat_execution::tests` and
+//! `chat_tool_loop::tests` cover the matrices; this file exists to prove the
+//! route is genuinely wired, which a unit test cannot show.
 //!
 //! Environment variables are process-global, so the cases that mutate them run
 //! serially inside one test function (`#[tokio::test]` bodies in a single test
@@ -19,6 +20,7 @@ use axum::{
     routing::post,
 };
 use serde_json::json;
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
 
@@ -69,6 +71,44 @@ fn stub_upstream(response_body: serde_json::Value, status: StatusCode, sink: Sin
 }
 
 use axum::response::IntoResponse;
+
+/// Upstream stand-in for a tool loop: answers a scripted sequence, one body per
+/// request, and records every request body it received so a test can assert on
+/// the follow-up request the loop builds. Once the script runs out it answers a
+/// plain completion, so an unexpectedly long loop fails on the request-count
+/// assertion rather than on a hang.
+fn stub_upstream_sequence(
+    scripts: Vec<serde_json::Value>,
+    requests: Arc<Mutex<Vec<serde_json::Value>>>,
+) -> Router {
+    let remaining: Arc<Mutex<VecDeque<serde_json::Value>>> = Arc::new(Mutex::new(scripts.into()));
+    Router::new().route(
+        "/chat/completions",
+        post(move |body: String| {
+            let requests = requests.clone();
+            let remaining = remaining.clone();
+            async move {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) {
+                    requests.lock().unwrap().push(parsed);
+                }
+                let response_body = remaining
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or_else(|| json!({
+                        "id": "chat-unexpected",
+                        "model": "deepseek-v4-pro",
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": "unexpected extra turn"}, "finish_reason": "stop"}],
+                    }));
+                (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    axum::Json(response_body).into_response(),
+                )
+            }
+        }),
+    )
+}
 
 async fn start_stub(router: Router) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -258,30 +298,323 @@ async fn chat_route_surfaces_upstream_failure_without_a_completion() {
 }
 
 #[tokio::test]
-async fn chat_route_refuses_tool_rounds_instead_of_flattening_them() {
+async fn chat_route_runs_tool_rounds_through_dispatch() {
     let _env = EnvLock::acquire();
-    let sink: Sink = Arc::new(Mutex::new(Captured::default()));
-    let upstream = stub_upstream(
+    let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let chart_call = json!({
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "generate_chart",
+            "arguments": "{\"type\":\"bar\",\"title\":\"t\",\"data\":[{\"label\":\"a\",\"value\":1},{\"label\":\"b\",\"value\":2}]}",
+        },
+    });
+    let upstream = stub_upstream_sequence(
+        vec![
+            json!({
+                "id": "chat-tools-1",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "let me chart that",
+                        "reasoning_content": "chart reasoning",
+                        "tool_calls": [chart_call.clone()],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            }),
+            json!({
+                "id": "chat-tools-2",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "the chart is drawn"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 4, "total_tokens": 11},
+            }),
+        ],
+        requests.clone(),
+    );
+    let url = start_stub(upstream).await;
+
+    let _guard = EnvGuard::set(&[
+        ("DEEPSEEK_API_URL", &url),
+        ("DEEPSEEK_API_KEY", "unit-upstream-key"),
+    ]);
+
+    let body = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [{"role": "user", "content": "chart a vs b"}],
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "generate_chart",
+                "description": "render a chart",
+                "parameters": {"type": "object"},
+            },
+        }],
+    })
+    .to_string();
+    let (status, response) = post_chat(&body).await;
+
+    assert_eq!(status, StatusCode::OK, "response: {response}");
+    assert_eq!(
+        response["choices"][0]["message"]["content"],
+        "the chart is drawn"
+    );
+    // Usage is merged across both rounds, mirroring `merge_usage_totals`.
+    assert_eq!(response["usage"]["prompt_tokens"], 10);
+    assert_eq!(response["usage"]["completion_tokens"], 6);
+    assert_eq!(response["usage"]["total_tokens"], 16);
+
+    let requests = requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2, "one executed round, then one final turn");
+    // The tool definitions survived preparation — without that, the model could
+    // never have called anything and the loop would be unreachable.
+    assert!(
+        requests[0]["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty()),
+        "first request must carry the tools: {}",
+        requests[0]
+    );
+    let messages = requests[1]["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3);
+    // The assistant turn that requested tools, replayed with its content and
+    // reasoning (thinking mode rejects the follow-up without reasoning_content).
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[1]["content"], "let me chart that");
+    assert_eq!(messages[1]["reasoning_content"], "chart reasoning");
+    assert_eq!(messages[1]["tool_calls"][0]["id"], "call-1");
+    // The tool result the model reads back: the dispatch envelope, compact JSON.
+    assert_eq!(messages[2]["role"], "tool");
+    assert_eq!(messages[2]["tool_call_id"], "call-1");
+    assert_eq!(messages[2]["name"], "generate_chart");
+    let content = messages[2]["content"].as_str().unwrap();
+    assert!(content.starts_with("{\"ok\":true"), "content: {content}");
+    assert!(content.contains("\"tool\":\"generate_chart\""));
+    assert!(content.contains("markdownTable"), "content: {content}");
+}
+
+#[tokio::test]
+async fn chat_route_runs_a_data_branch_against_the_workspace() {
+    let _env = EnvLock::acquire();
+    let workspace = tempfile::tempdir().unwrap();
+    let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let upstream = stub_upstream_sequence(
+        vec![
+            json!({
+                "id": "chat-data-1",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{
+                            "id": "call-rem-1",
+                            "type": "function",
+                            "function": {"name": "create_reminder", "arguments": "{\"title\":\"buy milk\",\"content\":\"two litres\",\"dueAt\":\"2027-01-01T09:00:00Z\"}"},
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+            }),
+            json!({
+                "id": "chat-data-2",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "reminder set"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14},
+            }),
+        ],
+        requests.clone(),
+    );
+    let url = start_stub(upstream).await;
+    let root = workspace.path().to_string_lossy().to_string();
+    let _guard = EnvGuard::set(&[
+        ("DEEPSEEK_API_URL", &url),
+        ("DEEPSEEK_API_KEY", "unit-upstream-key"),
+        ("DEEPSEEK_INFRA_ROOT", &root),
+    ]);
+
+    let body = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [{"role": "user", "content": "remind me to buy milk"}],
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "create_reminder",
+                "description": "create a reminder",
+                "parameters": {"type": "object"},
+            },
+        }],
+    })
+    .to_string();
+    let (status, response) = post_chat(&body).await;
+
+    assert_eq!(status, StatusCode::OK, "response: {response}");
+    assert_eq!(response["choices"][0]["message"]["content"], "reminder set");
+
+    let requests = requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let messages = requests[1]["messages"].as_array().unwrap();
+    assert_eq!(messages[2]["role"], "tool");
+    assert_eq!(messages[2]["name"], "create_reminder");
+    let content = messages[2]["content"].as_str().unwrap();
+    assert!(content.contains("\"ok\":true"), "content: {content}");
+    assert!(content.contains("buy milk"), "content: {content}");
+
+    // The write went through the injected workspace, fence and all: the store
+    // and the mutation gate's durable files live under DEEPSEEK_INFRA_ROOT,
+    // not under any process-global default.
+    assert!(
+        workspace
+            .path()
+            .join(".reminders")
+            .join("reminders.json")
+            .exists()
+    );
+    assert!(workspace.path().join(".workspace-generation").exists());
+}
+
+#[tokio::test]
+async fn chat_route_exhausts_the_round_budget_and_forces_a_final_answer() {
+    let _env = EnvLock::acquire();
+    let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    // The model never stops calling tools, so the loop must execute three tool
+    // rounds, then disable tools for the remaining turns, mirroring
+    // `force_final_answer_without_tools`.
+    let tool_turn = |content: &str| {
         json!({
-            "id": "chat-tools-1",
+            "id": "chat-budget",
             "model": "deepseek-v4-pro",
             "choices": [{
                 "index": 0,
                 "message": {
                     "role": "assistant",
-                    "content": "let me search",
+                    "content": content,
                     "tool_calls": [{
-                        "id": "call-1",
+                        "id": "call-loop",
                         "type": "function",
-                        "function": {"name": "web_search", "arguments": "{\"q\":\"x\"}"},
+                        "function": {"name": "generate_chart", "arguments": "{\"data\":[{\"label\":\"a\",\"value\":1}]}"},
                     }],
                 },
                 "finish_reason": "tool_calls",
             }],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        }),
-        StatusCode::OK,
-        sink,
+        })
+    };
+    let scripts = vec![
+        tool_turn(""),
+        tool_turn(""),
+        tool_turn(""),
+        tool_turn(""),
+        tool_turn("partial answer"),
+    ];
+    let upstream = stub_upstream_sequence(scripts, requests.clone());
+    let url = start_stub(upstream).await;
+    let _guard = EnvGuard::set(&[
+        ("DEEPSEEK_API_URL", &url),
+        ("DEEPSEEK_API_KEY", "unit-upstream-key"),
+    ]);
+
+    let body = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [{"role": "user", "content": "chart forever"}],
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "generate_chart",
+                "description": "render a chart",
+                "parameters": {"type": "object"},
+            },
+        }],
+    })
+    .to_string();
+    let (status, response) = post_chat(&body).await;
+
+    // The oracle returns the last turn's partial content once the budget is
+    // spent, rather than failing — the gateway keeps that shape.
+    assert_eq!(status, StatusCode::OK, "response: {response}");
+    assert_eq!(
+        response["choices"][0]["message"]["content"],
+        "partial answer"
+    );
+
+    let requests = requests.lock().unwrap().clone();
+    assert_eq!(
+        requests.len(),
+        5,
+        "max_tool_rounds + 2 turns: three executed rounds, two forced finals"
+    );
+    // The final request disables tools but keeps the definitions (prefix-cache
+    // stability) and carries the budget-exhausted user turn.
+    let last = &requests[4];
+    assert_eq!(last["tool_choice"], "none");
+    assert!(
+        last["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty())
+    );
+    let budget_prompts = last["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| {
+            message["content"] == json!(deepseek_gateway::tool_rounds::TOOL_BUDGET_EXHAUSTED_PROMPT)
+        })
+        .count();
+    assert_eq!(
+        budget_prompts, 1,
+        "the prompt is pushed once for the last sent request (the round-4 push never gets POSTed)"
+    );
+}
+
+#[tokio::test]
+async fn chat_route_reports_an_unported_branch_as_did_not_run() {
+    let _env = EnvLock::acquire();
+    let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let upstream = stub_upstream_sequence(
+        vec![
+            json!({
+                "id": "chat-unported-1",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "fetching that page",
+                        "tool_calls": [{
+                            "id": "call-fetch-1",
+                            "type": "function",
+                            "function": {"name": "fetch_url", "arguments": "{\"url\":\"https://example.com/\"}"},
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }),
+            json!({
+                "id": "chat-unported-2",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "i could not fetch the page"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+            }),
+        ],
+        requests.clone(),
     );
     let url = start_stub(upstream).await;
     let _guard = EnvGuard::set(&[
@@ -291,20 +624,29 @@ async fn chat_route_refuses_tool_rounds_instead_of_flattening_them() {
 
     let body = json!({
         "model": "deepseek-v4-pro",
-        "messages": [{"role": "user", "content": "search for x"}],
+        "messages": [{"role": "user", "content": "fetch that page"}],
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "fetch_url",
+                "description": "fetch a url",
+                "parameters": {"type": "object"},
+            },
+        }],
     })
     .to_string();
     let (status, response) = post_chat(&body).await;
 
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-    assert_eq!(
-        response["error"]["code"],
-        "NATIVE_CHAT_TOOL_ROUNDS_NOT_READY"
-    );
-    assert!(
-        response.get("choices").is_none(),
-        "a refused tool round must not look like a completed answer: {response}"
-    );
+    assert_eq!(status, StatusCode::OK, "response: {response}");
+    let requests = requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let messages = requests[1]["messages"].as_array().unwrap();
+    let content = messages[2]["content"].as_str().unwrap();
+    // The unported branch reports "did not run" rather than a success or a
+    // route-level failure — the degradation is visible to the model, and it
+    // can still answer around it.
+    assert!(content.contains("Tool did not run"), "content: {content}");
+    assert!(content.contains("\"tool\":\"fetch_url\""));
 }
 
 #[tokio::test]

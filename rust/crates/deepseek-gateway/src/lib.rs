@@ -14,6 +14,7 @@ use std::{io, path::Path as FsPath};
 mod auth;
 pub mod chat_execution;
 pub mod chat_stream;
+pub mod chat_tool_loop;
 mod control_proxy;
 pub mod observability;
 pub mod policy_routes;
@@ -29,22 +30,6 @@ pub fn gateway_version() -> &'static str {
 pub struct HealthzResponse {
     pub ok: bool,
     pub service: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ChatCompletionRequest {
-    #[serde(default)]
-    pub model: String,
-    #[serde(default)]
-    pub messages: Vec<ChatMessage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stream: Option<bool>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: String,
 }
 
 pub fn create_app() -> Router {
@@ -491,15 +476,15 @@ async fn models() -> (StatusCode, Json<serde_json::Value>) {
     )
 }
 
-async fn chat_completions(
-    Json(req): Json<ChatCompletionRequest>,
-) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
-    // Run the same preparation layer `/gateway/request/prepare` exposes instead
-    // of a second, thinner validation path. The typed request is re-encoded so
-    // both entry points share one normalization and one set of rules; the
-    // contract (`model` required, non-empty `messages`, a user turn, a boolean
-    // `stream`) therefore cannot drift between the two.
-    let raw = serde_json::to_value(&req).map_err(|_| {
+async fn chat_completions(body: Bytes) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    // The raw body is prepared directly — not re-encoded through a typed struct
+    // first. A typed shim would have to enumerate every forwardable field
+    // (`tools`, `tool_choice`, `temperature`, …) and would silently drop any it
+    // missed; the tool loop is only reachable at all because `tools` survives
+    // into the prepared request. Both entry points (`/v1/chat/completions` and
+    // `/gateway/request/prepare`) therefore share one validator,
+    // `prepare_chat_request`, and one set of rules.
+    let raw: serde_json::Value = serde_json::from_slice(&body).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
             Json(json!({
@@ -535,7 +520,11 @@ async fn chat_completions(
         let created = now_unix_seconds();
         return Ok(chat_stream::streaming_response(upstream, &model, created));
     }
-    match chat_execution::execute_chat_completion(&config, &prepared).await {
+    // The tool executor is per request: its file cache persists across this
+    // request's calls, which is the WorkspaceContext contract. The workspace
+    // root and the policy profile come from the server environment.
+    let executor = chat_tool_loop::ToolRoundExecutor::from_env();
+    match chat_tool_loop::execute_chat_with_tool_rounds(&config, &prepared, &executor).await {
         Ok(result) => Ok(Json(chat_execution::openai_completion_response(
             &result,
             &model,
@@ -584,10 +573,6 @@ fn chat_preparation_error(
     error: request_preparation::PreparationError,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let (status, error_type) = match error.code {
-        // Preserved behavior: streaming is refused as "not implemented".
-        "invalid_request" if error.message.contains("streaming") => {
-            (StatusCode::NOT_IMPLEMENTED, "not_supported")
-        }
         "request_too_large" => (StatusCode::PAYLOAD_TOO_LARGE, "invalid_request_error"),
         "context_compression_required" => (StatusCode::CONFLICT, "invalid_request_error"),
         _ => (StatusCode::BAD_REQUEST, "invalid_request_error"),

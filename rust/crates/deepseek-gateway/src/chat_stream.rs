@@ -31,7 +31,10 @@
 //! A streaming response whose upstream turn contains `tool_calls` is refused
 //! with `NATIVE_CHAT_TOOL_ROUNDS_NOT_READY` rather than emitting the tool-call
 //! round's prose as if it were the final answer, which would be a silent
-//! behavior change against the oracle.
+//! behavior change against the oracle. The *non-streaming* path runs the same
+//! rounds through `chat_tool_loop` now; continuing them mid-stream (where the
+//! round's frames interleave with the SSE emission the oracle interleaves them
+//! with) is the streaming slice's own seam.
 
 use axum::body::{Body, Bytes};
 use axum::http::header;
@@ -39,7 +42,10 @@ use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 
-use crate::chat_execution::ChatExecutionError;
+/// The refusal code for a streaming tool round: the one shape this transport
+/// still cannot continue. Kept as a literal so the wire contract is visible at
+/// the emission site.
+const STREAM_TOOL_ROUNDS_NOT_READY: &str = "NATIVE_CHAT_TOOL_ROUNDS_NOT_READY";
 
 /// One decoded upstream delta, in the vocabulary the OpenAI facade forwards.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -473,11 +479,12 @@ fn forward_line(
         UpstreamDelta::ToolCalls => {
             // This slice cannot run the tool round the oracle would run next, and
             // emitting the round's prose as the final answer would be a silent
-            // behavior change. Fail loudly with the same code the non-streaming
-            // path uses for the same condition.
+            // behavior change. Fail loudly; the non-streaming loop in
+            // `chat_tool_loop` *can* continue the round, so the code says which
+            // transport is not ready rather than that the capability is missing.
             *finished = true;
             Some(StreamChunkEncoder::error_frame(
-                ChatExecutionError::ToolRoundsUnwired.code(),
+                STREAM_TOOL_ROUNDS_NOT_READY,
             ))
         }
     }

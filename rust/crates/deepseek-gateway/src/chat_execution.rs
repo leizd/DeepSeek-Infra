@@ -2,23 +2,29 @@
 //!
 //! Scope: the `POST /v1/chat/completions` fast path, which the Python oracle
 //! serves through `deepseek_client.call_deepseek` → `openai_api.openai_chat_completion`.
-//! This module owns the upstream single-round exchange only.
+//! This module owns **one upstream exchange**: the request, the answer-turn
+//! extraction, and the final-answer translation. The multi-round tool loop that
+//! drives these exchanges lives in `chat_tool_loop`; the split mirrors how the
+//! oracle separates `call_deepseek`'s loop body from the per-turn
+//! `first_response_message` + `merge_usage_totals` pair.
+//!
+//! A turn that answers with `tool_calls` is **no longer refused here** — the
+//! loop continues it (execute the calls, append the tool exchange, ask again),
+//! mirroring the oracle. What this module still refuses is treating a turn as a
+//! final answer when there is no answer to give: empty `choices`, a missing
+//! `message`, or empty content all fail with `NATIVE_CHAT_NO_ANSWER`.
 //!
 //! Deliberately NOT implemented here (each stays on the Python path until its
-//! own slice lands, and each is reported as an explicit blocker rather than
-//! silently dropped):
-//! - tool-call rounds (`append_tool_exchange`, web search, `create_pptx`)
+//! own slice lands, and each is an explicit gap rather than a silent drop):
 //! - semantic cache, memory retrieval, context compression, model router
 //! - scheduler leases, resiliency retries, trace/span emission, budget ledger
-//! - SSE streaming (`stream_deepseek`); streaming requests are refused upstream
-//!   by `request_preparation` before reaching this module
-//!
-//! Because of that, an upstream response carrying `tool_calls` is refused with
-//! `NATIVE_CHAT_TOOL_ROUNDS_NOT_READY` instead of returning a flattened answer:
-//! returning the tool-call round's prose as if it were the final answer would be
-//! a silent behavior change against the oracle.
+//! - the web-search provider and `mcp__*` external bridging — no callback is
+//!   injected, so `web_search` / `compare_search_results` report
+//!   "not enabled for this request" and bridged names stay unsupported
+//! - SSE streaming (`stream_deepseek`); streaming requests are opened by
+//!   [`open_chat_stream`] and read by `chat_stream`
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::time::Duration;
 
 /// Mirrors `deepseek_infra.core.config.DEFAULT_DEEPSEEK_API_URL`.
@@ -40,9 +46,8 @@ pub enum ChatExecutionError {
     UpstreamStatus { status: u16 },
     /// Upstream body was not the documented JSON object.
     UpstreamMalformed,
-    /// Upstream answered with tool_calls, which this slice cannot continue.
-    ToolRoundsUnwired,
-    /// Upstream answered without a usable choices[0].message.
+    /// Upstream answered without a usable choices[0].message, or with empty
+    /// content.
     NoAnswer,
 }
 
@@ -54,7 +59,6 @@ impl ChatExecutionError {
             Self::UpstreamUnreachable => "NATIVE_CHAT_UPSTREAM_UNREACHABLE",
             Self::UpstreamStatus { .. } => "NATIVE_CHAT_UPSTREAM_STATUS",
             Self::UpstreamMalformed => "NATIVE_CHAT_UPSTREAM_MALFORMED",
-            Self::ToolRoundsUnwired => "NATIVE_CHAT_TOOL_ROUNDS_NOT_READY",
             Self::NoAnswer => "NATIVE_CHAT_NO_ANSWER",
         }
     }
@@ -63,9 +67,7 @@ impl ChatExecutionError {
     /// fail over, matching the oracle's `status=502` on `AppError(...)`.
     pub fn status(&self) -> u16 {
         match self {
-            Self::MissingUpstreamCredential => 503,
-            Self::InvalidUpstreamUrl => 503,
-            Self::ToolRoundsUnwired => 501,
+            Self::MissingUpstreamCredential | Self::InvalidUpstreamUrl => 503,
             Self::UpstreamUnreachable
             | Self::UpstreamStatus { .. }
             | Self::UpstreamMalformed
@@ -136,13 +138,224 @@ pub struct ChatCompletionResult {
     pub total_tokens: i64,
 }
 
+/// The usage fields summed across rounds, mirroring `USAGE_SUM_FIELDS`.
+///
+/// The two cache fields are not rendered by the OpenAI envelope, but the merge
+/// carries them anyway so the later budget-ledger slice inherits the oracle's
+/// arithmetic instead of re-deriving it.
+const USAGE_SUM_FIELDS: [(&str, &str); 5] = [
+    ("prompt_tokens", "promptTokens"),
+    ("completion_tokens", "completionTokens"),
+    ("total_tokens", "totalTokens"),
+    ("prompt_cache_hit_tokens", "promptCacheHitTokens"),
+    ("prompt_cache_miss_tokens", "promptCacheMissTokens"),
+];
+
+/// Mirrors `deepseek_client.usage_int`: the first named field that is present,
+/// non-`None` and non-blank, coerced the way Python's `int()` coerces — an
+/// integer passes, a float truncates toward zero, a numeric string must be an
+/// integer literal (after `int()`'s whitespace strip) — floored at zero.
+///
+/// Unparseable, blank and absent values fall through to the next name, then 0.
 fn usage_int(usage: &Value, names: &[&str]) -> i64 {
     for name in names {
-        if let Some(value) = usage.get(*name).and_then(Value::as_i64) {
-            return value.max(0);
+        let Some(raw) = usage.get(*name) else {
+            continue;
+        };
+        if let Some(number) = raw.as_i64() {
+            return number.max(0);
+        }
+        if let Some(flag) = raw.as_bool() {
+            return i64::from(flag);
+        }
+        if let Some(number) = raw.as_f64() {
+            return (number.trunc() as i64).max(0);
+        }
+        if let Some(text) = raw.as_str() {
+            if !text.is_empty() {
+                if let Ok(parsed) = text.trim().parse::<i64>() {
+                    return parsed.max(0);
+                }
+            }
         }
     }
     0
+}
+
+/// Mirrors `merge_usage_totals`: add one round's usage into the running total.
+///
+/// A field is only written when the round's contribution is truthy — Python's
+/// `if value:` — so a zero increment leaves the field absent, exactly as in the
+/// oracle. A non-object or empty usage leaves the total untouched.
+pub fn merge_usage_totals(total: &Value, usage: &Value) -> Value {
+    let Some(fields) = usage.as_object() else {
+        return total.clone();
+    };
+    if fields.is_empty() {
+        return total.clone();
+    }
+    let mut merged: Map<String, Value> = total.as_object().cloned().unwrap_or_default();
+    for (canonical, alias) in USAGE_SUM_FIELDS {
+        let increment = usage_int(usage, &[canonical, alias]);
+        if increment == 0 {
+            continue;
+        }
+        // The running total is always one of this merger's own integer writes
+        // under the canonical name, so a plain read suffices.
+        let running = merged.get(canonical).and_then(Value::as_i64).unwrap_or(0);
+        merged.insert(canonical.to_string(), json!(running + increment));
+    }
+    Value::Object(merged)
+}
+
+/// One upstream answer turn: `first_response_message` plus the fields the tool
+/// loop needs from the surrounding response body.
+///
+/// Extraction is deliberately **not** the final-answer translation. A turn that
+/// carries `tool_calls` extracts fine — the loop's job is to continue it, not
+/// to refuse it. [`final_answer`] is what refuses to invent an answer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpstreamTurn {
+    /// The response `id`, passed through verbatim (`response_json.get("id")`).
+    pub id: Value,
+    /// The response `model`. Required: a body without one is refused rather
+    /// than silently relabelled with the requested model.
+    pub model: String,
+    /// `choices[0].message` as an object.
+    pub message: Value,
+    /// The raw `usage` object (or `Null`), merged across rounds by the loop.
+    pub usage: Value,
+}
+
+impl UpstreamTurn {
+    /// The finalized tool calls, mirroring
+    /// `normalize_tool_calls(answer.get("tool_calls"))`: the lenient round-layer
+    /// normalization, which silently drops entries it cannot represent — this is
+    /// the provider's own output, not a client's.
+    pub fn tool_calls(&self) -> Vec<Value> {
+        match self.message.get("tool_calls").and_then(Value::as_array) {
+            Some(items) => crate::tool_rounds::normalize_tool_calls_lenient(items),
+            None => Vec::new(),
+        }
+    }
+
+    /// `str(answer.get("content") or "")`. A non-string content reads as empty —
+    /// the shapes DeepSeek sends are string or null.
+    pub fn content(&self) -> String {
+        self.message
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// `answer.get("reasoning_content") or answer.get("reasoning")`,
+    /// stringified when truthy — replayed into the follow-up request because
+    /// thinking mode rejects a `tool_calls` assistant message without it.
+    pub fn reasoning_content(&self) -> String {
+        for candidate in [
+            self.message.get("reasoning_content"),
+            self.message.get("reasoning"),
+        ] {
+            if let Some(text) = candidate.and_then(stringify_truthy) {
+                return text;
+            }
+        }
+        String::new()
+    }
+}
+
+/// Python truthiness plus `str()` for the reasoning fields: `null`, `""`, `0`,
+/// `0.0`, `false`, `[]` and `{}` fall through; a non-empty string passes and a
+/// number or `true` is stringified the way `str()` would.
+fn stringify_truthy(value: &Value) -> Option<String> {
+    match value {
+        Value::Null => None,
+        Value::String(text) => (!text.is_empty()).then(|| text.clone()),
+        Value::Bool(flag) => (*flag).then(|| "True".to_string()),
+        Value::Number(number) => (number.as_f64() != Some(0.0)).then(|| number.to_string()),
+        Value::Array(items) => {
+            (!items.is_empty()).then(|| serde_json::to_string(value).unwrap_or_default())
+        }
+        Value::Object(fields) => {
+            (!fields.is_empty()).then(|| serde_json::to_string(value).unwrap_or_default())
+        }
+    }
+}
+
+/// Extract the answer turn from an upstream body. Split out so the contract is
+/// unit-testable without a live upstream.
+pub fn turn_from_payload(payload: &Value) -> Result<UpstreamTurn, ChatExecutionError> {
+    let object = payload
+        .as_object()
+        .ok_or(ChatExecutionError::UpstreamMalformed)?;
+    let choices = object
+        .get("choices")
+        .and_then(Value::as_array)
+        .ok_or(ChatExecutionError::UpstreamMalformed)?;
+    let first = choices
+        .first()
+        .and_then(Value::as_object)
+        .ok_or(ChatExecutionError::NoAnswer)?;
+    let message = first
+        .get("message")
+        .and_then(Value::as_object)
+        .ok_or(ChatExecutionError::NoAnswer)?;
+    let model = object
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .ok_or(ChatExecutionError::UpstreamMalformed)?;
+    Ok(UpstreamTurn {
+        id: object.get("id").cloned().unwrap_or(Value::Null),
+        model,
+        message: Value::Object(message.clone()),
+        usage: object.get("usage").cloned().unwrap_or(Value::Null),
+    })
+}
+
+/// Translate the loop's last turn into the facade result.
+///
+/// The gateway's pre-existing rule, kept and pinned by tests: an answer with
+/// empty content is refused (`NATIVE_CHAT_NO_ANSWER`) rather than returned as a
+/// silent success. (The oracle returns `""` with 200 here — a divergence this
+/// facade has always had, not one the loop introduced.)
+pub fn final_answer(
+    turn: &UpstreamTurn,
+    usage_totals: &Value,
+) -> Result<ChatCompletionResult, ChatExecutionError> {
+    let content = turn.content();
+    if content.is_empty() {
+        return Err(ChatExecutionError::NoAnswer);
+    }
+    let prompt_tokens = usage_int(usage_totals, &["prompt_tokens", "promptTokens"]);
+    let completion_tokens = usage_int(usage_totals, &["completion_tokens", "completionTokens"]);
+    let total_tokens = usage_int(usage_totals, &["total_tokens", "totalTokens"]);
+    let total_tokens = if total_tokens == 0 {
+        prompt_tokens + completion_tokens
+    } else {
+        total_tokens
+    };
+    Ok(ChatCompletionResult {
+        id: turn.id.clone(),
+        model: turn.model.clone(),
+        content,
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+    })
+}
+
+/// Pure translation from a single upstream body, for callers outside the loop.
+///
+/// A `tool_calls` turn extracts like any other here; a caller that treats one as
+/// a final answer would be flattening a round the oracle continues. The loop in
+/// `chat_tool_loop` never does — its `decide_round` keeps executing first.
+pub fn translate_completion(payload: &Value) -> Result<ChatCompletionResult, ChatExecutionError> {
+    let turn = turn_from_payload(payload)?;
+    final_answer(&turn, &turn.usage)
 }
 
 /// Build the upstream HTTP client shared by both exchange shapes.
@@ -172,23 +385,25 @@ fn upstream_client(
         .map_err(|_| ChatExecutionError::UpstreamUnreachable)
 }
 
-/// Send one non-streaming completion and translate the upstream body.
+/// Send one non-streaming turn and extract it.
 ///
-/// `prepared` is the output of `request_preparation::prepare_request`, so the
-/// sanitization and validation rules have already been applied exactly once.
-pub async fn execute_chat_completion(
+/// `body` is the loop's working body — the prepared request on the first round,
+/// then each `append_tool_exchange` / `force_final_answer_without_tools`
+/// result. Headers, statuses and error codes match the single-exchange contract
+/// this route has always served.
+pub async fn exchange_turn(
     config: &UpstreamConfig,
-    prepared: &Value,
-) -> Result<ChatCompletionResult, ChatExecutionError> {
+    body: &Value,
+) -> Result<UpstreamTurn, ChatExecutionError> {
     let url = config.validate()?;
-    let body = serde_json::to_vec(prepared).map_err(|_| ChatExecutionError::UpstreamMalformed)?;
+    let bytes = serde_json::to_vec(body).map_err(|_| ChatExecutionError::UpstreamMalformed)?;
     let client = upstream_client(config, true)?;
     let response = client
         .post(url)
         .header("Authorization", format!("Bearer {}", config.api_key))
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
-        .body(body)
+        .body(bytes)
         .send()
         .await
         .map_err(|_| ChatExecutionError::UpstreamUnreachable)?;
@@ -206,7 +421,7 @@ pub async fn execute_chat_completion(
         .map_err(|_| ChatExecutionError::UpstreamUnreachable)?;
     let payload: Value =
         serde_json::from_slice(&bytes).map_err(|_| ChatExecutionError::UpstreamMalformed)?;
-    translate_completion(&payload)
+    turn_from_payload(&payload)
 }
 
 /// Open one streaming upstream turn and hand back the live response.
@@ -248,67 +463,6 @@ pub async fn open_chat_stream(
         });
     }
     Ok(response)
-}
-
-/// Pure translation from an upstream chat-completions body. Split out so the
-/// contract is unit-testable without a live upstream.
-pub fn translate_completion(payload: &Value) -> Result<ChatCompletionResult, ChatExecutionError> {
-    let object = payload
-        .as_object()
-        .ok_or(ChatExecutionError::UpstreamMalformed)?;
-    let choices = object
-        .get("choices")
-        .and_then(Value::as_array)
-        .ok_or(ChatExecutionError::UpstreamMalformed)?;
-    let first = choices
-        .first()
-        .and_then(Value::as_object)
-        .ok_or(ChatExecutionError::NoAnswer)?;
-    let message = first
-        .get("message")
-        .and_then(Value::as_object)
-        .ok_or(ChatExecutionError::NoAnswer)?;
-    // A tool-calling round is not a final answer. Refuse instead of returning
-    // the round's prose as the completion.
-    if message
-        .get("tool_calls")
-        .and_then(Value::as_array)
-        .is_some_and(|calls| !calls.is_empty())
-    {
-        return Err(ChatExecutionError::ToolRoundsUnwired);
-    }
-    let content = message
-        .get("content")
-        .and_then(Value::as_str)
-        .ok_or(ChatExecutionError::NoAnswer)?
-        .to_string();
-    if content.is_empty() {
-        return Err(ChatExecutionError::NoAnswer);
-    }
-    let usage = object.get("usage").cloned().unwrap_or(Value::Null);
-    let prompt_tokens = usage_int(&usage, &["prompt_tokens", "promptTokens"]);
-    let completion_tokens = usage_int(&usage, &["completion_tokens", "completionTokens"]);
-    let total_tokens = usage_int(&usage, &["total_tokens", "totalTokens"]);
-    let total_tokens = if total_tokens == 0 {
-        prompt_tokens + completion_tokens
-    } else {
-        total_tokens
-    };
-    let model = object
-        .get("model")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .ok_or(ChatExecutionError::UpstreamMalformed)?;
-    Ok(ChatCompletionResult {
-        id: object.get("id").cloned().unwrap_or(Value::Null),
-        model,
-        content,
-        prompt_tokens,
-        completion_tokens,
-        total_tokens,
-    })
 }
 
 /// Render the OpenAI `chat.completion` envelope. `fallback_model` is the model
@@ -412,20 +566,46 @@ mod tests {
     }
 
     #[test]
-    fn tool_calls_are_refused_rather_than_flattened_into_an_answer() {
-        // Returning this round's prose would silently drop the oracle's tool
-        // loop, so the slice must refuse.
+    fn a_tool_call_turn_extracts_so_the_loop_can_continue() {
+        // The turn is not refused — it is *data* for the loop. The finalized
+        // calls use the lenient round-layer normalization: id fallback,
+        // name required, arguments string passed through verbatim.
         let mut body = upstream_body();
-        body["choices"][0]["message"]["tool_calls"] = json!([{"id": "c1", "type": "function", "function": {"name": "web_search", "arguments": "{}"}}]);
-        assert_eq!(
-            translate_completion(&body).unwrap_err(),
-            ChatExecutionError::ToolRoundsUnwired
-        );
-        assert_eq!(
-            ChatExecutionError::ToolRoundsUnwired.status(),
-            501,
-            "unwired capability must not report success"
-        );
+        body["choices"][0]["message"] = json!({
+            "role": "assistant",
+            "content": "let me chart that",
+            "reasoning_content": "thinking about it",
+            "tool_calls": [
+                {"id": "call-1", "type": "function", "function": {"name": "generate_chart", "arguments": "{\"type\":\"bar\"}"}},
+                {"function": {"name": "", "arguments": "{}"}},
+                "not an object",
+            ],
+        });
+        let turn = turn_from_payload(&body).unwrap();
+        assert_eq!(turn.content(), "let me chart that");
+        assert_eq!(turn.reasoning_content(), "thinking about it");
+        let calls = turn.tool_calls();
+        assert_eq!(calls.len(), 1, "blank-name and non-object entries drop");
+        assert_eq!(calls[0]["id"], "call-1");
+        assert_eq!(calls[0]["function"]["name"], "generate_chart");
+        assert_eq!(calls[0]["function"]["arguments"], "{\"type\":\"bar\"}");
+    }
+
+    #[test]
+    fn reasoning_falls_back_to_reasoning_and_requires_truthy() {
+        let mut body = upstream_body();
+        body["choices"][0]["message"] = json!({
+            "role": "assistant",
+            "content": "hi",
+            "reasoning_content": "",
+            "reasoning": "fallback",
+        });
+        let turn = turn_from_payload(&body).unwrap();
+        assert_eq!(turn.reasoning_content(), "fallback");
+
+        body["choices"][0]["message"]["reasoning"] = json!("");
+        let turn = turn_from_payload(&body).unwrap();
+        assert_eq!(turn.reasoning_content(), "");
     }
 
     #[test]
@@ -433,7 +613,7 @@ mod tests {
         let mut body = upstream_body();
         body["choices"] = json!([]);
         assert_eq!(
-            translate_completion(&body).unwrap_err(),
+            turn_from_payload(&body).unwrap_err(),
             ChatExecutionError::NoAnswer
         );
 
@@ -443,6 +623,63 @@ mod tests {
             translate_completion(&body).unwrap_err(),
             ChatExecutionError::NoAnswer
         );
+    }
+
+    #[test]
+    fn usage_totals_sum_across_rounds_with_aliases_and_zero_skips() {
+        // Round one carries camelCase aliases, round two the canonical names.
+        let totals = merge_usage_totals(
+            &json!({}),
+            &json!({
+                "promptTokens": 3, "completionTokens": 2, "prompt_cache_hit_tokens": 4,
+            }),
+        );
+        let totals = merge_usage_totals(
+            &totals,
+            &json!({
+                "prompt_tokens": 7, "completion_tokens": 4, "total_tokens": 11,
+            }),
+        );
+        assert_eq!(totals["prompt_tokens"], 10);
+        assert_eq!(totals["completion_tokens"], 6);
+        assert_eq!(totals["total_tokens"], 11);
+        assert_eq!(totals["prompt_cache_hit_tokens"], 4);
+
+        // A zero contribution is falsy in Python, so the field is left absent
+        // rather than written as a sum that changed nothing.
+        let totals = merge_usage_totals(&totals, &json!({"prompt_tokens": 0}));
+        assert!(
+            totals
+                .get("prompt_tokens")
+                .is_some_and(|value| value == &json!(10))
+        );
+
+        // Non-dict and empty usage leave the total untouched.
+        let untouched = merge_usage_totals(&totals, &Value::Null);
+        assert_eq!(untouched, totals);
+        let untouched = merge_usage_totals(&totals, &json!({}));
+        assert_eq!(untouched, totals);
+    }
+
+    #[test]
+    fn usage_int_coerces_the_way_pythons_int_does() {
+        let usage = json!({
+            "a": 5, "b": 5.9, "c": "7", "d": " 8 ", "e": "7.9",
+            "f": "", "g": true, "h": false,
+        });
+        assert_eq!(usage_int(&usage, &["a"]), 5);
+        assert_eq!(usage_int(&usage, &["b"]), 5);
+        assert_eq!(usage_int(&usage, &["c"]), 7);
+        assert_eq!(usage_int(&usage, &["d"]), 8);
+        // "7.9" raises in Python, so the next name is consulted.
+        assert_eq!(usage_int(&usage, &["e", "a"]), 5);
+        // Blank and unparseable values fall through to the next name.
+        assert_eq!(usage_int(&usage, &["f", "a"]), 5);
+        assert_eq!(usage_int(&usage, &["missing", "a"]), 5);
+        assert_eq!(usage_int(&usage, &["missing"]), 0);
+        // `int(True)` is 1 and `int(False)` is 0.
+        assert_eq!(usage_int(&usage, &["g"]), 1);
+        assert_eq!(usage_int(&usage, &["h"]), 0);
     }
 
     #[test]
@@ -463,7 +700,6 @@ mod tests {
             ChatExecutionError::UpstreamUnreachable.code(),
             ChatExecutionError::UpstreamStatus { status: 500 }.code(),
             ChatExecutionError::UpstreamMalformed.code(),
-            ChatExecutionError::ToolRoundsUnwired.code(),
             ChatExecutionError::NoAnswer.code(),
         ];
         let unique: std::collections::HashSet<&str> = codes.iter().copied().collect();
@@ -496,7 +732,7 @@ mod tests {
         let mut body = upstream_body();
         body["model"] = json!("");
         assert_eq!(
-            translate_completion(&body).unwrap_err(),
+            turn_from_payload(&body).unwrap_err(),
             ChatExecutionError::UpstreamMalformed
         );
     }

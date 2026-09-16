@@ -5,11 +5,13 @@
 <!-- docs-language-switcher:end -->
 
 
-Status: **layer 1 implemented and byte-verified; route stays fail-closed.**
+Status: **layer 1 implemented and byte-verified; the non-streaming route now runs
+the tool loop (`chat_tool_loop`, see `GATEWAY_TOOL_DISPATCH.md`); streaming stays
+fail-closed.**
 
 This document records how the Rust gateway's tool-round *bookkeeping* is proven
 equivalent to the Python oracle, what is deliberately **not** implemented yet,
-and why the public route still refuses a tool-calling turn.
+and why the route refused tool-calling turns while the executor did not exist.
 
 ## Scope
 
@@ -18,28 +20,35 @@ implemented in Rust.
 
 | Layer | Responsibility | Oracle source | Rust status |
 | --- | --- | --- | --- |
-| 1. round control | accumulate streamed `tool_calls` deltas, finalize them, decide whether another round is allowed, assemble the assistant + tool-result messages | `deepseek_client.py` | **implemented** (`rust/crates/deepseek-gateway/src/tool_rounds.rs`) |
-| 2. tool execution | the 17 executable branches plus `browser_*` | `tool_runtime/tools.py` | **not implemented** |
-| 3. policy and sandbox | `ToolPolicy.evaluate` / `sanitize_result`, Rust-sidecar policy path | `tool_runtime/policy.py` | **not implemented** |
+| 1. round control | accumulate streamed `tool_calls` deltas, finalize them, decide whether another round is allowed, assemble the assistant + tool-result messages | `deepseek_client.py` | **implemented** (`rust/crates/deepseek-gateway/src/tool_rounds.rs`), **wired into the non-streaming loop** (`chat_tool_loop.rs`) |
+| 2. tool execution | the 17 executable branches plus `browser_*` | `tool_runtime/tools.py` | **11 of 18 branches ported and wired** (`deepseek-policy::tool_dispatch`); see `GATEWAY_TOOL_DISPATCH.md` |
+| 3. policy and sandbox | `ToolPolicy.evaluate` / `sanitize_result`, Rust-sidecar policy path | `tool_runtime/policy.py` | **policy engine ported** (`deepseek-policy::tool_policy`) and attached by the loop's executor |
 
 Layers 2 and 3 are thousands of lines and depend on the `rag`, `data`,
 `browser`, and `media` packages. They are the reported blockers for enabling
 tool rounds on a live route.
 
-## Why the route still refuses tool rounds
+## Why the route refused tool rounds, and what changed
 
-`/v1/chat/completions` answers a turn containing `tool_calls` with
+`/v1/chat/completions` used to answer a turn containing `tool_calls` with
 `NATIVE_CHAT_TOOL_ROUNDS_NOT_READY` (both streaming and non-streaming).
 
-Wiring layer 1 alone would **manufacture a silent behavior change**: with no
-executor, the only available tool result is synthetic. The model would receive a
+Wiring layer 1 alone would have **manufactured a silent behavior change**: with
+no executor, the only available tool result is synthetic. The model would receive a
 fabricated "tool unavailable" payload, keep generating, and the oracle's
 terminating tool loop would become a permanently-failing loop that still answers
-`200`. Fail-closed is the only honest option until layers 2–3 land.
+`200`. Fail-closed was the only honest option until layers 2–3 landed.
 
-Making the refusal *precise* is the point of this slice: the accumulation,
-finalization, and budget rules are now pinned by tests, so enabling them later is
+Making the refusal *precise* was the point of that slice: the accumulation,
+finalization, and budget rules are pinned by tests, so enabling them later is
 a wiring change rather than a rewrite.
+
+**The wiring slice has now landed (2026-09-16).** The non-streaming path runs
+the loop through `chat_tool_loop::execute_chat_with_tool_rounds`; the
+`NATIVE_CHAT_TOOL_ROUNDS_NOT_READY` refusal is deleted from the non-streaming
+path and remains only as the streaming refusal (`STREAM_TOOL_ROUNDS_NOT_READY`
+in `chat_stream.rs`), where continuing a round mid-stream — interleaved with the
+SSE emission the oracle interleaves it with — is still its own seam.
 
 ## Method
 
