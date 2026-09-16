@@ -733,6 +733,64 @@ fn authenticators_redact_tokens_in_debug() {
     assert!(debug.contains("<redacted>"));
 }
 
+// An unavailable configured authenticator is an outage, not permission to
+// downgrade to unauthenticated shadow RPCs. This fixture has no provider.
+#[tokio::test]
+async fn rpc_authenticator_outage_never_bypasses_identity_checks() {
+    struct UnavailableAuthenticator;
+    impl deepseek_worker::TransportAuthenticator for UnavailableAuthenticator {
+        fn authenticate(
+            &self,
+            _: &tonic::metadata::MetadataMap,
+        ) -> Result<CallerIdentity, deepseek_worker::AuthError> {
+            Err(deepseek_worker::AuthError::ServiceAuthenticationUnavailable)
+        }
+    }
+    let (config, canonical, installed) = frozen_authority();
+    let directory = tempfile::tempdir().unwrap();
+    let worker = Worker::open_with_authority(config.clone(), directory.path()).unwrap();
+    let service =
+        WorkerRpcService::new_with_authenticator(worker, Arc::new(UnavailableAuthenticator));
+    let installation = WorkerRpc::install_authoritative_epoch(
+        &service,
+        Request::new(InstallAuthoritativeEpochRequest {
+            fence: Some(installed.clone()),
+            canonical_request: canonical,
+        }),
+    )
+    .await
+    .unwrap()
+    .into_inner();
+    assert_eq!(
+        installation.error.as_ref().map(|error| error.code.as_str()),
+        Some("SERVICE_AUTHENTICATION_UNAVAILABLE")
+    );
+    let admission = admit(&service, installed.clone(), installed.execution_epoch).await;
+    assert_eq!(
+        admission.error.as_ref().map(|error| error.code.as_str()),
+        Some("SERVICE_AUTHENTICATION_UNAVAILABLE")
+    );
+    let query = WorkerRpc::query_effect(
+        &service,
+        Request::new(QueryEffectRequest {
+            fence: Some(installed.clone()),
+        }),
+    )
+    .await
+    .unwrap()
+    .into_inner();
+    assert_eq!(
+        query.error.as_ref().map(|error| error.code.as_str()),
+        Some("SERVICE_AUTHENTICATION_UNAVAILABLE")
+    );
+    drop(service);
+    let reopened = Worker::open_with_authority(config, directory.path()).unwrap();
+    assert_eq!(
+        reopened.admit(&installed),
+        Err(deepseek_protocol::AdmitError::FenceMismatch)
+    );
+}
+
 fn frozen_grant() -> Vec<u8> {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),

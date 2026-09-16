@@ -43,12 +43,13 @@ async fn query(
 }
 
 fn assert_mismatch(response: &StorageMutationResponse) {
+    assert_rejected(response, "STORAGE_OPERATION_MISMATCH");
+}
+
+fn assert_rejected(response: &StorageMutationResponse, code: &str) {
     assert_eq!(response.status(), StorageMutationStatus::Rejected);
     assert_eq!(response.state(), EffectState::Unknown);
-    assert_eq!(
-        response.error.as_ref().unwrap().code,
-        "STORAGE_OPERATION_MISMATCH"
-    );
+    assert_eq!(response.error.as_ref().unwrap().code, code);
     assert!(response.effect_id.is_empty());
     assert!(response.etag.is_empty());
     assert!(response.provider_metadata.is_empty());
@@ -136,6 +137,16 @@ async fn rpc_created_intent_preserves_operation_identity_on_three_real_providers
             assert_mismatch(&query(&service, &fence, substitute).await);
             let mut retry = request.clone();
             retry.operation_id = substitute.into();
+            assert_rejected(
+                &WorkerRpc::execute_storage_mutation(&service, authenticated(retry.clone()))
+                    .await
+                    .unwrap()
+                    .into_inner(),
+                "STORAGE_OPERATION_GRANT_COMMAND_MISMATCH",
+            );
+            // A valid grant for the replacement still cannot reuse the durable
+            // effect belonging to the original operation ID.
+            retry.canonical_authorization = sign_grant(&key, &retry);
             assert_mismatch(
                 &WorkerRpc::execute_storage_mutation(&service, authenticated(retry))
                     .await
@@ -155,6 +166,14 @@ async fn rpc_created_intent_preserves_operation_identity_on_three_real_providers
         assert_mismatch(&query(&service, &fence, "Operation-A").await);
         let mut retry = request.clone();
         retry.operation_id = "Operation-A".into();
+        assert_rejected(
+            &WorkerRpc::execute_storage_mutation(&service, authenticated(retry.clone()))
+                .await
+                .unwrap()
+                .into_inner(),
+            "STORAGE_OPERATION_GRANT_COMMAND_MISMATCH",
+        );
+        retry.canonical_authorization = sign_grant(&key, &retry);
         assert_mismatch(
             &WorkerRpc::execute_storage_mutation(&service, authenticated(retry))
                 .await

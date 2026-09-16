@@ -347,8 +347,8 @@ func verifyStorageOperationGrantPayload(payload map[string]any) error {
 		return ErrStorageOperationGrantInvalid
 	}
 	for _, key := range []string{"bucket", "prefix", "objectKey", "expectedEtag"} {
-		value := asString(payload[key])
-		if !utf8.ValidString(value) || len(value) > 1024 || strings.ContainsRune(value, 0) {
+		value, ok := payload[key].(string)
+		if !ok || !utf8.ValidString(value) || len(value) > 1024 || strings.ContainsRune(value, 0) {
 			return ErrStorageOperationGrantInvalid
 		}
 	}

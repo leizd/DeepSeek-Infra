@@ -17,6 +17,8 @@ mod authority_request;
 mod authority_store;
 mod mutation_request;
 mod operation_grant;
+#[cfg(test)]
+mod operation_grant_replay_tests;
 mod service;
 mod transport;
 
@@ -362,33 +364,37 @@ impl Worker {
                 "STORAGE_OPERATION_GRANT_MISSING",
             ));
         }
-        let live = if let Some(store) = &self.authority_store {
-            store.installed_epoch(command.action_id)
-        } else {
-            self.live_epochs
-                .get(command.action_id)
-                .copied()
-                .unwrap_or(0) as i64
-        };
-        let request_id = serde_json::from_slice::<serde_json::Value>(raw)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("requestId")
-                    .and_then(|id| id.as_str().map(str::to_string))
-            })
-            .unwrap_or_default();
+        if raw.len() > operation_grant::MAX_STORAGE_OPERATION_GRANT_BYTES {
+            return Err(StorageOperationGrantError::new(
+                "STORAGE_OPERATION_GRANT_TOO_LARGE",
+            ));
+        }
+        if let Some(store) = self.authority_store.as_mut() {
+            let authority = self.authority.as_ref().ok_or_else(|| {
+                StorageOperationGrantError::new("STORAGE_OPERATION_GRANT_AUTHORITY_MISSING")
+            })?;
+            return store.admit_grant(authority, raw, command);
+        }
+        let live = self
+            .live_epochs
+            .get(command.action_id)
+            .copied()
+            .unwrap_or(0) as i64;
+        let parsed: serde_json::Value = serde_json::from_slice(raw)
+            .map_err(|_| StorageOperationGrantError::new("STORAGE_OPERATION_GRANT_INVALID"))?;
+        let request_id = parsed
+            .get("requestId")
+            .and_then(|id| id.as_str())
+            .unwrap_or("");
+        let mut exact_retry = false;
         if let Some(authority) = self.authority.as_ref() {
-            if let Some(previous) = authority.seen_grant_blobs.get(&request_id) {
-                if previous.as_slice() == raw {
-                    let document = serde_json::from_slice(raw).map_err(|_| {
-                        StorageOperationGrantError::new("STORAGE_OPERATION_GRANT_INVALID")
-                    })?;
-                    return bind_storage_operation_grant(&document, command);
+            if let Some(previous) = authority.seen_grant_blobs.get(request_id) {
+                if previous.as_slice() != raw {
+                    return Err(StorageOperationGrantError::new(
+                        "STORAGE_OPERATION_GRANT_REPLAY",
+                    ));
                 }
-                return Err(StorageOperationGrantError::new(
-                    "STORAGE_OPERATION_GRANT_REPLAY",
-                ));
+                exact_retry = true;
             }
         }
         let now_owned;
@@ -404,7 +410,7 @@ impl Worker {
                 })?;
                 now_owned.as_str()
             };
-            let context = StorageOperationGrantContext {
+            let mut context = StorageOperationGrantContext {
                 now,
                 signer_public_key: &authority.signer_public_key,
                 signer_key_id: &authority.signer_key_id,
@@ -422,6 +428,15 @@ impl Worker {
                 seen_operation_digests: authority.seen_operation_digests.clone(),
                 max_future_skew_seconds: 30,
             };
+            if exact_retry {
+                // Only this exact previously verified document may repeat its
+                // own request/nonce. Recheck time, live epoch, authority, signed
+                // scope and operation binding on every attempt, including ACK retries.
+                context.seen_request_ids.remove(request_id);
+                if let Some(nonce) = parsed.get("nonce").and_then(|value| value.as_str()) {
+                    context.seen_nonces.remove(nonce);
+                }
+            }
             verify_storage_operation_grant(raw, &context)?
         };
         bind_storage_operation_grant(&document, command)?;

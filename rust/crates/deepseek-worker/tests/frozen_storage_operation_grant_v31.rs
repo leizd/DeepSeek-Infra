@@ -242,3 +242,93 @@ fn rust_rejects_command_substitution_after_a_valid_grant() {
         "STORAGE_OPERATION_GRANT_COMMAND_MISMATCH"
     );
 }
+
+#[test]
+fn worker_cached_grant_cannot_outlive_installed_epoch() {
+    let fixture = fixture();
+    let mut worker = deepseek_worker::Worker::new();
+    worker
+        .configure_authority(deepseek_worker::WorkerAuthorityConfig {
+            signer_public_key: fixture.signer_public_key,
+            fleet_id: "fleet-a".into(),
+            environment: "test".into(),
+            fencing_token: 4,
+            now: Some(fixture.now),
+        })
+        .unwrap();
+    let fence = deepseek_protocol::ActionFence {
+        action_id: "act-1".into(),
+        execution_epoch: 4,
+    };
+    worker.install_authoritative_epoch(&fence).unwrap();
+    worker
+        .admit_storage_operation_grant(fixture.canonical_request.as_bytes(), &frozen_command())
+        .unwrap();
+    // Exact retries remain idempotent only while live authorization still holds.
+    worker
+        .admit_storage_operation_grant(fixture.canonical_request.as_bytes(), &frozen_command())
+        .unwrap();
+    worker
+        .install_authoritative_epoch(&deepseek_protocol::ActionFence {
+            execution_epoch: 5,
+            ..fence
+        })
+        .unwrap();
+    assert_eq!(
+        worker
+            .admit_storage_operation_grant(fixture.canonical_request.as_bytes(), &frozen_command())
+            .unwrap_err()
+            .code,
+        "FENCE_MISMATCH"
+    );
+}
+
+// Published RFC 8032 test key, never a deployed credential. Re-sign invalid
+// payloads so the test exercises type validation, not a broken signature/digest.
+fn resign_fixture(document: &mut Value) {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use ed25519_dalek::{Signer as _, SigningKey};
+    let seed_hex = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
+    let mut seed = [0_u8; 32];
+    for (index, pair) in seed_hex.as_bytes().chunks_exact(2).enumerate() {
+        seed[index] = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
+    }
+    document.as_object_mut().unwrap().remove("signature");
+    document.as_object_mut().unwrap().remove("digest");
+    document["payloadDigest"] = Value::String(format!(
+        "sha256:{:x}",
+        Sha256::digest(canonical_bytes(&document["payload"]))
+    ));
+    document["digest"] = Value::String(format!(
+        "sha256:{:x}",
+        Sha256::digest(canonical_bytes(document))
+    ));
+    let mut message = b"deepseek-infra:control-storage-operation-grant-v1\x00".to_vec();
+    message.extend(canonical_bytes(document));
+    document["signature"] = Value::String(
+        URL_SAFE_NO_PAD.encode(SigningKey::from_bytes(&seed).sign(&message).to_bytes()),
+    );
+}
+
+#[test]
+fn rust_rejects_signed_non_string_storage_scope() {
+    let fixture = fixture();
+    let empty = Value::Object(Map::new());
+    let mut original: Value = serde_json::from_str(&fixture.canonical_request).unwrap();
+    resign_fixture(&mut original);
+    assert_eq!(
+        canonical_bytes(&original),
+        fixture.canonical_request.as_bytes()
+    );
+    for (field, value) in [("prefix", Value::from(42)), ("expectedEtag", Value::Null)] {
+        let mut document = original.clone();
+        document["payload"][field] = value;
+        resign_fixture(&mut document);
+        assert_eq!(
+            verify_storage_operation_grant(&canonical_bytes(&document), &context(&fixture, &empty))
+                .unwrap_err()
+                .code,
+            "STORAGE_OPERATION_GRANT_INVALID"
+        );
+    }
+}

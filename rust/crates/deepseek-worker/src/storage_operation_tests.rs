@@ -237,6 +237,14 @@ fn v2_migration_preserves_unbound_intent_and_rolls_back_on_identity_failure() {
     connection
         .execute_batch(
             "BEGIN IMMEDIATE;
+        DROP TRIGGER storage_grant_no_update;
+        DROP TRIGGER storage_grant_no_delete;
+        DROP TRIGGER storage_grant_no_replace;
+        DROP TRIGGER storage_grant_fence;
+        DROP TRIGGER storage_grant_epoch_replay;
+        DROP TRIGGER epoch_grant_replay;
+        DROP TRIGGER storage_grant_operation_binding;
+        DROP TABLE storage_operation_grants;
         DROP TRIGGER storage_rpc_parent;
         DROP TRIGGER storage_rpc_no_update;
         DROP TRIGGER storage_rpc_no_delete;
@@ -260,7 +268,7 @@ fn v2_migration_preserves_unbound_intent_and_rolls_back_on_identity_failure() {
     assert_eq!(
         connection
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_schema WHERE name LIKE 'storage_rpc_%'",
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name LIKE 'storage_rpc_%' OR name LIKE 'storage_grant_%' OR name IN ('storage_operation_grants','epoch_grant_replay')",
                 [],
                 |row| row.get::<_, i64>(0)
             )
@@ -273,7 +281,16 @@ fn v2_migration_preserves_unbound_intent_and_rolls_back_on_identity_failure() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        3
+        4
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM storage_operation_grants", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        0,
+        "migration must not infer grants for historical intents"
     );
     assert_eq!(
         connection

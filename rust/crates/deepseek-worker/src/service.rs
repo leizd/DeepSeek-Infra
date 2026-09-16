@@ -100,6 +100,12 @@ pub trait TransportAuthenticator: Send + Sync + 'static {
         &self,
         metadata: &tonic::metadata::MetadataMap,
     ) -> Result<CallerIdentity, AuthError>;
+
+    // Temporary qualification mode, selected by the unconfigured constructor
+    // only. A configured authenticator's failure must never select this mode.
+    fn permits_unauthenticated_shadow(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -113,6 +119,10 @@ impl TransportAuthenticator for ProductionFailClosedAuthenticator {
         // No configured authenticated transport. Loopback is not caller identity.
         // Transport approval alone never enables production execution authority.
         Err(AuthError::ServiceAuthenticationUnavailable)
+    }
+
+    fn permits_unauthenticated_shadow(&self) -> bool {
+        true
     }
 }
 
@@ -301,7 +311,11 @@ fn configured_transport_identity(
 ) -> Result<Option<CallerIdentity>, AuthError> {
     match authenticator.authenticate(metadata) {
         Ok(identity) => Ok(Some(identity)),
-        Err(AuthError::ServiceAuthenticationUnavailable) => Ok(None),
+        Err(AuthError::ServiceAuthenticationUnavailable)
+            if authenticator.permits_unauthenticated_shadow() =>
+        {
+            Ok(None)
+        }
         Err(error) => Err(error),
     }
 }
