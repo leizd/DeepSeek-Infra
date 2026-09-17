@@ -15,14 +15,28 @@
 //! shape, not a compromise. `reqwest::blocking` must not be entered from an async
 //! context; a `spawn_blocking` thread has none, so it is safe here.
 //!
-//! # Deliberate omissions, with owners
+//! # `search_budget` and `progress_callback` are parity, not gaps
 //!
-//! - **`search_budget`.** The oracle can refuse a search when a shared budget is
-//!   exhausted. That budget object is not ported yet, so the arm is absent rather
-//!   than faked — a missing refusal is visible, where an invented one would not be.
-//! - **`progress_callback`.** The oracle streams `search` progress events as rounds
-//!   advance. `/v1/chat/completions` maps only `content`/`done`/`error`, so those
-//!   events have no wire destination on this route (see `chat_stream`).
+//! An earlier version of this doc called them "deliberate omissions with owners".
+//! Measuring the call path says otherwise, so the claim is corrected here rather than
+//! left standing:
+//!
+//! - **`search_budget` is `None` on this route.** `SearchBudget` is constructed only in
+//!   `agent_runtime/agent_runs.py` and `agent_runtime/multi_agent.py`; the OpenAI route
+//!   calls `provider.stream_chat(payload, emit, cancel_event=…)` with no budget, so the
+//!   parameter takes its `None` default and the `try_consume` refusal **never fires**.
+//!   Adding it here would introduce a refusal the oracle does not perform.
+//! - **`progress_callback` is `None` too**, and its state mutation has no destination
+//!   here. `record_progress` still records the round into `rounds_by_index` and refreshes
+//!   `latest_search_data` when the callback is `None`, and that value flows to
+//!   `search_for_response` — but neither `openai_chat_stream` nor
+//!   `openai_completion_response` carries a `search` field, so nothing is observable on
+//!   `/v1/chat/completions`. The internal `/api/chat` route is what surfaces it, and that
+//!   route is out of scope for the Rust gateway.
+//!
+//! Both belong to the agent runtime and the internal route, which the Rust gateway does
+//! not own. Recording them as "not ported" would have implied a missing refusal where the
+//! reference implementation is silent.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
