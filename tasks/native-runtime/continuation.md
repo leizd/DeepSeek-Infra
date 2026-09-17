@@ -1956,3 +1956,39 @@ names**, not as whole definitions: the definitions are the tool catalog's own su
 covered there, and re-comparing them here would bury this probe's actual subject. Tests are at 295,
 `cargo fmt --check` and `cargo clippy --all-targets` are clean, and the Rust probe was re-run after
 formatting so the committed bytes reproduce the hash.
+
+
+### Step 2 measured: `context_manager` is not a slice either (`0882b1b0`)
+
+`context_manager` was the next recorded step. Measuring it first: its 137 lines depend on
+`context_engine` (347 lines, entirely unported), whose identity half needs **SHA-1** — and this crate
+depends on `sha2`, not `sha1`. So the work was split at the seam the dependency graph already has:
+
+- **done here**: the token half of the engine — the heuristics, the three estimators, the body
+  breakdown, the per-model window lookup, `available_input_tokens`, the budget plan with its
+  recommendation ladder, and `token_trim`;
+- **blocked on a decision**: `base_context_id` / `build_context_diff` / `build_engine_diagnostics`,
+  which need the SHA-1 either hand-rolled (a hash implementation in-tree) or via a new dependency;
+- **then**: `context_manager` itself, which is mostly ordering and diagnostics once the engine exists.
+
+What the 168-key corpus and 12 new tests pin, beyond the arithmetic:
+
+- an empty **object** message still pays the four-token structural overhead; only a non-object
+  message costs nothing (measured: the oracle returns 4 for `{}` — my first test said 0 and was
+  wrong, not the port);
+- the trailing system message is `dynamic` only when it is last *and* there is more than one message;
+- the CJK ranges include Fullwidth forms, so CJK-keyboard punctuation is not miscounted as Latin;
+- `round(x, 1)` is ties-to-even on both sides, which `format!("{:.1}")` mirrors;
+- `estimate_tools_tokens` measures a serialized tool array whose **key order differs** between
+  `serde_json` and Python — and the estimate is deliberately insensitive to that, since reordering
+  keys changes neither length nor CJK count. The string is not exposed, so nothing can start
+  comparing it byte-for-byte;
+- `token_trim` never touches the leading or trailing system message, keeps at least
+  `min_keep_messages` of the middle, and returns the caller's list untouched when the budget is zero.
+
+Verification: byte-identical, md5 `9c50e3cc29c8493f3c057fc3a3b79a07`; tests 295 → **307**; `fmt
+--check` and `clippy --all-targets` clean, with the probe re-run after formatting. Two more of my
+expectations were wrong on the first run and were corrected against the oracle rather than by
+changing the port — the same failure mode as the taint corpus index and the five-versus-six segment
+count, which is now three for three: **my arithmetic about the oracle is the weak link, so
+expectations get taken from the oracle.**
