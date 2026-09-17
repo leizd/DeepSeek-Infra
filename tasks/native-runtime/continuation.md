@@ -1429,3 +1429,55 @@ Verified:
 `ExecutorContext.web_search` callback that binds them — the seam already exists, so this is
 wiring rather than logic. Verification stays a **stub upstream**; a live call is a one-off
 confirmation, since the measured link was one clean `http=200` in roughly forty attempts.
+
+**Scoping: `format_search_context` is one link in an unported, security-bearing pipeline
+(2026-09-17，measured not started).**
+
+Both remaining `format_*` functions were previously listed as "the next slice". Measuring
+the call path says they are not a slice of their own — they are the last step of a pipeline
+whose other links, including a security module, are unported. Writing them alone would be
+inert code with no consumer.
+
+The pipeline, from `deepseek_client.py`:
+
+```python
+search_data = search_if_needed(payload, progress_callback=…, system_note_callback=…)
+...
+if search_data and search_data.get("results"):
+    # Context Taint firewall: web content is untrusted — isolation-wrap and
+    # scrub the per-turn search context before it joins the prompt.
+    payload = {**payload, "searchContext": context_taint.harden_search_context(
+        format_search_context(search_data))}
+elif search_data and search_data.get("status") == "error":
+    payload = {**payload, "searchContext": format_search_failure_context(search_data)}
+prepared = build_deepseek_request(payload, stream=stream, memory_state=memory_state,
+                                 validated=validated)
+```
+
+**Measured size of the missing links:**
+
+| link | size | notes |
+| --- | --- | --- |
+| `search_if_needed` | ~35 lines | gates on `searchEnabled is True` **and** `forced_search_mode`; raises `INVALID_PAYLOAD` on an empty query; emits up to four `system_note`s |
+| `search_multiple` | ~45 lines | **parallel** rounds (`ThreadPoolExecutor`, `SEARCH_ROUND_LIMIT` workers) — the only concurrent part of the search module |
+| `format_search_context` / `_failure_context` | ~55 lines | the two functions originally scoped as "next" |
+| **`context_taint.harden_search_context`** | **383-line module, 18 public items** | a **taint firewall**: `sanitize_external_text`, `UNTRUSTED_CONTENT_GUARD`, `taint_enabled()`, feature flags |
+| `searchContext` → `build_deepseek_request` | — | **the consumer does not exist in Rust**; the gateway passes the prepared body through |
+
+**Why this is a separate vertical slice, not an extension.** `searchContext` is consumed by
+`build_deepseek_request`, which the Rust gateway does not own — the route prepares the raw
+body and forwards it. So the pipeline's output has nowhere to go until the request-assembly
+layer exists, and that layer is where the earlier recorded layering lesson lives
+(`build_deepseek_request` composes the system turn from `payload["systemPrompt"]`).
+
+**Recommendation.** Treat this as its own slice with the taint firewall as its centre, not
+as a tail of the tool-round work. The ordering that keeps every step verifiable:
+1. the pure predicates and the two formatters (byte-parity, offline) — inert until 3, so
+   they commit safely;
+2. `search_multiple`'s parallel shape, which is the part with real concurrency semantics;
+3. `harden_search_context` and `sanitize_external_text` against the reference's own tables
+   — this is a security boundary, so it needs the same treatment the IP-block sets needed:
+   read the reference's data, do not rebuild the predicate from intuition;
+4. the `searchContext` injection once `build_deepseek_request` exists to consume it.
+
+Nothing here was started.
