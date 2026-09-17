@@ -8,6 +8,7 @@ use crate::capability::{Capability, RiskLevel};
 
 pub mod app_error;
 pub mod audit;
+pub mod budget_manager;
 pub mod capability;
 pub mod context_engine;
 pub mod context_manager;
