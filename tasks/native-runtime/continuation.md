@@ -1692,3 +1692,62 @@ verification that actually executes. That is a real gap to close once the harnes
 Remaining: slice 4 — the `searchContext` injection into `build_deepseek_request`, which has to
 exist first — and, separately, `search_if_needed`, which is what eventually calls
 `search_multiple`.
+
+
+### Slice 4 landed: the per-turn context, and the reader of `searchContext` (`4056e3c9`)
+
+`dynamic_context.rs` carries `build_dynamic_turn_context` — the function that reads
+`payload["searchContext"]` — plus everything it splices in: `format_current_time_context`,
+`format_context_summary_context`, `format_memory_notice`, `format_slides_skill_context`,
+`presentation_intent_requested` (over the already-ported `latest_user_query`),
+`append_context_to_latest_user`, and the constants (`CURRENT_TIME_CONTEXT_HEADER`,
+`CONTEXT_SUMMARY_MAX_CHARS = 12 000`, `WEB_SEARCH_SYSTEM_HINT`, the three slides
+name/reference/guidance strings).
+
+This closes the loop the earlier scoping note described: `harden_search_context` had a string
+with nowhere to go, and this is the thing that puts it in the prompt. The ordering is the
+whole design — the search context goes **after** the stable prefixes, so switching search on
+and off does not invalidate the prompt cache behind it.
+
+**The one real design decision: the clock is injected, not read.** The oracle calls
+`datetime.now().astimezone()` and renders the machine's local zone. Rust's standard library
+has no local-timezone support, and this workspace has **no time crate at all** — only
+`std::time` epoch arithmetic. So `LocalNow` carries the instant, the offset and the zone name,
+following the two precedents already in this tree: `utc_now_iso(epoch_seconds)`, whose doc
+says "the clock is a parameter so callers can pin it", and the injected search transport.
+**Resolving the OS zone is not implemented**, deliberately and visibly: faking it would be
+worse. The oracle's naive-datetime arm (`tzinfo is None` → assume UTC, then convert to the
+*machine's* local zone) has no counterpart for the same reason, and is excluded from the
+corpus because its output is host-dependent.
+
+Three details that would each be a silent divergence if "cleaned up":
+
+- **Two spellings of the same instant coexist.** `format_current_time_context` renders UTC as
+  `…Z`; `core_utils::utc_now_iso` renders `…+00:00`. The oracle replaces the suffix in exactly
+  one of the two places, so `isoformat_seconds` (new in `core_utils`, sharing
+  `civil_from_days` with `utc_now_iso`) appends the offset and leaves the choice to its caller.
+- **The slides text is transcribed with `concat!` and explicit `\n`,** not as a multi-line raw
+  string: a raw string takes its line endings from the source file, so a CRLF checkout would
+  silently change every prompt byte those constants feed. Git confirmed the risk is live —
+  committing these files printed `LF will be replaced by CRLF the next time Git touches it`.
+- **A landmine is recorded for the assembly slice.** `append_context_to_latest_user` appends
+  `{"role": …, "content": …}` and the oracle's body serializes in insertion order, but
+  `serde_json::Map` here is a `BTreeMap`, so `json!` emits `content` first. Whoever writes the
+  body builder must not let `json!` decide the order of the message it injects.
+
+Verification: eight pinned instants (UTC, +08:00, −05:00, +05:30, −09:30, epoch 0, and two
+day-rollover cases), the full assembly over fourteen payload/memory/tools combinations, both
+12 001-character truncation paths, and the append cases — **byte-identical**, 39 keys, md5
+`e3a065e999df38e421de8a17f74cfef6`. The Python probe imports the oracle modules directly and
+stubs `format_current_time_context` for the assembly cases, because the oracle's builder reads
+the machine clock; the mirror of that stub is the injected clock on this side. `cargo fmt
+--check` and `cargo clippy --all-targets` are clean, and **both** this probe and slice 3's were
+re-run after formatting so the committed bytes are the verified bytes (`e3a065e9…`,
+`adff8e27…`).
+
+**The honest remaining boundary.** The reader exists, but `build_deepseek_request` — the body
+assembly that would actually consume `build_dynamic_turn_context` — still does not exist in
+Rust: the gateway prepares the raw body and forwards it. So nothing injects into a request yet,
+and this slice is inert in the same recorded sense as slices 1–3. Also outstanding: the OS
+timezone resolution, `search_if_needed`, and the taint diagnostics half. No unit tests came
+with this module, for the same reason as the last one.
