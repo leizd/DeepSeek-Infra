@@ -10,6 +10,7 @@ pub mod app_error;
 pub mod audit;
 pub mod capability;
 pub mod context_engine;
+pub mod context_manager;
 pub mod context_taint;
 pub mod core_utils;
 pub mod dynamic_context;
