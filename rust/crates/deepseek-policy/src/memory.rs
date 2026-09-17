@@ -133,6 +133,55 @@ pub fn normalize_memory_scope(value: Option<&Value>) -> String {
     "global".to_string()
 }
 
+/// Mirrors `memory_scope_from_payload`.
+///
+/// Only the **latest** user message is consulted, and the loop `break`s either way — so a
+/// `projectId` on an older message never leaks into this turn's scope. Both derived
+/// branches re-normalise through [`normalize_memory_scope`], which is what turns a
+/// malformed id into `global` rather than into a scope nobody serves.
+pub fn memory_scope_from_payload(payload: &Value) -> String {
+    let explicit = normalize_memory_scope(payload.get("memoryScope"));
+    if explicit != "global" {
+        return explicit;
+    }
+    let Some(Value::Array(messages)) = payload.get("messages") else {
+        return "global".to_string();
+    };
+    for message in messages.iter().rev() {
+        if message.get("role") != Some(&Value::String("user".to_string())) {
+            continue;
+        }
+        let project_id = python_str_or(message.get("projectId"), "");
+        let project_id = project_id.trim();
+        if !project_id.is_empty() {
+            return normalize_memory_scope(Some(&Value::String(format!("project:{project_id}"))));
+        }
+        let seek_id = python_str_or(message.get("seekId"), "");
+        let seek_id = seek_id.trim();
+        if !seek_id.is_empty() {
+            return normalize_memory_scope(Some(&Value::String(format!("seek:{seek_id}"))));
+        }
+        break;
+    }
+    "global".to_string()
+}
+
+/// Mirrors `empty_memory_state`: the shape a turn gets when no memory layer is attached.
+///
+/// `enabled` is `memoryEnabled is not False` — an **identity** check, so a falsy `0` or
+/// `""` still reads as enabled and only the boolean `false` disables it. `scope` is derived
+/// even here, so a turn that never touched memory still reports the scope it would have
+/// used.
+pub fn empty_memory_state(payload: &Value) -> Value {
+    serde_json::json!({
+        "enabled": payload.get("memoryEnabled") != Some(&Value::Bool(false)),
+        "notice": "",
+        "context": "",
+        "hitCount": 0,
+        "scope": memory_scope_from_payload(payload),
+    })
+}
+
 /// Mirrors `memory_fingerprint`: `sha256(...)[:20]`, scoped.
 pub fn memory_fingerprint(content: &str, scope: &str) -> String {
     let normalized =
@@ -1409,5 +1458,72 @@ mod tests {
         let result = recall_memory(&arguments, "global", &root, None);
         assert_eq!(result["memories"].as_array().unwrap().len(), 1);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn memory_enabled_is_an_identity_check_so_only_false_disables_it() {
+        // `memoryEnabled is not False`: a falsy `0` or `""` still reads as enabled, which
+        // is the opposite of what a truthiness reading would give.
+        assert_eq!(empty_memory_state(&json!({}))["enabled"], json!(true));
+        assert_eq!(
+            empty_memory_state(&json!({"memoryEnabled": false}))["enabled"],
+            json!(false)
+        );
+        for falsy in [json!(0), json!(""), json!([]), json!(null)] {
+            assert_eq!(
+                empty_memory_state(&json!({"memoryEnabled": falsy}))["enabled"],
+                json!(true)
+            );
+        }
+    }
+
+    #[test]
+    fn the_scope_comes_from_the_latest_user_message_only() {
+        // An explicit scope wins outright, and it is re-normalised: a malformed one is
+        // silently narrowed to `global` rather than served.
+        assert_eq!(
+            memory_scope_from_payload(&json!({"memoryScope": "project:abc"})),
+            "project:abc"
+        );
+        assert_eq!(
+            memory_scope_from_payload(&json!({"memoryScope": "bogus"})),
+            "global"
+        );
+
+        // Only the last user message is inspected, so an older id never leaks forward.
+        assert_eq!(
+            memory_scope_from_payload(&json!({"messages": [
+                {"role": "user", "projectId": "p1"},
+                {"role": "user", "content": "x"},
+            ]})),
+            "global"
+        );
+        assert_eq!(
+            memory_scope_from_payload(&json!({"messages": [
+                {"role": "user", "content": "x"},
+                {"role": "user", "projectId": "p2"},
+            ]})),
+            "project:p2"
+        );
+        assert_eq!(
+            memory_scope_from_payload(&json!({"messages": [{"role": "user", "seekId": "s1"}]})),
+            "seek:s1"
+        );
+        // A malformed id is narrowed on the way in, not passed through.
+        assert_eq!(
+            memory_scope_from_payload(
+                &json!({"messages": [{"role": "user", "projectId": "bad id!"}]})
+            ),
+            "global"
+        );
+    }
+
+    #[test]
+    fn the_empty_state_still_reports_the_scope_it_would_have_used() {
+        let state = empty_memory_state(&json!({"messages": [{"role": "user", "projectId": "p1"}]}));
+        assert_eq!(state["scope"], json!("project:p1"));
+        assert_eq!(state["hitCount"], json!(0));
+        assert_eq!(state["notice"], json!(""));
+        assert_eq!(state["context"], json!(""));
     }
 }
