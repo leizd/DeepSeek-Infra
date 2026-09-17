@@ -1817,3 +1817,63 @@ started:
 
 Until step 5 lands, every slice so far remains inert in exactly the recorded sense: verified
 and unwired.
+
+
+### The harness works again, and the earlier mechanism note was wrong (2026-09-17)
+
+`cargo test -p deepseek-policy --lib` runs again: **242 passed; 0 failed** — 237 from before
+plus the five slice-2 tests that had never been able to execute. The fix is one flag:
+
+```
+RUSTFLAGS="-C link-self-contained=yes" cargo test -p deepseek-policy
+```
+
+**Correction first.** The earlier entry here explained the failure as "two competing raw-dylib
+stubs and `ld` keeps whichever it sees first". That was wrong. Asking the linker directly settles
+it:
+
+```
+RUSTFLAGS='-C link-arg=-Wl,--trace-symbol=__imp_WakeByAddressSingle' \
+  cargo test -p deepseek-policy --lib --no-run
+
+warning: linker stderr: D:/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/8.1.0/../../../../x86_64-w64-mingw32/lib/../lib/libkernel32.a(dqifs01464.o): definition of __imp_WakeByAddressSingle
+```
+
+The provider is **`/d/mingw64`'s `libkernel32.a`** — the *system* MinGW's import library, GCC 8.1.0,
+from 2018, on `PATH` as `gcc`. rustc's `windows-gnu` target uses `gcc` as its linker driver, and
+that driver injects its own library search path, so an import library built for a Windows era when
+`kernel32` did export the futex APIs is searched — and its ordinal-era stub `dqifs01464.o` wins
+`__imp_WakeByAddressSingle` from libstd's own stub. On this Windows build `kernel32` exports none of
+`WakeByAddressSingle` / `WakeByAddressAll` / `WaitOnAddress` (verified with `GetProcAddress`: all
+three live only in `kernelbase`), so the import is unsatisfiable and the loader stops with
+`0xc0000139`.
+
+Three things this re-explains, and one it does not:
+
+- **Why the API-set stub never appeared to be the provider.** It *is* rustc's provider: every
+  `WakeByAddress*` stub inside `libstd` (members `api-ms-win-core-synch-l1-2-0.dlls0000{0,1,2}.o`)
+  has a four-byte, **all-zero** `.idata$7` — the DLL-name field. rustc does not name the DLL in the
+  stub; the descriptor is chosen at link time. So a *different* archive can satisfy the symbol
+  first, which is exactly what the old system import library does.
+- **Why `cargo clean -p` and relinking never helped.** The offending archive is outside the target
+  directory.
+- **Why only the lib-test target died.** The symbol is undefined in several objects; which archive
+  wins depends on the order the linker walks them, which differs per target. The examples and the
+  other crates' test binaries happened to resolve it from libstd.
+- **What is still unexplained, and is now moot:** why this target in particular. With the flag the
+  ambiguity is gone, so there is nothing left to chase.
+
+`-C link-self-contained=yes` makes rustc use its own bundled `rust-mingw` libraries (which ship
+the correct-era import libs) instead of the system MinGW's, so the symbol resolves from libstd's
+stub and the import points at the API set that the loader maps to `kernelbase`.
+
+**This is a local toolchain setting, not a repo defect.** It is not committed as a config, because
+it changes the link inputs of every build in the workspace; the two ways to adopt it are one-off
+(`RUSTFLAGS=… cargo …`) or permanent (`rust/.cargo/config.toml` with `[build] rustflags =
+["-C", "link-self-contained=yes"]`). One caveat that argues for picking one and staying with it:
+the flag is part of cargo's fingerprint, so alternating between running with and without it rebuilds
+the crate's whole graph each time (~4 minutes).
+
+The consequence for the record: the "no unit tests came with the module, because the harness cannot
+start" note that appears against slices 3, 4 and 5 is now **expired** — the harness starts, and
+those modules can carry tests.
