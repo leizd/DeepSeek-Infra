@@ -10,9 +10,9 @@
 //!     diff <(tr -d '\r' < python.json) <(tr -d '\r' < rust.json)
 
 use deepseek_policy::context_engine::{
-    ContextEngineSettings, available_input_tokens, context_window_for_model,
-    estimate_body_breakdown, estimate_message_tokens, estimate_tokens, estimate_tools_tokens,
-    plan_token_budget, token_trim,
+    ContextEngineSettings, available_input_tokens, base_context_id, build_context_diff,
+    build_engine_diagnostics, context_window_for_model, estimate_body_breakdown,
+    estimate_message_tokens, estimate_tokens, estimate_tools_tokens, plan_token_budget, token_trim,
 };
 use serde_json::{Map, Value, json};
 
@@ -85,6 +85,18 @@ fn models() -> Vec<Option<&'static str>> {
         Some("unknown-model"),
         Some(" deepseek-v4-pro "),
     ]
+}
+
+fn identity_bodies() -> Vec<Value> {
+    let mut all = bodies();
+    all.extend(vec![
+        json!({"messages": [{"role": "system", "content": "中文前缀"}]}),
+        json!({"tools": [{"function": {"name": "a"}}, {"function": {"name": ""}}, {"function": "x"}, "not-a-dict"]}),
+        json!({"tools": [{"function": {"name": 5}}]}),
+        json!({"messages": [{"role": "user", "content": "x"}], "tools": [{"function": {"name": "b"}}, {"function": {"name": "a"}}]}),
+        json!({"messages": [{"role": "user", "content": "x"}], "tools": [{"function": {"name": "a"}}, {"function": {"name": "b"}}]}),
+    ]);
+    all
 }
 
 fn trim_messages() -> Vec<Value> {
@@ -237,6 +249,29 @@ fn main() {
             json!(token_trim(&messages, None, 6, settings).1),
         );
     }
+
+    let id_bodies = identity_bodies();
+    for (index, body) in id_bodies.iter().enumerate() {
+        out.insert(format!("base::{index}"), json!(base_context_id(body)));
+        out.insert(format!("diff::{index}"), build_context_diff(body, 0));
+        out.insert(
+            format!("engine::{index}"),
+            build_engine_diagnostics(body, None, 0, &default),
+        );
+    }
+    // Tool order is part of the prefix identity, and the last two bodies differ only there.
+    out.insert(
+        "base::order-swapped".to_string(),
+        json!(base_context_id(&id_bodies[3]) != base_context_id(&id_bodies[4])),
+    );
+    out.insert(
+        "diff::dropped".to_string(),
+        build_context_diff(&bodies()[4], 3),
+    );
+    out.insert(
+        "engine-s1".to_string(),
+        build_engine_diagnostics(&bodies()[5], None, 0, &settings_cases()[1]),
+    );
 
     let (empty, empty_dropped) = token_trim(&[], None, 0, &default);
     out.insert("trim::empty".to_string(), json!(empty));

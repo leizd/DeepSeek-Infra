@@ -19,7 +19,9 @@
 
 use serde_json::Value;
 
-use crate::core_utils::python_truthy;
+use sha1::{Digest, Sha1};
+
+use crate::core_utils::{encode_lower_hex, python_truthy};
 use crate::python_json::{dumps_default_separators, value_str};
 
 // --- Heuristics -----------------------------------------------------------------------
@@ -286,17 +288,7 @@ pub fn plan_token_budget(
     model: Option<&str>,
     settings: &ContextEngineSettings,
 ) -> TokenBudgetPlan {
-    // `str(model or body.get("model") or "")`: the argument wins when it is *truthy*, so an
-    // empty string falls through to the body's model while whitespace does not.
-    let raw_model = match model {
-        Some(found) if !found.is_empty() => found.to_string(),
-        _ => body
-            .get("model")
-            .filter(|value| python_truthy(value))
-            .map(value_str)
-            .unwrap_or_default(),
-    };
-    let resolved_model = raw_model.trim().to_string();
+    let resolved_model = resolve_model(body, model);
     let breakdown = estimate_body_breakdown(body);
     let prompt_tokens = breakdown.total();
     let window = context_window_for_model(Some(&resolved_model), settings);
@@ -327,6 +319,127 @@ pub fn plan_token_budget(
         within_budget,
         recommendation,
     }
+}
+
+/// `str(model or body.get("model") or "").strip()`.
+///
+/// The argument wins when it is *truthy*, so an empty string falls through to the body's
+/// model while whitespace does not.
+fn resolve_model(body: &Value, model: Option<&str>) -> String {
+    let raw = match model {
+        Some(found) if !found.is_empty() => found.to_string(),
+        _ => body
+            .get("model")
+            .filter(|value| python_truthy(value))
+            .map(value_str)
+            .unwrap_or_default(),
+    };
+    raw.trim().to_string()
+}
+
+// --- The identity block ---------------------------------------------------------------
+
+/// Mirrors `base_context_id`: a stable id for the cache-anchored prefix.
+///
+/// Constant across turns while the leading system message, the model and the tool order are
+/// unchanged, so diffing this value over a conversation reveals accidental prefix churn —
+/// the main cause of prompt-cache misses. SHA-1 is the oracle's choice and the port follows
+/// it; the oracle itself marks the call `usedforsecurity=False`, because this is a
+/// fingerprint rather than a security hash, and only the first twelve hex characters
+/// survive into the id.
+pub fn base_context_id(body: &Value) -> String {
+    let empty: Vec<Value> = Vec::new();
+    let messages = match body.get("messages") {
+        Some(Value::Array(items)) => items,
+        _ => &empty,
+    };
+    let mut system_prefix = String::new();
+    if let Some(first) = messages.first() {
+        if first.get("role") == Some(&Value::String("system".to_string())) {
+            system_prefix = text_or_empty(first.get("content"));
+        }
+    }
+    let mut tool_names: Vec<String> = Vec::new();
+    if let Some(Value::Array(tools)) = body.get("tools") {
+        for tool in tools {
+            let Some(function) = tool.get("function") else {
+                continue;
+            };
+            if !function.is_object() {
+                continue;
+            }
+            // The oracle requires a *truthy* name before it appends, so an unnamed tool
+            // still shifts nothing — but a later named one shifts the digest.
+            match function.get("name") {
+                Some(name) if python_truthy(name) => tool_names.push(value_str(name)),
+                _ => {}
+            }
+        }
+    }
+    let mut parts: Vec<String> = vec![system_prefix, text_or_empty(body.get("model"))];
+    parts.extend(tool_names);
+    let digest = Sha1::digest(parts.join(" ").as_bytes());
+    let hex = encode_lower_hex(&digest);
+    format!("ce_{}", &hex[..12])
+}
+
+/// Mirrors `build_context_diff`: what this turn adds to the stable base.
+///
+/// The `chars` of the dynamic block count **characters**, not bytes.
+pub fn build_context_diff(body: &Value, dropped: usize) -> Value {
+    let empty: Vec<Value> = Vec::new();
+    let messages = match body.get("messages") {
+        Some(Value::Array(items)) => items,
+        _ => &empty,
+    };
+    let history_count = messages
+        .iter()
+        .filter(|item| {
+            item.is_object()
+                && matches!(
+                    item.get("role").and_then(Value::as_str),
+                    Some("user") | Some("assistant")
+                )
+        })
+        .count();
+    let mut delta: Vec<Value> =
+        vec![serde_json::json!({"type": "history", "messages": history_count})];
+    if messages.len() > 1 {
+        if let Some(last) = messages.last() {
+            if last.get("role") == Some(&Value::String("system".to_string())) {
+                delta.push(serde_json::json!({
+                    "type": "dynamic_context",
+                    "chars": text_or_empty(last.get("content")).chars().count(),
+                }));
+            }
+        }
+    }
+    if let Some(Value::Array(tools)) = body.get("tools") {
+        if !tools.is_empty() {
+            delta.push(serde_json::json!({"type": "tools", "count": tools.len()}));
+        }
+    }
+    if dropped > 0 {
+        delta.push(serde_json::json!({"type": "trim", "droppedMessages": dropped}));
+    }
+    serde_json::json!({"baseContextId": base_context_id(body), "delta": delta})
+}
+
+/// Mirrors `build_engine_diagnostics`: the consolidated `contextEngine` block.
+pub fn build_engine_diagnostics(
+    body: &Value,
+    model: Option<&str>,
+    dropped: usize,
+    settings: &ContextEngineSettings,
+) -> Value {
+    let resolved_model = resolve_model(body, model);
+    let plan = plan_token_budget(body, Some(&resolved_model), settings);
+    serde_json::json!({
+        "enabled": true,
+        "model": resolved_model,
+        "tokenBudget": plan.to_value(),
+        "contextDiff": build_context_diff(body, dropped),
+    })
 }
 
 // --- Trimming -------------------------------------------------------------------------
@@ -637,5 +750,88 @@ mod tests {
         let messages = vec![json!({"role": "user", "content": "a".repeat(4_000)})];
         assert_eq!(token_trim(&messages, None, 0, &starved), (messages, 0));
         assert_eq!(token_trim(&[], None, 0, &settings()), (Vec::new(), 0));
+    }
+
+    #[test]
+    fn the_context_id_is_pinned_to_the_oracles_own_digests() {
+        // Taken from the oracle rather than computed here: these two ids are what CPython's
+        // hashlib.sha1 produces for the same part strings, so they double as a
+        // known-answer test of the digest path.
+        assert_eq!(
+            base_context_id(&json!({})),
+            "ce_b858cb282617",
+            "empty body: parts are [\"\", \"\"] joined by a space"
+        );
+        assert_eq!(
+            base_context_id(&json!({"messages": [{"role": "system", "content": "中文前缀"}]})),
+            "ce_5e98acd3e8dc"
+        );
+        // Shape: the literal prefix plus twelve hex characters.
+        let id = base_context_id(&json!({"model": "deepseek-v4-pro"}));
+        assert!(id.starts_with("ce_"));
+        assert_eq!(id.len(), 15);
+    }
+
+    #[test]
+    fn the_context_id_is_stable_until_the_prefix_changes() {
+        let body = json!({
+            "messages": [{"role": "system", "content": "role prompt"}],
+            "model": "deepseek-v4-pro",
+            "tools": [{"function": {"name": "a"}}, {"function": {"name": "b"}}],
+        });
+        assert_eq!(base_context_id(&body), base_context_id(&body.clone()));
+
+        // Tool *order* is part of the prefix identity, so swapping two names changes the id.
+        let swapped = json!({
+            "messages": [{"role": "system", "content": "role prompt"}],
+            "model": "deepseek-v4-pro",
+            "tools": [{"function": {"name": "b"}}, {"function": {"name": "a"}}],
+        });
+        assert_ne!(base_context_id(&body), base_context_id(&swapped));
+
+        // An unnamed tool contributes nothing to the part string.
+        let unnamed = json!({"tools": [{"function": {"name": ""}}, {"function": "x"}, "nope"]});
+        assert_eq!(base_context_id(&unnamed), base_context_id(&json!({})));
+    }
+
+    #[test]
+    fn the_context_diff_counts_characters_and_marks_a_trim() {
+        let body = json!({"messages": [
+            {"role": "system", "content": "a"},
+            {"role": "user", "content": "b"},
+            {"role": "system", "content": "中文"},
+        ]});
+        let diff = build_context_diff(&body, 0);
+        assert_eq!(
+            diff["delta"],
+            json!([
+                {"type": "history", "messages": 1},
+                {"type": "dynamic_context", "chars": 2},
+            ])
+        );
+        // A trim entry only appears when something was actually dropped.
+        let trimmed = build_context_diff(&body, 3);
+        assert_eq!(
+            trimmed["delta"][2],
+            json!({"type": "trim", "droppedMessages": 3})
+        );
+
+        // An empty tools array contributes no delta entry at all.
+        let bare = build_context_diff(&json!({"tools": []}), 0);
+        assert_eq!(bare["delta"], json!([{"type": "history", "messages": 0}]));
+    }
+
+    #[test]
+    fn the_engine_block_carries_the_plan_and_the_diff() {
+        let body =
+            json!({"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "a"}]});
+        let block = build_engine_diagnostics(&body, None, 0, &settings());
+        assert_eq!(block["enabled"], json!(true));
+        assert_eq!(block["model"], json!("deepseek-v4-pro"));
+        assert_eq!(block["tokenBudget"]["contextWindow"], json!(131_072));
+        assert_eq!(
+            block["contextDiff"]["baseContextId"],
+            json!(base_context_id(&body))
+        );
     }
 }

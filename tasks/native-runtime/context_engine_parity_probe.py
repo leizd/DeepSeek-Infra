@@ -91,6 +91,15 @@ SETTINGS_CASES = [
     (False, 8_192, 0.05, 75.0, 65_536, 2, {"deepseek-v4-pro": 131_072}),
 ]
 
+IDENTITY_BODIES = [
+    *BODIES,
+    {"messages": [{"role": "system", "content": "中文前缀"}]},
+    {"tools": [{"function": {"name": "a"}}, {"function": {"name": ""}}, {"function": "x"}, "not-a-dict"]},
+    {"tools": [{"function": {"name": 5}}]},
+    {"messages": [{"role": "user", "content": "x"}], "tools": [{"function": {"name": "b"}}, {"function": {"name": "a"}}]},
+    {"messages": [{"role": "user", "content": "x"}], "tools": [{"function": {"name": "a"}}, {"function": {"name": "b"}}]},
+]
+
 TRIM_MESSAGES = [
     {"role": "system", "content": "stable prefix"},
     {"role": "user", "content": "中" * 20},
@@ -162,6 +171,19 @@ def main() -> int:
         out[f"trim-s{settings_index}::overhead"] = with_settings(
             case, lambda: ce.token_trim(TRIM_MESSAGES, model=None, fixed_overhead_tokens=6)[1]
         )
+
+    for index, body in enumerate(IDENTITY_BODIES):
+        out[f"base::{index}"] = ce.base_context_id(body)
+        out[f"diff::{index}"] = ce.build_context_diff(body)
+        out[f"engine::{index}"] = ce.build_engine_diagnostics(body)
+
+    # The order of the tool names is part of the prefix identity, so reordering them must
+    # change the id; the last two bodies differ only in that order.
+    out["base::order-swapped"] = (
+        ce.base_context_id(IDENTITY_BODIES[3]) != ce.base_context_id(IDENTITY_BODIES[4])
+    )
+    out["diff::dropped"] = ce.build_context_diff(BODIES[4], dropped=3)
+    out["engine-s1"] = with_settings(SETTINGS_CASES[1], lambda: ce.build_engine_diagnostics(BODIES[5]))
 
     out["trim::empty"] = ce.token_trim([], model=None)[0]
     out["trim::empty-dropped"] = ce.token_trim([], model=None)[1]
