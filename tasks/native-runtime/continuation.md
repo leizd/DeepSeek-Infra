@@ -1545,3 +1545,57 @@ Next per the recorded order: slice 2, `search_multiple`'s parallel shape (a
 `ThreadPoolExecutor` over `SEARCH_ROUND_LIMIT` rounds — the module's only
 concurrency), then the taint firewall against the reference's own tables, then
 the `searchContext` consumer.
+
+
+### Slice 2 landed; the lib-test harness regressed with it (2026-09-17, measured)
+
+`search_multiple` is ported and committed (`e2354851`). It is the module's only
+concurrency: cache gate, query planning, per-round "searching" announcements,
+`as_completed`-style collection, the two error arms, the cache write, the
+progress callback. Parity is byte-identical — 2461 lines, md5
+`84b6f0f6b7c90b2d2a07f08d138659ae` on both sides; the probe grew the whole
+`multi::` family (first run, announcements, cache hit, expiry, reversed
+completion order, API error, worker exception, empty query list). `cargo fmt
+--check` and `cargo clippy --all-targets` are clean.
+
+**The harness no longer starts, and it did at slice 1.** The previous entry in
+this file records `cargo test -p deepseek-policy -j 1 -- --test-threads=1` →
+237 tests all pass, and that text came in with slice 1 (`6e6519cf`, 11:06). At
+12:46 the same command dies before running anything:
+
+    error: test failed, to rerun pass `-p deepseek-policy --lib`
+      process didn't exit successfully: ... (exit code: 0xc0000139,
+      STATUS_ENTRYPOINT_NOT_FOUND)
+
+What was measured, not assumed:
+
+- Of the 193 imported symbols in that binary, exactly one is unsatisfiable: it
+  binds `WakeByAddressSingle` to `KERNEL32.dll`.
+- This Windows build's `kernel32` exports **none** of `WakeByAddressSingle`,
+  `WakeByAddressAll`, `WaitOnAddress`. Verified at the loader's own API with
+  `GetProcAddress` (a five-line C probe): all three MISSING in kernel32, all
+  three PRESENT in kernelbase. Two other checks agree (`grep` for the name in
+  the DLL is 0 for kernel32, 1 for kernelbase; `objdump -p` the same).
+- The other seven test binaries in `target/debug/deps` — deepseek-core's and
+  deepseek-gateway's among them — bind those three to
+  `api-ms-win-core-synch-l1-2-0.dll` (which the loader maps to kernelbase) and
+  start normally. So does this crate's own `search_parity_probe` **example**
+  after a clean rebuild.
+- `cargo clean -p deepseek-policy` followed by a relink reproduces the bad
+  binding, so it is not a stale artifact.
+
+**The causal picture, stated honestly.** The example links the same lib code —
+including `search_multiple` and its threads — and binds the api-set, so the
+ported logic is not what breaks the import. What the lib-test target adds over
+the example is the `#[cfg(test)]` code plus `libtest`, and it is one of those
+that flips which of the two competing `__imp_WakeByAddressSingle` stubs the
+linker takes (raw-dylib stubs carry their own DLL name, and `ld` keeps the
+first). Slice 1's harness booted, slice 2's does not, and slice 2's only new
+code is `search_multiple` plus its tests — so the correlation points at the new
+test code, but **causality was not isolated**. Next diagnostic round: relink and
+run with slice 2's unit tests removed, which separates "the new tests pull it"
+from "the crate now links something else".
+
+This is written down rather than fixed because it is not the ported logic, and
+because guessing at the linker would be exactly the kind of change this project
+does not want: the verification for slice 2 is the probe, which does pass.
