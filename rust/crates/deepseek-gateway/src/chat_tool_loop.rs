@@ -75,6 +75,8 @@ use deepseek_policy::tool_dispatch::{
 use deepseek_policy::tool_policy::{ToolPolicy, ToolPolicyConfig};
 use deepseek_policy::tool_search::ExecutorContext;
 
+use crate::search_provider::SearchProvider;
+
 /// The workspace dependencies the data branches run against, bundled so one
 /// request can hold them and the file cache persists across that request's
 /// calls (and rounds).
@@ -89,6 +91,12 @@ pub struct WorkspaceBundle {
 }
 
 impl WorkspaceBundle {
+    /// The workspace root. The search cache lives under it (`<root>/.search-cache`),
+    /// which is why the search provider needs this rather than a path of its own.
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
@@ -167,8 +175,23 @@ impl ToolRoundExecutor {
         let fallback = selected.clone();
         let joined = tokio::task::spawn_blocking(move || {
             let view = workspace.as_deref().map(|bundle| bundle.view());
+            // The web-search provider is per request, like the executor: its memo and
+            // turn counter are the oracle's closure variables, so one callback must
+            // live across every round of this request.
+            //
+            // It is built whenever a workspace exists, **not** only when a key is set:
+            // the oracle calls `perform_web_search` regardless and lets
+            // `search_tavily` raise the missing-key error, so an unconfigured
+            // deployment gets a precise "not configured" failure rather than the
+            // executor's generic "not enabled for this request".
+            let callback = workspace
+                .as_deref()
+                .map(|bundle| SearchProvider::from_env(bundle.root().to_path_buf()))
+                .map(SearchProvider::callback);
             let context = ExecutorContext {
-                web_search: None,
+                web_search: callback
+                    .as_ref()
+                    .map(|callback| callback as &deepseek_policy::tool_search::WebSearchCallback),
                 workspace: view.as_ref(),
             };
             execute_tool_calls(&selected, &|| false, &|call| {
