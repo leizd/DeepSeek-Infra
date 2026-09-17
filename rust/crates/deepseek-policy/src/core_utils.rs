@@ -465,4 +465,32 @@ mod tests {
             assert_eq!(query_tokens(&joined), first);
         }
     }
+
+    #[test]
+    fn isoformat_seconds_shifts_the_instant_and_keeps_the_offset_spelling() {
+        // Moving the instant forward an hour and the offset back the same hour must
+        // cancel: the wall clock is identical and only the suffix changes.
+        let base = isoformat_seconds(1_758_096_268, 0);
+        let shifted = isoformat_seconds(1_758_096_268 + 3600, -3600);
+        assert_eq!(base[..19], shifted[..19]);
+        assert!(base.ends_with("+00:00"));
+        assert!(shifted.ends_with("-01:00"));
+    }
+
+    #[test]
+    fn isoformat_seconds_renders_the_minutes_of_a_half_hour_zone() {
+        assert!(isoformat_seconds(1_758_096_268, 19_800).ends_with("+05:30"));
+        assert!(isoformat_seconds(1_758_096_268, -34_200).ends_with("-09:30"));
+    }
+
+    #[test]
+    fn isoformat_seconds_agrees_with_utc_now_iso_at_zero_offset() {
+        // Two spellings of the same instant coexist in this crate — this one and the one
+        // `format_current_time_context` rewrites to "Z" — and they must not drift apart
+        // at the spelling they share.
+        assert_eq!(
+            isoformat_seconds(1_758_096_268, 0),
+            utc_now_iso(1_758_096_268)
+        );
+    }
 }

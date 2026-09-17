@@ -344,3 +344,183 @@ fn stripped_text(value: Option<&Value>) -> String {
 fn compiled(pattern: &str) -> Regex {
     Regex::new(pattern).expect("static pattern must compile")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core_utils::utc_now_iso;
+
+    /// 2025-09-17T08:04:28Z, rendered by a UTC+08:00 zone.
+    const EPOCH: i64 = 1_758_096_268;
+    const OFFSET: i32 = 28_800;
+
+    fn anchor() -> LocalNow {
+        LocalNow {
+            epoch_seconds: EPOCH,
+            offset_seconds: OFFSET,
+            timezone_name: "China Standard Time".to_string(),
+        }
+    }
+
+    fn env() -> DynamicContextEnv {
+        DynamicContextEnv::new(anchor())
+    }
+
+    #[test]
+    fn the_time_block_spells_utc_with_z_and_the_local_line_with_its_offset() {
+        let text = format_current_time_context(&anchor());
+        assert!(text.starts_with(CURRENT_TIME_CONTEXT_HEADER));
+        assert!(text.contains("Local time: 2025-09-17T16:04:28+08:00 (China Standard Time)"));
+        assert!(text.contains("UTC time: 2025-09-17T08:04:28Z"));
+        // The same instant through the other helper keeps "+00:00": the two spellings
+        // coexist on purpose and must not be unified.
+        assert_eq!(utc_now_iso(EPOCH), "2025-09-17T08:04:28+00:00".to_string());
+    }
+
+    #[test]
+    fn an_empty_zone_name_falls_back_to_local() {
+        let now = LocalNow {
+            timezone_name: String::new(),
+            ..anchor()
+        };
+        assert!(format_current_time_context(&now).contains("(local)"));
+    }
+
+    #[test]
+    fn the_search_switch_does_not_disturb_what_precedes_it() {
+        // The reason the hint lives in the per-turn block at all: flipping search on and
+        // off must leave everything before it byte-identical, or the prompt cache behind
+        // it is invalidated for the whole turn.
+        let on = build_dynamic_turn_context(
+            &json!({"searchEnabled": true, "searchMode": "on"}),
+            &json!({}),
+            true,
+            &env(),
+        );
+        let off = build_dynamic_turn_context(
+            &json!({"searchEnabled": true, "searchMode": "off"}),
+            &json!({}),
+            true,
+            &env(),
+        );
+        assert_eq!(on, format!("{off}\n\n{WEB_SEARCH_SYSTEM_HINT}"));
+    }
+
+    #[test]
+    fn the_search_context_joins_after_the_search_hint() {
+        let block = build_dynamic_turn_context(
+            &json!({"searchEnabled": true, "searchMode": "on", "searchContext": "hits"}),
+            &json!({}),
+            true,
+            &env(),
+        );
+        let hint = block.find(WEB_SEARCH_SYSTEM_HINT).expect("hint present");
+        let context = block.find("hits").expect("context present");
+        assert!(hint < context);
+        assert!(block.starts_with(PER_TURN_CONTEXT_MARKER));
+    }
+
+    #[test]
+    fn a_falsy_search_context_is_dropped_exactly_like_a_missing_one() {
+        let bare = build_dynamic_turn_context(&json!({}), &json!({}), true, &env());
+        for falsy in [json!(0), json!(""), json!(null), json!([]), json!({})] {
+            let block = build_dynamic_turn_context(
+                &json!({"searchContext": falsy}),
+                &json!({}),
+                true,
+                &env(),
+            );
+            assert_eq!(block, bare);
+        }
+    }
+
+    #[test]
+    fn a_truthy_non_string_context_is_rendered_the_way_python_renders_it() {
+        // `str([1, 2])` has the space after the comma; JSON would not.
+        let block =
+            build_dynamic_turn_context(&json!({"searchContext": [1, 2]}), &json!({}), true, &env());
+        assert!(block.ends_with("[1, 2]"), "{block}");
+    }
+
+    #[test]
+    fn surrounding_whitespace_is_stripped_from_every_spliced_value() {
+        let block = build_dynamic_turn_context(
+            &json!({"searchContext": "  hits  ", "continuationContext": "  more  "}),
+            &json!({}),
+            true,
+            &env(),
+        );
+        assert!(block.ends_with("hits\n\nmore"), "{block}");
+    }
+
+    #[test]
+    fn the_summary_cap_counts_characters_not_bytes() {
+        let summary = "摘".repeat(30);
+        let text = format_context_summary_context(&summary, 4);
+        assert!(text.ends_with("摘摘摘摘"));
+        assert!(!text.ends_with("摘摘摘摘摘"));
+    }
+
+    #[test]
+    fn memory_pieces_keep_the_oracles_order_after_the_summary() {
+        let block = build_dynamic_turn_context(
+            &json!({"contextSummary": "s"}),
+            &json!({"context": "mem", "notice": "saved"}),
+            true,
+            &env(),
+        );
+        let summary = block.find("较早历史对话").expect("summary");
+        let memory = block.find("mem").expect("memory");
+        let notice = block.find("[长期记忆操作]").expect("notice");
+        assert!(summary < memory && memory < notice);
+    }
+
+    #[test]
+    fn the_slides_block_needs_a_keyword_and_a_create_verb() {
+        let deck = json!({"messages": [{"role": "user", "content": "帮我做一份 PPT"}]});
+        let block = build_dynamic_turn_context(&deck, &json!({}), true, &env());
+        assert!(block.contains(&format_slides_skill_context()));
+
+        // Naming a presentation is not asking for one, so the guidance stays out.
+        let ask = json!({"messages": [{"role": "user", "content": "什么是 presentation？"}]});
+        let block = build_dynamic_turn_context(&ask, &json!({}), true, &env());
+        assert!(!block.contains("[Skill: slides]"));
+    }
+
+    #[test]
+    fn disabling_tools_gates_the_hint_and_the_slides_block_but_not_the_context() {
+        let payload = json!({
+            "searchEnabled": true,
+            "searchContext": "ctx",
+            "messages": [{"role": "user", "content": "做 PPT"}],
+        });
+        let block = build_dynamic_turn_context(&payload, &json!({}), false, &env());
+        assert!(!block.contains(WEB_SEARCH_SYSTEM_HINT));
+        assert!(!block.contains("[Skill: slides]"));
+        assert!(block.ends_with("ctx"), "{block}");
+    }
+
+    #[test]
+    fn appending_an_empty_context_leaves_the_history_untouched() {
+        let messages = vec![json!({"role": "user", "content": "hi"})];
+        assert_eq!(append_context_to_latest_user(&messages, ""), messages);
+    }
+
+    #[test]
+    fn the_per_turn_block_arrives_as_a_trailing_system_message() {
+        let messages = vec![json!({"role": "user", "content": "hi"})];
+        let appended = append_context_to_latest_user(&messages, "ctx");
+        assert_eq!(appended.len(), 2);
+        assert_eq!(appended[1]["role"], json!("system"));
+        assert_eq!(appended[1]["content"], json!("ctx"));
+        assert_eq!(appended[0], messages[0]);
+    }
+
+    #[test]
+    fn the_memory_notice_is_three_lines_in_the_oracles_order() {
+        assert_eq!(
+            format_memory_notice("已保存"),
+            "[长期记忆操作]\n已保存\n如果用户是在要求你记住或忘记某事，请简短确认；不要编造没有保存的记忆。"
+        );
+    }
+}
