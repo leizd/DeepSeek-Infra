@@ -1647,3 +1647,48 @@ which belongs in a migration commit.
 Corrects the earlier framing in this file: the regression did arrive with slice 2, but
 it is not caused by slice 2's code or tests; slice 2 is what made the test binary big
 enough to expose it.
+
+
+### Slice 3 landed: the taint firewall's string layer (`591d0c38`)
+
+`context_taint.rs` now carries the part of `gateway/context_taint.py` that has no I/O and no
+consumer-dependent shape: the guard constant and the trust/source/marker vocabulary, both
+pattern tables, the sensitive-tool alternation, `scan_text`, and the active hardening
+(`harden_search_context`, `file_context_guard_line`, `escalation_enabled`) with
+`ContextTaintSettings` at the oracle's defaults.
+
+**Both tables are read off the reference, not rebuilt** — the lesson from the IP-block sets:
+
+- the sensitive-tool list is *derived* from `TOOL_METADATA` with the oracle's own predicate
+  (`requires_confirm || sensitive_sink || risk == "high"`), so a tool profile change cannot
+  desynchronise the two. It comes out as eight names, in table order, and the alternation is
+  order-bearing because alternative branches are tried left to right.
+- the injection count is `tool_policy::sanitize_external_text`, the Tool Policy Engine's own
+  sanitizer, because the oracle shares that table between the two modules.
+- the exfiltration verb list keeps the oracle's deliberate exclusion of `提交`: it trips on
+  benign advisory prose like `不要提交到仓库`, while genuine exfiltration in this corpus uses
+  `发送` / `上传` / `发到`. The corpus pins that case, plus a 70-character gap (one past the
+  pattern's `{0,60}` lifetime), a newline inside the gap, and `web_search` not matching the
+  sensitive alternation — all four must *not* fire.
+
+Verification is `tasks/native-runtime/context_taint_parity_probe.py` against
+`examples/context_taint_parity_probe.rs`: 35 texts plus six flag combinations, 87 keys,
+**byte-identical**, md5 `adff8e2723c890fe8c969d21e8d1fa0c`. The Python side imports the
+oracle module directly rather than re-executing extracted source, because `context_taint`
+only pulls `core.config` and `tool_policy` and both import cleanly — so the tables under
+test are literally the oracle's own objects. `cargo fmt --check` and
+`cargo clippy --all-targets` are clean (exit 0).
+
+**Deliberately left out, as the honest boundary**: `_risk_level`, `classify_request_messages`,
+`build_taint_report`, `report_is_tainted`, `taint_status`. That is the diagnostics half, and
+its consumer — the gateway's diagnostics assembly and the `/api/taint` route — does not exist
+in Rust. It is inert in a way this layer is not: `harden_search_context` is exactly what
+slice 4's `searchContext` injection calls.
+
+No unit tests were added with the module: the lib-test harness still cannot start on this host
+(the link-shape finding above), so such tests could not be run, and the probe is the
+verification that actually executes. That is a real gap to close once the harness boots.
+
+Remaining: slice 4 — the `searchContext` injection into `build_deepseek_request`, which has to
+exist first — and, separately, `search_if_needed`, which is what eventually calls
+`search_multiple`.
