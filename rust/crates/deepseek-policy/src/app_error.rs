@@ -27,6 +27,12 @@ pub mod codes {
     pub const INTERNAL: &str = "internal";
     /// `ErrorCode.MISSING_API_KEY`
     pub const MISSING_API_KEY: &str = "missing_api_key";
+    /// `ErrorCode.INVALID_MESSAGES`
+    pub const INVALID_MESSAGES: &str = "invalid_messages";
+    /// `ErrorCode.INVALID_MESSAGE_CONTENT`
+    pub const INVALID_MESSAGE_CONTENT: &str = "invalid_message_content";
+    /// `ErrorCode.CONTEXT_COMPRESSION_REQUIRED`
+    pub const CONTEXT_COMPRESSION_REQUIRED: &str = "context_compression_required";
     /// `ErrorCode.UPSTREAM_TIMEOUT`
     pub const UPSTREAM_TIMEOUT: &str = "upstream_timeout";
     /// `ErrorCode.UPSTREAM_FAILURE`

@@ -25,6 +25,7 @@ pub mod path_guard;
 pub mod projects;
 pub mod python_json;
 pub mod reminders;
+pub mod request_messages;
 pub mod request_shaping;
 pub mod search;
 pub mod tool_batch;
