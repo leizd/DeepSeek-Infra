@@ -1895,3 +1895,23 @@ failure back along with a full rebuild. Picking one mechanism and staying with i
 The consequence for the record: the "no unit tests came with the module, because the harness cannot
 start" note that appears against slices 3, 4 and 5 is now **expired** — the harness starts, and
 those modules can carry tests.
+
+
+### The test debt is paid (`3b55437d`)
+
+The note above said the harness starting again meant slices 3, 4 and 5 could carry tests. They do
+now: 40 added, 242 → **282 passing**. `context_taint` gets the bulk, since it is the security
+boundary and every "obvious" simplification in it is a divergence — the guard wrapping rather than
+replacing, the `提交` exclusion, the gap neither crossing a newline nor sixty characters, the
+character-counted CJK prefix, the arm order in `tool_message_source`, the per-turn split, the
+media tail's position, and the report's cap-versus-totals behaviour. `dynamic_context` pins the
+`Z`/`+00:00` pair that must not be unified, the cache argument (search off is byte-identical up to
+the hint), the joins, and the falsy drops.
+
+One expectation was wrong on the first run: the truncation test asserted five segments where both
+implementations produce six. **The port was right and the arithmetic was mine** — and the corrected
+assertion now carries the oracle's own sequence rather than a recomputed number. Same lesson as the
+taint probe's mis-indexed corpus two slices ago: check the expectation before believing a failure.
+
+These tests are the fast local net; the parity probes stay the cross-language evidence, since they
+compare against the oracle rather than against expectations written by hand.
