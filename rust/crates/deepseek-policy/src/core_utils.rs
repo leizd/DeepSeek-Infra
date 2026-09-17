@@ -110,6 +110,27 @@ pub fn score_chunk(text: &str, tokens: &[String]) -> i64 {
     score
 }
 
+/// Mirrors `normalize_model_name`.
+///
+/// The lookup key is the raw value lower-cased with underscores turned into dashes and
+/// spaces removed — but the **fallback is the raw input**, not that key. So an unknown name
+/// comes back exactly as it was written (minus surrounding whitespace), and the caller
+/// decides what an unrecognised model means.
+pub fn normalize_model_name(value: Option<&Value>, aliases: &[(String, String)]) -> String {
+    let raw = match value {
+        Some(found) if python_truthy(found) => crate::python_json::value_str(found),
+        _ => String::new(),
+    };
+    let raw = raw.trim().to_string();
+    let key = raw.to_lowercase().replace('_', "-").replace(' ', "");
+    for (candidate, target) in aliases {
+        if candidate == &key {
+            return target.clone();
+        }
+    }
+    raw
+}
+
 /// Mirrors `utc_now_iso`: `datetime.now(timezone.utc).isoformat(timespec="seconds")`.
 ///
 /// `timespec="seconds"` is why there is no fractional part. The clock is a
@@ -464,6 +485,34 @@ mod tests {
         for _ in 0..5 {
             assert_eq!(query_tokens(&joined), first);
         }
+    }
+
+    #[test]
+    fn normalize_model_name_falls_back_to_the_raw_value_not_the_key() {
+        let aliases: Vec<(String, String)> = [
+            ("deepseek-v4-pro", "deepseek-v4-pro"),
+            ("v4pro", "deepseek-v4-pro"),
+            ("flash", "deepseek-v4-flash"),
+        ]
+        .iter()
+        .map(|(from, to)| (from.to_string(), to.to_string()))
+        .collect();
+
+        // The lookup key is lower-cased with underscores turned into dashes and spaces gone.
+        assert_eq!(
+            normalize_model_name(Some(&json!("DeepSeek_V4_Pro")), &aliases),
+            "deepseek-v4-pro"
+        );
+        assert_eq!(
+            normalize_model_name(Some(&json!(" v4pro ")), &aliases),
+            "deepseek-v4-pro"
+        );
+        // An unknown name comes back as written, not as its normalised key.
+        assert_eq!(
+            normalize_model_name(Some(&json!("My Model")), &aliases),
+            "My Model"
+        );
+        assert_eq!(normalize_model_name(None, &aliases), "");
     }
 
     #[test]
