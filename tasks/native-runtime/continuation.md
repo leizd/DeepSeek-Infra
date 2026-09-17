@@ -1867,12 +1867,30 @@ Three things this re-explains, and one it does not:
 the correct-era import libs) instead of the system MinGW's, so the symbol resolves from libstd's
 stub and the import points at the API set that the loader maps to `kernelbase`.
 
-**This is a local toolchain setting, not a repo defect.** It is not committed as a config, because
-it changes the link inputs of every build in the workspace; the two ways to adopt it are one-off
-(`RUSTFLAGS=… cargo …`) or permanent (`rust/.cargo/config.toml` with `[build] rustflags =
-["-C", "link-self-contained=yes"]`). One caveat that argues for picking one and staying with it:
-the flag is part of cargo's fingerprint, so alternating between running with and without it rebuilds
-the crate's whole graph each time (~4 minutes).
+**It is committed, scoped as narrowly as the cause allows.** `rust/.cargo/config.toml` now carries
+
+```toml
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "link-self-contained=yes"]
+```
+
+Scoped to the triple rather than `[build] rustflags` because the failing combination is specifically
+`windows-gnu` plus a system MinGW on `PATH` — nothing about MSVC builds or other targets should
+inherit the workaround. The file also carries the reasoning inline, since a config that changes link
+inputs deserves its own explanation next to it. It requires the `rust-mingw` component (present here,
+and installed by default for windows-gnu host toolchains).
+
+Verified after adopting it, with no `RUSTFLAGS` in the environment:
+
+- `cargo test -p deepseek-policy -j 1` → **242 passed, 0 failed**, in 0.77 s with the *same* artifact
+  hash as the env-var run — so the config produces the same fingerprint as `RUSTFLAGS` did, and
+  adopting it costs no rebuild;
+- `cargo test -p deepseek-core -j 1` → 8 passed after a rebuild under the new flags, so the flag does
+  not regress a crate that was already linking fine.
+
+One caveat that survives, and is written into the config file: **`RUSTFLAGS` in the environment takes
+precedence over the config**, so a stray value there silently overrides these flags and brings the
+failure back along with a full rebuild. Picking one mechanism and staying with it still matters.
 
 The consequence for the record: the "no unit tests came with the module, because the harness cannot
 start" note that appears against slices 3, 4 and 5 is now **expired** — the harness starts, and
