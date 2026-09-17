@@ -1751,3 +1751,69 @@ Rust: the gateway prepares the raw body and forwards it. So nothing injects into
 and this slice is inert in the same recorded sense as slices 1–3. Also outstanding: the OS
 timezone resolution, `search_if_needed`, and the taint diagnostics half. No unit tests came
 with this module, for the same reason as the last one.
+
+
+### `build_deepseek_request` was next, and measuring says it is not a slice (`9b3a7825`)
+
+The obvious next move after slice 4 was the assembly function that would finally consume
+everything: `build_deepseek_request`. Measuring it first, the way the earlier scoping pass
+should have, says **do not start it as one slice** — and the shapes below are what that
+judgement rests on.
+
+The function itself is only ~123 lines (`deepseek_client.py:240`–362), but it is a
+convergence point, not a unit. Its dependency closure, measured:
+
+| collaborator | size | ported? |
+| --- | --- | --- |
+| `model_router.py` (`route_request`, `is_auto_request`) | 279 lines | no |
+| `budget_manager.py` (`budget_policy_from_payload`, `should_downgrade`, `budget_scope`) | 371 lines | no — and it owns a **ledger**, so it is not pure |
+| `context_manager.py` (`manage_request_body`, `merge_context_manager_diagnostics`) | 137 lines | no |
+| `validate_deepseek_payload` + `_validate_request_messages` + `normalize_chat_messages` | ~110 lines | partly — the gateway has its own `prepare_request`/`normalize_*`, but not these |
+| `chat_payload.count_payload_attachments` | 32 lines | no |
+| `empty_memory_state`, `_has_image_content`, `tools_for_payload`, `forced_artifact_tool_name`, `normalize_reasoning_effort`, `TOOL_PARALLEL_SYSTEM_HINT` | ~75 lines | no |
+| `context_taint.build_taint_report` | 39 lines | no — until this commit |
+
+So the closure is ~1,200 lines across six subsystems, one of which is stateful. That is a
+milestone. The useful thing to do with a milestone is find its slices, and the first one was
+already sitting there: **line 357 needs `build_taint_report`**, which is exactly what slice 3
+deferred on the note that its consumer did not exist. Measuring the consumer turned it up, so
+this commit ports the diagnostics half and **`context_taint.py` is now complete**.
+
+What the classification half turned on, all pinned by the corpus:
+
+- **`len()` counts characters, and `_segments_for_user` uses a found index as a length.** A CJK
+  prefix before the file marker inflates the trusted-prefix segment if the index is treated as
+  bytes; the corpus pins the case that would catch it (中文提问… → `chars: 4`).
+- **The arm order in `tool_message_source` is the contract**: `browser_` and `mcp__` before the
+  metadata table, and `search_files` reaches the RAG arm only when the payload says `local_rag`.
+- **`segments_for_per_turn_system` inserts at 0 and 1** — that is what puts the media segment
+  first and the trusted prefix before the web segment.
+- The serialization landmine recorded for slice 4 applies to this block too: `build_taint_report`
+  builds its object in insertion order and the caller splices it into `diagnostics`; `json!` here
+  yields sorted keys, so the diagnostics serializer must own that order.
+
+Verification: 176 keys, byte-identical, md5 `49e390b4c0c9f2ab499337326b308404` — 29 message
+lists, 4 settings tuples × 6 bodies, the `taint_status` block and 8 risk combinations, on top of
+slice 3's 87 keys (the earlier cases are still in the same probe, now 176). The first comparison
+**failed**, and the cause was the probe corpus rather than the port: the Python body list indexed
+one case off from the Rust one, and only the Python side needed changing to make the hashes agree.
+That is the method working — the diff localised the fault before it became a story about the port.
+
+**Sequence for the milestone, in the order that keeps each step verifiable.** None of these is
+started:
+1. the remaining pure collaborators (`empty_memory_state`, `_has_image_content`,
+   `tools_for_payload`, `forced_artifact_tool_name`, `normalize_reasoning_effort`,
+   `count_payload_attachments`, `TOOL_PARALLEL_SYSTEM_HINT`) — small, and each has an oracle
+   function to compare against;
+2. `context_manager` (137 lines) — pure but with the sliding-window semantics that make the
+   body's bytes; needs its own probe over windowed bodies;
+3. `model_router` (279 lines) — pure tier selection, but it needs a model catalog to compare
+   against, so measure that dependency before assuming;
+4. `budget_manager` (371 lines) — **last, and only with a store port**: it reads a ledger, so it
+   is the one piece here that is not a pure function, and the ledger's own port would have to
+   come first;
+5. the assembly itself (`build_deepseek_request`), once its collaborators exist, with the
+   diagnostics serializer that owns key order.
+
+Until step 5 lands, every slice so far remains inert in exactly the recorded sense: verified
+and unwired.
