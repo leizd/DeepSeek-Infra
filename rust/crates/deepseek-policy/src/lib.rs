@@ -11,6 +11,7 @@ pub mod audit;
 pub mod capability;
 pub mod context_taint;
 pub mod core_utils;
+pub mod dynamic_context;
 pub mod entropy;
 pub mod file_cache;
 pub mod file_lock;

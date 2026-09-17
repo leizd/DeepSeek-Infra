@@ -283,6 +283,31 @@ fn civil_from_days(days: i64) -> (i32, u32, u32) {
     )
 }
 
+/// `datetime.isoformat(timespec="seconds")` for a tz-aware value.
+///
+/// The instant is shifted by `offset_seconds` and the offset is rendered as `+HH:MM`
+/// (`-HH:MM` for western zones), which is what Python's `isoformat` appends for a
+/// `timezone` — note the colon, and note that a UTC offset still reads `+00:00` here.
+/// Callers that want the `Z` spelling must replace it themselves: the oracle does exactly
+/// that in one place (`format_current_time_context`) and keeps `+00:00` in another
+/// (`utc_now_iso`), so this function must not pick a side.
+pub fn isoformat_seconds(epoch_seconds: i64, offset_seconds: i32) -> String {
+    let local = epoch_seconds + offset_seconds as i64;
+    let days = local.div_euclid(86_400);
+    let remainder = local.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let sign = if offset_seconds < 0 { '-' } else { '+' };
+    let absolute = offset_seconds.unsigned_abs();
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}{sign}{:02}:{:02}",
+        remainder / 3600,
+        (remainder % 3600) / 60,
+        remainder % 60,
+        absolute / 3600,
+        (absolute % 3600) / 60
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
