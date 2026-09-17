@@ -47,7 +47,7 @@ pub fn dumps_default_separators(value: &Value) -> String {
             format!("{{{}}}", rendered.join(", "))
         }
         Value::String(text) => Value::String(text.clone()).to_string(),
-        other => other.to_string(),
+        other => scalar_str(other),
     }
 }
 
@@ -68,7 +68,7 @@ pub fn dumps_compact(value: &Value) -> String {
             format!("{{{}}}", rendered.join(","))
         }
         Value::String(text) => Value::String(text.clone()).to_string(),
-        other => other.to_string(),
+        other => scalar_str(other),
     }
 }
 
@@ -164,6 +164,19 @@ pub fn json_number_str(number: &serde_json::Number) -> String {
     }
 }
 
+/// `json.dumps`'s rendering for a scalar that is **not** a string.
+///
+/// Numbers go through [`json_number_str`] rather than `serde_json`'s own `to_string`:
+/// `serde_json` renders `4.93e-5` as `0.0000493` and `1e-6` as `1e-6`, where Python
+/// writes `4.93e-05` and `1e-06`. A per-request cost is exactly that small — a
+/// fraction of a cent — so this is a difference in real payloads, not a corner case.
+fn scalar_str(value: &Value) -> String {
+    match value {
+        Value::Number(number) => json_number_str(number),
+        other => other.to_string(),
+    }
+}
+
 /// `str(value)` for the JSON scalars that reach a message.
 pub fn value_str(value: &Value) -> String {
     match value {
@@ -244,7 +257,7 @@ impl OrderedJson {
         match self {
             OrderedJson::Scalar(value) => match value {
                 Value::String(text) => Value::String(text.clone()).to_string(),
-                other => other.to_string(),
+                other => scalar_str(other),
             },
             OrderedJson::List(items) => {
                 if items.is_empty() {
@@ -363,5 +376,23 @@ mod tests {
         assert_eq!(value_str(&json!(true)), "True");
         assert_eq!(value_str(&json!(null)), "None");
         assert_eq!(value_str(&json!("x")), "x");
+    }
+
+    #[test]
+    fn containers_keep_a_small_floats_python_spelling() {
+        // `serde_json`'s own rendering writes `0.0000493`; Python writes `4.93e-05`, and
+        // this magnitude is what a single request's cost looks like.
+        assert_eq!(
+            dumps_default_separators(&json!({"cost": 4.93e-5})),
+            "{\"cost\": 4.93e-05}"
+        );
+        assert_eq!(
+            dumps_compact(&json!({"cost": 4.93e-5})),
+            "{\"cost\":4.93e-05}"
+        );
+        assert_eq!(
+            OrderedJson::from_value_with_order(&json!({"cost": 4.93e-5}), &[]).render_indent_2(),
+            "{\n  \"cost\": 4.93e-05\n}"
+        );
     }
 }
