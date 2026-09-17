@@ -1,9 +1,12 @@
 """Tavily search parity probe (layers 1+2), Python side.
 
 Covers the non-transport half of `infra/tool_runtime/search.py`: query planning,
-response normalization, ranking, the round projection, and the cache.
-`search_tavily` / `search_tavily_with_retry` are excluded — they are the HTTP slice,
-and only their retry *policy* is compared here.
+response normalization, ranking, the round projection, the cache, and the two
+prompt-context formatters. `search_tavily` / `search_tavily_with_retry` are
+excluded — they are the HTTP slice, and only their retry *policy* is compared
+here. The three payload predicates (`search_mode` & co.) live in
+`gateway/deepseek_client.py`, not in the search module, and are extracted
+verbatim from that file — importing it would pull the whole gateway.
 
 Usage::
 
@@ -14,12 +17,76 @@ Usage::
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
+
+DEEPSEEK_CLIENT = REPO / "deepseek_infra" / "infra" / "gateway" / "deepseek_client.py"
+GATEWAY_PREDICATES = ("search_mode", "forced_search_mode", "search_tool_enabled")
+
+
+def extract_gateway_predicates() -> dict:
+    """The oracle's own payload predicates, pulled verbatim from deepseek_client.py."""
+    source = DEEPSEEK_CLIENT.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    found: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name in GATEWAY_PREDICATES:
+            found[node.name] = ast.get_source_segment(source, node) or ""
+    missing = set(GATEWAY_PREDICATES) - set(found)
+    if missing:
+        raise SystemExit(f"could not extract {sorted(missing)} from {DEEPSEEK_CLIENT}")
+    namespace: dict = {}
+    exec(
+        compile("\n\n".join(found[name] for name in GATEWAY_PREDICATES), str(DEEPSEEK_CLIENT), "exec"),
+        namespace,
+    )
+    return namespace
+
+MODES = [
+    {},
+    {'searchMode': 'on'},
+    {'searchMode': 'OFF'},
+    {'searchMode': ' force '},
+    {'searchMode': ''},
+    {'searchMode': None},
+    {'searchMode': 'auto'},
+    # `or` reads the raw value's truthiness: a falsy 0 / False lands on the default.
+    {'searchMode': 0},
+    {'searchMode': True},
+    {'searchMode': 'true'},
+    {'searchMode': '1'},
+]
+ENABLED = [
+    {},
+    {'searchEnabled': True},
+    {'searchEnabled': True, 'searchMode': 'off'},
+    {'searchEnabled': True, 'searchMode': 'auto'},
+    {'searchEnabled': 1},
+    {'searchEnabled': 'true'},
+    {'searchEnabled': False, 'searchMode': 'force'},
+    # a numeric 0 is falsy, so the mode is 'auto' (enabled); the string '0' is the off mode.
+    {'searchEnabled': True, 'searchMode': 0},
+    {'searchEnabled': True, 'searchMode': '0'},
+]
+CONTEXTS = [{'query': 'q', 'answer': ' a ', 'results': []}, {'query': None, 'answer': '', 'results': [{'title': '', 'url': 'u', 'raw_content': '', 'content': 'c'}]}, {'results': [{'citation_id': 'W9', 'title': 'T', 'url': 'u', 'raw_content': 'rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr'}]}, {'results': [{'url': 'u1'}, {'url': 'u2'}]}, {},
+    # every `or` chain here reads the raw value, truthiness first: a falsy 0 takes
+    # the fallback, the next arm, or nothing at all. (A non-dict entry would make
+    # the oracle raise AttributeError, so it is not part of the compared corpus.)
+    {'query': 7, 'answer': 0,
+     'results': [{'title': 0, 'citation_id': 0, 'raw_content': 0, 'content': ' c ', 'url': ''}]},
+]
+FAILURES = [
+    {'rounds': [{'error': 'e1'}, {'error': ''}, {'error': 'e2'}, {'error': 'e3'}, {'error': 'e4'}]},
+    {'rounds': []},
+    {},
+    {'rounds': ['not-a-dict', {'error': 'only'}]},
+    {'rounds': [{'error': True}, {'error': 0}, {'error': 'e'}]},
+]
 
 QUERY_CASES = [
     "  DeepSeek   V3   release  ",
@@ -40,6 +107,9 @@ SHOULD_SEARCH_CASES = [
     ("https://example.com/a", {}),
     ("搜索一下这个", {}),
     ("", {}),
+    # a falsy numeric mode falls through to text matching instead of reading as off
+    ("最新消息", {"searchMode": 0}),
+    ("随便聊聊", {"searchMode": 0}),
 ]
 
 INTENT_CASES = ["最新新闻", "显卡价格", "python 报错", "政策法规", "A 和 B 的区别", "随便聊聊"]
@@ -201,6 +271,18 @@ def main() -> int:
         out["retry::no-retry-on-missing-key"] = drive([missing, (None, 200)])
     finally:
         s.search_tavily = real_search_tavily
+
+    # --- step 1: the pure predicates and the two prompt formatters -------------------
+    gateway = extract_gateway_predicates()
+    for index, payload in enumerate(MODES):
+        out[f"search-mode::{index}"] = gateway["search_mode"](payload)
+        out[f"forced::{index}"] = gateway["forced_search_mode"](payload)
+    for index, payload in enumerate(ENABLED):
+        out[f"tool-enabled::{index}"] = gateway["search_tool_enabled"](payload)
+    for index, data in enumerate(CONTEXTS):
+        out[f"context::{index}"] = s.format_search_context(data)
+    for index, data in enumerate(FAILURES):
+        out[f"failure-context::{index}"] = s.format_search_failure_context(data)
 
     json.dump(out, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
     sys.stdout.write("\n")

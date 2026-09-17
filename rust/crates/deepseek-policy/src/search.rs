@@ -1,15 +1,22 @@
-//! Tavily search: query planning, response normalization, ranking, and the cache.
+//! Tavily search: query planning, response normalization, ranking, the cache, and
+//! the prompt-context formatters.
 //!
-//! Mirrors the non-transport half of `infra/tool_runtime/search.py` — everything the
-//! `web_search` tool branch needs **except the HTTP call itself**, which is the next
-//! slice. That boundary is a dependency closure rather than a taste call:
+//! Mirrors `infra/tool_runtime/search.py` — everything except the concrete HTTP
+//! client, which arrives injected as a [`Transport`] — plus the three payload
+//! predicates the oracle defines in `gateway/deepseek_client.py`
+//! ([`search_mode`], [`forced_search_mode`], [`search_tool_enabled`]). They are
+//! ported into this module rather than the gateway crate because their consumers
+//! here are the tool catalog and `tools_for_payload`; the parity probe extracts
+//! them from the oracle's own file, so the placement is noted rather than hidden.
 //!
-//! - [`format_search_context`] / [`format_search_failure_context`] are **not** here.
-//!   They build the *prompt context* at request-assembly time; the tool branch returns
-//!   a compiled tool result and never touches them.
-//! - [`search_tavily`] / [`search_tavily_with_retry`] are not here either. Their
-//!   retry *policy* is ([`should_retry_tavily_error`], [`simplified_retry_query`]);
-//!   only the request itself is missing.
+//! [`format_search_context`] / [`format_search_failure_context`] build the
+//! **prompt context** that `search_if_needed` injects as `searchContext` at
+//! request-assembly time. The Rust request-assembly layer does not exist yet, so
+//! nothing in this workspace calls them: they are the offline, byte-verified first
+//! step of the search-prefetch pipeline recorded in
+//! `tasks/native-runtime/continuation.md`, whose remaining links
+//! (`search_if_needed`, `search_multiple`, the taint firewall, the consumer) are
+//! later slices.
 //!
 //! # What is reproduced rather than tidied
 //!
@@ -1038,15 +1045,212 @@ pub fn search_tavily_with_retry(
     }
 }
 
+/// Mirrors `search_mode` (`gateway/deepseek_client.py`): the payload's mode,
+/// trimmed and lowercased, defaulting to `auto` — via an **`or`** on the raw
+/// value, so every falsy spelling (missing, `null`, `""`, `false`, `0`, `0.0`)
+/// becomes `auto`. The sibling `should_search_for_query` defaults its mode to
+/// `""` instead; the two `or` chains are genuinely different and must not be
+/// unified.
+pub fn search_mode(payload: &Value) -> String {
+    let raw = payload.get("searchMode").unwrap_or(&Value::Null);
+    let text = if python_truthy(raw) {
+        crate::python_json::value_str(raw)
+    } else {
+        "auto".to_string()
+    };
+    text.trim().to_lowercase()
+}
+
+/// Mirrors `forced_search_mode`: the user explicitly demanded a search.
+pub fn forced_search_mode(payload: &Value) -> bool {
+    matches!(search_mode(payload).as_str(), "on" | "force" | "true" | "1")
+}
+
+/// Mirrors `search_tool_enabled`.
+///
+/// Note `payload.get("searchEnabled") is not True`: an **identity** check, so a JSON
+/// `1` or `"true"` does not enable the tool — only the boolean `true` does. Reading it
+/// for truthiness would enable search for values the oracle refuses.
+pub fn search_tool_enabled(payload: &Value) -> bool {
+    if payload.get("searchEnabled") != Some(&Value::Bool(true)) {
+        return false;
+    }
+    !matches!(search_mode(payload).as_str(), "off" | "false" | "0")
+}
+
+// --- prompt context --------------------------------------------------------------
+
+/// Mirrors `format_search_context`: the per-turn web-search block that joins the prompt.
+///
+/// Two details are easy to "clean up" into a divergence:
+///
+/// - the query line is `search_data.get("query", "")` inside an f-string. A **missing**
+///   key renders as empty, but a present `null` renders as Python's `str(None)` —
+///   `"None"`. Collapsing both to empty would change the prompt bytes.
+/// - `raw_content or content` is a truthiness `or`, so an empty `raw_content` falls
+///   through to `content`.
+///
+/// The block is emitted with `\n` joins and no trailing newline, and the answer and
+/// result sections are separated by **blank lines**, which is what makes the guard text
+/// and the sources legible as separate sections to the model.
+///
+/// # Measured divergence, kept on purpose
+///
+/// The oracle reads `result.get("title")` off **every** entry, so a non-dict entry —
+/// or a non-array `results` — raises `AttributeError` / `TypeError` and the request
+/// fails. This port renders non-dict entries through the fallbacks and treats a
+/// non-array `results` as empty. Both shapes are unreachable from the wired
+/// pipeline (`normalize_search_response` / `aggregate_search_rounds` guarantee dict
+/// entries in a list) and reachable only from a hand-corrupted cache file, where
+/// the oracle's own behaviour is an uncontrolled 500. Pinned by a unit test so the
+/// tolerance is a recorded decision rather than an accident.
+pub fn format_search_context(search_data: &Value) -> String {
+    let mut lines: Vec<String> = vec![
+        "When citing these web sources, use the exact [^Wn] markers shown below.".to_string(),
+        "你可以使用以下联网搜索结果回答用户问题。".to_string(),
+        format!(
+            "搜索问题: {}",
+            python_str_verbatim(search_data.get("query"))
+        ),
+        "要求:".to_string(),
+        "1. 只在搜索结果支持时给出时效性结论。".to_string(),
+        "2. 引用来源时在论断后追加对应的 [^Wn] 标记，不要写 [来源]/[Source] 或 Markdown 链接。"
+            .to_string(),
+        "3. 具体日期、价格、版本号、政策、新闻结论后必须给出来源链接。".to_string(),
+        "4. 不要引用未出现在搜索来源里的网页。".to_string(),
+        "5. 如果结果不足或互相矛盾，请明确说明不确定。".to_string(),
+        "6. 优先使用官方、原始、权威来源。".to_string(),
+        "7. 如已有结果足以回答，不要继续搜索；只有缺少关键事实时最多再补充 1 次 web_search。"
+            .to_string(),
+    ];
+
+    let answer = python_str(search_data.get("answer").unwrap_or(&Value::Null))
+        .trim()
+        .to_string();
+    if !answer.is_empty() {
+        lines.push(String::new());
+        lines.push(format!("Tavily 摘要: {answer}"));
+    }
+
+    let results = search_data
+        .get("results")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !results.is_empty() {
+        lines.push(String::new());
+        lines.push("搜索来源:".to_string());
+    }
+
+    for (position, result) in results.iter().take(SEARCH_CONTEXT_RESULT_LIMIT).enumerate() {
+        let index = position as i64 + 1;
+        let title = python_str(result.get("title").unwrap_or(&Value::Null));
+        let title = if title.is_empty() {
+            format!("来源 {index}")
+        } else {
+            title
+        };
+        let citation_id = python_str(result.get("citation_id").unwrap_or(&Value::Null));
+        let citation_id = if citation_id.is_empty() {
+            format!("W{index}")
+        } else {
+            citation_id
+        };
+        let url = python_str(result.get("url").unwrap_or(&Value::Null));
+        // `raw_content or content`, then `.strip()`.
+        let raw = python_str(result.get("raw_content").unwrap_or(&Value::Null));
+        let content = if raw.is_empty() {
+            python_str(result.get("content").unwrap_or(&Value::Null))
+        } else {
+            raw
+        };
+        let content = content.trim();
+
+        lines.push(String::new());
+        lines.push(format!("[^{citation_id}] {title}"));
+        lines.push(format!("URL: {url}"));
+        if !content.is_empty() {
+            lines.push(format!(
+                "内容摘录: {}",
+                truncate_chars(content, SEARCH_RAW_CONTENT_CHARS)
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
+/// Mirrors `format_search_failure_context`.
+///
+/// Only the **first three** errors are listed, and an empty list still renders a bullet
+/// (`- 未知错误`) rather than an empty section.
+pub fn format_search_failure_context(search_data: &Value) -> String {
+    let errors: Vec<String> = search_data
+        .get("rounds")
+        .and_then(Value::as_array)
+        .map(|rounds| {
+            rounds
+                .iter()
+                .filter(|round| round.is_object())
+                .filter_map(|round| {
+                    let error = python_str(round.get("error").unwrap_or(&Value::Null));
+                    if error.is_empty() { None } else { Some(error) }
+                })
+                .take(3)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let listed = if errors.is_empty() {
+        "- 未知错误".to_string()
+    } else {
+        errors
+            .iter()
+            .map(|error| format!("- {error}"))
+            .collect::<Vec<String>>()
+            .join("\n")
+    };
+
+    [
+        "本轮尝试联网搜索，但搜索没有得到可用来源。",
+        "回答时不要声称已经查到最新资料。",
+        "如果问题依赖实时信息，请明确说明无法确认最新状态。",
+        "",
+        "搜索错误:",
+        &listed,
+    ]
+    .join("\n")
+}
+
 // --- helpers ---------------------------------------------------------------------
 
-/// `str(value or "")`, the oracle's stringification.
-fn python_str(value: &Value) -> String {
+/// `str(value)` for a value that may be absent, where the two cases differ.
+///
+/// `search_data.get("query", "")` inside an f-string renders a **missing** key as
+/// empty but a present `null` as `None`. `python_str` collapses both to empty,
+/// which is right for the `x or fallback` idiom and wrong here. Container values
+/// render through [`crate::python_json::value_str`], whose JSON quoting is this
+/// crate's standing approximation of Python's `repr` — unreachable from the wired
+/// pipeline, where `query` is always a string.
+fn python_str_verbatim(value: Option<&Value>) -> String {
     match value {
-        Value::String(text) if !text.is_empty() => text.clone(),
-        Value::Number(number) => number.to_string(),
-        Value::Bool(true) => "True".to_string(),
-        _ => String::new(),
+        None => String::new(),
+        Some(value) => crate::python_json::value_str(value),
+    }
+}
+
+/// `str(value or "")`, the oracle's stringification.
+///
+/// The `or` reads the **raw** value's truthiness, so a falsy spelling — `null`,
+/// `""`, `false`, `0`, an empty array — renders as the empty string. This helper
+/// once matched on the rendered text instead, which let a numeric `0` through as
+/// `"0"`: that difference flips `should_search_for_query` for
+/// `{"searchMode": 0}` (the oracle falls through to text matching, `"0"` is the
+/// off mode) and turns `{"answer": 0}` into a `Tavily 摘要` line.
+fn python_str(value: &Value) -> String {
+    if python_truthy(value) {
+        crate::python_json::value_str(value)
+    } else {
+        String::new()
     }
 }
 
@@ -1126,4 +1330,91 @@ fn lookup_query_pattern() -> &'static Regex {
 
 fn bare_domain_pattern() -> &'static Regex {
     case_insensitive(r"https?://|www\.|[a-z0-9-]+\.(com|org|net|io|dev|cn|edu|gov)")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_falsy_mode_spelling_is_auto_not_the_rendered_text() {
+        // `str(payload.get("searchMode") or "auto")` reads the raw value's
+        // truthiness: `0` is falsy, so the oracle renders "auto", which neither
+        // forces nor disables. Reading the rendered text instead gives "0" — an
+        // off-mode spelling — and flips `search_tool_enabled`.
+        for mode in [json!(0), json!(0.0), json!(false), json!(""), json!(null)] {
+            let payload = json!({"searchEnabled": true, "searchMode": mode});
+            assert_eq!(search_mode(&payload), "auto");
+            assert!(search_tool_enabled(&payload));
+            assert!(!forced_search_mode(&payload));
+        }
+        let payload = json!({"searchEnabled": true, "searchMode": "0"});
+        assert_eq!(search_mode(&payload), "0");
+        assert!(!search_tool_enabled(&payload));
+    }
+
+    #[test]
+    fn a_falsy_mode_falls_through_to_text_matching() {
+        // `should_search_for_query` defaults its mode to "" (not "auto"), so a
+        // numeric 0 must fall through to the query-text patterns rather than be
+        // read as the off mode.
+        assert!(should_search_for_query(
+            "最新消息",
+            &json!({"searchMode": 0})
+        ));
+        assert!(!should_search_for_query(
+            "随便聊聊",
+            &json!({"searchMode": 0})
+        ));
+    }
+
+    #[test]
+    fn the_query_line_renders_missing_and_null_differently() {
+        assert!(format_search_context(&json!({})).contains("搜索问题: \n"));
+        assert!(format_search_context(&json!({"query": null})).contains("搜索问题: None\n"));
+        assert!(format_search_context(&json!({"query": 7})).contains("搜索问题: 7\n"));
+    }
+
+    #[test]
+    fn falsy_fields_take_the_fallbacks_of_their_or_chains() {
+        let text = format_search_context(&json!({
+            "answer": 0,
+            "results": [{"title": 0, "citation_id": 0, "raw_content": 0, "content": " c ", "url": ""}],
+        }));
+        assert!(
+            !text.contains("Tavily 摘要"),
+            "a falsy answer renders no summary line"
+        );
+        assert!(text.contains("[^W1] 来源 1\nURL: \n"));
+        // the excerpt is the final line: the block carries no trailing newline.
+        assert!(text.ends_with("内容摘录: c"));
+    }
+
+    #[test]
+    fn a_non_dict_result_entry_renders_where_the_oracle_raises() {
+        // The oracle calls `result.get("title")` on every entry, so a non-dict
+        // entry raises AttributeError and the request fails. The port renders it
+        // through the fallbacks instead — see the divergence note on
+        // `format_search_context`. Pinned so the tolerance stays a decision.
+        let text = format_search_context(&json!({"results": ["not-a-dict", {"url": "u"}]}));
+        assert!(text.contains("[^W1] 来源 1"));
+        assert!(text.contains("[^W2] 来源 2\nURL: u"));
+    }
+
+    #[test]
+    fn failure_errors_render_through_str_and_keep_the_first_three() {
+        let text = format_search_failure_context(&json!({
+            "rounds": [{"error": true}, {"error": 0}, {"error": "e"}, {"error": "f"}, {"error": "g"}]
+        }));
+        assert!(
+            text.contains("- True\n- e\n- f"),
+            "a bool renders as Python's True; a falsy 0 is skipped"
+        );
+        assert!(
+            !text.contains("g"),
+            "only the first three errors are listed"
+        );
+        assert!(format_search_failure_context(&json!({})).ends_with("- 未知错误"));
+    }
 }

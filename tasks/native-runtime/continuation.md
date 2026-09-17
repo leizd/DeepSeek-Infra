@@ -1481,3 +1481,67 @@ as a tail of the tool-round work. The ordering that keeps every step verifiable:
 4. the `searchContext` injection once `build_deepseek_request` exists to consume it.
 
 Nothing here was started.
+
+**Search-prefetch slice 1: the pure predicates and the two formatters (2026-09-17).**
+
+Step 1 of the order recorded above, landed in `deepseek-policy::search`:
+`search_mode`, `forced_search_mode`, `search_tool_enabled`,
+`format_search_context`, `format_search_failure_context`. Byte-verified offline;
+inert until the assembly layer exists, so nothing calls them yet.
+
+**This slice resumed an interrupted working tree, and the interruption was not
+clean.** The three modified files had never run: the Rust example failed to
+compile (five `cannot find function` errors) and the Python probe crashed with
+`AttributeError: …search has no attribute 'search_mode'`. The recovery found two
+defects before anything was green:
+
+1. **The predicates live in `gateway/deepseek_client.py`, not `search.py`.** The
+   probe now extracts them verbatim from that file via `ast` (the SSE-probe
+   pattern), so the definitions being compared are the oracle's own. The Rust
+   port stays in this crate's `search` module because its consumers are the tool
+   catalog and `tools_for_payload`; the placement is recorded in the module docs.
+2. **`python_str` matched `str(x or "")` on the rendered text, not the raw
+   truthiness.** A numeric `0` came through as `"0"` — an off-mode spelling —
+   so `{"searchMode": 0}` made `search_mode` return `"0"` where the oracle
+   returns `"auto"` (its `or` fallback is `"auto"`, which neither forces nor
+   disables), **flipping `search_tool_enabled`**, and made
+   `should_search_for_query` refuse where the oracle falls through to text
+   matching. The same root cause would render a `Tavily 摘要` line for
+   `{"answer": 0}`. Fixed through `python_truthy` + `python_json::value_str`;
+   the corpus now pins every one of those shapes (mode `0`/`true`, answer `0`,
+   title/citation/raw_content `0`, error `true`/`0`). This was a defect in
+   **committed** code (`should_search_for_query` shares `python_str`), not just
+   the interrupted WIP.
+
+Two divergences measured and recorded rather than compared:
+
+- A **non-dict result entry** (or a non-array `results`) makes the oracle raise
+  `AttributeError`/`TypeError` and fail the request; the port renders through
+  the fallbacks. Unreachable from the wired pipeline —
+  `normalize_search_response` / `aggregate_search_rounds` guarantee dict entries
+  in a list — and reachable only from a hand-corrupted cache file, where the
+  oracle's own behaviour is an uncontrolled 500. Pinned by a unit test so the
+  tolerance is a recorded decision, and the corpus case that would have crashed
+  the Python probe was dropped. The *failure* formatter keeps its non-dict round
+  entry, because there the oracle guards with `isinstance` and both sides agree.
+- The query line renders containers through `value_str`'s JSON quoting — the
+  crate's standing `repr` approximation, unreachable from the wired pipeline
+  where `query` is always a string.
+
+Verified locally:
+
+- Byte-level parity: **identical MD5 `0f3877807ce994f0d3dbe852293c47ee`**, 157
+  keys (up from 113), no differences, re-confirmed after `cargo fmt`.
+- `cargo test -p deepseek-policy -j 1 -- --test-threads=1` → **237 tests, all
+  pass** (6 new).
+- `cargo clippy -p deepseek-policy --all-targets --all-features -- -D warnings`
+  → clean; one real find fixed (`useless_vec` on the example's corpus, which had
+  never been clippy'd). The only other output is the transient `deepseek-core`
+  incremental-copy warning, which is not a lint.
+- `cargo check -p deepseek-gateway --all-targets` → still compiles.
+- `cargo fmt --all -- --check` → clean.
+
+Next per the recorded order: slice 2, `search_multiple`'s parallel shape (a
+`ThreadPoolExecutor` over `SEARCH_ROUND_LIMIT` rounds — the module's only
+concurrency), then the taint firewall against the reference's own tables, then
+the `searchContext` consumer.
