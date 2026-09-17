@@ -13,11 +13,11 @@ use deepseek_policy::search::{
     Transport, TransportOutcome, aggregate_search_rounds, compact_search_tool_result,
     domain_from_url, forced_search_mode, format_search_context, format_search_failure_context,
     format_upstream_error, normalize_search_query_text, normalize_search_response,
-    normalize_search_url, rerank_search_results, rounds_in_order, search_cache_key,
-    search_domain_filters, search_intent, search_mode, search_queries_for, search_reason_for_query,
-    search_result_score, search_round_from_cache, search_round_status, search_tavily_with_retry,
-    search_tool_enabled, should_search_for_query, simplified_retry_query, tavily_options_for_query,
-    tavily_request_body_json,
+    normalize_search_url, rerank_search_results, rounds_in_order, search_cache_dir,
+    search_cache_key, search_domain_filters, search_intent, search_mode, search_multiple,
+    search_queries_for, search_reason_for_query, search_result_score, search_round_from_cache,
+    search_round_status, search_tavily_with_retry, search_tool_enabled, should_search_for_query,
+    simplified_retry_query, tavily_options_for_query, tavily_request_body_json,
 };
 use serde_json::{Map, Value, json};
 
@@ -452,6 +452,314 @@ fn main() {
             json!(format_search_failure_context(&data)),
         );
     }
+
+    // --- step 2: search_multiple — the parallel shape --------------------------------
+    //
+    // The Rust stub drives the injected transport (the layer below `search_tavily`);
+    // the Python stub replaces `search_tavily` itself — the same split as the retry
+    // cases. Per-query sleeps make completion order deterministic.
+    use std::collections::HashMap;
+
+    #[derive(Clone)]
+    enum StubFailure {
+        Api,
+        Panic,
+    }
+
+    fn drive_multi(
+        query: &str,
+        root: &std::path::Path,
+        now_epoch: i64,
+        payloads: &HashMap<String, Value>,
+        delays: &HashMap<String, std::time::Duration>,
+        failures: &HashMap<String, StubFailure>,
+    ) -> (Value, Vec<Value>, usize) {
+        // The transport must be 'static — the `Transport` alias requires it — so
+        // the stub owns its tables and shares the call log through an Arc.
+        let payloads = payloads.clone();
+        let delays = delays.clone();
+        let failures = failures.clone();
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let observed = std::sync::Arc::clone(&calls);
+        let transport =
+            move |_url: &str, body: &[u8], _headers: &[(&str, &str)]| -> TransportOutcome {
+                let parsed: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+                let query = parsed
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                observed
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(query.clone());
+                if let Some(delay) = delays.get(&query) {
+                    std::thread::sleep(*delay);
+                }
+                match failures.get(&query) {
+                    // `Rejected` injects the same `AppError` the Python stub raises.
+                    Some(StubFailure::Api) => {
+                        TransportOutcome::Rejected(deepseek_policy::app_error::AppError {
+                            message: "boom missing_api_key".to_string(),
+                            code: "missing_api_key",
+                            status: 503,
+                        })
+                    }
+                    // a panicking transport is this port's `raise RuntimeError`;
+                    // `search_multiple` folds it into an error round
+                    Some(StubFailure::Panic) => panic!("worker exploded"),
+                    None => TransportOutcome::Response {
+                        status: 200,
+                        body: payloads
+                            .get(&query)
+                            .cloned()
+                            .unwrap_or(Value::Null)
+                            .to_string()
+                            .into_bytes(),
+                    },
+                }
+            };
+        let mut progress: Vec<Value> = Vec::new();
+        let result = search_multiple(query, "k", &transport, root, now_epoch, &mut |payload| {
+            progress.push(payload.clone())
+        })
+        .expect("the cache write succeeds");
+        (
+            result,
+            progress,
+            calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+        )
+    }
+
+    let spread = |queries: &[String]| -> HashMap<String, std::time::Duration> {
+        queries
+            .iter()
+            .enumerate()
+            .map(|(index, text)| {
+                (
+                    text.clone(),
+                    std::time::Duration::from_millis(80 * index as u64),
+                )
+            })
+            .collect()
+    };
+
+    let root = std::env::temp_dir().join(format!("search-parity-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("temp cache root");
+    let now_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0);
+
+    let queries_a = search_queries_for("最新消息");
+    let payloads_a: HashMap<String, Value> = [
+        (
+            queries_a[0].clone(),
+            json!({"query": queries_a[0], "answer": "a1", "results": [
+                {"title": "A1", "url": "https://multi-a.com/1", "content": "c1", "score": 0.8},
+                {"title": "A2", "url": "https://multi-a.com/2", "content": "c2", "score": 0.6},
+            ]}),
+        ),
+        (
+            queries_a[1].clone(),
+            json!({"query": queries_a[1], "answer": "a2", "results": [
+                {"title": "B1", "url": "https://multi-b.com/1", "content": "c3", "score": 0.7},
+            ]}),
+        ),
+        (
+            queries_a[2].clone(),
+            json!({"query": queries_a[2], "answer": "", "results": []}),
+        ),
+    ]
+    .into_iter()
+    .collect();
+
+    let (result, progress, calls) = drive_multi(
+        "最新消息",
+        &root,
+        now_epoch,
+        &payloads_a,
+        &spread(&queries_a),
+        &HashMap::new(),
+    );
+    let first_result = result.clone();
+    out.insert("multi::first-result".to_string(), result);
+    out.insert("multi::first-progress".to_string(), json!(progress));
+    out.insert("multi::first-call-count".to_string(), json!(calls));
+
+    // The saved cache: same file name and parsed content. The *bytes* are not the
+    // contract — Python preserves dict insertion order, this port's serde map is
+    // sorted — so what is compared is "written, then read back as the same value".
+    let cache_file = search_cache_dir(&root).join(format!("{}.json", search_cache_key("最新消息")));
+    out.insert(
+        "multi::cache-file-exists".to_string(),
+        json!(cache_file.exists()),
+    );
+    out.insert(
+        "multi::cache-file-value".to_string(),
+        serde_json::from_str(&std::fs::read_to_string(&cache_file).expect("saved cache file"))
+            .expect("saved cache JSON"),
+    );
+
+    // the hit: one announcement, the saved value with `cached: true`, no search
+    let (result, progress, calls) = drive_multi(
+        "最新消息",
+        &root,
+        now_epoch,
+        &payloads_a,
+        &spread(&queries_a),
+        &HashMap::new(),
+    );
+    out.insert("multi::hit-result".to_string(), result);
+    out.insert("multi::hit-progress".to_string(), json!(progress));
+    out.insert("multi::hit-call-count".to_string(), json!(calls));
+
+    // expiry: backdate the file past the age window, the search runs again
+    {
+        // `File::open` is a read-only handle, and Windows refuses to set times
+        // through one — a write handle does not truncate, it only grants access.
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&cache_file)
+            .expect("cache file to backdate");
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        file.set_times(std::fs::FileTimes::new().set_modified(past))
+            .expect("backdate the cache file");
+    }
+    let (result, progress, calls) = drive_multi(
+        "最新消息",
+        &root,
+        now_epoch,
+        &payloads_a,
+        &spread(&queries_a),
+        &HashMap::new(),
+    );
+    out.insert(
+        "multi::expired-runs-again".to_string(),
+        json!(calls == queries_a.len()),
+    );
+    out.insert(
+        "multi::expired-result-equals-first".to_string(),
+        json!(result == first_result),
+    );
+    out.insert(
+        "multi::expired-progress-count".to_string(),
+        json!(progress.len()),
+    );
+
+    // reversed sleeps: the first query finishes last, so completions arrive
+    // backwards — this pins `as_completed` rather than submission order
+    let queries_e = search_queries_for("显卡价格 评测");
+    let delays_e: HashMap<String, std::time::Duration> = queries_e
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            (
+                text.clone(),
+                std::time::Duration::from_millis(80 * (queries_e.len() - 1 - index) as u64),
+            )
+        })
+        .collect();
+    let payloads_e: HashMap<String, Value> = queries_e
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            (
+                text.clone(),
+                json!({"query": text, "answer": "", "results": [
+                    {"title": format!("E{index}"), "url": format!("https://multi-e.com/{index}"),
+                     "content": "x", "score": 0.5},
+                ]}),
+            )
+        })
+        .collect();
+    let (result, progress, _calls) = drive_multi(
+        "显卡价格 评测",
+        &root,
+        now_epoch,
+        &payloads_e,
+        &delays_e,
+        &HashMap::new(),
+    );
+    out.insert("multi::reversed-result".to_string(), result);
+    out.insert("multi::reversed-progress".to_string(), json!(progress));
+
+    // an AppError round (a missing key is never retried)
+    let queries_b = search_queries_for("python 报错");
+    let payloads_b: HashMap<String, Value> = queries_b
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            (
+                text.clone(),
+                json!({"query": text, "answer": "", "results": [
+                    {"title": format!("B{index}"), "url": format!("https://multi-bx.com/{index}"),
+                     "content": "y", "score": 0.4},
+                ]}),
+            )
+        })
+        .collect();
+    let failures_b: HashMap<String, StubFailure> = [(queries_b[1].clone(), StubFailure::Api)]
+        .into_iter()
+        .collect();
+    let (result, progress, _calls) = drive_multi(
+        "python 报错",
+        &root,
+        now_epoch,
+        &payloads_b,
+        &spread(&queries_b),
+        &failures_b,
+    );
+    out.insert("multi::api-error-result".to_string(), result);
+    out.insert("multi::api-error-progress".to_string(), json!(progress));
+
+    // a panicking transport — the `except Exception` arm
+    let queries_c = search_queries_for("政策法规");
+    let payloads_c: HashMap<String, Value> = queries_c
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            (
+                text.clone(),
+                json!({"query": text, "answer": "", "results": [
+                    {"title": format!("C{index}"), "url": format!("https://multi-cx.com/{index}"),
+                     "content": "z", "score": 0.3},
+                ]}),
+            )
+        })
+        .collect();
+    let failures_c: HashMap<String, StubFailure> = [(queries_c[2].clone(), StubFailure::Panic)]
+        .into_iter()
+        .collect();
+    let (result, progress, _calls) = drive_multi(
+        "政策法规",
+        &root,
+        now_epoch,
+        &payloads_c,
+        &spread(&queries_c),
+        &failures_c,
+    );
+    out.insert("multi::exception-result".to_string(), result);
+    out.insert("multi::exception-progress".to_string(), json!(progress));
+
+    // the empty query: no rounds, no search, nothing cached
+    let (result, progress, calls) = drive_multi(
+        "",
+        &root,
+        now_epoch,
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+    out.insert("multi::empty-result".to_string(), result);
+    out.insert("multi::empty-progress".to_string(), json!(progress));
+    out.insert("multi::empty-call-count".to_string(), json!(calls));
+
+    let _ = std::fs::remove_dir_all(&root);
 
     let mut encoded =
         serde_json::to_string_pretty(&Value::Object(out)).expect("serialize probe output");

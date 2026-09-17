@@ -19,7 +19,11 @@ from __future__ import annotations
 
 import ast
 import json
+import os
+import shutil
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -283,6 +287,130 @@ def main() -> int:
         out[f"context::{index}"] = s.format_search_context(data)
     for index, data in enumerate(FAILURES):
         out[f"failure-context::{index}"] = s.format_search_failure_context(data)
+
+    # --- step 2: search_multiple — the parallel shape --------------------------------
+    #
+    # The stub replaces `search_tavily` (post-normalize), the Rust side drives the
+    # injected transport (pre-normalize) — the same layer split as the retry cases.
+    # Per-query sleeps make completion order deterministic, and SEARCH_CACHE_DIR is
+    # redirected to a temp dir the way `tmp_settings` redirects the stores.
+
+    def drive_multi(query, payloads, delays, errors=None):
+        errors = errors or {}
+        calls = []
+
+        def fake(search_query, *, tavily_api_key=""):
+            calls.append(search_query)
+            delay = delays.get(search_query)
+            if delay:
+                time.sleep(delay)
+            error = errors.get(search_query)
+            if error is not None:
+                raise error
+            return s.normalize_search_response(search_query, payloads[search_query])
+
+        real_tavily = s.search_tavily
+        s.search_tavily = fake
+        progress = []
+        try:
+            result = s.search_multiple(query, progress_callback=progress.append, tavily_api_key="k")
+        finally:
+            s.search_tavily = real_tavily
+        return result, progress, calls
+
+    def spread(queries):
+        # 0 / 80 / 160 ms: completion order follows submission order
+        return {text: 0.08 * index for index, text in enumerate(queries)}
+
+    real_cache_dir = s.SEARCH_CACHE_DIR
+    cache_dir = Path(tempfile.mkdtemp(prefix="search-parity-"))
+    s.SEARCH_CACHE_DIR = cache_dir
+    try:
+        queries_a = s.search_queries_for("最新消息")
+        payloads_a = {
+            queries_a[0]: {"query": queries_a[0], "answer": "a1", "results": [
+                {"title": "A1", "url": "https://multi-a.com/1", "content": "c1", "score": 0.8},
+                {"title": "A2", "url": "https://multi-a.com/2", "content": "c2", "score": 0.6},
+            ]},
+            queries_a[1]: {"query": queries_a[1], "answer": "a2", "results": [
+                {"title": "B1", "url": "https://multi-b.com/1", "content": "c3", "score": 0.7},
+            ]},
+            queries_a[2]: {"query": queries_a[2], "answer": "", "results": []},
+        }
+        result, progress, calls = drive_multi("最新消息", payloads_a, spread(queries_a))
+        out["multi::first-result"] = result
+        out["multi::first-progress"] = progress
+        out["multi::first-call-count"] = len(calls)
+
+        # The saved cache: same file name and parsed content. The *bytes* are not the
+        # contract — Python preserves dict insertion order, this port's serde map is
+        # sorted — so what is compared is "written, then read back as the same value".
+        cache_file = cache_dir / f"{s.search_cache_key('最新消息')}.json"
+        out["multi::cache-file-exists"] = cache_file.exists()
+        out["multi::cache-file-value"] = json.loads(cache_file.read_text(encoding="utf-8"))
+
+        # the hit: one announcement, the saved value with `cached: true`, no search
+        result, progress, calls = drive_multi("最新消息", payloads_a, spread(queries_a))
+        out["multi::hit-result"] = result
+        out["multi::hit-progress"] = progress
+        out["multi::hit-call-count"] = len(calls)
+
+        # expiry: backdate the file past the age window, the search runs again
+        past = time.time() - 3600
+        os.utime(cache_file, (past, past))
+        result, progress, calls = drive_multi("最新消息", payloads_a, spread(queries_a))
+        out["multi::expired-runs-again"] = len(calls) == len(queries_a)
+        out["multi::expired-result-equals-first"] = result == out["multi::first-result"]
+        out["multi::expired-progress-count"] = len(progress)
+
+        # reversed sleeps: the first query finishes last, so completions arrive
+        # backwards — this pins `as_completed` rather than submission order
+        queries_e = s.search_queries_for("显卡价格 评测")
+        delays_e = {text: 0.08 * (len(queries_e) - 1 - index) for index, text in enumerate(queries_e)}
+        payloads_e = {
+            text: {"query": text, "answer": "", "results": [
+                {"title": f"E{index}", "url": f"https://multi-e.com/{index}", "content": "x", "score": 0.5},
+            ]}
+            for index, text in enumerate(queries_e)
+        }
+        result, progress, calls = drive_multi("显卡价格 评测", payloads_e, delays_e)
+        out["multi::reversed-result"] = result
+        out["multi::reversed-progress"] = progress
+
+        # an AppError round (a missing key is never retried)
+        queries_b = s.search_queries_for("python 报错")
+        payloads_b = {
+            text: {"query": text, "answer": "", "results": [
+                {"title": f"B{index}", "url": f"https://multi-bx.com/{index}", "content": "y", "score": 0.4},
+            ]}
+            for index, text in enumerate(queries_b)
+        }
+        errors_b = {queries_b[1]: s.AppError("boom missing_api_key", code=s.ErrorCode.MISSING_API_KEY, status=503)}
+        result, progress, calls = drive_multi("python 报错", payloads_b, spread(queries_b), errors_b)
+        out["multi::api-error-result"] = result
+        out["multi::api-error-progress"] = progress
+
+        # a plain exception round — the `except Exception` arm
+        queries_c = s.search_queries_for("政策法规")
+        payloads_c = {
+            text: {"query": text, "answer": "", "results": [
+                {"title": f"C{index}", "url": f"https://multi-cx.com/{index}", "content": "z", "score": 0.3},
+            ]}
+            for index, text in enumerate(queries_c)
+        }
+        errors_c = {queries_c[2]: RuntimeError("worker exploded")}
+        result, progress, calls = drive_multi("政策法规", payloads_c, spread(queries_c), errors_c)
+        out["multi::exception-result"] = result
+        out["multi::exception-progress"] = progress
+
+        # the empty query: no rounds, no search, nothing cached
+        result, progress, calls = drive_multi("", {}, {})
+        out["multi::empty-result"] = result
+        out["multi::empty-progress"] = progress
+        out["multi::empty-call-count"] = len(calls)
+    finally:
+        s.SEARCH_CACHE_DIR = real_cache_dir
+        shutil.rmtree(cache_dir, ignore_errors=True)
 
     json.dump(out, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
     sys.stdout.write("\n")

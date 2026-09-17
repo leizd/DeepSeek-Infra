@@ -1045,6 +1045,152 @@ pub fn search_tavily_with_retry(
     }
 }
 
+/// Mirrors `search_multiple`: the module's only concurrency — a bounded pool over
+/// the planned queries, with rounds folded in **completion order**.
+///
+/// # The parallel shape, reproduced rather than approximated
+///
+/// - a **cache hit** short-circuits: `{**cached, "cached": True}` goes to the
+///   progress callback and is returned with no search at all;
+/// - every round is recorded as `"searching"` and announced to the progress
+///   callback **in submission order**, with those snapshots' aggregate status
+///   forced to `"searching"`;
+/// - completions are processed in the order they **finish** — `as_completed`, not
+///   submission order — each updating its round and firing the callback with the
+///   status left for the aggregate to infer;
+/// - a completed round has `round` and `status` re-stamped by this caller
+///   (`str(round_data.get("status") or "done")`);
+/// - both of the oracle's failure arms produce the **same** round: an `AppError`
+///   and any other exception each become `search_round_status(..., "error",
+///   str(exc))`, differing only in logging, which is not part of the contract.
+///   Here the second arm is a panicking transport, caught per task so the pool
+///   survives the way a Python future swallows its exception;
+/// - the cache is written only when the aggregate has results, and a **failed
+///   write is an error** — the oracle's `save_search_cache` raises out of
+///   `search_multiple`, so this returns `Err` rather than silently returning
+///   results the oracle would have lost. The message is this port's own (the
+///   oracle's is whatever `OSError` produced) and the code is the documented
+///   mapping, as with the stores' `TypeError`.
+///
+/// The worker bound is the oracle's `max(1, min(len(queries), SEARCH_ROUND_LIMIT))`.
+/// It never queues today — `search_queries_for` caps at [`SEARCH_ROUND_LIMIT`], so
+/// every query has its own worker — but the bound is kept (work is chunked as
+/// `index % workers`) so raising the limit cannot silently over-parallelise. The
+/// workers also start after the submission announcements rather than during them;
+/// nothing they do is observable until the `as_completed` loop runs, which in the
+/// oracle also only starts once every round is submitted.
+///
+/// The transport is a generic parameter bounded `Fn + Send + Sync + 'static`: it
+/// crosses the worker threads, and the `Transport` alias already requires
+/// 'static objects (every transport this crate has passed is one — owned
+/// clients and owned probe tables alike). The rounds map and the progress
+/// callback stay on the calling thread, as in the oracle.
+pub fn search_multiple<F>(
+    query: &str,
+    tavily_api_key: &str,
+    transport: &F,
+    cache_root: &Path,
+    now_epoch: i64,
+    progress: &mut dyn FnMut(&Value),
+) -> Result<Value, AppError>
+where
+    F: Fn(&str, &[u8], &[(&str, &str)]) -> TransportOutcome + Send + Sync + 'static,
+{
+    if let Some(cached) = load_search_cache(cache_root, query, now_epoch) {
+        let mut hit = cached;
+        if let Some(object) = hit.as_object_mut() {
+            object.insert("cached".to_string(), json!(true));
+        }
+        progress(&hit);
+        return Ok(hit);
+    }
+
+    let queries = search_queries_for(query);
+    let mut rounds_by_index: BTreeMap<i64, Value> = BTreeMap::new();
+
+    // Submission: every round enters as "searching" and is announced in order.
+    for (position, search_query) in queries.iter().enumerate() {
+        let round_index = (position + 1) as i64;
+        rounds_by_index.insert(
+            round_index,
+            search_round_status(search_query, round_index, "searching", ""),
+        );
+        progress(&aggregate_search_rounds(
+            query,
+            &rounds_in_order(&rounds_by_index),
+            Some("searching"),
+        ));
+    }
+
+    let worker_count = queries.len().min(SEARCH_ROUND_LIMIT);
+    std::thread::scope(|scope| {
+        let (sender, receiver) = std::sync::mpsc::channel::<(usize, Result<Value, String>)>();
+        for worker in 0..worker_count {
+            let sender = sender.clone();
+            let queries = &queries;
+            scope.spawn(move || {
+                for index in (worker..queries.len()).step_by(worker_count) {
+                    // `catch_unwind` is the `except Exception` arm: a panicking
+                    // transport must not take the pool — and the other rounds — down.
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        search_tavily_with_retry(
+                            &queries[index],
+                            tavily_api_key,
+                            transport as &Transport,
+                        )
+                    }));
+                    let payload = match outcome {
+                        Ok(Ok(value)) => Ok(value),
+                        Ok(Err(error)) => Err(error.message),
+                        Err(panic) => Err(panic_message(&panic)),
+                    };
+                    if sender.send((index, payload)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(sender);
+
+        // `as_completed`: each round is folded in as it finishes, in finish order.
+        for _ in 0..queries.len() {
+            let (position, payload) = receiver
+                .recv()
+                .expect("every submitted round reports exactly once");
+            let round_index = (position + 1) as i64;
+            let round_data = match payload {
+                Ok(mut data) => {
+                    if let Some(object) = data.as_object_mut() {
+                        let status = python_str(object.get("status").unwrap_or(&Value::Null));
+                        object.insert("round".to_string(), json!(round_index));
+                        object.insert("status".to_string(), json!(status.if_empty("done")));
+                    }
+                    data
+                }
+                Err(message) => {
+                    search_round_status(&queries[position], round_index, "error", &message)
+                }
+            };
+            rounds_by_index.insert(round_index, round_data);
+            progress(&aggregate_search_rounds(
+                query,
+                &rounds_in_order(&rounds_by_index),
+                None,
+            ));
+        }
+    });
+
+    let result = aggregate_search_rounds(query, &rounds_in_order(&rounds_by_index), None);
+    if python_truthy(result.get("results").unwrap_or(&Value::Null)) {
+        save_search_cache(cache_root, query, &result, now_epoch).map_err(|error| AppError {
+            message: format!("Cannot write search cache: {error}"),
+            code: codes::INTERNAL,
+            status: 500,
+        })?;
+    }
+    Ok(result)
+}
+
 /// Mirrors `search_mode` (`gateway/deepseek_client.py`): the payload's mode,
 /// trimmed and lowercased, defaulting to `auto` — via an **`or`** on the raw
 /// value, so every falsy spelling (missing, `null`, `""`, `false`, `0`, `0.0`)
@@ -1254,6 +1400,27 @@ fn python_str(value: &Value) -> String {
     }
 }
 
+/// `str(exc)` for a caught panic — the message of the `except Exception` arm.
+///
+/// A `panic!` with a string payload is this port's `raise RuntimeError(...)`,
+/// which is what the probe drives; any other payload keeps a fixed description,
+/// because there is no faithful rendering of an arbitrary one.
+///
+/// The parameter is the `Box` itself, not `&(dyn Any + Send)`: coercing a trait
+/// object into another trait object re-vtables it as an `Any` implementor of its
+/// own, whose `type_id` is the *object type's* — and every downcast then misses.
+/// Downcasting through the box keeps the original vtable. Measured, not
+/// inferred: the direct downcast worked while the coerced one did not.
+fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(text) = panic.downcast_ref::<&'static str>() {
+        (*text).to_string()
+    } else if let Some(text) = panic.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "search round panicked".to_string()
+    }
+}
+
 /// `float(value or 0)`, or `None` where Python raises.
 fn python_float_opt(value: Option<&Value>) -> Option<f64> {
     let value = value?;
@@ -1416,5 +1583,200 @@ mod tests {
             "only the first three errors are listed"
         );
         assert!(format_search_failure_context(&json!({})).ends_with("- 未知错误"));
+    }
+
+    fn temp_root(label: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("search-multiple-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_empty_query_aggregates_without_searching() {
+        let root = temp_root("empty");
+        let boom = |_url: &str, _body: &[u8], _headers: &[(&str, &str)]| -> TransportOutcome {
+            panic!("the empty query must not search");
+        };
+        let mut seen = Vec::new();
+        let result = search_multiple("", "k", &boom, &root, 1_700_000_000, &mut |payload| {
+            seen.push(payload.clone())
+        })
+        .expect("no results means no cache write");
+        assert_eq!(result["status"], json!("done"));
+        assert_eq!(result["results"], json!([]));
+        assert_eq!(result["rounds"], json!([]));
+        assert!(seen.is_empty(), "no submission or completion is announced");
+        let saved = search_cache_dir(&root).join(format!("{}.json", search_cache_key("")));
+        assert!(!saved.exists(), "nothing is cached");
+    }
+
+    #[test]
+    fn a_cache_hit_returns_without_searching() {
+        let root = temp_root("hit");
+        let saved = json!({
+            "status": "done", "query": "q", "reason": "r", "answer": "a",
+            "results": [{"title": "T", "url": "https://x.com/a"}],
+            "rounds": [], "response_time": null, "cached": false,
+        });
+        save_search_cache(&root, "q", &saved, 1_700_000_000).unwrap();
+        let boom = |_url: &str, _body: &[u8], _headers: &[(&str, &str)]| -> TransportOutcome {
+            panic!("a cache hit must not search");
+        };
+        let mut seen = Vec::new();
+        let result = search_multiple("q", "k", &boom, &root, 1_700_000_000, &mut |payload| {
+            seen.push(payload.clone())
+        })
+        .expect("no results means no cache write");
+        assert_eq!(seen.len(), 1, "the hit is announced exactly once");
+        let mut expected = saved;
+        expected["cached"] = json!(true);
+        assert_eq!(result, expected);
+        assert_eq!(seen[0], expected);
+    }
+
+    #[test]
+    fn completions_fold_in_in_finish_order_not_submission_order() {
+        let root = temp_root("order");
+        let query = "最新消息"; // fresh intent -> three variants
+        let queries = search_queries_for(query);
+        assert_eq!(queries.len(), 3);
+        // the first query sleeps longest, so the completions arrive backwards
+        let delays: std::collections::HashMap<String, std::time::Duration> = queries
+            .iter()
+            .enumerate()
+            .map(|(index, text)| {
+                (
+                    text.clone(),
+                    std::time::Duration::from_millis(120 * (2 - index) as u64),
+                )
+            })
+            .collect();
+        let transport =
+            move |_url: &str, body: &[u8], _headers: &[(&str, &str)]| -> TransportOutcome {
+                let parsed: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+                let query = parsed
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                std::thread::sleep(delays.get(&query).copied().unwrap_or_default());
+                TransportOutcome::Response {
+                    status: 200,
+                    body: json!({
+                        "query": query,
+                        "answer": "",
+                        "results": [{"title": "T", "url": "https://finish-order.com/a",
+                                     "content": "c", "score": 0.5}],
+                    })
+                    .to_string()
+                    .into_bytes(),
+                }
+            };
+        let mut seen = Vec::new();
+        let result = search_multiple(
+            query,
+            "k",
+            &transport,
+            &root,
+            1_700_000_000,
+            &mut |payload| seen.push(payload.clone()),
+        )
+        .expect("results exist, so the cache is written");
+        // three submission announcements, then one per completion
+        assert_eq!(seen.len(), 6);
+        fn statuses(snapshot: &Value) -> Vec<&str> {
+            snapshot["rounds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|round| round["status"].as_str().unwrap())
+                .collect()
+        }
+        // `searching` flips to `done` from the END first, because the first query
+        // sleeps longest — submission order alone would flip from the front
+        assert_eq!(statuses(&seen[3]), vec!["searching", "searching", "done"]);
+        assert_eq!(statuses(&seen[4]), vec!["searching", "done", "done"]);
+        assert_eq!(statuses(&seen[5]), vec!["done", "done", "done"]);
+        assert_eq!(result["rounds"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_panicking_transport_becomes_an_error_round_like_an_exception() {
+        let root = temp_root("panic");
+        let query = "政策法规"; // official intent -> three variants
+        let queries = search_queries_for(query);
+        assert_eq!(queries.len(), 3);
+        let failing_query = queries[2].clone();
+        let transport =
+            move |_url: &str, body: &[u8], _headers: &[(&str, &str)]| -> TransportOutcome {
+                let parsed: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+                let query = parsed
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                if query == failing_query {
+                    // the `except Exception` arm, driven as a panic
+                    panic!("worker exploded");
+                }
+                TransportOutcome::Response {
+                    status: 200,
+                    body: json!({
+                        "query": query,
+                        "answer": "",
+                        "results": [{"title": "T", "url": "https://panic-round.com/a",
+                                     "content": "c", "score": 0.5}],
+                    })
+                    .to_string()
+                    .into_bytes(),
+                }
+            };
+        let mut seen = Vec::new();
+        let result = search_multiple(
+            query,
+            "k",
+            &transport,
+            &root,
+            1_700_000_000,
+            &mut |payload| seen.push(payload.clone()),
+        )
+        .expect("results exist, so the cache is written");
+        let rounds = result["rounds"].as_array().unwrap();
+        assert_eq!(rounds[0]["status"], json!("done"));
+        assert_eq!(rounds[1]["status"], json!("done"));
+        assert_eq!(rounds[2]["status"], json!("error"));
+        assert_eq!(rounds[2]["error"], json!("worker exploded"));
+        // not every round errored, so the aggregate stays `done`
+        assert_eq!(result["status"], json!("done"));
+        assert_eq!(seen.len(), 6);
+    }
+
+    #[test]
+    fn a_failed_cache_write_surfaces_rather_than_being_swallowed() {
+        // The oracle's `save_search_cache` raises out of `search_multiple`; a port
+        // that swallowed it would answer with results the oracle would have lost.
+        let file =
+            std::env::temp_dir().join(format!("search-multiple-blocked-{}", std::process::id()));
+        let _ = std::fs::remove_file(&file);
+        std::fs::write(&file, b"not a directory").unwrap();
+        let transport = |_url: &str, _body: &[u8], _headers: &[(&str, &str)]| -> TransportOutcome {
+            TransportOutcome::Response {
+                status: 200,
+                body: json!({
+                    "query": "q",
+                    "answer": "",
+                    "results": [{"title": "T", "url": "https://blocked-write.com/a",
+                                 "content": "c", "score": 0.5}],
+                })
+                .to_string()
+                .into_bytes(),
+            }
+        };
+        let error = search_multiple("q", "k", &transport, &file, 1_700_000_000, &mut |_| {})
+            .expect_err("the cache write fails, so the call does");
+        assert_eq!(error.code, codes::INTERNAL);
+        let _ = std::fs::remove_file(&file);
     }
 }
