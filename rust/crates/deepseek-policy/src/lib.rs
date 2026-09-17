@@ -9,6 +9,7 @@ use crate::capability::{Capability, RiskLevel};
 pub mod app_error;
 pub mod audit;
 pub mod capability;
+pub mod context_taint;
 pub mod core_utils;
 pub mod entropy;
 pub mod file_cache;
