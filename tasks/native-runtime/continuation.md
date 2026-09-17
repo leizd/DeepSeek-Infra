@@ -1992,3 +1992,34 @@ expectations were wrong on the first run and were corrected against the oracle r
 changing the port — the same failure mode as the taint corpus index and the five-versus-six segment
 count, which is now three for three: **my arithmetic about the oracle is the weak link, so
 expectations get taken from the oracle.**
+
+
+### The context engine is whole (`3960be2c`), and the SHA-1 decision went to a dependency
+
+The identity half was blocked on a decision worth recording: `base_context_id` needs SHA-1, this
+crate depends on `sha2`, and the two ways out were hand-rolling the primitive or adding the crate.
+Measurements that decided it:
+
+- **`sha1` was not in the lockfile at all**, not even transitively — so the addition is a real one,
+  not a free promotion of something already present;
+- **every existing fingerprint in the crate delegates to a RustCrypto digest**
+  (`memory.rs:195`, `search.rs:735`, `tool_policy.rs:1330` all call `Sha256::digest`), so writing a
+  primitive by hand would have introduced a practice this codebase does not have.
+
+So `sha1 = "0.10"` sits next to `sha2 = "0.10"` in the workspace table. What the corpus and four new
+tests pin:
+
+- **tool order is part of the prefix identity** — the parts string is the leading system content, the
+  model, then the tool names *in order*, so a swap changes the id. That is the value's whole purpose:
+  revealing accidental prefix churn.
+- **an unnamed tool contributes nothing**, so a tool with an empty name, a non-dict `function`, or a
+  bare string leaves the parts string untouched and the id equal to an empty body's.
+- the dynamic block's `chars` counts characters, not bytes.
+- the two ids asserted in the unit tests are **taken from the oracle**, which doubles them as a
+  known-answer test of the digest path.
+
+Verification: 204 keys byte-identical, md5 `0b430da00b2467c6a99e632880b4f38d`; tests 307 → **311**;
+`fmt --check` and `clippy --all-targets` clean, probe re-run after formatting.
+
+`context_engine` is now complete, which leaves `context_manager` as the only piece of this subsystem
+— and it is mostly ordering plus diagnostics assembly, since both halves it depends on exist.
