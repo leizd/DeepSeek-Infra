@@ -38,8 +38,10 @@
 use std::sync::OnceLock;
 
 use regex::Regex;
+use serde_json::{Map, Value, json};
 
-use crate::tool_policy::{TOOL_METADATA, sanitize_external_text};
+use crate::core_utils::python_truthy;
+use crate::tool_policy::{TOOL_METADATA, sanitize_external_text, tool_metadata};
 
 // --- Trust levels and segment sources -----------------------------------------------
 
@@ -257,7 +259,460 @@ pub fn escalation_enabled(settings: &ContextTaintSettings) -> bool {
     taint_enabled(settings) && settings.escalate_confirm
 }
 
+// --- Segment classification -----------------------------------------------------------
+
+/// Tool results carry the executing tool's name in their stable JSON encoding.
+const TOOL_NAME_IN_RESULT: &str = r#""tool"\s*:\s*"([A-Za-z0-9_.-]+)""#;
+const FILE_READ_TOOLS: [&str; 3] = ["search_files", "read_file_chunk", "list_project_files"];
+const RAG_RETRIEVAL_TOOLS: [&str; 2] = ["search_project_documents", "search_files"];
+
+/// One classified slice of the assembled prompt: the oracle's `TaintSegment`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaintSegment {
+    pub source: &'static str,
+    pub trust: &'static str,
+    pub chars: usize,
+    pub scan: TaintScan,
+}
+
+impl TaintSegment {
+    /// Mirrors `TaintSegment.to_dict`.
+    ///
+    /// The six keys come out in the oracle's insertion order here only because `json!`
+    /// sorts them; that is fine for the value, but see [`build_taint_report`] for why a
+    /// serializer consuming this must not inherit the sorted order.
+    pub fn to_value(&self) -> Value {
+        json!({
+            "source": self.source,
+            "trust": self.trust,
+            "chars": self.chars,
+            "injectionHits": self.scan.injection,
+            "exfiltrationHits": self.scan.exfiltration,
+            "toolDirectiveHits": self.scan.tool_directive,
+        })
+    }
+}
+
+/// Mirrors `_tool_message_source`: which untrusted bucket a tool result belongs to.
+///
+/// The order of the arms is the contract. `browser_` and `mcp__` are checked before the
+/// metadata table, so a bridged MCP tool stays untrusted even if a local tool of the same
+/// name exists; and `search_files` is both a file reader and a RAG retriever, so the RAG
+/// arm only wins when the payload explicitly marks `local_rag`.
+pub fn tool_message_source(content: &str) -> &'static str {
+    let name = match tool_name_regex().captures(content) {
+        Some(found) => found
+            .get(1)
+            .map(|group| group.as_str().to_string())
+            .unwrap_or_default(),
+        None => String::new(),
+    };
+    if name.starts_with("browser_") {
+        return UNTRUSTED_BROWSER;
+    }
+    if name.starts_with("mcp__") {
+        return UNTRUSTED_WEB;
+    }
+    let meta = tool_metadata(&name);
+    if meta.map(|found| found.external_output).unwrap_or(false) {
+        return UNTRUSTED_WEB;
+    }
+    if FILE_READ_TOOLS.contains(&name.as_str()) {
+        return UNTRUSTED_FILE;
+    }
+    if RAG_RETRIEVAL_TOOLS.contains(&name.as_str())
+        && content.contains("\"source\"")
+        && content.contains("\"local_rag\"")
+    {
+        return UNTRUSTED_RAG;
+    }
+    if meta.is_some() {
+        return TRUSTED_TOOL;
+    }
+    UNTRUSTED_TOOL
+}
+
+/// Mirrors `_message_text`: the plain text of a message content, joining the text parts of
+/// a vision message. Anything that is neither a string nor a list of text parts reads as
+/// empty — which is what makes such a message drop out of the classification entirely.
+pub fn message_text(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(parts)) => {
+            let texts: Vec<String> = parts
+                .iter()
+                .filter(|part| part.get("type") == Some(&Value::String("text".to_string())))
+                .map(|part| text_or_empty(part.get("text")))
+                .collect();
+            texts.join("\n")
+        }
+        _ => String::new(),
+    }
+}
+
+/// Return `(head, media_tail)` split at [`MEDIA_CONTEXT_MARKER`], or `(text, "")`.
+pub fn split_media_tail(text: &str) -> (String, String) {
+    match text.find(MEDIA_CONTEXT_MARKER) {
+        Some(index) => (text[..index].to_string(), text[index..].to_string()),
+        None => (text.to_string(), String::new()),
+    }
+}
+
+fn segments_for_user(text: &str) -> Vec<TaintSegment> {
+    let mut segments: Vec<TaintSegment> = Vec::new();
+    let (head, media_tail) = split_media_tail(text);
+    let text = if media_tail.is_empty() {
+        text.to_string()
+    } else {
+        head
+    };
+    match text.find(FILE_CONTEXT_MARKER) {
+        Some(index) => {
+            // The oracle uses the character index as a *length*, so this must count
+            // characters, not bytes: a CJK prefix would otherwise overstate the segment.
+            let file_index = char_len(&text[..index]);
+            if file_index > 0 {
+                segments.push(TaintSegment {
+                    source: TRUSTED_USER,
+                    trust: TRUSTED,
+                    chars: file_index,
+                    scan: TaintScan::default(),
+                });
+            }
+            let file_part = &text[index..];
+            segments.push(TaintSegment {
+                source: UNTRUSTED_FILE,
+                trust: UNTRUSTED,
+                chars: char_len(file_part),
+                scan: scan_text(file_part),
+            });
+        }
+        None => {
+            if !text.is_empty() {
+                segments.push(TaintSegment {
+                    source: TRUSTED_USER,
+                    trust: TRUSTED,
+                    chars: char_len(&text),
+                    scan: TaintScan::default(),
+                });
+            }
+        }
+    }
+    if !media_tail.is_empty() {
+        segments.push(TaintSegment {
+            source: UNTRUSTED_MEDIA,
+            trust: UNTRUSTED,
+            chars: char_len(&media_tail),
+            scan: scan_text(&media_tail),
+        });
+    }
+    segments
+}
+
+fn segments_for_system_with_media(text: &str) -> Vec<TaintSegment> {
+    let (head, media_tail) = split_media_tail(text);
+    let mut segments: Vec<TaintSegment> = Vec::new();
+    if !head.is_empty() {
+        segments.push(TaintSegment {
+            source: TRUSTED_SYSTEM,
+            trust: TRUSTED,
+            chars: char_len(&head),
+            scan: TaintScan::default(),
+        });
+    }
+    if !media_tail.is_empty() {
+        segments.push(TaintSegment {
+            source: UNTRUSTED_MEDIA,
+            trust: UNTRUSTED,
+            chars: char_len(&media_tail),
+            scan: scan_text(&media_tail),
+        });
+    }
+    segments
+}
+
+/// Split the trailing dynamic-context system message into trusted/untrusted parts.
+///
+/// The `insert(0, …)` / `insert(1, …)` juggling is the oracle's, and it is what makes the
+/// media segment come *first* while the trusted prefix and the web segment follow in order.
+fn segments_for_per_turn_system(text: &str) -> Vec<TaintSegment> {
+    let (head, media_tail) = split_media_tail(text);
+    let mut segments: Vec<TaintSegment> = Vec::new();
+    if !media_tail.is_empty() {
+        segments.push(TaintSegment {
+            source: UNTRUSTED_MEDIA,
+            trust: UNTRUSTED,
+            chars: char_len(&media_tail),
+            scan: scan_text(&media_tail),
+        });
+    }
+    let Some(search_index) = head.find(SEARCH_CONTEXT_MARKER) else {
+        let source = if head.contains(MEMORY_CONTEXT_MARKER) {
+            TRUSTED_MEMORY
+        } else {
+            TRUSTED_SYSTEM
+        };
+        if !head.is_empty() {
+            segments.insert(
+                0,
+                TaintSegment {
+                    source,
+                    trust: TRUSTED,
+                    chars: char_len(&head),
+                    scan: TaintScan::default(),
+                },
+            );
+        }
+        return segments;
+    };
+    // Everything from the guard/header line that carries the search marker on is
+    // web-derived (only the continuation note may follow; close enough for taint).
+    let line_start = head[..search_index]
+        .rfind('\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let pre = &head[..line_start];
+    let web_part = &head[line_start..];
+    if !pre.is_empty() {
+        let source = if pre.contains(MEMORY_CONTEXT_MARKER) {
+            TRUSTED_MEMORY
+        } else {
+            TRUSTED_SYSTEM
+        };
+        segments.insert(
+            0,
+            TaintSegment {
+                source,
+                trust: TRUSTED,
+                chars: char_len(pre),
+                scan: TaintScan::default(),
+            },
+        );
+    }
+    segments.insert(
+        1,
+        TaintSegment {
+            source: UNTRUSTED_WEB,
+            trust: UNTRUSTED,
+            chars: char_len(web_part),
+            scan: scan_text(web_part),
+        },
+    );
+    segments
+}
+
+/// Mirrors `classify_request_messages`: tag every assembled message with a source + scan.
+///
+/// `messages` is the raw `body["messages"]`; a non-list reads as empty the way the oracle's
+/// `isinstance(messages, list) else []` does.
+pub fn classify_request_messages(messages: Option<&Value>) -> Vec<TaintSegment> {
+    let empty: Vec<Value> = Vec::new();
+    let list = match messages {
+        Some(Value::Array(items)) => items,
+        _ => &empty,
+    };
+    let mut segments: Vec<TaintSegment> = Vec::new();
+    for message in list {
+        let Some(object) = message.as_object() else {
+            continue;
+        };
+        let role = text_or_empty(object.get("role"));
+        let text = message_text(object.get("content"));
+        if text.is_empty() {
+            continue;
+        }
+        match role.as_str() {
+            "system" => {
+                if text.contains(PER_TURN_CONTEXT_MARKER) {
+                    segments.extend(segments_for_per_turn_system(&text));
+                } else if text.contains(MEDIA_CONTEXT_MARKER) {
+                    segments.extend(segments_for_system_with_media(&text));
+                } else {
+                    segments.push(TaintSegment {
+                        source: TRUSTED_SYSTEM,
+                        trust: TRUSTED,
+                        chars: char_len(&text),
+                        scan: TaintScan::default(),
+                    });
+                }
+            }
+            "user" => segments.extend(segments_for_user(&text)),
+            "tool" => {
+                let source = tool_message_source(&text);
+                let trust = if source == TRUSTED_TOOL {
+                    TRUSTED
+                } else {
+                    UNTRUSTED
+                };
+                let scan = if trust == UNTRUSTED {
+                    scan_text(&text)
+                } else {
+                    TaintScan::default()
+                };
+                segments.push(TaintSegment {
+                    source,
+                    trust,
+                    chars: char_len(&text),
+                    scan,
+                });
+            }
+            "assistant" => segments.push(TaintSegment {
+                source: TRUSTED_ASSISTANT,
+                trust: TRUSTED,
+                chars: char_len(&text),
+                scan: TaintScan::default(),
+            }),
+            _ => {}
+        }
+    }
+    segments
+}
+
+// --- The report ------------------------------------------------------------------------
+
+/// Mirrors `_risk_level`. Exfiltration or a tool directive is always `high`; a single
+/// injection hit or three of any kind is `medium`.
+pub fn risk_level(
+    total_hits: usize,
+    injection: usize,
+    exfiltration: usize,
+    tool_directive: usize,
+) -> &'static str {
+    if exfiltration > 0 || tool_directive > 0 {
+        return "high";
+    }
+    if injection > 0 || total_hits >= 3 {
+        return "medium";
+    }
+    if total_hits > 0 {
+        return "low";
+    }
+    "none"
+}
+
+/// Mirrors `build_taint_report`: the `diagnostics.contextTaint` block for one body.
+///
+/// **Serialization landmine.** The oracle builds this object in insertion order and its
+/// caller splices it into `diagnostics`, which is then serialized in that order.
+/// `serde_json::Map` here is a `BTreeMap`, so `json!` yields alphabetically sorted keys —
+/// the *value* is equivalent, the *bytes* are not. Whoever writes the diagnostics
+/// serializer must own the key order rather than inheriting it from `json!`, exactly as
+/// with the message `append_context_to_latest_user` injects.
+pub fn build_taint_report(body: &Value, settings: &ContextTaintSettings) -> Option<Value> {
+    if !taint_enabled(settings) {
+        return None;
+    }
+    let segments = classify_request_messages(body.get("messages"));
+
+    let mut sources: Map<String, Value> = Map::new();
+    let mut injection = 0usize;
+    let mut exfiltration = 0usize;
+    let mut tool_directive = 0usize;
+    let mut untrusted_chars = 0usize;
+    let mut untrusted_segments = 0usize;
+    for segment in &segments {
+        let running = sources
+            .get(segment.source)
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        sources.insert(
+            segment.source.to_string(),
+            json!(running + segment.chars as u64),
+        );
+        if segment.trust == UNTRUSTED {
+            untrusted_chars += segment.chars;
+            untrusted_segments += 1;
+            injection += segment.scan.injection;
+            exfiltration += segment.scan.exfiltration;
+            tool_directive += segment.scan.tool_directive;
+        }
+    }
+    let total_hits = injection + exfiltration + tool_directive;
+
+    let mut escalated_tools: Vec<&'static str> = Vec::new();
+    let mut recommended_action = "none";
+    if taint_enabled(settings) && settings.escalate_confirm && total_hits > 0 {
+        escalated_tools = sensitive_tool_names();
+        recommended_action = "confirm_sensitive_tools";
+    }
+
+    let visible: Vec<Value> = segments
+        .iter()
+        .take(settings.max_segments)
+        .map(TaintSegment::to_value)
+        .collect();
+
+    Some(json!({
+        "enabled": true,
+        "tainted": total_hits > 0,
+        "riskLevel": risk_level(total_hits, injection, exfiltration, tool_directive),
+        "untrustedChars": untrusted_chars,
+        "untrustedSegments": untrusted_segments,
+        "injectionHits": injection,
+        "exfiltrationHits": exfiltration,
+        "toolDirectiveHits": tool_directive,
+        "escalatedTools": escalated_tools,
+        "recommendedAction": recommended_action,
+        "sources": Value::Object(sources),
+        "segments": visible,
+    }))
+}
+
+/// Mirrors `report_is_tainted`.
+pub fn report_is_tainted(report: Option<&Value>) -> bool {
+    match report {
+        Some(value @ Value::Object(_)) => python_truthy(&value["tainted"]),
+        _ => false,
+    }
+}
+
+/// Mirrors `taint_status`: the block `/api/config` and `GET /api/taint` serve.
+pub fn taint_status(settings: &ContextTaintSettings) -> Value {
+    json!({
+        "enabled": settings.enabled,
+        "hardenSearchContext": settings.harden_search_context,
+        "hardenFileContext": settings.harden_file_context,
+        "escalateConfirm": settings.escalate_confirm,
+        "trustLevels": [TRUSTED, UNTRUSTED],
+        "sources": [
+            TRUSTED_SYSTEM,
+            TRUSTED_USER,
+            TRUSTED_MEMORY,
+            TRUSTED_TOOL,
+            UNTRUSTED_WEB,
+            UNTRUSTED_BROWSER,
+            UNTRUSTED_FILE,
+            UNTRUSTED_MEDIA,
+            UNTRUSTED_RAG,
+            UNTRUSTED_TOOL,
+        ],
+        "exfiltrationPatterns": EXFILTRATION_PATTERNS.len(),
+        "toolDirectivePatterns": TOOL_DIRECTIVE_PREFIXES.len() + 1,
+        "sensitiveToolNames": sensitive_tool_names(),
+    })
+}
+
 // --- Regex compilation ------------------------------------------------------------------
+
+/// `len(text)` in the oracle counts *characters*, and one caller uses the index of a found
+/// marker as a length. Both must count characters here, or a CJK prefix inflates the
+/// segment size reported in the taint block.
+fn char_len(text: &str) -> usize {
+    text.chars().count()
+}
+
+/// `str(value or "")` without the strip: Python truthiness first, then `str()`.
+fn text_or_empty(value: Option<&Value>) -> String {
+    match value {
+        Some(found) if python_truthy(found) => crate::python_json::value_str(found),
+        _ => String::new(),
+    }
+}
+
+fn tool_name_regex() -> &'static Regex {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    PATTERN.get_or_init(|| compiled(TOOL_NAME_IN_RESULT))
+}
 
 /// The tables are fixed and short, so they are compiled once into their `OnceLock` and
 /// never looked up by name — a keyed cache here would only add a lock to a cold path.
