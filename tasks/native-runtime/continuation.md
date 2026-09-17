@@ -2023,3 +2023,39 @@ Verification: 204 keys byte-identical, md5 `0b430da00b2467c6a99e632880b4f38d`; t
 
 `context_engine` is now complete, which leaves `context_manager` as the only piece of this subsystem
 — and it is mostly ordering plus diagnostics assembly, since both halves it depends on exist.
+
+
+### The context subsystem is complete (`7c377889`)
+
+`context_manager` was the last piece, and it went in small because both halves it depends on
+already existed. What is worth recording is less the port than two mistakes in my own verification:
+
+**The first corpus could not have caught a broken token-trim.** The manage bodies carried a model
+that is *in* the window table, so the table's 131 072 beat the small patched default window and the
+token-aware pass **never ran** — meaning the probe would have reported "parity holds" whether that
+path worked or was a no-op. Switching the corpus to a model outside the table made the path
+reachable, and the reference now shows the discrimination: 4 messages dropped with trim on, 0 with
+it off. The same mistake was in the unit test, where the fix was to empty the table explicitly. This
+is the strongest form of the recurring lesson — not "my expected value was wrong" but **"my corpus
+could not tell the difference"**, which is worse because it reads as a pass.
+
+**And the lint I introduced.** The settings tuple in the new probe tripped `type_complexity`, which
+is a warning rather than a deny, so `clippy` still exited 0 — the diagnostic was there and my filter
+was hiding it. It is fixed with a `SettingsCase` alias. Worth remembering: "clippy exit 0" and "no
+diagnostics" are not the same claim, and it is the second one that was being asserted in these
+messages.
+
+Traps the corpus and seven tests pin: the sort is by `(name, type)` and **stable**, `toolOrder`
+lists only named tools while `toolCount` counts every entry, both system ends are pinned and the
+count window's budget floors at one, the engine block appears only while the engine is on, and
+`merge_context_manager_diagnostics` **moves** the engine block out and copies a **zero**
+`requestMessageCount` (a truthiness test would drop it). One measured divergence is kept and
+documented: the oracle's `tool_name` raises on a non-dict tool where this port returns an empty name.
+
+Verification: 341 keys byte-identical, md5 `ba5343c49b1b6aeef25fec1724b0d911`; tests 311 → **318**;
+`fmt --check` clean and `clippy --all-targets` exit 0 with no diagnostics in the new files.
+
+What is left before `build_deepseek_request` can exist: `model_router` (279 lines, pure, needs its
+model catalogue measured first), `budget_manager` (371, ledger-backed and therefore last), the
+validation/normalisation set (~110), and then the assembly itself with the diagnostics serializer
+that owns key order.
