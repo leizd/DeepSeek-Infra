@@ -2096,3 +2096,45 @@ Verification: 251 keys byte-identical, md5 `ebad857e793f240bba7fa0d1c2f5a894`; t
 What is left before `build_deepseek_request`: `budget_manager` (371, ledger-backed and therefore
 last), the validation/normalisation set (~110), the `edge_inference` edge-routing half (~430), and
 then the assembly with the diagnostics serializer that owns key order.
+
+
+### The message layer landed, and the corpus nearly failed to be able to fail (`01d252b1`)
+
+`normalize_chat_messages` plus its two validators and the tool-call helpers. The layer is
+**fail-closed** by design and the oracle's docstring records why: an earlier revision silently
+skipped every turn it could not represent, so the caller's instruction reached the model as if it
+had never been written — a `200` whose answer ignored what the user had said. Every unrepresentable
+turn raises here, with its index and the codes the gateway's own preparation layer returns.
+
+**The content expander is injected.** `expanded_message_content` reaches the file index through
+`build_attachment_context`, which is I/O, so the pure layer takes the expander as a parameter — the
+same move as the clock and the transport. Attachment *parts* are still covered, because
+`_image_content_parts` is pure and is ported.
+
+Three notes on verification, in order of how much they cost:
+
+1. **The first corpus for the check layer could not have failed.** It reused the message sets, none
+   of which contains more than 40 messages, so the `context_compression_required` path was
+   unreachable and the probe would have reported parity whether that rule worked or not. It has its
+   own corpus now, and the reference shows the discrimination: 41 messages without a summary is a
+   **409**, with a summary it is fine, and exactly 40 is fine either way. This is the second
+   instance of "a corpus that cannot fail reads as a pass" after the token-trim one.
+2. **One measured divergence.** A JSON *object* as tool-call `arguments` is re-serialized in sorted
+   key order here where the oracle keeps insertion order — `serde_json::Map` is a `BTreeMap` and
+   `preserve_order` is off workspace-wide on purpose, and the order is gone at parse time. The wire
+   format sends arguments as a string, so it is unreachable from the wired path; documented, pinned
+   by a test, and the corpus uses an already-sorted object so the probe compares behaviour rather
+   than that gap.
+3. **A test case of mine was wrong, not the port.** The api-key-fallback case omitted `messages`,
+   which the oracle rejects too — the probe showed both sides agreeing before the test changed.
+
+The "no diagnostics" assertion earned its keep for the second slice running: the helper landed after
+the test module again, a warning that does not move clippy's exit code.
+
+Verification: 121 keys byte-identical, md5 `7c7860c9a70b4b4f07f0cff7503cdda7`; tests 329 → **337**;
+`fmt --check` clean; `clippy --all-targets` exit 0 with no diagnostics.
+
+What is left: `budget_manager` (371, ledger-backed and therefore last), the attachment-expansion path
+behind the file index, and then `build_deepseek_request` itself with the diagnostics serializer that
+owns key order. The `edge_inference` edge-routing half is **not** in this closure — only its four
+consumed names were ever needed.
