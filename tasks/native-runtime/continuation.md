@@ -1599,3 +1599,51 @@ from "the crate now links something else".
 This is written down rather than fixed because it is not the ported logic, and
 because guessing at the linker would be exactly the kind of change this project
 does not want: the verification for slice 2 is the probe, which does pass.
+
+
+### Isolation done: the harness failure is a link-shape fragility, not a test bug
+
+The previous entry left the next round as "relink with slice 2's unit tests removed".
+That was done, by disabling tests one at a time with `#[cfg(any())]` in front of the
+`#[test]` attribute (the source was byte-restored afterwards; `git diff` is empty).
+Each round relinked and ran the lib harness:
+
+| new tests enabled | harness |
+| --- | --- |
+| none | **boots: 237 passed, 0 failed** |
+| `an_empty_query_aggregates_without_searching` | dies, 0xc0000139 |
+| `a_cache_hit_returns_without_searching` | dies, 0xc0000139 |
+| those two together | dies, 0xc0000139 |
+| all five | dies, 0xc0000139 |
+
+With all five disabled the count is exactly 237 — slice 1's number — and
+`search_multiple` is still in the lib, so the *library* code is not what breaks the
+import. Enabling **any one** of the five is enough, and the two single tests are
+trivial: no worker thread is spawned, no panic occurs, the transport is a closure that
+is never called. So it is not the content of a test. What flips the import is the
+lib-test target acquiring a reference to `search_multiple` at all — i.e. **the test
+binary growing changes which competing import stub the linker keeps**. The same
+reference in the **example** target binds the api-set and runs, so the outcome is
+target-dependent, not source-dependent.
+
+Where the stubs come from, checked: rustc's self-contained
+`lib/rustlib/x86_64-pc-windows-gnu/lib/self-contained/libsynchronization.a` does
+provide `WakeByAddressSingle`, and inside it the DLL name is
+`api-ms-win-core-synch-l1-2-0.dll` — the correct one. `/d/mingw64`'s copy of the same
+archive agrees. `libkernel32.a` (both the toolchain's and mingw64's) does **not** define
+the symbol at all. So the KERNEL32 binding that appears in the failing binary is not
+coming from those archives; it comes from a crate-level raw-dylib stub, i.e. some object
+compiled against `kernel32.dll`, and which stub wins is decided by link order. Pinpointing
+that object needs the std sources, and `rust-src` is not installed on this machine —
+that is where this stopped, deliberately, rather than guessing further.
+
+**Consequences.** (1) There is no "guilty test" to rewrite; the fragility will resurface
+whenever this target's object set changes. (2) Slice 2's verification stays the probe,
+which is byte-identical. (3) If the harness is wanted back, the options are a link-level
+workaround (`RUSTFLAGS` with an explicit stub order or `-C link-self-contained`), a
+toolchain pin, or installing `rust-src` to name the offending object first — none of
+which belongs in a migration commit.
+
+Corrects the earlier framing in this file: the regression did arrive with slice 2, but
+it is not caused by slice 2's code or tests; slice 2 is what made the test binary big
+enough to expose it.
