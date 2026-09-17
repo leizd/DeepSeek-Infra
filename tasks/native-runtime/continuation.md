@@ -2138,3 +2138,49 @@ What is left: `budget_manager` (371, ledger-backed and therefore last), the atta
 behind the file index, and then `build_deepseek_request` itself with the diagnostics serializer that
 owns key order. The `edge_inference` edge-routing half is **not** in this closure — only its four
 consumed names were ever needed.
+
+
+### The budget manager's pure half, and a float rendering that was wrong at real magnitudes (`04645d0c`)
+
+`budget_manager` was the last leaf before the assembly, and its ledger is SQLite -- so the slice
+line is the one the oracle's own docstring draws: pricing, cost arithmetic, the policy and its
+payload override, the in-memory `ToolBudget`, the scope key and the cost diagnostic are pure; the
+database (`connect_db`, `record_spend`, `daily_spend`, `over_daily_budget`, `should_downgrade`,
+`budget_status`) is a store and its own slice. 209 keys byte-identical, md5
+`08a4887495a2a11398f75daeae21393f`.
+
+**The finding outlived the port.** Serializing `estimate_cost` in the probe meant comparing
+serde_json's float rendering against Python's, and they disagree on *every* float below `1e-4`:
+serde_json writes `4.93e-5` as `0.0000493` and `1e-6` as `1e-6`, where Python writes `4.93e-05` and
+`1e-06`. A single request's cost is exactly that size -- a fraction of a cent -- and
+`diagnostics["costUsd"]` is served to the caller. The crate already had the right renderer
+(`python_json::float_str`, with `1e-05`/`1e+16` pinned), but three containers --
+`dumps_default_separators`, `dumps_compact`, `OrderedJson::render` -- sent numbers through
+serde_json's own `to_string` and bypassed it. Fixed in a commit of its own (`36fc2de7`), because
+eight modules consume those renderers; the two probes with hashes on record were re-run
+(`request_messages` still `7c7860c9...`, `memory` byte-identical). This was visible at all only
+because the corpus uses **real costs** rather than round numbers -- the third time in this
+migration that the corpus's composition decided whether the probe could see anything.
+
+**Two asymmetries recorded, not smoothed over.** `diagnostics_with_cost` reads a non-dict as `{}`
+where the oracle's bare `dict(...)` raises -- unreachable, and the module doc says so, explicitly
+so that nobody later "unifies" it with `cost_from_usage`, which *does* guard in the oracle. And
+`BudgetPolicy::to_value` cannot carry the oracle's `to_dict` insertion order (`maxTotalTokens,
+maxAgentTokens, maxSearchCalls, maxToolCalls, maxEstimatedCostUsd, policy`) because a
+`serde_json::Map` is a `BTreeMap` -- and the payload reaches the wire as
+`diagnostics["budgetPolicy"]`, where Python's response `json.dumps` does not sort. The serializer
+that serves it must be handed the order; the assembly slice owns that decision, and the module doc
+now states it.
+
+**Corpus traps pinned**: a usage value that is present but cannot convert is *skipped* (so a later
+spelling can still win) rather than read as zero; a present negative limit is *floored* while an
+unconvertible one *falls back* -- two directions, two assertions; an unknown `budgetPolicy` cannot
+be turned on by a payload; the scope cap is 120 code points, which is what keeps a 200-character
+Chinese scope from becoming an unbounded ledger key.
+
+Verification: 209 keys byte-identical, md5 `08a48874...`; tests 337 -> **347**; `fmt --check` clean;
+`clippy --all-targets` exit 0 with no diagnostics (one `explicit_auto_deref` found and fixed).
+
+What is left before `build_deepseek_request` itself: the SQLite ledger (`should_downgrade` is the
+assembly's consumer), the attachment-expansion path behind the file index, and then the assembly
+with the diagnostics serializer.
