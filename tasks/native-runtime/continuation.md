@@ -2059,3 +2059,40 @@ What is left before `build_deepseek_request` can exist: `model_router` (279 line
 model catalogue measured first), `budget_manager` (371, ledger-backed and therefore last), the
 validation/normalisation set (~110), and then the assembly itself with the diagnostics serializer
 that owns key order.
+
+
+### The model router landed, and the new check earned its keep (`b04772bc`)
+
+Same shape as the last two: `model_router.py` is 279 lines and depends on `edge_inference`'s 529, of
+which it uses **four names**. So the slice is the router plus that surface — the three query-shape
+patterns and the two payload readers — with the edge-routing half (providers, quantisation,
+local-versus-cloud) left for its own slice. The patterns are exported as **text** as well as
+compiled, and the probe compares the strings: they carry CJK literals, and a wrong character
+transcribed blind would otherwise surface only as a mysterious routing difference.
+
+What the 251-key corpus and eleven tests pin, in the order they would bite:
+
+- complexity tests run in the oracle's order — the complex pattern beats a short length, and the
+  simple pattern only counts within 400 characters, so `解释` + 500 characters is `neutral`;
+- `is_auto_request` mixes a case-fold with an identity check: `model: " AUTO "` opts in while
+  `autoRoute: 1` does not;
+- capability reads the **attachment** (`imageData: data:image/…`), not content parts — the test
+  asserts both directions against `request_shaping::has_image_content` so the pair cannot collapse;
+- an explicit model is normalised, checked against the supported list, then overridden by vision
+  unless it is already the refine model;
+- auto routing walks complexity → the soft cost cap (off at zero) → the default, and the tier falls
+  back to the model name for anything that is neither draft nor refine;
+- cascade is refused for agent and vision turns; the quality gate scores `1 - 0.34` per reason with
+  one uncertainty marker passing and two failing.
+
+**The "no diagnostics" standard caught a real lint this time.** Appending the test modules left the
+`text_or_empty` helper after them — `items after a test module`, a warning that does not change
+clippy's exit code. Under the old "exit 0" claim it would have shipped. Both files were reordered.
+Same class of miss as `type_complexity` last round, and the reason the assertion was changed.
+
+Verification: 251 keys byte-identical, md5 `ebad857e793f240bba7fa0d1c2f5a894`; tests 318 → **329**;
+`fmt --check` clean; `clippy --all-targets` exit 0 with no diagnostics.
+
+What is left before `build_deepseek_request`: `budget_manager` (371, ledger-backed and therefore
+last), the validation/normalisation set (~110), the `edge_inference` edge-routing half (~430), and
+then the assembly with the diagnostics serializer that owns key order.
