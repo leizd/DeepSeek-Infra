@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
@@ -33,7 +34,7 @@ from deepseek_infra.infra.gateway import deepseek_client as dc  # noqa: E402
 LONG_IMAGE = "data:image/png;base64," + "A" * 40
 SHORT_IMAGE = "data:image/png;base64,AA"
 
-MESSAGE_SETS = [
+MESSAGE_SETS: list[Any] = [
     [],
     [{"role": "user", "content": "hi"}],
     [{"role": "system", "content": "sys"}, {"role": "assistant", "content": "ok"}],
@@ -59,7 +60,7 @@ MESSAGE_SETS = [
     [{"role": "assistant", "content": "calling", "tool_calls": [{"function": {"name": ""}}]}],
 ]
 
-TOOL_CALL_VALUES = [
+TOOL_CALL_VALUES: list[Any] = [
     None,
     "not-a-list",
     [],
@@ -82,9 +83,9 @@ TOOL_CALL_VALUES = [
 
 STABLE_ID_CASES = [(0, "web_search"), (1, ""), (2, "  "), (3, "  Mixed-Case.Name  "), (4, "中" * 60)]
 
-CANONICAL_CASES = ["{\"b\":2,\"a\":1}", "not json", "  padded  ", 5, {"z": 1, "a": [2, 3]}, [1, "中"]]
+CANONICAL_CASES: list[Any] = ["{\"b\":2,\"a\":1}", "not json", "  padded  ", 5, {"z": 1, "a": [2, 3]}, [1, "中"]]
 
-VALIDATE_PAYLOADS = [
+VALIDATE_PAYLOADS: list[Any] = [
     {},
     {"apiKey": "k", "messages": [{"role": "user", "content": "x"}]},
     {"apiKey": "  k  ", "messages": [{"role": "user", "content": "x"}]},
@@ -160,16 +161,15 @@ def main() -> int:
     for index, value in enumerate(CANONICAL_CASES):
         out[f"canonical::{index}"] = dc.canonical_tool_arguments(value)
 
-    for index, message in enumerate(
-        [
-            {},
-            {"attachments": "x"},
-            {"attachments": [{"imageData": LONG_IMAGE}]},
-            {"attachments": [{"imageData": SHORT_IMAGE}]},
-            {"attachments": [{"imageData": " data:image/png;base64," + "B" * 30 + " "}]},
-            {"attachments": [{"imageData": 5}, "x"]},
-        ]
-    ):
+    image_cases: list[Any] = [
+        {},
+        {"attachments": "x"},
+        {"attachments": [{"imageData": LONG_IMAGE}]},
+        {"attachments": [{"imageData": SHORT_IMAGE}]},
+        {"attachments": [{"imageData": " data:image/png;base64," + "B" * 30 + " "}]},
+        {"attachments": [{"imageData": 5}, "x"]},
+    ]
+    for index, message in enumerate(image_cases):
         out[f"image-parts::{index}"] = dc._image_content_parts(message)
 
     for index, payload in enumerate(VALIDATE_PAYLOADS):

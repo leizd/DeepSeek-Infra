@@ -1,5 +1,10 @@
 # 2026-09-14 git 仓库损坏事件 + 阶段 D 首切片
 
+<!-- docs-language-switcher:start -->
+[中文](README.md) / [English](README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 > **✅ 修复已完成（2026-09-14 下午）** —— 见文末「修复结果」。
 > 最终：`git fsck` error/broken/missing/dangling **全为 0**；229 个 refs 全部可读；
 > `git fetch` / `git log` / `git ls-tree -r` / `git diff` 全部恢复；工作树零损失。

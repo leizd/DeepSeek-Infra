@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
@@ -32,7 +33,7 @@ from deepseek_infra.infra.gateway import chat_payload, deepseek_client as dc  # 
 
 EFFORT_CASES = ["low", "max", "minimal", "MEDIUM", " high ", "", None, 5, True, "medium"]
 
-MESSAGE_LISTS = [
+MESSAGE_LISTS: list[Any] = [
     [],
     [{"role": "user", "content": "text"}],
     [{"role": "user", "content": [{"type": "text", "text": "a"}]}],
@@ -42,7 +43,7 @@ MESSAGE_LISTS = [
     [{"role": "user", "content": "no parts"}, {"role": "user", "content": [{"type": "image_url"}]}],
 ]
 
-TOOL_PAYLOADS = [
+TOOL_PAYLOADS: list[Any] = [
     {},
     {"searchEnabled": True, "searchMode": "on"},
     {"searchEnabled": True, "searchMode": "off"},
@@ -57,7 +58,7 @@ PPT_QUERY = [{"role": "user", "content": "帮我做一份 PPT"}]
 MINDMAP_QUERY = [{"role": "user", "content": "画一张思维导图"}]
 KEYWORD_ONLY = [{"role": "user", "content": "什么是 mindmap？"}]
 
-FORCE_CASES = [
+FORCE_CASES: list[Any] = [
     ({"messages": PPT_QUERY}, "full"),
     ({"messages": PPT_QUERY, "toolsEnabled": False}, "full"),
     ({"messages": PPT_QUERY, "allowedTools": ["web_search"]}, "full"),
@@ -77,7 +78,7 @@ ATTACHMENT_CASES = [
     ["not a dict", {"attachments": [{"a": 1}]}],
 ]
 
-MEMORY_PAYLOADS = [
+MEMORY_PAYLOADS: list[Any] = [
     {},
     {"memoryEnabled": False},
     {"memoryEnabled": 0},

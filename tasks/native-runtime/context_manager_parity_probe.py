@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
@@ -36,7 +37,7 @@ STABLE_VALUES = [
 # Tool *objects* only. A bare non-dict entry is deliberately absent: the oracle's `tool_name`
 # calls `.get` on it and raises AttributeError, so it cannot be part of a compared corpus.
 # `tool_sort_key` does guard, and that difference is pinned separately below and by unit tests.
-TOOLS = [
+TOOLS: list[Any] = [
     {"type": "function", "function": {"name": "web_search"}},
     {"type": "function", "function": {"name": "create_pptx"}},
     {"type": "other", "function": {"name": "create_pptx"}},
@@ -46,7 +47,7 @@ TOOLS = [
     {"type": "function"},
 ]
 
-MESSAGE_SETS = [
+MESSAGE_SETS: list[Any] = [
     [],
     [{"role": "system", "content": "prefix"}, {"role": "user", "content": "hi"}],
     [
@@ -74,7 +75,7 @@ SETTINGS_CASES = [
     (False, 36, True, True, 8_192, 0.05, 65_536, 2),
 ]
 
-MERGE_CASES = [
+MERGE_CASES: list[Any] = [
     ({"a": 1}, {"enabled": True, "requestMessageCount": 3}),
     ({"a": 1}, {"enabled": True, "requestMessageCount": 0}),
     ({"a": 1}, {"enabled": True, "contextEngine": {"x": 1}, "requestMessageCount": 2}),
@@ -147,7 +148,10 @@ def main() -> int:
                 # A message list may legally contain entries that are not objects, so the
                 # probe compares a defensive role rather than assuming a shape.
                 kept = managed.get("messages") or []
-                role_of = lambda item: item.get("role") if isinstance(item, dict) else None
+
+                def role_of(item):
+                    return item.get("role") if isinstance(item, dict) else None
+
                 out[f"{key}::first"] = role_of(kept[0]) if kept else None
                 out[f"{key}::last"] = role_of(kept[-1]) if kept else None
                 out[f"{key}::diagnostics"] = diagnostics

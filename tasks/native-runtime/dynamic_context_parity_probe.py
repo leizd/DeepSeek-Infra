@@ -42,6 +42,7 @@ import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
@@ -66,7 +67,7 @@ TIME_CASES = [
 ANCHOR_INDEX = 1
 
 # (payload, memory_state, tools_enabled)
-CORPUS = [
+CORPUS: list[Any] = [
     ({}, {}, True),
     ({"searchContext": "hits"}, {}, True),
     ({"searchContext": "  spaced  ", "continuationContext": "cont"}, {}, True),
@@ -130,7 +131,7 @@ def main() -> int:
     real_clock = dc.format_current_time_context
     anchor = real_clock(now=aware(*TIME_CASES[ANCHOR_INDEX]))
     try:
-        dc.format_current_time_context = lambda: anchor
+        setattr(dc, "format_current_time_context", lambda: anchor)
         for index, (payload, memory_state, tools_enabled) in enumerate(CORPUS):
             out[f"build::{index}"] = dc.build_dynamic_turn_context(
                 payload, memory_state, tools_enabled=tools_enabled

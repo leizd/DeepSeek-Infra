@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
@@ -42,7 +43,7 @@ QUERIES = [
     "啊" * 200,
 ]
 
-IMAGE_PAYLOADS = [
+IMAGE_PAYLOADS: list[Any] = [
     {},
     {"messages": "not-a-list"},
     {"messages": [{"role": "user"}]},
@@ -54,7 +55,7 @@ IMAGE_PAYLOADS = [
     {"messages": [{"role": "user", "attachments": [{"imageData": 5}]}]},
 ]
 
-AUTO_PAYLOADS = [
+AUTO_PAYLOADS: list[Any] = [
     {},
     {"model": "auto"},
     {"model": "AUTO"},
@@ -69,7 +70,7 @@ AUTO_PAYLOADS = [
     {"cascade": True, "judge": True},
 ]
 
-ROUTE_PAYLOADS = [
+ROUTE_PAYLOADS: list[Any] = [
     {},
     {"model": "flash"},
     {"model": "v4pro"},

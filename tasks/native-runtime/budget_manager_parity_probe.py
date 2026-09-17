@@ -22,13 +22,14 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 from deepseek_infra.infra.gateway import budget_manager as bm  # noqa: E402
 
-USAGE_CASES = [
+USAGE_CASES: list[Any] = [
     {},
     {"prompt_tokens": 10, "completion_tokens": 20},
     {"prompt_tokens": "12", "completion_tokens": "3.9"},
@@ -45,7 +46,7 @@ USAGE_CASES = [
 
 MODELS = [None, "", "deepseek-v4-pro", "deepseek-v4-flash", "unknown", " deepseek-v4-pro ", "DeepSeek-V4-Pro"]
 
-POLICY_PAYLOADS = [
+POLICY_PAYLOADS: list[Any] = [
     {},
     {"budget": "not-a-dict"},
     {"budget": {}},
@@ -59,7 +60,7 @@ POLICY_PAYLOADS = [
     {"budgetPolicy": "", "budget": {"policy": "downgrade_to_flash_when_exceeded"}},
 ]
 
-SCOPE_PAYLOADS = [
+SCOPE_PAYLOADS: list[Any] = [
     {},
     {"memoryScope": "  project:abc  "},
     {"memoryScope": "中" * 200},
@@ -74,7 +75,7 @@ SCOPE_PAYLOADS = [
     {"memoryScope": 0, "projectId": "p1"},
 ]
 
-DIAGNOSTICS = [
+DIAGNOSTICS: list[Any] = [
     {},
     {"a": 1},
     {"costUsd": 9.9, "other": None},
@@ -173,11 +174,11 @@ def main() -> int:
         }
 
     saved_datetime = bm.datetime
-    bm.datetime = FixedDatetime
+    setattr(bm, "datetime", FixedDatetime)
     try:
         out["today"] = bm.today()
     finally:
-        bm.datetime = saved_datetime
+        setattr(bm, "datetime", saved_datetime)
 
     for index, payload in enumerate(SCOPE_PAYLOADS):
         out[f"scope::{index}"] = bm.budget_scope(payload)

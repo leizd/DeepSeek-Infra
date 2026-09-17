@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
@@ -67,7 +68,7 @@ TOOL_ARRAYS = [
     [{"type": "function", "function": {"name": f"tool{i}", "description": "描述"}} for i in range(4)],
 ]
 
-BODIES = [
+BODIES: list[Any] = [
     {},
     {"messages": []},
     {"messages": [{"role": "system", "content": "role prompt"}]},
@@ -91,7 +92,7 @@ SETTINGS_CASES = [
     (False, 8_192, 0.05, 75.0, 65_536, 2, {"deepseek-v4-pro": 131_072}),
 ]
 
-IDENTITY_BODIES = [
+IDENTITY_BODIES: list[Any] = [
     *BODIES,
     {"messages": [{"role": "system", "content": "中文前缀"}]},
     {"tools": [{"function": {"name": "a"}}, {"function": {"name": ""}}, {"function": "x"}, "not-a-dict"]},

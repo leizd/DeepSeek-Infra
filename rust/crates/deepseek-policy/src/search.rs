@@ -41,7 +41,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::app_error::{AppError, codes};
-use crate::core_utils::{python_int_opt, python_truthy, query_tokens};
+use crate::core_utils::{encode_lower_hex, python_int_opt, python_truthy, query_tokens};
 
 /// `SEARCH_RESULT_LIMIT`.
 pub const SEARCH_RESULT_LIMIT: usize = 15;
@@ -733,7 +733,7 @@ pub fn search_cache_key(query: &str) -> String {
         .trim()
         .to_string();
     let digest = Sha256::digest(normalized.as_bytes());
-    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    let hex = encode_lower_hex(&digest);
     hex[..32].to_string()
 }
 

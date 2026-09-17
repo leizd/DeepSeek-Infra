@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
@@ -106,7 +107,7 @@ def with_flags(enabled, harden_search, harden_file, escalate, call):
         ) = saved
 
 
-CLASSIFY_CASES = [
+CLASSIFY_CASES: list[Any] = [
     [],
     [{"role": "user", "content": "hello"}],
     [{"role": "user", "content": "hi[用户上传文件上下文]file body"}],
@@ -159,7 +160,7 @@ CLASSIFY_CASES = [
 ]
 
 # (enabled, harden_search_context, harden_file_context, escalate_confirm, max_segments)
-SETTINGS_CASES = [
+SETTINGS_CASES: list[Any] = [
     (True, True, True, True, 24),
     (False, True, True, True, 24),
     (True, True, True, False, 24),
@@ -248,7 +249,7 @@ def main() -> int:
             {"role": "user", "content": "second[用户上传文件上下文]file two"},
         ]
     }
-    BODY_CASES = [
+    BODY_CASES: list[Any] = [
         {},
         {"messages": []},
         {"messages": CLASSIFY_CASES[2][0:1]},
