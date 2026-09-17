@@ -1915,3 +1915,44 @@ taint probe's mis-indexed corpus two slices ago: check the expectation before be
 
 These tests are the fast local net; the parity probes stay the cross-language evidence, since they
 compare against the oracle rather than against expectations written by hand.
+
+
+### Milestone step 1: the pure collaborators are ported (`11a08fff`)
+
+The sequence recorded above said to take the assembly's pure leaves first. They are in, in a new
+`request_shaping` module plus two functions in `memory`:
+
+| what | where it came from |
+| --- | --- |
+| `TOOL_PARALLEL_SYSTEM_HINT` | `deepseek_client.py` |
+| `normalize_reasoning_effort`, `tools_for_payload`, `forced_artifact_tool_name`, `should_force_create_pptx`, `has_create_pptx_tool`, `mindmap_intent_requested`, `has_image_content` | `deepseek_client.py` |
+| `count_payload_attachments` | `chat_payload.py` |
+| `empty_memory_state`, `memory_scope_from_payload` | `data/memory.py` |
+
+That shrinks the closure between here and a working `build_deepseek_request` to four things:
+`context_manager` (137 lines), `model_router` (279), `budget_manager` (371, ledger-backed and
+therefore last), and the assembly itself with the serializer that owns the diagnostics key order.
+
+What the corpus and the 13 new tests pin, each of which reads like a tidy-up waiting to happen:
+
+- **`tools_for_payload` composes two filters and their order shows.** The allow-list is applied
+  first, then the search tools are dropped — so naming `web_search` in `allowedTools` still loses
+  it when search is off. A non-list `allowedTools` is ignored rather than treated as empty.
+- **`forced_artifact_tool_name` needs availability *and* permission**, and with no allow-list the
+  permitted set *is* the available one.
+- **`normalize_reasoning_effort` is case-sensitive** — `MEDIUM` falls back like any unknown — and
+  `"  high  "` is stripped before the membership test.
+- **`memory_enabled` is `is not False`**, so `0` and `""` read as *enabled* while only the boolean
+  `false` disables it; a malformed scope id is silently narrowed to `global`.
+- **`memory_scope_from_payload` reads the latest user message only** and stops there either way, so
+  an older `projectId` never leaks forward.
+- **`mindmap_intent_requested` fires on `什么是 mindmap？`** with no create verb, because the
+  oracle's verb alternation contains `map` and `mindmap` contains it. Left as-is, with the reason in
+  the code: this is the oracle's behaviour, and tightening it would be a divergence, not a fix.
+
+Verification: the probe pair replays six corpora and matches byte for byte — 86 keys, md5
+`4bc6167d94f761c2a4178c70e2cdac6e`. `tools_for_payload` is compared as the **sequence of function
+names**, not as whole definitions: the definitions are the tool catalog's own subject and are
+covered there, and re-comparing them here would bury this probe's actual subject. Tests are at 295,
+`cargo fmt --check` and `cargo clippy --all-targets` are clean, and the Rust probe was re-run after
+formatting so the committed bytes reproduce the hash.
