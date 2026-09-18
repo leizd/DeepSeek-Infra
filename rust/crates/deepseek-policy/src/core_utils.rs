@@ -35,6 +35,8 @@
 use regex::Regex;
 use serde_json::Value;
 
+use crate::python_json::value_str;
+
 pub(crate) fn encode_lower_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
 
@@ -224,9 +226,40 @@ pub fn python_int_opt(value: Option<&Value>) -> Option<i64> {
     }
 }
 
+/// `float(value)`, or `None` where Python raises `TypeError`/`ValueError`.
+///
+/// A string is trimmed first (`" 1.5 "` converts), and Python's own `nan`/`inf`
+/// spellings parse. Python also accepts digit-separating underscores there
+/// (`"1_0.5"`), which Rust's parser rejects — unreachable from the values this
+/// reads, and recorded rather than papered over.
+pub fn python_float_opt(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(number) => number.as_f64(),
+        Value::Bool(flag) => Some(if *flag { 1.0 } else { 0.0 }),
+        Value::String(text) => text.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+/// `round(x, 6)` — Python's decimal rounding applied to the exact binary value.
+///
+/// Costs are reported in microdollars and embedding components are rounded to six
+/// decimals; both rely on this being *correct* rounding rather than a scaled
+/// multiply-and-truncate.
+pub fn round_six(value: f64) -> f64 {
+    format!("{value:.6}").parse().unwrap_or(value)
+}
+
+/// `str(value or "")` without the strip.
+pub fn text_or_empty(value: Option<&Value>) -> String {
+    match value {
+        Some(found) if python_truthy(found) => value_str(found),
+        _ => String::new(),
+    }
+}
+
 /// The production clock.
 pub struct SystemClock;
-
 impl Clock for SystemClock {
     fn now_iso(&self) -> String {
         let seconds = std::time::SystemTime::now()

@@ -598,6 +598,7 @@ dependencies = [
 name = "deepseek-policy"
 version = "0.1.0"
 dependencies = [
+ "blake2",
  "deepseek-core",
  "regex",
  "serde",

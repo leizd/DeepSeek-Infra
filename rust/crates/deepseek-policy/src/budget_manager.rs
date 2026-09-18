@@ -16,7 +16,9 @@ use std::sync::Mutex;
 
 use serde_json::{Map, Value};
 
-use crate::core_utils::{isoformat_seconds, python_int_opt, python_truthy};
+use crate::core_utils::{
+    isoformat_seconds, python_float_opt, python_int_opt, python_truthy, round_six, text_or_empty,
+};
 use crate::python_json::value_str;
 
 /// Mirrors `SPEND_TABLE`.
@@ -107,7 +109,7 @@ pub fn estimate_cost(
     let (input_price, output_price) = model_pricing(model, settings);
     let cost = (prompt_tokens.max(0) as f64 / 1_000_000.0) * input_price
         + (completion_tokens.max(0) as f64 / 1_000_000.0) * output_price;
-    round_six_decimals(cost)
+    round_six(cost)
 }
 
 /// Mirrors `cost_from_usage`: a non-dict usage reads as `{}`, so it costs nothing.
@@ -123,11 +125,6 @@ pub fn cost_from_usage(usage: &Value, model: Option<&str>, settings: &BudgetSett
         model,
         settings,
     )
-}
-
-/// `round(x, 6)`, the same correct-rounding mirror the other modules use.
-fn round_six_decimals(value: f64) -> f64 {
-    format!("{value:.6}").parse().unwrap_or(value)
 }
 
 /// Mirrors `BudgetPolicy`.
@@ -225,16 +222,6 @@ pub fn budget_policy_from_payload(payload: &Value, settings: &BudgetSettings) ->
         max_tool_calls: int_field("max_tool_calls", base.max_tool_calls),
         max_estimated_cost_usd: float_field("max_estimated_cost_usd", base.max_estimated_cost_usd),
         policy,
-    }
-}
-
-/// `float(value)`, or `None` where Python raises `TypeError`/`ValueError`.
-fn python_float_opt(value: &Value) -> Option<f64> {
-    match value {
-        Value::Number(number) => number.as_f64(),
-        Value::Bool(flag) => Some(if *flag { 1.0 } else { 0.0 }),
-        Value::String(text) => text.trim().parse::<f64>().ok(),
-        _ => None,
     }
 }
 
@@ -350,14 +337,6 @@ pub fn diagnostics_with_cost(
         serde_json::json!(cost_from_usage(usage, model, settings)),
     );
     Value::Object(result)
-}
-
-/// `str(value or "")` without the strip.
-fn text_or_empty(value: Option<&Value>) -> String {
-    match value {
-        Some(found) if python_truthy(found) => value_str(found),
-        _ => String::new(),
-    }
 }
 
 #[cfg(test)]
