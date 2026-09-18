@@ -2316,4 +2316,8 @@ The baseline for "will CI accept this" is `origin/main`, and the check is the 1.
 above -- not the local stable, which merely warns.
 
 Verified before re-pushing: 1.85 full-workspace `cargo test --locked --all` exit 0;
-`ruff check .` and `mypy .` pass; both probe pairs unchanged. Awaiting the re-run.
+`ruff check .` and `mypy .` pass; both probe pairs unchanged.
+
+**The re-run is green.** `35312303606` on `59914dce`: **all 35 jobs succeeded** -- `rust`, the
+three `test` legs, `rust-coverage`, `native-go`, and every parity / S3 / federation e2e job.
+The ten commits from `2e7f395e` through `59914dce` are CI-verified at that HEAD.
