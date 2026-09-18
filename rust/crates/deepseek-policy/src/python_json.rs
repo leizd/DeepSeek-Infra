@@ -262,7 +262,7 @@ impl OrderedJson {
                     }
                     pairs.push((
                         name.clone(),
-                        Self::build(item, &name, sub_order(&name, nested_orders), nested_orders),
+                        Self::build(item, name, sub_order(name, nested_orders), nested_orders),
                     ));
                 }
                 OrderedJson::Object(pairs)

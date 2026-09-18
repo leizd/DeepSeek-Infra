@@ -20,9 +20,9 @@ Usage::
 from __future__ import annotations
 
 import json
-import sqlite3
 import sys
 import tempfile
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 
@@ -105,7 +105,10 @@ def main() -> int:
         out["file::ok"] = files.load_cached_file(file_id)
 
         for index, bad in enumerate(BAD_FILE_IDS):
-            out[f"file::bad-id-{index}"] = error_view(lambda bad=bad: files.load_cached_file(bad))
+            # `partial` binds the loop value at creation, the way the default-argument
+            # lambda idiom would; a typed `Callable[[], Any]` context cannot infer that
+            # idiom's parameter type.
+            out[f"file::bad-id-{index}"] = error_view(partial(files.load_cached_file, bad))
 
         out["file::missing"] = error_view(lambda: files.load_cached_file("b" * 32))
 

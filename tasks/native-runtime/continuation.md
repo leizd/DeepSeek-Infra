@@ -2290,3 +2290,30 @@ next, together with the file vector index (`local_rag`; refused via
 `NATIVE_FILE_VECTOR_INDEX_NOT_READY`/501), the OS local timezone and `search_if_needed`.
 
 **Unpushed**: this slice adds `3b7c041b` and `02976415` on top of the six already recorded.
+
+### The batch's first CI run went red in two lints, and neither had a local signal
+
+Run `35310488045` on `56b189eb`: 4 of its jobs failed, and both causes were lints in code
+that had never been through CI. Everything else passed -- `rust-coverage`, `native-go`, and
+the parity / S3 / federation e2e jobs among them -- so the red is fully explained by:
+
+- **rust**: clippy 1.85 with `-D warnings` rejects `needless_borrow` twice in
+  `python_json::build` (the `&name` spellings from `de2bd60a`; local stable 1.97 only warns
+  about them) and `needless_lifetimes` in `budget_ledger`'s test helper. Reproduced locally
+  with the exact CI invocation (`cargo +1.85.0-x86_64-pc-windows-gnu clippy --locked
+  --all-targets --all-features -- -D warnings`), fixed, and re-run to exit 0.
+- **test (3.10 / 3.11 / 3.12)**: ruff first -- an unused `sqlite3` import and an unused
+  `failures` dict in the two newest probes -- and, behind it (ruff masks mypy), mypy 2.0's
+  `Cannot infer type of lambda` for the default-argument idiom passed to a typed
+  `Callable[[], Any]`; replaced with `functools.partial`, which binds the loop value the same
+  way. Both probes' outputs are byte-identical before and after (`65c1e23c…` / `0e22a712…`).
+
+**The trap worth recording**: the two `needless_borrow` sites had been judged "pre-existing"
+and deliberately left alone -- on the evidence that they were byte-identical at local `HEAD`.
+But local `HEAD` included nine unpushed commits, so byte-identity there only proved they were
+older than the last *local* commit; it said nothing about whether CI had ever tolerated them.
+The baseline for "will CI accept this" is `origin/main`, and the check is the 1.85 invocation
+above -- not the local stable, which merely warns.
+
+Verified before re-pushing: 1.85 full-workspace `cargo test --locked --all` exit 0;
+`ruff check .` and `mypy .` pass; both probe pairs unchanged. Awaiting the re-run.

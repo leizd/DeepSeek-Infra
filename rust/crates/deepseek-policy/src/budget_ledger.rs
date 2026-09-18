@@ -312,7 +312,7 @@ mod tests {
         Ok(())
     }
 
-    fn deps_with<'a>(read: ReadSpendRow<'a>) -> LedgerDeps<'a> {
+    fn deps_with(read: ReadSpendRow<'_>) -> LedgerDeps<'_> {
         LedgerDeps {
             database_present: true,
             database_path: "probe-budget.db".to_string(),

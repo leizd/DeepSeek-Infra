@@ -96,7 +96,6 @@ def main() -> int:
 
     # --- A: thresholds, the downgrade decision and the status envelope -----------------
     daily_calls = {"count": 0}
-    failures = {"connect": False}
 
     def stubbed_daily_spend(scope: str = "global", day: str | None = None) -> dict[str, Any]:
         daily_calls["count"] += 1
