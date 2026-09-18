@@ -230,8 +230,39 @@ fields, the seven dropped ones, the falsy-model set, alias normalization (case, 
 spaces, unknown, a truthy bool), the `stream` truthiness table, the `temperature` type table and
 the two refusals. Seven unit tests pin the same behaviour in-crate.
 
-**Not landed**: the route still does not call it. That is the next slice, and it needs, in this
-order:
+**Landed (`native_chat`)**: the composition itself — `call_deepseek` → `prepare_deepseek_call`'s
+order, which is *validate* → *memory* → *build*. `native_chat_composition_parity_probe`, **15
+cases, 298 431 chars, byte-identical** (body, diagnostics, tool names and api key for each). Three
+unit tests. The two-step API (`prepare_openai_chat` then `assemble_openai_chat`) exists so the
+"validate before memory" ordering is visible at the call site rather than hidden inside a callback.
+
+Three things the composition measurement settled, each of which **removes** work this plan had
+assumed:
+
+- **`forced_search_mode` is structurally unreachable on this route.** `search_mode` is
+  `payload.get("searchMode") or "auto"` and the facade never forwards `searchMode`, so the
+  prefetch branch in `prepare_deepseek_call` is dead. No refusal is owed; adding one would
+  introduce a refusal the oracle cannot perform.
+- **`web_search` is absent from the composed tool list.** `tools_for_payload` adds it only when
+  `search_tool_enabled(payload)` sees `searchEnabled is True`, another field the facade does not
+  forward. The route gets the 26-tool catalog minus the search tool — pinned by a unit test.
+- **The file vector index refusal is narrower than "has attachments".**
+  `expanded_message_content` returns early unless a message carries a non-empty `attachments`
+  list, and `search_file_chunks` is consulted only for an attachment with a non-empty `file_id`.
+  So only *file* attachments can need the index, not every attachment.
+
+**And one defect it found**, which is the reason the composition needed its own probe rather than
+trusting two green probes to compose: `request_assembly::NESTED_ORDERS` had
+`("messages", &["role", "content"])`, so the body renderer emitted a tool result as
+`role, content, tool_call_id` and a call entry as `function, id, type`, where the oracle writes
+`role, tool_call_id, content` and `id, type, function`. Values were identical; only key order
+differed. The assembly probe's corpus has no tool-role turn, so it could not see this. Fixed by
+making the message order a superset (`role, tool_call_id, content, tool_calls`) that serves all
+three oracle message shapes — absent keys are skipped — plus a `tool_calls` entry. The assembly
+probe is re-run and unchanged (1 946 077 chars).
+
+**Not landed**: the route still does not call any of it. That is the next slice, and it needs, in
+this order:
 
 1. `AssemblyEnv::from_env` — the nine injected fields. Every settings struct has an oracle-matching
    `Default` (`ModelRouterSettings`, `BudgetSettings`, `ContextTaintSettings`,
@@ -244,14 +275,15 @@ order:
 2. `request_base_url` — `routes/chat.py` passes `request_base_url(request)`, which trusts the
    `Host` header only when `host_without_port(host)` is in `allowed_auth_hosts()`, and otherwise
    falls back to `http://127.0.0.1:{port}`.
-3. The two refusals. `FileContextDeps::search_file_chunks` returns a bare `Vec<i64>`, so it cannot
-   signal "no provider" itself: the refusal has to be taken **before** the expander runs, on the
-   requests that would actually consult the file index (`count_payload_attachments`), using the
-   available `file_store::vector_index_not_ready()`. Forced-search mode is the same shape, reached
-   only from `forced_search_mode`.
-4. The error envelope. `build_deepseek_request` raises `AppError` with the internal codes; the
-   OpenAI route currently answers with `PreparationError` codes. Moving the route means moving
-   which envelope a malformed request gets, so the two have to be reconciled in the same change
-   rather than discovered afterwards.
+3. The file-index refusal, taken **before** the expander runs (`FileContextDeps::search_file_chunks`
+   returns a bare `Vec<i64>` and so cannot refuse itself), on the requests whose messages carry a
+   file attachment, using the available `file_store::vector_index_not_ready()`. Forced search needs
+   nothing — see above.
+4. The error envelope. `build_deepseek_request` raises `AppError` as
+   `{"error": <message>, "code": <code>}` with `AppError.status`, while the route currently answers
+   `{"error": {"message": …, "type": "invalid_request_error"}}`. The frozen REST inventory
+   (`compat/native-runtime/v1/http/rest_inventory.json`) records the route but no error envelope,
+   so this is a compat decision, not a frozen-byte one — and it has to move in the same change
+   rather than be discovered afterwards.
 5. A real-upstream integration test, since none of the above proves the assembled body reaches
    DeepSeek correctly — only that it matches the oracle's bytes.

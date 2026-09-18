@@ -2819,3 +2819,117 @@ to carry, in order:
    reaches DeepSeek correctly.
 
 Decision B (a `memory` domain declaration) still gates wiring the **write** half.
+
+---
+
+## The composition landed, and it found a key-order defect two green probes could not
+
+**Branch `main`, HEAD `918885cc`** (the OpenAI facade translation, committed by the previous
+round; `origin/main` is still `1b856bec`). Working tree carried only the files below.
+
+Last round ported the facade and noted that "two probes can each be right and still compose
+wrongly". This round built the composition and ran that check — and it was not a hypothetical.
+
+### What landed
+
+`deepseek-gateway::native_chat`, the `call_deepseek` → `prepare_deepseek_call` composition:
+
+```
+openai_to_internal_payload  →  preflight_deepseek_payload  →  prepare_memory_state  →  build_deepseek_request
+```
+
+in **that** order, measured from `deepseek_client.py:1502` and `:651`. The two-step API
+(`prepare_openai_chat` then `assemble_openai_chat`) exists so "validate before memory" is visible
+at the call site instead of hidden inside a callback — `call_deepseek` validates before
+`prepare_memory_state` runs, and the memory command path *writes*, so the order is observable.
+
+Paired with the oracle: `native_chat_composition_parity_probe.py` ↔
+`examples/native_chat_composition_parity_probe.rs`, **15 cases, 298 431 chars, byte-identical** —
+body, diagnostics, tool names and api key for each. Plus three unit tests.
+
+### The defect it found
+
+`request_assembly::NESTED_ORDERS` carried `("messages", &["role", "content"])`, and the body
+renderer appends any key the list does not name in **sorted** order. So a tool result rendered
+
+```
+{"role": "tool", "content": "[expanded]", "tool_call_id": "call-1"}     ← Rust
+{"role": "tool", "tool_call_id": "call-1", "content": "[expanded]"}     ← oracle
+```
+
+and a call entry rendered `{"function": …, "id": …, "type": …}` where the oracle writes
+`{"id": …, "type": …, "function": …}`. Identical values, different bytes — a real body-level
+difference on a public route, and invisible to `request_assembly_parity_probe` because its corpus
+has no tool-role turn. The tool-*call* path is exactly where the native route is now most active
+(the loop runs rounds), so this was not a corner.
+
+Fixed by making the message order a **superset** that serves all three oracle shapes — absent keys
+are skipped, so one list covers all of them:
+
+| shape | oracle order | served by |
+| --- | --- | --- |
+| plain | `role, content` | ✓ |
+| assistant + tool calls | `role, content, tool_calls` | ✓ |
+| tool result | `role, tool_call_id, content` | ✓ |
+
+with the list `["role", "tool_call_id", "content", "tool_calls"]`, plus a new
+`("tool_calls", &["id", "type", "function"])` entry. `request_assembly_parity_probe` was re-run
+afterwards and is **unchanged at 1 946 077 chars**, so the fix is a strict improvement rather than
+a trade.
+
+### Three measurements that remove planned work
+
+- **`forced_search_mode` is structurally unreachable on this route.** It is
+  `search_mode(payload) in {"on","force","true","1"}` and `search_mode` is
+  `payload.get("searchMode") or "auto"` — a field `openai_to_internal_payload` never forwards. The
+  prefetch branch in `prepare_deepseek_call` is dead here, so **no refusal is owed**. Adding one
+  would be the `search_budget` mistake the `search_provider` docs already record.
+- **`web_search` is absent from the composed tool list.** `tools_for_payload` adds it only when
+  `search_tool_enabled` sees `searchEnabled is True`, also never forwarded. The route gets the
+  26-tool catalog minus the search tool; a unit test pins it.
+- **The file-index refusal is narrower than "has attachments".**
+  `expanded_message_content` returns early unless a message carries a non-empty `attachments`
+  list, and `search_file_chunks` is consulted only for an attachment with a non-empty `file_id`.
+  Only *file* attachments can need the index.
+
+### A test expectation I got wrong, again
+
+The first version of the tools test asserted the composed list **contains** `web_search`. It does
+not — that is the measurement above. Corrected against the measured list rather than by touching
+the composition; the recurring lesson is unchanged, and this time the failing assertion *was* the
+measurement.
+
+### Verification
+
+- `cargo test -p deepseek-policy` → **400 passed**; `cargo test -p deepseek-gateway` → **155 lib
+  tests** (3 new) plus every integration target (7 + 6 + 1 + 1).
+- Workspace `fmt --all -- --check` exit 0; workspace clippy (1.85, `--locked --all-targets
+  --all-features -- -D warnings`) **exit 0 with no diagnostics**.
+- `ruff check` and `mypy` pass on the new probe.
+- Probe pairs re-run: `native_chat_composition` byte-identical (15 cases); `request_assembly`
+  unchanged (1 946 077 chars); `openai_facade`, `memory_index`, `memory_parity` unchanged.
+
+### Not done, and the next executable task
+
+**Not pushed.** Exact-head CI has not run against any of this.
+
+The route still does not call any of it — `openai_facade` and `native_chat` are both additive and
+inert. `assembly-wiring-plan.md` §5 lists the **five** pieces the swap has to carry, revised by
+this round's measurements:
+
+1. `AssemblyEnv::from_env` — nine injected fields; settings `Default`s match the oracle, ledger
+   from `budget_store` + `LedgerDeps`, clock from `local_clock::local_now`, expander from
+   `attachment_context::expanded_message_content` over a `FileContextDeps`. **Recorded gap:** the
+   settings' *env readers* are not ported, so only a default-configured deployment would agree.
+2. `request_base_url` — `Host` trusted only when `host_without_port(host)` is in
+   `allowed_auth_hosts()`, else `http://127.0.0.1:{port}`.
+3. The **file-index** refusal only (forced search owes nothing), taken before the expander runs,
+   because `search_file_chunks` returns a bare `Vec<i64>` and cannot refuse itself.
+4. The error envelope: `build_deepseek_request` raises `AppError` as
+   `{"error": …, "code": …}` + `AppError.status`, while the route answers
+   `{"error": {"message": …, "type": …}}`. The frozen REST inventory records the route but **no**
+   error envelope, so this is a compat decision — and it moves in the same change.
+5. A real-upstream integration test; matching the oracle's bytes does not prove the body reaches
+   DeepSeek correctly.
+
+Decision B (a `memory` domain declaration) still gates wiring the **write** half.

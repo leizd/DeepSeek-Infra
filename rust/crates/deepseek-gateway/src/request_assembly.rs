@@ -112,13 +112,32 @@ pub const DIAGNOSTIC_KEYS: [&str; 19] = [
 ];
 
 /// Key orders for the blocks that arrive as a `Value`, matched by block name.
-pub const NESTED_ORDERS: [(&str, &[&str]); 15] = [
+pub const NESTED_ORDERS: [(&str, &[&str]); 16] = [
     // Array elements are ordered by the array's name, so messages and tools differ.
-    ("messages", &["role", "content"]),
+    //
+    // One list has to serve all three message shapes the oracle builds, and the absent
+    // keys are simply skipped, so the order is a **superset** in the oracle's own
+    // precedence:
+    //   plain          `{"role", "content"}`
+    //   assistant+tool `{"role", "content", "tool_calls"}`
+    //   tool result    `{"role", "tool_call_id", "content"}`
+    // `["role", "content"]` covered only the first: a tool result rendered
+    // `role, content, tool_call_id` (the unlisted key sorts last) where the oracle writes
+    // `role, tool_call_id, content`. Found by the composition probe, not by the assembly
+    // probe, whose corpus has no tool-role turn.
+    (
+        "messages",
+        &["role", "tool_call_id", "content", "tool_calls"],
+    ),
     ("tools", &["type", "function"]),
     // A forced artifact tool replaces the `"auto"` string with this object.
     ("tool_choice", &["type", "function"]),
+    // Registered for tool *definitions*; a tool *call*'s own `function` carries only
+    // `name` and `arguments`, and `arguments` sorts behind the listed keys anyway, so the
+    // same entry serves both (`arguments` is deliberately not listed).
     ("function", &["name", "strict", "description", "parameters"]),
+    // A `tool_calls` entry is built as `{"id", "type", "function"}`.
+    ("tool_calls", &["id", "type", "function"]),
     (
         "parameters",
         &["type", "properties", "required", "additionalProperties"],

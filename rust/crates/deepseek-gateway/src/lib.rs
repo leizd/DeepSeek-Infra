@@ -17,6 +17,7 @@ pub mod chat_stream;
 pub mod chat_tool_loop;
 mod control_proxy;
 pub mod local_clock;
+pub mod native_chat;
 pub mod observability;
 pub mod openai_facade;
 pub mod policy_routes;
