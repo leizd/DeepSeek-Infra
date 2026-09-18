@@ -8,26 +8,32 @@
 //! on `memories.lock`, and the workspace mutation gate that fences and bumps the
 //! backup generation.
 //!
-//! # Where this is deliberately not faithful yet
+//! # The vector bonus
 //!
 //! `retrieve_memories` in the oracle adds a **vector-search bonus** from
-//! `local_rag.search_memories_index`. `local_rag` is 2,676 lines and belongs to the
-//! RAG slice, so this port takes the bonus through an injectable
-//! [`VectorHits`] provider and defaults to none.
+//! `local_rag.search_memories_index`. The read path is ported in
+//! [`crate::memory_index`], which reads `.local-rag/rag.sqlite3` read-only; this module
+//! takes the bonus through an injectable [`VectorHits`] provider so the turn-state half
+//! and the store stay separable.
 //!
-//! The oracle wraps that call in `try/except Exception` and falls back to an empty
-//! map, so the default reproduces the oracle's **own degradation path** exactly. But
-//! the bonus is **not bounded**, and that is now measured rather than assumed:
-//! `tasks/native-runtime/memory_vector_bonus_probe.py` runs the real oracle over a
-//! corpus with the default offline configuration (`LOCAL_RAG_ENABLED` defaults to
-//! true and the embedding provider to `hash`, so the index is live with no API key)
-//! and once with `search_memories_index` forced to raise — the state this port
-//! defaults to. **7 of 8 queries retrieved a different order, and the sets differ,
-//! not just the order**: a memory with a lexical score of zero surfaces only
-//! through the bonus. A production caller of [`retrieve_memories`] or
-//! [`prepare_memory_state`] must therefore either inject a provider that
-//! reproduces the index or refuse; passing `None` is a visible divergence on every
-//! deployment that has memories, and is recorded as such in the migration matrix.
+//! `None` is **not** an acceptable default in production. The oracle wraps the call in
+//! `try/except Exception` and falls back to an empty map, so `None` reproduces that
+//! degradation path exactly — but the bonus is **not bounded**, and that is measured
+//! rather than assumed: `tasks/native-runtime/memory_vector_bonus_probe.py` runs the
+//! real oracle over a corpus with the default offline configuration
+//! (`LOCAL_RAG_ENABLED` defaults to true and the embedding provider to `hash`, so the
+//! index is live with no API key) and once with `search_memories_index` forced to
+//! raise. **7 of 8 queries retrieved a different order, and the sets differ, not just
+//! the order**: a memory with a lexical score of zero surfaces only through the bonus.
+//!
+//! The paired probe now closes that gap
+//! (`tasks/native-runtime/memory_index_parity_probe.py` and
+//! `examples/memory_index_parity_probe.rs`): the Rust provider reproduces the oracle's
+//! live path and its no-index path on the same 8 queries, byte for byte, and reports
+//! the same 7 of 8. A production caller of [`retrieve_memories`] or
+//! [`prepare_memory_state`] must inject that provider; the one configuration it refuses
+//! — a `rag_vec` table, which only a `sqlite-vec` deployment has — is
+//! [`crate::memory_index::MemoryIndexError::VectorTableNotReadable`].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -597,8 +603,15 @@ fn conflicts_in(root: &Path, content: &str, category: &str, scope: &str) -> Vec<
 // --- retrieval -------------------------------------------------------------------
 
 /// The vector-search bonus the oracle gets from
-/// `local_rag.search_memories_index`. Not ported; see the module docs.
-pub type VectorHits = dyn Fn(&str, &[String]) -> HashMap<String, i64>;
+/// `local_rag.search_memories_index`.
+///
+/// Ported as [`crate::memory_index`]; this is the injection point the turn-state half
+/// takes, so the read path and the store stay separable.
+///
+/// The lifetime parameter is load-bearing: a provider borrows the index it reads, and
+/// a bare `dyn Fn` alias would default its object bound to `'static`, forcing every
+/// caller to leak or `Rc` its store.
+pub type VectorHits<'a> = dyn Fn(&str, &[String]) -> HashMap<String, i64> + 'a;
 
 /// Mirrors `is_memory_broad_query`.
 pub fn is_memory_broad_query(query: &str) -> bool {
@@ -610,7 +623,7 @@ pub fn retrieve_memories(
     query: &str,
     scopes: Option<&[String]>,
     root: &Path,
-    vector_hits: Option<&VectorHits>,
+    vector_hits: Option<&VectorHits<'_>>,
 ) -> Vec<Value> {
     let memories = load_memories(root);
     if memories.is_empty() {
@@ -811,7 +824,7 @@ pub fn recall_memory(
     arguments: &Map<String, Value>,
     default_scope: &str,
     root: &Path,
-    vector_hits: Option<&VectorHits>,
+    vector_hits: Option<&VectorHits<'_>>,
 ) -> Value {
     let cleaned = {
         let raw = python_str_or(arguments.get("query"), "");
@@ -1134,7 +1147,7 @@ pub fn prepare_memory_state(
     payload: &Value,
     root: &Path,
     clock: &dyn Clock,
-    vector_hits: Option<&VectorHits>,
+    vector_hits: Option<&VectorHits<'_>>,
 ) -> Value {
     let mut state = empty_memory_state(payload);
     if state.get("enabled").and_then(Value::as_bool) != Some(true) {

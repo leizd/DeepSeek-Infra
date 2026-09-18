@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-**Status: plan of record. No production code changed.** The goal is `chat_execution` building
+**Status: plan of record. Step 3 is now unblocked.** The goal is `chat_execution` building
 its upstream body through `build_deepseek_request` instead of the thinner body it builds today.
 
 **Progress**: **Decision A is taken and landed** (`da8c21cf`) — the two patterns are repaired, the
@@ -14,9 +14,11 @@ replaced. **Decision C is answered by measurement and Step 2 is landed**: the me
 ported (`memory_scope_candidates`, `memory_scope_label`, `format_memory_context`,
 `upsert_memory`, `clear_memories`, `delete_memory_by_id`, `apply_explicit_memory_command`,
 `prepare_memory_state`) with `vector_hits` injected, and the paired measurement shows the vector
-bonus is **not bounded** — see §4. Decision B (read-only wiring vs a `memory` domain declaration)
-is open. Step 3 — wiring `chat_execution` — is the next slice, and it now has a third
-prerequisite: a provider (or a refusal) for the memory vector index.
+bonus is **not bounded** — see §4. **Step 3's third prerequisite is landed too**: the provider
+for the memory vector index is `deepseek_policy::memory_index`, paired with the oracle byte for
+byte (`memory_index_parity_probe`, 64 keys, `turn::differing = 7 of 8`). Decision B (read-only
+wiring vs a `memory` domain declaration) is still open, but it gates only the **write** half.
+Step 3 — wiring `chat_execution` — is the next slice, and every prerequisite it named is met.
 
 Everything below is a measurement with its evidence, not a roadmap. Where a decision is needed it
 is marked **DECISION** and carries a recommendation.
@@ -156,12 +158,20 @@ Rust provider) cannot be copied verbatim either — memory is enabled by default
 refusal would refuse almost every request and *lower* capability below Python, which the migration
 rules forbid.
 
-**Recommendation:** the memory index read path is bounded and belongs to the Rust data plane
-(hash embedding + cosine + BM25 over the `rag_items`/`rag_vec` tables, **read-only** — Python
-remains the writer until a `memory` domain is declared). Until that provider exists, the wiring
-must refuse a turn whose memory read would have been index-backed rather than silently pass
-`None`; the refusal has to be narrow (only when the index is populated) so a memory-less
-deployment is unaffected.
+**Recommendation — now implemented.** The memory index read path is
+`deepseek_policy::memory_index` (hash embedding + cosine + BM25 over `rag_items`,
+**read-only**; Python remains the writer until a `memory` domain is declared), paired with
+the oracle by `memory_index_parity_probe.py` ↔ `examples/memory_index_parity_probe.rs`:
+**64 keys, byte-identical (LF md5 `16494f98…`)**. The wiring injects it and does **not** pass
+`None`.
+
+One narrow refusal remains, and it is not the blanket one this plan rejected: when the
+`rag_vec` table exists, the oracle blends `vec0` distances this process cannot evaluate
+(`sqlite-vec` is a Python-loaded extension that is not a dependency of this repository),
+so the read returns `MemoryIndexError::VectorTableNotReadable` rather than serving the
+cosine fallback. That fires only in a deployment that installed the optional extra, so
+the default path is unaffected — the opposite of the "refuse almost every request"
+outcome the `file_store` precedent would have produced here.
 
 ## Recommended order
 
@@ -171,10 +181,12 @@ deployment is unaffected.
    `memory_scope_candidates`, `memory_scope_label`, `format_memory_context` — with `vector_hits`
    injected, and run the §4 measurement inside it.~~ **Landed** — the eight functions are ported and
    byte-verified (194-key probe, `97187819…`), and §4 is answered: the bonus is not bounded.
-3. **Next:** a Rust provider for the memory index read path (or the narrow refusal), then wire
-   `chat_execution` onto `build_deepseek_request`, with the forced-search mode refusal and the file
-   vector index refusal (already available as `vector_index_not_ready()`).
+3. ~~A Rust provider for the memory index read path (or the narrow refusal).~~ **Landed** —
+   `deepseek_policy::memory_index`, paired and byte-identical (64 keys, `turn::differing = 7 of 8`).
+   **Next:** wire `chat_execution` onto `build_deepseek_request`, with the forced-search mode
+   refusal and the file vector index refusal (already available as `vector_index_not_ready()`).
 4. After a `memory` domain is declared: wire the write half.
 
-Steps 1 and 2 are additive and inert. Step 3 is the one that changes what the native route sends,
-and it is the point at which the 4.9.2 `chat_completions_fast_path` cutover becomes real.
+Steps 1-3 are additive and inert. Step 4 — the wiring — is the one that changes what the native
+route sends, and it is the point at which the 4.9.2 `chat_completions_fast_path` cutover becomes
+real.

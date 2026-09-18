@@ -2616,3 +2616,107 @@ against them. The new `docs/MEMORY_STORE.md` and the two task Markdown edits are
 `rag_items`/`rag_vec`, read-only) **or** the narrow refusal — then step 3, wiring `chat_execution`
 onto `build_deepseek_request` with the three refusals and a real memory-state provider. Decision B
 (a `memory` domain declaration) still gates wiring the **write** half.
+
+---
+
+## The memory index read path landed, and its acceptance criterion had to be corrected
+
+**Branch `main`, HEAD `cd8cca08`** (committed by the workspace, not pushed — `origin/main` is still
+`1b856bec`). The turn-state half of the previous section is in that commit; the index read path is
+the uncommitted set below.
+
+This closes the third prerequisite step 3 of
+[`assembly-wiring-plan.md`](assembly-wiring-plan.md) was waiting for. The plan and the module
+skeleton were already in the tree when this session started; what was missing was **verification**,
+and an unverified provider is exactly what the migration rules do not count.
+
+### What was verified, and the one defect it found
+
+`tasks/native-runtime/memory_index_parity_probe.py` ↔
+`rust/crates/deepseek-policy/examples/memory_index_parity_probe.rs`: **64 keys,
+byte-identical** after `tr -d '\r'`. The fixture is **shared**, not duplicated — Python builds
+`.local-rag/rag.sqlite3` through the production `save_memories` → `sync_memories` path and Rust
+opens that same file read-only, so the schema and the column types are part of what is compared.
+`.local-rag/rag.sqlite3`, note, is written by Python and read by Rust: no second writer.
+
+The defect only the `pure::` layer could see: `parse_embedding` has **three** outcomes in the
+oracle (a decode error returns the bare `return []`, a non-array normalizes `[]` to `dimensions`
+zeros, an array normalizes to `dimensions` components) and the port had collapsed the first two.
+It is invisible in every score — `cosine_similarity` returns `0.0` for an empty *and* for an
+all-zero vector — so all 8 queries and their 24-key ordering were already identical while the
+function was wrong. `str(value or "[]")` is part of the contract too: an empty string is falsy and
+lands in the *second* branch. Fixed, and `pure::parse-9` now pins the empty-string case.
+
+### The acceptance criterion in the plan was wrong, and the measurement says so
+
+`memory-index-read-path-plan.md` asked for "the 7 differing queries drop to 0". That conflates two
+comparisons. The 7-of-8 figure is the *live index versus no index* difference **inside the
+oracle**; a correct Rust provider reproduces the **live** side, which leaves the figure at 7. The
+probe therefore reports both paths — `retrieve::` with the provider and `retrieve-none::` without
+— and **`turn::differing = 7 of 8` is now a positive result**, not a target. A provider that
+silently returned nothing would have reported `0 of 8`; one that computed the wrong bonus would
+have failed the `retrieve::` comparison. The plan records the correction.
+
+### What the provider deliberately does not do
+
+The `rag_vec` branch is **not** reimplemented. `vec0` is an extension loaded into the Python
+connection, `rusqlite`'s bundled SQLite has no such module, and `sqlite-vec` is not a dependency of
+this repository (not in `requirements*.txt`, `pyproject.toml` or any Compose file;
+`find_spec("sqlite_vec")` is `None`). `initialize_schema` creates `rag_vec` only `if vec_loaded`,
+so **every shipped deployment and every CI leg takes the cosine fallback**, which is complete.
+
+When the table *is* present the read returns `MemoryIndexError::VectorTableNotReadable` instead of
+quietly serving the fallback — the oracle would have blended `1/(1+distance)` into every score, so
+the two answers differ in membership, not just in order. This is the narrow refusal the wiring plan
+asked for: it fires only in a deployment that installed the optional extra, which is the opposite
+of the blanket refusal the `file_store` precedent would have produced.
+
+The read is read-only in the strict sense: `SQLITE_OPEN_READ_ONLY`, and it does not create the
+directory, the schema or the `rag_meta` rows the oracle's `db_ready()` would. A missing database is
+therefore `None` rather than an empty index, because the oracle's `[]` there comes from `db_ready()`
+*creating* it — the one thing a reader must not do.
+
+One structural fix came with it: `memory::VectorHits` was `dyn Fn(…) -> …` with no lifetime, so its
+object bound defaulted to `'static` and no provider could borrow the store it reads. It now carries
+a lifetime (`VectorHits<'a>`), which is what lets the wiring build a per-request provider rather
+than leaking or `Rc`-ing one.
+
+### Verification
+
+- **Both probe pairs byte-identical**: `memory_index` **64 keys / ** (new);
+  `memory_parity_probe` re-run and unchanged at **194 keys**, LF-normalized md5
+  `97187819db5aec787776174f6ac3f3d5`.
+- `cargo test -p deepseek-policy` → **400 passed** (10 in `memory_index`, 2 new here);
+  `cargo test -p deepseek-gateway` → pass.
+- Workspace `fmt --all -- --check` exit 0; workspace clippy (1.85, `--locked --all-targets
+  --all-features -- -D warnings`) **exit 0 with no diagnostics** — one `useless_vec` in the
+  in-flight test code was fixed to get there.
+- `ruff check` and `mypy` pass on the new probe.
+
+### Two traps worth recording
+
+- **The `docs` job's rule applies to any new tracked Markdown**, and
+  `memory-index-read-path-plan.md` already carries its language switcher — verified, not assumed.
+- **`memory_parity_probe.py` writes GBK on this host.** Its Python side has no stdout
+  reconfiguration, so a bare `python … > python.json` on Windows produces bytes that cannot be
+  decoded as UTF-8 and compares as "different" against a correct Rust output. The pair is
+  byte-identical under `PYTHONIOENCODING=utf-8`. The new probe pins `reconfigure(encoding="utf-8")`
+  itself so its documented command works as written.
+
+### A workspace hazard for the next session
+
+Between two consecutive `git status` calls in this session the same 7 files moved from unstaged to
+staged, then appeared as commit `cd8cca08` (19:41), and `memory_index.rs` +
+`memory-index-read-path-plan.md` appeared with mtimes this session did not produce. A `codex`
+process was resident throughout and idle by 19:46. Whatever the exact cause, **treat this working
+tree as possibly having a second writer**: re-check `git status` and file mtimes before staging,
+rebasing or force-pushing, and prefer adding to the existing task files over rewriting them.
+
+### Not done, and the next executable task
+
+**Not pushed.** Exact-head CI has not run against any of this.
+
+**Next slice — step 3, now unblocked:** wire `chat_execution` onto `build_deepseek_request` with
+the memory provider bound (not `None`), plus the forced-search mode refusal and the file vector
+index refusal (`vector_index_not_ready()`). Decision B (a `memory` domain declaration) still gates
+wiring the **write** half.

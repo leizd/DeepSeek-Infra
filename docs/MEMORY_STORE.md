@@ -45,16 +45,15 @@ for, so a store that skipped it on the migration path would leave a backup free 
 accept a package assembled across that write. Fixed by moving the gate into
 `save_unlocked`, where the oracle has it.
 
-## Where this is deliberately not faithful yet — and the measurement that settled it
+## The vector bonus: measured, then closed
 
 `retrieve_memories` adds a **vector-search bonus** from
-`local_rag.search_memories_index`. `local_rag` is 2,676 lines and belongs to the RAG
-slice, so the bonus arrives through an injectable `VectorHits` provider and defaults
-to none.
+`local_rag.search_memories_index`. The bonus arrives through an injectable
+`VectorHits` provider so the turn-state half and the RAG store stay separable.
 
 The oracle wraps that call in `try/except Exception` and falls back to an empty map,
-so the default reproduces the oracle's **own degradation path** exactly — and the
-probe compares that path. What was open is whether the bonus is *bounded*: could a
+so `None` reproduces the oracle's **own degradation path** exactly — and the probe
+compares that path. What was open is whether the bonus is *bounded*: could a
 production caller pass `None` and merely lose a tie-break?
 
 It cannot, and the paired measurement shows why. `LOCAL_RAG_ENABLED` defaults to
@@ -74,7 +73,65 @@ runs the real oracle over a corpus once with that index live and once with
 **Consequence for the wiring:** a production caller of `retrieve_memories` or
 `prepare_memory_state` must inject a provider that reproduces the index, or refuse.
 Passing `None` is a visible divergence on every deployment that has memories — it is
-not a bounded one — and it is recorded as such in the migration matrix.
+not a bounded one.
+
+**That provider now exists** — `deepseek_policy::memory_index` — and the same
+measurement is the acceptance test for it; see the next section.
+
+## The index read path (`deepseek_policy::memory_index`)
+
+`search_memories_index` is `search(collection="memory", scopes=…, limit=…)`, and
+`_search_db` has two branches. Which one runs is decided by whether `sqlite-vec`
+loaded:
+
+| branch | when | what it needs |
+| --- | --- | --- |
+| `rag_vec` `MATCH` | the extension loaded | the `vec0` virtual table |
+| **cosine fallback** | the extension absent | `rag_items.embedding` (a JSON column) |
+
+`sqlite_vec` is not a dependency of this repository — not in `requirements.txt`,
+`requirements-dev.txt`, `pyproject.toml` or any Compose file, and
+`find_spec("sqlite_vec")` is `None`. `initialize_schema` creates `rag_vec` only
+`if vec_loaded`, so the fallback is the branch **every shipped deployment takes**, and
+it is the one implemented in full.
+
+The `rag_vec` branch is not reimplemented, because it cannot be: `vec0` is an
+extension loaded into the Python connection and `rusqlite`'s bundled SQLite has no
+such module. When the table is present the read returns
+`MemoryIndexError::VectorTableNotReadable` instead of quietly computing the fallback
+— the oracle would have blended `1/(1+distance)` into every score, so the two answers
+differ in membership, not just in order. The refusal is narrow by construction: only
+a deployment that installed the optional `sqlite-vec` extra can reach it.
+
+The read is **read-only**: it opens `.local-rag/rag.sqlite3` with
+`SQLITE_OPEN_READ_ONLY` and never creates the directory, the schema or the `rag_meta`
+rows the oracle's `db_ready()` would. Python remains the writer (`sync_memories` from
+`save_memories`), so `one_table_one_authoritative_writer` holds by construction — there
+is no second writer to fence. A missing database is therefore `None` rather than an
+empty index: the oracle's `[]` on a missing database comes from `db_ready()` *creating*
+it, and creating it is the one thing a reader must not do.
+
+`bm25_scores` and `_python_normalize_query` live here rather than in `deepseek-rag`
+because they are reachable only through this path, and `deepseek-policy` does not
+depend on `deepseek-rag`. `hash_text_embedding`, `normalize_vector` and
+`cosine_similarity` are reused from `attachment_context` — already probe-verified —
+rather than duplicated. `DEEPSEEK_RUST_RAG` defaults to **false**, so the oracle's
+lexical half is Python's `bm25_scores`, not the sidecar: BM25 is what is ported.
+
+### A defect the probe found
+
+`parse_embedding` has **three** distinct outcomes in the oracle, and the port had
+collapsed two of them. A decode error is a bare `return []` — the **raw** empty list,
+not normalized — while a value that is not an array normalizes `[]` to `dimensions`
+zeros. The port returned `dimensions` zeros for both.
+
+The difference is invisible downstream, which is exactly why it survived: with an
+empty right-hand side `cosine_similarity` returns `0.0` early, and with `dimensions`
+zeros it sums to `0.0`, so every score in the corpus was already identical. It is
+visible only at the function's own contract — and `str(value or "[]")` is part of that
+contract too: an empty string is falsy, so it parses as `[]` and lands in the
+*second* branch, not the first. Both are now pinned by `pure::parse-3` and the new
+`pure::parse-9` case.
 
 ## The turn-state half (the request-assembly slice)
 
@@ -124,27 +181,50 @@ nested-order consumer) included.
   budget-crossing corpus), 8 upsert shapes with their file bytes, clear and
   delete-by-id with their file bytes, 14 command shapes with their file bytes, and 9
   turn-state shapes with their file bytes and the final generation counter.
+- **The index read path**: `tasks/native-runtime/memory_index_parity_probe.py` ↔
+  `rust/crates/deepseek-policy/examples/memory_index_parity_probe.rs`, **64 keys,
+  byte-identical** after `tr -d '\r'` (LF-normalised MD5
+  `16494f987aa25c24e617eaeda15e33a9`; the Rust `println!` writes CRLF
+  on Windows, which is why every probe pair in this repository normalises). The
+  fixture is shared rather than duplicated: the Python side builds
+  `.local-rag/rag.sqlite3` through the production `save_memories` → `sync_memories`
+  write path and the Rust side opens that same file read-only. Pinned: 7 embedding
+  shapes, 6 normalization shapes, a 6-document BM25 corpus, 10 `parse_embedding`
+  shapes, `store::dimensions`/`vector-table-present`/`memory-rows` (10),
+  the ordered hit list and the `id → max(score)` map for all 8 queries, and
+  `retrieve_memories` on both paths.
+- **The acceptance test the wiring plan asked for, inverted**: the same 8 queries
+  report `turn::differing = 7 of 8` — the Rust provider reproduces the oracle's live
+  path *and* its no-index path exactly, and the bonus still moves 7 of 8. A provider
+  that had quietly returned nothing would have shown `0 of 8`; one that returned the
+  wrong bonus would have failed the `retrieve::` comparison.
 - The budget corpus **can fail**: with `normalize_memory_text` capping a row at 1200
   characters, reaching 8 000 takes six full rows (used 7 254) plus a 737-character
   row that lands exactly on the budget; the reference output contains the 省略 marker
   (8 140 characters) — the first corpus (3 × 3000) could never have reached it.
-- `cargo test -p deepseek-policy` → **390 tests, all pass** (33 new here);
-  `cargo test -p deepseek-gateway` → 145 lib + 15 integration, all pass.
-- `cargo fmt --check` clean; `cargo clippy -p deepseek-policy --locked --all-targets
-  --all-features -- -D warnings` exit 0 with no diagnostics.
-- `ruff check` and `mypy` pass on both probes.
+- `cargo test -p deepseek-policy` → **400 tests, all pass** (10 of them
+  `memory_index`, 2 new here); `cargo test -p deepseek-gateway` → 145 lib + 15
+  integration, all pass.
+- `cargo fmt --check` clean; `cargo clippy --locked --all-targets --all-features
+  -- -D warnings` exit 0 with no diagnostics.
+- `ruff check` and `mypy` pass on all three probes.
 
 ## What is left
 
 - **Wiring** `chat_execution` onto `build_deepseek_request` (step 3 of
   [`tasks/native-runtime/assembly-wiring-plan.md`](../tasks/native-runtime/assembly-wiring-plan.md)),
-  with refusals for forced-search mode and the file vector index — and, per the
-  measurement above, a real provider (or a refusal) for the memory vector index
-  rather than `None`.
+  with refusals for forced-search mode and the file vector index. The memory provider
+  that step was waiting for is landed, so all three of its named prerequisites are now
+  met; what remains is the wiring itself.
 - A `memory` domain declaration before any Rust **write** is wired (Decision B).
 - `suggest_memory` still does not persist anything: it builds a suggestion and fires
   a callback. The write functions are now ported, but nothing calls them from a
   production path yet.
+- The optional `sqlite-vec` deployment still has no Rust read path: reproducing the
+  `rag_vec` distances would need the extension itself, or a verified reimplementation
+  of what `vec0` returns — a measurement this host cannot make, since the module is not
+  installed. That configuration refuses (`VectorTableNotReadable`) rather than
+  degrading; the fallback path that every shipped deployment takes is complete.
 
 ## A truthiness detail worth its own note
 

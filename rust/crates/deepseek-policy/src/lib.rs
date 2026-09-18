@@ -24,6 +24,7 @@ pub mod file_cache;
 pub mod file_lock;
 pub mod file_store;
 pub mod memory;
+pub mod memory_index;
 pub mod model_router;
 pub mod mutation_gate;
 pub mod path_guard;

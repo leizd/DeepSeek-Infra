@@ -547,10 +547,12 @@ pub struct WorkspaceContext<'a> {
     pub clock: &'a dyn crate::core_utils::Clock,
     /// The uploaded-file cache, which must persist across calls in a request.
     pub file_cache: &'a crate::file_cache::FileCache,
-    /// The `local_rag.search_memories_index` bonus. **Not ported**, so this is
-    /// normally `None`, which reproduces the oracle's own `except Exception`
-    /// degradation path. See `docs/MEMORY_STORE.md`.
-    pub vector_hits: Option<&'a crate::memory::VectorHits>,
+    /// The `local_rag.search_memories_index` bonus, implemented by
+    /// [`crate::memory_index`]. A caller on a populated index must supply it: `None`
+    /// reproduces only the oracle's `except Exception` degradation path, and the
+    /// paired measurement shows the bonus changes the retrieved set, not just its
+    /// order. See `docs/MEMORY_STORE.md`.
+    pub vector_hits: Option<&'a crate::memory::VectorHits<'a>>,
     /// The `memory_suggestion_callback`. `None` is not "no suggestion" — the branch
     /// still builds and returns one; it simply is not notified.
     pub on_memory_suggestion: Option<&'a dyn Fn(&Value)>,
