@@ -2378,8 +2378,12 @@ probe only exercised the Windows path.
 
 **Unpushed**: `24f7263f` (the green re-run record) and `f31eea9b`.
 
-**Next explicit action**: wire the assembly into `chat_execution`, which builds its own thinner
-body today. The two remaining surfaces are handled rather than ported: the file vector index
-(`local_rag`) already refuses via `NATIVE_FILE_VECTOR_INDEX_NOT_READY`/501, and forced-search
-mode must refuse the same way rather than improvise a Tavily fetch. That slice is now blocked on
-nothing.
+**Next explicit action**: measured, and the earlier claim here that the wiring slice is "blocked on
+nothing" was **wrong** — see [`assembly-wiring-plan.md`](assembly-wiring-plan.md). Wiring
+`chat_execution` onto `build_deepseek_request` still needs the memory state, and
+`prepare_memory_state` is unported (8 functions). The measurement also found two things that are
+not wiring work at all: the oracle's explicit-memory-command parser is broken by a pair of
+`(?:` → `(` typos (so "记住: X" is silently dropped), and the test that covers it monkeypatches
+`memory.re` and therefore cannot see it. The plan records both, the ownership gap (memory is not a
+declared domain, and `chat_completions_fast_path`'s cutover is 4.9.2), and the four decisions the
+next slices need.
