@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -119,32 +118,47 @@ def test_delete_clear_retrieve_and_context_budget_edges(tmp_settings: Path, monk
     assert memory.load_memories() == []
 
 
-def test_explicit_english_remember_forget_and_opt_out(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_explicit_memory_commands_are_parsed_by_their_real_patterns(tmp_settings: Path) -> None:
+    """The command grammar is module-level regexes, so this runs them.
+
+    The test this replaces monkeypatched `memory.re` and handed the function fabricated match
+    objects, so it passed whatever the patterns said. Both patterns had in fact kept a leading
+    `:` in their first alternative -- `(:忘记|…` where `(?:忘记|…` was meant -- which made every
+    natural phrasing ("记住: X", "forget: X") fail to match at all.
+    """
+
+    # Nothing to parse is not a command, and "don't remember" is an instruction not to save --
+    # the latter is checked before every branch below.
+    assert memory.apply_explicit_memory_command("") == ""
+    assert memory.apply_explicit_memory_command("不要记住: 这是临时的") == ""
     assert memory.apply_explicit_memory_command("do not remember this") == ""
-    remember_matches = iter([None, None, SimpleNamespace(group=lambda _: "concise replies")])
-    def remember_search(pattern: str, string: str, flags: int = 0) -> object:
-        try:
-            return next(remember_matches)
-        except StopIteration:
-            return re.search(pattern, string, flags)
-    monkeypatch.setattr(
-        memory,
-        "re",
-        SimpleNamespace(search=remember_search, sub=re.sub, fullmatch=re.fullmatch, IGNORECASE=re.IGNORECASE, DOTALL=re.DOTALL),
-    )
-    notice = memory.apply_explicit_memory_command("remember concise replies")
-    assert "concise replies" in notice
-    forget_matches = iter([None, SimpleNamespace(group=lambda _: "concise replies")])
-    def forget_search(pattern: str, string: str, flags: int = 0) -> object:
-        try:
-            return next(forget_matches)
-        except StopIteration:
-            return re.search(pattern, string, flags)
-    monkeypatch.setattr(
-        memory,
-        "re",
-        SimpleNamespace(search=forget_search, sub=re.sub, fullmatch=re.fullmatch, IGNORECASE=re.IGNORECASE, DOTALL=re.DOTALL),
-    )
-    deleted = memory.apply_explicit_memory_command("forget concise replies")
-    assert "1" in deleted
-    assert memory.format_memory_notice("saved")
+    assert memory.load_memories() == []
+
+    # The remember branch requires the whole prefix it spells out -- `请`, then `帮我`, then the
+    # verb -- and saves the text after the colon rather than the command word. Whether those
+    # prefixes *should* be optional (so that a bare "记住: X" also matches) is a product decision
+    # separate from repairing the typo, so it is deliberately not asserted here either way.
+    for query, content in [
+        ("请帮我记住: 我的生日是3月5日", "我的生日是3月5日"),
+        ("请帮我记住：牙医预约在周四", "牙医预约在周四"),
+        ("请帮我以后记得: 部署要走 CI", "部署要走 CI"),
+    ]:
+        notice = memory.apply_explicit_memory_command(query)
+        assert content in notice, query
+        assert content in {item["content"] for item in memory.load_memories()}, query
+
+    # "don't forget" asks for the content to be *kept*. It must not reach the forget branch, which
+    # matches the bare `忘记:` substring and would delete what the user asked to keep.
+    notice = memory.apply_explicit_memory_command("别忘记: 明天下午三点开会")
+    assert "明天下午三点开会" in notice
+    contents = {item["content"] for item in memory.load_memories()}
+    assert "明天下午三点开会" in contents
+    assert "我的生日是3月5日" in contents
+
+    # "forget" deletes against what follows the colon, not against the command word: while the
+    # alternation captured, the target was the literal "忘记", so the count was always 0.
+    notice = memory.apply_explicit_memory_command("忘记: 牙医预约")
+    assert "删除 1 条" in notice
+    remaining = {item["content"] for item in memory.load_memories()}
+    assert "牙医预约在周四" not in remaining
+    assert "我的生日是3月5日" in remaining

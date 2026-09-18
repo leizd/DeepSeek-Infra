@@ -506,6 +506,18 @@ def format_memory_context(memories: list[dict[str, Any]]) -> str:
 
 
 def apply_explicit_memory_command(query: str, *, scope: str = "global", scopes: list[str] | None = None) -> str:
+    """Parse an explicit "remember this" / "forget this" instruction out of a turn.
+
+    The order is the contract: an instruction *not* to remember returns early; a *negated* forget
+    is a remember (it must be checked before the forget branch, which matches the bare verb); then
+    forget; then remember. Every command alternation needs its `?:` — written as a capturing group
+    it shifts `(.+)` to group 2, and the code below then acts on the command word instead of on the
+    text after the colon.
+
+    Two pre-existing gaps, neither reachable through the phrasings handled here: `不要再记得` in
+    the forget alternation is shadowed by the "不要…记得" guard and returns "", and a negated
+    `删除记忆:` / `delete memory:` still reaches the delete branch.
+    """
     text = str(query or "").strip()
     if not text:
         return ""
@@ -513,8 +525,22 @@ def apply_explicit_memory_command(query: str, *, scope: str = "global", scopes: 
     if re.search(r"(不要|别|不用|无需|do not|don't).{0,12}(记住|记得|remember)", text, flags=re.IGNORECASE):
         return ""
 
+    # "不要忘记: X" is a *remember* request, and it has to be recognised **before** the forget
+    # branch below: that branch matches a bare `忘记:` once its group is spelled correctly, so
+    # without this the negation would delete the very memory the user asked to keep. Every
+    # pattern here needs the `?:` its first alternative reads as having been written for.
+    kept_match = re.search(
+        r"(?:不要|别|不用|无需|do not|don't)\s*(?:忘记|forget)[:：]\s*(.+)",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if kept_match:
+        content = kept_match.group(1).strip()
+        item = upsert_memory(content, scope=scope, source="manual")
+        return f"已保存一条长期记忆：[{item.get('category')}] {item.get('content')}"
+
     forget_match = re.search(
-        r"(:忘记|删除记忆|不要再记得|不再记住|取消记住|forget|delete memory)[:：]\s*(.+)",
+        r"(?:忘记|删除记忆|不要再记得|不再记住|取消记住|forget|delete memory)[:：]\s*(.+)",
         text,
         flags=re.IGNORECASE | re.DOTALL,
     )
@@ -524,7 +550,7 @@ def apply_explicit_memory_command(query: str, *, scope: str = "global", scopes: 
         return f"已根据用户要求删除 {deleted} 条相关长期记忆。"
 
     remember_match = re.search(
-        r"(:请)(:帮我)(:记住|以后记得|remember)[:：]\s*(.+)",
+        r"(?:请)(?:帮我)(?:记住|以后记得|remember)[:：]\s*(.+)",
         text,
         flags=re.IGNORECASE | re.DOTALL,
     )
