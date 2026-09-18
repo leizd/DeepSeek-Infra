@@ -1,5 +1,10 @@
 # Assembly wiring plan — measured 2026-09-18
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 **Status: plan of record. No production code changed.** The goal is `chat_execution` building
 its upstream body through `build_deepseek_request` instead of the thinner body it builds today.
 
