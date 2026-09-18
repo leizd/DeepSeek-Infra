@@ -2376,7 +2376,7 @@ Verified:
 **Not verified**: the Unix read compiles in CI's Linux job but was not run here -- the paired
 probe only exercised the Windows path.
 
-**Unpushed**: `24f7263f` (the green re-run record) and `f31eea9b`.
+**Pushed and green**: `24f7263f`, `f31eea9b`, `af6e8e52`, `4903540c` — see the CI round below.
 
 **Next explicit action**: measured, and the earlier claim here that the wiring slice is "blocked on
 nothing" was **wrong** — see [`assembly-wiring-plan.md`](assembly-wiring-plan.md). Wiring
@@ -2387,3 +2387,32 @@ not wiring work at all: the oracle's explicit-memory-command parser is broken by
 `memory.re` and therefore cannot see it. The plan records both, the ownership gap (memory is not a
 declared domain, and `chat_completions_fast_path`'s cutover is 4.9.2), and the four decisions the
 next slices need.
+
+### The batch went red on a managed-document rule, and the re-run is green (`0b697839`)
+
+Run `35318257112` on `4903540c`: 4 jobs failed of 35 -- `docs` and all three `test` legs -- from
+**one** cause. `assembly-wiring-plan.md` is a tracked Markdown file, so it is a *managed document*:
+`scripts/update_docs_language_nav.py --check` (the `docs` job) requires the language switcher block
+and `tests/test_docs_language_navigation.py` asserts both its presence and that its targets resolve.
+
+That was my omission, and the cost ratio is the lesson: local verification had covered
+`ruff` + `mypy` for the new probe but not the two commands the `docs` job runs, nor the docs test
+that reads them. One missing four-line block killed four jobs 21 seconds in. The rule is now in the
+project memory: for any new tracked Markdown, run `scripts/update_docs_language_nav.py` (it inserts
+the block), then `--check`, then `scripts/check_doc_links.py`, then
+`pytest tests/test_docs_language_navigation.py`.
+
+Nothing else was wrong: `rust` passed, which matters because that job compiled the new Unix FFI for
+the first time, and `native-protocol`, `rust-coverage`, `native-go` and every parity / e2e job passed.
+
+Fixed in `0b697839` with the repo's own script (it edited exactly one file).
+
+**The re-run is green.** `35321343935` on `0b697839`: **all 35 jobs succeeded**, `docs` and the three
+`test` legs among them.
+
+**A push trap worth writing down**: `git push` then hung for ~14 minutes with no output. This shell
+carries the persistent `HTTPS_PROXY=http://127.0.0.1:7897/`, which git inherits, and an unhealthy
+Clash node hangs instead of failing. `gh` keeps working throughout because it uses the API path, so
+"`gh` is fine" is not evidence the push landed. The remote ref proved it had not -- and the direct
+push (`timeout 120 env -u HTTPS_PROXY -u HTTP_PROXY -u ALL_PROXY git push origin main`) went through
+immediately. Check `git ls-remote --heads origin main` before believing either way.
