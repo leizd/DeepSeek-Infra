@@ -601,6 +601,7 @@ dependencies = [
  "blake2",
  "deepseek-core",
  "regex",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha1",

@@ -14,5 +14,6 @@ serde_json = { workspace = true }
 regex = { workspace = true }
 sha2 = { workspace = true }
 sha1 = { workspace = true }
+rusqlite = { workspace = true }
 
 [dev-dependencies]
