@@ -2321,3 +2321,65 @@ Verified before re-pushing: 1.85 full-workspace `cargo test --locked --all` exit
 **The re-run is green.** `35312303606` on `59914dce`: **all 35 jobs succeeded** -- `rust`, the
 three `test` legs, `rust-coverage`, `native-go`, and every parity / S3 / federation e2e job.
 The ten commits from `2e7f395e` through `59914dce` are CI-verified at that HEAD.
+
+### The clock stopped being the reason the assembly cannot be wired (`f31eea9b`)
+
+The assembly has been complete and unwired since `de2bd60a`, and the prerequisite named there
+was the OS local zone: `dynamic_context` carries `LocalNow` as data precisely because "Rust's
+standard library has no local-timezone support", and every path through
+`build_dynamic_turn_context` needs it unconditionally. That is now resolved, and it was the
+**only** hard prerequisite -- the other candidate in that list is not one (below).
+
+**`deepseek-gateway::local_clock`** asks the OS the way CPython does, because that is what the
+parity target *is*. `datetime._local_timezone()` consults no tz database: on Windows
+`tm_gmtoff`/`tm_zone` do not exist, so it falls back to `time.timezone` / `time.altzone` and
+`time.tzname[tm_isdst]`, which the UCRT fills from `GetTimeZoneInformation`; on POSIX it reads
+`localtime_r`'s `tm_gmtoff` and `tm_zone` directly. The FFI is declared rather than
+dependenc-ised, following `deepseek-policy::file_lock` (`#[link(name = "kernel32")]` on Windows,
+a bare `extern "C"` on Unix), so the dependency graph is unchanged -- and a time crate would not
+have closed the gap anyway, since `chrono` and `time` expose the offset but not the zone's own
+name, which is what gets printed into the prompt.
+
+**The measurement that mattered.** On this zh-CN Windows 11, `GetTimeZoneInformation` reports
+`Bias = -480`, `StandardBias = 0`, `StandardName = 中国标准时间`, and CPython's `tzname()`
+returns that same string. **Not** `China Standard Time` -- which is what the example in
+`dynamic_context` led a reader to expect, and what a hand-written name table would have
+produced: a prompt that looks right and diverges on every request. That example is corrected,
+and so is `search.rs`'s module header, which still claimed the request-assembly layer "does not
+exist yet" and listed three links (the taint firewall, `search_multiple`, the consumer) that are
+in fact ported.
+
+**The second measurement changed the plan.** `search_if_needed` had been recorded alongside the
+zone as a pre-wiring prerequisite. It is not one: it is reached only under
+`forced_search_mode(payload)` (`deepseek_client.py:674`), and `searchContext` is written only
+inside that same branch -- so the ordinary path never needs it. Its two callbacks
+(`progress_callback`, `system_note_callback`) have no destination at all on
+`/v1/chat/completions` (measured in `search_provider`), and its body is a live Tavily fetch, so
+a native path that reaches forced-search mode must **refuse** rather than port it. Porting it
+now would be porting dead orchestration.
+
+Verified:
+- `tasks/native-runtime/local_clock_parity_probe.py` with `examples/local_clock_parity_probe.rs`:
+  both sides resolve the host's zone and render the same pinned instant through the oracle's own
+  `format_current_time_context` -- **byte-identical** (`diff=0`; `offset_seconds` 28800,
+  `tzname` 中国标准时间, `is_daylight` false on both).
+- **Negative control run**: with the offset sign flipped the pair reported `offset_seconds:
+  -28800` and `2026-09-17T22:50:44-08:00`, so the probe is able to fail. Reverted before the
+  commit.
+- 6 unit tests on the Windows bias mapping -- the daylight branch and a non-zero `StandardBias`
+  are pinned there because no host in reach exercises them, and they run on Linux CI too, where
+  the Windows read is `cfg`-ed out.
+- `cargo fmt -p deepseek-gateway -- --check` clean; full-workspace clippy (1.85, `--locked
+  --all-targets --all-features -- -D warnings`) exit 0 with **no diagnostics**; `ruff check .`
+  and `mypy .` pass (884 files).
+
+**Not verified**: the Unix read compiles in CI's Linux job but was not run here -- the paired
+probe only exercised the Windows path.
+
+**Unpushed**: `24f7263f` (the green re-run record) and `f31eea9b`.
+
+**Next explicit action**: wire the assembly into `chat_execution`, which builds its own thinner
+body today. The two remaining surfaces are handled rather than ported: the file vector index
+(`local_rag`) already refuses via `NATIVE_FILE_VECTOR_INDEX_NOT_READY`/501, and forced-search
+mode must refuse the same way rather than improvise a Tavily fetch. That slice is now blocked on
+nothing.
