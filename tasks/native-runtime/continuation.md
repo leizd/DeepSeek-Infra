@@ -2720,3 +2720,102 @@ rebasing or force-pushing, and prefer adding to the existing task files over rew
 the memory provider bound (not `None`), plus the forced-search mode refusal and the file vector
 index refusal (`vector_index_not_ready()`). Decision B (a `memory` domain declaration) still gates
 wiring the **write** half.
+
+---
+
+## The OpenAI facade translation landed, and the wiring stopped being a fidelity question
+
+**Branch `main`, HEAD `276d21a7`** (the memory index read path, committed by the previous round;
+`origin/main` is still `1b856bec`). Working tree carried only the files below.
+
+Before writing any wiring code, the oracle's route was measured rather than assumed — and the
+measurement changed what the slice *is*.
+
+### The measurement: `/v1/chat/completions` is a facade, and the native route disagrees with it
+
+`routes/chat.py:65` is `payload = openai_to_internal_payload(body, local_base_url=…)`, then
+`resolve_provider(model).chat(payload)` → `call_deepseek` → `prepare_deepseek_call` →
+`build_deepseek_request`. So the OpenAI body is translated **first**, and the translation is part
+of the public contract.
+
+`openai_to_internal_payload` (`openai_api.py:29`) is narrow: it forwards `model` (after
+`body.get("model") or settings.default_model`, then `MODEL_ALIASES`), `messages` **verbatim and
+unvalidated**, `stream` (Python truthiness — the string `"false"` is *true*), `thinkingEnabled:
+False`, `localBaseUrl`, and `temperature` only when it is a real number. It **drops** `tools`,
+`tool_choice`, `max_tokens`, `top_p`, `reasoning_effort` and `thinking`.
+
+The native route does the opposite. `request_preparation::prepare_chat_request` builds the upstream
+body straight from the OpenAI request, so it **forwards** those six fields and **omits**
+`thinkingEnabled`/`localBaseUrl`. That is a visible divergence on a public route (§五.11), not the
+omission the plan had recorded — a client sending `tools` gets a body the oracle never builds, and
+`temperature` is applied unconditionally instead of only when `build_deepseek_request` decides the
+tier warrants it.
+
+### What landed
+
+`deepseek-gateway::openai_facade::openai_to_internal_payload`, with `payload_canonical_json` for
+probes and diagnostics (`json.dumps(..., ensure_ascii=False, sort_keys=True)` — Python's default
+separators, so a rendering comparison does not test `serde_json`'s compact default).
+
+Paired with the real Python function:
+`openai_facade_parity_probe.py` ↔ `examples/openai_facade_parity_probe.rs`, **56 keys, 12 204
+chars, byte-identical**. The corpus is written to reach every branch and is labelled per case, so a
+diff names the behaviour that moved:
+
+- the six forwarded fields and the seven dropped ones, including "drops everything at once";
+- the falsy-model set (`""`, `null`, `0`, `false`, `[]`, `{}`) all falling back to the default
+  **before** normalization, and a truthy `true` normalizing to the literal `"True"` — which is what
+  `str(True)` does and which no alias matches, so it passes through;
+- alias normalization: case, underscores, spaces, surrounding whitespace, unknown passthrough;
+- the `stream` truthiness table, `"false"` → `true` included;
+- the `temperature` type table, `bool` excluded explicitly (a `bool` *is* an `int` in Python);
+- `messages` forwarded verbatim — blank content, a `tool` turn, a non-object entry and
+  `content: null` all survive this layer, which is what keeps validation single-sourced in
+  `build_deepseek_request`;
+- both refusals as `{message, code, status}`.
+
+Seven unit tests pin the same behaviour in-crate.
+
+### One probe bug worth recording
+
+The first run showed **42 of 56 cases differing** — all of them only in whitespace inside the
+canonical rendering. Python's `json.dumps(..., sort_keys=True)` uses the default `", "` / `": "`
+separators; `serde_json::to_string` is compact. The fix is `python_json::OrderedJson::
+render_default_separators`, which this repository already had for exactly this reason — the same
+class of trap as the `4.9e-05` float rendering recorded in the budget slice. A probe that compares
+*renderings* has to render both sides the same way; only then does a diff mean a behaviour change.
+
+### Verification
+
+- `cargo test -p deepseek-gateway` → **152 lib tests passed** (7 new) plus every integration target
+  (7 + 6 + 1 + 1); `cargo test -p deepseek-policy` unchanged.
+- Workspace `fmt --all -- --check` exit 0; workspace clippy (1.85, `--locked --all-targets
+  --all-features -- -D warnings`) **exit 0 with no diagnostics**.
+- `ruff check` and `mypy` pass on the new probe.
+- Probes re-run for regressions: `openai_facade` byte-identical (56 keys); `memory_index` and
+  `memory_parity` unchanged.
+
+### Not done, and the next executable task
+
+**Not pushed.** Exact-head CI has not run against any of this.
+
+The route still does not call `openai_facade` — this slice is additive and inert, like the three
+before it. The wiring is now the **only** thing between here and a native body that matches the
+oracle, and §5 of [`assembly-wiring-plan.md`](assembly-wiring-plan.md) lists the five pieces it has
+to carry, in order:
+
+1. `AssemblyEnv::from_env` — nine injected fields. Every settings struct has an oracle-matching
+   `Default`; the ledger comes from `budget_store` + `LedgerDeps`, the clock from
+   `local_clock::local_now`, the expander from `attachment_context::expanded_message_content` over
+   a `FileContextDeps`. **Recorded gap:** the settings' *env readers* are not ported, so only a
+   default-configured deployment would agree.
+2. `request_base_url` — `Host` trusted only when `host_without_port(host)` is in
+   `allowed_auth_hosts()`, else `http://127.0.0.1:{port}`.
+3. The two refusals, taken **before** the expander runs (`search_file_chunks` returns a bare
+   `Vec<i64>` and so cannot refuse itself), on requests that would actually consult the file index.
+4. The error envelope: `build_deepseek_request` raises internal `AppError` codes where the route
+   currently answers with `PreparationError` codes. Both move in one change.
+5. A real-upstream integration test — matching the oracle's bytes does not prove the assembled body
+   reaches DeepSeek correctly.
+
+Decision B (a `memory` domain declaration) still gates wiring the **write** half.

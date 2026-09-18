@@ -183,10 +183,75 @@ outcome the `file_store` precedent would have produced here.
    byte-verified (194-key probe, `97187819…`), and §4 is answered: the bonus is not bounded.
 3. ~~A Rust provider for the memory index read path (or the narrow refusal).~~ **Landed** —
    `deepseek_policy::memory_index`, paired and byte-identical (64 keys, `turn::differing = 7 of 8`).
+4. **Landed** — `openai_facade::openai_to_internal_payload`, the OpenAI→internal translation the
+   route has to start from (§5), paired and byte-identical (56 keys).
    **Next:** wire `chat_execution` onto `build_deepseek_request`, with the forced-search mode
-   refusal and the file vector index refusal (already available as `vector_index_not_ready()`).
-4. After a `memory` domain is declared: wire the write half.
+   refusal and the file vector index refusal (already available as `vector_index_not_ready()`);
+   §5 lists the five pieces that change has to carry.
+5. After a `memory` domain is declared: wire the write half.
 
-Steps 1-3 are additive and inert. Step 4 — the wiring — is the one that changes what the native
+Steps 1-4 are additive and inert. Step 5 — the wiring — is the one that changes what the native
 route sends, and it is the point at which the 4.9.2 `chat_completions_fast_path` cutover becomes
 real.
+
+## §5 The front of the wiring — measured, and it is a divergence, not just a gap
+
+This plan framed the wiring as a *fidelity* improvement: the native body has "no dynamic context,
+no memory state, no clock, no assembled system prompt". Measuring the oracle's route shows
+something stronger, and it is a compatibility problem rather than an omission.
+
+`POST /v1/chat/completions` is a **facade**. `routes/chat.py:65` calls
+`openai_to_internal_payload(body, local_base_url=…)` (`openai_api.py:29`), and only then
+`resolve_provider(model).chat(payload)` → `call_deepseek` → `prepare_deepseek_call` →
+`build_deepseek_request`. The translation is therefore part of the public contract, and it is
+deliberately narrow:
+
+| | forwarded |
+| --- | --- |
+| `model` | yes, through `MODEL_ALIASES`, after `body.get("model") or settings.default_model` |
+| `messages` | yes, **verbatim and unvalidated** — `build_deepseek_request` is what validates them |
+| `stream` | yes, Python truthiness, so the string `"false"` is **true** |
+| `thinkingEnabled` | **set to `False`** — "deterministic content only, no reasoning tokens" |
+| `localBaseUrl` | **set** from `request_base_url(request)` |
+| `temperature` | yes, but only for a real number (`isinstance(t, (int, float)) and not isinstance(t, bool)`) |
+| `tools`, `tool_choice`, `max_tokens`, `top_p`, `reasoning_effort`, `thinking` | **dropped** |
+
+The last row is the divergence. The native route built its body straight from the OpenAI request
+through `request_preparation::prepare_chat_request`, which **forwards** `tools`, `tool_choice`,
+`max_tokens`, `top_p` and `reasoning_effort` — all of which the oracle drops — and never sets
+`thinkingEnabled` or `localBaseUrl`, which the oracle does. On a public route that is a
+compatibility break, not a thinning: a client sending `tools` gets the catalog-tool plus
+client-tool mixture the oracle refuses to build, and `temperature` is applied unconditionally
+rather than only when `build_deepseek_request` decides the model tier warrants it.
+
+**Landed (`openai_facade`)**: the translation is ported and paired with the real Python function —
+`openai_facade_parity_probe`, **56 keys, 12 204 chars, byte-identical**, covering the six forwarded
+fields, the seven dropped ones, the falsy-model set, alias normalization (case, underscores,
+spaces, unknown, a truthy bool), the `stream` truthiness table, the `temperature` type table and
+the two refusals. Seven unit tests pin the same behaviour in-crate.
+
+**Not landed**: the route still does not call it. That is the next slice, and it needs, in this
+order:
+
+1. `AssemblyEnv::from_env` — the nine injected fields. Every settings struct has an oracle-matching
+   `Default` (`ModelRouterSettings`, `BudgetSettings`, `ContextTaintSettings`,
+   `ContextManagerSettings`, `ContextEngineSettings`), the ledger comes from `budget_store` plus
+   `LedgerDeps`, the clock from `local_clock::local_now`, and the expander from
+   `attachment_context::expanded_message_content` over a `FileContextDeps` built from `FileStore`.
+   **Recorded gap:** the *env readers* for those settings are not ported, so a deployment that
+   overrides e.g. `CONTEXT_WINDOW_MESSAGES` would get the oracle's default rather than its own
+   value. That has to be closed before this is more than a default-configured deployment.
+2. `request_base_url` — `routes/chat.py` passes `request_base_url(request)`, which trusts the
+   `Host` header only when `host_without_port(host)` is in `allowed_auth_hosts()`, and otherwise
+   falls back to `http://127.0.0.1:{port}`.
+3. The two refusals. `FileContextDeps::search_file_chunks` returns a bare `Vec<i64>`, so it cannot
+   signal "no provider" itself: the refusal has to be taken **before** the expander runs, on the
+   requests that would actually consult the file index (`count_payload_attachments`), using the
+   available `file_store::vector_index_not_ready()`. Forced-search mode is the same shape, reached
+   only from `forced_search_mode`.
+4. The error envelope. `build_deepseek_request` raises `AppError` with the internal codes; the
+   OpenAI route currently answers with `PreparationError` codes. Moving the route means moving
+   which envelope a malformed request gets, so the two have to be reconciled in the same change
+   rather than discovered afterwards.
+5. A real-upstream integration test, since none of the above proves the assembled body reaches
+   DeepSeek correctly — only that it matches the oracle's bytes.
