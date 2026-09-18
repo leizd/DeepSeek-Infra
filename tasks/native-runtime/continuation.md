@@ -2184,3 +2184,40 @@ Verification: 209 keys byte-identical, md5 `08a48874...`; tests 337 -> **347**; 
 What is left before `build_deepseek_request` itself: the SQLite ledger (`should_downgrade` is the
 assembly's consumer), the attachment-expansion path behind the file index, and then the assembly
 with the diagnostics serializer.
+
+
+### The two blocks before the assembly: attachment expansion and the budget ledger (`2e7f395e`, `592a05ce`)
+
+`build_deepseek_request` needs two things that are not pure, and both now exist as pure halves
+with their I/O injected -- the same boundary the clock, the transport and the content expander
+already had.
+
+**`attachment_context`** (`2e7f395e`) is `rag/files.py` 69-283 plus
+`chat_payload.expanded_message_content`: the chunk selector with its scoring and embedding
+helpers, the two formatters, and the orchestration. `load_cached_file` (the file index),
+`local_rag.search_file_chunks` (the vector index) and the embedding pipeline arrive as
+parameters, and the `context_taint` guard line is handed in rather than re-derived. Every
+budget and truncation counts **code points**, because the section boundaries are part of the
+prompt. 69 keys byte-identical, md5 `347c7fb29c4c8cc73fe6ca0bc8f7c93e`; tests 347 -> 359.
+
+**`budget_ledger`** (`592a05ce`) is the behaviour `budget_manager.py` 183-371 wrap around
+`connect_db`: the spend view, the row shaping, the four threshold checks, `should_downgrade`,
+`record_request_spend`, `budget_status`. The SQL statements, the connection and its pragmas are
+the store's slice, so they arrive as `LedgerDeps`. Its defining property is that **failure is
+data**: the oracle swallows every database error into `_last_error` and returns the empty view,
+so these functions return the message and the caller owns the state -- which is why
+`budget_status` reads the ledger twice and reports the newest failure. 75 keys byte-identical,
+md5 `0e22a7129ec62c918f52ac0117532c93`; tests 359 -> 367.
+
+What the two slices had in common, beyond the boundary: **each corpus was wrong on the first
+pass in a way that would have read as a pass.** The selector's indexed rows used a `file_id`
+the search stub did not know, so the branch that reads the vector index was never entered; and
+its budget-exhausted row used two attachments where the share shrinks multiplicatively
+(`remaining -> remaining / left`), so the "not sent" row cannot appear before the
+`max(8_000, ...)` floor binds -- about fifteen attachments. Both were caught by asking what
+the corpus was supposed to be able to **fail** on, not by reading the diff. That is the fourth
+and fifth instance of this class in the migration.
+
+Remaining before the assembly: the two stores (the SQL and connection behind `LedgerDeps`; the
+file and vector indexes behind `FileContextDeps`), and then `build_deepseek_request` itself
+with the diagnostics serializer that owns key order.
