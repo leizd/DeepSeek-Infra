@@ -2221,3 +2221,72 @@ and fifth instance of this class in the migration.
 Remaining before the assembly: the two stores (the SQL and connection behind `LedgerDeps`; the
 file and vector indexes behind `FileContextDeps`), and then `build_deepseek_request` itself
 with the diagnostics serializer that owns key order.
+
+---
+
+### The closure list above is closed: the stores and the assembly landed (`13136490`, `de2bd60a`), and its probe is now clean (`3b7c041b`, `02976415`)
+
+Three commits were not yet in this record. `13136490` is the two stores behind the injected
+reads: `budget_store` (`connect_db` + the schema DDL, which is itself a contract because SQLite
+stores the statement text, so it is written with `concat!` and explicit `\n` -- a multi-line
+literal would have taken CRLF from the checkout) and `file_store` (`load_cached_file` with its
+four failure codes, whose messages render **into the prompt**). `de2bd60a` is
+`build_deepseek_request` itself, with the key orders **measured** by making the Python probe
+publish every envelope and nested block's key order. Its first run reported "95 of 292 rows
+differing, and every one of them is inside a tool schema".
+
+**That last part was wrong, and closing it was the whole slice.** 45 rows differed inside tool
+schemas; **50 differed on `contextDiff.delta` elements**, which are not tool schemas at all.
+Fixing both then surfaced three more divergences that the same rows had been masking -- the
+first-difference sampling only ever saw the earliest one. The probe pair now reports **0 of 406
+rows differing**, md5 `adfbfd903b6e98dd83bbb75f7d323985`.
+
+**The tool-schema order had to move into the data.** Measured from the asset:
+`parameters.properties` takes **25 distinct orders** across the catalog -- each tool declaring
+its own property sequence while reusing the same names -- and property objects order `type`
+before `description`. `NESTED_ORDERS` matches by key **name**, so no table can express that.
+`python_json` gained `loads` (structural scanning there; leaves decoded by `serde_json`, because
+a `Deserialize` visitor was ruled out after reading the source: with workspace-unified
+`arbitrary_precision`, `deserialize_any` delivers numbers as a private map). `tool_catalog`
+gained the ordered trees plus `ordered_tool_definition`, which serves a definition only when it
+is byte-equal to the catalog's own -- drift keeps the generic rendering. The strongest check is
+the new test that re-renders the whole 40 KB asset from the parsed trees and asserts it equals
+the committed bytes.
+
+**The taint block needed its builder to keep the bytes.** `sources` accumulates in
+first-appearance order over the **untruncated** segment scan, and the visible `segments` are
+capped at `max_segments` -- once truncation bites, the order is not re-derivable from the
+report. `build_taint_report_ordered` now builds the tree (the `Value` API delegates to it and is
+unchanged); the assembly carries it on `PreparedDeepSeekRequest::taint_ordered` and substitutes
+it while the two views agree, the same guard shape as the tool substitution. Its probe
+reproduces its recorded hash `49e390b4c0c9f2ab499337326b308404` after the refactor.
+
+**Three divergences the old corpus could not see** (each inside a row already differing for the
+tool-schema reason):
+
+1. `temperature`: the oracle's `max(0, min(float(t), 2))` keeps **the integer** at the clamps --
+   `3.5 -> 2`, `-1 -> 0`, `False -> 0` -- where the port rendered `2.0` / `0.0`. Measured on
+   the oracle, ported as comparisons, extracted into `clamped_temperature` so a unit test pins
+   the whole table.
+2. taint `segments` elements and `sources` order (above).
+3. `modelRouter.reasons` elements: `{"router": ..., "decision": ...}` -- one more table row.
+
+**And the corpus could not have caught any of them.** It never reached the forced `tool_choice`
+object (no payload carried a PPT/mindmap intent), never turned search on, never narrowed
+`allowedTools`, and never clamped the temperature low. It now does: +3 payloads, +2 axes -- a
+memory-state `{}`, which also exposed that the port used `unwrap_or_else` where the oracle's
+`memory_state or empty_memory_state(payload)` is Python's `or` with its falsy fallback, and the
+non-pro ledger short-circuit. 292 -> **406 rows**.
+
+Verified: `cargo test -p deepseek-policy -p deepseek-gateway -j 1` -> 383 + 139 lib tests plus
+7 + 6 + 1 + 1 integration tests, all passing; `cargo fmt --check` clean; clippy exit 0 with **no
+diagnostics in the new code** (the two `needless_borrow` warnings in `python_json::build` and
+`control_proxy.rs`'s `result_large_err` are byte-identical at HEAD -- local stable 1.97 versus
+the CI pin 1.85; do not "fix" either, and do not read exit 0 as "no diagnostics").
+
+What the assembly still is **not**: wired. The production chat path (`chat_execution`) builds its
+own thinner body today; this oracle-shaped assembly is what a production caller switches onto
+next, together with the file vector index (`local_rag`; refused via
+`NATIVE_FILE_VECTOR_INDEX_NOT_READY`/501), the OS local timezone and `search_if_needed`.
+
+**Unpushed**: this slice adds `3b7c041b` and `02976415` on top of the six already recorded.

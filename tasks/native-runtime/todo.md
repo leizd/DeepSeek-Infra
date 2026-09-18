@@ -4,7 +4,12 @@
 [中文](../../README.md) / [English](../../README.en.md)
 <!-- docs-language-switcher:end -->
 
-Status: in progress on `codex/native-runtime-4.8.1`.
+Status: all Phase 0-3 items are checked; Phase 4's two release gates (exact-head CI /
+Evidence Assembly, qualification) remain open and no 4.8.1 release has been cut —
+`VERSION` is `4.8.0`. Live slice work continues in
+[`continuation.md`](continuation.md) under the 5.0 native milestone; the unified tracker
+is [`migration-matrix.md`](migration-matrix.md). This file is the 4.8.1 contract-freeze
+record and is not updated per slice.
 
 ## Phase 0 — Decision and ownership
 
