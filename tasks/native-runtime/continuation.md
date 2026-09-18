@@ -2416,3 +2416,68 @@ Clash node hangs instead of failing. `gh` keeps working throughout because it us
 "`gh` is fine" is not evidence the push landed. The remote ref proved it had not -- and the direct
 push (`timeout 120 env -u HTTPS_PROXY -u HTTP_PROXY -u ALL_PROXY git push origin main`) went through
 immediately. Check `git ls-remote --heads origin main` before believing either way.
+
+### Decision A taken: the memory-command grammar was two `?` from working (`da8c21cf`)
+
+`apply_explicit_memory_command` (`infra/data/memory.py:508`) is the write half of
+`prepare_memory_state`, and the wiring plan's §2 measured it as broken. The repair is the `?` in each
+`(?:` that had been written `(:`, and it has three consequences:
+
+1. **Nothing that used to match stops matching.** `删除记忆: X`, `forget: X`, `不要再记得: X`,
+   `不再记住: X`, `取消记住: X`, `delete memory: X` matched before and still do; they now delete
+   against the text after the colon. While the alternation captured, `(.+)` was group 2 and the code
+   reads group 1, so the target was the literal **command word** -- `删除记忆: X` answered
+   `已根据用户要求删除 0 条相关长期记忆。` and wrote nothing.
+2. **`忘记: X` becomes reachable.** It had required a literal `:` in front of it, which is why every
+   natural phrasing failed to match and nothing was ever saved.
+3. **That reachability needs a guard, and this part is not a typo repair.** A negated forget --
+   `不要忘记: X`, `别忘记: X`, `don't forget: X` -- contains the bare `忘记:` substring, so it would
+   land in the delete branch and destroy the memory the user asked to keep. Measured with the guard
+   removed: `别忘记: 牙医预约` returned `已根据用户要求删除 1 条相关长期记忆。` and the row was gone.
+   A negated forget is now recognised first and routed to *remember*, which is what the sentence
+   means. Eight lines, and they are the difference between a repair and a new way to lose data.
+
+**The accept-set of the repaired grammar, measured** -- and the reason this is a decision rather than
+a finished story:
+
+| input | result |
+| --- | --- |
+| `请帮我记住: A` | saved |
+| `记住: B` / `帮我记住: C` / `以后记得: D` / `remember: E` | `""` -- still dropped |
+| `不要忘记: F` / `don't forget: G` | saved |
+| `忘记: X` / `forget: X` / `删除记忆: X` | deleted, against `X` |
+| `不要再记得: H` | `""` -- shadowed by the `不要…记得` guard |
+| `不要删除记忆: I` | reaches the delete branch |
+
+The remember branch's prefix is **required**: `(?:请)(?:帮我)` never had a `?`, so the only phrasing
+that works is `请帮我记住: X`. Making those prefixes optional is a one-token change that *adds*
+accepted phrasings -- a product decision, left open. The last two rows are pre-existing gaps this
+repair does not touch; both are now in the function's docstring.
+
+**The test could not fail, which is why none of it was visible.**
+`test_explicit_english_remember_forget_and_opt_out` monkeypatched `memory.re` with a
+`SimpleNamespace` whose `search` returned fabricated `SimpleNamespace(group=lambda _: …)` objects: it
+never ran the patterns, never distinguished `group(1)` from `group(2)`, and it asserted a result for
+`"forget concise replies"`, a phrasing the grammar never accepted. Replaced by
+`test_explicit_memory_commands_are_parsed_by_their_real_patterns`, which calls the function on real
+phrasings against a temporary memory directory and also closes the empty-input early return that was
+uncovered.
+
+Verified:
+- **Both negative controls, each restored before the commit**: reverting the two patterns makes the
+  new test fail at its first remember assertion; disabling the negated-forget branch makes
+  `别忘记: 牙医预约` delete instead of save.
+- `tests/test_memory_failure_paths_332.py` + `tests/test_memory.py` -> 24 passed; `test_memory.py`
+  alone -> 13 passed; `memory.py` line coverage over those files 92.90% -> 94.48%.
+- `ruff check .` and `mypy .` pass (884 files).
+- **The full local suite is not a usable gate on this host**, which is worth recording rather than
+  glossing: it runs ~5x slower than CI; the 16 storage files cannot provision MinIO (no `minio`
+  binary in `bin/`, no Docker daemon); and a combined run reports **35 failures that all pass when
+  their file is run alone** (19 in `test_files.py`, 8 in `test_memory.py`, 4 in
+  `test_presentations.py`, 1 in `test_search.py`, 3 in backup files) -- local cross-file isolation
+  artifacts, not code. CI ran those same files green on `0b697839`, so CI is the arbiter for the
+  full gate. Two traps found while trying: `pytest --cov` is blocked by the sandbox's safe-delete
+  hook unless `COVERAGE_FILE` points outside the repo, and `-v` is overridden by the project's
+  pytest config into per-file dots.
+
+**Unpushed**: `da8c21cf`.

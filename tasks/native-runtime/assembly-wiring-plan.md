@@ -8,6 +8,11 @@
 **Status: plan of record. No production code changed.** The goal is `chat_execution` building
 its upstream body through `build_deepseek_request` instead of the thinner body it builds today.
 
+**Progress**: **Decision A is taken and landed** (`da8c21cf`) — the two patterns are repaired, the
+negated-forget guard that repair made necessary is in, and the test that could not fail them is
+replaced. Decision B (read-only wiring vs a `memory` domain declaration) and Decision C (the memory
+vector index) are open. Step 2 — porting the memory read half — is the next slice.
+
 Everything below is a measurement with its evidence, not a roadmap. Where a decision is needed it
 is marked **DECISION** and carries a recommendation.
 
