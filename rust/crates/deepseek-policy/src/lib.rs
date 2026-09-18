@@ -9,6 +9,7 @@ use crate::capability::{Capability, RiskLevel};
 pub mod app_error;
 pub mod attachment_context;
 pub mod audit;
+pub mod budget_ledger;
 pub mod budget_manager;
 pub mod capability;
 pub mod context_engine;
