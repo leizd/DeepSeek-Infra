@@ -2480,4 +2480,22 @@ Verified:
   hook unless `COVERAGE_FILE` points outside the repo, and `-v` is overridden by the project's
   pytest config into per-file dots.
 
-**Unpushed**: `da8c21cf`.
+**Pushed**: `da8c21cf` (the repair) and `1b856bec` (this record); both are on `origin/main`.
+
+**The batch is green** (run `35330894171` on `1b856bec`, after a re-run of one job): **35 of 35 jobs
+succeeded** -- including `docs`, all three `test` legs, `rust`, `rust-coverage`, `native-go` and
+every parity / e2e job. The first attempt was 34 green and one red, and the red was a **flaky
+threshold assertion, not this change**:
+`tests/test_backup_458_storage_control_plane.py::test_qos_reserves_p0_bandwidth_and_enforces_independent_target_buckets`
+returned `0.747967004776001` against `>= 0.75` at line 1314 -- a rate-accounting assertion missing by
+0.27%, in a storage-QoS test that has nothing to do with memory parsing. The evidence that it is
+flaky rather than broken: the same code passed `test (3.10)` in the previous run (`0b697839`, all 35
+green) and passed `test (3.11)` and `test (3.12)` in the failing run; `gh run rerun --failed` then
+passed it with no code change.
+
+**Two CI-harness traps recorded while getting here**, both of which cost time and will cost it again:
+`gh run watch --exit-status` returns non-zero on a *network* error too (`failed to get run: … … unexpected EOF`,
+the proxy hop), while the run is still going -- so the conclusion must come from
+`gh run view --json status,conclusion` and the per-job `conclusion` (an empty string there means
+in progress, not failed). And on this host the full local suite cannot stand in for CI at all; see
+the previous section.
