@@ -342,6 +342,27 @@ impl OrderedJson {
         }
     }
 
+    /// The plain `Value` view of this tree, for callers that must hand the same data to a
+    /// `Value`-shaped consumer **and** keep the ordered tree.
+    ///
+    /// The order does not survive the conversion — a `Map` is sorted here and
+    /// insertion-ordered in some builds — so this is a one-way door: whatever needs the
+    /// bytes keeps the tree.
+    pub fn to_value(&self) -> Value {
+        match self {
+            OrderedJson::Scalar(value) => value.clone(),
+            OrderedJson::List(items) => {
+                Value::Array(items.iter().map(OrderedJson::to_value).collect())
+            }
+            OrderedJson::Object(pairs) => Value::Object(
+                pairs
+                    .iter()
+                    .map(|(key, item)| (key.clone(), item.to_value()))
+                    .collect(),
+            ),
+        }
+    }
+
     fn render(&self, depth: usize) -> String {
         match self {
             OrderedJson::Scalar(value) => match value {
@@ -379,6 +400,165 @@ impl OrderedJson {
                 format!("{{\n{}\n{closing}}}", rendered.join(",\n"))
             }
         }
+    }
+}
+
+/// `json.loads` for the one property this crate depends on: **object key order**.
+///
+/// `serde_json`'s `Value` cannot carry it (`Map` is a `BTreeMap` here, and workspace
+/// feature unification could silently make it an `IndexMap` — see the module note), so
+/// the structure is assembled here while the **leaves** are decoded by `serde_json`
+/// itself: strings through `from_str::<String>` and numbers through
+/// `from_str::<Number>`, so escape handling and number typing follow the same rules as
+/// every other parse in the workspace.
+///
+/// One deliberate difference from `json.loads`: duplicate keys are kept in document
+/// order rather than collapsed to the last one. The assets this reads are machine
+/// generated and have none; keeping the order makes the function useful for inspecting
+/// a file whose duplicates would themselves be the bug.
+pub fn loads(text: &str) -> Result<OrderedJson, String> {
+    let mut loader = Loader { text, pos: 0 };
+    let value = loader.value()?;
+    loader.skip_whitespace();
+    if loader.pos != text.len() {
+        return Err(loader.error("trailing data"));
+    }
+    Ok(value)
+}
+
+struct Loader<'a> {
+    text: &'a str,
+    pos: usize,
+}
+
+impl Loader<'_> {
+    fn byte(&self) -> Option<u8> {
+        self.text.as_bytes().get(self.pos).copied()
+    }
+
+    fn error(&self, what: &str) -> String {
+        format!("{what} at byte {}", self.pos)
+    }
+
+    fn skip_whitespace(&mut self) {
+        while matches!(self.byte(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+            self.pos += 1;
+        }
+    }
+
+    fn value(&mut self) -> Result<OrderedJson, String> {
+        self.skip_whitespace();
+        match self.byte() {
+            Some(b'{') => self.object(),
+            Some(b'[') => self.array(),
+            Some(b'"') => Ok(OrderedJson::Scalar(Value::String(self.string()?))),
+            Some(b't') => self.literal("true", OrderedJson::Scalar(Value::Bool(true))),
+            Some(b'f') => self.literal("false", OrderedJson::Scalar(Value::Bool(false))),
+            Some(b'n') => self.literal("null", OrderedJson::Scalar(Value::Null)),
+            Some(b'-' | b'0'..=b'9') => Ok(OrderedJson::Scalar(Value::Number(self.number()?))),
+            Some(_) => Err(self.error("unexpected character")),
+            None => Err(self.error("unexpected end of input")),
+        }
+    }
+
+    fn literal(&mut self, word: &str, value: OrderedJson) -> Result<OrderedJson, String> {
+        if self.text[self.pos..].starts_with(word) {
+            self.pos += word.len();
+            Ok(value)
+        } else {
+            Err(self.error("invalid literal"))
+        }
+    }
+
+    fn object(&mut self) -> Result<OrderedJson, String> {
+        self.pos += 1;
+        let mut pairs: Vec<(String, OrderedJson)> = Vec::new();
+        self.skip_whitespace();
+        if self.byte() == Some(b'}') {
+            self.pos += 1;
+            return Ok(OrderedJson::Object(pairs));
+        }
+        loop {
+            self.skip_whitespace();
+            let key = self.string()?;
+            self.skip_whitespace();
+            if self.byte() != Some(b':') {
+                return Err(self.error("expected `:`"));
+            }
+            self.pos += 1;
+            pairs.push((key, self.value()?));
+            self.skip_whitespace();
+            match self.byte() {
+                Some(b',') => self.pos += 1,
+                Some(b'}') => {
+                    self.pos += 1;
+                    return Ok(OrderedJson::Object(pairs));
+                }
+                _ => return Err(self.error("expected `,` or `}`")),
+            }
+        }
+    }
+
+    fn array(&mut self) -> Result<OrderedJson, String> {
+        self.pos += 1;
+        let mut items: Vec<OrderedJson> = Vec::new();
+        self.skip_whitespace();
+        if self.byte() == Some(b']') {
+            self.pos += 1;
+            return Ok(OrderedJson::List(items));
+        }
+        loop {
+            items.push(self.value()?);
+            self.skip_whitespace();
+            match self.byte() {
+                Some(b',') => self.pos += 1,
+                Some(b']') => {
+                    self.pos += 1;
+                    return Ok(OrderedJson::List(items));
+                }
+                _ => return Err(self.error("expected `,` or `]`")),
+            }
+        }
+    }
+
+    /// Scans a string's extent bytewise; the slice is handed to `serde_json`, so escapes
+    /// (`\uXXXX` included) decode by the same rules as any other parse. Multi-byte UTF-8
+    /// needs no special handling: no byte of such a sequence can equal `"` or `\`.
+    fn string(&mut self) -> Result<String, String> {
+        let start = self.pos;
+        match self.byte() {
+            Some(b'"') => {}
+            Some(_) => return Err(self.error("expected a string")),
+            None => return Err(self.error("unexpected end of input")),
+        }
+        self.pos += 1;
+        while let Some(byte) = self.byte() {
+            match byte {
+                b'"' => {
+                    self.pos += 1;
+                    return serde_json::from_str::<String>(&self.text[start..self.pos])
+                        .map_err(|error| format!("invalid string at byte {start}: {error}"));
+                }
+                // A backslash always escapes the next byte; a `\u` escape's four hex
+                // digits are ordinary bytes on the following iterations, and an invalid
+                // escape is left for `from_str` above to reject.
+                b'\\' => self.pos += 2,
+                _ => self.pos += 1,
+            }
+        }
+        Err(self.error("unterminated string"))
+    }
+
+    fn number(&mut self) -> Result<serde_json::Number, String> {
+        let start = self.pos;
+        while matches!(
+            self.byte(),
+            Some(b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E')
+        ) {
+            self.pos += 1;
+        }
+        serde_json::from_str::<serde_json::Number>(&self.text[start..self.pos])
+            .map_err(|error| format!("invalid number at byte {start}: {error}"))
     }
 }
 
@@ -483,5 +663,84 @@ mod tests {
             OrderedJson::from_value_with_order(&json!({"cost": 4.93e-5}), &[]).render_indent_2(),
             "{\n  \"cost\": 4.93e-05\n}"
         );
+    }
+
+    #[test]
+    fn loads_keeps_key_order_where_a_value_would_sort_it() {
+        let parsed = loads(r#"{"b": 1, "a": {"z": true, "y": null}, "c": []}"#).expect("parses");
+        // The order is the document's, not sorted.
+        assert_eq!(
+            parsed,
+            OrderedJson::Object(vec![
+                ("b".to_string(), OrderedJson::Scalar(json!(1))),
+                (
+                    "a".to_string(),
+                    OrderedJson::Object(vec![
+                        ("z".to_string(), OrderedJson::Scalar(json!(true))),
+                        ("y".to_string(), OrderedJson::Scalar(Value::Null)),
+                    ]),
+                ),
+                ("c".to_string(), OrderedJson::List(vec![])),
+            ])
+        );
+        // And it survives a render: this is the round trip the catalog depends on.
+        assert_eq!(
+            parsed.render_default_separators(),
+            r#"{"b": 1, "a": {"z": true, "y": null}, "c": []}"#
+        );
+    }
+
+    #[test]
+    fn loads_decodes_escapes_and_numbers_like_python() {
+        // Escapes decode through `serde_json`; the rendered form re-escapes the same way
+        // Python does (`\n` stays `\n`, a literal quote becomes `\"`).
+        assert_eq!(
+            loads(r#"{"s": "a\nb", "q": "x\"y", "u": "\u4f60\u597d"}"#)
+                .expect("parses")
+                .render_default_separators(),
+            "{\"s\": \"a\\nb\", \"q\": \"x\\\"y\", \"u\": \"你好\"}"
+        );
+        // Number spellings that survive `json.loads` + `json.dumps` unchanged.
+        assert_eq!(
+            loads("[0, -1, 1.5, 2e3]")
+                .expect("parses")
+                .render_default_separators(),
+            "[0, -1, 1.5, 2000.0]"
+        );
+    }
+
+    #[test]
+    fn loads_rejects_malformed_input_with_a_position() {
+        for (text, marker) in [
+            ("{", "unexpected end of input"),
+            ("{} {}", "trailing data"),
+            (r#"{"a" 1}"#, "expected `:`"),
+            (r#"{"a": 1 "b": 2}"#, "expected `,` or `}`"),
+            ("[1, ]", "unexpected character"),
+            ("tru", "invalid literal"),
+            (r#""unterminated"#, "unterminated string"),
+            ("[01]", "invalid number"),
+        ] {
+            let error = loads(text).expect_err(text);
+            assert!(error.contains(marker), "{text}: {error}");
+        }
+    }
+
+    #[test]
+    fn loads_round_trips_the_indented_rendering() {
+        // `render_indent_2` and `loads` are inverses on this simple document, which is
+        // what the catalog asset round-trip in `tool_catalog` exercises at full size.
+        let document = OrderedJson::Object(vec![
+            ("b".to_string(), OrderedJson::Scalar(json!(1))),
+            (
+                "a".to_string(),
+                OrderedJson::List(vec![
+                    OrderedJson::Scalar(json!("x")),
+                    OrderedJson::Object(vec![("k".to_string(), OrderedJson::Scalar(json!(null)))]),
+                ]),
+            ),
+        ]);
+        let rendered = document.render_indent_2();
+        assert_eq!(loads(&rendered).expect("parses"), document);
     }
 }

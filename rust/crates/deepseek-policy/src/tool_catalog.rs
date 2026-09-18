@@ -26,6 +26,8 @@ use std::sync::OnceLock;
 
 use serde_json::Value;
 
+use crate::python_json::OrderedJson;
+
 /// The oracle's exact `json.dumps(available_tool_definitions(), ensure_ascii=False, indent=2)`.
 const CATALOG_JSON: &str = include_str!("../assets/tool_catalog_v1.json");
 
@@ -48,6 +50,71 @@ pub fn available_tool_definitions() -> &'static [Value] {
 /// forward the oracle's rendering rather than a re-serialization.
 pub fn catalog_json() -> &'static str {
     CATALOG_JSON
+}
+
+/// The catalog with the oracle's **key order** preserved, parsed from the same asset
+/// through [`crate::python_json::loads`].
+///
+/// [`available_tool_definitions`] cannot carry this order: it goes through
+/// `serde_json::Value`, whose `Map` sorts. The lost order is load-bearing once a
+/// definition travels into an upstream request body — `parameters.properties` names
+/// each tool's properties in **declaration order** (not alphabetical: `sessionId`
+/// before `projectId`, `query` before `intent`), and every property object orders
+/// `type` before `description`. That order is per-tool and per-property, so no table
+/// keyed by *name* can express it; the trees themselves have to carry it, which is why
+/// they live here and the assembly borrows them when it renders a body.
+///
+/// The two parses are positionally aligned — both read `CATALOG_JSON`, so index *i* is
+/// the same definition in both — which is what lets [`ordered_tool_definition`] check
+/// identity against the `Value` view.
+pub fn ordered_tool_definitions() -> &'static [OrderedJson] {
+    static PARSED: OnceLock<Vec<OrderedJson>> = OnceLock::new();
+    PARSED.get_or_init(|| match crate::python_json::loads(CATALOG_JSON) {
+        Ok(OrderedJson::List(items)) => items,
+        Ok(other) => panic!("the embedded catalog asset must be a JSON array, found {other:?}"),
+        Err(error) => panic!("the embedded catalog asset must parse: {error}"),
+    })
+}
+
+/// Tool name -> position in the catalog, for the ordered lookup.
+///
+/// The local catalog has unique names (asserted by a test); a duplicate would keep the
+/// first, and `ordered_tool_definition`'s equality guard would then simply refuse the
+/// second — visible, not silently mis-ordered.
+fn ordered_index() -> &'static BTreeMap<String, usize> {
+    static INDEX: OnceLock<BTreeMap<String, usize>> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        let mut index = BTreeMap::new();
+        for (position, definition) in available_tool_definitions().iter().enumerate() {
+            let Some(function) = definition.get("function").and_then(Value::as_object) else {
+                continue;
+            };
+            let name = crate::python_json::value_str(function.get("name").unwrap_or(&Value::Null));
+            if name.is_empty() {
+                continue;
+            }
+            index.entry(name).or_insert(position);
+        }
+        index
+    })
+}
+
+/// The ordered tree for one definition as it travels into a request body, or `None`
+/// when this catalog does not own that definition **byte for byte**.
+///
+/// The equality check is deliberate. The orders are the *catalog's*; a definition that
+/// has drifted from the catalog (edited by some other path) must not silently borrow
+/// them and render as if it were the catalog's own. `None` sends it back through the
+/// generic by-name renderer, where the difference stays visible in the output instead
+/// of being papered over.
+pub fn ordered_tool_definition(definition: &Value) -> Option<OrderedJson> {
+    let function = definition.get("function")?.as_object()?;
+    let name = crate::python_json::value_str(function.get("name").unwrap_or(&Value::Null));
+    let position = *ordered_index().get(&name)?;
+    if available_tool_definitions().get(position)? != definition {
+        return None;
+    }
+    ordered_tool_definitions().get(position).cloned()
 }
 
 /// Mirrors `tool_parameter_schemas`: local tool name -> its declared `parameters`.
@@ -266,6 +333,73 @@ mod tests {
         assert_eq!(
             wrapped[28]["function"]["parameters"]["properties"]["q"]["type"],
             "string"
+        );
+    }
+
+    /// The strongest available check of the ordered parse: the whole committed asset,
+    /// re-rendered from the parsed trees, must reproduce its own bytes. The asset *is*
+    /// `json.dumps(tools, ensure_ascii=False, indent=2)`, so this compares the parse and
+    /// the indent renderer against 28 real schemas at once — escapes, CJK text and
+    /// nesting included.
+    #[test]
+    fn the_asset_round_trips_through_the_ordered_parser() {
+        let ordered = ordered_tool_definitions();
+        assert_eq!(ordered.len(), 28);
+        let rerendered = OrderedJson::List(ordered.to_vec()).render_indent_2();
+        assert_eq!(rerendered, catalog_json());
+    }
+
+    /// Declaration order is not alphabetical, and the ordered tree keeps it.
+    #[test]
+    fn ordered_definitions_carry_declaration_order() {
+        let web_search = available_tool_definitions()
+            .iter()
+            .find(|tool| tool["function"]["name"] == "web_search")
+            .expect("web_search");
+        let ordered = ordered_tool_definition(web_search).expect("the catalog owns it");
+        let rendered = ordered.render_default_separators();
+        // `query` is declared before `intent`, and the property object puts `type` first.
+        assert!(
+            rendered.contains(r#""properties": {"query": {"type": "string""#),
+            "{rendered}"
+        );
+
+        // The generic renderer cannot know either, which is the gap this closes.
+        let generic = OrderedJson::from_value_with_orders(web_search, &[], &[]);
+        let generic_rendered = generic.render_default_separators();
+        assert!(!generic_rendered.contains(r#""properties": {"query""#));
+        assert_ne!(rendered, generic_rendered);
+    }
+
+    /// Every catalog definition is served its own tree, and the names the index relies
+    /// on are unique.
+    #[test]
+    fn every_definition_is_served_its_own_order() {
+        let mut names = std::collections::BTreeSet::new();
+        for (position, tool) in available_tool_definitions().iter().enumerate() {
+            let name = tool["function"]["name"].as_str().expect("name").to_string();
+            assert!(names.insert(name.clone()), "duplicate tool name {name}");
+            let ordered =
+                ordered_tool_definition(tool).unwrap_or_else(|| panic!("{name} is not served"));
+            assert_eq!(ordered, ordered_tool_definitions()[position]);
+        }
+    }
+
+    /// A definition the catalog does not own — drifted, unknown, or malformed — is
+    /// refused rather than re-rendered with the catalog's orders.
+    #[test]
+    fn a_definition_the_catalog_does_not_own_is_never_reordered() {
+        let mut drifted = available_tool_definitions()[0].clone();
+        drifted["function"]["description"] = serde_json::json!("edited elsewhere");
+        assert!(ordered_tool_definition(&drifted).is_none());
+
+        assert!(ordered_tool_definition(&serde_json::json!({"type": "function"})).is_none());
+        assert!(
+            ordered_tool_definition(&serde_json::json!({
+                "type": "function",
+                "function": {"name": "mcp__remote", "parameters": {"type": "object"}},
+            }))
+            .is_none()
         );
     }
 }

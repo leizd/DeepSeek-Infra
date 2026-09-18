@@ -14,14 +14,11 @@
 //!   [`crate::tool_policy::TOOL_METADATA`] the same way the oracle derives it;
 //! - [`scan_text`], the three scanners' hit counts;
 //! - the active hardening: [`harden_search_context`], [`file_context_guard_line`],
-//!   [`escalation_enabled`].
-//!
-//! **Not ported yet, deliberately**: `classify_request_messages` (segment splitting by
-//! marker and tool name), `build_taint_report` (the `diagnostics.contextTaint` block),
-//! `report_is_tainted`, `_risk_level` and `taint_status`. They are the diagnostics half,
-//! and their consumer — the gateway's diagnostics assembly and the `/api/taint` route —
-//! does not exist in Rust, so porting them now would be inert in a way this one is not:
-//! the hardening below is what slice 4's `searchContext` injection calls.
+//!   [`escalation_enabled`];
+//! - the classification and report half — [`classify_request_messages`],
+//!   [`build_taint_report`] / [`build_taint_report_ordered`], [`report_is_tainted`],
+//!   `risk_level` and [`taint_status`] — consumed by the gateway's diagnostics
+//!   assembly.
 //!
 //! Two details are easy to "clean up" into a divergence:
 //!
@@ -38,9 +35,10 @@
 use std::sync::OnceLock;
 
 use regex::Regex;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::core_utils::python_truthy;
+use crate::python_json::OrderedJson;
 use crate::tool_policy::{TOOL_METADATA, sanitize_external_text, tool_metadata};
 
 // --- Trust levels and segment sources -----------------------------------------------
@@ -278,9 +276,9 @@ pub struct TaintSegment {
 impl TaintSegment {
     /// Mirrors `TaintSegment.to_dict`.
     ///
-    /// The six keys come out in the oracle's insertion order here only because `json!`
-    /// sorts them; that is fine for the value, but see [`build_taint_report`] for why a
-    /// serializer consuming this must not inherit the sorted order.
+    /// This is the `Value` view; its key order is a `Map`'s — sorted here, insertion
+    /// ordered in some builds. The bytes come from [`build_taint_report_ordered`], which
+    /// orders each segment object by [`SEGMENT_KEYS`] explicitly.
     pub fn to_value(&self) -> Value {
         json!({
             "source": self.source,
@@ -592,33 +590,58 @@ pub fn risk_level(
 
 /// Mirrors `build_taint_report`: the `diagnostics.contextTaint` block for one body.
 ///
-/// **Serialization landmine.** The oracle builds this object in insertion order and its
-/// caller splices it into `diagnostics`, which is then serialized in that order.
-/// `serde_json::Map` here is a `BTreeMap`, so `json!` yields alphabetically sorted keys —
-/// the *value* is equivalent, the *bytes* are not. Whoever writes the diagnostics
-/// serializer must own the key order rather than inheriting it from `json!`, exactly as
-/// with the message `append_context_to_latest_user` injects.
+/// The segment object's key order, as `TaintSegment::to_dict` declares it.
+const SEGMENT_KEYS: [&str; 6] = [
+    "source",
+    "trust",
+    "chars",
+    "injectionHits",
+    "exfiltrationHits",
+    "toolDirectiveHits",
+];
+
+/// Mirrors `build_taint_report` — the `diagnostics.contextTaint` block, spliced into
+/// `diagnostics` and serialized in the oracle's insertion order. This is the `Value`
+/// view; [`build_taint_report_ordered`] is the same report with its bytes intact.
 pub fn build_taint_report(body: &Value, settings: &ContextTaintSettings) -> Option<Value> {
+    build_taint_report_ordered(body, settings).map(|report| report.to_value())
+}
+
+/// As [`build_taint_report`], with the key order the oracle's serialization carries.
+///
+/// Two of the block's orders are facts of **construction** and cannot be re-derived from
+/// the `Value` afterwards:
+///
+/// - `sources` accumulates in first-appearance order over the **untruncated** segment
+///   scan, while the visible `segments` are capped at `max_segments` — once truncation
+///   bites, a source present only in the tail of the scan has no first appearance the
+///   caller could read back;
+/// - each segment object's keys follow `TaintSegment::to_dict`'s declaration order.
+///
+/// So the builder produces the tree, and the caller that renders `diagnostics` uses it
+/// directly rather than inheriting an order from `json!` (a `Map` here would sort).
+pub fn build_taint_report_ordered(
+    body: &Value,
+    settings: &ContextTaintSettings,
+) -> Option<OrderedJson> {
     if !taint_enabled(settings) {
         return None;
     }
     let segments = classify_request_messages(body.get("messages"));
 
-    let mut sources: Map<String, Value> = Map::new();
+    // `sources[segment.source] = sources.get(segment.source, 0) + segment.chars` — a
+    // `Vec` here rather than a map precisely because the insertion order is the value.
+    let mut sources: Vec<(String, u64)> = Vec::new();
     let mut injection = 0usize;
     let mut exfiltration = 0usize;
     let mut tool_directive = 0usize;
     let mut untrusted_chars = 0usize;
     let mut untrusted_segments = 0usize;
     for segment in &segments {
-        let running = sources
-            .get(segment.source)
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        sources.insert(
-            segment.source.to_string(),
-            json!(running + segment.chars as u64),
-        );
+        match sources.iter_mut().find(|(name, _)| name == segment.source) {
+            Some((_, running)) => *running += segment.chars as u64,
+            None => sources.push((segment.source.to_string(), segment.chars as u64)),
+        }
         if segment.trust == UNTRUSTED {
             untrusted_chars += segment.chars;
             untrusted_segments += 1;
@@ -636,26 +659,66 @@ pub fn build_taint_report(body: &Value, settings: &ContextTaintSettings) -> Opti
         recommended_action = "confirm_sensitive_tools";
     }
 
-    let visible: Vec<Value> = segments
+    let visible: Vec<OrderedJson> = segments
         .iter()
         .take(settings.max_segments)
-        .map(TaintSegment::to_value)
+        .map(|segment| OrderedJson::from_value_with_orders(&segment.to_value(), &SEGMENT_KEYS, &[]))
         .collect();
 
-    Some(json!({
-        "enabled": true,
-        "tainted": total_hits > 0,
-        "riskLevel": risk_level(total_hits, injection, exfiltration, tool_directive),
-        "untrustedChars": untrusted_chars,
-        "untrustedSegments": untrusted_segments,
-        "injectionHits": injection,
-        "exfiltrationHits": exfiltration,
-        "toolDirectiveHits": tool_directive,
-        "escalatedTools": escalated_tools,
-        "recommendedAction": recommended_action,
-        "sources": Value::Object(sources),
-        "segments": visible,
-    }))
+    Some(OrderedJson::Object(vec![
+        ("enabled".to_string(), OrderedJson::Scalar(json!(true))),
+        (
+            "tainted".to_string(),
+            OrderedJson::Scalar(json!(total_hits > 0)),
+        ),
+        (
+            "riskLevel".to_string(),
+            OrderedJson::Scalar(json!(risk_level(
+                total_hits,
+                injection,
+                exfiltration,
+                tool_directive
+            ))),
+        ),
+        (
+            "untrustedChars".to_string(),
+            OrderedJson::Scalar(json!(untrusted_chars)),
+        ),
+        (
+            "untrustedSegments".to_string(),
+            OrderedJson::Scalar(json!(untrusted_segments)),
+        ),
+        (
+            "injectionHits".to_string(),
+            OrderedJson::Scalar(json!(injection)),
+        ),
+        (
+            "exfiltrationHits".to_string(),
+            OrderedJson::Scalar(json!(exfiltration)),
+        ),
+        (
+            "toolDirectiveHits".to_string(),
+            OrderedJson::Scalar(json!(tool_directive)),
+        ),
+        (
+            "escalatedTools".to_string(),
+            OrderedJson::Scalar(json!(escalated_tools)),
+        ),
+        (
+            "recommendedAction".to_string(),
+            OrderedJson::Scalar(json!(recommended_action)),
+        ),
+        (
+            "sources".to_string(),
+            OrderedJson::Object(
+                sources
+                    .into_iter()
+                    .map(|(name, chars)| (name, OrderedJson::Scalar(json!(chars))))
+                    .collect(),
+            ),
+        ),
+        ("segments".to_string(), OrderedJson::List(visible)),
+    ]))
 }
 
 /// Mirrors `report_is_tainted`.
@@ -1080,5 +1143,67 @@ mod tests {
             status["sensitiveToolNames"].as_array().map(Vec::len),
             Some(8)
         );
+    }
+
+    /// The ordered report carries the two orders a `Value` cannot: `sources` in
+    /// first-appearance order, and each segment object in `to_dict` order.
+    #[test]
+    fn the_ordered_report_carries_the_orders_construction_owns() {
+        let body = json!({
+            "messages": [
+                {"role": "user", "content": "中文提问[用户上传文件上下文]文件内容"},
+                {"role": "system", "content": "[Per-turn context]\nsearch snippets"},
+            ],
+        });
+        let report = build_taint_report_ordered(&body, &settings()).expect("taint is enabled");
+        let OrderedJson::Object(pairs) = &report else {
+            panic!("the report is an object");
+        };
+        let node = |name: &str| {
+            pairs
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, node)| node)
+                .unwrap_or_else(|| panic!("{name}"))
+        };
+
+        let OrderedJson::Object(sources) = node("sources") else {
+            panic!("sources is an object");
+        };
+        let names: Vec<&str> = sources.iter().map(|(name, _)| name.as_str()).collect();
+        // The order must be discriminable from the sorted one for this test to mean
+        // anything — if the corpus were alphabetical, it could not fail.
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        assert_ne!(names, sorted, "corpus cannot tell the orders apart");
+
+        // And it is exactly the first-appearance order of the visible segments.
+        let OrderedJson::List(segments) = node("segments") else {
+            panic!("segments is a list");
+        };
+        let mut seen: Vec<String> = Vec::new();
+        for segment in segments {
+            let OrderedJson::Object(fields) = segment else {
+                panic!("a segment is an object");
+            };
+            let source = fields
+                .iter()
+                .find(|(key, _)| key == "source")
+                .map(|(_, value)| value)
+                .expect("source");
+            let OrderedJson::Scalar(Value::String(source)) = source else {
+                panic!("source is a string");
+            };
+            if !seen.iter().any(|name| name == source) {
+                seen.push(source.clone());
+            }
+        }
+        assert_eq!(names, seen.iter().map(String::as_str).collect::<Vec<_>>());
+
+        let OrderedJson::Object(first) = &segments[0] else {
+            panic!("a segment is an object");
+        };
+        let keys: Vec<&str> = first.iter().map(|(key, _)| key.as_str()).collect();
+        assert_eq!(keys, SEGMENT_KEYS);
     }
 }
