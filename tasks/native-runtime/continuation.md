@@ -2933,3 +2933,66 @@ this round's measurements:
    DeepSeek correctly.
 
 Decision B (a `memory` domain declaration) still gates wiring the **write** half.
+
+---
+
+## The assembly environment landed — the last prerequisite before the route swap
+
+**Branch `main`, HEAD `a017e402`** (the OpenAI-chat composition, committed by the previous
+round; `origin/main` is still `1b856bec`). Working tree carried only the files below.
+
+`deepseek-gateway::assembly_env::NativeAssembly` binds the nine `AssemblyEnv` fields from the
+server environment: the five settings structs at the oracle's own `Default`s, a real
+`BudgetStore` + `LedgerDeps` over `<root>/.budget`, the real `FileStore` and
+`attachment_context::expanded_message_content` expander, and the OS zone through
+`local_clock::system_local_now`. Seven unit tests.
+
+`with_env` is a closure rather than a returned struct because `AssemblyEnv` borrows a ledger and
+an expander that borrow *their* stores — the whole graph has to live on one stack frame, and that
+frame is `with_env`.
+
+### Two decisions the tests forced, both measured
+
+**`DEEPSEEK_INFRA_ROOT` unset is an error, not a degrade.** `chat_tool_loop::ToolRoundExecutor`
+treats an unset root as "no workspace" and lets the data branches report their disabled path. The
+assembly cannot: the memory store, the file cache and the budget ledger all live under the root,
+so reading them from anywhere else would be a silent divergence. The refusal names the variable.
+
+**The file-index refusal is a flag, not a predicate.** `search_file_chunks` returns a bare
+`Vec<i64>` and cannot refuse itself, and a duplicated predicate about attachments could drift from
+`expanded_message_content`'s real trigger. So the injected search sets a `Cell` flag and
+`with_env` returns it; a caller that sees `true` refuses. The guard therefore fires exactly when
+the oracle itself would have called the index.
+
+My first two tests were wrong and the code taught me why — worth recording because it narrows the
+condition further than the plan assumed:
+
+- the attachment field is **`fileId`**, not `id`, and the cached document must exist:
+  `build_attachment_context` calls the search only from the `Ok(cached)` arm of
+  `load_cached_file`;
+- even then, `select_file_chunk_indices` returns early and **never asks the index** unless the
+  chunk text exceeds `min(FILE_FULL_CONTEXT_LIMIT, char_budget)` — 60 000 characters here. So a
+  small attached file is served in full and must **not** trip the guard, and refusing on "has a
+  file attachment" would refuse requests the oracle answers completely.
+
+Both sides are now pinned: a 70 000-character attachment trips the flag, a short one does not.
+
+### Verification
+
+- `cargo test -p deepseek-gateway` → **162 lib tests** (7 new) plus every integration target
+  (7 + 6 + 1 + 1); `cargo test -p deepseek-policy` → 400 passed.
+- Workspace `fmt --all -- --check` exit 0; workspace clippy (1.85, `--locked --all-targets
+  --all-features -- -D warnings`) **exit 0 with no diagnostics**.
+
+### Not done, and the next executable task
+
+**Not pushed.** Exact-head CI has not run against any of this.
+
+The route still does not call any of it. Every prerequisite is now landed and probe-verified, so
+the swap itself is the next slice and `assembly-wiring-plan.md` §5 lists its four remaining
+pieces: `request_base_url`; the refusal the flag drives; the error envelope (**the tests in
+`tests/chat_execution.rs` capture the upstream body and are the regression net**); and a
+real-upstream integration test. The recorded env-reader gap for the settings stays open and is
+noted as the boundary of what this assembly guarantees.
+
+Decision B (a `memory` domain declaration) still gates wiring the **write** half.

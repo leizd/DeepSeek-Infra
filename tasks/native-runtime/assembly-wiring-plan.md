@@ -264,26 +264,36 @@ probe is re-run and unchanged (1 946 077 chars).
 **Not landed**: the route still does not call any of it. That is the next slice, and it needs, in
 this order:
 
-1. `AssemblyEnv::from_env` — the nine injected fields. Every settings struct has an oracle-matching
-   `Default` (`ModelRouterSettings`, `BudgetSettings`, `ContextTaintSettings`,
-   `ContextManagerSettings`, `ContextEngineSettings`), the ledger comes from `budget_store` plus
-   `LedgerDeps`, the clock from `local_clock::local_now`, and the expander from
-   `attachment_context::expanded_message_content` over a `FileContextDeps` built from `FileStore`.
-   **Recorded gap:** the *env readers* for those settings are not ported, so a deployment that
+1. ~~`AssemblyEnv::from_env` — the nine injected fields.~~ **Landed** —
+   `deepseek-gateway::assembly_env::NativeAssembly`, with `with_root` for callers that already
+   resolved the workspace (and for tests). Seven unit tests. Two things it settled:
+   - **`DEEPSEEK_INFRA_ROOT` unset is an error, not a degrade.** `chat_tool_loop` treats an unset
+     root as "no workspace" and lets the data branches report their disabled path, but the
+     assembly cannot: the memory store, the file cache and the budget ledger all live under the
+     root, and reading them from anywhere else would be a silent divergence. The refusal names the
+     variable.
+   - **The file-index refusal is a mechanical flag, not a predicate.** `search_file_chunks`
+     returns a bare `Vec<i64>` and so cannot refuse itself; rather than trust a duplicated
+     predicate about attachments to stay in step with `expanded_message_content`'s real trigger,
+     the injected search sets a flag and `with_env` returns it. A caller that sees `true` refuses.
+     The guard fires only when the oracle itself would have called the index — measured:
+     `select_file_chunk_indices` returns early and never asks the index unless the chunks exceed
+     `min(FILE_FULL_CONTEXT_LIMIT, char_budget)`, so a small attachment does **not** trip it, and a
+     test pins both sides.
+   **Recorded gap:** the *env readers* for the settings are still not ported, so a deployment that
    overrides e.g. `CONTEXT_WINDOW_MESSAGES` would get the oracle's default rather than its own
    value. That has to be closed before this is more than a default-configured deployment.
 2. `request_base_url` — `routes/chat.py` passes `request_base_url(request)`, which trusts the
    `Host` header only when `host_without_port(host)` is in `allowed_auth_hosts()`, and otherwise
    falls back to `http://127.0.0.1:{port}`.
-3. The file-index refusal, taken **before** the expander runs (`FileContextDeps::search_file_chunks`
-   returns a bare `Vec<i64>` and so cannot refuse itself), on the requests whose messages carry a
-   file attachment, using the available `file_store::vector_index_not_ready()`. Forced search needs
-   nothing — see above.
+3. The file-index refusal, as returned by `NativeAssembly::with_env` (see item 1). Forced search
+   needs nothing — see above.
 4. The error envelope. `build_deepseek_request` raises `AppError` as
    `{"error": <message>, "code": <code>}` with `AppError.status`, while the route currently answers
    `{"error": {"message": …, "type": "invalid_request_error"}}`. The frozen REST inventory
    (`compat/native-runtime/v1/http/rest_inventory.json`) records the route but no error envelope,
    so this is a compat decision, not a frozen-byte one — and it has to move in the same change
-   rather than be discovered afterwards.
+   rather than be discovered afterwards. `tests/chat_execution.rs` asserts on the captured
+   upstream body, so it is also the regression net for the swap.
 5. A real-upstream integration test, since none of the above proves the assembled body reaches
    DeepSeek correctly — only that it matches the oracle's bytes.

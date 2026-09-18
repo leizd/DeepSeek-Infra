@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{io, path::Path as FsPath};
 
+pub mod assembly_env;
 mod auth;
 pub mod chat_execution;
 pub mod chat_stream;
