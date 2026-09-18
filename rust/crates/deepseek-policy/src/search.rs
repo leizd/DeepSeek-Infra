@@ -9,14 +9,19 @@
 //! here are the tool catalog and `tools_for_payload`; the parity probe extracts
 //! them from the oracle's own file, so the placement is noted rather than hidden.
 //!
-//! [`format_search_context`] / [`format_search_failure_context`] build the
-//! **prompt context** that `search_if_needed` injects as `searchContext` at
-//! request-assembly time. The Rust request-assembly layer does not exist yet, so
-//! nothing in this workspace calls them: they are the offline, byte-verified first
-//! step of the search-prefetch pipeline recorded in
-//! `tasks/native-runtime/continuation.md`, whose remaining links
-//! (`search_if_needed`, `search_multiple`, the taint firewall, the consumer) are
-//! later slices.
+//! [`format_search_context`] / [`format_search_failure_context`] build the **prompt context**
+//! that `search_if_needed` injects as `searchContext` at request-assembly time. Nothing calls
+//! them yet, and the reason has narrowed since this note was first written: the request-assembly
+//! layer landed (`deepseek-gateway::request_assembly`, `de2bd60a`), the taint firewall is ported
+//! ([`crate::context_taint::harden_search_context`]), and the consumer of `searchContext` is
+//! ported ([`crate::dynamic_context::build_dynamic_turn_context`]). What is missing is the
+//! prefetch **driver** — `search_if_needed`, which is what would call these two and write the
+//! result back onto the payload. It is the only remaining link, and it is deliberately deferred
+//! rather than pending: its two callbacks have no destination on this route (see
+//! `deepseek-gateway::search_provider`, which measured that `progress_callback` and
+//! `system_note_callback` surface only on the internal `/api/chat` route), and its body is a live
+//! Tavily fetch, so a native path that reaches forced-search mode must refuse rather than
+//! improvise. Recorded in `tasks/native-runtime/continuation.md`.
 //!
 //! # What is reproduced rather than tidied
 //!

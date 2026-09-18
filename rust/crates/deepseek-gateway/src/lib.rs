@@ -16,6 +16,7 @@ pub mod chat_execution;
 pub mod chat_stream;
 pub mod chat_tool_loop;
 mod control_proxy;
+pub mod local_clock;
 pub mod observability;
 pub mod policy_routes;
 pub mod request_assembly;

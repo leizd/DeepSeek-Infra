@@ -138,11 +138,14 @@ pub const SLIDES_RUNTIME_GUIDANCE: &str = concat!(
 
 /// The instant plus how the machine renders its local zone.
 ///
-/// `timezone_name` is what Python's `tzname()` returns for the real zone (for example
-/// `China Standard Time` or `UTC+08:00` for a bare offset). The oracle's fallback chain is
-/// `tzname() or str(tzinfo) or "local"`; for every real zone `tzname()` is non-empty, so
-/// the middle arm is unreachable in practice and an empty name here falls straight through
-/// to `local`.
+/// `timezone_name` is what Python's `tzname()` returns for the real zone, and that string is the
+/// OS's own, in the machine's own locale: measured on a zh-CN Windows 11 it is `中国标准时间`,
+/// **not** the English `China Standard Time` — a hand-written name would look right and diverge on
+/// every request. Do not copy a name from anywhere; `deepseek-gateway`'s `local_clock` reads it
+/// from the same C library CPython does. The oracle's fallback chain is
+/// `tzname() or str(tzinfo) or "local"`; for every real zone `tzname()` is non-empty, so an empty
+/// name here falls straight through to `local` (the middle arm, `str(tzinfo)`, is unreachable in
+/// practice).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalNow {
     pub epoch_seconds: i64,
