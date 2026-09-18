@@ -10,8 +10,13 @@ its upstream body through `build_deepseek_request` instead of the thinner body i
 
 **Progress**: **Decision A is taken and landed** (`da8c21cf`) — the two patterns are repaired, the
 negated-forget guard that repair made necessary is in, and the test that could not fail them is
-replaced. Decision B (read-only wiring vs a `memory` domain declaration) and Decision C (the memory
-vector index) are open. Step 2 — porting the memory read half — is the next slice.
+replaced. **Decision C is answered by measurement and Step 2 is landed**: the memory read half is
+ported (`memory_scope_candidates`, `memory_scope_label`, `format_memory_context`,
+`upsert_memory`, `clear_memories`, `delete_memory_by_id`, `apply_explicit_memory_command`,
+`prepare_memory_state`) with `vector_hits` injected, and the paired measurement shows the vector
+bonus is **not bounded** — see §4. Decision B (read-only wiring vs a `memory` domain declaration)
+is open. Step 3 — wiring `chat_execution` — is the next slice, and it now has a third
+prerequisite: a provider (or a refusal) for the memory vector index.
 
 Everything below is a measurement with its evidence, not a roadmap. Where a decision is needed it
 is marked **DECISION** and carries a recommendation.
@@ -39,16 +44,18 @@ body honestly reproduce".
 | forced-search prefetch (`search_if_needed`) | **not ported — refuse** | reached only from `forced_search_mode` (`deepseek_client.py:674`) |
 | memory state (`prepare_memory_state`) | **not ported** | 8 functions missing, see §1 |
 
-## §1 `prepare_memory_state` — eight functions are missing
+## §1 `prepare_memory_state` — the eight functions, now ported
 
-The oracle is `deepseek_infra/infra/data/memory.py:32`. Absent from both Rust crates (grep over
-`deepseek-policy/src` + `deepseek-gateway/src`): `prepare_memory_state`,
+The oracle is `deepseek_infra/infra/data/memory.py:32`. All eight were absent from both Rust crates
+(grep over `deepseek-policy/src` + `deepseek-gateway/src`): `prepare_memory_state`,
 `apply_explicit_memory_command`, `format_memory_context`, `memory_scope_candidates`,
-`memory_scope_label`, `upsert_memory`, `clear_memories`, `delete_memory_by_id`.
-
-Already ported, so the gap is narrower than the function list suggests: `empty_memory_state`,
-`memory_scope_from_payload`, `retrieve_memories` (with the vector bonus as an injected
-`VectorHits`), `delete_memories_by_query`, `load_memories` / `save_memories`, and the file lock.
+`memory_scope_label`, `upsert_memory`, `clear_memories`, `delete_memory_by_id`. **All eight are now
+in `deepseek-policy::memory`** and byte-verified by the extended probe pair
+(`tasks/native-runtime/memory_parity_probe.py` ↔
+`rust/crates/deepseek-policy/examples/memory_parity_probe.rs`, 194 keys, md5
+`97187819db5aec787776174f6ac3f3d5`); see `docs/MEMORY_STORE.md` for what the corpus pins and the
+two defects it found on the way (the falsy content gate and an `OrderedJson` array-order
+regression).
 
 Two call sites, both Python: `prepare_deepseek_call` (cloud, `deepseek_client.py:668`) and
 `build_edge_messages` (edge fallback, `:726`). The edge path is a second consumer of
@@ -119,7 +126,7 @@ wiring read-only.
 *Recommendation: read-only, plus a follow-up domain declaration.* It is also free right now, since
 the write half is inert-by-bug (§2).
 
-## §4 The memory vector index has no Rust provider
+## §4 The memory vector index has no Rust provider — measured, and not bounded
 
 `retrieve_memories` calls `local_rag.search_memories_index` (collection = memory) inside a
 `try/except Exception` that swallows everything into `{}` — but that is not evidence the index is
@@ -130,29 +137,43 @@ fallback** (`db_ready()` → `vector_table_ready` → `_search_db`). So hits —
 
 `deepseek-rag` is a crate of **pure primitives** (chunk validation, citation formatting, query
 parsing, scoring, vector similarity, the binary rank protocol, index metadata) with **no store and
-no collection** — measured from its public surface, not assumed. So `VectorHits` has no provider
+no collection** — measured from its public surface, not assumed. So `VectorHits` had no provider
 to inject, and passing `None` would drop a bonus the oracle actually applies.
 
-**DECISION C.** Refuse, or bound the divergence.
+**DECISION C — measured, not chosen** (`tasks/native-runtime/memory_vector_bonus_probe.py`, the
+real oracle, paired runs over a corpus). `LOCAL_RAG_ENABLED` defaults to true and the embedding
+provider to `hash`, so the index is live **offline** in a default deployment:
 
-*Recommendation: measure before choosing.* The `file_store` precedent is to refuse an index-backed
-surface with no Rust provider (`NATIVE_FILE_VECTOR_INDEX_NOT_READY`) even though the oracle degrades
-silently — but memory is enabled by default (`memoryEnabled is not False`), so a blanket refusal
-would refuse almost every request and *lower* capability below Python, which the migration rules
-forbid. The honest next step is a paired measurement: the oracle's `retrieve_memories` over a corpus
-of memories and queries, run once with the index live and once with `search_memories_index` forced
-to raise. If the retrieved set or its order never differs, `None` is bounded and can be documented;
-if it differs, the surface needs its own refusal or a Rust provider.
+| observation | result |
+| --- | --- |
+| run A executed twice | identical — the difference is the index, not flakiness |
+| queries whose retrieved **order** differs | **7 of 8** |
+| queries whose retrieved **set** differs | same 7 — `m-long` surfaces only through the bonus (`score 37 → +3`) |
+
+So `None` is **not** bounded: it changes both the order and the membership of the memory context
+the assembled request carries. The `file_store` precedent (refuse an index-backed surface with no
+Rust provider) cannot be copied verbatim either — memory is enabled by default, so a blanket
+refusal would refuse almost every request and *lower* capability below Python, which the migration
+rules forbid.
+
+**Recommendation:** the memory index read path is bounded and belongs to the Rust data plane
+(hash embedding + cosine + BM25 over the `rag_items`/`rag_vec` tables, **read-only** — Python
+remains the writer until a `memory` domain is declared). Until that provider exists, the wiring
+must refuse a turn whose memory read would have been index-backed rather than silently pass
+`None`; the refusal has to be narrow (only when the index is populated) so a memory-less
+deployment is unaffected.
 
 ## Recommended order
 
-1. **DECISION A** → fix the two patterns and the test that cannot see them. Small, independent of
-   the wiring, and a production behaviour change, so it needs explicit approval.
-2. Port the memory read half — `prepare_memory_state` (read-only path), `memory_scope_candidates`,
-   `memory_scope_label`, `format_memory_context` — with `vector_hits` injected, and run the §4
-   measurement inside it.
-3. Wire `chat_execution` onto `build_deepseek_request`, with two refusals: forced-search mode and
-   the file vector index (already available as `vector_index_not_ready()`).
+1. ~~**DECISION A** → fix the two patterns and the test that cannot see them.~~ **Landed**
+   (`da8c21cf`).
+2. ~~Port the memory read half — `prepare_memory_state` (read-only path),
+   `memory_scope_candidates`, `memory_scope_label`, `format_memory_context` — with `vector_hits`
+   injected, and run the §4 measurement inside it.~~ **Landed** — the eight functions are ported and
+   byte-verified (194-key probe, `97187819…`), and §4 is answered: the bonus is not bounded.
+3. **Next:** a Rust provider for the memory index read path (or the narrow refusal), then wire
+   `chat_execution` onto `build_deepseek_request`, with the forced-search mode refusal and the file
+   vector index refusal (already available as `vector_index_not_ready()`).
 4. After a `memory` domain is declared: wire the write half.
 
 Steps 1 and 2 are additive and inert. Step 3 is the one that changes what the native route sends,

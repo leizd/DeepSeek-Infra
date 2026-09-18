@@ -267,14 +267,27 @@ impl OrderedJson {
                 }
                 OrderedJson::Object(pairs)
             }
-            Value::Array(items) => OrderedJson::List(
-                items
+            Value::Array(items) => {
+                // Elements take their order from the array's own name when a nested
+                // order is registered for it (`messages` and `tools` differ), and
+                // otherwise **inherit the enclosing order** — the behaviour the
+                // single-order entry point had before the nested table existed, which
+                // the store fixtures rely on: a top-level array's elements are ordered
+                // by the one order the caller passed. An empty inherited order still
+                // renders sorted, so `from_value_with_order(&object, &[])` callers are
+                // unchanged.
+                let element_order = nested_orders
                     .iter()
-                    .map(|item| {
-                        Self::build(item, key, sub_order(key, nested_orders), nested_orders)
-                    })
-                    .collect(),
-            ),
+                    .find(|(name, _)| *name == key)
+                    .map(|(_, keys)| *keys)
+                    .unwrap_or(order);
+                OrderedJson::List(
+                    items
+                        .iter()
+                        .map(|item| Self::build(item, key, element_order, nested_orders))
+                        .collect(),
+                )
+            }
             other => OrderedJson::Scalar(other.clone()),
         }
     }

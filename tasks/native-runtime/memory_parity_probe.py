@@ -28,6 +28,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mutation_gate_parity_probe as gate_probe  # noqa: E402
@@ -56,9 +57,19 @@ MEMORY_FUNCTIONS = (
     "delete_memories_by_query",
     "is_memory_broad_query",
     "retrieve_memories",
+    "empty_memory_state",
+    "memory_scope_from_payload",
+    "memory_scope_candidates",
+    "memory_scope_label",
+    "format_memory_context",
+    "upsert_memory",
+    "clear_memories",
+    "delete_memory_by_id",
+    "apply_explicit_memory_command",
+    "prepare_memory_state",
 )
 TOOLS_FUNCTIONS = ("memory_tool_scopes", "recall_memory_tool", "forget_memory_tool")
-UTILS_FUNCTIONS = ("query_tokens", "score_chunk", "utc_now_iso")
+UTILS_FUNCTIONS = ("query_tokens", "score_chunk", "utc_now_iso", "latest_user_query")
 
 SCOPE_CASES = [
     "global", "  global  ", "project:abc", "seek:SEARCH-1", "skill:pack.v1",
@@ -92,7 +103,7 @@ TOOL_SCOPE_CASES = [
     ("seek:s1", "project:abc"), ("bogus", "project:abc"), ("", ""),
 ]
 
-STORE_FIXTURE = [
+STORE_FIXTURE: list[dict[str, Any]] = [
     {"id": "m-pref", "content": "我用 React 做前端", "category": "preference", "scope": "global",
      "createdAt": "2026-01-01T00:00:00+00:00", "updatedAt": "2026-01-05T00:00:00+00:00"},
     {"id": "m-pinned", "content": "重要：我用 React", "category": "fact", "scope": "global",
@@ -197,7 +208,6 @@ def build_namespace(root: Path) -> dict:
             "Iterator": Iterator,
             "_memory_lock": threading.RLock(),
             "utc_now_iso": utc_now_iso,
-            "latest_user_query": lambda payload: "",
         }
     )
 
@@ -305,6 +315,9 @@ def main() -> int:
             {"content": "   "},
             {"content": "survivor", "confidence": 5, "category": "PREFERENCE", "scope": "bogus"},
             {"content": "bad confidence", "confidence": "nope"},
+            {"content": 0},
+            {"content": True},
+            {"content": False},
         ]
         ns["save_memories"](saved)
         out["store::migrated"] = store.read_text(encoding="utf-8")
@@ -379,6 +392,168 @@ def main() -> int:
             "the sky is blue", category="fact", scope="global"
         )
         out["lock::exists"] = ns["MEMORY_DIR"].joinpath("memories.lock").exists()
+
+        # --- scope candidates / labels (the turn state's read half) ------------
+        CANDIDATE_CASES: list[dict[str, Any]] = [
+            {},
+            {"messages": []},
+            {"memoryScope": "project:abc"},
+            {"memoryScope": "bogus"},
+            {"memoryScope": 0},
+            {"messages": [{"role": "user", "projectId": "p1"}]},
+            {"messages": [{"role": "user", "seekId": "s1"}]},
+            {"messages": [
+                {"role": "assistant", "projectId": "p9"},
+                {"role": "user", "content": "hi"},
+            ]},
+            {"memoryScope": "seek:s2", "messages": [{"role": "user", "projectId": "p1"}]},
+        ]
+        for index, payload in enumerate(CANDIDATE_CASES):
+            out[f"candidates::{index}"] = ns["memory_scope_candidates"](payload)
+            out[f"scope-of::{index}"] = ns["memory_scope_from_payload"](payload)
+        for value in ["global", "project:abc", "seek:SEARCH-1", "skill:pack.v1", "bogus", "project:a:b:c", ""]:
+            out[f"label::{json.dumps(value, ensure_ascii=False)}"] = ns["memory_scope_label"](value)
+
+        # --- format context ----------------------------------------------------
+        # The budget corpus must be able to fail: `normalize_memory_text` caps a
+        # row at 1200 chars, so reaching the 8000 budget takes six full rows
+        # (used = 7254) plus a 737-char row that lands exactly on 8000 and is
+        # kept, with the row after it crossing into the 省略 marker.
+        CONTEXT_CASES = [
+            ("empty", []),
+            ("fixture", STORE_FIXTURE),
+            ("budget", [
+                {"id": "c-1", "content": "戌" * 1200, "category": "fact", "scope": "global"},
+                {"id": "c-2", "content": "戌" * 1200, "category": "fact", "scope": "global"},
+                {"id": "c-3", "content": "戌" * 1200, "category": "fact", "scope": "global"},
+                {"id": "c-4", "content": "戌" * 1200, "category": "fact", "scope": "global"},
+                {"id": "c-5", "content": "戌" * 1200, "category": "fact", "scope": "global"},
+                {"id": "c-6", "content": "戌" * 1200, "category": "fact", "scope": "global"},
+                {"id": "c-7", "content": "辰" * 737, "category": "fact", "scope": "global"},
+                {"id": "c-8", "content": "丁" * 100, "category": "fact", "scope": "global"},
+            ]),
+            ("boundary", [
+                {"id": "c-first", "content": "戌" * 1200, "category": "fact", "scope": "global"},
+                {"id": "c-second", "content": "y", "category": "fact", "scope": "global"},
+            ]),
+            ("falsy-rows", [
+                {"id": "c-blank", "content": "   ", "category": "fact", "scope": "global"},
+                {"id": "c-zero", "content": 0, "category": "fact", "scope": "global"},
+                {"id": "c-false", "content": False, "category": "fact", "scope": "global"},
+                {"id": "c-true", "content": True, "category": "fact", "scope": "global"},
+                {"id": "c-real", "content": "真实记忆", "category": "fact", "scope": "global"},
+            ]),
+            ("scoped", [
+                {"id": "c-scope", "content": "项目记忆", "category": "project", "scope": "project:abc"},
+                {"id": "c-global", "content": "全局记忆", "category": "fact", "scope": "global"},
+            ]),
+            ("no-category", [{"id": "c-nocat", "content": "no category", "scope": "global"}]),
+            ("category-number", [{"id": "c-numcat", "content": "x", "category": 7, "scope": "global"}]),
+        ]
+        for label, rows in CONTEXT_CASES:
+            out[f"context::{label}"] = ns["format_memory_context"](rows)
+
+        # --- upsert --------------------------------------------------------------
+        # A row whose id is the fingerprint of its content, so the update path runs.
+        update_id = ns["memory_fingerprint"]("我用 React 做前端", "global")
+        update_fixture: list[dict[str, Any]] = [dict(row) for row in STORE_FIXTURE]
+        for row in update_fixture:
+            if row["id"] == "m-pref":
+                row["id"] = update_id
+        pinned_id = ns["memory_fingerprint"]("固定内容", "global")
+        pinned_fixture = [
+            {"id": pinned_id, "content": "固定内容", "category": "fact", "scope": "global",
+             "pinned": True, "createdAt": "2026-01-01T00:00:00+00:00",
+             "updatedAt": "2026-01-01T00:00:00+00:00"},
+        ]
+        UPSELL_CASES = [
+            ("new", "新的一条：项目用 pnpm", None, "global", "manual", False, None, STORE_FIXTURE),
+            ("update", "我用 React 做前端", None, "global", "manual", False, None, update_fixture),
+            ("sensitive", "my password is hunter2", None, "global", "manual", False, None, STORE_FIXTURE),
+            ("empty", "   ", None, "global", "manual", False, None, STORE_FIXTURE),
+            ("replace", "全新的内容", None, "global", "manual", False, ["m-pref"], STORE_FIXTURE),
+            ("scoped", "项目事实", None, "project:abc", "manual", False, None, STORE_FIXTURE),
+            ("category-source", "whatever", "todo", "global", "agent", False, None, STORE_FIXTURE),
+            ("pinned-merge", "固定内容", None, "global", "manual", False, None, pinned_fixture),
+        ]
+        for label, content, category, scope, source, pinned, replace, fixture in UPSELL_CASES:
+            write_fixture(fixture)
+            out[f"upsert::{label}"] = outcome(
+                lambda content=content, category=category, scope=scope, source=source,
+                pinned=pinned, replace=replace: ns["upsert_memory"](
+                    content, category=category, scope=scope, source=source,
+                    pinned=pinned, replace_ids=replace,
+                )
+            )
+            out[f"upsert::{label}::file"] = store.read_text(encoding="utf-8")
+
+        # --- clear / delete-by-id ------------------------------------------------
+        write_fixture(STORE_FIXTURE)
+        out["clear::count"] = outcome(lambda: ns["clear_memories"]())
+        out["clear::file"] = store.read_text(encoding="utf-8")
+        write_fixture(STORE_FIXTURE)
+        out["by-id::hit"] = outcome(lambda: ns["delete_memory_by_id"]("m-pref"))
+        out["by-id::hit-file"] = store.read_text(encoding="utf-8")
+        out["by-id::miss"] = outcome(lambda: ns["delete_memory_by_id"]("absent-id"))
+        out["by-id::miss-file"] = store.read_text(encoding="utf-8")
+
+        # --- explicit commands ----------------------------------------------------
+        def command(query, scope="global", scopes=None):
+            return ns["apply_explicit_memory_command"](query, scope=scope, scopes=scopes)
+
+        COMMAND_CASES = [
+            ("remember", "请帮我记住: 我的生日是 3 月 5 日", "global", None),
+            ("remember-en", "Don't forget: the alignment review", "global", None),
+            ("negated-forget", "不要忘记: 牙医预约", "global", None),
+            ("forget", "忘记: React", "global", ["global"]),
+            ("delete-memory", "删除记忆: 生日", "global", ["global"]),
+            ("forget-upper", "FORGET: react", "global", ["global"]),
+            ("opt-out", "不要记住: 这是临时的", "global", None),
+            ("opt-out-en", "don't remember: this", "global", None),
+            ("bare-remember-gap", "记住: 我的生日", "global", None),
+            ("sensitive", "请帮我记住: my api key", "global", None),
+            ("multiline", "请帮我记住: 第一行\n第二行", "global", None),
+            ("kept-scoped", "不要忘记: 项目笔记", "project:abc", None),
+            ("forget-scoped", "忘记: Rust", "global", ["project:abc"]),
+            ("plain", "今天天气怎么样", "global", None),
+        ]
+        for label, query, scope, scopes in COMMAND_CASES:
+            write_fixture(STORE_FIXTURE)
+            out[f"command::{label}"] = outcome(
+                lambda query=query, scope=scope, scopes=scopes: command(query, scope=scope, scopes=scopes)
+            )
+            out[f"command::{label}::file"] = store.read_text(encoding="utf-8")
+
+        # --- the turn state -------------------------------------------------------
+        STATE_CASES: list[tuple[str, dict[str, Any]]] = [
+            ("disabled", {"memoryEnabled": False, "messages": [
+                {"role": "user", "content": "请帮我记住: 这条不该保存"},
+            ]}),
+            ("falsy-enabled", {"memoryEnabled": 0, "messages": [
+                {"role": "user", "content": "React 怎么用"},
+            ]}),
+            ("plain", {"messages": [{"role": "user", "content": "React 怎么用"}]}),
+            ("remember", {"messages": [
+                {"role": "user", "content": "请帮我记住: 我喜欢深色主题"},
+            ]}),
+            ("sensitive", {"messages": [
+                {"role": "user", "content": "请帮我记住: my password is 123"},
+            ]}),
+            ("scoped", {"messages": [
+                {"role": "user", "projectId": "abc", "content": "Rust"},
+            ]}),
+            ("no-messages", {}),
+            ("explicit-scope", {"memoryScope": "seek:s1"}),
+            ("broad", {"messages": [{"role": "user", "content": "你记得什么"}]}),
+        ]
+        for label, payload in STATE_CASES:
+            write_fixture(STORE_FIXTURE)
+            out[f"state::{label}"] = ns["prepare_memory_state"](payload)
+            out[f"state::{label}::file"] = store.read_text(encoding="utf-8")
+        out["state::generation"] = (
+            (root / ".workspace-generation").read_text(encoding="ascii")
+            if (root / ".workspace-generation").exists() else None
+        )
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

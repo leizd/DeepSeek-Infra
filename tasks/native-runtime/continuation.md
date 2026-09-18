@@ -2499,3 +2499,120 @@ the proxy hop), while the run is still going -- so the conclusion must come from
 `gh run view --json status,conclusion` and the per-job `conclusion` (an empty string there means
 in progress, not failed). And on this host the full local suite cannot stand in for CI at all; see
 the previous section.
+
+---
+
+## The memory turn-state half landed, and the vector bonus turned out not to be bounded
+
+**Branch `main`, HEAD `dd9b5cdb`** (one commit ahead of `origin/main` — the last push was
+`1b856bec`; nothing in this section is pushed yet). Working tree carried only the files below.
+
+This is step 2 of [`assembly-wiring-plan.md`](assembly-wiring-plan.md): the memory read half the
+request assembly waits for. The wiring plan had recorded `prepare_memory_state` as the last hard
+prerequisite for wiring `chat_execution` onto `build_deepseek_request`; eight functions were
+missing. All eight are now ported into `deepseek-policy::memory`, byte-verified, and the plan's
+open **Decision C** — whether the un-ported vector bonus is bounded — is **answered by
+measurement**.
+
+### Decision C: measured, and the answer is no
+
+`LOCAL_RAG_ENABLED` defaults to **true** and the embedding provider to **`hash`** — so unlike the
+API-key-gated paths, the memory vector index is **live offline in a default deployment**:
+`save_memories` populates it through `sync_memories`, and `search_memories_index` returns real
+scores. The plan's proposed measurement was run for real
+([`memory_vector_bonus_probe.py`](memory_vector_bonus_probe.py), the actual modules, a scratch root
+via `DEEPSEEK_INFRA_ROOT`):
+
+| observation | result |
+| --- | --- |
+| run A (index live) executed twice | **identical** — the difference is the index, not flakiness |
+| queries whose retrieved **order** differs from run B | **7 of 8** |
+| queries whose retrieved **set** differs | the same 7 |
+
+The set result is the one that matters. For query `react`, `m-long` has a lexical score of **zero**
+and is retrieved *only* through the bonus (`hit score 37 → +3`); with the index forced to raise,
+it is absent. So `None` is **not** a tie-break divergence that can be documented away: it changes
+which memories reach the prompt.
+
+**Consequence recorded in the matrix and the plan:** the wiring slice now has a third
+prerequisite — a Rust provider for the memory index read path (bounded: hash embedding + cosine +
+BM25 over `rag_items`/`rag_vec`, **read-only** while Python remains the writer), or a narrow
+refusal that only fires when the index is populated. The `file_store` precedent cannot be copied
+verbatim, because memory is enabled by default and a blanket refusal would refuse nearly every
+request.
+
+### What was ported, and the two defects found on the way
+
+The eight functions — `memory_scope_candidates`, `memory_scope_label`, `format_memory_context`,
+`upsert_memory`, `clear_memories`, `delete_memory_by_id`, `apply_explicit_memory_command`,
+`prepare_memory_state` — with the same injection boundary the clock and the transport already use
+(`vector_hits` as a `dyn Fn` provider). The repaired grammar from `da8c21cf` is ported with it: the
+opt-out guard first, then the *negated forget* (which must beat the forget branch or it deletes the
+memory the user asked to keep), then forget, then remember. The remember branch's required
+`请`/`帮我` prefixes are kept as the oracle's own gap, not "fixed" — that is a product decision.
+
+Two real defects surfaced, neither by reading the diff:
+
+1. **A falsy content gate.** The oracle writes `normalize_memory_text(item.get("content") or "")`,
+   so `content: 0` is empty and the row is **dropped**; the port passed the value straight in, so
+   `0` became `"0"` and the row survived. `normalized_content` now applies the truthiness gate, and
+   the migration corpus carries `0` / `true` / `false`.
+2. **An `OrderedJson` regression that no gate could see.** The nested-order refactor (`3b7c041b`)
+   made array elements take their order from the array's *name* with an empty fallback, so a
+   **top-level array** — exactly how the store fixtures are written — rendered alphabetically. No
+   CI job runs these probes, so it sat there; the memory probe's `store::file` observation caught it
+   the moment the probe was re-run. The fix restores inheritance of the enclosing order when no
+   nested order is registered; all **24 runnable probe pairs** were re-run afterwards and are
+   byte-identical, `request_assembly` (the nested-order consumer) included.
+
+### The corpus that could not fail, again — twice
+
+- The first budget corpus was `3 × 3000`-char rows. `normalize_memory_text` caps a row at **1200**
+  characters, so `used` peaked at ~3 600 of 8 000 and the 省略 path was **never reached** — the
+  probe would have reported parity whether that branch worked or was a no-op. My unit test failed
+  for the same reason and exposed it. The corpus is now six full rows (7 254) plus a 737-char row
+  that lands **exactly** on the budget and a row after it that crosses; the reference output
+  contains the marker (8 140 chars). Sixth instance of this class in the migration.
+- The same cap invalidated the "exact boundary" case for the same reason.
+
+My own unit-test expectations were wrong twice more (I indexed `load_memories()[0]` and forgot that
+**pinned** rows sort first) — corrected against the oracle-derived probe rather than by touching
+the port. That is the recurring lesson, unchanged: **expectations get taken from the oracle.**
+
+### Verification
+
+- Probe pair byte-identical: **194 keys** (was 92), md5 **`97187819db5aec787776174f6ac3f3d5`**,
+  re-run after `cargo fmt` so the committed bytes reproduce the hash. Includes 8 upsert shapes,
+  clear/delete-by-id, **14 command shapes**, and **9 turn-state shapes**, each with its file bytes
+  and the final generation counter.
+- `cargo test -p deepseek-policy` → **390 passed** (33 new); `cargo test -p deepseek-gateway` →
+  145 lib + 15 integration passed.
+- `cargo +1.85.0-x86_64-pc-windows-gnu test --locked --all` → **exit 0**, whole workspace,
+  including the real Go→Rust boundary integration tests.
+- Workspace `fmt --all -- --check` exit 0; workspace clippy (1.85, `--locked --all-targets
+  --all-features -- -D warnings`) **exit 0 with no diagnostics**.
+- `ruff check` and `mypy` pass on both probes (the new probe needed explicit `list[dict[str, Any]]`
+  annotations to satisfy mypy's overload resolution).
+- Docs gates: `update_docs_language_nav.py --check` PASS (199 files), `check_doc_links.py` OK.
+
+### Two pre-existing probe breakages found while re-running the suite (not mine)
+
+Recorded rather than fixed, since both are legacy measurement tools with newer replacements:
+
+- `oracle_parity_probe.py` fails with `NameError: name 'AppError' is not defined`: it extracts
+  `normalize_chat_messages` from `deepseek_client.py`, and `df7dfa13` introduced `AppError` into
+  that function *after* the probe's last edit (`6ea4dde3`). `request_messages_parity_probe.py` is
+  the superseding probe and is byte-identical (121 keys).
+- `local_clock_parity_probe` takes the epoch as an argument on the Rust side while the Python side
+  prints its own; it passes when paired that way (verified: identical).
+
+### Not done, and the next executable task
+
+**Not pushed.** The four changed files plus one new probe are local only; exact-head CI has not run
+against them. The new `docs/MEMORY_STORE.md` and the two task Markdown edits are managed documents
+(the `docs` job's language switcher is verified present).
+
+**Next slice:** the memory index read path in Rust (hash embedding + cosine + BM25 over
+`rag_items`/`rag_vec`, read-only) **or** the narrow refusal — then step 3, wiring `chat_execution`
+onto `build_deepseek_request` with the three refusals and a real memory-state provider. Decision B
+(a `memory` domain declaration) still gates wiring the **write** half.
