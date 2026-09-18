@@ -18,6 +18,7 @@ pub mod chat_tool_loop;
 mod control_proxy;
 pub mod observability;
 pub mod policy_routes;
+pub mod request_assembly;
 pub mod request_preparation;
 pub mod search_provider;
 pub mod static_files;

@@ -203,15 +203,14 @@ pub enum OrderedJson {
     List(Vec<OrderedJson>),
 }
 
-/// A nested value becomes a real node so containers render with indentation, as
-/// Python's `indent=2` does at every level.
-///
-/// Nested object **keys** come out sorted because Python's insertion order is not
-/// recoverable from every `serde_json::Value` configuration. Callers that need a
-/// nested order must flatten the value or take the order at the top level, where
-/// [`OrderedJson::from_value_with_order`] accepts one.
-fn nested(value: &Value) -> OrderedJson {
-    OrderedJson::from_value_with_order(value, &[])
+/// The key order a nested object takes, matched by **key name**; an unnamed object renders
+/// sorted.
+fn sub_order<'a>(key: &str, nested_orders: &'a [(&'a str, &'a [&'a str])]) -> &'a [&'a str] {
+    nested_orders
+        .iter()
+        .find(|(name, _)| *name == key)
+        .map(|(_, keys)| *keys)
+        .unwrap_or(&[])
 }
 
 impl OrderedJson {
@@ -220,25 +219,60 @@ impl OrderedJson {
     /// Keys missing from `order` are appended in sorted order, so a schema drift
     /// is visible in the output rather than silently dropped.
     pub fn from_value_with_order(value: &Value, order: &[&str]) -> Self {
+        Self::from_value_with_orders(value, order, &[])
+    }
+
+    /// As [`OrderedJson::from_value_with_order`], with key orders for nested objects matched
+    /// **by key name**.
+    ///
+    /// The diagnostics envelope needs this: its top level is assembled here, but blocks like
+    /// `contextManager` or `contextTaint` arrive as a `serde_json::Value` from the module that
+    /// built them, and a `Map` has already lost their insertion order. The orders are matched
+    /// by name rather than by path — a name reused at two depths would take the same order at
+    /// both, which no envelope here does.
+    ///
+    /// Anything deeper than those named blocks still renders sorted; the nested tables are
+    /// extended as their own slices land.
+    pub fn from_value_with_orders(
+        value: &Value,
+        order: &[&str],
+        nested_orders: &[(&str, &[&str])],
+    ) -> Self {
+        Self::build(value, "", order, nested_orders)
+    }
+
+    /// `key` is the name this value sits under: an object's property name, or — for an array
+    /// element — the **array's** name, so `messages` elements and `tools` elements can be
+    /// given different orders.
+    fn build(value: &Value, key: &str, order: &[&str], nested_orders: &[(&str, &[&str])]) -> Self {
         match value {
             Value::Object(fields) => {
                 let mut pairs: Vec<(String, OrderedJson)> = Vec::new();
-                for key in order {
-                    if let Some(item) = fields.get(*key) {
-                        pairs.push(((*key).to_string(), nested(item)));
+                for name in order {
+                    if let Some(item) = fields.get(*name) {
+                        pairs.push((
+                            (*name).to_string(),
+                            Self::build(item, name, sub_order(name, nested_orders), nested_orders),
+                        ));
                     }
                 }
-                for (key, item) in sorted_fields(fields) {
-                    if !order.contains(&key.as_str()) {
-                        pairs.push((key.clone(), nested(item)));
+                for (name, item) in sorted_fields(fields) {
+                    if order.contains(&name.as_str()) {
+                        continue;
                     }
+                    pairs.push((
+                        name.clone(),
+                        Self::build(item, &name, sub_order(&name, nested_orders), nested_orders),
+                    ));
                 }
                 OrderedJson::Object(pairs)
             }
             Value::Array(items) => OrderedJson::List(
                 items
                     .iter()
-                    .map(|item| OrderedJson::from_value_with_order(item, order))
+                    .map(|item| {
+                        Self::build(item, key, sub_order(key, nested_orders), nested_orders)
+                    })
                     .collect(),
             ),
             other => OrderedJson::Scalar(other.clone()),
@@ -251,6 +285,61 @@ impl OrderedJson {
     /// puts each item on its own line, and renders an empty container inline.
     pub fn render_indent_2(&self) -> String {
         self.render(0)
+    }
+
+    /// `json.dumps(value, ensure_ascii=False)` — the **default** separators (`", "`, `": "`)
+    /// and no line breaks. This is the shape `requests` sends a body in.
+    pub fn render_default_separators(&self) -> String {
+        match self {
+            OrderedJson::Scalar(value) => match value {
+                Value::String(text) => Value::String(text.clone()).to_string(),
+                other => scalar_str(other),
+            },
+            OrderedJson::List(items) => {
+                let rendered: Vec<String> = items
+                    .iter()
+                    .map(OrderedJson::render_default_separators)
+                    .collect();
+                format!("[{}]", rendered.join(", "))
+            }
+            OrderedJson::Object(pairs) => {
+                let rendered: Vec<String> = pairs
+                    .iter()
+                    .map(|(key, item)| {
+                        format!(
+                            "{}: {}",
+                            Value::String(key.clone()),
+                            item.render_default_separators()
+                        )
+                    })
+                    .collect();
+                format!("{{{}}}", rendered.join(", "))
+            }
+        }
+    }
+
+    /// `json.dumps(value, ensure_ascii=False, separators=(",", ":"))` — what the SSE writer
+    /// emits for a diagnostics payload.
+    pub fn render_compact(&self) -> String {
+        match self {
+            OrderedJson::Scalar(value) => match value {
+                Value::String(text) => Value::String(text.clone()).to_string(),
+                other => scalar_str(other),
+            },
+            OrderedJson::List(items) => {
+                let rendered: Vec<String> = items.iter().map(OrderedJson::render_compact).collect();
+                format!("[{}]", rendered.join(","))
+            }
+            OrderedJson::Object(pairs) => {
+                let rendered: Vec<String> = pairs
+                    .iter()
+                    .map(|(key, item)| {
+                        format!("{}:{}", Value::String(key.clone()), item.render_compact())
+                    })
+                    .collect();
+                format!("{{{}}}", rendered.join(","))
+            }
+        }
     }
 
     fn render(&self, depth: usize) -> String {
