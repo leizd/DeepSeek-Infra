@@ -19,15 +19,32 @@
 //! The orders are **measured**, not inferred: the Python probe publishes the key order of
 //! every envelope and every nested block it sees, and these tables are what it reported.
 //!
-//! # The remaining gap, as the probe measures it
+//! # Where the tool and taint orders come from
 //!
-//! With the tables below, the probe reports **95 of 292 rows differing**, and every one of
-//! them is inside a **tool schema**: `parameters.properties` names its properties in
-//! declaration order (not sorted) and each property object orders `type` before
-//! `description`. Both belong to the tool catalog — [`crate::request_preparation`] and the
-//! catalog slice own that shape — so extending these tables from here would put one slice's
-//! contract in another slice's file. The tool entries are therefore the known gap, named
-//! rather than papered over; everything else the envelope carries matches byte for byte.
+//! Two parts of the documents are not fixed shapes — the order lives in the data — and
+//! the by-name tables cannot carry them:
+//!
+//! - **Tool schemas.** `parameters.properties` names each tool's properties in its own
+//!   declaration order (25 distinct property orders across the catalog, reusing the same
+//!   property names) and every property object orders `type` before `description`. The
+//!   catalog owns those trees ([`tool_catalog::ordered_tool_definition`]), and
+//!   [`PreparedDeepSeekRequest::render_body`] substitutes them for the definitions the
+//!   catalog owns byte for byte; a definition it does not own keeps the generic rendering,
+//!   where drift stays visible.
+//! - **The taint block.** `sources` accumulates in first-appearance order over the
+//!   **untruncated** segment scan, which the capped `segments` list cannot re-derive, so
+//!   the builder hands the renderer its tree
+//!   ([`deepseek_policy::context_taint::build_taint_report_ordered`], carried on
+//!   [`PreparedDeepSeekRequest::taint_ordered`]) and
+//!   [`PreparedDeepSeekRequest::render_diagnostics`] substitutes it while the two views
+//!   still agree.
+//!
+//! The cross-language check is the probe pair
+//! (`tasks/native-runtime/request_assembly_parity_probe.py` +
+//! `examples/request_assembly_parity_probe.rs`): 406 rows over every branch the corpus can
+//! reach — the forced `tool_choice` object, the memory-state axis, the ledger
+//! short-circuit, both temperature clamps, the search-on and narrowed tool lists — rendered
+//! the way the wire renders them, and matching byte for byte.
 
 use serde_json::{Map, Value, json};
 
@@ -40,7 +57,7 @@ use deepseek_policy::context_engine::ContextEngineSettings;
 use deepseek_policy::context_manager::{
     ContextManagerSettings, manage_request_body, merge_context_manager_diagnostics,
 };
-use deepseek_policy::context_taint::{ContextTaintSettings, build_taint_report};
+use deepseek_policy::context_taint::{ContextTaintSettings, build_taint_report_ordered};
 use deepseek_policy::core_utils::{python_int_opt, python_truthy, text_or_empty};
 use deepseek_policy::dynamic_context::{
     DynamicContextEnv, append_context_to_latest_user, build_dynamic_turn_context,
@@ -55,6 +72,7 @@ use deepseek_policy::request_shaping::{
     TOOL_PARALLEL_SYSTEM_HINT, count_payload_attachments, forced_artifact_tool_name,
     has_image_content, normalize_reasoning_effort, tools_for_payload,
 };
+use deepseek_policy::tool_catalog;
 
 /// The upstream request body's key order: the three required keys, then each conditional
 /// block in the order the oracle assigns them.
@@ -94,10 +112,12 @@ pub const DIAGNOSTIC_KEYS: [&str; 19] = [
 ];
 
 /// Key orders for the blocks that arrive as a `Value`, matched by block name.
-pub const NESTED_ORDERS: [(&str, &[&str]); 12] = [
+pub const NESTED_ORDERS: [(&str, &[&str]); 15] = [
     // Array elements are ordered by the array's name, so messages and tools differ.
     ("messages", &["role", "content"]),
     ("tools", &["type", "function"]),
+    // A forced artifact tool replaces the `"auto"` string with this object.
+    ("tool_choice", &["type", "function"]),
     ("function", &["name", "strict", "description", "parameters"]),
     (
         "parameters",
@@ -120,6 +140,9 @@ pub const NESTED_ORDERS: [(&str, &[&str]); 12] = [
     ),
     ("breakdown", &["system", "tools", "history", "dynamic"]),
     ("contextDiff", &["baseContextId", "delta"]),
+    // `delta` entries are built as `{"type": ..., <one payload key>}` — the type tag
+    // leads and the single remaining key sorts behind it.
+    ("delta", &["type"]),
     (
         "modelRouter",
         &[
@@ -132,6 +155,8 @@ pub const NESTED_ORDERS: [(&str, &[&str]); 12] = [
             "reasons",
         ],
     ),
+    // Every router reason is built as `{"router": …, "decision": …}`.
+    ("reasons", &["router", "decision"]),
     (
         "budgetPolicy",
         &[
@@ -207,20 +232,34 @@ pub struct PreparedDeepSeekRequest {
     pub api_key: String,
     pub body: Value,
     pub diagnostics: Value,
+    /// The taint block's ordered tree, built once beside the `Value` the diagnostics hold.
+    ///
+    /// It exists because `sources` accumulates in first-appearance order over the
+    /// **untruncated** segment scan: once the visible `segments` are capped, that order is
+    /// not re-derivable from anything the `Value` keeps, so whoever renders the block must
+    /// be handed the tree ([`deepseek_policy::context_taint::build_taint_report_ordered`]).
+    pub taint_ordered: Option<OrderedJson>,
 }
 
 impl PreparedDeepSeekRequest {
     /// `json.dumps(body)` — default separators, insertion order: what `requests` sends.
     pub fn render_body(&self) -> String {
-        OrderedJson::from_value_with_orders(&self.body, &BODY_KEYS, &NESTED_ORDERS)
-            .render_default_separators()
+        let mut ordered =
+            OrderedJson::from_value_with_orders(&self.body, &BODY_KEYS, &NESTED_ORDERS);
+        substitute_catalog_tool_orders(&mut ordered, &self.body);
+        ordered.render_default_separators()
     }
 
     /// `json.dumps(diagnostics, ensure_ascii=False, separators=(",", ":"))`: what the SSE
     /// writer emits.
     pub fn render_diagnostics(&self) -> String {
-        OrderedJson::from_value_with_orders(&self.diagnostics, &DIAGNOSTIC_KEYS, &NESTED_ORDERS)
-            .render_compact()
+        let mut ordered = OrderedJson::from_value_with_orders(
+            &self.diagnostics,
+            &DIAGNOSTIC_KEYS,
+            &NESTED_ORDERS,
+        );
+        substitute_taint_order(&mut ordered, &self.diagnostics, self.taint_ordered.as_ref());
+        ordered.render_compact()
     }
 
     /// The nested blocks' key order, as this side sees it — the probe compares it with the
@@ -254,6 +293,57 @@ impl PreparedDeepSeekRequest {
             }
         }
         Value::Object(blocks)
+    }
+}
+
+/// Tool definitions carry the catalog's own key order, which the by-name tables cannot
+/// express: `parameters.properties` names each tool's properties in its own declaration
+/// order (25 distinct orders across the catalog) and the property objects order `type`
+/// before `description`. The catalog owns those trees
+/// ([`tool_catalog::ordered_tool_definition`]); a definition it does not own — drifted or
+/// unknown — keeps the generic rendering, so the difference stays visible instead of
+/// being silently served the catalog's bytes.
+fn substitute_catalog_tool_orders(ordered: &mut OrderedJson, body: &Value) {
+    let Some(Value::Array(tools)) = body.get("tools") else {
+        return;
+    };
+    let OrderedJson::Object(pairs) = ordered else {
+        return;
+    };
+    let Some((_, OrderedJson::List(elements))) =
+        pairs.iter_mut().find(|(key, _)| key.as_str() == "tools")
+    else {
+        return;
+    };
+    for (element, tool) in elements.iter_mut().zip(tools.iter()) {
+        if let Some(tree) = tool_catalog::ordered_tool_definition(tool) {
+            *element = tree;
+        }
+    }
+}
+
+/// The taint block's builder-owned tree replaces the generic rendering — while the two
+/// views still agree, the same guard the tool substitution uses. A caller that edits
+/// `diagnostics.contextTaint` without clearing [`PreparedDeepSeekRequest::taint_ordered`]
+/// keeps the edited bytes visible rather than being served the builder's tree.
+fn substitute_taint_order(
+    ordered: &mut OrderedJson,
+    diagnostics: &Value,
+    report: Option<&OrderedJson>,
+) {
+    let Some(report) = report else {
+        return;
+    };
+    if diagnostics.get("contextTaint") != Some(&report.to_value()) {
+        return;
+    }
+    let OrderedJson::Object(pairs) = ordered else {
+        return;
+    };
+    for (key, node) in pairs.iter_mut() {
+        if key == "contextTaint" {
+            *node = report.clone();
+        }
     }
 }
 
@@ -338,9 +428,12 @@ pub fn build_deepseek_request(
     let normalized_messages = normalize_chat_messages(&messages_value, env.expander)?;
     validate_request_messages(payload, &messages, env.expander)?;
 
-    let memory_state = memory_state
-        .cloned()
-        .unwrap_or_else(|| empty_memory_state(payload));
+    // `memory_state or empty_memory_state(payload)`: Python's `or` treats a falsy state
+    // — `{}` included — as absent, so the payload-derived default applies.
+    let memory_state = match memory_state {
+        Some(state) if python_truthy(state) => state.clone(),
+        _ => empty_memory_state(payload),
+    };
     let memory_enabled = python_truthy(memory_state.get("enabled").unwrap_or(&Value::Null));
     let memory_hit_count = python_int_opt(memory_state.get("hitCount")).unwrap_or(0);
     let dynamic_context =
@@ -378,23 +471,7 @@ pub fn build_deepseek_request(
     }
 
     if model == "deepseek-v4-flash" {
-        // `isinstance(temperature, (int, float))` — a bool counts as an int here.
-        let temperature = match payload.get("temperature") {
-            Some(Value::Number(number)) => number.as_f64().unwrap_or(1.0),
-            Some(Value::Bool(flag)) => {
-                if *flag {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
-            _ => 1.0,
-        };
-        // Python's `max(0, min(t, 2))`, written as comparisons so a NaN would keep the bound
-        // the way Python's min/max do.
-        let capped = if temperature < 2.0 { temperature } else { 2.0 };
-        let bounded = if capped > 0.0 { capped } else { 0.0 };
-        request_body.insert("temperature".to_string(), json!(bounded));
+        request_body.insert("temperature".to_string(), clamped_temperature(payload));
         request_body.insert("top_p".to_string(), json!(1.0));
     }
 
@@ -483,10 +560,13 @@ pub fn build_deepseek_request(
     );
     let mut diagnostics =
         merge_context_manager_diagnostics(Value::Object(diagnostics), context_manager_diag);
-    let taint_report = build_taint_report(&body, env.taint);
-    if let Some(report) = taint_report {
+    // The taint block is built in tree form: two of its orders (`sources`
+    // first-appearance over the untruncated scan, segment key order) are facts of
+    // construction and cannot be re-derived from the `Value` the diagnostics carry.
+    let taint_ordered = build_taint_report_ordered(&body, env.taint);
+    if let Some(report) = &taint_ordered {
         if let Some(fields) = diagnostics.as_object_mut() {
-            fields.insert("contextTaint".to_string(), report);
+            fields.insert("contextTaint".to_string(), report.to_value());
         }
     }
 
@@ -494,5 +574,212 @@ pub fn build_deepseek_request(
         api_key,
         body,
         diagnostics,
+        taint_ordered,
     })
+}
+
+/// `max(0, min(float(temperature), 2))` with Python's type behaviour, for the flash tier.
+///
+/// `isinstance(temperature, (int, float))` lets a bool through (`float(True)` is `1.0`),
+/// anything else is the `1.0` default. The clamp is the interesting part: `min(t, 2)`
+/// keeps **the integer 2** when `t > 2` and `max(0, …)` keeps **the integer 0** when the
+/// inner value is not above zero, so `json.dumps` writes `2` / `0` — not `2.0` / `0.0` —
+/// at the bounds. Measured on the oracle: 3.5→`2`, 2.0→`2.0`, 0.5→`0.5`, 0→`0`,
+/// -1→`0`, True→`1.0`, False→`0`; NaN falls through both comparisons to `0`, as there.
+fn clamped_temperature(payload: &Value) -> Value {
+    let temperature = match payload.get("temperature") {
+        Some(Value::Number(number)) => number.as_f64().unwrap_or(1.0),
+        Some(Value::Bool(flag)) => {
+            if *flag {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        _ => 1.0,
+    };
+    if temperature > 2.0 {
+        json!(2)
+    } else if temperature > 0.0 {
+        json!(temperature)
+    } else {
+        json!(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use deepseek_policy::tool_catalog::available_tool_definitions;
+
+    fn catalog_tool(name: &str) -> Value {
+        available_tool_definitions()
+            .iter()
+            .find(|tool| tool["function"]["name"] == name)
+            .unwrap_or_else(|| panic!("{name} is in the catalog"))
+            .clone()
+    }
+
+    fn prepared(body: Value, diagnostics: Value) -> PreparedDeepSeekRequest {
+        PreparedDeepSeekRequest {
+            api_key: "k".to_string(),
+            body,
+            diagnostics,
+            taint_ordered: None,
+        }
+    }
+
+    /// The clamp's type is part of the bytes: a clamped value is the integer the oracle's
+    /// `min`/`max` kept, a float boundary keeps its `.0`, and a bool is an `int`.
+    #[test]
+    fn a_clamped_temperature_keeps_pythons_type_at_the_bounds() {
+        for (temperature, expected) in [
+            (json!(3.5), "2"),
+            (json!(2.0), "2.0"),
+            (json!(2), "2.0"),
+            (json!(0.5), "0.5"),
+            (json!(0), "0"),
+            (json!(0.0), "0"),
+            (json!(-1), "0"),
+            (json!(true), "1.0"),
+            (json!(false), "0"),
+            (json!("x"), "1.0"),
+        ] {
+            let bounded = clamped_temperature(&json!({"temperature": temperature}));
+            let rendered =
+                OrderedJson::from_value_with_order(&bounded, &[]).render_default_separators();
+            assert_eq!(rendered, expected, "{temperature}");
+        }
+    }
+
+    /// The body's key order is the oracle's assignment order, not the alphabet:
+    /// `model, messages, stream, tools, tool_choice, …`. The tables are the contract,
+    /// and this pins them without a cross-language run.
+    #[test]
+    fn the_body_keeps_the_order_the_oracle_assigns() {
+        let rendered = prepared(
+            json!({
+                "model": "deepseek-v4-pro",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": false,
+                "tools": [catalog_tool("web_search")],
+                "tool_choice": {"type": "function", "function": {"name": "create_pptx"}},
+            }),
+            json!({}),
+        )
+        .render_body();
+        let position = |needle: &str| rendered.find(needle).unwrap_or_else(|| panic!("{needle}"));
+        assert!(position("\"model\"") < position("\"messages\""));
+        assert!(position("\"messages\"") < position("\"stream\""));
+        assert!(position("\"stream\"") < position("\"tools\""));
+        assert!(position("\"tools\"") < position("\"tool_choice\""));
+        // A forced tool choice keeps `type` before `function`.
+        assert!(
+            rendered.contains(
+                r#""tool_choice": {"type": "function", "function": {"name": "create_pptx"}}"#
+            ),
+            "{rendered}"
+        );
+    }
+
+    /// Tool schemas render with the **catalog's** order: `query` is declared before
+    /// `intent`, and the property object puts `type` before `description`. Neither is
+    /// alphabetical, so a sorted rendering would visibly differ.
+    #[test]
+    fn tool_schemas_render_with_the_catalogs_declaration_order() {
+        let rendered =
+            prepared(json!({"tools": [catalog_tool("web_search")]}), json!({})).render_body();
+        assert!(
+            rendered.contains(r#""properties": {"query": {"type": "string""#),
+            "{rendered}"
+        );
+    }
+
+    /// A definition the catalog does not own keeps the generic rendering: its edit is
+    /// visible in the output and the catalog's orders are **not** borrowed for it.
+    #[test]
+    fn a_drifted_definition_renders_visibly_instead_of_borrowing_the_catalogs_order() {
+        let mut drifted = catalog_tool("web_search");
+        drifted["function"]["description"] = json!("edited elsewhere");
+        let rendered = prepared(json!({"tools": [drifted]}), json!({})).render_body();
+        assert!(rendered.contains("edited elsewhere"), "{rendered}");
+        // The generic path sorts the properties (`intent` before `query`), which is the
+        // visible difference a substitution would have hidden.
+        assert!(
+            rendered.contains(r#""properties": {"intent""#),
+            "{rendered}"
+        );
+    }
+
+    /// `contextDiff.delta` entries lead with their type tag — all four shapes the oracle
+    /// can emit, including the `trim` entry the parity corpus cannot reach today.
+    #[test]
+    fn delta_entries_lead_with_their_type() {
+        let rendered = prepared(
+            json!({}),
+            json!({
+                "contextEngine": {
+                    "enabled": true,
+                    "model": "m",
+                    "tokenBudget": null,
+                    "contextDiff": {
+                        "baseContextId": "ce_x",
+                        "delta": [
+                            {"type": "history", "messages": 1},
+                            {"type": "dynamic_context", "chars": 187},
+                            {"type": "tools", "count": 26},
+                            {"type": "trim", "droppedMessages": 2},
+                        ],
+                    },
+                },
+            }),
+        )
+        .render_diagnostics();
+        for expected in [
+            r#"{"type":"history","messages":1}"#,
+            r#"{"type":"dynamic_context","chars":187}"#,
+            r#"{"type":"tools","count":26}"#,
+            r#"{"type":"trim","droppedMessages":2}"#,
+        ] {
+            assert!(
+                rendered.contains(expected),
+                "{expected} missing from {rendered}"
+            );
+        }
+    }
+
+    /// The taint block renders from the builder's tree — where `sources` keeps its
+    /// first-appearance order and each segment its declared key order — and a block the
+    /// tree no longer matches keeps its own bytes instead.
+    #[test]
+    fn the_taint_block_renders_from_the_builders_tree_while_it_agrees() {
+        let body = json!({"messages": [
+            {"role": "user", "content": "中文提问[用户上传文件上下文]文件内容"},
+            {"role": "system", "content": "[Per-turn context]\nsearch snippets"},
+        ]});
+        let report = build_taint_report_ordered(&body, &ContextTaintSettings::default())
+            .expect("taint is enabled");
+        let mut request = prepared(json!({}), json!({"contextTaint": report.to_value()}));
+        request.taint_ordered = Some(report);
+        let rendered = request.render_diagnostics();
+        // The user turn is scanned before the system turn, so `trusted_user` leads —
+        // not the sorted spelling, which would open with `trusted_system`.
+        assert!(
+            rendered.contains(r#""sources":{"trusted_user""#),
+            "{rendered}"
+        );
+        assert!(
+            rendered
+                .contains(r#""segments":[{"source":"trusted_user","trust":"trusted","chars":4,"#,),
+            "{rendered}"
+        );
+
+        // A drifted block does not get borrowed orders: the edit stays visible.
+        let drifted = prepared(json!({}), json!({"contextTaint": {"tainted": false}}));
+        let drifted_rendered = drifted.render_diagnostics();
+        assert!(
+            drifted_rendered.contains(r#""contextTaint":{"tainted":false}"#),
+            "{drifted_rendered}"
+        );
+    }
 }
