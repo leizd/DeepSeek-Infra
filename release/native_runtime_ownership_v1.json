@@ -92,7 +92,7 @@
       "plane": "data",
       "current_owner": "python",
       "target_owner": "rust",
-      "cutover": "4.9.2",
+      "cutover": "4.9.4",
       "durable_store": "rust_data"
     },
     {

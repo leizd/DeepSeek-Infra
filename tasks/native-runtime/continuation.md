@@ -3089,8 +3089,10 @@ refusal: it builds a suggestion and writes nothing.
 
 **The declaration was prepared, not applied on my own initiative.** `release/native_runtime_ownership_v1.json` is
 `status: accepted` with `approved_by: ["leizd"]`, so an added domain amends a contract that carries
-your signature; §3b of the plan holds the exact entry (`memory_store`, python → rust, cutover 4.9.2,
-`durable_store: rust_data`) with its two judgement values flagged as such. The measured context for
+your signature; §3b of the plan holds the exact entry (`memory_store`, python → rust,
+`durable_store: rust_data`, and a cutover that was written as 4.9.2 and later moved to 4.9.4 — see the
+section below for why the mode, not the analogy, decides it), with its two judgement values flagged as
+such. The measured context for
 that decision: the barrier is policy, not machinery (`GO_CONTROL_DOMAINS` is 28 ids with no memory
 entry, and the memory file is in no `durable_stores` entry), and Python has **four** write entry
 points — so moving `current_owner` is a Python-side decommissioning, not a one-line edit. The stakes
@@ -3130,11 +3132,14 @@ the data plane can still be Python's during that window. `check_zero_python_runt
 `mechanical_writer_denial` gate now verifies both halves — `28 Go control domains and 1 Rust data
 domain`.
 
-**A mismatch to settle**: the gate fires in `PYTHON_DISABLED`, which ADR-0049 places at **4.9.4**,
-while the declaration cuts `memory_store` over at **4.9.2**. As it stands the mechanism becomes
-effective one version after the contract says it does. My reading is that the declaration should say
-4.9.4, since that is the first version whose mode actually stops Python — but it is a one-line edit to
-a contract you approved, so §3c of the plan flags it instead of making it.
+**A mismatch that was flagged, and is now settled by moving the declaration.** The gate fires in
+`PYTHON_DISABLED`, which ADR-0049 places at **4.9.4**, while the declaration said `memory_store` cuts
+over at **4.9.2** — so the mechanism was effective one version after the contract claimed. The
+**declaration moved**: `memory_store` now cuts over at **4.9.4**, the first version whose mode actually
+stops Python. Verified: `validate_ownership` accepts it, `scripts/native_runtime_contract.py --check`
+reports `"ok": true`, `check_zero_python_runtime.py` PASS 8/8, and the ownership plus gate tests are 17
+passed. 4.9.4 has exactly one member — this domain — which is the point: the data-plane handover is
+tied to the version that de-authorizes Python, not to the one that moves the listener.
 
 **Verified**: 52 tests across the memory, ownership, gate and docker-config files;
 `scripts/check_zero_python_runtime.py` PASS 8/8; `ruff check .` and `mypy .` (888 files) clean. The

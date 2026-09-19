@@ -182,17 +182,19 @@ unexplained — and why it was prepared first and applied only on acceptance:
   "plane": "data",
   "current_owner": "python",
   "target_owner": "rust",
-  "cutover": "4.9.2",
+  "cutover": "4.9.4",
   "durable_store": "rust_data"
 }
 ```
 
-Its two free values were judgement calls, not measurements: `cutover: 4.9.2` matches
-`chat_completions_fast_path` — the route that carries the write half — and `durable_store: rust_data`
-says the file's durable state belongs to the rust data plane, which the schema then requires agree
-with `target_owner: rust`. The schema's other rules are satisfied by construction: ids unique,
-`current_owner` python, and the 40-domain production convention that a cutover is named (the only
-null cutovers are the three `production: false` reference/client domains).
+Its two free values were judgement calls, not measurements. `durable_store: rust_data` says the file's
+durable state belongs to the rust data plane, which the schema then requires agree with
+`target_owner: rust`. The cutover was first written as 4.9.2 by analogy with
+`chat_completions_fast_path` — the route that carries the write half — and **moved to 4.9.4** once §3c
+established which mode actually stops Python; that reasoning, not the analogy, is what the value now
+rests on. The schema's other rules are satisfied by construction: ids unique, `current_owner` python,
+and the 40-domain production convention that a cutover is named (the only null cutovers are the three
+`production: false` reference/client domains).
 
 **Landed.** `domains` 43 → 44. Verified rather than assumed: `validate_ownership` accepts the entry,
 `scripts/native_runtime_contract.py --check` reports `"ok": true, "domains": 44`,
@@ -235,16 +237,17 @@ memory, ownership and gate files; `check_zero_python_runtime.py` PASS 8/8; `ruff
 set contains,
 `test_every_memory_write_path_is_denied_once_python_is_de_authorized` goes red.
 
-**The mode condition is the part that needed an argument, and it disagrees with the declared
-cutover.** The gate fires in `PYTHON_DISABLED` and **not** in `GO_AUTHORITATIVE`: ADR-0049 hands the
-control plane over first ("4.9.3 makes Go control domains authoritative one at a time"), and during
-that window the data plane can still be Python's — so `GO_AUTHORITATIVE` says nothing about it, and
-denying there would break a deployment that is only half-way across. But `PYTHON_DISABLED` is the
-ADR's **4.9.4** ("disables Python production authority by default while retaining an explicit
-rollback runtime"), while the declaration's `cutover` for `memory_store` is **4.9.2**. So the
-mechanism becomes effective at 4.9.4 and the contract says 4.9.2; one of the two should move, and my
-reading is that the **declaration** should say 4.9.4, since that is the first version whose mode
-actually stops Python. Changing it edits a contract you approved, so it is flagged rather than made.
+**The mode condition is the part that needed an argument, and it moved the declared cutover.** The
+gate fires in `PYTHON_DISABLED` and **not** in `GO_AUTHORITATIVE`: ADR-0049 hands the control plane
+over first ("4.9.3 makes Go control domains authoritative one at a time"), and during that window the
+data plane can still be Python's — so `GO_AUTHORITATIVE` says nothing about it, and denying there
+would break a deployment that is only half-way across. But `PYTHON_DISABLED` is the ADR's **4.9.4**
+("disables Python production authority by default while retaining an explicit rollback runtime"), so
+the mechanism becomes effective at 4.9.4 while the declaration had said 4.9.2. One of the two had to
+move and the **declaration moved**: `memory_store` now cuts over at **4.9.4**, the first version whose
+mode actually stops Python. The contract is consistent as of that change, and the cutover value is
+deliberately singular — 4.9.4 has exactly one member, this domain, which is the point: the data-plane
+handover is tied to the version that de-authorizes Python, not to the version that moves the listener.
 
 **Still open after this**: nothing in the route writes memory any more, and nothing in Python can once
 the mode flips — but Rust does not write it either. Filling the route's two refusals with the ported
