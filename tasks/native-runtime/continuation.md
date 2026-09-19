@@ -3112,3 +3112,36 @@ clippy (1.85, `--locked --all-targets --all-features -- -D warnings`) clean.
 
 **Not pushed**, and the ownership handover itself is not started — the hole fix is a refusal, and the
 declaration is intent. Both commits sit on `main` ahead of origin.
+
+### The handover body: the Python side is now mechanically stoppable
+
+`memory_store` is declared, so "how do Python's four write entry points stop" had to be answered
+mechanically rather than by convention. It is one edit, because they are one choke point:
+`upsert_memory`, `save_memories`, `delete_memories_by_query`, `delete_memory_by_id`,
+`clear_memories` and the turn-level command (through the first and third) all pass through
+`memory._save_memories_unlocked`, so `assert_python_writer_allowed("memory_store")` sits there, ahead
+of the directory creation. The two delete paths reach it only when they would really delete — a no-op
+is not a write — and the test asserts that in both directions.
+
+`authority.py` grew `RUST_DATA_DOMAINS`, and the gate is deliberately **not** symmetric with the Go
+one: control domains are denied in `GO_AUTHORITATIVE` and `PYTHON_DISABLED`, data domains only in
+`PYTHON_DISABLED`, because ADR-0049 hands the control plane over first ("4.9.3 ... one at a time") and
+the data plane can still be Python's during that window. `check_zero_python_runtime`'s
+`mechanical_writer_denial` gate now verifies both halves — `28 Go control domains and 1 Rust data
+domain`.
+
+**A mismatch to settle**: the gate fires in `PYTHON_DISABLED`, which ADR-0049 places at **4.9.4**,
+while the declaration cuts `memory_store` over at **4.9.2**. As it stands the mechanism becomes
+effective one version after the contract says it does. My reading is that the declaration should say
+4.9.4, since that is the first version whose mode actually stops Python — but it is a one-line edit to
+a contract you approved, so §3c of the plan flags it instead of making it.
+
+**Verified**: 52 tests across the memory, ownership, gate and docker-config files;
+`scripts/check_zero_python_runtime.py` PASS 8/8; `ruff check .` and `mypy .` (888 files) clean. The
+new denial test is **able to fail**: disarming the gate's domain string turns it red, which is how it
+was checked, and the file was restored byte-identically afterwards. `ruff format` is deliberately not
+run — the repository does not use it, and CI checks only `ruff check .`.
+
+**Not pushed**, and the Rust write half is deliberately not filled: ADR-0049 leaves the prior owner
+authoritative until its cutover gate passes and does not permit dual writers, so it lands *with* the
+mode flip.

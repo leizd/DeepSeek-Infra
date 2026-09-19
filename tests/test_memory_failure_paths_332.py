@@ -118,6 +118,83 @@ def test_delete_clear_retrieve_and_context_budget_edges(tmp_settings: Path, monk
     assert memory.load_memories() == []
 
 
+def test_every_memory_write_path_is_denied_once_python_is_de_authorized(
+    tmp_settings: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`memory_store` is a declared domain (python -> rust), and the handover has to be mechanical.
+
+    Every write path funnels through `_save_memories_unlocked`, so one gate there covers them all —
+    `upsert_memory`, `save_memories`, `delete_memories_by_query`, `delete_memory_by_id`,
+    `clear_memories`, and the turn-level command, which reaches the store through the first and
+    third. The paths that only call the choke point when they actually delete are deliberately not
+    denied when they do nothing: a no-op is not a write.
+
+    The gate is mode-driven, because ADR-0049 says "a cutover gate that has not passed leaves the
+    prior owner authoritative; it does not permit dual writers" — so the assertions on the other
+    side of this test matter just as much: the default mode leaves every path working.
+    """
+    from deepseek_infra.infra.native_runtime.authority import PythonWriterMechanicallyDeniedError
+
+    seeded = memory.upsert_memory("Python still owns the store here", category="fact")
+    memory.save_memories([seeded])
+    for write in (
+        lambda: memory.upsert_memory("written while Python owns it", category="fact"),
+        lambda: memory.save_memories([seeded]),
+        lambda: memory.delete_memories_by_query("still owns"),
+        lambda: memory.delete_memory_by_id(str(seeded["id"])),
+        memory.clear_memories,
+    ):
+        write()
+    assert memory.load_memories() == [], "the default mode must keep every write path working"
+
+    # The denial batch has to name what is actually stored: the two delete paths reach the choke
+    # point only when they would really delete. Seeded in the default mode, then captured.
+    present = memory.upsert_memory("still Python's until the cutover", category="fact")
+    survivor = str(present["id"])
+    before = memory.MEMORY_FILE.read_text(encoding="utf-8")
+    monkeypatch.setenv("DEEPSEEK_RUNTIME_MODE", "python_disabled")
+    for denied_write in (
+        lambda: memory.upsert_memory("after the cutover", category="fact"),
+        lambda: memory.save_memories([present]),
+        lambda: memory.delete_memories_by_query("until the cutover"),
+        lambda: memory.delete_memory_by_id(survivor),
+        memory.clear_memories,
+        lambda: memory.apply_explicit_memory_command("请帮我记住: 之后"),
+    ):
+        with pytest.raises(PythonWriterMechanicallyDeniedError):
+            denied_write()
+    assert memory.MEMORY_FILE.read_text(encoding="utf-8") == before, "a denied write left a change behind"
+
+    # A call that would delete nothing never reaches the choke point, so it stays allowed: a no-op
+    # is not a write, and denying it would be a wider behaviour change than the ownership question
+    # asks for. These two lines are why the delete paths above had to name what is stored.
+    assert memory.delete_memories_by_query("nothing matches this") == 0
+    assert memory.delete_memory_by_id("no-such-id") == 0
+    assert memory.MEMORY_FILE.read_text(encoding="utf-8") == before
+
+
+def test_the_domain_is_the_one_the_ownership_contract_declares() -> None:
+    """The gate's domain string and the contract's id are the same string, or the gate never fires.
+
+    `release/native_runtime_ownership_v1.json` is the authority for the id; this pins the two
+    together so a rename on either side fails here instead of silently disarming the gate.
+    """
+    import json
+
+    from deepseek_infra.infra.native_runtime.authority import RUST_DATA_DOMAINS
+
+    contract = json.loads(
+        (Path(__file__).resolve().parents[1] / "release" / "native_runtime_ownership_v1.json").read_text(encoding="utf-8")
+    )
+    declared = {
+        item["id"]
+        for item in contract["domains"]
+        if item.get("current_owner") == "python" and item.get("target_owner") == "rust" and item.get("durable_store") == "rust_data"
+    }
+    assert declared, "the contract declares no python -> rust data domain"
+    assert RUST_DATA_DOMAINS <= declared, f"gate domains not declared by the contract: {sorted(RUST_DATA_DOMAINS - declared)}"
+
+
 def test_explicit_memory_commands_are_parsed_by_their_real_patterns(tmp_settings: Path) -> None:
     """The command grammar is module-level regexes, so this runs them.
 

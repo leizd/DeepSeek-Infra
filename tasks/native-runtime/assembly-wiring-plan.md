@@ -216,6 +216,41 @@ asserting that write as intended. One of those is probably wrong, and which one 
 question rather than a typo; it is flagged here rather than changed, because the write is asserted
 by an existing test that was deliberately written that way.
 
+### §3c The handover body: one choke point, and a mode that has to mean it
+
+"Stopping Python's four write entry points" is not four edits. Measured: every write path into the
+store funnels through `memory._save_memories_unlocked` — `upsert_memory`, `save_memories`,
+`delete_memories_by_query`, `delete_memory_by_id`, `clear_memories`, and the turn-level command
+through the first and third — so the ownership gate belongs at that choke point, where a new caller
+cannot forget it. The two delete paths reach it only when they would really delete, which is
+deliberate: a no-op is not a write, and denying one would be a wider change than the ownership
+question asks for.
+
+**Landed**: `authority.RUST_DATA_DOMAINS` names `memory_store`; `_save_memories_unlocked` calls
+`assert_python_writer_allowed("memory_store")` before it creates so much as a directory; and
+`check_zero_python_runtime`'s `mechanical_writer_denial` gate now checks the data plane as well as
+the control plane (`28 Go control domains and 1 Rust data domain`). Verified: 52 tests over the
+memory, ownership and gate files; `check_zero_python_runtime.py` PASS 8/8; `ruff check .` and
+`mypy .` clean. The new test is **able to fail** — with the gate's domain string changed to a name no
+set contains,
+`test_every_memory_write_path_is_denied_once_python_is_de_authorized` goes red.
+
+**The mode condition is the part that needed an argument, and it disagrees with the declared
+cutover.** The gate fires in `PYTHON_DISABLED` and **not** in `GO_AUTHORITATIVE`: ADR-0049 hands the
+control plane over first ("4.9.3 makes Go control domains authoritative one at a time"), and during
+that window the data plane can still be Python's — so `GO_AUTHORITATIVE` says nothing about it, and
+denying there would break a deployment that is only half-way across. But `PYTHON_DISABLED` is the
+ADR's **4.9.4** ("disables Python production authority by default while retaining an explicit
+rollback runtime"), while the declaration's `cutover` for `memory_store` is **4.9.2**. So the
+mechanism becomes effective at 4.9.4 and the contract says 4.9.2; one of the two should move, and my
+reading is that the **declaration** should say 4.9.4, since that is the first version whose mode
+actually stops Python. Changing it edits a contract you approved, so it is flagged rather than made.
+
+**Still open after this**: nothing in the route writes memory any more, and nothing in Python can once
+the mode flips — but Rust does not write it either. Filling the route's two refusals with the ported
+write half is the other half of the handover, and it has to land *with* the mode flip: ADR-0049 leaves
+the prior owner authoritative until its cutover gate passes, and does not permit dual writers.
+
 ## §4 The memory vector index has no Rust provider — measured, and not bounded
 
 `retrieve_memories` calls `local_rag.search_memories_index` (collection = memory) inside a

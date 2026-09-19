@@ -28,6 +28,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from deepseek_infra.infra.native_runtime.authority import (  # noqa: E402
     GO_CONTROL_DOMAINS,
+    RUST_DATA_DOMAINS,
     PythonRuntimeDisabledError,
     PythonWriterMechanicallyDeniedError,
     RuntimeMode,
@@ -239,6 +240,23 @@ def check_mechanical_writer_denial() -> GateCheckResult:
         os.environ["DEEPSEEK_RUNTIME_MODE"] = "python_disabled"
         os.environ.pop("DEEPSEEK_LEGACY_PYTHON", None)
 
+        # The data plane is denied in the same mode, and deliberately *not* under
+        # go_authoritative: ADR-0049 hands the control plane over first ("4.9.3 makes Go control
+        # domains authoritative one at a time"), so during that window the data plane can still be
+        # Python's. Checking both halves here is what keeps the asymmetry honest.
+        denied_data_domains = []
+        for domain in RUST_DATA_DOMAINS:
+            try:
+                assert_python_writer_allowed(domain)
+            except PythonWriterMechanicallyDeniedError:
+                denied_data_domains.append(domain)
+            else:
+                return GateCheckResult(
+                    name="mechanical_writer_denial",
+                    passed=False,
+                    details=f"Writer for data domain {domain!r} was NOT mechanically denied in python_disabled mode",
+                )
+
         try:
             assert_production_python_allowed()
             return GateCheckResult(
@@ -263,8 +281,14 @@ def check_mechanical_writer_denial() -> GateCheckResult:
         return GateCheckResult(
             name="mechanical_writer_denial",
             passed=True,
-            details=f"Mechanical writer denial active across all {len(denied_domains)} Go control domains; startup gate enforces zero Python",
-            data={"denied_domains": sorted(denied_domains)},
+            details=(
+                f"Mechanical writer denial active across all {len(denied_domains)} Go control domains "
+                f"and all {len(denied_data_domains)} Rust data domains; startup gate enforces zero Python"
+            ),
+            data={
+                "denied_domains": sorted(denied_domains),
+                "denied_data_domains": sorted(denied_data_domains),
+            },
         )
     finally:
         if prev_mode is not None:

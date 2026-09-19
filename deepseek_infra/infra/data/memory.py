@@ -83,6 +83,14 @@ def save_memories(memories: list[dict[str, Any]]) -> None:
 
 
 def _save_memories_unlocked(memories: list[dict[str, Any]]) -> None:
+    # The single choke point for every write to the store: `upsert_memory`, `save_memories`,
+    # `delete_memories_by_query`, `delete_memory_by_id` and `clear_memories` all land here, and the
+    # turn-level command reaches it through them. The ownership gate belongs here rather than at
+    # each of those, so a new caller cannot forget it — and it comes first, before the directory is
+    # even created, so a denied write leaves no side effect behind.
+    from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
+
+    assert_python_writer_allowed("memory_store")
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
 
     cleaned = []
