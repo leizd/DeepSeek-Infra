@@ -666,11 +666,12 @@ async fn streaming_continues_a_tool_call_round() {
     );
     assert!(body.ends_with("data: [DONE]\n\n"));
 
-    // The tool actually ran against the injected workspace.
+    // The tool round ran and was *refused*: the reminders store is undeclared and still Python's, so
+    // `create_reminder` answers the ownership refusal — and the loop carries that refusal on as the
+    // tool result, which is what this case is about (a refusal is a tool result, not a failed turn).
+    // Nothing was written.
     let store = root.join(".reminders").join("reminders.json");
-    assert!(store.exists(), "the round must have written the reminder");
-    let stored = std::fs::read_to_string(&store).unwrap();
-    assert!(stored.contains("buy milk"), "stored: {stored}");
+    assert!(!store.exists(), "a refused create wrote the store");
 
     // Two upstream requests, and the second one carries the exchange: the
     // assistant turn that called the tool, plus the tool result.
@@ -688,5 +689,9 @@ async fn streaming_continues_a_tool_call_round() {
     assert!(
         second_body.contains("buy milk"),
         "the tool result content must be replayed: {second_body}"
+    );
+    assert!(
+        second_body.contains("NATIVE_REMINDERS_WRITE_NOT_OWNED"),
+        "the refusal is what the model reads back: {second_body}"
     );
 }

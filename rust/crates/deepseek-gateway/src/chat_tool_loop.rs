@@ -208,13 +208,31 @@ impl ToolRoundExecutor {
                 // changed. Once the mode says Python is de-authorised the tool runs for real, which
                 // is the point of the flip. `suggest_memory` needs no gate either way — it builds a
                 // suggestion and writes nothing.
-                if name == "forget_memory" && !crate::native_owns_memory_store() {
+                if name == "forget_memory" && !crate::may_write_native_store("memory_store") {
                     return tool_dispatch::DispatchOutcome::Denied(json!({
                         "ok": false,
                         "tool": name,
                         "error": "The memory store is still written by the Python runtime, so this \
                                   gateway refuses to delete from it.",
                         "code": crate::MEMORY_WRITE_NOT_OWNED,
+                    }));
+                }
+                // The reminders store is in the same position, and worse: `reminders_store` is not a
+                // declared domain at all (`remind` appears nowhere in the ownership contract), Python
+                // writes it from three paths — one of them the *delivery* poll `due_reminders`, which
+                // marks `notified` and rewrites the whole file — and both sides reproduce the same
+                // temp path (`reminders.json` -> `reminders.tmp`), so two writers can interleave
+                // before either replaces it. `may_write_native_store` refuses it whatever the mode
+                // says, because a mode must not be able to enable a store nobody has declared; the
+                // cutover is where it gets declared, and this gate then flips with it.
+                if name == "create_reminder" && !crate::may_write_native_store("reminders_store") {
+                    return tool_dispatch::DispatchOutcome::Denied(json!({
+                        "ok": false,
+                        "tool": name,
+                        "error": "The reminders store is still written by the Python runtime, so this \
+                                  gateway refuses to create one rather than reporting a reminder that \
+                                  was never stored.",
+                        "code": crate::REMINDERS_WRITE_NOT_OWNED,
                     }));
                 }
                 let arguments = call
@@ -341,22 +359,38 @@ mod tests {
     async fn a_data_branch_runs_against_the_injected_workspace() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().to_path_buf();
+        // The proof of injection has to come from a **read** now: `create_reminder` is refused while
+        // the reminders store is undeclared (it is still Python's), so the write that used to carry
+        // this evidence is gone. Seeding the store under the injected root and finding it is the
+        // stronger check anyway — a branch reading any other root would come back empty.
+        let reminders_dir = root.join(".reminders");
+        std::fs::create_dir_all(&reminders_dir).unwrap();
+        std::fs::write(
+            reminders_dir.join("reminders.json"),
+            serde_json::to_string(&json!([{
+                "id": "r-seeded",
+                "title": "buy milk",
+                "content": "two litres",
+                "dueAt": "2027-01-01T09:00:00Z",
+                "createdAt": 1_800_000_000_000u64,
+                "notified": false,
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+
         let executor = ToolRoundExecutor::new(Some(WorkspaceBundle::new(root.clone())), None);
-        let results = executor
-            .run_round(vec![call(
-                "create_reminder",
-                r#"{"title":"buy milk","content":"two litres","dueAt":"2027-01-01T09:00:00Z"}"#,
-            )])
-            .await;
+        let results = executor.run_round(vec![call("list_reminders", "{}")]).await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0]["role"], "tool");
         assert_eq!(results[0]["tool_call_id"], "call-1");
         let content = results[0]["content"].as_str().unwrap();
         assert!(content.contains("\"ok\":true"), "content: {content}");
-        assert!(content.contains("\"tool\":\"create_reminder\""));
-        // The write went through the workspace: the store exists under the
-        // injected root, not under some process-global default.
-        assert!(root.join(".reminders").join("reminders.json").exists());
+        assert!(content.contains("\"tool\":\"list_reminders\""));
+        assert!(
+            content.contains("buy milk"),
+            "the branch did not read the injected root: {content}"
+        );
     }
 
     #[tokio::test]

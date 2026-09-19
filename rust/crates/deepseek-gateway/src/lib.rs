@@ -509,27 +509,45 @@ pub(crate) const MEMORY_WRITE_NOT_OWNED: &str = "NATIVE_MEMORY_WRITE_NOT_OWNED";
 /// `NATIVE_MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE` — the deployment has a `rag_vec` table.
 const MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE: &str = "NATIVE_MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE";
 
-/// Whether this process is the memory store's authoritative writer.
+/// The data-plane stores this process is allowed to write.
 ///
-/// The counterpart of `deepseek_infra/infra/native_runtime/authority.py:assert_python_writer_allowed`,
-/// and it reads the same signal that gate does: `DEEPSEEK_RUNTIME_MODE=python_disabled`, which
-/// ADR-0049 places at the 4.9.4 cutover ("disables Python production authority by default while
-/// retaining an explicit rollback runtime"). Deliberately **not** `DEEPSEEK_GO_CONTROL=1`: that mode
-/// says the Go *control* plane is authoritative, and the ADR hands the control plane over one domain
-/// at a time (4.9.3) while the data plane can still be Python's — reading it as data-plane ownership
-/// would put two writers on one store, which is what the ADR forbids.
+/// Two separate questions decide a write, and this list is the second one:
 ///
-/// While this is false the route **refuses** a turn that would write the store rather than answering
-/// without saving; while it is true the ported write half runs. The two are mutually exclusive by
-/// construction, which is what keeps `one_table_one_authoritative_writer` true across the flip.
-pub(crate) fn native_owns_memory_store() -> bool {
-    memory_store_owner_is_native(&std::env::var("DEEPSEEK_RUNTIME_MODE").unwrap_or_default())
+/// 1. **Has the deployment de-authorised Python?** — [`python_is_de_authorised`], the same signal
+///    `deepseek_infra/infra/native_runtime/authority.py:assert_python_writer_allowed` reads
+///    (`DEEPSEEK_RUNTIME_MODE=python_disabled`, ADR-0049's 4.9.4). Deliberately **not**
+///    `DEEPSEEK_GO_CONTROL=1`: that is the *control* plane's mode, and the ADR hands the control plane
+///    over one domain at a time while the data plane can still be Python's — reading it as data-plane
+///    ownership would put two writers on one store.
+/// 2. **Has this store been declared and cut over?** — `release/native_runtime_ownership_v1.json`
+///    lists it as python -> rust with a cutover. `memory_store` is declared. `reminders_store` is
+///    **not**: `remind` appears nowhere in the contract, in `GO_CONTROL_DOMAINS` or in the command
+///    codes, so the route refuses it whatever the mode says — setting the mode alone must not be able
+///    to enable a store nobody has declared. A test pins this list against the contract.
+pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 1] = ["memory_store"];
+
+/// Whether this process may write the store `domain` names.
+///
+/// Both conditions above, and the order matters only for the reader: an undeclared store is refused
+/// even in a fully native deployment.
+pub(crate) fn may_write_native_store(domain: &str) -> bool {
+    DECLARED_NATIVE_DATA_DOMAINS.contains(&domain) && python_is_de_authorised()
 }
 
-/// [`native_owns_memory_store`] over an explicit mode string, so the rule is testable without env.
-pub(crate) fn memory_store_owner_is_native(mode: &str) -> bool {
+/// Whether the deployment has de-authorised Python — ADR-0049's 4.9.4 mode.
+pub(crate) fn python_is_de_authorised() -> bool {
+    python_is_de_authorised_in(&std::env::var("DEEPSEEK_RUNTIME_MODE").unwrap_or_default())
+}
+
+/// [`python_is_de_authorised`] over an explicit mode string, so the rule is testable without env.
+pub(crate) fn python_is_de_authorised_in(mode: &str) -> bool {
     mode.trim().eq_ignore_ascii_case("python_disabled")
 }
+
+/// `NATIVE_REMINDERS_WRITE_NOT_OWNED` — a turn that would write the reminders store, which is
+/// undeclared and still Python's. A sibling of [`MEMORY_WRITE_NOT_OWNED`] rather than a shared code:
+/// the two stores have different cutovers, and a caller that sees this one knows which store it was.
+pub(crate) const REMINDERS_WRITE_NOT_OWNED: &str = "NATIVE_REMINDERS_WRITE_NOT_OWNED";
 
 async fn chat_completions(
     headers: HeaderMap,
@@ -614,7 +632,7 @@ async fn chat_completions(
             //   the instruction — so the turn is refused;
             // - once the mode says Python is de-authorised, the ported write half runs and this is
             //   the writer, which is what makes the handover a flip rather than a rewrite.
-            let owns_memory_store = native_owns_memory_store();
+            let owns_memory_store = may_write_native_store("memory_store");
             let latest_query = latest_user_query(&prepared.payload);
             if !owns_memory_store && memory::has_explicit_memory_command(&latest_query) {
                 return Err(AppError {
@@ -1211,22 +1229,67 @@ mod tests {
     #[test]
     fn the_memory_store_owner_is_the_mode_and_not_go_control() {
         let _env = EnvLock::acquire();
-        assert!(!memory_store_owner_is_native(""));
-        assert!(!memory_store_owner_is_native("python_authoritative"));
-        assert!(!memory_store_owner_is_native("shadow"));
-        assert!(!memory_store_owner_is_native("go_authoritative"));
-        assert!(memory_store_owner_is_native("python_disabled"));
+        assert!(!python_is_de_authorised_in(""));
+        assert!(!python_is_de_authorised_in("python_authoritative"));
+        assert!(!python_is_de_authorised_in("shadow"));
+        assert!(!python_is_de_authorised_in("go_authoritative"));
+        assert!(python_is_de_authorised_in("python_disabled"));
         // Case and surrounding whitespace are the reader's own tolerance, not a second spelling.
-        assert!(memory_store_owner_is_native(" Python_Disabled "));
+        assert!(python_is_de_authorised_in(" Python_Disabled "));
 
         let _go = EnvGuard::with(&[("DEEPSEEK_GO_CONTROL", "1"), ("DEEPSEEK_RUNTIME_MODE", "")]);
         assert!(
-            !native_owns_memory_store(),
+            !python_is_de_authorised(),
             "DEEPSEEK_GO_CONTROL is the control plane and must not grant the data plane"
         );
         // With the Go flag still set, the mode alone flips it: the store's owner is a mode question.
         let _mode = EnvGuard::with(&[("DEEPSEEK_RUNTIME_MODE", "python_disabled")]);
-        assert!(native_owns_memory_store());
+        assert!(python_is_de_authorised());
+        // ...and the mode alone is not enough: the store has to be declared as well.
+        assert!(may_write_native_store("memory_store"));
+        assert!(!may_write_native_store("reminders_store"));
+    }
+
+    /// The writable-stores list must be the contract's list, not a second opinion.
+    ///
+    /// `release/native_runtime_ownership_v1.json` is the authority for which stores have cut over, so
+    /// this pins the two together: declaring a domain without adding it here would leave the route
+    /// refusing a store it owns, and adding one here without declaring it would put a second writer on
+    /// a store the contract still gives to Python.
+    #[test]
+    fn the_writable_stores_are_the_ones_the_contract_declares() {
+        let contract: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../../release/native_runtime_ownership_v1.json"),
+            )
+            .expect("the ownership contract is readable from the crate root"),
+        )
+        .expect("the ownership contract is JSON");
+        let mut declared: Vec<&str> = contract["domains"]
+            .as_array()
+            .expect("domains[] is an array")
+            .iter()
+            .filter(|item| {
+                item["current_owner"] == json!("python")
+                    && item["target_owner"] == json!("rust")
+                    && item["durable_store"] == json!("rust_data")
+            })
+            .filter_map(|item| item["id"].as_str())
+            .collect();
+        declared.sort_unstable();
+        // A **subset**, not equality: the contract also declares stores this gateway has nothing to
+        // do with (`s3_minio_streaming`, `transfer_jobs`, the crypto/verification domains — nine of
+        // them carry `durable_store: rust_data`). What must never happen is this list inventing
+        // ownership the contract has not declared, because that is the second writer it forbids.
+        for domain in DECLARED_NATIVE_DATA_DOMAINS {
+            assert!(
+                declared.contains(&domain),
+                "{domain} is writable here but the contract does not declare it python -> rust"
+            );
+        }
+        // And the one this route actually predicates on is in it, so the list is not decorative.
+        assert!(DECLARED_NATIVE_DATA_DOMAINS.contains(&"memory_store"));
     }
 
     /// With no credential the route fails closed, and it answers with the oracle's own error.

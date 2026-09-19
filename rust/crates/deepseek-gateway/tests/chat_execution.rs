@@ -696,42 +696,57 @@ async fn chat_route_runs_the_memory_deleting_tool_once_the_mode_de_authorises_py
     );
 }
 
+/// The reminders store is refused — and refused **even when** the mode says Python is de-authorised,
+/// because `reminders_store` is not a declared domain and a mode must not be able to enable a store
+/// nobody has declared.
+///
+/// This replaces a case that asserted the write happened. Three measurements moved it: `remind`
+/// appears nowhere in the ownership contract (the domain list, `GO_CONTROL_DOMAINS` and the command
+/// codes were each searched), Python writes the store from three paths — one of them the *delivery*
+/// poll `due_reminders`, which marks `notified` and rewrites the whole file — and both sides reproduce
+/// the same temp path (`reminders.json` -> `reminders.tmp`), so two writers can interleave before
+/// either replaces it. The write-through-the-injected-workspace path is still covered, by the memory
+/// mirrors above.
 #[tokio::test]
-async fn chat_route_runs_a_data_branch_against_the_workspace() {
+async fn chat_route_refuses_to_create_a_reminder_while_the_store_is_undeclared() {
     let _env = EnvLock::acquire();
     let workspace = tempfile::tempdir().unwrap();
     let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let tool_round = || {
+        json!({
+            "id": "chat-data-1",
+            "model": "deepseek-v4-pro",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call-rem-1",
+                        "type": "function",
+                        "function": {"name": "create_reminder", "arguments": "{\"title\":\"buy milk\",\"content\":\"two litres\",\"dueAt\":\"2027-01-01T09:00:00Z\"}"},
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+        })
+    };
+    let final_turn = || {
+        json!({
+            "id": "chat-data-2",
+            "model": "deepseek-v4-pro",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "reminder set"},
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14},
+        })
+    };
+    // Two requests, two rounds each: the default mode, then the mode that de-authorises Python.
     let upstream = stub_upstream_sequence(
-        vec![
-            json!({
-                "id": "chat-data-1",
-                "model": "deepseek-v4-pro",
-                "choices": [{
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [{
-                            "id": "call-rem-1",
-                            "type": "function",
-                            "function": {"name": "create_reminder", "arguments": "{\"title\":\"buy milk\",\"content\":\"two litres\",\"dueAt\":\"2027-01-01T09:00:00Z\"}"},
-                        }],
-                    },
-                    "finish_reason": "tool_calls",
-                }],
-                "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
-            }),
-            json!({
-                "id": "chat-data-2",
-                "model": "deepseek-v4-pro",
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": "reminder set"},
-                    "finish_reason": "stop",
-                }],
-                "usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14},
-            }),
-        ],
+        vec![tool_round(), final_turn(), tool_round(), final_turn()],
         requests.clone(),
     );
     let url = start_stub(upstream).await;
@@ -755,33 +770,44 @@ async fn chat_route_runs_a_data_branch_against_the_workspace() {
         }],
     })
     .to_string();
-    let (status, response) = post_chat(&body).await;
 
+    let (status, response) = post_chat(&body).await;
     assert_eq!(status, StatusCode::OK, "response: {response}");
     assert_eq!(response["choices"][0]["message"]["content"], "reminder set");
-
-    let requests = requests.lock().unwrap().clone();
-    assert_eq!(requests.len(), 2);
-    let messages = requests[1]["messages"].as_array().unwrap();
-    // Index 4: the assembled body puts the tools' hint and the per-turn context ahead of the
-    // round's own assistant/tool pair.
-    assert_eq!(messages[4]["role"], "tool");
-    assert_eq!(messages[4]["name"], "create_reminder");
-    let content = messages[4]["content"].as_str().unwrap();
-    assert!(content.contains("\"ok\":true"), "content: {content}");
-    assert!(content.contains("buy milk"), "content: {content}");
-
-    // The write went through the injected workspace, fence and all: the store
-    // and the mutation gate's durable files live under DEEPSEEK_INFRA_ROOT,
-    // not under any process-global default.
+    let tool_result = |index: usize| -> String {
+        requests.lock().unwrap()[index]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["role"] == "tool")
+            .expect("the round appended a tool result")
+            .to_string()
+    };
+    let refused = tool_result(1);
     assert!(
-        workspace
-            .path()
-            .join(".reminders")
-            .join("reminders.json")
-            .exists()
+        refused.contains("NATIVE_REMINDERS_WRITE_NOT_OWNED"),
+        "the tool result must be the ownership refusal: {refused}"
     );
-    assert!(workspace.path().join(".workspace-generation").exists());
+    assert!(!refused.contains("\"ok\":true"), "content: {refused}");
+    let store = workspace.path().join(".reminders").join("reminders.json");
+    assert!(!store.exists(), "a refused create wrote the store");
+
+    // Now with Python de-authorised. The memory store flips here; the reminders store does not,
+    // because it has no declaration — which is the mechanical half of "declare it at the cutover".
+    let _mode = EnvGuard::set(&[
+        ("DEEPSEEK_API_URL", &url),
+        ("DEEPSEEK_API_KEY", "unit-upstream-key"),
+        ("DEEPSEEK_INFRA_ROOT", &root),
+        ("DEEPSEEK_RUNTIME_MODE", "python_disabled"),
+    ]);
+    let (status, response) = post_chat(&body).await;
+    assert_eq!(status, StatusCode::OK, "response: {response}");
+    let still_refused = tool_result(3);
+    assert!(
+        still_refused.contains("NATIVE_REMINDERS_WRITE_NOT_OWNED"),
+        "an undeclared store must stay refused even with Python de-authorised: {still_refused}"
+    );
+    assert!(!store.exists(), "a refused create wrote the store");
 }
 
 #[tokio::test]

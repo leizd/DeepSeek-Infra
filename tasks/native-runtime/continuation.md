@@ -3185,3 +3185,39 @@ clean); deleting `target/debug/incremental` is the heavier one.
 
 **Not pushed**: six commits now sit on `main` ahead of origin, and the flip is inert until the mode is
 set — nothing runs differently today.
+
+### The reminders write is refused, and the refusal is export-proof
+
+The question "which of the two undeclared stores is treated wrongly" answered itself once measured: it
+is the reminders write, the one the route performed unconditionally. `.reminders` sits exactly where
+`.memory` sat before its declaration (undeclared — `remind` appears nowhere in the contract,
+`GO_CONTROL_DOMAINS` or the command codes — and written by Python from three paths, one of them the
+*delivery* poll `due_reminders`), and ADR-0049's "it does not permit dual writers" forbids the native
+side writing it. On the owner's call the treatment is now the same as memory's: **refuse now, declare at
+the cutover.**
+
+The gate grew a second condition rather than a second constant. `python_is_de_authorised()` is the
+deployment-wide mode (ADR-0049's 4.9.4), and `may_write_native_store(domain)` is that **and** the
+domain's presence in `DECLARED_NATIVE_DATA_DOMAINS`. That split is the whole point: `reminders_store` is
+not in the list, so `create_reminder` answers `NATIVE_REMINDERS_WRITE_NOT_OWNED` **whatever the mode
+says**, and one case asserts it twice — refused by default, and still refused with
+`DEEPSEEK_RUNTIME_MODE=python_disabled`. No environment variable can enable a store nobody has declared,
+which is the mechanical half of "declare it at the cutover". A second test pins the list as a **subset**
+of the contract's python → rust data domains, so it cannot invent ownership (nine domains carry
+`durable_store: rust_data`, and most belong to other planes).
+
+**Three cases had asserted the reminder write**, and each was updated rather than deleted, keeping its
+own purpose: the integration case now asserts the refusal and that no store appeared; the streaming case
+still proves a tool round is *continued* rather than failing the turn, with the refusal as the replayed
+tool result; and `chat_tool_loop`'s unit test proves workspace injection by seeding the store under the
+injected root and reading it back, which is stronger evidence than the write it used to lean on. Both
+refusal assertions were shown **able to fail**: disarming the gate turns the integration case and the
+streaming case red, and nothing else.
+
+**Correction worth recording**: my first version of the contract-pinning test asserted the writable list
+*equals* the contract's python → rust data domains. That was wrong and it failed immediately — the
+contract declares nine such domains, most of them other planes' stores. A subset is the correct
+invariant, and it is the one the Python side already used.
+
+**Verified**: `cargo test -p deepseek-gateway -p deepseek-policy` → 164 lib plus 10 + 6 + 1 + 1
+integration and 403 policy, all passed; `fmt --check` clean; clippy clean on lib and test targets.

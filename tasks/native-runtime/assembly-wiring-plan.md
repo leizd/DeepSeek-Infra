@@ -249,9 +249,26 @@ under the rule this plan already follows:
    the port*; it is not a licence for two processes to use it at once.
 
 The remedy is the one memory already has: refuse while Python owns it, and flip when a `reminders_store`
-domain is declared and cut over at the version whose mode de-authorises Python. That is a behaviour
-change to a path an existing test asserts, so it is left for the owner to call — the options are a
-refusal now plus a declaration at the cutover, or a declaration now with the same mode-driven flip.
+domain is declared and cut over at the version whose mode de-authorises Python.
+
+**Landed: refused, and refused for the right reason.** `lib.rs` now separates the two questions the
+single mode predicate was conflating — `python_is_de_authorised()` is the deployment-wide mode, and
+`may_write_native_store(domain)` is that **and** the domain's presence in
+`DECLARED_NATIVE_DATA_DOMAINS`. `reminders_store` is not in it, so `chat_tool_loop`'s `create_reminder`
+gate answers `NATIVE_REMINDERS_WRITE_NOT_OWNED` **whatever the mode says** — a test asserts exactly
+that, twice in one case: refused by default, and still refused with `DEEPSEEK_RUNTIME_MODE=python_disabled`.
+That is the mechanical half of "declare it at the cutover": no environment variable can enable a store
+nobody has declared. A test also pins `DECLARED_NATIVE_DATA_DOMAINS` as a **subset** of the contract's
+python → rust data domains (nine carry `durable_store: rust_data`, most of them other planes' stores),
+so the list cannot invent ownership.
+
+Three cases had asserted the reminder write and were updated rather than deleted, each keeping its own
+purpose: the integration case now asserts the refusal and that no store appeared; the streaming case
+still proves a tool round is *continued* rather than failing the turn, with the refusal as the replayed
+tool result; and `chat_tool_loop`'s unit test proves workspace injection by **seeding** the store under
+the injected root and reading it back — stronger than the write it used to rely on. Both refusal
+assertions were shown able to fail: disarming the gate turns the integration case and the streaming
+case red.
 
 ### §3c The handover body: one choke point, and a mode that has to mean it
 
