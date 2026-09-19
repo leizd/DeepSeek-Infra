@@ -218,6 +218,41 @@ asserting that write as intended. One of those is probably wrong, and which one 
 question rather than a typo; it is flagged here rather than changed, because the write is asserted
 by an existing test that was deliberately written that way.
 
+**Measured: it is the reminders write that is wrong.** Four findings, and the first alone settles it
+under the rule this plan already follows:
+
+1. **The rule is uniform and reminders breaks it.** `.reminders` is an undeclared durable store — the
+   string `remind` appears **nowhere** in `release/native_runtime_ownership_v1.json`, in
+   `GO_CONTROL_DOMAINS`, or in the command codes, so by the same test memory failed it is in the same
+   position: Python writes it, and `one_table_one_authoritative_writer` plus ADR-0049's "a cutover gate
+   that has not passed leaves the prior owner authoritative; **it does not permit dual writers**" say
+   the native route must not write it until a domain is declared and cut over. Memory now does exactly
+   that; reminders writes unconditionally.
+2. **It was never a decision.** The write arrived as one of "the seven data branches"
+   (`432318d1 feat(policy): wire the seven data branches into the dispatcher`), and no commit message,
+   continuation section or plan paragraph discusses who owns the reminders store. Memory's declaration
+   was the deliberate act; this was a by-product of porting the dispatcher.
+3. **The window is not turn-driven, and the failure is user-visible.** Python's delivery path
+   `due_reminders` marks `notified` and **rewrites the whole file** (`reminders.py:59-63`), and it is
+   reached from an endpoint the UI polls (`web/server.py:604` `api_due_reminders`) — so that writer runs
+   independently of any conversation. Both sides do read-modify-write under a **process-local** lock
+   (`_LOCK` / `STORE_LOCK`), and a cross-process lock does not make a read-modify-write atomic. The
+   precondition is both runtimes live against one root — which is precisely what an opt-in-delegate
+   deployment is, and both resolve the store as `<root>/.reminders/reminders.json`. So a Rust create that
+   read before Python marked writes back the unmarked copy and **the reminder fires again**, and the
+   reverse order **silently drops** the reminder the user was just told was set.
+4. **It is worse than a lost update.** Python's temp path is `REMINDERS_FILE.with_suffix(".tmp")` —
+   `reminders.json` → `reminders.tmp` — and the Rust port reproduces it faithfully, which
+   `continuation.md` already records as a reproduced quirk ("two writers collide on one name"). Two
+   concurrent writers can therefore interleave on that single temp file before either `replace`s it,
+   which is a corrupt-publication risk rather than a lost update. Reproducing the naming was right *for
+   the port*; it is not a licence for two processes to use it at once.
+
+The remedy is the one memory already has: refuse while Python owns it, and flip when a `reminders_store`
+domain is declared and cut over at the version whose mode de-authorises Python. That is a behaviour
+change to a path an existing test asserts, so it is left for the owner to call — the options are a
+refusal now plus a declaration at the cutover, or a declaration now with the same mode-driven flip.
+
 ### §3c The handover body: one choke point, and a mode that has to mean it
 
 "Stopping Python's four write entry points" is not four edits. Measured: every write path into the
