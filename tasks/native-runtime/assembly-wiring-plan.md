@@ -172,8 +172,9 @@ and it has nothing to deny here. Python's side has **four** write entry points
 decommissioning, not a one-line edit.
 
 `release/native_runtime_ownership_v1.json` is `status: accepted` with `approved_by: ["leizd"]`, so an
-added domain is an **amendment to a contract that carries your signature** — prepared here, not
-applied:
+added domain is an **amendment to a contract that carries your signature**. That is why the entry is
+written down here with the reasoning that fixed its two free values instead of appearing in a diff
+unexplained — and why it was prepared first and applied only on acceptance:
 
 ```json
 {
@@ -186,12 +187,19 @@ applied:
 }
 ```
 
-Both remaining values are judgement calls, not measurements: `cutover: 4.9.2` matches
+Its two free values were judgement calls, not measurements: `cutover: 4.9.2` matches
 `chat_completions_fast_path` — the route that carries the write half — and `durable_store: rust_data`
 says the file's durable state belongs to the rust data plane, which the schema then requires agree
 with `target_owner: rust`. The schema's other rules are satisfied by construction: ids unique,
 `current_owner` python, and the 40-domain production convention that a cutover is named (the only
 null cutovers are the three `production: false` reference/client domains).
+
+**Landed.** `domains` 43 → 44. Verified rather than assumed: `validate_ownership` accepts the entry,
+`scripts/native_runtime_contract.py --check` reports `"ok": true, "domains": 44`,
+`scripts/check_zero_python_runtime.py` still passes 8/8, and the ownership plus zero-python tests are
+17 passed. Declaring the domain changes **no runtime behaviour** — `GO_CONTROL_DOMAINS` is what
+denies a write, and it still has no memory identifier. It is a statement of intent plus the cutover it
+will be judged against, and the two refusals in the route remain what keep the interim honest.
 
 **The stakes, so the decision is not abstract**: at the `chat_completions_fast_path` cutover this
 route becomes production-authoritative, and memory-write turns then get a `501` for real users —

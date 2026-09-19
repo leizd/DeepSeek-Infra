@@ -3087,7 +3087,7 @@ Python owns. The loop now answers `DispatchOutcome::Denied` with the same code t
 uses, `NATIVE_MEMORY_WRITE_NOT_OWNED`, because it is the same reason. `suggest_memory` needs no
 refusal: it builds a suggestion and writes nothing.
 
-**The declaration is prepared, not applied.** `release/native_runtime_ownership_v1.json` is
+**The declaration was prepared, not applied on my own initiative.** `release/native_runtime_ownership_v1.json` is
 `status: accepted` with `approved_by: ["leizd"]`, so an added domain amends a contract that carries
 your signature; §3b of the plan holds the exact entry (`memory_store`, python → rust, cutover 4.9.2,
 `durable_store: rust_data`) with its two judgement values flagged as such. The measured context for
@@ -3098,9 +3098,17 @@ are concrete: at the `chat_completions_fast_path` cutover the `501` becomes a ca
 against Python, and the contract's `forbidden` list contains `permanent_python_fallback`, so the
 cutover is where the handover has to be recorded.
 
+**The amendment was then accepted and applied.** `domains` 43 → 44, with `validate_ownership`
+accepting the entry, `scripts/native_runtime_contract.py --check` reporting `"ok": true, "domains":
+44`, `scripts/check_zero_python_runtime.py` still PASS 8/8, and the ownership plus zero-python tests
+at 17 passed. It changes no runtime behaviour: `GO_CONTROL_DOMAINS` is the mechanical denial and it
+still has no memory identifier, so the declaration is intent plus the cutover it will be judged
+against. What remains open is the handover itself — stopping Python's four write paths and filling
+the route's two refusals with the ported write half — which is a slice of its own.
+
 **Verified**: `cargo test -p deepseek-gateway` → 162 lib plus 8 + 6 + 1 + 1 integration, all passed
 (the new case included); `cargo test -p deepseek-policy` → 403 passed; workspace `fmt --check` and
 clippy (1.85, `--locked --all-targets --all-features -- -D warnings`) clean.
 
-**Not pushed**, and the declaration is not applied — the hole fix is a refusal, and the ownership
-handover is yours to accept.
+**Not pushed**, and the ownership handover itself is not started — the hole fix is a refusal, and the
+declaration is intent. Both commits sit on `main` ahead of origin.

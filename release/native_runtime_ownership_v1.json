@@ -88,6 +88,14 @@
       "durable_store": null
     },
     {
+      "id": "memory_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.2",
+      "durable_store": "rust_data"
+    },
+    {
       "id": "mcp_jsonrpc",
       "plane": "data",
       "current_owner": "python",
