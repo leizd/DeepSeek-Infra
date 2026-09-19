@@ -8,8 +8,14 @@ use axum::{
     routing::{any, get, post},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::{io, path::Path as FsPath};
+use serde_json::{Value, json};
+use std::{collections::HashMap, io, path::Path as FsPath};
+
+use deepseek_policy::app_error::AppError;
+use deepseek_policy::core_utils::{latest_user_query, python_truthy};
+use deepseek_policy::memory;
+use deepseek_policy::model_router::ModelRouterSettings;
+use deepseek_policy::request_messages::validate_request_messages;
 
 pub mod assembly_env;
 mod auth;
@@ -482,14 +488,28 @@ async fn models() -> (StatusCode, Json<serde_json::Value>) {
     )
 }
 
-async fn chat_completions(body: Bytes) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
-    // The raw body is prepared directly — not re-encoded through a typed struct
-    // first. A typed shim would have to enumerate every forwardable field
-    // (`tools`, `tool_choice`, `temperature`, …) and would silently drop any it
-    // missed; the tool loop is only reachable at all because `tools` survives
-    // into the prepared request. Both entry points (`/v1/chat/completions` and
-    // `/gateway/request/prepare`) therefore share one validator,
-    // `prepare_chat_request`, and one set of rules.
+/// What the composition produced for one `/v1/chat/completions` request.
+struct NativeChat {
+    /// The assembled upstream body — `build_deepseek_request`'s output, not a thin
+    /// OpenAI→upstream mapping.
+    body: serde_json::Value,
+    /// The credential the assembly validated. The oracle sends *this*, not a fresh
+    /// environment read, so an explicit `apiKey` in the payload is honoured and a
+    /// missing one has already failed closed.
+    api_key: String,
+    streaming: bool,
+    model: String,
+}
+
+/// `NATIVE_MEMORY_WRITE_NOT_OWNED` — the turn carries an explicit memory command.
+const MEMORY_WRITE_NOT_OWNED: &str = "NATIVE_MEMORY_WRITE_NOT_OWNED";
+/// `NATIVE_MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE` — the deployment has a `rag_vec` table.
+const MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE: &str = "NATIVE_MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE";
+
+async fn chat_completions(
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
     let raw: serde_json::Value = serde_json::from_slice(&body).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
@@ -501,26 +521,132 @@ async fn chat_completions(body: Bytes) -> Result<Response, (StatusCode, Json<ser
             })),
         )
     })?;
-    let prepared =
-        request_preparation::prepare_chat_request(&raw).map_err(chat_preparation_error)?;
-    let model = prepared
-        .get("model")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    // The upstream credential is read from the server environment, never from
-    // the request: preparation already rejects client-supplied credential keys.
-    let config = chat_execution::UpstreamConfig::from_env();
-    let streaming = prepared
-        .get("stream")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    if streaming {
+
+    // The body is built the way the oracle builds it: the OpenAI facade translates the
+    // request into the internal payload (dropping everything it does not forward), the
+    // payload is validated, and only then is the upstream body assembled. Building it
+    // straight from the OpenAI request — what this route used to do — forwards `tools`,
+    // `tool_choice`, `max_tokens`, `top_p` and `reasoning_effort`, none of which the
+    // oracle forwards, and omits `thinkingEnabled`/`localBaseUrl`.
+    //
+    // Facade and validation run **before** the workspace is bound: the oracle validates
+    // inside `call_deepseek`, before anything reads a store, so a request with no user turn
+    // must be a `400` whether or not this process has a workspace root.
+    let router = ModelRouterSettings::default();
+    let api_key_fallback = std::env::var("DEEPSEEK_API_KEY").unwrap_or_default();
+    let base_url = openai_facade::request_base_url(&headers);
+    let prepared = native_chat::prepare_openai_chat(&raw, &base_url, &router, &api_key_fallback)
+        .map_err(openai_app_error)?;
+
+    let assembly = assembly_env::NativeAssembly::from_env().map_err(openai_app_error)?;
+
+    // A deployment that installed the optional `sqlite-vec` extra has a `rag_vec` table, and
+    // the oracle would blend its distances into every memory score. This process cannot
+    // evaluate a `vec0` MATCH, so it refuses rather than serving the cosine fallback, whose
+    // hits differ in *membership*, not just order.
+    let memory_index = deepseek_policy::memory_index::MemoryIndex::open(assembly.root());
+    if memory_index
+        .as_ref()
+        .is_some_and(|index| index.vector_table_ready)
+    {
+        return Err(openai_app_error(AppError {
+            message: "The memory index has a rag_vec table, so sqlite-vec distances would \
+                      change which memories this turn retrieves; refusing rather than \
+                      serving the cosine fallback."
+                .to_string(),
+            code: MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE,
+            status: 501,
+        }));
+    }
+
+    let root = assembly.root().to_path_buf();
+    // The facade translation and the validation already ran, deliberately before the workspace
+    // was bound, so this closure starts from that `prepared` rather than repeating the pair.
+    let (outcome, consulted_file_index) =
+        assembly.with_env(|env| -> Result<NativeChat, AppError> {
+            let streaming = python_truthy(prepared.payload.get("stream").unwrap_or(&Value::Null));
+            let model = prepared.validated.model.clone();
+
+            // The message rules run here rather than with the validation above, and that placement is
+            // forced: they are defined over `normalize_chat_messages`, whose first act is
+            // `expanded_message_content(message)` (`deepseek_client.py:492`), so a turn that is blank
+            // *before* expansion is not blank to them. They therefore need the expander, and the
+            // expander needs the file cache. Running them before the memory read — instead of leaving
+            // them to `build_deepseek_request` — is what keeps the oracle's order inside
+            // `call_deepseek`: validate, message rules, memory, build.
+            validate_request_messages(
+                &prepared.payload,
+                &prepared.validated.messages,
+                env.expander,
+            )?;
+
+            // `.memory/memories.json` is owned by Python: no `memory` domain is declared and
+            // `one_table_one_authoritative_writer` is an invariant, so this route must not
+            // write it. Answering a "记住: X" turn *without* saving would silently discard the
+            // instruction, so such a turn is refused instead — see
+            // `deepseek_policy::memory::{has_explicit_memory_command, prepare_memory_state_read_only}`.
+            let latest_query = latest_user_query(&prepared.payload);
+            if memory::has_explicit_memory_command(&latest_query) {
+                return Err(AppError {
+                    message: "This turn asks for a long-term memory to be saved or deleted. The \
+                          memory store is still written by the Python runtime, so the native \
+                          route refuses rather than answering without saving."
+                        .to_string(),
+                    code: MEMORY_WRITE_NOT_OWNED,
+                    status: 501,
+                });
+            }
+
+            let provider = |query: &str, scopes: &[String]| -> HashMap<String, i64> {
+                match &memory_index {
+                    // `vector_table_ready` was already refused above, so this read cannot be
+                    // the un-reproducible branch; the fallback is unreachable rather than
+                    // swallowed, which is why it is safe here.
+                    Some(index) => deepseek_policy::memory_index::memory_vector_hits(
+                        index,
+                        query,
+                        scopes,
+                        memory::MEMORY_RETRIEVE_LIMIT * 2,
+                    )
+                    .unwrap_or_default(),
+                    None => HashMap::new(),
+                }
+            };
+            let borrowed: &memory::VectorHits<'_> = &provider;
+            let memory_state =
+                memory::prepare_memory_state_read_only(&prepared.payload, &root, Some(borrowed));
+            let assembled =
+                native_chat::assemble_openai_chat(prepared, streaming, &memory_state, env)?;
+            Ok(NativeChat {
+                body: assembled.body,
+                api_key: assembled.api_key,
+                streaming,
+                model,
+            })
+        });
+
+    // The flag is set by the very call the oracle would have served, so it cannot drift
+    // from `expanded_message_content`'s own trigger the way a duplicated predicate would.
+    if consulted_file_index {
+        return Err(openai_app_error(
+            deepseek_policy::file_store::vector_index_not_ready(),
+        ));
+    }
+    let outcome = outcome.map_err(openai_app_error)?;
+
+    // The upstream credential comes from the assembled request, which is where the oracle
+    // takes it; the client never supplies one (the facade does not forward credentials).
+    let mut config = chat_execution::UpstreamConfig::from_env();
+    if !outcome.api_key.is_empty() {
+        config.api_key = outcome.api_key.clone();
+    }
+    let model = outcome.model.clone();
+    if outcome.streaming {
         // The upstream turn is opened *before* the response is built so a
         // non-success upstream status can surface as an HTTP error. Once the
         // stream is open the status line is already on the wire, so any later
         // failure has to travel as an SSE error frame instead.
-        let upstream = chat_execution::open_chat_stream(&config, &prepared)
+        let upstream = chat_execution::open_chat_stream(&config, &outcome.body)
             .await
             .map_err(chat_execution_error)?;
         let created = now_unix_seconds();
@@ -529,14 +655,19 @@ async fn chat_completions(body: Bytes) -> Result<Response, (StatusCode, Json<ser
         // workspace root and policy profile come from the server environment.
         let executor = chat_tool_loop::ToolRoundExecutor::from_env();
         return Ok(chat_stream::streaming_response(
-            config, prepared, executor, upstream, &model, created,
+            config,
+            outcome.body,
+            executor,
+            upstream,
+            &model,
+            created,
         ));
     }
     // The tool executor is per request: its file cache persists across this
     // request's calls, which is the WorkspaceContext contract. The workspace
     // root and the policy profile come from the server environment.
     let executor = chat_tool_loop::ToolRoundExecutor::from_env();
-    match chat_tool_loop::execute_chat_with_tool_rounds(&config, &prepared, &executor).await {
+    match chat_tool_loop::execute_chat_with_tool_rounds(&config, &outcome.body, &executor).await {
         Ok(result) => Ok(Json(chat_execution::openai_completion_response(
             &result,
             &model,
@@ -545,6 +676,22 @@ async fn chat_completions(body: Bytes) -> Result<Response, (StatusCode, Json<ser
         .into_response()),
         Err(error) => Err(chat_execution_error(error)),
     }
+}
+
+/// Report an assembly failure in the oracle's envelope: `{"error": <message>, "code":
+/// <code>}` with `AppError.status`.
+///
+/// This is the shape `AppError.to_response()` produces and the FastAPI handler returns, so
+/// a client that reads `error` as a string and `code` as the machine-readable field sees
+/// what the Python runtime already sends. The frozen REST inventory records this route but
+/// no error envelope, so the shape is a compatibility choice rather than a frozen byte —
+/// and it is the oracle's, which is the behaviour being preserved.
+fn openai_app_error(error: AppError) -> (StatusCode, Json<serde_json::Value>) {
+    let status = StatusCode::from_u16(error.status).unwrap_or(StatusCode::BAD_REQUEST);
+    (
+        status,
+        Json(json!({"error": error.message, "code": error.code})),
+    )
 }
 
 fn now_unix_seconds() -> i64 {
@@ -578,28 +725,6 @@ fn chat_execution_error(
     )
 }
 
-/// Map a preparation failure onto the OpenAI-compatible error envelope this
-/// route already returns, keeping the pre-existing status codes for the cases
-/// that were previously handled inline.
-fn chat_preparation_error(
-    error: request_preparation::PreparationError,
-) -> (StatusCode, Json<serde_json::Value>) {
-    let (status, error_type) = match error.code {
-        "request_too_large" => (StatusCode::PAYLOAD_TOO_LARGE, "invalid_request_error"),
-        "context_compression_required" => (StatusCode::CONFLICT, "invalid_request_error"),
-        _ => (StatusCode::BAD_REQUEST, "invalid_request_error"),
-    };
-    (
-        status,
-        Json(json!({
-            "error": {
-                "message": error.message,
-                "type": error_type
-            }
-        })),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -626,6 +751,79 @@ mod tests {
         let status = response.status();
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
+    // The route reads its server-side credential fallback from the process environment, so a
+    // test that needs a credential has to set one, and a test that needs *no* credential has to
+    // clear whatever the developer's shell exported — otherwise these cases pass or fail by
+    // accident. A blocking `std::sync::MutexGuard` cannot be held across `.await` (clippy's
+    // `await_holding_lock`), so this is the hand-rolled spin flag `tests/chat_execution.rs` and
+    // `tests/chat_stream.rs` already use, released by `EnvGuard::drop`.
+    static ENV_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    struct EnvLock;
+
+    impl EnvLock {
+        fn acquire() -> Self {
+            use std::sync::atomic::Ordering;
+            while ENV_BUSY
+                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                std::thread::yield_now();
+            }
+            Self
+        }
+    }
+
+    impl Drop for EnvLock {
+        fn drop(&mut self) {
+            ENV_BUSY.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    /// `DEEPSEEK_API_KEY` and a workspace root, both forced for the lifetime of the guard.
+    ///
+    /// The root is needed by any case that gets past the credential, model and `messages` checks:
+    /// `/v1/chat/completions` binds the assembly from there, and the message rules expand each
+    /// turn's content, so they read the file cache the same way the memory store and the budget
+    /// ledger do. Without a root such a case answers `500 DEEPSEEK_INFRA_ROOT is not set`.
+    struct EnvGuard {
+        saved: Vec<(&'static str, Option<String>)>,
+        _root: tempfile::TempDir,
+    }
+
+    impl EnvGuard {
+        fn api_key(value: &str) -> Self {
+            let _root = tempfile::tempdir().expect("a temp workspace root");
+            let root_path = _root
+                .path()
+                .to_str()
+                .expect("a utf-8 temp path")
+                .to_string();
+            let mut saved = Vec::new();
+            for (name, value) in [
+                ("DEEPSEEK_API_KEY", value),
+                ("DEEPSEEK_INFRA_ROOT", root_path.as_str()),
+            ] {
+                saved.push((name, std::env::var(name).ok()));
+                // `set_var` is `unsafe` in edition 2024; `EnvLock` is what makes it sound here, by
+                // keeping these mutations away from other tests' threads for its lifetime.
+                unsafe { std::env::set_var(name, value) };
+            }
+            Self { saved, _root }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (name, value) in &self.saved {
+                match value {
+                    Some(value) => unsafe { std::env::set_var(name, value) },
+                    None => unsafe { std::env::remove_var(name) },
+                }
+            }
+        }
     }
 
     async fn send_bytes(
@@ -932,13 +1130,26 @@ mod tests {
         assert!(response.get("error").is_none());
     }
 
-    #[tokio::test]
-    async fn chat_rejects_missing_model() {
-        let app = create_app();
-        let body = r#"{"messages":[{"role":"user","content":"hello"}]}"#;
-        let (status, _body) =
-            send_request(app, "POST", "/v1/chat/completions", Some(body.to_string())).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
+    /// A missing `model` is **accepted**, not rejected.
+    ///
+    /// `openai_to_internal_payload` substitutes `settings.default_model` for a falsy `model`
+    /// (`openai_api.py:36`), so the oracle answers a request without one using the default.
+    /// This route used to reject it with `400`; that was its own divergence, not the oracle's
+    /// rule, and `openai_facade_parity_probe`'s `default-model-when-absent` case is what pins
+    /// the fallback. The assertion is made at the composition boundary rather than over HTTP
+    /// because the route's next step needs a bound workspace, and what this case is about is
+    /// the translation, not the workspace.
+    #[test]
+    fn a_missing_model_falls_back_to_the_default_rather_than_being_rejected() {
+        let router = deepseek_policy::model_router::ModelRouterSettings::default();
+        let prepared = native_chat::prepare_openai_chat(
+            &json!({"messages": [{"role": "user", "content": "hello"}]}),
+            "http://127.0.0.1:8000",
+            &router,
+            "test-key",
+        )
+        .expect("a missing model is not an error");
+        assert_eq!(prepared.validated.model, "deepseek-v4-pro");
     }
 
     #[tokio::test]
@@ -950,21 +1161,28 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
+    /// With no credential the route fails closed, and it answers with the oracle's own error.
+    ///
+    /// Wiring the assembly moved this case from `503 NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING` to
+    /// `400 missing_api_key`: the route now validates through the facade's
+    /// `validate_deepseek_payload` (`deepseek_client.py:198-201`), which checks the credential
+    /// **first** and raises `AppError`'s default status, 400. 400 is what the oracle answers —
+    /// the 503 was this route's own divergence — and the credential check further down can no
+    /// longer fire here, because validation has already required a non-empty key.
+    ///
+    /// `DEEPSEEK_API_KEY` is forced empty so a developer shell that exports one cannot silently
+    /// turn this case into a different request.
     #[tokio::test]
     async fn chat_reports_missing_upstream_credential_instead_of_a_stub() {
-        // The route is wired to real execution now, so with no server-side
-        // credential it must fail closed on the credential check and never
-        // emit a fabricated completion.
+        let _env = EnvLock::acquire();
+        let _key = EnvGuard::api_key("");
         let app = create_app();
         let body = r#"{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}]}"#;
         let (status, response_body) =
             send_request(app, "POST", "/v1/chat/completions", Some(body.to_string())).await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         let response: serde_json::Value = serde_json::from_str(&response_body).unwrap();
-        assert_eq!(
-            response["error"]["code"],
-            "NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING"
-        );
+        assert_eq!(response["code"], "missing_api_key", "{response_body}");
         assert!(!response_body.contains("chatcmpl-stub"));
         assert!(
             response.get("choices").is_none(),
@@ -972,11 +1190,16 @@ mod tests {
         );
     }
 
+    /// `/v1/chat/completions` runs the oracle's own preparation layer, in the oracle's order.
+    ///
+    /// `validate_deepseek_payload` checks the credential **first** (`deepseek_client.py:198`), so
+    /// a credential has to be present for these cases to reach the model allowlist, the user-turn
+    /// requirement and the compression conflict at all. That ordering is itself part of the
+    /// contract: with no key the only answer this route gives is `400 missing_api_key`.
     #[tokio::test]
     async fn chat_enforces_the_shared_preparation_rules() {
-        // `/v1/chat/completions` now runs the same preparation layer as
-        // `/gateway/request/prepare`. These cases only pass if the route really
-        // reuses it rather than a second, thinner validator.
+        let _env = EnvLock::acquire();
+        let _key = EnvGuard::api_key("test-key");
         let app = create_app();
 
         // No user turn -> the oracle's user-message requirement.
@@ -991,7 +1214,9 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(
-            response_body.contains("a user message is required"),
+            // The oracle's own wording and casing (`deepseek_client.py:245`), not the thinner
+            // validator's `a user message is required` that this route used to raise.
+            response_body.contains("A user message is required"),
             "unexpected body: {response_body}"
         );
 
@@ -1017,7 +1242,10 @@ mod tests {
             send_request(app, "POST", "/v1/chat/completions", Some(body)).await;
         assert_eq!(status, StatusCode::CONFLICT);
         assert!(
-            response_body.contains("context compression is required"),
+            // The oracle's sentence (`deepseek_client.py:231`), not the thinner validator's
+            // `context compression is required`.
+            response_body
+                .contains("Context compression required before sending more than 40 messages."),
             "unexpected body: {response_body}"
         );
     }
@@ -1201,12 +1429,17 @@ mod tests {
         );
     }
 
-    /// Streaming is a first-class transport now, so the route must no longer
-    /// answer `501`. Without an upstream credential the honest answer is `503`
-    /// from the credential check, *before* any streaming frame is written — the
-    /// request is accepted and prepared, then refused for a real reason.
+    /// Streaming is a first-class transport, so `stream: true` must not be refused as
+    /// unimplemented — and whatever refuses it has to refuse with ordinary JSON, before any SSE
+    /// frame reaches the client.
+    ///
+    /// With no credential the refusal is `400 missing_api_key` from validation, which the ordered
+    /// validation makes the first thing this route can say. The name therefore says what the case
+    /// proves — the refusal arrives before any frame — rather than naming a layer.
     #[tokio::test]
-    async fn chat_accepts_streaming_and_fails_only_on_the_upstream() {
+    async fn chat_accepts_streaming_and_refuses_before_any_frame() {
+        let _env = EnvLock::acquire();
+        let _key = EnvGuard::api_key("");
         let app = create_app();
         let body = r#"{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}],"stream":true}"#;
         let (status, response) =
@@ -1216,12 +1449,9 @@ mod tests {
             StatusCode::NOT_IMPLEMENTED,
             "streaming must not be refused as unimplemented: {response}"
         );
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
         let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
-        assert_eq!(
-            parsed["error"]["code"],
-            "NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING"
-        );
+        assert_eq!(parsed["code"], "missing_api_key", "{response}");
         // The refusal happened before the body, so it is ordinary JSON, not SSE.
         assert!(!response.starts_with("data: "));
     }

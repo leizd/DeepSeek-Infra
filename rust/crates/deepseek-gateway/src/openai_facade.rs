@@ -108,6 +108,93 @@ fn invalid_payload(message: &str) -> AppError {
     }
 }
 
+// --- request_base_url --------------------------------------------------------------
+
+/// `host_without_port`: the first comma-separated Host, brackets stripped for IPv6,
+/// lowercased.
+pub fn host_without_port(value: &str) -> String {
+    let host = value.split(',').next().unwrap_or("").trim().to_string();
+    if let Some(rest) = host.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or("").to_lowercase();
+    }
+    host.split(':').next().unwrap_or("").to_lowercase()
+}
+
+/// `request_port`: the Host header's port, defaulting to 80.
+///
+/// The oracle prefers `request.scope["server"][1]` — the port the server actually bound —
+/// and falls back to the Host header. This handler has no scope to read, and **the two
+/// agree whenever a client dialed the port it named**, which is the ordinary case;
+/// recorded as a narrowing rather than silently assumed equal.
+pub fn request_port(host_header: &str) -> u16 {
+    let host = host_header.split(',').next().unwrap_or("").trim();
+    // An IPv6 literal keeps its colons inside brackets, so only look past the `]`.
+    let after_host = match host.rfind(']') {
+        Some(index) => &host[index + 1..],
+        None => host,
+    };
+    after_host
+        .strip_prefix(':')
+        .and_then(|port| port.parse::<u16>().ok())
+        .filter(|port| *port > 0)
+        .unwrap_or(80)
+}
+
+/// `allowed_auth_hosts`: the loopback names plus the configured ones.
+///
+/// The oracle also adds the machine's LAN address (`local_ip()`), which is not ported; a
+/// deployment reached by LAN name therefore falls back to `http://127.0.0.1:{port}` for
+/// `localBaseUrl`. That value reaches the payload and the pptx download link, **not** the
+/// assembled upstream body.
+pub fn allowed_auth_hosts() -> std::collections::HashSet<String> {
+    let mut hosts: std::collections::HashSet<String> = ["localhost", "127.0.0.1", "::1"]
+        .iter()
+        .map(|host| (*host).to_string())
+        .collect();
+    let configured = std::env::var("HOST")
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    if !configured.is_empty() && configured != "0.0.0.0" {
+        hosts.insert(configured);
+    }
+    for host in std::env::var("AUTH_ALLOWED_HOSTS")
+        .unwrap_or_default()
+        .split(',')
+    {
+        let host = host.trim().to_lowercase();
+        if !host.is_empty() {
+            hosts.insert(host);
+        }
+    }
+    hosts
+}
+
+/// Mirrors `request_base_url`.
+///
+/// The Host header is trusted only when it carries no path separator and its host part is
+/// in the allow-list; otherwise the payload is told the loopback address rather than the
+/// name the client asked for, so a name that resolves elsewhere cannot be reflected into it.
+pub fn request_base_url(headers: &axum::http::HeaderMap) -> String {
+    let host_header = headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .split(',')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !host_header.is_empty()
+        && !host_header.contains('/')
+        && !host_header.contains('\\')
+        && allowed_auth_hosts().contains(&host_without_port(&host_header))
+    {
+        return format!("http://{host_header}");
+    }
+    format!("http://127.0.0.1:{}", request_port(&host_header))
+}
+
 /// The payload as the internal path renders it, for probes and diagnostics:
 /// `json.dumps(value, ensure_ascii=False, sort_keys=True)` — Python's **default**
 /// separators, so the rendering is comparable with the oracle's rather than with

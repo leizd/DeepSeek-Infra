@@ -1112,26 +1112,57 @@ pub fn apply_explicit_memory_command(
     root: &Path,
     clock: &dyn Clock,
 ) -> Result<String, AppError> {
-    let text = query.trim();
-    if text.is_empty() {
-        return Ok(String::new());
+    match explicit_memory_command(query) {
+        None => Ok(String::new()),
+        Some(ExplicitCommand::Remember(content)) => {
+            let item = upsert_memory(&content, None, scope, "manual", false, None, root, clock)?;
+            Ok(saved_notice(&item))
+        }
+        Some(ExplicitCommand::Forget(target)) => {
+            let deleted = delete_memories_by_query(&target, scopes, root, clock)?;
+            Ok(format!("已根据用户要求删除 {deleted} 条相关长期记忆。"))
+        }
     }
-    if negated_remember_regex().is_match(text) {
-        return Ok(String::new());
+}
+
+/// The write an explicit memory command would perform, or `None` when the turn carries
+/// no command.
+///
+/// Split out of [`apply_explicit_memory_command`] so the **parse** and the **write**
+/// cannot disagree. The native route needs the parse alone: `.memory/memories.json` is
+/// owned by Python (`release/native_runtime_ownership_v1.json` declares no `memory`
+/// domain, and `one_table_one_authoritative_writer` is an invariant), so a Rust turn must
+/// not write it — but answering a "记住: X" turn *without* saving would silently drop the
+/// user's instruction, which is the failure mode `USER.md` names as unacceptable. The route
+/// therefore asks [`has_explicit_memory_command`] and **refuses** such a turn instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExplicitCommand {
+    Remember(String),
+    Forget(String),
+}
+
+/// The parse, in the oracle's order: an instruction *not* to remember returns early; a
+/// *negated* forget is a remember and must be recognised **before** the forget branch,
+/// which matches the bare verb and would otherwise delete the very memory the user asked to
+/// keep; then forget; then remember. The remember branch's `请`/`帮我` prefixes are
+/// required — the oracle's own gap, kept rather than "fixed".
+pub fn explicit_memory_command(query: &str) -> Option<ExplicitCommand> {
+    let text = query.trim();
+    if text.is_empty() || negated_remember_regex().is_match(text) {
+        return None;
     }
     if let Some(content) = command_target(kept_forget_regex(), text) {
-        let item = upsert_memory(&content, None, scope, "manual", false, None, root, clock)?;
-        return Ok(saved_notice(&item));
+        return Some(ExplicitCommand::Remember(content));
     }
     if let Some(target) = command_target(forget_command_regex(), text) {
-        let deleted = delete_memories_by_query(&target, scopes, root, clock)?;
-        return Ok(format!("已根据用户要求删除 {deleted} 条相关长期记忆。"));
+        return Some(ExplicitCommand::Forget(target));
     }
-    if let Some(content) = command_target(remember_command_regex(), text) {
-        let item = upsert_memory(&content, None, scope, "manual", false, None, root, clock)?;
-        return Ok(saved_notice(&item));
-    }
-    Ok(String::new())
+    command_target(remember_command_regex(), text).map(ExplicitCommand::Remember)
+}
+
+/// Whether [`apply_explicit_memory_command`] would write the memory store for this turn.
+pub fn has_explicit_memory_command(query: &str) -> bool {
+    explicit_memory_command(query).is_some()
 }
 
 /// Mirrors `prepare_memory_state` — the read half the request assembly consumes.
@@ -1160,6 +1191,37 @@ pub fn prepare_memory_state(
         Ok(notice) => state["notice"] = Value::String(notice),
         Err(error) => state["notice"] = Value::String(format!("长期记忆操作失败：{error}")),
     }
+    let memories = retrieve_memories(&latest_query, Some(&scopes), root, vector_hits);
+    state["hitCount"] = json!(memories.len());
+    state["context"] = Value::String(format_memory_context(&memories));
+    state
+}
+
+/// [`prepare_memory_state`] with the explicit-command **write** left out.
+///
+/// Identical to the oracle for every turn that carries no command — `empty_memory_state`
+/// already carries `notice: ""`, so the read half is the whole difference. For a turn that
+/// *does* carry one, the oracle would save or delete a memory and inject a notice, and this
+/// produces the state without either.
+///
+/// It exists because `.memory/memories.json` is owned by Python (no `memory` domain is
+/// declared; `one_table_one_authoritative_writer` is an invariant) while the route that
+/// needs the read half is Rust. A caller must therefore **refuse** a turn for which
+/// [`has_explicit_memory_command`] is true rather than serve this state for it — the
+/// alternative is answering "记住: X" without saving, which silently discards the user's
+/// instruction. The refusal and this function are deliberately separate so the decision is
+/// visible at the call site.
+pub fn prepare_memory_state_read_only(
+    payload: &Value,
+    root: &Path,
+    vector_hits: Option<&VectorHits<'_>>,
+) -> Value {
+    let mut state = empty_memory_state(payload);
+    if state.get("enabled").and_then(Value::as_bool) != Some(true) {
+        return state;
+    }
+    let latest_query = latest_user_query(payload);
+    let scopes = memory_scope_candidates(payload);
     let memories = retrieve_memories(&latest_query, Some(&scopes), root, vector_hits);
     state["hitCount"] = json!(memories.len());
     state["context"] = Value::String(format_memory_context(&memories));
@@ -1283,6 +1345,64 @@ mod tests {
     fn write_raw(root: &Path, raw: &str) {
         std::fs::create_dir_all(memory_dir(root)).unwrap();
         std::fs::write(memory_file(root), raw).unwrap();
+    }
+
+    // --- the explicit-command split -------------------------------------------
+
+    #[test]
+    fn the_command_predicate_matches_the_grammar_the_writer_runs() {
+        // True exactly when `apply_explicit_memory_command` would write.
+        for phrase in [
+            "请帮我记住: 我的生日是3月5日",
+            "不要忘记: 牙医预约",
+            "don't forget: the dentist",
+            "忘记: 生日",
+            "forget: birthday",
+            "删除记忆: 生日",
+            "delete memory: birthday",
+        ] {
+            assert!(has_explicit_memory_command(phrase), "{phrase}");
+        }
+        // The oracle's own gaps and the opt-out guard: no write happens for these, so the
+        // native route must not refuse them either.
+        for phrase in [
+            "",
+            "   ",
+            "记住: 我的生日",       // the required 请/帮我 prefix — the oracle's gap
+            "帮我记住: 我的生日",   // …same gap
+            "不要记住: 这是临时的", // the opt-out guard
+            "今天天气不错",
+        ] {
+            assert!(!has_explicit_memory_command(phrase), "{phrase}");
+        }
+    }
+
+    #[test]
+    fn the_read_only_state_equals_the_oracle_when_no_command_is_present() {
+        let root = temp_root("read-only-equal");
+        let payload = json!({"messages": [{"role": "user", "content": "我用 React 做前端"}]});
+        let full = prepare_memory_state(&payload, &root, &clock(), None);
+        let read_only = prepare_memory_state_read_only(&payload, &root, None);
+        assert_eq!(full, read_only);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_read_only_state_skips_the_write_a_command_would_perform() {
+        let root = temp_root("read-only-command");
+        let payload =
+            json!({"messages": [{"role": "user", "content": "请帮我记住: 我的生日是3月5日"}]});
+
+        let full = prepare_memory_state(&payload, &root, &clock(), None);
+        assert!(!full["notice"].as_str().unwrap_or("").is_empty());
+        assert_eq!(load_memories(&root).len(), 1);
+
+        let read_only = prepare_memory_state_read_only(&payload, &root, None);
+        // The read-only state carries the empty notice, which is what the caller must
+        // refuse rather than serve — and the store it did not touch still holds one row.
+        assert_eq!(read_only["notice"], json!(""));
+        assert_eq!(load_memories(&root).len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // --- normalization --------------------------------------------------------

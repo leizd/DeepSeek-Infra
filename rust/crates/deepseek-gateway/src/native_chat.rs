@@ -32,13 +32,14 @@
 use serde_json::Value;
 
 use deepseek_policy::app_error::AppError;
+use deepseek_policy::model_router::ModelRouterSettings;
 use deepseek_policy::request_messages::{ValidatedPayload, validate_deepseek_payload};
 
 use crate::openai_facade::openai_to_internal_payload;
 use crate::request_assembly::{AssemblyEnv, PreparedDeepSeekRequest, build_deepseek_request};
 
-/// The facade translation plus `preflight_deepseek_payload` — steps 1 and 2 of the
-/// oracle's `call_deepseek`, in that order.
+/// The facade translation plus the validation half of `preflight_deepseek_payload` — steps 1
+/// and 2 of the oracle's `call_deepseek`, in that order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedOpenAiChat {
     /// The internal payload the assembly consumes. The memory read needs it, which is
@@ -47,18 +48,31 @@ pub struct PreparedOpenAiChat {
     pub validated: ValidatedPayload,
 }
 
-/// Steps 1-2: translate the OpenAI body, then validate it.
+/// Steps 1-2: translate the OpenAI body, then run the validation half of the oracle's preflight.
 ///
-/// `local_base_url` is `request_base_url(request)`; `env.api_key_fallback` is the same
-/// server-side key `build_deepseek_request` would fall back to, and using it here keeps
-/// validation identical to the assembly's own default.
+/// Takes the router and the credential fallback **directly** rather than an `AssemblyEnv`, so the
+/// credential, model and `messages` checks are answerable without a workspace.
+///
+/// The **message rules** — the user-turn requirement and the compression conflict — are *not*
+/// here, and cannot be: the oracle defines them over `normalize_chat_messages`, whose first act is
+/// `content = expanded_message_content(message)` (`deepseek_client.py:492`). A blank turn is only
+/// blank *before* expansion, so evaluating those rules needs the content expander, and the expander
+/// needs the file cache. Passing a plain-content expander here to force them early is measurably
+/// wrong: it reports `invalid_message_content` for a turn the oracle accepts (the composition probe
+/// catches it at `case::blank-content-turn`). The caller runs them inside `with_env`, where the real
+/// expander exists, and before it reads the memory store — which is the oracle's own order.
+///
+/// `local_base_url` is `request_base_url(request)`; `api_key_fallback` is the server-side
+/// key `build_deepseek_request` would fall back to, so validation here is identical to the
+/// assembly's own default.
 pub fn prepare_openai_chat(
     body: &Value,
     local_base_url: &str,
-    env: &AssemblyEnv<'_>,
+    router: &ModelRouterSettings,
+    api_key_fallback: &str,
 ) -> Result<PreparedOpenAiChat, AppError> {
-    let payload = openai_to_internal_payload(body, local_base_url, env.router)?;
-    let validated = validate_deepseek_payload(&payload, env.api_key_fallback, env.router)?;
+    let payload = openai_to_internal_payload(body, local_base_url, router)?;
+    let validated = validate_deepseek_payload(&payload, api_key_fallback, router)?;
     Ok(PreparedOpenAiChat { payload, validated })
 }
 
@@ -143,9 +157,13 @@ mod tests {
     #[test]
     fn the_facade_runs_before_validation_so_a_non_object_body_is_the_facade_error() {
         let fixture = fixture();
-        let env = fixture.env();
-        let error = prepare_openai_chat(&json!([]), "http://127.0.0.1:8000", &env)
-            .expect_err("a non-object body is refused");
+        let error = prepare_openai_chat(
+            &json!([]),
+            "http://127.0.0.1:8000",
+            &fixture.router,
+            "test-key",
+        )
+        .expect_err("a non-object body is refused");
         assert_eq!(error.message, "Request body must be a JSON object");
         assert_eq!(error.code, "invalid_payload");
     }
@@ -153,9 +171,13 @@ mod tests {
     #[test]
     fn the_translated_payload_is_what_validation_sees() {
         let fixture = fixture();
-        let env = fixture.env();
-        let prepared = prepare_openai_chat(&minimal(), "http://127.0.0.1:8000", &env)
-            .expect("a minimal body is accepted");
+        let prepared = prepare_openai_chat(
+            &minimal(),
+            "http://127.0.0.1:8000",
+            &fixture.router,
+            "test-key",
+        )
+        .expect("a minimal body is accepted");
         // `thinkingEnabled: false` comes from the facade, not from the client.
         assert_eq!(prepared.payload["thinkingEnabled"], json!(false));
         assert_eq!(prepared.validated.model, "deepseek-v4-pro");
@@ -172,7 +194,8 @@ mod tests {
                 "tools": [{"type": "function", "function": {"name": "client_tool"}}],
             }),
             "http://127.0.0.1:8000",
-            &env,
+            &fixture.router,
+            "test-key",
         )
         .expect("the body is accepted");
         let assembled =

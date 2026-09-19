@@ -5,8 +5,14 @@
 <!-- docs-language-switcher:end -->
 
 
-**Status: plan of record. Step 3 is now unblocked.** The goal is `chat_execution` building
-its upstream body through `build_deepseek_request` instead of the thinner body it builds today.
+**Status: Step 3 is landed; exact-head CI has not run against it yet.** The goal — `chat_execution`
+building its upstream body through `build_deepseek_request` instead of the thinner body it built
+itself — is met: the route now runs the oracle's order (facade translate, validate, bind, message
+rules, memory, build) with the four §5 pieces in place. `continuation.md`'s "The swap landed" section
+records what finishing it took, including the one place §5's framing was wrong: the **message rules
+cannot** run with the validation, because the oracle defines them over expanded content
+(`deepseek_client.py:492`), so they need the expander and the expander needs the file cache. They run
+inside `with_env`, before the memory read, which is the oracle's order with the workspace bound.
 
 **Progress**: **Decision A is taken and landed** (`da8c21cf`) — the two patterns are repaired, the
 negated-forget guard that repair made necessary is in, and the test that could not fail them is

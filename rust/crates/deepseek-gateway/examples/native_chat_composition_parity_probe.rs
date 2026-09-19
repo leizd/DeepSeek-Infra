@@ -161,7 +161,7 @@ fn main() {
     out.insert("probe::base-url".to_string(), json!(BASE_URL));
 
     for (label, body) in cases() {
-        let view = match prepare_openai_chat(&body, BASE_URL, &env) {
+        let view = match prepare_openai_chat(&body, BASE_URL, env.router, env.api_key_fallback) {
             Ok(prepared) => match assemble_openai_chat(prepared, false, &memory_state, &env) {
                 Ok(assembled) => {
                     let tool_names: Vec<String> = assembled

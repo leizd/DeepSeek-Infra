@@ -173,18 +173,33 @@ async fn post_chat(uri: &str) -> (StatusCode, serde_json::Value) {
 
 struct EnvGuard {
     saved: Vec<(&'static str, Option<String>)>,
+    /// The workspace root the route binds, kept alive for as long as the variables are set.
+    ///
+    /// `/v1/chat/completions` composes through `build_deepseek_request` now, so it reads the
+    /// memory store, file cache and budget ledger from `DEEPSEEK_INFRA_ROOT`; a case that posts
+    /// to it without one gets `500 DEEPSEEK_INFRA_ROOT is not set`. Every case in this file posts
+    /// to it, so the guard installs one rather than each test repeating three lines.
+    _root: tempfile::TempDir,
 }
 
 impl EnvGuard {
     fn set(pairs: &[(&'static str, &str)]) -> Self {
+        let _root = tempfile::tempdir().expect("a temp workspace root");
+        let root_path = _root
+            .path()
+            .to_str()
+            .expect("a utf-8 temp path")
+            .to_string();
         let mut saved = Vec::new();
-        for (name, value) in pairs {
-            saved.push((*name, std::env::var(name).ok()));
+        for (name, value) in std::iter::once(("DEEPSEEK_INFRA_ROOT", root_path.as_str()))
+            .chain(pairs.iter().copied())
+        {
+            saved.push((name, std::env::var(name).ok()));
             unsafe {
                 std::env::set_var(name, value);
             }
         }
-        Self { saved }
+        Self { saved, _root }
     }
 }
 
@@ -257,7 +272,31 @@ async fn chat_route_executes_against_a_real_upstream() {
     assert_eq!(captured.accept.as_deref(), Some("application/json"));
     let sent = captured.body.expect("upstream received a JSON body");
     assert_eq!(sent["model"], "deepseek-v4-pro");
-    assert_eq!(sent["messages"][0]["content"], "question");
+    // The assembled body, not the client's: the catalog's tools (which the client never sent)
+    // bring their parallel-call hint as the leading system turn, the client's own turn follows,
+    // and the per-turn context arrives as the trailing system message. The thin body this route
+    // used to send had none of the three.
+    assert!(
+        sent["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty()),
+        "the catalog tools must be in the body: {sent}"
+    );
+    assert!(
+        sent["messages"][0]["content"]
+            .as_str()
+            .is_some_and(|content| content.starts_with("当需要多个独立信息时")),
+        "expected the parallel-call hint first: {sent}"
+    );
+    assert_eq!(sent["messages"][1]["role"], "user");
+    assert_eq!(sent["messages"][1]["content"], "question");
+    assert_eq!(sent["messages"][2]["role"], "system");
+    assert!(
+        sent["messages"][2]["content"]
+            .as_str()
+            .is_some_and(|content| content.starts_with("[Per-turn context]")),
+        "expected the per-turn context last: {sent}"
+    );
     assert!(
         sent.get("api_key").is_none() && sent.get("apiKey").is_none(),
         "credential must never be placed in the body: {sent}"
@@ -383,18 +422,23 @@ async fn chat_route_runs_tool_rounds_through_dispatch() {
         requests[0]
     );
     let messages = requests[1]["messages"].as_array().unwrap();
-    assert_eq!(messages.len(), 3);
+    // Five turns, not the three the thin body produced: the catalog tools' hint and the per-turn
+    // context are the two the assembled body adds ahead of the round's own pair.
+    assert_eq!(messages.len(), 5);
+    assert_eq!(messages[0]["role"], "system");
+    assert_eq!(messages[1]["role"], "user");
+    assert_eq!(messages[2]["role"], "system");
     // The assistant turn that requested tools, replayed with its content and
     // reasoning (thinking mode rejects the follow-up without reasoning_content).
-    assert_eq!(messages[1]["role"], "assistant");
-    assert_eq!(messages[1]["content"], "let me chart that");
-    assert_eq!(messages[1]["reasoning_content"], "chart reasoning");
-    assert_eq!(messages[1]["tool_calls"][0]["id"], "call-1");
+    assert_eq!(messages[3]["role"], "assistant");
+    assert_eq!(messages[3]["content"], "let me chart that");
+    assert_eq!(messages[3]["reasoning_content"], "chart reasoning");
+    assert_eq!(messages[3]["tool_calls"][0]["id"], "call-1");
     // The tool result the model reads back: the dispatch envelope, compact JSON.
-    assert_eq!(messages[2]["role"], "tool");
-    assert_eq!(messages[2]["tool_call_id"], "call-1");
-    assert_eq!(messages[2]["name"], "generate_chart");
-    let content = messages[2]["content"].as_str().unwrap();
+    assert_eq!(messages[4]["role"], "tool");
+    assert_eq!(messages[4]["tool_call_id"], "call-1");
+    assert_eq!(messages[4]["name"], "generate_chart");
+    let content = messages[4]["content"].as_str().unwrap();
     assert!(content.starts_with("{\"ok\":true"), "content: {content}");
     assert!(content.contains("\"tool\":\"generate_chart\""));
     assert!(content.contains("markdownTable"), "content: {content}");
@@ -467,9 +511,11 @@ async fn chat_route_runs_a_data_branch_against_the_workspace() {
     let requests = requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 2);
     let messages = requests[1]["messages"].as_array().unwrap();
-    assert_eq!(messages[2]["role"], "tool");
-    assert_eq!(messages[2]["name"], "create_reminder");
-    let content = messages[2]["content"].as_str().unwrap();
+    // Index 4: the assembled body puts the tools' hint and the per-turn context ahead of the
+    // round's own assistant/tool pair.
+    assert_eq!(messages[4]["role"], "tool");
+    assert_eq!(messages[4]["name"], "create_reminder");
+    let content = messages[4]["content"].as_str().unwrap();
     assert!(content.contains("\"ok\":true"), "content: {content}");
     assert!(content.contains("buy milk"), "content: {content}");
 
@@ -641,7 +687,8 @@ async fn chat_route_reports_an_unported_branch_as_did_not_run() {
     let requests = requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 2);
     let messages = requests[1]["messages"].as_array().unwrap();
-    let content = messages[2]["content"].as_str().unwrap();
+    // Index 4 for the same reason as the data-branch case above.
+    let content = messages[4]["content"].as_str().unwrap();
     // The unported branch reports "did not run" rather than a success or a
     // route-level failure — the degradation is visible to the model, and it
     // can still answer around it.

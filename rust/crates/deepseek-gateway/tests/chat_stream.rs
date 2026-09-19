@@ -148,18 +148,33 @@ impl Drop for EnvLock {
 
 struct EnvGuard {
     saved: Vec<(&'static str, Option<String>)>,
+    /// A workspace root, installed unless the case names its own.
+    ///
+    /// `/v1/chat/completions` composes through `build_deepseek_request` now, so it binds the
+    /// memory store, file cache and budget ledger from `DEEPSEEK_INFRA_ROOT`; a case that
+    /// posts to it without one gets `500`. The root is appended **before** the caller's pairs
+    /// so a case that sets its own (the workspace data-branch case does) still wins.
+    _root: tempfile::TempDir,
 }
 
 impl EnvGuard {
     fn set(pairs: &[(&'static str, &str)]) -> Self {
+        let _root = tempfile::tempdir().expect("a temp workspace root");
+        let root_path = _root
+            .path()
+            .to_str()
+            .expect("a utf-8 temp path")
+            .to_string();
         let mut saved = Vec::new();
-        for (name, value) in pairs {
-            saved.push((*name, std::env::var(name).ok()));
+        for (name, value) in std::iter::once(("DEEPSEEK_INFRA_ROOT", root_path.as_str()))
+            .chain(pairs.iter().copied())
+        {
+            saved.push((name, std::env::var(name).ok()));
             unsafe {
                 std::env::set_var(name, value);
             }
         }
-        Self { saved }
+        Self { saved, _root }
     }
 }
 

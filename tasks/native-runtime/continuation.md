@@ -2996,3 +2996,52 @@ real-upstream integration test. The recorded env-reader gap for the settings sta
 noted as the boundary of what this assembly guarantees.
 
 Decision B (a `memory` domain declaration) still gates wiring the **write** half.
+
+### The swap landed: the route composes through the assembly
+
+`chat_completions` no longer builds its own body. It runs the oracle's order — facade translate,
+validate, bind the assembly, message rules, memory, build — and the four pieces §5 listed are in:
+`request_base_url`, the `rag_vec` refusal, the `{"error", "code"}` envelope, and
+`tests/chat_execution.rs` re-derived as the regression net.
+
+The slice arrived in the working tree half-written, so this records what finishing it took. The
+last piece was not a typo.
+
+**It did not compile.** Three errors, all interruption artefacts: `ModelRouterSettings` missing from
+two scopes, and the real one — the closure still called
+`native_chat::prepare_openai_chat(&raw, &base_url, env)` after the facade and the validation had been
+moved *before* the workspace binding. Deleting that stale call and threading the router through the
+remaining call sites was most of it; the probe's call site and two unused `let env` in the tests were
+the rest.
+
+**The message rules cannot run where the comments said they do, and that is measured.** Both the
+module doc and `PreparedOpenAiChat`'s said the preflight runs before the workspace is bound, so a
+request with no user turn answers `400` rather than `500`. Running the whole preflight there needs
+`preflight_deepseek_payload`, which needs the content expander — and the oracle defines the message
+rules over `normalize_chat_messages`, whose first act is
+`content = expanded_message_content(message)` (`deepseek_client.py:492`). A blank turn is only blank
+*before* expansion. Forcing the rules early with a plain-content expander is **measurably wrong**:
+`native_chat_composition_parity_probe` diverges at `case::blank-content-turn`, where the oracle
+accepts the turn and the plain expander answers `invalid_message_content`. So the validation half
+stays pre-binding (credential, model, `messages` — no store needed) and the route runs
+`validate_request_messages` with the **real** expander inside `with_env`, before the memory read:
+the oracle's order, with the workspace bound. The cost is exact and stated — on a process with no
+`DEEPSEEK_INFRA_ROOT`, a request that fails a message rule answers `500` instead of `400`. That is
+the boundary, not a claim.
+
+**The regression net was stale, not broken.** Three `lib.rs` cases asserted the old route's own
+errors — `503 NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING` for a missing credential, and its own
+`a user message is required` / `context compression is required` wording. The oracle answers
+`400 missing_api_key` (validation checks the credential **first**, `deepseek_client.py:198-201`,
+with `AppError`'s default status) and its own two sentences, so the cases now assert those.
+`tests/chat_execution.rs` needed the same for the body it captures: the assembled body leads with the
+catalog tools' parallel-call hint, carries the client's own turn, and takes the per-turn context as
+the trailing system message, which moves a round's assistant/tool pair from index 1/2 to 3/4. Its
+cases also need a workspace root now — the guard installs one — and `DEEPSEEK_API_KEY` is forced, so
+a developer shell cannot silently change what they test.
+
+**Verified**: `cargo test -p deepseek-gateway` → 162 lib plus 7 + 6 + 1 + 1 integration, all passed;
+`cargo test -p deepseek-policy` → 403 passed; workspace `fmt --check` and clippy (1.85,
+`--locked --all-targets --all-features -- -D warnings`) clean; `native_chat_composition_parity_probe`
+**byte-identical** again (315 124 B, `diff` empty after `tr -d '\r'`), which is the evidence that
+dropping the plain-expander attempt restored parity.
