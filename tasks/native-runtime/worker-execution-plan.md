@@ -550,7 +550,7 @@ Credentials come from the server environment only (`DEEPSEEK_API_KEY`,
 | Missing capability | Behavior | Code / status |
 | --- | --- | --- |
 | Tool-call rounds (`append_tool_exchange`, web search, `create_pptx`) | refuses instead of returning the round's prose as the final answer | `NATIVE_CHAT_TOOL_ROUNDS_NOT_READY` / 501 |
-| No server-side upstream credential | refuses before contacting upstream | `NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING` / 503 |
+| No server-side upstream credential | refuses before contacting upstream | `missing_api_key` / 400 — the oracle's own validation error, which this route now returns; it used to answer `NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING` / 503 |
 | Upstream non-success / malformed body / empty answer | 502, no `choices` emitted | `NATIVE_CHAT_UPSTREAM_STATUS` / `_MALFORMED` / `_NO_ANSWER` |
 | Upstream unreachable | 502 | `NATIVE_CHAT_UPSTREAM_UNREACHABLE` |
 

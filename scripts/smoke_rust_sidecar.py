@@ -175,16 +175,21 @@ def run_smoke(base_url: str, *, wait_seconds: float = 60.0, timeout: float = 5.0
             "stream": False,
         },
         timeout=timeout,
-        expected_status=503,
+        expected_status=400,
     )
-    chat_error = chat.get("error")
+    # `400 missing_api_key` is the oracle's own answer, not this route's: the route validates
+    # through `validate_deepseek_payload`, which checks the credential first and raises
+    # `AppError`'s default status, and the envelope is the oracle's flat
+    # `{"error": <message>, "code": <code>}`. It used to answer `503` with a nested
+    # `NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING` that the oracle never sends.
     _require(
-        isinstance(chat_error, dict)
-        and chat_error.get("code") == "NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING",
+        chat.get("code") == "missing_api_key",
         "native chat did not fail closed when its server-side credential was absent",
     )
     _require("choices" not in chat, "native chat returned a fabricated completion")
-    checks.append(CheckResult("chat_missing_credential", "POST /v1/chat/completions -> 503"))
+    checks.append(
+        CheckResult("chat_missing_credential", "POST /v1/chat/completions -> 400 missing_api_key")
+    )
 
     mcp_request = {
         "jsonrpc": "2.0",

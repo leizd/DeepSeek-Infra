@@ -194,14 +194,15 @@ class _SidecarHandler(BaseHTTPRequestHandler):
         request = json.loads(body.decode("utf-8"))
         if self.path == "/v1/chat/completions":
             assert request["stream"] is False
+            # The route's own envelope now, which is the oracle's: a flat
+            # `{"error": <message>, "code": <code>}` at `AppError`'s default status for a missing
+            # credential. It used to be a nested error object at `503`.
             self._send(
                 {
-                    "error": {
-                        "code": "NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING",
-                        "message": "native chat upstream credential missing",
-                    }
+                    "error": "Missing DeepSeek API Key. Set DEEPSEEK_API_KEY or enter a key in settings.",
+                    "code": "missing_api_key",
                 },
-                status=503,
+                status=400,
             )
             return
         if self.path == "/mcp/request/prepare":
