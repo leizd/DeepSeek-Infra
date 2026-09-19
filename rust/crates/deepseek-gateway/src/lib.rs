@@ -501,8 +501,11 @@ struct NativeChat {
     model: String,
 }
 
-/// `NATIVE_MEMORY_WRITE_NOT_OWNED` — the turn carries an explicit memory command.
-const MEMORY_WRITE_NOT_OWNED: &str = "NATIVE_MEMORY_WRITE_NOT_OWNED";
+/// `NATIVE_MEMORY_WRITE_NOT_OWNED` — a turn that would write the memory store, which Python still
+/// owns. Raised in two places, because the store has two reachable write paths on this route: the
+/// turn's own explicit command (`apply_explicit_memory_command`, checked here) and the model
+/// calling `forget_memory` (checked in [`chat_tool_loop`]).
+pub(crate) const MEMORY_WRITE_NOT_OWNED: &str = "NATIVE_MEMORY_WRITE_NOT_OWNED";
 /// `NATIVE_MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE` — the deployment has a `rag_vec` table.
 const MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE: &str = "NATIVE_MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE";
 

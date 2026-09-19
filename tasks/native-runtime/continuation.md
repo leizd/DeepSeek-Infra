@@ -3065,3 +3065,42 @@ envelope, so the script's new expectations are exercised end to end rather than 
 `worker-execution-plan.md` carried the same stale row for this case; the rest of that document's
 drift — its "Still on the Python path" list still names memory retrieval, context compression and the
 model router, all of which are ported — is left alone and flagged rather than silently rewritten.
+
+### Decision B, advanced: "read-only" was hiding a live writer
+
+Decision B asked whether to declare a `memory` domain or land the wiring read-only. The read-only half
+is already landed, so the honest next step was to *verify* that claim rather than repeat it. It did
+not hold.
+
+**The route's refusal is not the only reachable write.** `has_explicit_memory_command` inspects the
+*user's* text. The tool loop is the other path, and it executes `forget_memory`: it is not among the
+seven unported branches (`chat_tool_loop.rs`'s module doc names them), and its body deletes —
+`memory.rs:874` calls `delete_memories_by_query(cleaned, Some(&scopes), root, clock)`. A model that
+calls the tool on its own reaches the store with no command in the turn at all.
+
+**Demonstrated, then fixed.**
+`chat_route_refuses_the_memory_deleting_tool_instead_of_writing_the_store` seeds a memory under the
+test root and has the stubbed upstream answer with a `forget_memory` tool call. Before the refusal it
+got `{"ok":true,"result":{"deleted":1,"query":"dentist","scopes":["global"]},"tool":"forget_memory"}`
+and the file changed — a turn whose text never matched the command grammar, deleting from the store
+Python owns. The loop now answers `DispatchOutcome::Denied` with the same code the turn-level refusal
+uses, `NATIVE_MEMORY_WRITE_NOT_OWNED`, because it is the same reason. `suggest_memory` needs no
+refusal: it builds a suggestion and writes nothing.
+
+**The declaration is prepared, not applied.** `release/native_runtime_ownership_v1.json` is
+`status: accepted` with `approved_by: ["leizd"]`, so an added domain amends a contract that carries
+your signature; §3b of the plan holds the exact entry (`memory_store`, python → rust, cutover 4.9.2,
+`durable_store: rust_data`) with its two judgement values flagged as such. The measured context for
+that decision: the barrier is policy, not machinery (`GO_CONTROL_DOMAINS` is 28 ids with no memory
+entry, and the memory file is in no `durable_stores` entry), and Python has **four** write entry
+points — so moving `current_owner` is a Python-side decommissioning, not a one-line edit. The stakes
+are concrete: at the `chat_completions_fast_path` cutover the `501` becomes a capability regression
+against Python, and the contract's `forbidden` list contains `permanent_python_fallback`, so the
+cutover is where the handover has to be recorded.
+
+**Verified**: `cargo test -p deepseek-gateway` → 162 lib plus 8 + 6 + 1 + 1 integration, all passed
+(the new case included); `cargo test -p deepseek-policy` → 403 passed; workspace `fmt --check` and
+clippy (1.85, `--locked --all-targets --all-features -- -D warnings`) clean.
+
+**Not pushed**, and the declaration is not applied — the hole fix is a refusal, and the ownership
+handover is yours to accept.

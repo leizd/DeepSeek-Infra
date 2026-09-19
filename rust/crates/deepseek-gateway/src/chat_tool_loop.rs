@@ -58,7 +58,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::chat_execution::{
     ChatCompletionResult, ChatExecutionError, UpstreamConfig, UpstreamTurn, exchange_turn,
@@ -196,6 +196,25 @@ impl ToolRoundExecutor {
             };
             execute_tool_calls(&selected, &|| false, &|call| {
                 let name = tool_dispatch::tool_call_name(call);
+                // The memory store is still written by Python — no `memory` domain is declared and
+                // `one_table_one_authoritative_writer` is an invariant — so this loop must not
+                // delete from it, and `forget_memory` deletes (`delete_memories_by_query`).
+                //
+                // This is **not** redundant with the route's turn-level refusal: that one inspects
+                // the *user's* text, so a model that calls the tool on its own still reached the
+                // store with no command in the turn at all. Measured before it was refused:
+                // `forget_memory` answered `{"ok":true,"result":{"deleted":1,…}}` and the file
+                // changed. `suggest_memory` needs no refusal — it builds a suggestion and writes
+                // nothing.
+                if name == "forget_memory" {
+                    return tool_dispatch::DispatchOutcome::Denied(json!({
+                        "ok": false,
+                        "tool": name,
+                        "error": "The memory store is still written by the Python runtime, so this \
+                                  gateway refuses to delete from it.",
+                        "code": crate::MEMORY_WRITE_NOT_OWNED,
+                    }));
+                }
                 let arguments = call
                     .get("function")
                     .and_then(|function| function.get("arguments"))

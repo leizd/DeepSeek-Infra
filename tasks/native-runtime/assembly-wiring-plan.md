@@ -134,6 +134,80 @@ wiring read-only.
 *Recommendation: read-only, plus a follow-up domain declaration.* It is also free right now, since
 the write half is inert-by-bug (§2).
 
+### §3a What changed after §2 was repaired, and what "read-only" was hiding
+
+§2 is fixed (`da8c21cf`), so the parenthetical above is **stale in the direction that matters**:
+Python's write half works, which makes a Rust write a genuine second writer rather than a write that
+happens to do nothing. That makes "read-only" a claim to *verify*, not a default — and it did not
+hold. Measured:
+
+- **The route's refusal is not the only reachable write.** `has_explicit_memory_command` inspects the
+  *user's text*. The tool loop is the other path, and it executes `forget_memory`
+  (`chat_tool_loop.rs` dispatches it; the module doc's unported seven are `browser_*`, `python_eval`,
+  `search_files`, `fetch_url`, `create_mindmap`, `create_pptx`, `create_document` — `forget_memory` is
+  not among them). Its branch body deletes: `memory.rs:874` calls
+  `delete_memories_by_query(cleaned, Some(&scopes), root, clock)`.
+- **Demonstrated, not argued**: `tests/chat_execution.rs`'s
+  `chat_route_refuses_the_memory_deleting_tool_instead_of_writing_the_store` seeds a memory under the
+  test root and has the stubbed upstream answer with a `forget_memory` tool call. Before the refusal it
+  got `{"ok":true,"result":{"deleted":1,"query":"dentist","scopes":["global"]},"tool":"forget_memory"}`
+  and the file changed — a turn whose text never matched the command grammar, deleting from the store
+  Python owns.
+- **Now refused**, with the same code the turn-level refusal uses, because it is the same reason:
+  `chat_tool_loop.rs` answers `DispatchOutcome::Denied` with
+  `NATIVE_MEMORY_WRITE_NOT_OWNED`. `suggest_memory` needs no refusal — it builds a suggestion and
+  writes nothing.
+
+So the read-only option is now actually read-only: both reachable write paths on this route refuse,
+and the test above holds the second one.
+
+### §3b What the declaration still owes, and what I did not do about it
+
+The barrier is policy, not machinery, and that is measured rather than quoted: `GO_CONTROL_DOMAINS`
+is 28 ids with **no** memory identifier (`memory-ish: []`), and `durable_stores` lists the three
+planes only — the memory file is in none of them. `authority.py:77` is what denies a Python write,
+and it has nothing to deny here. Python's side has **four** write entry points
+(`infra/memory/store.py`, `infra/tool_runtime/tools.py:1481`, `web/routes/memory.py`, and
+`infra/data/memory.py`'s own command path), so moving `current_owner` to rust is a Python-side
+decommissioning, not a one-line edit.
+
+`release/native_runtime_ownership_v1.json` is `status: accepted` with `approved_by: ["leizd"]`, so an
+added domain is an **amendment to a contract that carries your signature** — prepared here, not
+applied:
+
+```json
+{
+  "id": "memory_store",
+  "plane": "data",
+  "current_owner": "python",
+  "target_owner": "rust",
+  "cutover": "4.9.2",
+  "durable_store": "rust_data"
+}
+```
+
+Both remaining values are judgement calls, not measurements: `cutover: 4.9.2` matches
+`chat_completions_fast_path` — the route that carries the write half — and `durable_store: rust_data`
+says the file's durable state belongs to the rust data plane, which the schema then requires agree
+with `target_owner: rust`. The schema's other rules are satisfied by construction: ids unique,
+`current_owner` python, and the 40-domain production convention that a cutover is named (the only
+null cutovers are the three `production: false` reference/client domains).
+
+**The stakes, so the decision is not abstract**: at the `chat_completions_fast_path` cutover this
+route becomes production-authoritative, and memory-write turns then get a `501` for real users —
+a capability regression against Python, which your rules forbid. Nor is "let Python keep doing it"
+available indefinitely: the contract's `forbidden` list contains `permanent_python_fallback`. So the
+cutover is where the handover has to be recorded, and the refusal is what keeps the interim honest
+instead of silently dropping the user's instruction.
+
+**The same question is open for reminders, and it is answered the other way.** `.reminders/reminders.json`
+is written by Python (`infra/data/reminders.py`) and by this route's `create_reminder` branch, and
+`domains[]` has **no** reminder entry either (`reminder-ish domains: []`). So the two undeclared
+stores get opposite treatment — memory is refused, reminders are written, with an existing test
+asserting that write as intended. One of those is probably wrong, and which one is a decision-B
+question rather than a typo; it is flagged here rather than changed, because the write is asserted
+by an existing test that was deliberately written that way.
+
 ## §4 The memory vector index has no Rust provider — measured, and not bounded
 
 `retrieve_memories` calls `local_rag.search_memories_index` (collection = memory) inside a

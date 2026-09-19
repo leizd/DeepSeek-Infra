@@ -444,6 +444,111 @@ async fn chat_route_runs_tool_rounds_through_dispatch() {
     assert!(content.contains("markdownTable"), "content: {content}");
 }
 
+/// The route must not write the memory store, and the **tool loop is a write path too**.
+///
+/// `forget_memory` deletes through `delete_memories_by_query`, so a model that calls it writes
+/// `.memory/memories.json` — a store Python still owns until the `memory` domain is declared and
+/// cut over. The turn-level refusal cannot see it: it inspects the *user's* text
+/// (`has_explicit_memory_command`), and "forget the dentist thing" is not the command grammar.
+#[tokio::test]
+async fn chat_route_refuses_the_memory_deleting_tool_instead_of_writing_the_store() {
+    let _env = EnvLock::acquire();
+    let workspace = tempfile::tempdir().unwrap();
+    let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let upstream = stub_upstream_sequence(
+        vec![
+            json!({
+                "id": "chat-mem-1",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{
+                            "id": "call-forget-1",
+                            "type": "function",
+                            "function": {"name": "forget_memory", "arguments": "{\"query\":\"dentist\"}"},
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+            }),
+            json!({
+                "id": "chat-mem-2",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "asked"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14},
+            }),
+        ],
+        requests.clone(),
+    );
+    let url = start_stub(upstream).await;
+    let root = workspace.path().to_string_lossy().to_string();
+    let _guard = EnvGuard::set(&[
+        ("DEEPSEEK_API_URL", &url),
+        ("DEEPSEEK_API_KEY", "unit-upstream-key"),
+        ("DEEPSEEK_INFRA_ROOT", &root),
+    ]);
+
+    // Seed the store the way Python would, so a delete has something to delete.
+    let memory_dir = workspace.path().join(".memory");
+    std::fs::create_dir_all(&memory_dir).unwrap();
+    let memory_file = memory_dir.join("memories.json");
+    std::fs::write(
+        &memory_file,
+        serde_json::to_string(&json!([{
+            "id": "m-dentist",
+            "memoryId": "m-dentist",
+            "content": "dentist appointment on Thursday",
+            "category": "fact",
+            "type": "fact",
+            "scope": "global",
+            "source": "manual",
+            "confidence": 0.9,
+            "pinned": false,
+            "createdAt": "2026-09-18T00:00:00Z",
+            "updatedAt": "2026-09-18T00:00:00Z",
+        }]))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let body = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [{"role": "user", "content": "forget the dentist thing"}],
+    })
+    .to_string();
+    let (status, response) = post_chat(&body).await;
+    assert_eq!(status, StatusCode::OK, "response: {response}");
+    assert_eq!(response["choices"][0]["message"]["content"], "asked");
+
+    // The tool result the model reads back is a refusal, not a deletion it can claim.
+    let requests = requests.lock().unwrap().clone();
+    let messages = requests[1]["messages"].as_array().unwrap();
+    let tool_turn = messages
+        .iter()
+        .find(|message| message["role"] == "tool")
+        .expect("the round appended a tool result");
+    let content = tool_turn["content"].as_str().unwrap();
+    assert!(
+        content.contains("NATIVE_MEMORY_WRITE_NOT_OWNED"),
+        "the tool result must be the ownership refusal: {content}"
+    );
+
+    // And the store Python owns is untouched.
+    let after = std::fs::read_to_string(&memory_file).unwrap();
+    assert!(
+        after.contains("dentist appointment on Thursday"),
+        "the native route wrote a store Python owns: {after}"
+    );
+}
+
 #[tokio::test]
 async fn chat_route_runs_a_data_branch_against_the_workspace() {
     let _env = EnvLock::acquire();
