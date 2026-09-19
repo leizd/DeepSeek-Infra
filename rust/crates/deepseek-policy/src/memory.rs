@@ -1129,12 +1129,13 @@ pub fn apply_explicit_memory_command(
 /// no command.
 ///
 /// Split out of [`apply_explicit_memory_command`] so the **parse** and the **write**
-/// cannot disagree. The native route needs the parse alone: `.memory/memories.json` is
-/// owned by Python (`release/native_runtime_ownership_v1.json` declares no `memory`
-/// domain, and `one_table_one_authoritative_writer` is an invariant), so a Rust turn must
-/// not write it — but answering a "记住: X" turn *without* saving would silently drop the
-/// user's instruction, which is the failure mode `USER.md` names as unacceptable. The route
-/// therefore asks [`has_explicit_memory_command`] and **refuses** such a turn instead.
+/// cannot disagree. The native route needs the parse alone while Python still owns the store:
+/// `memory_store` is a declared domain (`release/native_runtime_ownership_v1.json`, python -> rust,
+/// cutover 4.9.4) and `one_table_one_authoritative_writer` is an invariant, so until that cutover a
+/// Rust turn must not write it — but answering a "记住: X" turn *without* saving would silently drop
+/// the user's instruction, which is the failure mode `USER.md` names as unacceptable. Until the
+/// handover the route therefore asks [`has_explicit_memory_command`] and **refuses** such a turn;
+/// once the mode says Python is de-authorised it calls [`apply_explicit_memory_command`] instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExplicitCommand {
     Remember(String),
@@ -1204,13 +1205,14 @@ pub fn prepare_memory_state(
 /// *does* carry one, the oracle would save or delete a memory and inject a notice, and this
 /// produces the state without either.
 ///
-/// It exists because `.memory/memories.json` is owned by Python (no `memory` domain is
-/// declared; `one_table_one_authoritative_writer` is an invariant) while the route that
-/// needs the read half is Rust. A caller must therefore **refuse** a turn for which
-/// [`has_explicit_memory_command`] is true rather than serve this state for it — the
+/// It exists because `.memory/memories.json` can still be Python's (`memory_store` is declared as
+/// python -> rust with cutover 4.9.4, and `one_table_one_authoritative_writer` is an invariant)
+/// while the route that needs the read half is Rust. Until that cutover a caller must **refuse** a
+/// turn for which [`has_explicit_memory_command`] is true rather than serve this state for it — the
 /// alternative is answering "记住: X" without saving, which silently discards the user's
-/// instruction. The refusal and this function are deliberately separate so the decision is
-/// visible at the call site.
+/// instruction. After the cutover the caller uses [`prepare_memory_state`] instead, and the two are
+/// mutually exclusive by the same ownership signal. The refusal and this function are deliberately
+/// separate so the decision is visible at the call site.
 pub fn prepare_memory_state_read_only(
     payload: &Value,
     root: &Path,

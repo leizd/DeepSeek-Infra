@@ -549,6 +549,153 @@ async fn chat_route_refuses_the_memory_deleting_tool_instead_of_writing_the_stor
     );
 }
 
+/// The mirror of the turn-level refusal: once the mode says Python is de-authorised, the ported write
+/// half runs and this route **is** the writer.
+///
+/// Without this the handover would be half a mechanism — Python mechanically stopped, nothing
+/// writing — and the cutover would go from *refusing* to *broken* instead of from refusing to
+/// serving.
+#[tokio::test]
+async fn chat_route_saves_the_memory_once_the_mode_de_authorises_python() {
+    let _env = EnvLock::acquire();
+    let workspace = tempfile::tempdir().unwrap();
+    let sink: Sink = Arc::new(Mutex::new(Captured::default()));
+    let upstream = stub_upstream(
+        json!({
+            "id": "chat-mem-owned-1",
+            "model": "deepseek-v4-pro",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "记住了"},
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+        }),
+        StatusCode::OK,
+        sink,
+    );
+    let url = start_stub(upstream).await;
+    let root = workspace.path().to_string_lossy().to_string();
+    let _guard = EnvGuard::set(&[
+        ("DEEPSEEK_API_URL", &url),
+        ("DEEPSEEK_API_KEY", "unit-upstream-key"),
+        ("DEEPSEEK_INFRA_ROOT", &root),
+        ("DEEPSEEK_RUNTIME_MODE", "python_disabled"),
+    ]);
+
+    let body = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [{"role": "user", "content": "请帮我记住: 也写进去了"}],
+    })
+    .to_string();
+    let (status, response) = post_chat(&body).await;
+    assert_eq!(status, StatusCode::OK, "response: {response}");
+
+    let memory_file = workspace.path().join(".memory").join("memories.json");
+    let stored = std::fs::read_to_string(&memory_file).expect("the route wrote the store");
+    assert!(
+        stored.contains("也写进去了"),
+        "the turn's memory was not saved: {stored}"
+    );
+}
+
+/// The mirror of the tool-level refusal: same seed, same scripted `forget_memory` call, one mode
+/// different — and the tool now deletes instead of answering `NATIVE_MEMORY_WRITE_NOT_OWNED`.
+#[tokio::test]
+async fn chat_route_runs_the_memory_deleting_tool_once_the_mode_de_authorises_python() {
+    let _env = EnvLock::acquire();
+    let workspace = tempfile::tempdir().unwrap();
+    let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let upstream = stub_upstream_sequence(
+        vec![
+            json!({
+                "id": "chat-mem-owned-2",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [{
+                            "id": "call-forget-owned",
+                            "type": "function",
+                            "function": {"name": "forget_memory", "arguments": "{\"query\":\"dentist\"}"},
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+            }),
+            json!({
+                "id": "chat-mem-owned-3",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "forgotten"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14},
+            }),
+        ],
+        requests.clone(),
+    );
+    let url = start_stub(upstream).await;
+    let root = workspace.path().to_string_lossy().to_string();
+    let _guard = EnvGuard::set(&[
+        ("DEEPSEEK_API_URL", &url),
+        ("DEEPSEEK_API_KEY", "unit-upstream-key"),
+        ("DEEPSEEK_INFRA_ROOT", &root),
+        ("DEEPSEEK_RUNTIME_MODE", "python_disabled"),
+    ]);
+
+    let memory_dir = workspace.path().join(".memory");
+    std::fs::create_dir_all(&memory_dir).unwrap();
+    let memory_file = memory_dir.join("memories.json");
+    std::fs::write(
+        &memory_file,
+        serde_json::to_string(&json!([{
+            "id": "m-dentist-owned",
+            "memoryId": "m-dentist-owned",
+            "content": "dentist appointment on Thursday",
+            "category": "fact",
+            "type": "fact",
+            "scope": "global",
+            "source": "manual",
+            "confidence": 0.9,
+            "pinned": false,
+            "createdAt": "2026-09-18T00:00:00Z",
+            "updatedAt": "2026-09-18T00:00:00Z",
+        }]))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let body = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [{"role": "user", "content": "forget the dentist thing"}],
+    })
+    .to_string();
+    let (status, response) = post_chat(&body).await;
+    assert_eq!(status, StatusCode::OK, "response: {response}");
+
+    let requests = requests.lock().unwrap().clone();
+    let messages = requests[1]["messages"].as_array().unwrap();
+    let tool_turn = messages
+        .iter()
+        .find(|message| message["role"] == "tool")
+        .expect("the round appended a tool result");
+    let content = tool_turn["content"].as_str().unwrap();
+    assert!(
+        content.contains("\"deleted\":1"),
+        "the tool should have deleted the memory: {content}"
+    );
+    let stored = std::fs::read_to_string(&memory_file).unwrap();
+    assert!(
+        !stored.contains("dentist appointment on Thursday"),
+        "the memory survived the delete: {stored}"
+    );
+}
+
 #[tokio::test]
 async fn chat_route_runs_a_data_branch_against_the_workspace() {
     let _env = EnvLock::acquire();

@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use std::{collections::HashMap, io, path::Path as FsPath};
 
 use deepseek_policy::app_error::AppError;
-use deepseek_policy::core_utils::{latest_user_query, python_truthy};
+use deepseek_policy::core_utils::{SystemClock, latest_user_query, python_truthy};
 use deepseek_policy::memory;
 use deepseek_policy::model_router::ModelRouterSettings;
 use deepseek_policy::request_messages::validate_request_messages;
@@ -509,6 +509,28 @@ pub(crate) const MEMORY_WRITE_NOT_OWNED: &str = "NATIVE_MEMORY_WRITE_NOT_OWNED";
 /// `NATIVE_MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE` — the deployment has a `rag_vec` table.
 const MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE: &str = "NATIVE_MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE";
 
+/// Whether this process is the memory store's authoritative writer.
+///
+/// The counterpart of `deepseek_infra/infra/native_runtime/authority.py:assert_python_writer_allowed`,
+/// and it reads the same signal that gate does: `DEEPSEEK_RUNTIME_MODE=python_disabled`, which
+/// ADR-0049 places at the 4.9.4 cutover ("disables Python production authority by default while
+/// retaining an explicit rollback runtime"). Deliberately **not** `DEEPSEEK_GO_CONTROL=1`: that mode
+/// says the Go *control* plane is authoritative, and the ADR hands the control plane over one domain
+/// at a time (4.9.3) while the data plane can still be Python's — reading it as data-plane ownership
+/// would put two writers on one store, which is what the ADR forbids.
+///
+/// While this is false the route **refuses** a turn that would write the store rather than answering
+/// without saving; while it is true the ported write half runs. The two are mutually exclusive by
+/// construction, which is what keeps `one_table_one_authoritative_writer` true across the flip.
+pub(crate) fn native_owns_memory_store() -> bool {
+    memory_store_owner_is_native(&std::env::var("DEEPSEEK_RUNTIME_MODE").unwrap_or_default())
+}
+
+/// [`native_owns_memory_store`] over an explicit mode string, so the rule is testable without env.
+pub(crate) fn memory_store_owner_is_native(mode: &str) -> bool {
+    mode.trim().eq_ignore_ascii_case("python_disabled")
+}
+
 async fn chat_completions(
     headers: HeaderMap,
     body: Bytes,
@@ -583,13 +605,18 @@ async fn chat_completions(
                 env.expander,
             )?;
 
-            // `.memory/memories.json` is owned by Python: no `memory` domain is declared and
-            // `one_table_one_authoritative_writer` is an invariant, so this route must not
-            // write it. Answering a "记住: X" turn *without* saving would silently discard the
-            // instruction, so such a turn is refused instead — see
-            // `deepseek_policy::memory::{has_explicit_memory_command, prepare_memory_state_read_only}`.
+            // `.memory/memories.json` is a declared domain (`memory_store`, python -> rust, cutover
+            // 4.9.4) and `one_table_one_authoritative_writer` is an invariant, so exactly one side
+            // writes it. Which side is this turn's business, not a constant:
+            //
+            // - while Python is authoritative (`native_owns_memory_store()` false) this route must
+            //   not write it, and answering a "记住: X" turn *without* saving would silently discard
+            //   the instruction — so the turn is refused;
+            // - once the mode says Python is de-authorised, the ported write half runs and this is
+            //   the writer, which is what makes the handover a flip rather than a rewrite.
+            let owns_memory_store = native_owns_memory_store();
             let latest_query = latest_user_query(&prepared.payload);
-            if memory::has_explicit_memory_command(&latest_query) {
+            if !owns_memory_store && memory::has_explicit_memory_command(&latest_query) {
                 return Err(AppError {
                     message: "This turn asks for a long-term memory to be saved or deleted. The \
                           memory store is still written by the Python runtime, so the native \
@@ -616,8 +643,14 @@ async fn chat_completions(
                 }
             };
             let borrowed: &memory::VectorHits<'_> = &provider;
-            let memory_state =
-                memory::prepare_memory_state_read_only(&prepared.payload, &root, Some(borrowed));
+            let memory_state = if owns_memory_store {
+                // The writer path, and the oracle's own function: the explicit command runs *before*
+                // the retrieval so a memory saved this turn is retrievable in it, and its notice
+                // reaches the prompt.
+                memory::prepare_memory_state(&prepared.payload, &root, &SystemClock, Some(borrowed))
+            } else {
+                memory::prepare_memory_state_read_only(&prepared.payload, &root, Some(borrowed))
+            };
             let assembled =
                 native_chat::assemble_openai_chat(prepared, streaming, &memory_state, env)?;
             Ok(NativeChat {
@@ -798,6 +831,12 @@ mod tests {
 
     impl EnvGuard {
         fn api_key(value: &str) -> Self {
+            Self::with(&[("DEEPSEEK_API_KEY", value)])
+        }
+
+        /// `pairs` forced for the guard's lifetime, with a workspace root installed alongside them —
+        /// the route binds the assembly, so any case that gets past validation needs one.
+        fn with(pairs: &[(&'static str, &str)]) -> Self {
             let _root = tempfile::tempdir().expect("a temp workspace root");
             let root_path = _root
                 .path()
@@ -805,10 +844,9 @@ mod tests {
                 .expect("a utf-8 temp path")
                 .to_string();
             let mut saved = Vec::new();
-            for (name, value) in [
-                ("DEEPSEEK_API_KEY", value),
-                ("DEEPSEEK_INFRA_ROOT", root_path.as_str()),
-            ] {
+            for (name, value) in std::iter::once(("DEEPSEEK_INFRA_ROOT", root_path.as_str()))
+                .chain(pairs.iter().copied())
+            {
                 saved.push((name, std::env::var(name).ok()));
                 // `set_var` is `unsafe` in edition 2024; `EnvLock` is what makes it sound here, by
                 // keeping these mutations away from other tests' threads for its lifetime.
@@ -1162,6 +1200,33 @@ mod tests {
         let (status, _body) =
             send_request(app, "POST", "/v1/chat/completions", Some(body.to_string())).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    /// The ownership signal is the mode, and only the mode.
+    ///
+    /// `DEEPSEEK_GO_CONTROL=1` means the Go *control* plane is authoritative; the data plane can
+    /// still be Python's during that window, so reading it as ownership of the memory store would put
+    /// two writers on one file — the thing ADR-0049 forbids. The table below is the counterpart of
+    /// `authority.py`'s rule for data domains, and it deliberately ignores the Go flag.
+    #[test]
+    fn the_memory_store_owner_is_the_mode_and_not_go_control() {
+        let _env = EnvLock::acquire();
+        assert!(!memory_store_owner_is_native(""));
+        assert!(!memory_store_owner_is_native("python_authoritative"));
+        assert!(!memory_store_owner_is_native("shadow"));
+        assert!(!memory_store_owner_is_native("go_authoritative"));
+        assert!(memory_store_owner_is_native("python_disabled"));
+        // Case and surrounding whitespace are the reader's own tolerance, not a second spelling.
+        assert!(memory_store_owner_is_native(" Python_Disabled "));
+
+        let _go = EnvGuard::with(&[("DEEPSEEK_GO_CONTROL", "1"), ("DEEPSEEK_RUNTIME_MODE", "")]);
+        assert!(
+            !native_owns_memory_store(),
+            "DEEPSEEK_GO_CONTROL is the control plane and must not grant the data plane"
+        );
+        // With the Go flag still set, the mode alone flips it: the store's owner is a mode question.
+        let _mode = EnvGuard::with(&[("DEEPSEEK_RUNTIME_MODE", "python_disabled")]);
+        assert!(native_owns_memory_store());
     }
 
     /// With no credential the route fails closed, and it answers with the oracle's own error.

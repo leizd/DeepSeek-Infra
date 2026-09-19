@@ -3150,3 +3150,38 @@ run — the repository does not use it, and CI checks only `ruff check .`.
 **Not pushed**, and the Rust write half is deliberately not filled: ADR-0049 leaves the prior owner
 authoritative until its cutover gate passes and does not permit dual writers, so it lands *with* the
 mode flip.
+
+### The other half of the handover: the refusals became a flip
+
+Both route refusals are now driven by one predicate instead of being constants, which is what turns the
+handover into a **flip** rather than a rewrite.
+
+`lib.rs`'s `native_owns_memory_store()` (with the testable `memory_store_owner_is_native(mode)` under
+it) is true exactly when `DEEPSEEK_RUNTIME_MODE=python_disabled` — the same signal
+`authority.py`'s gate reads. It is deliberately **not** `DEEPSEEK_GO_CONTROL=1`: that is the *control*
+plane's mode, the ADR hands the control plane over one domain at a time (4.9.3) while the data plane can
+still be Python's, and reading it as data-plane ownership would put two writers on one file. A test
+pins that reading, and the mode table with it.
+
+While it is false the turn-level refusal and the tool-level denial behave exactly as before — the tests
+written for them did not change — and while it is true the turn calls the oracle's own
+`prepare_memory_state` (command first, then retrieval, so a memory saved this turn is retrievable in it)
+and `forget_memory` dispatches for real. One environment variable decides which side writes; the store
+never has two.
+
+**Verified from both sides.** `chat_route_saves_the_memory_once_the_mode_de_authorises_python` and
+`chat_route_runs_the_memory_deleting_tool_once_the_mode_de_authorises_python` are the mirrors of the two
+refusal cases — same bodies, one mode different — and both are **able to fail**: forcing the predicate
+to `false` turns exactly those two red and leaves the other eight green, which is how it was checked.
+Totals: gateway 163 lib plus 10 + 6 + 1 + 1 integration; policy 403 passed; `fmt --check` clean; clippy
+clean on lib and test targets.
+
+**A host quirk worth recording**: three clippy runs in a row failed on this machine with
+`error: failed to write D:/deepseek/rust/target/debug/examples/*.rmeta: os error 5`, reported as
+"could not compile … due to 1 previous error" for files that had no compile error. Disk has 20 GB free
+and a manual write into the same directory succeeds, so it is intermittent file contention, not
+permissions or space. `CARGO_INCREMENTAL=0` is the lighter workaround (it also made `cargo check`
+clean); deleting `target/debug/incremental` is the heavier one.
+
+**Not pushed**: six commits now sit on `main` ahead of origin, and the flip is inert until the mode is
+set — nothing runs differently today.
