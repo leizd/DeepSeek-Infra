@@ -696,19 +696,17 @@ async fn chat_route_runs_the_memory_deleting_tool_once_the_mode_de_authorises_py
     );
 }
 
-/// The reminders store is refused — and refused **even when** the mode says Python is de-authorised,
-/// because `reminders_store` is not a declared domain and a mode must not be able to enable a store
-/// nobody has declared.
+/// The reminder tool is refused while Python owns the store, and runs once the mode flips — the same
+/// two-sided shape the memory tests use, for the store that needed it more.
 ///
-/// This replaces a case that asserted the write happened. Three measurements moved it: `remind`
-/// appears nowhere in the ownership contract (the domain list, `GO_CONTROL_DOMAINS` and the command
-/// codes were each searched), Python writes the store from three paths — one of them the *delivery*
-/// poll `due_reminders`, which marks `notified` and rewrites the whole file — and both sides reproduce
-/// the same temp path (`reminders.json` -> `reminders.tmp`), so two writers can interleave before
-/// either replaces it. The write-through-the-injected-workspace path is still covered, by the memory
-/// mirrors above.
+/// Why this one needed a refusal at all: `reminders_store` was the store the route wrote while it was
+/// undeclared. Python writes it from three paths — one of them the *delivery* poll `due_reminders`,
+/// which marks `notified` and rewrites the whole file — and both sides reproduce the same temp path
+/// (`reminders.json` -> `reminders.tmp`), so two writers could interleave before either replaced it.
+/// The declaration it now has is `python -> rust` at 4.9.4, which is the same cutover as
+/// `memory_store`, so this case and the memory mirrors flip together and on the same signal.
 #[tokio::test]
-async fn chat_route_refuses_to_create_a_reminder_while_the_store_is_undeclared() {
+async fn chat_route_refuses_the_reminder_tool_until_the_store_is_declared_and_the_mode_flips() {
     let _env = EnvLock::acquire();
     let workspace = tempfile::tempdir().unwrap();
     let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
@@ -792,8 +790,7 @@ async fn chat_route_refuses_to_create_a_reminder_while_the_store_is_undeclared()
     let store = workspace.path().join(".reminders").join("reminders.json");
     assert!(!store.exists(), "a refused create wrote the store");
 
-    // Now with Python de-authorised. The memory store flips here; the reminders store does not,
-    // because it has no declaration — which is the mechanical half of "declare it at the cutover".
+    // Same body, one mode different: the store is declared, so this is the flip and the tool runs.
     let _mode = EnvGuard::set(&[
         ("DEEPSEEK_API_URL", &url),
         ("DEEPSEEK_API_KEY", "unit-upstream-key"),
@@ -802,12 +799,17 @@ async fn chat_route_refuses_to_create_a_reminder_while_the_store_is_undeclared()
     ]);
     let (status, response) = post_chat(&body).await;
     assert_eq!(status, StatusCode::OK, "response: {response}");
-    let still_refused = tool_result(3);
+    let ran = tool_result(3);
     assert!(
-        still_refused.contains("NATIVE_REMINDERS_WRITE_NOT_OWNED"),
-        "an undeclared store must stay refused even with Python de-authorised: {still_refused}"
+        !ran.contains("NATIVE_REMINDERS_WRITE_NOT_OWNED"),
+        "a declared store must flip with the mode: {ran}"
     );
-    assert!(!store.exists(), "a refused create wrote the store");
+    assert!(
+        std::fs::read_to_string(&store)
+            .unwrap()
+            .contains("buy milk"),
+        "the created reminder was not stored"
+    );
 }
 
 #[tokio::test]

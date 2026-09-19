@@ -520,11 +520,11 @@ const MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE: &str = "NATIVE_MEMORY_VECTOR_INDEX_N
 ///    over one domain at a time while the data plane can still be Python's — reading it as data-plane
 ///    ownership would put two writers on one store.
 /// 2. **Has this store been declared and cut over?** — `release/native_runtime_ownership_v1.json`
-///    lists it as python -> rust with a cutover. `memory_store` is declared. `reminders_store` is
-///    **not**: `remind` appears nowhere in the contract, in `GO_CONTROL_DOMAINS` or in the command
-///    codes, so the route refuses it whatever the mode says — setting the mode alone must not be able
-///    to enable a store nobody has declared. A test pins this list against the contract.
-pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 1] = ["memory_store"];
+///    lists it as python -> rust with a cutover. `memory_store` and `reminders_store` both are, each at
+///    4.9.4. A store that is **not** here stays refused whatever the mode says — setting the mode alone
+///    must not be able to enable a store nobody declared — which is why the list is the second
+///    condition rather than a detail of the first. A test pins it as a subset of the contract's.
+pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 2] = ["memory_store", "reminders_store"];
 
 /// Whether this process may write the store `domain` names.
 ///
@@ -1247,7 +1247,11 @@ mod tests {
         assert!(python_is_de_authorised());
         // ...and the mode alone is not enough: the store has to be declared as well.
         assert!(may_write_native_store("memory_store"));
-        assert!(!may_write_native_store("reminders_store"));
+        assert!(may_write_native_store("reminders_store"));
+        // A third condition, in effect: the contract declaring a domain does not make *this* gateway
+        // its writer. `s3_minio_streaming` is declared python -> rust, and the gateway must still
+        // refuse it — an undeclared-here store stays refused whatever the mode says.
+        assert!(!may_write_native_store("s3_minio_streaming"));
     }
 
     /// The writable-stores list must be the contract's list, not a second opinion.

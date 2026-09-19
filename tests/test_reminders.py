@@ -72,3 +72,37 @@ def test_reminder_due_time_timezone_and_natural_parser_edges() -> None:
     assert parsed is not None and "21:00:00" in parsed["dueAt"]
     next_day = reminders.parse_natural_reminder("9 点提醒我 test", now=datetime(2026, 1, 1, 10, 0))
     assert next_day is not None and "2026-01-02" in next_day["dueAt"]
+
+
+def test_every_reminder_write_path_is_denied_once_python_is_de_authorized(
+    tmp_settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`reminders_store` is a declared domain (python -> rust, 4.9.4), so the handover is mechanical.
+
+    All three Python write paths funnel through `_write_reminders` — `create_reminder`,
+    `due_reminders`'s delivery marking, and `delete_reminder`. That is exactly why the gate sits there
+    and not at each call site: the delivery marking runs on a **poll**, outside any conversation, so a
+    per-call-site gate would have to remember a path nobody is looking at.
+
+    The gate is mode-driven because ADR-0049 says "a cutover gate that has not passed leaves the prior
+    owner authoritative; it does not permit dual writers" — so the default mode leaving every path
+    working is half of what this test asserts.
+    """
+    from deepseek_infra.infra.native_runtime.authority import PythonWriterMechanicallyDeniedError
+
+    # The default mode: creation works, and the store is readable.
+    overdue = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+    created = reminders.create_reminder({"title": "晨会", "content": "准备要点", "dueAt": overdue})
+    assert [item["id"] for item in reminders.load_reminders()] == [created["id"]]
+    before = reminders.REMINDERS_FILE.read_text(encoding="utf-8")
+
+    monkeypatch.setenv("DEEPSEEK_RUNTIME_MODE", "python_disabled")
+    fresh = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    with pytest.raises(PythonWriterMechanicallyDeniedError):
+        reminders.create_reminder({"title": "after the cutover", "dueAt": fresh})
+    # The delivery poll writes too, and this is the path that makes the choke point necessary.
+    with pytest.raises(PythonWriterMechanicallyDeniedError):
+        reminders.due_reminders(datetime.now(timezone.utc))
+    with pytest.raises(PythonWriterMechanicallyDeniedError):
+        reminders.delete_reminder(str(created["id"]))
+    assert reminders.REMINDERS_FILE.read_text(encoding="utf-8") == before, "a denied write changed the store"

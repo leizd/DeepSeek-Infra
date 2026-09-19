@@ -61,11 +61,14 @@ GO_CONTROL_DOMAINS = frozenset(
 
 RUST_DATA_DOMAINS = frozenset(
     {
-        # `memory_store` is declared in `release/native_runtime_ownership_v1.json` as
-        # python -> rust at 4.9.2. Every write path into it funnels through one choke point
-        # (`memory._save_memories_unlocked`), so this set is what makes the handover mechanical
-        # rather than a convention each caller has to remember.
+        # Both are declared in `release/native_runtime_ownership_v1.json` as python -> rust at 4.9.4,
+        # and each has one write choke point in Python — `memory._save_memories_unlocked` and
+        # `reminders._write_reminders` — so this set is what makes the handover mechanical rather than
+        # a convention each caller has to remember. Both stores also have a *second* Python writer
+        # path that runs outside any conversation (the memory tools and routes; `due_reminders`'s
+        # delivery marking), which is the reason the gate is per store and not per call site.
         "memory_store",
+        "reminders_store",
     }
 )
 

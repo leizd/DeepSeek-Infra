@@ -254,21 +254,35 @@ domain is declared and cut over at the version whose mode de-authorises Python.
 **Landed: refused, and refused for the right reason.** `lib.rs` now separates the two questions the
 single mode predicate was conflating — `python_is_de_authorised()` is the deployment-wide mode, and
 `may_write_native_store(domain)` is that **and** the domain's presence in
-`DECLARED_NATIVE_DATA_DOMAINS`. `reminders_store` is not in it, so `chat_tool_loop`'s `create_reminder`
-gate answers `NATIVE_REMINDERS_WRITE_NOT_OWNED` **whatever the mode says** — a test asserts exactly
+`DECLARED_NATIVE_DATA_DOMAINS`. `reminders_store` was not in it, so `chat_tool_loop`'s `create_reminder`
+gate answered `NATIVE_REMINDERS_WRITE_NOT_OWNED` **whatever the mode said** — a test asserted exactly
 that, twice in one case: refused by default, and still refused with `DEEPSEEK_RUNTIME_MODE=python_disabled`.
 That is the mechanical half of "declare it at the cutover": no environment variable can enable a store
 nobody has declared. A test also pins `DECLARED_NATIVE_DATA_DOMAINS` as a **subset** of the contract's
 python → rust data domains (nine carry `durable_store: rust_data`, most of them other planes' stores),
 so the list cannot invent ownership.
 
+**And then the declaration landed, so the store flips.** Cutting `reminders_store` over takes **three**
+edits, not the two it looks like, because a store has two writers and each needs its own gate:
+
+| where | what | why it is needed |
+| --- | --- | --- |
+| `release/native_runtime_ownership_v1.json` | a `reminders_store` domain, python -> rust, `cutover: 4.9.4`, `durable_store: rust_data` | the contract is the authority for who owns it; `domains` 44 → 45 |
+| `lib.rs`'s `DECLARED_NATIVE_DATA_DOMAINS` | `"reminders_store"` | without it the Rust side refuses a store it now owns — the flip would never happen |
+| `authority.RUST_DATA_DOMAINS` + `reminders._write_reminders` | the same domain, gated at Python's one write choke point | **without it the flip is asymmetric**: Rust starts writing while Python is still allowed to, which is the dual writer the whole exercise forbids — and it would bite hardest in the `DEEPSEEK_LEGACY_PYTHON=1` rollback, where the Python server *is* running |
+
+4.9.4 now has exactly two members, `memory_store` and `reminders_store`, so the two stores flip together
+on the same signal. The integration case was rewritten from "refused even when the mode flips" to the
+memory tests' two-sided shape — refused by default, written once the mode flips — and the
+"undeclared-here stays refused" property moved onto `s3_minio_streaming`, a domain the contract *does*
+declare python → rust but that this gateway must not write.
+
 Three cases had asserted the reminder write and were updated rather than deleted, each keeping its own
-purpose: the integration case now asserts the refusal and that no store appeared; the streaming case
-still proves a tool round is *continued* rather than failing the turn, with the refusal as the replayed
-tool result; and `chat_tool_loop`'s unit test proves workspace injection by **seeding** the store under
-the injected root and reading it back — stronger than the write it used to rely on. Both refusal
-assertions were shown able to fail: disarming the gate turns the integration case and the streaming
-case red.
+purpose: the integration case now covers both sides of the flip; the streaming case still proves a tool
+round is *continued* rather than failing the turn, with the tool result as the model reads it; and
+`chat_tool_loop`'s unit test proves workspace injection by **seeding** the store under the injected root
+and reading it back — stronger than the write it used to rely on. Every refusal assertion was shown able
+to fail: disarming a gate turns exactly the corresponding case red, and nothing else.
 
 ### §3c The handover body: one choke point, and a mode that has to mean it
 

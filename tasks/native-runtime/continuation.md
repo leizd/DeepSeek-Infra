@@ -3221,3 +3221,41 @@ invariant, and it is the one the Python side already used.
 
 **Verified**: `cargo test -p deepseek-gateway -p deepseek-policy` → 164 lib plus 10 + 6 + 1 + 1
 integration and 403 policy, all passed; `fmt --check` clean; clippy clean on lib and test targets.
+
+### The reminders cutover, all three pieces
+
+The declaration landed on the owner's word, and cutting a store over takes **three** edits rather than
+the two it looks like — because a store has two writers and each needs its own gate:
+
+1. `release/native_runtime_ownership_v1.json` gained a `reminders_store` domain (python -> rust,
+   `cutover: 4.9.4`, `durable_store: rust_data`). `domains` 44 → 45, and 4.9.4 now has exactly two
+   members: `memory_store` and `reminders_store`.
+2. `lib.rs`'s `DECLARED_NATIVE_DATA_DOMAINS` gained `"reminders_store"`. Without it the Rust side keeps
+   refusing a store it now owns, and the flip would never happen.
+3. `authority.RUST_DATA_DOMAINS` gained the same domain, and `reminders._write_reminders` now calls the
+   gate. **Without this the flip is asymmetric** — Rust starts writing while Python is still allowed to,
+   which is precisely the dual writer ADR-0049 forbids, and it would bite hardest in the
+   `DEEPSEEK_LEGACY_PYTHON=1` rollback where the Python server *is* running.
+
+All three are inert today (the default mode is `python_authoritative`), so nothing runs differently; what
+they buy is that the flip is now one environment variable, symmetric on both sides, for both stores.
+
+**Tests moved with it.** The integration case flipped from "refused even when the mode is set" to the
+memory tests' two-sided shape — refused by default, written once the mode flips — and the
+"undeclared-here stays refused" property moved onto `s3_minio_streaming`, a domain the contract *does*
+declare python -> rust and that this gateway must still refuse. Python gained
+`tests/test_reminders.py::test_every_reminder_write_path_is_denied_once_python_is_de_authorized`, which
+covers all three write paths at once (creation, the delivery poll's marking, deletion) and asserts the
+store is byte-identical afterwards. Each refusal assertion was shown **able to fail**: disarming a gate
+turns exactly the corresponding case red, and nothing else.
+
+**Verified**: `cargo test -p deepseek-gateway -p deepseek-policy` → 164 lib plus 10 + 6 + 1 + 1
+integration and 403 policy; `pytest` over the reminders, memory, ownership and gate files → 33 + 17
+passed; `ruff check .` and `mypy .` (888 files) clean; `check_zero_python_runtime.py` PASS 8/8, now
+reporting `all 28 Go control domains and all 2 Rust data domains`; the contract CLI reports
+`"ok": true`.
+
+**A process note worth keeping**: an append executed by this host's shell tool can run **twice** (the
+sandboxed pass and the escalated retry), and `cat >>` is not idempotent — the test above was appended
+twice, which `mypy` caught as `no-redef` and `ruff` as a redefinition. Guard repeats with
+`grep -q … ||`, or edit by unique anchor instead of appending.

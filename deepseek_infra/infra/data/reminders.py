@@ -131,6 +131,14 @@ def _read_reminders() -> list[dict[str, Any]]:
 
 
 def _write_reminders(reminders: list[dict[str, Any]]) -> None:
+    # The single choke point for all three write paths (`create_reminder`, `due_reminders`'s delivery
+    # marking, `delete_reminder`), so the ownership gate belongs here rather than at each of them —
+    # and it comes first, before the mutation fence, so a denied write leaves nothing behind. While
+    # Python is authoritative this is a no-op; once `reminders_store` is cut over it is what stops
+    # Python writing a store the native runtime owns.
+    from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
+
+    assert_python_writer_allowed("reminders_store")
     with mutation_gate.mutation_scope(root=REMINDERS_DIR.parent):
         REMINDERS_DIR.mkdir(parents=True, exist_ok=True)
         tmp = REMINDERS_FILE.with_suffix(".tmp")
