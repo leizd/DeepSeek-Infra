@@ -3045,3 +3045,23 @@ a developer shell cannot silently change what they test.
 `--locked --all-targets --all-features -- -D warnings`) clean; `native_chat_composition_parity_probe`
 **byte-identical** again (315 124 B, `diff` empty after `tr -d '\r'`), which is the evidence that
 dropping the plain-expander attempt restored parity.
+
+**The batch is green**: run `35411153854` on `6e0af1ef` — **all 35 jobs succeeded**, `rust-docker`,
+`evidence-assembly`, `rc-readiness` and `release-package` among them.
+
+The first attempt (`35409221685` on `5d247be9`) was 31 green and four not: `rust-docker` failed, and
+`evidence-assembly`, `rc-readiness` and `release-package` fell with it. That is one root cause, not
+four — `evidence-assembly` and `rc-readiness` both need `rust-docker`, and the gate's step is a bare
+`exit 1` under "Require every upstream Evidence gate", so it reads like an independent failure and is
+not; `release-package` was skipped behind them. Worth knowing before diagnosing the next one.
+
+The cause was the same class of stale contract as the `lib.rs` cases, in Python:
+`scripts/smoke_rust_sidecar.py` expected `POST /v1/chat/completions` to answer `503` with a *nested*
+`NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING`. The wired route answers `400 missing_api_key` — the
+oracle's own validation error, in the oracle's flat `{"error": <message>, "code": <code>}` envelope.
+The requirement the script encodes (fail closed, never a fabricated completion) is unchanged and
+still asserted; `tests/test_rust_docker_config.py`'s stubbed sidecar now answers with the new
+envelope, so the script's new expectations are exercised end to end rather than assumed (9 passed).
+`worker-execution-plan.md` carried the same stale row for this case; the rest of that document's
+drift — its "Still on the Python path" list still names memory retrieval, context compression and the
+model router, all of which are ported — is left alone and flagged rather than silently rewritten.
