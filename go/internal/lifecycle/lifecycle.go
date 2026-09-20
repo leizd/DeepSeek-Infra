@@ -66,11 +66,27 @@ func Start(ctx context.Context, cfg config.Config) (*Server, error) {
 func serve(ctx context.Context, cfg config.Config, listener net.Listener, control *store.Control, renewEvery time.Duration) *Server {
 	runCtx, cancel := context.WithCancel(ctx)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(writer http.ResponseWriter, _ *http.Request) {
+	encodeStatus := func(writer http.ResponseWriter) {
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(StatusFrom(cfg, control != nil))
+	}
+	mux.HandleFunc("/healthz", func(writer http.ResponseWriter, _ *http.Request) {
+		encodeStatus(writer)
+	})
+	mux.HandleFunc("/api/control/status", func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet {
+			writer.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		encodeStatus(writer)
 	})
 	api.Register(mux, control)
+	api.RegisterPublicView(mux, control, api.PublicView{
+		Mode:               cfg.Mode,
+		MutationAuthority:  config.MutationAuthority,
+		ProductionMutation: false,
+		ShadowStore:        control != nil,
+	})
 	server := &http.Server{Handler: mux, BaseContext: func(net.Listener) context.Context { return runCtx }}
 	runtime := &Server{address: listener.Addr().String(), done: make(chan error, 1)}
 	served := make(chan error, 1)

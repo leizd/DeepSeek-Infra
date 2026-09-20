@@ -855,11 +855,7 @@ pub fn read_file_chunk(
 /// `project.json.tmp` — a third spelling alongside the reminders store's replaced
 /// suffix and the workspace schema's appended one. Reproduced rather than unified,
 /// because the bytes on disk are the contract.
-pub fn write_project(
-    root: &Path,
-    project: &Value,
-    entropy: &dyn Entropy,
-) -> Result<(), AppError> {
+pub fn write_project(root: &Path, project: &Value, entropy: &dyn Entropy) -> Result<(), AppError> {
     let safe_id = validate_project_id(&python_str(project.get("id")))?;
     let directory = projects_dir(root).join(&safe_id);
     std::fs::create_dir_all(&directory)
@@ -872,7 +868,8 @@ pub fn write_project(
     rendered.push('\n');
     std::fs::write(&temporary, rendered.as_bytes())
         .map_err(|error| AppError::invalid_payload(error.to_string()))?;
-    std::fs::rename(&temporary, &path).map_err(|error| AppError::invalid_payload(error.to_string()))?;
+    std::fs::rename(&temporary, &path)
+        .map_err(|error| AppError::invalid_payload(error.to_string()))?;
     let _ = entropy;
     Ok(())
 }
@@ -894,11 +891,7 @@ const PROJECT_RECORD_KEYS: [&str; 9] = [
 /// Mirrors `create_project`: the 40-project cap, the id minted as
 /// `proj-{secrets.token_hex(6)}` (12 hex characters, not 16), and the seven initial
 /// fields.
-pub fn create_project(
-    name: &str,
-    root: &Path,
-    entropy: &dyn Entropy,
-) -> Result<Value, AppError> {
+pub fn create_project(name: &str, root: &Path, entropy: &dyn Entropy) -> Result<Value, AppError> {
     if list_projects(root, entropy)?.len() >= MAX_PROJECTS {
         return Err(AppError {
             message: "Too many projects".to_string(),

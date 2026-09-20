@@ -5,8 +5,10 @@
 <!-- docs-language-switcher:end -->
 
 
-Status: **seam ported and byte-verified; one of 18 branches implemented; nothing
-wired.**
+Status: **seam ported and byte-verified; all 18 branches now run.**
+`browser_*` is the safety gate + static HTML controller (see
+[`BROWSER.md`](BROWSER.md)). This document is the seam's original record;
+later branch slices have their own docs.
 
 This is the first slice of layer 2 (tool execution). It ports the *seam* — the
 envelope contract, the normalization the branches rely on, the branch inventory,
@@ -48,16 +50,18 @@ Every other branch needs a package that does not exist on the Rust side yet:
 
 | Branch | Blocked on |
 | --- | --- |
-| `browser_*` | `infra.browser.actions` |
-| `python_eval` | a real sandbox — the oracle shells out to a Python interpreter, which the migrated runtime must not do |
-| `search_files` | `infra.rag` |
-| `fetch_url` | an HTTP client + the DNS-time SSRF guard |
+| `browser_*` | **ported** — see [`BROWSER.md`](BROWSER.md) |
+| `python_eval` | **ported** — see [`PYTHON_EVAL.md`](PYTHON_EVAL.md) |
+| `search_files` | **ported** — see [`SEARCH_FILES.md`](SEARCH_FILES.md) |
+| `fetch_url` | **ported** — see [`FETCH_URL.md`](FETCH_URL.md) |
 | `web_search`, `compare_search_results` | the `web_search` callback |
 | `suggest_memory`, `recall_memory`, `forget_memory` | `infra.data.memory` |
 | `create_reminder`, `list_reminders` | `infra.data.reminders` |
 | `list_project_files`, `read_file_chunk` | `infra.data.projects` |
 | `data_transform` | its four `transform_*` helpers |
-| `create_mindmap`, `create_pptx`, `create_document` | `infra.tool_runtime` media modules |
+| `create_mindmap` | **ported** — see [`MINDMAP.md`](MINDMAP.md) |
+| `create_document` | **ported** — see [`CREATE_DOCUMENT.md`](CREATE_DOCUMENT.md) |
+| `create_pptx` | **ported** — see [`CREATE_PPTX.md`](CREATE_PPTX.md) |
 
 `generate_chart` needs none of them: it normalizes a chart type, filters up to 12
 points, and renders a markdown table.
@@ -213,9 +217,9 @@ into cancelled envelopes rather than "did not run".
 
 `stable_tool_output_for_model` and `strip_volatile_tool_fields` are ported in full.
 The artifact-compaction path (`compact_artifact_tool_output`) for `create_pptx` /
-`create_document` / `create_mindmap` is **deferred**: those branches are not
-ported, so the path is unreachable, and a test pins that their output currently
-passes through unchanged so the gap stays visible rather than silent.
+`create_document` / `create_mindmap` is **still deferred**: those branches now
+run, but a test pins that their output currently passes through unchanged so
+the compaction gap stays visible rather than silent.
 
 ## A shared Python-JSON module
 
@@ -252,15 +256,17 @@ silent. They are blocked on real subsystems:
 
 | Branch | Blocker |
 | --- | --- |
-| `browser_*` | a browser engine (`infra.browser.actions`) |
-| `python_eval` | a real sandbox — the oracle shells out to a Python interpreter, which the migrated runtime must not |
-| `search_files` | `infra.rag` |
-| `fetch_url` | an HTTP client + the DNS-time SSRF guard |
+| `browser_*` | **ported** — see [`BROWSER.md`](BROWSER.md) |
+| `python_eval` | **ported** — see [`PYTHON_EVAL.md`](PYTHON_EVAL.md) |
+| `search_files` | **ported** — see [`SEARCH_FILES.md`](SEARCH_FILES.md) |
+| `fetch_url` | **ported** — see [`FETCH_URL.md`](FETCH_URL.md) |
 | `web_search`, `compare_search_results` | the `web_search` callback |
 | `suggest_memory`, `recall_memory`, `forget_memory` | `infra.data.memory` |
 | `create_reminder`, `list_reminders` | `infra.data.reminders` |
 | `list_project_files`, `read_file_chunk` | `infra.data.projects` |
-| `create_mindmap`, `create_pptx`, `create_document` | `infra.tool_runtime` media modules |
+| `create_mindmap` | **ported** — see [`MINDMAP.md`](MINDMAP.md) |
+| `create_document` | **ported** — see [`CREATE_DOCUMENT.md`](CREATE_DOCUMENT.md) |
+| `create_pptx` | **ported** — see [`CREATE_PPTX.md`](CREATE_PPTX.md) |
 
 Wiring the round loop (and deleting `ToolRoundsUnwired`) stays blocked on these —
 wiring it now would replace the oracle's terminating tool loop with a permanently
@@ -373,11 +379,9 @@ have called anything. Both entry points (`/v1/chat/completions` and
 
 ## What runs, honestly
 
-Eleven of eighteen branches execute for real: the four request-independent ones
-plus the seven data branches. The other seven (`browser_*`, `python_eval`,
-`search_files`, `fetch_url`, `create_mindmap`, `create_pptx`,
-`create_document`) resolve to the `Tool did not run` envelope — visible to the
-model, never a success, never a route failure. Also absent, each with an owner:
+All eighteen branches execute for real. `browser_*` is refused by safety
+(private host / confirmation) or served by the static HTML controller rather
+than answering `Tool did not run`. Also absent, each with an owner:
 the web-search provider (branches answer "not enabled"), `mcp__*` bridging
 ("Unsupported tool:"), the artifact terminal check, and the loop's surrounding
 machinery (semantic cache, memory retrieval, scheduler, traces, budget ledger).
@@ -397,8 +401,8 @@ machinery (semantic cache, memory retrieval, scheduler, traces, budget ledger).
   - `chat_route_exhausts_the_round_budget_and_forces_a_final_answer` —
     exactly `MAX_TOOL_ROUNDS + 2` upstream turns; the last request carries the
     budget prompt and `tool_choice: "none"` while keeping the `tools` prefix;
-  - `chat_route_reports_an_unported_branch_as_did_not_run` — `fetch_url` gets
-    the honest envelope and the loop still completes.
+  - `chat_route_blocks_a_private_browser_url` — `browser_open_url` of
+    `http://127.0.0.1/admin` is `forbidden` (see [`BROWSER.md`](BROWSER.md)).
 - `cargo test -p deepseek-policy -j 1 -- --test-threads=1` → 223 pass.
 - `cargo clippy -p deepseek-gateway -p deepseek-policy --all-targets -- -D
   warnings` → only the pre-existing `control_proxy.rs:20`

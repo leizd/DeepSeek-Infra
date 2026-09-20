@@ -13,6 +13,7 @@ from deepseek_infra.core.config import PROJECTS_DIR
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.core.utils import utc_now_iso
 from deepseek_infra.infra.rag.files import extract_uploaded_file
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 
 MAX_PROJECTS = 40
 MAX_PROJECT_DOCUMENTS = 120
@@ -35,6 +36,7 @@ def list_projects() -> list[dict[str, Any]]:
 
 
 def create_project(name: str) -> dict[str, Any]:
+    assert_python_writer_allowed("project_metadata_store")
     if len(list_projects()) >= MAX_PROJECTS:
         raise AppError("Too many projects", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
     now = int(time.time() * 1000)
@@ -54,6 +56,8 @@ def create_project(name: str) -> dict[str, Any]:
 
 
 def delete_project(project_id: str) -> int:
+    # Deny before RAG/media cleanup, not just before removing project.json.
+    assert_python_writer_allowed("project_metadata_store")
     safe_id = validate_project_id(project_id)
     path = PROJECTS_DIR / safe_id
     if not path.exists():
@@ -223,6 +227,7 @@ def add_project_files(
     ocr_enabled: bool | None = None,
     ocr_api_key: str | None = None,
 ) -> list[dict[str, Any]]:
+    assert_python_writer_allowed("project_metadata_store")
     project = require_project(project_id)
     documents = list(project.get("documents") or [])
     if len(documents) + len(files) > MAX_PROJECT_DOCUMENTS:
@@ -298,6 +303,7 @@ def read_project(project_id: str) -> dict[str, Any] | None:
 
 
 def write_project(project: dict[str, Any]) -> None:
+    assert_python_writer_allowed("project_metadata_store")
     safe_id = validate_project_id(str(project.get("id") or ""))
     directory = PROJECTS_DIR / safe_id
     directory.mkdir(parents=True, exist_ok=True)

@@ -81,6 +81,34 @@ def collect_profiles(go_dir: Path, dest: Path) -> None:
         dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def profile_statement_counts(profile: Path) -> tuple[int, int]:
+    """Count covered/total statements without rounding Go's display percentage.
+
+    A block repeated by merged runs counts once and is covered if any run hit it.
+    The Go tool still validates the source locations before this is used by the gate.
+    """
+    lines = profile.read_text(encoding="utf-8").splitlines()
+    if not lines or lines[0] not in {"mode: set", "mode: count", "mode: atomic"}:
+        raise ValueError("invalid Go coverage profile mode")
+    blocks: dict[str, tuple[int, bool]] = {}
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        location, statement_count, hit_count = line.rsplit(None, 2)
+        statements, hits = int(statement_count), int(hit_count)
+        if statements < 0 or hits < 0:
+            raise ValueError("negative Go coverage count")
+        previous = blocks.get(location)
+        if previous is not None and previous[0] != statements:
+            raise ValueError(f"inconsistent statement count at {location}")
+        blocks[location] = (statements, hits > 0 or (previous is not None and previous[1]))
+    total = sum(statements for statements, _ in blocks.values())
+    if total == 0:
+        raise ValueError("Go coverage profile contains no statements")
+    covered = sum(statements for statements, hit in blocks.values() if hit)
+    return covered, total
+
+
 def coverage_percent(profile: Path, cwd: Path | None = None) -> float:
     result = subprocess.run(
         ["go", "tool", "cover", f"-func={profile}"],
@@ -93,11 +121,10 @@ def coverage_percent(profile: Path, cwd: Path | None = None) -> float:
         sys.stderr.write(result.stderr)
         raise SystemExit(result.returncode)
     print(result.stdout)
-    total = ""
-    for line in result.stdout.splitlines():
-        if line.startswith("total:"):
-            total = line.rsplit(None, 1)[-1].rstrip("%")
-    return float(total)
+    covered, total = profile_statement_counts(profile)
+    percent = 100.0 * covered / total
+    print(f"Exact Go statement coverage: {percent:.6f}% ({covered}/{total})")
+    return percent
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -114,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     percent = coverage_percent(profile, Path(args.dir) if args.dir else None)
     if percent + 1e-9 < args.min:
-        print(f"Go coverage {percent:.1f}% is below {args.min:.1f}%", file=sys.stderr)
+        print(f"Go coverage {percent:.6f}% is below {args.min:.1f}%", file=sys.stderr)
         return 1
     return 0
 

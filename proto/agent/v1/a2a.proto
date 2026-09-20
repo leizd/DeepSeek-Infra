@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package deepseek.agent.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1;agentv1";
+
+// Go owns task IDs, lifecycle, execution fencing, and durable artifact order.
+// JSON fields contain existing A2A 0.3.0 wire documents (including extension
+// fields); they are data, never a second RPC dispatch or an arbitrary store write.
+message A2ASubmitRequest {
+  string agent_id = 1;
+  string context_id = 2;
+  bytes message_json = 3;
+  // The edge proposes an idempotency identity with epoch ZERO (no authority).
+  // Go alone installs epoch one atomically with the new task; caller-supplied
+  // nonzero epochs are rejected. Retrying this identity cannot create another task.
+  deepseek.common.v1.ActionFence fence = 4;
+}
+
+message A2ATaskRef { string task_id = 1; }
+
+message A2AExecutionRef {
+  deepseek.common.v1.ActionFence fence = 1;
+  string execution_token = 2;
+}
+
+message A2AFinishRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string execution_token = 2;
+  string content = 3;
+  string failure = 4;
+}
+
+// A read-only list filter carries no execution authority.
+message A2AListFilter { int32 limit = 1; }
+
+message A2ATaskSnapshot {
+  string task_id = 1;
+  string state = 2;
+  uint64 revision = 3;
+  bytes public_task_json = 4;
+  // Present only on Claim. Get/List/Cancel never expose execution credentials.
+  A2AExecutionRef execution = 5;
+  deepseek.common.v1.ActionFence fence = 6;
+}
+
+message A2ATaskList { repeated A2ATaskSnapshot tasks = 1; }
+
+service A2ATaskControl {
+  rpc Submit(A2ASubmitRequest) returns (A2ATaskSnapshot);
+  rpc Get(A2ATaskRef) returns (A2ATaskSnapshot);
+  rpc Claim(A2ATaskRef) returns (A2ATaskSnapshot);
+  rpc Renew(A2AExecutionRef) returns (A2ATaskSnapshot);
+  rpc Finish(A2AFinishRequest) returns (A2ATaskSnapshot);
+  rpc Cancel(A2ATaskRef) returns (A2ATaskSnapshot);
+  rpc List(A2AListFilter) returns (A2ATaskList);
+}

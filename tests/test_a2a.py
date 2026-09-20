@@ -58,6 +58,29 @@ def send_params(text: str) -> dict[str, Any]:
     return {"message": {"role": "user", "parts": [{"kind": "text", "text": text}], "messageId": "msg_1", "kind": "message"}}
 
 
+@pytest.mark.parametrize("mode", ["go_authoritative", "python_disabled"])
+def test_native_owner_denies_python_before_task_or_cancel_mutation(tmp_settings, monkeypatch, mode: str) -> None:
+    from deepseek_infra.infra.native_runtime.authority import PythonWriterMechanicallyDeniedError
+
+    monkeypatch.setenv("DEEPSEEK_RUNTIME_MODE", mode)
+    event = threading.Event()
+    task: dict[str, Any] = {"id": "task-existing", "status": {"state": "working"}}
+    a2a._TASKS["task-existing"] = task
+    a2a._TASK_CANCEL_EVENTS["task-existing"] = event
+    with pytest.raises(PythonWriterMechanicallyDeniedError):
+        a2a.submit_message(send_params("must not execute"), agent_id="reasoner")
+    with pytest.raises(PythonWriterMechanicallyDeniedError):
+        a2a.cancel_task("task-existing")
+    with pytest.raises(PythonWriterMechanicallyDeniedError):
+        a2a._update_task("task-existing", lambda record: record.update(status={"state": "completed"}))
+    with pytest.raises(PythonWriterMechanicallyDeniedError):
+        a2a._persist_task(task)
+    assert list(a2a._TASKS) == ["task-existing"]
+    assert task["status"]["state"] == "working"
+    assert not event.is_set()
+    assert not a2a._task_path("task-existing").exists()
+
+
 def task_state(task: dict[str, Any]) -> str:
     return str((task.get("status") or {}).get("state") or "")
 

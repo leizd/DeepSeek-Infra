@@ -169,7 +169,7 @@ pub fn validate_workspace_id(value: &str, label: &str) -> Result<String, AppErro
 
 /// `normalize_title`: whitespace collapsed, trimmed, capped, then the default.
 pub fn normalize_title(value: Option<&Value>, default: &str) -> String {
-    let raw = python_str(value);
+    let raw = python_str(value.filter(|value| crate::core_utils::python_truthy(value)));
     let collapsed = whitespace_regex().replace_all(&raw, " ").to_string();
     let title: String = collapsed.trim().chars().take(MAX_TITLE_CHARS).collect();
     if title.is_empty() {
@@ -190,7 +190,8 @@ pub fn normalize_content(value: Option<&Value>) -> String {
 }
 
 fn normalize_content_with_cap(value: Option<&Value>, cap: usize) -> String {
-    let raw = python_str(value).replace("\r\n", "\n");
+    let raw = python_str(value.filter(|value| crate::core_utils::python_truthy(value)))
+        .replace("\r\n", "\n");
     raw.trim().chars().take(cap).collect()
 }
 
@@ -205,7 +206,7 @@ pub fn normalize_tags(value: Option<&Value>) -> Vec<String> {
     let mut tags: Vec<String> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
     for item in items {
-        let raw = python_str(Some(item));
+        let raw = python_str(Some(item).filter(|value| crate::core_utils::python_truthy(value)));
         let collapsed = whitespace_regex().replace_all(&raw, " ").to_string();
         let tag: String = collapsed.trim().chars().take(MAX_TAG_CHARS).collect();
         let key = tag.to_lowercase();
@@ -281,7 +282,9 @@ pub fn normalize_source_ref(value: &Value) -> Value {
 
 /// `normalize_saved_type` — an unrecognised type **raises** rather than defaulting.
 pub fn normalize_saved_type(value: Option<&Value>) -> Result<String, AppError> {
-    let item_type = python_str(value).trim().to_lowercase();
+    let item_type = python_str(value.filter(|value| crate::core_utils::python_truthy(value)))
+        .trim()
+        .to_lowercase();
     if !SAVED_ITEM_TYPES.contains(&item_type.as_str()) {
         return Err(AppError::invalid_payload("Unsupported saved item type"));
     }
@@ -290,7 +293,9 @@ pub fn normalize_saved_type(value: Option<&Value>) -> Result<String, AppError> {
 
 /// `normalize_saved_purpose` — an unrecognised purpose degrades to `reference`.
 pub fn normalize_saved_purpose(value: Option<&Value>) -> String {
-    let purpose = python_str(value).trim().to_lowercase();
+    let purpose = python_str(value.filter(|value| crate::core_utils::python_truthy(value)))
+        .trim()
+        .to_lowercase();
     if SAVED_ITEM_PURPOSES.contains(&purpose.as_str()) {
         purpose
     } else {
@@ -304,7 +309,9 @@ pub fn normalize_saved_purpose(value: Option<&Value>) -> String {
 /// The suffix fallback is the part worth stating: `normalize_artifact_type("", path=
 /// "a/b.md")` is `markdown`, while `normalize_artifact_type("")` with no path raises.
 pub fn normalize_artifact_type(value: Option<&Value>, path: &str) -> Result<String, AppError> {
-    let raw = python_str(value).trim().to_lowercase();
+    let raw = python_str(value.filter(|value| crate::core_utils::python_truthy(value)))
+        .trim()
+        .to_lowercase();
     let mut artifact_type = raw.trim_start_matches('.').to_string();
     if artifact_type == "md" {
         artifact_type = "markdown".to_string();
@@ -639,6 +646,34 @@ pub fn python_str(value: Option<&Value>) -> String {
 mod tests {
     use super::*;
     use crate::entropy::SystemEntropy;
+
+    #[test]
+    fn empty_python_values_use_defaults_without_changing_source_ref_scalars() {
+        for value in [
+            Value::Null,
+            json!(false),
+            json!(0),
+            json!(""),
+            json!([]),
+            json!({}),
+        ] {
+            assert_eq!(normalize_title(Some(&value), "Default"), "Default");
+            assert_eq!(normalize_content(Some(&value)), "");
+            assert_eq!(normalize_description(Some(&value)), "");
+            assert_eq!(
+                normalize_artifact_type(Some(&value), "result.md").unwrap(),
+                "markdown"
+            );
+        }
+        assert_eq!(
+            normalize_tags(Some(&json!([false, 0, [], {}, "Keep"]))),
+            vec!["Keep"]
+        );
+        assert_eq!(
+            normalize_source_ref(&json!({"flag": false, "count": 0, "list": [false]})),
+            json!({"flag": false, "count": 0, "list": ["False"]})
+        );
+    }
 
     #[test]
     fn timestamp_ms_to_iso_truncates_and_uses_z() {

@@ -51,6 +51,7 @@ pub mod tool_policy;
 pub mod tool_search;
 pub mod tool_transform;
 pub mod url_guard;
+pub mod workspace_projects;
 pub mod workspace_schema;
 
 pub fn policy_version() -> &'static str {

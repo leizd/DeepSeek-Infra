@@ -31,6 +31,7 @@ func Register(mux *http.ServeMux, control *store.Control) {
 func Handler() http.Handler {
 	mux := http.NewServeMux()
 	Register(mux, nil)
+	RegisterPublic(mux, nil)
 	return mux
 }
 
