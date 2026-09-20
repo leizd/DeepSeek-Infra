@@ -5,7 +5,10 @@
 <!-- docs-language-switcher:end -->
 
 
-Status: **ported and byte-verified in full (E1 + E2). Nothing is wired.**
+Status: **E1/E2 reads are wired into native tool dispatch; Workspace project
+reads are also wired into the native public HTTP router.** Project mutation
+ownership, upload and deletion cleanup are not cut over. This is local
+qualification, not whole-migration or release acceptance.
 
 This is the last data-layer domain, and it is split in two because the measurement
 showed the two halves have very different dependencies.
@@ -14,6 +17,60 @@ showed the two halves have very different dependencies.
 | --- | --- | --- |
 | **E1** | the projects store: id validation, the `normalize_*` family, `read_project`, `public_project`, `list_projects` | **ported, byte-verified** |
 | **E2** | `load_cached_file` (the file-cache read path) and the two branch wrappers `list_project_files_tool` / `read_file_chunk_tool` | **ported, byte-verified** |
+| **E3** | Workspace 2.0 project, conversation, saved-item and artifact read projections plus public HTTP routes | **wired, locally verified against Python storage fixtures and a real Rust gateway process** |
+
+## Public project reads (2026-09-20)
+
+`deepseek-gateway::project_routes` registers these authenticated paths before the
+general Go `/api/*` proxy:
+
+- `POST /api/projects`, actions `list` and `get`;
+- `GET /api/workspace/projects` and `GET /api/workspace/projects/{project_id}`;
+- `GET /api/workspace/projects/{project_id}/conversations`;
+- `GET /api/workspace/projects/{project_id}/saved-items`, including type/tag filters;
+- `GET /api/workspace/projects/{project_id}/artifacts`.
+
+The legacy list retains its legacy shape and numeric timestamps. Workspace 2.0
+returns ISO timestamps, millisecond companions, child counts and (for details)
+the normalized children. Saved items and artifacts come from their separate
+JSON stores, and memories are filtered by project scope. Aggregate project
+reads tolerate invalid children as the Python facade does; direct child reads
+retain validation errors. Reads never persist normalized values or enter a
+mutation scope. Blocking filesystem work runs outside the async executor.
+
+`workspace_projects_oracle.py` imports the current Python implementation only in
+an isolated offline harness. Its 14 storage fixtures cover 98 comparisons across
+legacy lists, Workspace lists/details, conversations, saved-item filters and
+artifacts. They include malformed child data, type coercion, stable ordering and
+the conversation/message limits. The full-child fixture explicitly requires
+nonzero file, saved-item, artifact, conversation and memory counts. This exposed
+and fixed the shared Rust schema's handling of Python falsey values such as a
+`False` title; source-reference booleans remain booleans.
+
+Five additional production-router tests bring `tests/data_routes.rs` to 24 tests:
+they cover envelopes, authentication, body validation and the 2,000,000-byte
+limit, missing/invalid IDs, child errors, no writes, and mutation refusal in all
+three runtime modes. Invalid JSON uses the stable code and message prefix;
+parser-specific diagnostic text is not asserted byte-for-byte.
+
+`workspace_projects_read_e2e.py` launches the actual Rust executable twice in
+`python_disabled` mode without a Go proxy. The recorded local run passes 23
+checks, including HTTP results, auth, mutation refusal, process restart, unchanged
+file/directory snapshots and an unchanged executable hash. Python is only the
+offline HTTP harness. Evidence is in the gitignored
+`artifacts/workspace-projects-read-e2e.json` with the base HEAD, dirty-worktree
+flag, executable/fixture hashes and process IDs. It is not exact-head CI proof.
+
+Reproduce the qualification with the pinned Rust toolchain:
+
+```powershell
+python tasks/native-runtime/workspace_projects_oracle.py
+Push-Location rust
+cargo +1.85.0-x86_64-pc-windows-gnu test -p deepseek-policy -p deepseek-gateway
+cargo +1.85.0-x86_64-pc-windows-gnu build -p deepseek-gateway --bin deepseek-gateway
+Pop-Location
+python tasks/native-runtime/workspace_projects_read_e2e.py --binary rust/target/debug/deepseek-gateway.exe
+```
 
 ## Why the split
 
@@ -164,6 +221,11 @@ the test, not in the lock semantics.
 
 ## What is left
 
-The data layer is now **complete**: reminders, memory, the shared scorer, and projects.
-Nothing is wired, and `Branch::is_ported()` has not been revisited — that, and the round
-loop, is the next piece of work.
+Project writes remain a separate unfinished migration step. The native routes
+return `501 NATIVE_PROJECTS_MUTATIONS_NOT_READY` for create/rename/delete and
+child creation, including in `python_disabled` mode. Existing low-level Rust
+write helpers are not sufficient to open these routes: project metadata needs
+an explicit writer domain and mechanical Python denial, serialized/fenced
+read-modify-write, and deletion must handle RAG/media cleanup. Upload/extraction,
+artifact preview/download and the remaining workspace APIs are also unfinished.
+The frozen ownership declaration and release `NOT_READY` assessment are unchanged.

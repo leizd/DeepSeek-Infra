@@ -906,13 +906,13 @@ async fn chat_route_exhausts_the_round_budget_and_forces_a_final_answer() {
 }
 
 #[tokio::test]
-async fn chat_route_reports_an_unported_branch_as_did_not_run() {
+async fn chat_route_refuses_a_private_fetch_url_target() {
     let _env = EnvLock::acquire();
     let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
     let upstream = stub_upstream_sequence(
         vec![
             json!({
-                "id": "chat-unported-1",
+                "id": "chat-fetch-ssrf-1",
                 "model": "deepseek-v4-pro",
                 "choices": [{
                     "index": 0,
@@ -920,9 +920,9 @@ async fn chat_route_reports_an_unported_branch_as_did_not_run() {
                         "role": "assistant",
                         "content": "fetching that page",
                         "tool_calls": [{
-                            "id": "call-fetch-1",
+                            "id": "call-fetch-ssrf",
                             "type": "function",
-                            "function": {"name": "fetch_url", "arguments": "{\"url\":\"https://example.com/\"}"},
+                            "function": {"name": "fetch_url", "arguments": "{\"url\":\"http://127.0.0.1/admin\"}"},
                         }],
                     },
                     "finish_reason": "tool_calls",
@@ -930,11 +930,11 @@ async fn chat_route_reports_an_unported_branch_as_did_not_run() {
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             }),
             json!({
-                "id": "chat-unported-2",
+                "id": "chat-fetch-ssrf-2",
                 "model": "deepseek-v4-pro",
                 "choices": [{
                     "index": 0,
-                    "message": {"role": "assistant", "content": "i could not fetch the page"},
+                    "message": {"role": "assistant", "content": "that url is not allowed"},
                     "finish_reason": "stop",
                 }],
                 "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
@@ -950,30 +950,443 @@ async fn chat_route_reports_an_unported_branch_as_did_not_run() {
 
     let body = json!({
         "model": "deepseek-v4-pro",
-        "messages": [{"role": "user", "content": "fetch that page"}],
-        "tools": [{
-            "type": "function",
-            "function": {
-                "name": "fetch_url",
-                "description": "fetch a url",
-                "parameters": {"type": "object"},
-            },
-        }],
+        "messages": [{"role": "user", "content": "fetch http://127.0.0.1/admin"}],
     })
     .to_string();
     let (status, response) = post_chat(&body).await;
-
     assert_eq!(status, StatusCode::OK, "response: {response}");
     let requests = requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 2);
-    let messages = requests[1]["messages"].as_array().unwrap();
-    // Index 4 for the same reason as the data-branch case above.
-    let content = messages[4]["content"].as_str().unwrap();
-    // The unported branch reports "did not run" rather than a success or a
-    // route-level failure — the degradation is visible to the model, and it
-    // can still answer around it.
-    assert!(content.contains("Tool did not run"), "content: {content}");
-    assert!(content.contains("\"tool\":\"fetch_url\""));
+    let content = requests[1]["messages"].as_array().unwrap()[4]["content"]
+        .as_str()
+        .unwrap();
+    assert!(
+        !content.contains("Tool did not run"),
+        "a ported branch must not hide behind did-not-run: {content}"
+    );
+    assert!(
+        content.contains("forbidden") || content.contains("not allowed"),
+        "the private target must be refused: {content}"
+    );
+}
+
+#[tokio::test]
+async fn chat_route_searches_cached_files() {
+    let _env = EnvLock::acquire();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let cache = workspace.path().join(".file-cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(
+        cache.join("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json"),
+        r#"{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"notes.txt","kind":"text","chunks":[{"index":0,"text":"useMemo caches computed values","lineStart":1,"lineEnd":1}]}"#,
+    )
+    .unwrap();
+    let root = workspace.path().to_str().expect("utf-8 path").to_string();
+    let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let upstream = stub_upstream_sequence(
+        vec![
+            json!({
+                "id": "chat-search-1",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "searching notes",
+                        "tool_calls": [{
+                            "id": "call-search-1",
+                            "type": "function",
+                            "function": {"name": "search_files", "arguments": "{\"query\":\"useMemo\"}"},
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }),
+            json!({
+                "id": "chat-search-2",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "found the memo notes"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+            }),
+        ],
+        requests.clone(),
+    );
+    let url = start_stub(upstream).await;
+    let _guard = EnvGuard::set(&[
+        ("DEEPSEEK_API_URL", &url),
+        ("DEEPSEEK_API_KEY", "unit-upstream-key"),
+        ("DEEPSEEK_INFRA_ROOT", &root),
+    ]);
+    let body = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [{"role": "user", "content": "find useMemo in my notes"}],
+    })
+    .to_string();
+    let (status, response) = post_chat(&body).await;
+    assert_eq!(status, StatusCode::OK, "response: {response}");
+    let requests = requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let content = requests[1]["messages"].as_array().unwrap()[4]["content"]
+        .as_str()
+        .unwrap();
+    assert!(
+        !content.contains("Tool did not run"),
+        "search_files must run: {content}"
+    );
+    assert!(
+        content.contains("useMemo") && content.contains("notes.txt"),
+        "the cached file must be retrieved: {content}"
+    );
+}
+
+#[tokio::test]
+async fn chat_route_creates_a_mindmap_svg() {
+    let _env = EnvLock::acquire();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let root = workspace.path().to_str().expect("utf-8 path").to_string();
+    let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let upstream = stub_upstream_sequence(
+        vec![
+            json!({
+                "id": "chat-mindmap-1",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "drawing a map",
+                        "tool_calls": [{
+                            "id": "call-map-1",
+                            "type": "function",
+                            "function": {"name": "create_mindmap", "arguments": "{\"title\":\"Growth plan\",\"nodes\":[{\"label\":\"Market\",\"children\":[]}]}"},
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }),
+            json!({
+                "id": "chat-mindmap-2",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "here is the map"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+            }),
+        ],
+        requests.clone(),
+    );
+    let url = start_stub(upstream).await;
+    let _guard = EnvGuard::set(&[
+        ("DEEPSEEK_API_URL", &url),
+        ("DEEPSEEK_API_KEY", "unit-upstream-key"),
+        ("DEEPSEEK_INFRA_ROOT", &root),
+    ]);
+    let body = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [{"role": "user", "content": "make a mind map"}],
+    })
+    .to_string();
+    let (status, response) = post_chat(&body).await;
+    assert_eq!(status, StatusCode::OK, "response: {response}");
+    let requests = requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let content = requests[1]["messages"].as_array().unwrap()[4]["content"]
+        .as_str()
+        .unwrap();
+    assert!(
+        !content.contains("Tool did not run"),
+        "create_mindmap must run: {content}"
+    );
+    assert!(
+        content.contains("Growth plan") && content.contains("/api/download?id="),
+        "the mind map must be stored and linked: {content}"
+    );
+    let generated = std::fs::read_dir(workspace.path().join(".generated"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("svg"));
+    assert!(generated, "no svg was written under .generated");
+}
+
+#[tokio::test]
+async fn chat_route_creates_a_docx_document() {
+    let _env = EnvLock::acquire();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let root = workspace.path().to_str().expect("utf-8 path").to_string();
+    let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let upstream = stub_upstream_sequence(
+        vec![
+            json!({
+                "id": "chat-doc-1",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "writing a report",
+                        "tool_calls": [{
+                            "id": "call-doc-1",
+                            "type": "function",
+                            "function": {"name": "create_document", "arguments": "{\"format\":\"docx\",\"title\":\"季度产品报告\",\"sections\":[{\"heading\":\"概述\",\"body\":[\"背景\"],\"bullets\":[],\"table\":null}]}"},
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }),
+            json!({
+                "id": "chat-doc-2",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "here is the document"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+            }),
+        ],
+        requests.clone(),
+    );
+    let url = start_stub(upstream).await;
+    let _guard = EnvGuard::set(&[
+        ("DEEPSEEK_API_URL", &url),
+        ("DEEPSEEK_API_KEY", "unit-upstream-key"),
+        ("DEEPSEEK_INFRA_ROOT", &root),
+    ]);
+    let body = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [{"role": "user", "content": "write a report"}],
+    })
+    .to_string();
+    let (status, response) = post_chat(&body).await;
+    assert_eq!(status, StatusCode::OK, "response: {response}");
+    let requests = requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let content = requests[1]["messages"].as_array().unwrap()[4]["content"]
+        .as_str()
+        .unwrap();
+    assert!(
+        !content.contains("Tool did not run"),
+        "create_document must run: {content}"
+    );
+    assert!(
+        content.contains("季度产品报告") && content.contains("/api/download?id="),
+        "the document must be stored and linked: {content}"
+    );
+    let generated = std::fs::read_dir(workspace.path().join(".generated"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("docx"));
+    assert!(generated, "no docx was written under .generated");
+}
+
+#[tokio::test]
+async fn chat_route_creates_a_pptx_deck() {
+    let _env = EnvLock::acquire();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let root = workspace.path().to_str().expect("utf-8 path").to_string();
+    let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let upstream = stub_upstream_sequence(
+        vec![
+            json!({
+                "id": "chat-ppt-1",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "building a deck",
+                        "tool_calls": [{
+                            "id": "call-ppt-1",
+                            "type": "function",
+                            "function": {"name": "create_pptx", "arguments": "{\"title\":\"测试标题\",\"slides\":[{\"title\":\"第一页\",\"bullets\":[\"要点 A\"]}]}"},
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }),
+            json!({
+                "id": "chat-ppt-2",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "here is the deck"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+            }),
+        ],
+        requests.clone(),
+    );
+    let url = start_stub(upstream).await;
+    let _guard = EnvGuard::set(&[
+        ("DEEPSEEK_API_URL", &url),
+        ("DEEPSEEK_API_KEY", "unit-upstream-key"),
+        ("DEEPSEEK_INFRA_ROOT", &root),
+    ]);
+    let body = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [{"role": "user", "content": "make a ppt"}],
+    })
+    .to_string();
+    let (status, response) = post_chat(&body).await;
+    assert_eq!(status, StatusCode::OK, "response: {response}");
+    let requests = requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let content = requests[1]["messages"].as_array().unwrap()[4]["content"]
+        .as_str()
+        .unwrap();
+    assert!(
+        !content.contains("Tool did not run"),
+        "create_pptx must run: {content}"
+    );
+    assert!(
+        content.contains("测试标题") && content.contains("/api/download?id="),
+        "the deck must be stored and linked: {content}"
+    );
+    let generated = std::fs::read_dir(workspace.path().join(".generated"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("pptx"));
+    assert!(generated, "no pptx was written under .generated");
+}
+
+#[tokio::test]
+async fn chat_route_evals_a_python_expression() {
+    let _env = EnvLock::acquire();
+    let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let upstream = stub_upstream_sequence(
+        vec![
+            json!({
+                "id": "chat-eval-1",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "computing",
+                        "tool_calls": [{
+                            "id": "call-eval-1",
+                            "type": "function",
+                            "function": {"name": "python_eval", "arguments": "{\"expression\":\"factorial(6)\"}"},
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }),
+            json!({
+                "id": "chat-eval-2",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "720"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+            }),
+        ],
+        requests.clone(),
+    );
+    let url = start_stub(upstream).await;
+    let _guard = EnvGuard::set(&[
+        ("DEEPSEEK_API_URL", &url),
+        ("DEEPSEEK_API_KEY", "unit-upstream-key"),
+    ]);
+    let body = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [{"role": "user", "content": "what is 6!"}],
+    })
+    .to_string();
+    let (status, response) = post_chat(&body).await;
+    assert_eq!(status, StatusCode::OK, "response: {response}");
+    let requests = requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let content = requests[1]["messages"].as_array().unwrap()[4]["content"]
+        .as_str()
+        .unwrap();
+    assert!(
+        !content.contains("Tool did not run"),
+        "python_eval must run: {content}"
+    );
+    assert!(
+        content.contains("720"),
+        "factorial(6) must evaluate: {content}"
+    );
+}
+
+#[tokio::test]
+async fn chat_route_blocks_a_private_browser_url() {
+    let _env = EnvLock::acquire();
+    let requests: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let upstream = stub_upstream_sequence(
+        vec![
+            json!({
+                "id": "chat-browser-1",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "opening",
+                        "tool_calls": [{
+                            "id": "call-browser-1",
+                            "type": "function",
+                            "function": {"name": "browser_open_url", "arguments": "{\"url\":\"http://127.0.0.1:8000/admin\"}"},
+                        }],
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }),
+            json!({
+                "id": "chat-browser-2",
+                "model": "deepseek-v4-pro",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "blocked"},
+                    "finish_reason": "stop",
+                }],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+            }),
+        ],
+        requests.clone(),
+    );
+    let url = start_stub(upstream).await;
+    let _guard = EnvGuard::set(&[
+        ("DEEPSEEK_API_URL", &url),
+        ("DEEPSEEK_API_KEY", "unit-upstream-key"),
+        ("BROWSER_CONTROL_ENABLED", "1"),
+    ]);
+    let body = json!({
+        "model": "deepseek-v4-pro",
+        "messages": [{"role": "user", "content": "open that admin page"}],
+    })
+    .to_string();
+    let (status, response) = post_chat(&body).await;
+    assert_eq!(status, StatusCode::OK, "response: {response}");
+    let requests = requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let content = requests[1]["messages"].as_array().unwrap()[4]["content"]
+        .as_str()
+        .unwrap();
+    assert!(
+        !content.contains("Tool did not run"),
+        "browser_open_url must run: {content}"
+    );
+    assert!(
+        content.contains("forbidden") || content.contains("unsafe_url"),
+        "private hosts must be blocked: {content}"
+    );
 }
 
 #[tokio::test]

@@ -436,3 +436,14 @@ rendered audit path).
 It does not enable `DEEPSEEK_RUST_POLICY`, and it does not wire tool execution. The
 flag stays off; enabling it is a separate, explicit cutover that also needs
 `path_guard` aligned and the failure-mode policy reviewed.
+
+## `GET /api/tool-policy` (native gateway)
+
+The status payload is now served by the native gateway **before** the Go
+`/api/*` proxy:
+
+- `toolPolicy` = `tool_policy_status` (settings + capability profiles + 28-card catalog)
+- `audit` = `read_recent_audit` (missing log → `[]`; bad `limit` → 50)
+
+This is the Python `routes/status.py` endpoint, not a Go stub. Other `/api/*`
+paths still proxy (or `GO_CONTROL_PROXY_NOT_READY`).

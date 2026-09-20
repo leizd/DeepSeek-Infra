@@ -291,6 +291,44 @@ pub fn load_memories(root: &Path) -> Vec<Value> {
     load_unlocked(root)
 }
 
+/// The process-wide store mutex, for a caller that must hold it across a
+/// **read-modify-write** rather than across one call.
+///
+/// `store.edit_memory` is the one such caller: the oracle holds `_memory_lock`
+/// across the read, the patch and the write so a concurrent upsert cannot interleave
+/// between them. Exposing the guard is what lets the projection layer reproduce that
+/// critical section.
+///
+/// **Rust's `Mutex` is not reentrant and Python's `RLock` is**, so a caller holding
+/// this guard must use [`load_unlocked`] / [`save_unlocked`] rather than the
+/// locking wrappers — the wrappers would deadlock on this same thread. That is why
+/// both are exposed here rather than left private.
+pub fn memory_process_lock() -> std::sync::MutexGuard<'static, ()> {
+    // Poisoning is deliberately not an error: Python's `RLock` has no poisoning, so
+    // turning one into a failure would add a failure mode the oracle lacks.
+    MEMORY_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The unlocked read, for a caller already holding [`memory_process_lock`].
+pub(crate) fn load_unlocked_for_caller(root: &Path) -> Vec<Value> {
+    load_unlocked(root)
+}
+
+/// The unlocked write, for a caller already holding [`memory_process_lock`].
+///
+/// Still takes the mutation fence, exactly as the locking wrapper does — the process
+/// lock and the fence are different guards, and holding the former never implies the
+/// latter.
+pub(crate) fn save_unlocked_for_caller(
+    root: &Path,
+    memories: &[Value],
+    clock: &dyn Clock,
+) -> Result<(), AppError> {
+    save_unlocked(root, memories, clock)
+}
+
 fn load_unlocked(root: &Path) -> Vec<Value> {
     let Ok(raw) = std::fs::read_to_string(memory_file(root)) else {
         return Vec::new();

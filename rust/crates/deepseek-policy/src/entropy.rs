@@ -20,6 +20,10 @@ use crate::app_error::AppError;
 pub trait Entropy {
     /// Mirrors `secrets.token_hex(8)` — 16 lowercase hex characters.
     fn new_id(&self) -> Result<String, AppError>;
+    /// Mirrors `secrets.token_hex(16)` — 32 lowercase hex characters, the generated-file id.
+    fn new_file_id(&self) -> Result<String, AppError> {
+        Ok(format!("{}{}", self.new_id()?, self.new_id()?))
+    }
     /// Mirrors `int(time.time() * 1000)`.
     fn now_millis(&self) -> i64;
 }

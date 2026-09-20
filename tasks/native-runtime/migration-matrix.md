@@ -19,12 +19,12 @@ or public entry uses it; `local` this workspace verified; `ci` exact-head CI;
 
 ## 1. Machine-readable ownership domains
 
-Source: `release/native_runtime_ownership_v1.json` (43 domains). Current
+Source: `release/native_runtime_ownership_v1.json` (46 domains). Current
 production authority is Python. Target owners are 5.0 goals.
 
 | Domain | Target | Current prod | Native code | Wired | Evidence | Blocker |
 | --- | --- | --- | --- | --- | --- | --- |
-| public_http_listener | rust | py | deepseek-gateway routes registered | chat non-stream + SSE wired; MCP/A2A fail-closed | local gateway tests only | MCP/A2A, catalog parity |
+| public_http_listener | rust | py | deepseek-gateway routes registered | chat + MCP + A2A + Go public `/api` status | local gateway + Go tests | remaining Python `/api/*`, `GO_CONTROL_ADDR` |
 | llm_gateway_sse | rust | py | gateway request-prep + non-stream + SSE execution | **SSE wired, byte-parity verified locally** | `chat_stream.rs` (15 unit) + `tests/chat_stream.rs` (7 real-boundary) + byte-identical probe | exact-head CI; `/api/chat` NDJSON |
 | chat_completions_fast_path | rust | py | route exists; non-stream loop runs tool rounds through `dispatch` | wired; boundary-verified | `tests/chat_execution.rs` (real scripted upstream: continuation, data branch, budget exhaustion) | streaming tool loop; exact-head CI |
 | chat_streaming_openai_sse | rust | py | `chat_stream.rs` decoder + encoder + read loop | wired via `chat_completions` | byte-identical to oracle (`b9129475…`); 6 scripted upstream cases | tool-round refusal is in-band; no `/api/chat` |
@@ -38,7 +38,7 @@ production authority is Python. Target owners are 5.0 goals.
 | tool_branch: data_transform | rust | py | `tool_transform`: `data_transform` + 4 operations + helpers (json-path, csv, stats) | **ported; wired via the loop** | in the 80-key batch diff (`3f088f27…`) | none |
 | tool_batch (layer 2b) | rust | py | `tool_batch`: `execute_tool_calls` batching + cancellation + `role:"tool"` message assembly | **ported; wired — the loop runs one batch per round** | in the 80-key diff; concurrency not reproduced (sequential group = same index-ordered list) | thread pool is a mechanism; the 7 unported branches degrade to "Tool did not run", visibly |
 | tool_branches: search family | rust | py | `tool_search`: `web_search` + `compare_search_results` (callback injected via `ExecutorContext`) + `search_result_key` | **ported; wired via the loop (no provider yet → "not enabled for this request")** | in the 104-key diff (`a6aa9b0e…`) | the web-search provider the gateway owns |
-| data_layer_storage (memory/reminders/projects) | rust | py | `none equivalent` | **measured; reminders ported, memory/projects not** | `docs/DATA_LAYER_MEASUREMENT.md` (measurement), `docs/REMINDERS_STORE.md` (slice B) | memory (slice D) needs the scorer; projects (slice E) needs `rag/files.py` |
+| data_layer_storage (memory/reminders/projects) | rust | py | memory/reminder stores; legacy and Workspace project read projections | tool reads and native public data reads wired; memory/reminder writes gated | store probes, `tests/data_routes.rs`, project oracle and process proof | project mutation ownership, upload/extraction and cleanup; full production cutover |
 | data_branch: reminders | rust | py | `reminders`: store + `create_reminder` + `list_reminders` + `delete_reminder` + `due_reminders` + `parse_due_at` | **ported; wired via the loop's `WorkspaceContext`** | byte-identical to oracle (`a636cd45…`), 74 keys; 171 tests; file bytes incl. key order; boundary test writes through the fence | `due_reminders` ported but not yet in a compared corpus |
 | data_branch: memory triple + memory index read path | rust | py | `memory`: store + `suggest_memory` + `recall_memory` + `forget_memory` + normalization/fingerprint/category/conflict helpers + **the turn-state half** (`prepare_memory_state`, `apply_explicit_memory_command`, `format_memory_context`, `memory_scope_candidates`/`_label`, `upsert_memory`, `clear_memories`, `delete_memory_by_id`) + **`memory_index`**: the `local_rag` memory-collection read path (`hash_text_embedding`/`normalize_vector`/`cosine_similarity` reused from `attachment_context`, `bm25_scores`, `_python_normalize_query`, `parse_embedding`, `load_candidate_rows`, `_search_db`, `search_memories_index`, read-only on `.local-rag/rag.sqlite3`) | **ported; wired via the loop's `WorkspaceContext`**; the turn-state half and the index provider are ported but unwired | byte-identical to oracle (`97187819…`), 194 keys; **index read path byte-identical (`memory_index_parity_probe`, 64 keys, `turn::differing = 7 of 8`)**; 400 tests; `docs/MEMORY_STORE.md` | **the bonus is not bounded — measured**, and the provider that reproduces it now exists, so the wiring must inject it rather than `None`. The `sqlite-vec` deployment still refuses (`VectorTableNotReadable`): `vec0` is a Python-loaded extension, absent from every shipped dependency set and from CI. **Wiring `chat_execution` is the remaining step** |
 | workspace_file_lock (shared) | rust | py | `file_lock`: exclusive OS lock, `LockFileEx` retry / `flock` split | **ported** (used by `memory` and `mutation_gate`, both now reached from the loop) | in the same 206 tests, incl. cross-thread serialization | none |
@@ -50,11 +50,20 @@ production authority is Python. Target owners are 5.0 goals.
 | data_branch: projects branches (slice E2) | rust | py | `projects` branches + `file_cache`: `list_project_files` + `read_file_chunk` + `load_cached_file` + `project_file_cache_dir` | **ported; wired via the loop's `WorkspaceContext`** | byte-identical to oracle (`5baaaba2…`), 29 keys; `docs/PROJECTS_STORE.md` | **data layer complete and wired**; the A1 gate test's rare failure led to a poisoning fidelity fix (see docs/PROJECTS_STORE.md) - narrowed, not closed |
 | workspace_mutation_gate (slice A1) | rust | py | `mutation_gate`: fence read/assert, exclusive OS lock, durable generation counter, `mutation_scope` | **ported; wired — the loop's data writes pass through it** | byte-identical to oracle (`57e0ede2…`), 32 keys; 155 tests incl. a multi-thread serialisation case; `docs/WORKSPACE_MUTATION_GATE.md` | none |
 | core_utils_scorer (slice C) | rust | py | `core_utils`: `query_tokens` + `score_chunk` + `utc_now_iso` + `latest_user_query` | **ported; not wired** | byte-identical to oracle (`2170fb90…`), 37 keys; 180 tests; `docs/RETRIEVAL_SCORER.md` | **oracle is non-deterministic here** (hash-seed dependent `[:80]` cap) — the port is deterministic by design; unblocks slice D and `search_files` |
-| tool_branches: 14 remaining | rust | py | `none equivalent` | **unimplemented** — 7 remain after the loop wiring (`browser_*`, `python_eval`, `search_files`, `fetch_url`, `create_mindmap`, `create_pptx`, `create_document`); each resolves to the visible `Tool did not run` envelope | `Branch::blocker()` names each package; a test asserts none is silent | `browser_*`, `python_eval` (needs a real sandbox), `search_files` (rag), `fetch_url` (HTTP client), mindmap/pptx/document |
+| tool_branch: fetch_url | rust | py | `fetch_url`: `resolve_public_url` + DNS-time `ensure_public_address` + redirect revalidation + cache + HTML extract; gateway `locked_http_get` pins the resolved IP | **ported; wired via the loop's `FetchContext`** | byte-identical to oracle (`844b896f…`), 30 keys; `docs/FETCH_URL.md`; `chat_route_refuses_a_private_fetch_url_target`; locked TCP test sends the oracle Host/UA | trafilatura is not a production dependency, so the HTML-parser fallback is the shipped path; `gb18030` decode uses `encoding_rs` |
+| tool_branch: search_files | rust | py | `search_files`: json_hybrid over `.file-cache` / `.projects/*/files` plus read-only `search_files_index` on `rag_items` collection `files` | **ported; wired via the loop's `WorkspaceContext`** | byte-identical json_hybrid probe (`133204b5…`), 3423 chars; `docs/SEARCH_FILES.md`; `chat_route_searches_cached_files` | does **not** call `index_file_payload` (Python remains the RAG writer); `rag_vec` deployments skip the sqlite path |
+| tool_branch: create_mindmap | rust | py | `mindmaps` + `generated_files`: SVG layout/render + `.generated/{id}.svg` | **ported; wired via the loop's `WorkspaceContext`** | byte-identical SVG probe (`be02bc5f…`), 5979 chars; `docs/MINDMAP.md`; `chat_route_creates_a_mindmap_svg` | unique-id creates, not a dual-written durable table |
+| tool_branch: create_document | rust | py | `documents`: format aliases, section/table normalize, MD5 theme, OOXML zip + CID PDF | **ported; wired via the loop's `WorkspaceContext`** | content-model probe byte-identical (`a09bbde4…`), 4798 chars; `docs/CREATE_DOCUMENT.md`; `chat_route_creates_a_docx_document` | Office/PDF **bytes** are not python-docx/reportlab fingerprints; files are valid zip/`%PDF-` with CJK |
+| tool_branch: create_pptx | rust | py | `presentations`: slide normalize, layout picker, MD5 theme, 16:9 OOXML zip | **ported; wired via the loop's `WorkspaceContext`** | content-model probe byte-identical (`d360f5e4…`), 3676 chars; `docs/CREATE_PPTX.md`; `chat_route_creates_a_pptx_deck` | pptx **bytes** are not python-pptx fingerprints; `create_presentation_from_text` stays a slides-skill path |
+| tool_branch: python_eval | rust | py | in-process AST allowlist matching `PYTHON_EVAL_RUNNER` (no CPython child) | **ported; wired** | probe byte-identical (`b545a8f9…`), 3458 chars; `docs/PYTHON_EVAL.md`; `chat_route_evals_a_python_expression` | integers are i128 (overflow refuses huge factorials the CPython ints would accept) |
+| tool_branch: browser_* | rust | py | safety gate + in-memory sessions + static HTML controller (Playwright fallback path) | **ported; wired** | safety probe byte-identical (`ae657d74…`), 2252 chars; `docs/BROWSER.md`; `chat_route_blocks_a_private_browser_url`; fixture `file://` open | Playwright not ported; Media/RAG snapshot writes stay Python; static controller does not fetch http |
 | tool_policy_pure_core (layer 3a) | rust | py | `deepseek-policy::tool_policy`: guards, sanitizers, schema validation, metadata + capability tables | **ported; wired — the loop's executor attaches a policy per request** | byte-identical to oracle (`26c7723c…`), 158 keys; 30 unit tests; `docs/GATEWAY_TOOL_POLICY_PARITY.md` | none |
 | tool_policy_engine (layer 3b) | rust | py | `deepseek-policy::tool_policy`: `ToolPolicy.evaluate`, denial output, diagnostics, taint, `AuditSink` + JSONL writer, args hash, `tool_policy_status` + `ToolPolicySettings` + `ToolAuditPaths` | **ported; wired — `ToolRoundExecutor::from_env` builds the main-chat profile** | byte-identical to oracle (`bae3a9e5…`), 257 keys; 82 unit tests; `docs/GATEWAY_TOOL_POLICY_PARITY.md` | payload-driven narrowing (capability/allowedTools/approvedTools) and the context-taint firewall are not ported; config env reader not ported |
 | policy_url_route_parity | rust | py | `url_guard::validate_url_access` delegates to `tool_policy::evaluate_url_safety` | **aligned (route now matches the oracle); flag off** | `guard::*` keys compare the route against the oracle over all 59 URL cases in the same 257-key diff | `path_guard` still a different (containment) operation — needs its own slice; do not enable `DEEPSEEK_RUST_POLICY` before that |
-| mcp_jsonrpc | rust | py | deepseek-mcp crate | no | corpus replay only | public `/mcp` |
+| mcp_jsonrpc | rust | py | `mcp_hub`: initialize/ping/tools/list/call + resources/prompts | **wired on native `/mcp`** | `mcp_initialize_and_tools_call_are_native`; `python_eval` `2+2` → `4`; `docs/MCP_HUB.md` | external `mcp__*` bridging refused as tool error; production HTTP still Python |
+| data_route: /api/reminders (+ /due) | rust | py | `deepseek-gateway::data_routes` over `deepseek-policy::reminders`; registered ahead of the Go `/api/*` catch-all | **wired on the native edge; mutating actions gated** | `tests/data_routes.rs` (9 real-HTTP cases through `create_production_app`): gate refusal + no file, the flip writing for real, fence generation `2`, byte-identical refused delete, due-marking persistence and second-poll silence, oracle 400s, and the auth boundary | **`list` is served for real; `create`/`delete`/`due` are refused with `NATIVE_REMINDERS_WRITE_NOT_OWNED` until the `reminders_store` cutover** (declared, cutover 4.9.4) — the same gate the tool loop applies |
+| memory_v3_schema (projection layer) | rust | py | `deepseek-policy::memory_schema`: `public_scope`/`storage_scope`/`public_type`/`legacy_category`/`normalize_source_ref`/`public_source`/`public_confidence`/`public_memory`, the policy pair (`assert_memory_safe`/`readable_scopes`/`skill_can_read_memory`), and the store/search operations (`list`/`add`/`edit`/`delete`/`search_memories`/`memory_context_for_skill`) over the existing `deepseek-policy::memory` store | **ported; wired via `/api/memory`** | byte-identical to oracle (`d0bbb075…`), **164 keys / 18 935 chars**, shown not blind; 15 unit tests; `docs/DATA_ROUTES.md` | the store is the *same* `.memory/memories.json` the chat turn writes — one authoritative writer, gated identically |
+| data_route: /api/memory family | rust | py | `data_routes`: `GET`/`POST /api/memory` (list/add/clear/delete/deletebyid), `DELETE`/`PATCH /api/memory/{id}`, `GET /api/memory/search`, `POST /api/memory/conflicts` | **wired on the native edge; mutations gated, reads served** | `tests/data_routes.rs` (10 cases): all four POST actions + DELETE + PATCH refused with no file, the flip writing for real (generation **4**, two saves), the 409 conflict path checked **before** the gate, `replaceIds`, and the bare-`int()` limit 400 | three measured corrections recorded in `docs/DATA_ROUTES.md`: identical content is **not** a conflict, one `add_memory` bumps the generation **four** times, and `public_confidence("nan")` is `1.0` |
 | rag_hot_path | rust | py | deepseek-rag | no | document-prep sidecar | query/index ownership |
 | tool_sandbox | rust | py | policy crate | no | none | sandbox execution |
 | url_path_capability_policy | rust | py | deepseek-policy | **URL aligned; path partial** | crate tests + 59-case route parity | `path_guard` root-containment vs oracle argument scan — separate slice |
@@ -76,6 +85,7 @@ production authority is Python. Target owners are 5.0 goals.
 | policy_crud | go | py | control store domain | shadow | store tests | cutover |
 | target_registry | go | py | control store domain | shadow | store tests | cutover |
 | backup_scheduler | go | py | scheduler shadow | digest parity | shadow tests | mutation denied |
+| a2a_task_lifecycle | go | py | `go/internal/a2a`, `a2a_control.rs`, versioned mTLS gRPC | native edge with explicit control configuration | 9 real process checks, race tests, 31 message + 12 SSE oracle cases, Python writer denial | qualification only; exact local Go coverage 95.003059%; full parity and production cutover remain |
 | agent_dag_scheduler | go | py | internal/agent | shadow | fuzz/parity | production DAG |
 | job_controller | go | py | action coordinator | qualification | go tests | cutover + signed ops |
 | lease_fencing | go | py | writer + action leases | shadow/qual | go tests | live Rust lease install |
@@ -90,7 +100,7 @@ production authority is Python. Target owners are 5.0 goals.
 | ingress_grant_lifecycle | go | py | store grant | shadow | tests | Gate A |
 | federated_transfer_journal | go | py | store transfer | shadow | tests | Rust data path |
 | dr_orchestration | go | py | shadow | shadow | tests | cutover |
-| health_readiness | go | py | deepseekd health | internal | process tests | public edge health |
+| health_readiness | go | py | deepseekd `/healthz` + `/api/control/status` + `/api/config` subset | **public read subset wired on deepseekd** | `TestPublicConfigIsAGoOwnedSubset`; `docs/GO_PUBLIC_API.md` | production edge still Python; OCR/RAG/budget stay 501 |
 | offline_eval_oracle | python | python | allowed | n/a | pytest/evals | must stay non-prod |
 | migration_release_tooling | python | python | allowed | n/a | scripts | must stay out of images |
 | browser_ui | ts | ts | frontend/ | `/` via Python today | frontend CI | serve from rust edge |
@@ -102,14 +112,14 @@ several of these, but HTTP/CLI still import Python.
 
 | Package | Production entry | Target owner | Native stand-in | Status |
 | --- | --- | --- | --- | --- |
-| gateway | `web/routes/chat.py`, `openai_api.py` | rust | deepseek-gateway | non-stream chat wired; MCP/A2A/SSE fail-closed |
-| agent_runtime | A2A routes, agent runs | go+rust | proto/agent, go/agent | shadow DAG only |
+| gateway | `web/routes/chat.py`, `openai_api.py` | rust | deepseek-gateway | chat + SSE + MCP hub + A2A JSON-RPC; production HTTP still Python |
+| agent_runtime | A2A routes, agent runs | go+rust | proto/agent, go/agent, go/a2a | A2A durable lifecycle over mTLS verified locally; DAG remains shadow |
 | rag | `routes/rag.py`, local_rag | rust | deepseek-rag | library |
 | tool_runtime | tools, OCR, documents, slides | rust | none equivalent | **unmigrated** |
 | observability | traces, metrics, `/api` status | rust+go | gateway observability | partial |
 | mcp | `POST /mcp`, registry, executor | rust | deepseek-mcp | codec/library |
 | evaluation | evals/ | python oracle | n/a | allowed if offline |
-| data | projects, reminders | go | control store subset | unwired |
+| data | projects, reminders | rust reads/stores; project writer ownership pending | native reminder API and project read facade | reads wired; project writes refused pending explicit ownership and cleanup |
 | workspace | backup/DR/federation/resilience HTTP | go+rust | store + worker + proof | Python HTTP |
 | automation | `routes/automation.py` | go | none | **unmigrated** |
 | browser | browser controller | rust worker | none | **unmigrated** |
@@ -129,8 +139,11 @@ public inventory but does not implement behavior.
 | --- | --- | --- | --- | --- |
 | `/v1/chat/completions`, `/v1/models` | `routes/chat.py` | rust edge | non-stream + SSE wired (tool rounds refuse) | tool-round parity + browser parity |
 | `/api/chat` (NDJSON), `/api/title`, search | `routes/chat.py` | rust or go `/api` | no | proxy + Go API |
+| `/api/reminders`, `/api/reminders/due` | `web/server.py` | rust edge | **wired** — read served; mutations gated on the `reminders_store` cutover | `docs/DATA_ROUTES.md`; 9 real-HTTP cases |
+| `/api/memory` family | `routes/memory.py` | rust edge | **wired** — reads served; mutations gated on the `memory_store` cutover | `docs/DATA_ROUTES.md`; 10 real-HTTP cases; byte-identical parity probe |
 | `/mcp`, `/api/mcp/*` | `routes/mcp.py` | rust | no | MCP corpus on edge |
-| `/.well-known/agent-card.json`, `/a2a` | agent_runtime | rust | fail-closed | A2A corpus |
+| `/api/projects`, `/api/workspace/projects` reads and child lists | `routes/workspace.py` | rust edge | **wired**: legacy list/get; Workspace list/detail/conversations/saved-items/artifacts | 14 Python storage fixtures / 98 comparisons; 5 added production-router tests; 23 real Rust process checks. Project writes, upload and artifact delivery remain unfinished; `docs/PROJECTS_STORE.md` |
+| `/.well-known/agent-card.json`, `/a2a` | agent_runtime | rust | **wired** — cards + tasks + native chat runner + SSE/resubscribe | `docs/A2A_HUB.md`; real HTTP native-runner test + 12 Python oracle event cases + 9 real Go/Rust process checks; Go-only task/chunk persistence; remaining peer clients, metrics, migration, full parity and production cutover |
 | `/api/workspace/*` backups/DR/resilience | workspace + backup_governance | go `/api` via edge | isolation only | Go control API |
 | `/api/media`, `/api/memory`, `/api/skills` | media/memory/skills | rust/go | none | native impl |
 | `/api/automation` | automation | go | none | native impl |
@@ -210,7 +223,7 @@ Unmigrated business modules above are **not** oracles.
    memory vector index read path or a narrow refusal** — the paired measurement
    proved `None` is not a bounded divergence — plus the two existing refusals
    (forced-search mode, the file vector index).
-6. Remaining packages: media, OCR/docs, browser, skills, memory, automation, stateless-mcp, A2A.
+6. All 18 chat-tool branches run; native `/mcp` `/a2a` (including SSE/resubscribe) `/api/tool-policy` `/api/budget` `/api/rag/status` `/api/gateway/status`; Go `/api/config` subset. Remaining: rest of Python `/api`, Playwright, A2A Python-task migration/retention/peer clients/telemetry/full parity, launchers.
 7. Per-domain cutover shadow → dual-evaluate → Go-authoritative → Python-disabled.
 8. Launchers/images/Android without Python.
 9. Exact-head CI, Evidence Assembly, performance, zero-Python workload.

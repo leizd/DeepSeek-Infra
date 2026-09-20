@@ -64,6 +64,14 @@
   ],
   "domains": [
     {
+      "id": "a2a_task_lifecycle",
+      "plane": "control",
+      "current_owner": "python",
+      "target_owner": "go",
+      "cutover": "4.9.3",
+      "durable_store": "go_control"
+    },
+    {
       "id": "public_http_listener",
       "plane": "data",
       "current_owner": "python",
@@ -97,6 +105,14 @@
     },
     {
       "id": "reminders_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data"
+    },
+    {
+      "id": "project_metadata_store",
       "plane": "data",
       "current_owner": "python",
       "target_owner": "rust",

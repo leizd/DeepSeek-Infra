@@ -39,6 +39,49 @@ impl Default for ContextManagerSettings {
     }
 }
 
+impl ContextManagerSettings {
+    /// Mirrors the gateway/context-engine env knobs.
+    pub fn from_env() -> Self {
+        let defaults = Self::default();
+        Self {
+            enabled: env_flag("GATEWAY_CONTEXT_MANAGER_ENABLED", defaults.enabled),
+            window_messages: env_usize_clamped(
+                "GATEWAY_CONTEXT_WINDOW_MESSAGES",
+                defaults.window_messages,
+                8,
+                80,
+            ),
+            engine_enabled: env_flag("CONTEXT_ENGINE_ENABLED", defaults.engine_enabled),
+            token_aware_trim: env_flag(
+                "CONTEXT_ENGINE_TOKEN_AWARE_TRIM",
+                defaults.token_aware_trim,
+            ),
+        }
+    }
+}
+
+fn env_flag(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(raw) if !raw.trim().is_empty() => matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        _ => default,
+    }
+}
+
+fn env_usize_clamped(name: &str, default: usize, min: usize, max: usize) -> usize {
+    match std::env::var(name) {
+        Ok(raw) if !raw.trim().is_empty() => raw
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .map(|value| value.clamp(min, max))
+            .unwrap_or(default),
+        _ => default,
+    }
+}
+
 /// Mirrors `stable_json_dumps`: the deterministic serialization the gateway uses for
 /// idempotency keys.
 pub fn stable_json_dumps(value: &Value) -> String {

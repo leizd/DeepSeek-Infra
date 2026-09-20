@@ -11,18 +11,16 @@
 //!
 //! # What this is not
 //!
-//! **Only four of the eighteen branches are implemented** — `generate_chart`,
-//! `data_transform`, `web_search` and `compare_search_results`, the four with no
-//! external package behind them. The rest are marked [`Branch::is_ported`] `false`
-//! and can never produce output. That is deliberate: [`DispatchOutcome::Unported`]
-//! has no envelope at all, so a branch that has not been ported cannot be mistaken
-//! for one that ran. Nothing in this module is wired to a route.
+//! **Twelve of the eighteen branches are implemented.** The rest are marked
+//! [`Branch::is_ported`] `false` and can never produce output. That is
+//! deliberate: [`DispatchOutcome::Unported`] has no envelope at all, so a
+//! branch that has not been ported cannot be mistaken for one that ran.
 //!
 //! The remaining branches are not blocked on this module's shape. They are
-//! blocked on packages: `search` / `rag`, `data` (projects, reminders, memory),
-//! `media` (presentations, mindmaps, documents), `browser`, and — for
-//! `python_eval` — a real sandbox, since the oracle shells out to a Python
-//! interpreter and the migrated runtime must not.
+//! blocked on packages: `rag` (`search_files`), `media` (presentations,
+//! mindmaps, documents), `browser`, and — for `python_eval` — a real sandbox,
+//! since the oracle shells out to a Python interpreter and the migrated runtime
+//! must not.
 //!
 //! # Two orderings that are load-bearing
 //!
@@ -237,9 +235,13 @@ impl Branch {
         matches!(
             self,
             Branch::GenerateChart
+                | Branch::BrowserFamily
+                | Branch::PythonEval
                 | Branch::DataTransform
                 | Branch::WebSearch
                 | Branch::CompareSearchResults
+                | Branch::FetchUrl
+                | Branch::SearchFiles
                 | Branch::CreateReminder
                 | Branch::ListReminders
                 | Branch::SuggestMemory
@@ -247,6 +249,9 @@ impl Branch {
                 | Branch::ForgetMemory
                 | Branch::ListProjectFiles
                 | Branch::ReadFileChunk
+                | Branch::CreateMindmap
+                | Branch::CreatePptx
+                | Branch::CreateDocument
         )
     }
 
@@ -255,12 +260,10 @@ impl Branch {
         match self {
             Branch::GenerateChart => None,
             Branch::WebSearch | Branch::CompareSearchResults => None,
-            Branch::BrowserFamily => Some("infra.browser.actions"),
-            Branch::PythonEval => {
-                Some("needs a real sandbox; the oracle shells out to a Python interpreter")
-            }
-            Branch::SearchFiles => Some("infra.rag / search"),
-            Branch::FetchUrl => Some("http client + DNS-time SSRF guard"),
+            Branch::BrowserFamily => None,
+            Branch::PythonEval => None,
+            Branch::SearchFiles => None,
+            Branch::FetchUrl => None,
             Branch::SuggestMemory
             | Branch::RecallMemory
             | Branch::ForgetMemory
@@ -269,9 +272,9 @@ impl Branch {
             | Branch::ListProjectFiles
             | Branch::ReadFileChunk => None,
             Branch::DataTransform => None,
-            Branch::CreateMindmap => Some("infra.tool_runtime.mindmaps"),
-            Branch::CreatePptx => Some("infra.tool_runtime.presentations"),
-            Branch::CreateDocument => Some("infra.tool_runtime.documents"),
+            Branch::CreateMindmap => None,
+            Branch::CreatePptx => None,
+            Branch::CreateDocument => None,
         }
     }
 }
@@ -614,6 +617,15 @@ fn run_workspace_branch(
             workspace.root,
             workspace.clock,
         )),
+        Branch::SearchFiles => {
+            let query = crate::fetch_url::python_url_arg(object.get("query"));
+            let limit = safe_limit(object.get("limit"), 5, 10).max(0) as usize;
+            mapped(crate::search_files::search_files(
+                &query,
+                limit,
+                workspace.root,
+            ))
+        }
         Branch::ListProjectFiles => mapped(crate::projects::list_project_files(
             object,
             workspace.root,
@@ -624,6 +636,52 @@ fn run_workspace_branch(
             workspace.root,
             workspace.file_cache,
         )),
+        Branch::CreateMindmap => {
+            let title = crate::fetch_url::python_url_arg(object.get("title"));
+            let subtitle = crate::fetch_url::python_url_arg(object.get("subtitle"));
+            let nodes = object.get("nodes").cloned().unwrap_or(Value::Null);
+            mapped(crate::mindmaps::create_mindmap(
+                &title,
+                &nodes,
+                &subtitle,
+                workspace.root,
+                workspace.entropy,
+                crate::generated_files::system_now(),
+            ))
+        }
+        Branch::CreatePptx => {
+            let title = crate::fetch_url::python_url_arg(object.get("title"));
+            let subtitle = crate::fetch_url::python_url_arg(object.get("subtitle"));
+            let slides = object.get("slides").cloned().unwrap_or(Value::Null);
+            mapped(crate::presentations::create_presentation(
+                &title,
+                &slides,
+                &subtitle,
+                workspace.root,
+                workspace.entropy,
+                crate::generated_files::system_now(),
+            ))
+        }
+        Branch::CreateDocument => {
+            let fmt = crate::fetch_url::python_url_arg(object.get("format"));
+            let fmt = if fmt.is_empty() {
+                "docx".to_string()
+            } else {
+                fmt
+            };
+            let title = crate::fetch_url::python_url_arg(object.get("title"));
+            let subtitle = crate::fetch_url::python_url_arg(object.get("subtitle"));
+            let sections = object.get("sections").cloned().unwrap_or(Value::Null);
+            mapped(crate::documents::create_document(
+                &fmt,
+                &title,
+                &sections,
+                &subtitle,
+                workspace.root,
+                workspace.entropy,
+                crate::generated_files::system_now(),
+            ))
+        }
         other => Err(missing_workspace(tool, other)),
     }
 }
@@ -672,6 +730,25 @@ pub fn dispatch(
     // The oracle stringifies each argument with `str(value or default)` before
     // handing it to the branch.
     let result = match branch {
+        Branch::BrowserFamily => {
+            let mut payload = Value::Object(object.clone());
+            let action = tool.strip_prefix("browser_").unwrap_or(tool.as_str());
+            if let Some(fields) = payload.as_object_mut() {
+                fields.insert("action".to_string(), json!(action));
+            }
+            let settings = crate::browser_safety::BrowserSettings::from_env();
+            let fallback = crate::entropy::SystemEntropy;
+            let entropy: &dyn crate::entropy::Entropy = context
+                .workspace
+                .map(|workspace| workspace.entropy)
+                .unwrap_or(&fallback);
+            crate::browser::execute_browser_action(&payload, &settings, entropy)
+                .map_err(|error| ToolFailure::from_app_error(&tool, &error))
+        }
+        Branch::PythonEval => crate::python_eval::python_eval(&crate::fetch_url::python_url_arg(
+            object.get("expression"),
+        ))
+        .map_err(|error| ToolFailure::from_app_error("python_eval", &error)),
         Branch::GenerateChart => generate_chart(&object),
         Branch::DataTransform => crate::tool_transform::data_transform(
             &python_str_or(object.get("operation"), ""),
@@ -684,14 +761,25 @@ pub fn dispatch(
         Branch::CompareSearchResults => {
             crate::tool_search::compare_search_results_branch(&object, context)
         }
+        Branch::FetchUrl => crate::fetch_url::fetch_url(
+            &crate::fetch_url::python_url_arg(object.get("url")),
+            context.fetch,
+        )
+        .map_err(|error| ToolFailure::from_app_error("fetch_url", &error)),
         Branch::CreateReminder
         | Branch::ListReminders
         | Branch::SuggestMemory
         | Branch::RecallMemory
         | Branch::ForgetMemory
+        | Branch::SearchFiles
         | Branch::ListProjectFiles
-        | Branch::ReadFileChunk => run_workspace_branch(&tool, branch, &object, context),
-        // Unreachable: `is_ported` was checked above.
+        | Branch::ReadFileChunk
+        | Branch::CreateMindmap
+        | Branch::CreatePptx
+        | Branch::CreateDocument => run_workspace_branch(&tool, branch, &object, context),
+        // All 18 branches are ported; keep the arm so a future unported
+        // variant cannot silently fall through to a success envelope.
+        #[allow(unreachable_patterns)]
         other => {
             return DispatchOutcome::Unported {
                 tool,
@@ -845,6 +933,10 @@ mod tests {
         assert_eq!(
             ported,
             vec![
+                "browser_*",
+                "python_eval",
+                "search_files",
+                "fetch_url",
                 "web_search",
                 "compare_search_results",
                 "suggest_memory",
@@ -855,7 +947,10 @@ mod tests {
                 "list_project_files",
                 "read_file_chunk",
                 "data_transform",
-                "generate_chart"
+                "generate_chart",
+                "create_mindmap",
+                "create_pptx",
+                "create_document"
             ]
         );
         for branch in BRANCHES {
@@ -1009,25 +1104,43 @@ mod tests {
     /// The guard rail: an unported branch has *no* envelope, so a caller cannot
     /// report success (or even a tidy error) for a tool that never ran.
     #[test]
-    fn an_unported_branch_has_no_envelope_at_all() {
-        for name in ["fetch_url", "search_files", "browser_click", "create_pptx"] {
-            let outcome = run(name, &args(json!({})), None, None);
-            let DispatchOutcome::Unported { tool, branch } = &outcome else {
-                panic!("expected Unported for {name}, got {outcome:?}");
-            };
-            assert_eq!(tool, name);
-            assert!(!branch.is_ported());
+    fn every_branch_is_ported() {
+        for branch in BRANCHES {
             assert!(
-                outcome.to_output().is_none(),
-                "{name} must not yield an envelope"
+                branch.is_ported() && branch.blocker().is_none(),
+                "{branch:?} must run or name a blocker"
             );
         }
     }
 
     #[test]
+    fn fetch_url_without_a_context_is_not_enabled_rather_than_unported() {
+        let outcome = run(
+            "fetch_url",
+            &args(json!({"url": "https://example.com/"})),
+            None,
+            None,
+        );
+        let DispatchOutcome::Unsupported(output) = outcome else {
+            panic!("expected the disabled envelope, got {outcome:?}");
+        };
+        assert_eq!(output["ok"], false);
+        assert_eq!(output["tool"], "fetch_url");
+        assert_eq!(output["code"], INVALID_PAYLOAD);
+        assert!(
+            output["error"]
+                .as_str()
+                .unwrap()
+                .contains("not enabled for this request"),
+            "error: {}",
+            output["error"]
+        );
+    }
+
+    #[test]
     fn a_denial_short_circuits_before_the_branch_runs() {
         // `fetch_url` to a metadata address: denied by the SSRF guard, so the
-        // unported branch is never even reached.
+        // branch is never even reached.
         let mut policy = ToolPolicy::new(ToolPolicyConfig {
             audit: false,
             ..ToolPolicyConfig::default()

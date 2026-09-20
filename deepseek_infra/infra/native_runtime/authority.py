@@ -52,6 +52,7 @@ GO_CONTROL_DOMAINS = frozenset(
         "federation_transfer",
         "federation_transfer_broker",
         "agent_run",
+        "a2a_task_lifecycle",
         "agent_dag_scheduler",
         "dr_orchestration",
         "dr_orchestrator",
@@ -69,6 +70,9 @@ RUST_DATA_DOMAINS = frozenset(
         # delivery marking), which is the reason the gate is per store and not per call site.
         "memory_store",
         "reminders_store",
+        # Project metadata is the project.json record, including conversation
+        # snapshots and legacy bindings. Child stores retain separate ownership.
+        "project_metadata_store",
     }
 )
 
@@ -92,7 +96,7 @@ def assert_python_writer_allowed(domain: str) -> None:
     - **Go control domains** are denied once Go is authoritative (`GO_AUTHORITATIVE`) or Python is
       disabled, matching ADR-0049's staging, which hands over the control plane first ("4.9.3 makes
       Go control domains authoritative one at a time").
-    - **Rust data domains** — today just `memory_store` — are denied only once Python is disabled
+    - **Rust data domains** are denied only once Python is disabled
       (`PYTHON_DISABLED`, "4.9.4 disables Python production authority"). Denying them under
       `GO_AUTHORITATIVE` would be wrong in the other direction: that mode says nothing about the
       *data* plane, and during 4.9.3 the data plane can still be Python's.

@@ -24,7 +24,7 @@
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::python_json::OrderedJson;
 
@@ -223,6 +223,69 @@ pub fn agent_tool_definitions(external_profiles: Option<&[Value]>) -> Vec<Value>
     tools
 }
 
+const MUTATING_MCP_TOOLS: &[&str] = &[
+    "create_pptx",
+    "create_document",
+    "create_mindmap",
+    "create_reminder",
+    "suggest_memory",
+    "forget_memory",
+];
+
+/// MCP `tools/list` catalog, mirroring `infra.mcp.registry.mcp_tools` for the
+/// local runtime (external `mcp__*` profiles are not appended here).
+pub fn mcp_tools(capability: &str) -> Vec<Value> {
+    let capability = {
+        let trimmed = capability.trim();
+        if trimmed.is_empty() { "full" } else { trimmed }
+    };
+    let allowed: std::collections::HashSet<&str> = if capability == "full" {
+        crate::tool_policy::all_tool_names().into_iter().collect()
+    } else {
+        crate::tool_policy::capability_tools(capability)
+            .into_iter()
+            .collect()
+    };
+    let mut tools = Vec::new();
+    for definition in available_tool_definitions() {
+        let Some(function) = definition.get("function").and_then(Value::as_object) else {
+            continue;
+        };
+        let Some(name) = function
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|n| !n.is_empty())
+        else {
+            continue;
+        };
+        if !allowed.contains(name) {
+            continue;
+        }
+        let parameters = function
+            .get("parameters")
+            .cloned()
+            .unwrap_or(json!({"type": "object"}));
+        let mut tool = json!({
+            "name": name,
+            "description": function.get("description").and_then(Value::as_str).unwrap_or(""),
+            "inputSchema": if parameters.is_object() { parameters } else { json!({"type": "object"}) },
+        });
+        if let Some(meta) = crate::tool_policy::tool_metadata(name) {
+            tool.as_object_mut().unwrap().insert(
+                "annotations".to_string(),
+                json!({
+                    "title": name,
+                    "readOnlyHint": !MUTATING_MCP_TOOLS.contains(&name),
+                    "destructiveHint": meta.requires_confirm,
+                    "openWorldHint": meta.network,
+                }),
+            );
+        }
+        tools.push(tool);
+    }
+    tools
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,6 +296,14 @@ mod tests {
         assert_eq!(tools.len(), 28, "the local catalog has 28 tools");
         // Array order is the oracle's declaration order, and callers depend on it.
         assert_eq!(tools[0]["function"]["name"], "web_search");
+        let mcp = mcp_tools("full");
+        assert!(mcp.iter().any(|tool| tool["name"] == "python_eval"));
+        let pptx = mcp
+            .iter()
+            .find(|tool| tool["name"] == "create_pptx")
+            .unwrap();
+        assert_eq!(pptx["annotations"]["readOnlyHint"], false);
+        assert_eq!(mcp_tools("researcher").len(), 3);
         // Every entry is a function definition with a name and an object schema.
         for tool in tools {
             assert_eq!(tool["type"], "function", "{tool}");

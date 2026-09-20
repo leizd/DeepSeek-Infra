@@ -37,6 +37,50 @@ func TestHealthzIsShadowAndReadOnly(t *testing.T) {
 	if !status.OK || status.Mode != config.ModeShadow || status.MutationAuthority != config.MutationAuthority || status.ProductionMutation || status.ShadowStore {
 		t.Fatalf("status %+v", status)
 	}
+	public, err := client.Get("http://" + addr + "/api/control/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer public.Body.Close()
+	publicBody, err := io.ReadAll(public.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var publicStatus Status
+	if err := json.Unmarshal(publicBody, &publicStatus); err != nil {
+		t.Fatal(err)
+	}
+	if public.StatusCode != http.StatusOK || publicStatus != status {
+		t.Fatalf("public status %d %+v vs %+v", public.StatusCode, publicStatus, status)
+	}
+	post, err := http.NewRequest(http.MethodPost, "http://"+addr+"/api/control/status", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied, err := client.Do(post)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer denied.Body.Close()
+	if denied.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("post %d", denied.StatusCode)
+	}
+	configResp, err := client.Get("http://" + addr + "/api/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer configResp.Body.Close()
+	configBody, err := io.ReadAll(configResp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(configBody, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if configResp.StatusCode != http.StatusOK || cfg["owner"] != "go" {
+		t.Fatalf("config %d %+v", configResp.StatusCode, cfg)
+	}
 }
 
 func TestListenOpensIsolatedShadowStore(t *testing.T) {

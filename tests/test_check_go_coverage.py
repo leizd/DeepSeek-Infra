@@ -1,12 +1,42 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+
+import pytest
+
+from scripts import check_go_coverage
 
 from scripts.check_go_coverage import is_generated_only_package
 from scripts.run_rust_coverage import GENERATED_PROTO_COVERAGE_OMIT
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_rounded_go_display_cannot_admit_coverage_below_the_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    profile = tmp_path / "coverage.out"
+    profile.write_text("mode: set\na.go:1.1,1.2 9496 1\na.go:2.1,2.2 504 0\n", encoding="utf-8")
+    monkeypatch.setattr(check_go_coverage.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(
+        args, 0, stdout="total: (statements) 95.0%\n", stderr=""))
+    assert check_go_coverage.main(["--profile", str(profile), "--min", "95.0"]) == 1
+
+
+@pytest.mark.parametrize("mode", ["set", "count", "atomic"])
+def test_profile_statement_counts_merge_repeated_blocks_without_inflation(tmp_path: Path, mode: str) -> None:
+    profile = tmp_path / "coverage.out"
+    profile.write_text(f"mode: {mode}\na.go:1.1,1.2 95 0\na.go:1.1,1.2 95 7\na.go:2.1,2.2 5 0\n", encoding="utf-8")
+    assert check_go_coverage.profile_statement_counts(profile) == (95, 100)
+
+
+@pytest.mark.parametrize("body", ["mode: set\n", "mode: invalid\na:1.1,1.2 1 1\n",
+                                  "mode: set\na:1.1,1.2 -1 1\n", "mode: set\na:1.1,1.2 1 -1\n",
+                                  "mode: set\na:1.1,1.2 1 1\na:1.1,1.2 2 1\n"])
+def test_coverage_rejects_empty_or_inconsistent_profile(tmp_path: Path, body: str) -> None:
+    profile = tmp_path / "coverage.out"
+    profile.write_text(body, encoding="utf-8")
+    with pytest.raises(ValueError):
+        check_go_coverage.profile_statement_counts(profile)
 
 
 def test_generated_only_go_package_is_excluded_from_business_coverage(tmp_path: Path) -> None:

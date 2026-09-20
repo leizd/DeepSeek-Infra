@@ -56,6 +56,10 @@ pub const LOCAL_RAG_BM25_K1: f64 = 1.5;
 pub const LOCAL_RAG_BM25_B: f64 = 0.75;
 /// `COLLECTION_MEMORY`.
 pub const COLLECTION_MEMORY: &str = "memory";
+/// `COLLECTION_FILES`.
+pub const COLLECTION_FILES: &str = "files";
+/// `COLLECTION_MEDIA`.
+pub const COLLECTION_MEDIA: &str = "media";
 /// `ITEM_TABLE`.
 pub const ITEM_TABLE: &str = "rag_items";
 /// `VECTOR_TABLE`.
@@ -199,7 +203,10 @@ pub struct CandidateRow {
 pub struct IndexHit {
     pub item_id: String,
     pub source_id: String,
+    pub project_id: String,
     pub name: String,
+    pub kind: String,
+    pub text: String,
     pub chunk_index: i64,
     pub score: i64,
     pub vector_score: f64,
@@ -259,6 +266,28 @@ impl MemoryIndex {
         if query.trim().is_empty() {
             return Ok(Vec::new());
         }
+        self.search_collection(COLLECTION_MEMORY, query, scopes, limit)
+    }
+
+    /// `search_files_index(query, limit=…)`.
+    pub fn search_files(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<IndexHit>, MemoryIndexError> {
+        self.search_collection(COLLECTION_FILES, query, &[], limit)
+    }
+
+    fn search_collection(
+        &self,
+        collection: &str,
+        query: &str,
+        scopes: &[String],
+        limit: usize,
+    ) -> Result<Vec<IndexHit>, MemoryIndexError> {
+        if query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
         let query_vector = hash_text_embedding(query, self.dimensions);
 
         // The `rag_vec` branch: `distance` per item, when the extension is present.
@@ -266,12 +295,19 @@ impl MemoryIndex {
             std::collections::HashMap::new();
         if self.vector_table_ready {
             vector_distances = self
-                .vector_match(&query_vector, scopes, limit)
+                .vector_match(collection, &query_vector, scopes, limit)
                 .map_err(|error| MemoryIndexError::VectorTableNotReadable(error.to_string()))?;
         }
 
         Ok(self
-            .search_db(query, &query_vector, scopes, limit, &vector_distances)
+            .search_db(
+                collection,
+                query,
+                &query_vector,
+                scopes,
+                limit,
+                &vector_distances,
+            )
             .unwrap_or_default())
     }
 
@@ -289,15 +325,34 @@ impl MemoryIndex {
             .map(|count| count.max(0) as usize)
     }
 
+    fn item_count(&self) -> Result<usize, rusqlite::Error> {
+        self.connection
+            .query_row(&format!("SELECT COUNT(*) FROM {ITEM_TABLE}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map(|count| count.max(0) as usize)
+    }
+
+    fn distinct_source_count(&self, collection: &str) -> Result<usize, rusqlite::Error> {
+        self.connection
+            .query_row(
+                &format!("SELECT COUNT(DISTINCT source_id) FROM {ITEM_TABLE} WHERE collection = ?"),
+                [collection],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count.max(0) as usize)
+    }
+
     fn search_db(
         &self,
+        collection: &str,
         query: &str,
         query_vector: &[f64],
         scopes: &[String],
         limit: usize,
         vector_distances: &std::collections::HashMap<String, f64>,
     ) -> Result<Vec<IndexHit>, rusqlite::Error> {
-        let rows = self.load_candidate_rows(scopes, vector_distances)?;
+        let rows = self.load_candidate_rows(collection, scopes, vector_distances)?;
         let normalized_query = python_normalize_query(query);
         let tokens = query_tokens(&normalized_query);
         let docs_terms: Vec<Vec<String>> = rows.iter().map(|row| query_tokens(&row.text)).collect();
@@ -326,7 +381,10 @@ impl MemoryIndex {
             results.push(IndexHit {
                 item_id: row.item_id.clone(),
                 source_id: row.source_id.clone(),
+                project_id: row.project_id.clone(),
                 name: row.name.clone(),
+                kind: row.kind.clone(),
+                text: row.text.clone(),
                 chunk_index: row.chunk_index,
                 score,
                 vector_score,
@@ -350,6 +408,7 @@ impl MemoryIndex {
 
     fn vector_match(
         &self,
+        collection: &str,
         query_vector: &[f64],
         scopes: &[String],
         limit: usize,
@@ -363,7 +422,7 @@ impl MemoryIndex {
         let mut parameters: Vec<Box<dyn rusqlite::ToSql>> = vec![
             Box::new(blob),
             Box::new((limit * 4).max(limit) as i64),
-            Box::new(COLLECTION_MEMORY.to_string()),
+            Box::new(collection.to_string()),
         ];
         if !scopes.is_empty() {
             let placeholders = vec!["?"; scopes.len()].join(", ");
@@ -393,12 +452,12 @@ impl MemoryIndex {
     /// returned that the scope filter did not already include.
     fn load_candidate_rows(
         &self,
+        collection: &str,
         scopes: &[String],
         vector_distances: &std::collections::HashMap<String, f64>,
     ) -> Result<Vec<CandidateRow>, rusqlite::Error> {
         let mut clauses = vec!["collection = ?".to_string()];
-        let mut parameters: Vec<Box<dyn rusqlite::ToSql>> =
-            vec![Box::new(COLLECTION_MEMORY.to_string())];
+        let mut parameters: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(collection.to_string())];
         if !scopes.is_empty() {
             let placeholders = vec!["?"; scopes.len()].join(", ");
             clauses.push(format!("scope IN ({placeholders})"));
@@ -440,6 +499,87 @@ impl MemoryIndex {
         }
         Ok(candidates)
     }
+}
+
+fn env_flag(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(raw) if !raw.trim().is_empty() => matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        _ => default,
+    }
+}
+
+fn env_or(name: &str, default: &str) -> String {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default.to_string())
+}
+
+/// Mirrors `local_rag.status`: read-only, never creates `rag.sqlite3`.
+pub fn local_rag_status(root: &Path) -> Value {
+    let db = local_rag_db(root);
+    let enabled = env_flag("LOCAL_RAG_ENABLED", true);
+    let requested = env_or("LOCAL_RAG_EMBEDDING_PROVIDER", "hash");
+    let onnx_configured = std::env::var("LOCAL_RAG_ONNX_MODEL_PATH")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty());
+    let tokenizer_configured = std::env::var("LOCAL_RAG_TOKENIZER_PATH")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty());
+    let mut payload = json!({
+        "enabled": enabled,
+        "backend": env_or("LOCAL_RAG_BACKEND", "sqlite_vec"),
+        "databasePath": crate::tool_policy::render_path_like_python(&db),
+        "sqliteVecAvailable": false,
+        "embeddingProvider": requested,
+        "embeddingProviderRequested": requested,
+        "embeddingDimensions": LOCAL_RAG_EMBEDDING_DIMENSIONS,
+        "embeddingModelPathConfigured": onnx_configured,
+        "tokenizerPathConfigured": tokenizer_configured,
+        "hybridSearch": "bm25+vector",
+        "bm25K1": LOCAL_RAG_BM25_K1,
+        "bm25B": LOCAL_RAG_BM25_B,
+        "incremental": env_flag("LOCAL_RAG_INCREMENTAL", true),
+        "lastError": "",
+        "indexedItems": 0,
+        "indexedFiles": 0,
+        "indexedMedia": 0,
+        "indexedMemories": 0,
+        "vectorTableAvailable": false,
+    });
+    if !enabled || !db.exists() {
+        return payload;
+    }
+    let Some(index) = MemoryIndex::open(root) else {
+        payload["lastError"] = json!("status failed: could not open rag.sqlite3 read-only");
+        return payload;
+    };
+    payload["vectorTableAvailable"] = json!(index.vector_table_ready);
+    payload["embeddingDimensions"] = json!(index.dimensions);
+    match (
+        index.item_count(),
+        index.distinct_source_count(COLLECTION_FILES),
+        index.distinct_source_count(COLLECTION_MEDIA),
+        index.row_count(COLLECTION_MEMORY),
+    ) {
+        (Ok(items), Ok(files), Ok(media), Ok(memories)) => {
+            payload["indexedItems"] = json!(items);
+            payload["indexedFiles"] = json!(files);
+            payload["indexedMedia"] = json!(media);
+            payload["indexedMemories"] = json!(memories);
+        }
+        (Err(error), _, _, _)
+        | (_, Err(error), _, _)
+        | (_, _, Err(error), _)
+        | (_, _, _, Err(error)) => {
+            payload["lastError"] = json!(format!("status failed: {error}"));
+        }
+    }
+    payload
 }
 
 /// Why a read from this index cannot be served faithfully.
@@ -736,6 +876,25 @@ mod tests {
             )
             .unwrap();
         connection.close().unwrap();
+    }
+
+    #[test]
+    fn local_rag_status_reads_the_fixture_and_does_not_invent_a_db() {
+        let missing = scratch("status-missing");
+        let empty = local_rag_status(&missing);
+        assert_eq!(empty["indexedItems"], 0);
+        assert_eq!(empty["enabled"], true);
+        assert!(!local_rag_db(&missing).exists());
+
+        let root = scratch("status-present");
+        write_fixture(&root, false);
+        let status = local_rag_status(&root);
+        assert_eq!(status["indexedItems"], 1);
+        assert_eq!(status["indexedMemories"], 1);
+        assert_eq!(status["indexedFiles"], 0);
+        assert_eq!(status["indexedMedia"], 0);
+        assert_eq!(status["vectorTableAvailable"], false);
+        assert_eq!(status["sqliteVecAvailable"], false);
     }
 
     #[test]

@@ -8,7 +8,261 @@ This file is the session handoff. Historical plans, checkboxes, VERSION, and
 `release/native_runtime_5_0_evidence_v1.json` are not completion evidence.
 The capability matrix is [`migration-matrix.md`](migration-matrix.md).
 
-## Current git
+## Current continuation checkpoint — 2026-09-20 native project reads
+
+The live workspace advanced externally to HEAD
+`b9b31b90c14406c8d306de98f5291d914062d476` on
+`codex/native-a2a-stream-continuation`; that commit contains prior Rust policy
+work. This continuation preserved the remaining mixed changes and made no
+commit, push, merge or cleanup. Current goal remains active; release evidence
+still says `NOT_READY` with `exact_head: null`.
+
+Implemented:
+
+- `deepseek-policy::workspace_projects`: Workspace 2.0 project read facade,
+  bounded conversations/messages, separate saved-item/artifact store projections,
+  filtering, artifact versions and project-scoped memories. Aggregate reads
+  tolerate child errors; direct child reads return their validation error.
+- `deepseek-gateway::project_routes`: authenticated legacy project list/get and
+  Workspace project/list/detail/conversation/saved-item/artifact reads, ahead of
+  the Go proxy. Filesystem work uses `spawn_blocking`. JSON body limit is
+  2,000,000 bytes, with structured error envelopes.
+- Fixed a measured existing schema mismatch: falsey Python values now select
+  empty/default titles/content/tags and artifact type fallback. Source-reference
+  scalar booleans retain their value.
+- Native project mutations explicitly return
+  `501 NATIVE_PROJECTS_MUTATIONS_NOT_READY` in every runtime mode; no new writer
+  domain or production cutover is claimed. Reads leave durable state unchanged.
+
+Evidence:
+
+- The initial production-router regression failed with 503
+  `GO_CONTROL_PROXY_NOT_READY`; after wiring, all 24 data-route tests pass.
+- `workspace_projects_oracle.py`: 14 isolated Python storage fixtures and 98
+  Rust comparisons. Full children have nonzero counts; corruption, falsey
+  values, sorting and 200-conversation/400-message boundaries are covered.
+- Pinned Rust 1.85 full policy + gateway tests: **721 passed**, zero failures.
+  Strict Clippy (`--all-targets -- -D warnings`) and gateway binary build pass.
+- `workspace_projects_read_e2e.py`: **23 PASS checks**, actual Rust executable,
+  two independent process starts, `python_disabled`, no Go proxy; expected HTTP
+  values, auth, write refusal, unchanged tree before/after process exit and
+  unchanged binary hash. Report: `artifacts/workspace-projects-read-e2e.json`;
+  full Rust log: `artifacts/workspace-projects-rust-tests.log`.
+- Ruff and mypy pass for both new offline harnesses. This is dirty-workspace
+  local qualification, not exact-head CI/Evidence Assembly or zero-Python
+  default packaging acceptance.
+
+Next: complete the project write ownership decision and mechanical denial,
+fenced/serialized read-modify-write, RAG/media deletion cleanup and uploads;
+then continue the remaining public APIs, Go/Rust execution, default native
+packaging and real-provider/exact-head acceptance from the matrix. Do not reopen
+project writes merely because low-level `projects::create_project` and
+`delete_project` exist: their side effects and ownership remain incomplete.
+
+## Previous continuation checkpoint — 2026-09-20 A2A hardening and precise coverage
+
+This entry supersedes the prior coverage and A2A test counts below. Same branch
+`codex/native-a2a-stream-continuation`, HEAD `57f0595b54071d673799f1093929b783094fa334`.
+All changes remain uncommitted; no push/merge or unrelated worktree cleanup.
+The full migration goal is active, and release readiness remains `NOT_READY`.
+
+Implemented and verified:
+
+- **31 Python message-oracle cases** now exercise Rust text rendering and Go
+  admission from the same fixture. Red regressions caught Rust's `false` ->
+  `"false"` mismatch and Go rejecting Python's `true` -> `"True"` case.
+  Context fallback, Python truthiness/control-character whitespace, and native
+  execution preserve message extensions. The real process harness validates an
+  integer above 2^53, null messageId/kind, and nested contextId.
+- Every private A2A RPC now rechecks the validity interval of a complete
+  previously verified TLS certificate chain. A red regression proved that an
+  expired issuing CA had previously retained mutation authority. Both a direct
+  alternate-chain test and an actual persistent mTLS connection with a short-lived
+  CA prove the fix. This does not add certificate revocation/reload support.
+- Actual SQLite corruption/lock tests prove failed initialization releases its
+  writer lock, expiry/cancellation cannot be acknowledged without commit, list
+  queries do not return partial damaged results, and a corrupted later data page
+  cannot partially recover preceding tasks. Restoring that byte lets all 81
+  submitted tasks recover through the real store. All damaged files are temporary
+  test fixtures; no user task database was touched.
+- Removed impossible entropy-error propagation after verifying the pinned Go
+  1.27 crypto/rand.Read implementation (fills the buffer or terminates the process).
+  The closed string-only status-message encoding no longer propagates impossible
+  JSON errors. Dynamic document, filesystem, SQL and transaction errors remain.
+- **The Go coverage gate now counts raw profile statements.** A red regression
+  showed that the old gate admitted 94.96% when Go printed 95.0%. Duplicate block
+  counts are merged and malformed/empty profiles fail closed. No threshold was
+  lowered and no source was excluded.
+
+Current local evidence:
+
+- `artifacts/a2a-control-go-coverage.log`: **95.003059% (4658/4903)**, exact 95.0%
+  gate PASS after running every handwritten internal/pkg package. Margin is
+  narrow; this is not an exact-head CI claim.
+- `artifacts/a2a-control-rust-tests.log`: **234 passed**; strict Rust 1.85 Clippy
+  and the gateway build passed. `a2a-control-go-race.log`: the updated A2A package
+  passed race checks, and `go vet ./...` passed. API/lifecycle race and all 16 Go
+  packages passed in the preceding checkpoint; this round did not rerun those
+  race packages.
+- `artifacts/a2a-control-restart-proof.json`: **9 PASS** against the current
+  Go/Rust binary hashes, including coercion/metadata preservation and all previous
+  crash/lease/cancellation/no-rerun cases. Five tasks produced exactly five
+  controlled loopback provider calls. The harness is offline Python tooling,
+  not a Python production listener or storage-provider acceptance test.
+- Coverage-gate tests: **13 passed**; Ruff/Mypy passed the four touched Python
+  gate/harness files. Message oracle **31/31**, SSE oracle **12/12**, pinned codegen
+  drift check, native contract check (**46 domains / 8 proto / 12 outputs**), and
+  shadow comparison **8/8** passed.
+
+Next work remains the full matrix: complete A2A peer clients, telemetry,
+legacy-task migration, retention/full wire parity; remaining public business
+APIs; authoritative Go controller and Rust worker/provider recovery; native
+service, desktop and Android packaging; real storage-provider and exact-head
+CI/Evidence Assembly acceptance. The default Docker entry still runs Python.
+
+## Current continuation checkpoint — 2026-09-20 durable A2A control
+
+This entry supersedes older A2A process-local/restart-gap statements below.
+Branch `codex/native-a2a-stream-continuation`, HEAD `57f0595b54071d673799f1093929b783094fa334`;
+all migration changes remain uncommitted, and unrelated dirty/untracked work was
+preserved. No push/merge. Goal remains active; readiness is `NOT_READY` with
+`exact_head: null`. The default Docker entry still runs `python app.py`.
+
+Implemented: Go-owned SQLite A2A task/history/chunk lifecycle; OS single-writer
+exclusion; immutable submission binding; Go-installed epoch plus renewable
+execution token/lease; mTLS Protobuf service; Rust public JSON-RPC/SSE bridge and
+native executor; shared cursor framing; mechanical denial of Python A2A writes
+in native ownership modes. No Rust/Go writes into Python `.a2a` and no local
+fallback when native control is missing or unavailable. See `docs/A2A_HUB.md`.
+
+Current evidence (development scope, not release PASS):
+
+- `artifacts/a2a-control-restart-proof.json`: **8 PASS** checks against actual
+  Go/Rust binaries, binary SHA256s, and killed process PIDs/exit codes. Completed
+  snapshots survive both restarts; resubscribe emits only the missing answer;
+  Go crash fails unfinished work and rejects late completion; cancellation
+  discards the answer; Rust crash expires the real 45-second lease. The loopback
+  HTTP provider observed exactly one call per task, no reruns. Python is only
+  the offline harness. This does not prove storage-provider or whole-topology
+  zero-Python behavior.
+- Gateway full regression: **233 passed**, including the new fail-closed
+  configuration regression and **6/6** A2A integration tests. Logs: `a2a-control-rust-tests.log`, `a2a-control-boundary-tests.log`.
+  Rust 1.85 strict Clippy and fmt passed (`a2a-control-clippy.log`).
+- Go `test ./... -count=1` passed all 16 test-bearing packages
+  (`a2a-control-go-all-tests.log`); `vet ./...` passed; `-race` passed
+  A2A/API/lifecycle packages with the
+  previously verified per-command `libsynchronization.a` link fix. No machine
+  environment changes. Log: `a2a-control-go-race.log`. Linux amd64 A2A test
+  binary cross-compilation passed (compile only; not a Linux execution claim).
+- Full Go coverage runner executed every handwritten internal/pkg package:
+  **94.3%**, below the unchanged **95.0%** gate. New A2A package is **87.4%**;
+  other packages aggregate **95.083%**. This is an outstanding code/test gate,
+  not an environmental blocker and not a passing native-go lane.
+- Python A2A + denial/ownership/proto suites passed **63 tests**. The new denial
+  tests failed before adding the gate, then passed. Ruff and Mypy passed all
+  four touched Python source/test files.
+- Pinned codegen drift check, contract validation (**46 domains / 8 proto files /
+  12 generated outputs**), shadow comparison **8/8**, and the 12-case Python
+  SSE oracle check passed.
+
+Remaining next work: close the Go coverage gap with meaningful fault/recovery
+verification; complete A2A peer clients, telemetry, legacy-task migration,
+retention and full error/coercion parity; continue remaining public APIs,
+Go controller/worker authority and real provider kill/takeover evidence, native
+service/desktop/Android packaging, then exact-head CI/Evidence Assembly. Never
+mark the whole migration complete from this isolated A2A qualification.
+
+## Current continuation checkpoint — 2026-09-19 data-plane routes
+
+This checkpoint supersedes the historical status paragraphs below for A2A.
+Current branch: `codex/native-a2a-stream-continuation`, based on `57f0595b`.
+The pre-existing uncommitted migration work was retained. No push or merge.
+The session goal is active: the entire Rust/Go migration is not complete.
+`Dockerfile` still starts `python app.py`; readiness remains `NOT_READY` with
+`exact_head: null`.
+
+### Slices landed in this session (uncommitted)
+
+1. **`/api/reminders` + `/api/reminders/due`** on the native edge — reads served,
+   mutations gated on the `reminders_store` cutover. 9 real-HTTP cases.
+2. **`deepseek-policy::memory_schema`** — the v3.0 Memory projection layer, paired
+   byte-for-byte with the oracle (164 keys, md5 `d0bbb075…`), shown not blind.
+3. **The `/api/memory` family** — reads served, mutations gated on the
+   `memory_store` cutover. 10 real-HTTP cases.
+
+See the sections below for each slice's evidence. Nothing was pushed.
+
+### Local environment blockers (recorded, not worked around)
+
+- **The Docker daemon is not running on this host** (`npipe:////./pipe/
+  dockerDesktopLinuxEngine` missing), so the Three-MinIO / two-Fleet provider
+  evidence cannot be produced here. The `container_image_isolation` gate still
+  passes statically; the *provider* workloads are what need a daemon.
+- No MinIO binary is on `PATH` and no `DEEPSEEK_TEST_S3_ENDPOINT_*` is set.
+- **`gofmt -l` reports every Go file on this host**, but it is a checkout artifact,
+  not drift: the working tree has CRLF while the committed blobs are LF (verified by
+  byte count and by `git show HEAD:…`), and `.gitattributes` only pins the generated
+  files. CI runs on Linux where this cannot occur. Reformatting here would rewrite
+  every line of files this session never touched.
+
+All three are environment gaps, not code gaps. Everything below was verified
+locally without them.
+
+### Implemented and verified in this continuation
+
+- Native `message/stream` and `tasks/resubscribe` on both A2A RPC routes:
+  initial public snapshot, resumable progress/answer chunks, terminal status,
+  retained JSON-RPC IDs, SSE error events, and no OpenAI `[DONE]` marker.
+- Task notifications wake subscribers without polling; disconnect drops the
+  subscription without canceling work. Start/cancel/finish share the task lock;
+  a queued cancellation prevents execution, and a running cancellation discards
+  the late answer before an answer chunk or terminal completion can be published.
+- The production router's authentication applies, and disabled A2A rejects
+  both ordinary and stream RPC requests. Go's `/api/a2a` and config flags now
+  advertise the implemented stream capability.
+- A2A hub tests serialize their global-state resets. The baseline had two
+  failures caused by parallel reset/runner changes, not by the new stream code.
+
+Evidence (local artifacts are gitignored):
+
+- `artifacts/native-a2a-red.log`: regression first failed because the route
+  returned `application/json` instead of SSE.
+- `cargo +1.85.0-x86_64-pc-windows-gnu test -p deepseek-gateway --locked -j 2`:
+  **210 passed**, zero failed/ignored (181 lib + 29 integration), recorded in
+  `artifacts/native-a2a-gateway-tests.log`.
+- The five new integration tests include real loopback HTTP through the
+  production gateway, the default native A2A runner, and a controlled local
+  upstream. The initial snapshot arrives before the upstream is released.
+- `python tasks/native-runtime/a2a_stream_oracle.py`: **12 cases** generated
+  directly from the Python oracle's AST; Rust tests compare decoded events for
+  three terminal states and four resume cursors. This is semantic parity,
+  not a byte-order or full-A2A-parity claim. Ruff and Mypy pass for this helper.
+- Gateway `cargo fmt --check` and strict Clippy (`--locked --all-targets
+  --all-features -- -D warnings`) pass.
+- `go test ./... -count=1 -timeout=600s`: **15 packages pass**;
+  `go vet ./...` passes. Logs: `artifacts/native-a2a-go-all.log`.
+- API and lifecycle race tests pass with **96.8%** and **98.9%** coverage
+  respectively (`native-a2a-go-race-import-fix.log` and
+  `native-a2a-go-lifecycle-race.log`). The initial Windows race
+  binary could not load (`0xc0000139`): PE inspection proved old GCC 8.1 import
+  libraries bound `WakeByAddressSingle`, `WakeByAddressAll`, and `WaitOnAddress`
+  to `kernel32.dll`, which does not export them on this host. The scoped fix
+  is `CGO_LDFLAGS=C:\Users\12393\.rustup\toolchains\1.85.0-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\lib\self-contained\libsynchronization.a`.
+  Do not replace the entire library search path: mixing CRT generations fails
+  linking. No system toolchain or persistent environment setting was changed.
+
+### Next work and completion boundary
+
+A2A task/chunk storage is still process-local. Implement restart persistence
+and eviction after checking the authoritative store ownership rules, then
+prove recovery across actual gateway process death. Peer clients and A2A
+trace/disconnect telemetry are also still missing. See `docs/A2A_HUB.md`.
+Other public APIs, browser execution, production cutover, default launchers,
+desktop/Android packaging, and exact-head CI/Evidence Assembly remain.
+Historical matrix entries may be stale; inspect current code before choosing
+the next slice. Do not mark the overall goal complete from this local slice.
+
+## Historical git at recovery
 
 | Field | Value |
 | --- | --- |
@@ -3259,3 +3513,721 @@ reporting `all 28 Go control domains and all 2 Rust data domains`; the contract 
 sandboxed pass and the escalated retry), and `cat >>` is not idempotent — the test above was appended
 twice, which `mypy` caught as `no-redef` and `ruff` as a redefinition. Guard repeats with
 `grep -q … ||`, or edit by unique anchor instead of appending.
+
+---
+
+## fetch_url landed: DNS-time SSRF, locked HTTP, and the loop no longer says it did not run
+
+**Branch `main`, HEAD `57f0595b`** (reminders cutover). This slice is uncommitted on top of that.
+
+`fetch_url` was the first remaining tool branch whose dependencies were already in the tree: the
+static URL guard is aligned, `reqwest::blocking` is how the search provider talks to Tavily, and
+the tool loop was already the production caller. It was resolving to `Tool did not run`. That is
+now a real branch.
+
+### What landed
+
+`deepseek-policy::fetch_url` ports `resolve_public_url` / `ensure_public_address` /
+`fetch_public_url` / the cache / `extract_html_text` (the shipped fallback; `trafilatura` is not a
+production dependency). DNS and HTTP are injected as `FetchContext` callbacks, same shape as the
+search transport, so the policy crate stays free of TLS.
+
+`deepseek-gateway::fetch_provider::locked_http_get` is the connection the oracle's
+`LockedHTTPConnection` performs: connect to the pinned address, send `Host: host_header` and the
+oracle User-Agent/Accept, disable redirects (the policy crate re-resolves `Location`), and
+**disable ambient HTTP(S)_PROXY**. The last of those hung the first TCP test on this host — the
+shell carries `HTTPS_PROXY=http://127.0.0.1:7897/`, and reqwest would have sent the "locked"
+request through Clash. The oracle does not. `.no_proxy()` is the fidelity fix, not a test hack.
+
+A hostname that is already an IP is checked with `ensure_public_address` before DNS is consulted.
+That is equivalent for literals (`getaddrinfo("127.0.0.1")` returns `127.0.0.1`) and is what stops
+a stub DNS from laundering a redirect to `http://127.0.0.1/admin` into a public stand-in.
+
+### Verification
+
+- Probe pair byte-identical: **30 keys / 3818 chars**, LF-normalized md5
+  `844b896fa61715c0663273d8d8a13abb`. Covers resolve accept/refuse, address block set,
+  HTML extract, cache hit (one HTTP for two fetches), redirect revalidation, oversize body,
+  HTTP 503 status cap.
+- `cargo test -p deepseek-policy` → **415 passed** (12 new in `fetch_url` + the dispatch
+  "not enabled rather than unported" case).
+- `cargo test -p deepseek-gateway` → **166 lib** + **11 + 6 + 1 + 1** integration, including
+  `chat_route_refuses_a_private_fetch_url_target` (wired loop refuses `http://127.0.0.1/admin`
+  instead of `Tool did not run`) and the locked TCP test (connects to 127.0.0.1, `Host:
+  example.com`, oracle UA). The unported-branch case now uses `search_files`.
+- `cargo +1.85.0-x86_64-pc-windows-gnu clippy -p deepseek-policy -p deepseek-gateway
+  --locked --all-targets --all-features -- -D warnings` clean. Local stable (1.97) still
+  fires the pre-existing `control_proxy.rs` `result_large_err`; CI's 1.85 does not.
+- `ruff check` / `mypy` pass on the new probe. Docs language nav PASS (200 files); doc links OK.
+
+### Not done, and the next executable task
+
+**Not pushed.** Exact-head CI has not run against this.
+
+Six tool branches remain: `search_files` (scorer + file cache already ported — the next
+dependency-satisfied slice), `browser_*`, `python_eval` (real sandbox, must not shell out to
+CPython), `create_mindmap` / `create_pptx` / `create_document` (media; high-risk, validate
+early rather than last). Then MCP/A2A, skills, automation, OCR, launchers, and the zero-Python
+cutover.
+
+`release/native_runtime_5_0_evidence_v1.json` remains `NOT_READY`. This slice does not change
+that: production HTTP is still Python-authoritative; the native gateway is still an opt-in
+delegate.
+
+---
+
+## search_files landed: json_hybrid is the production path, RAG sqlite stays Python-written
+
+**Branch `main`, HEAD `57f0595b`**, on top of the uncommitted `fetch_url` slice.
+
+`search_files` was the next remaining tool whose dependencies were already in the tree:
+`query_tokens` / `score_chunk`, the file-cache layout, and the read-only RAG cosine+BM25
+path from `memory_index`. It was resolving to `Tool did not run`.
+
+### What landed
+
+`deepseek-policy::search_files` ports the oracle's two retrieval paths and merges them
+by `(fileId, projectId, chunkIndex)` keeping the higher score:
+
+1. **json_hybrid** — walk `.file-cache/*.json` and `.projects/*/files/*.json`. Complete.
+2. **local_rag** — read-only `search_files_index` over collection `files`. `MemoryIndex`
+   grew a collection parameter so files and memories share one reader.
+
+**It does not call `index_file_payload`.** That function writes `rag_items`. Python is
+still the writer; indexing from the native search would be a second writer of one table.
+json_hybrid still finds anything sitting in the cache JSON, which is the source
+`index_file_payload` itself reads. A missing sqlite file degrades to json_hybrid only.
+When `rag_vec` is present the sqlite path is skipped (same refusal as the memory index).
+
+`compact_snippet` windows by **code point**, matching `len(str)` / `s[start:end]`. A first
+draft used `str::find` byte offsets and would have sliced CJK wrong.
+
+### Verification
+
+- Probe pair byte-identical: **3423 chars**, LF-normalized md5
+  `133204b547c51707467ed66ca058b21b`. Python `search_files_index` stubbed to `[]` so the
+  comparison is the json_hybrid path without a dual-writer. Covers snippet windows
+  (ASCII + CJK), empty/blank query, two-index merge, corrupt cache skip, no-hit.
+- `cargo test -p deepseek-policy` → **419 passed**.
+- `cargo test -p deepseek-gateway` → **166 lib** + **12 + 6 + 1 + 1** integration,
+  including `chat_route_searches_cached_files`. The unported-branch case now uses
+  `python_eval`.
+- Clippy 1.85 GNU `--locked -D warnings` clean on policy + gateway.
+- `ruff` / `mypy` pass on the new probe.
+
+### Not done, and the next executable task
+
+**Not pushed.** Exact-head CI has not run.
+
+Five tool branches remain. Next is **`create_mindmap`**: pure SVG, no python-docx /
+python-pptx / reportlab, so it is the media path that can be proven native without
+waiting on Office libraries. Then `create_pptx` / `create_document` (those libraries
+are the high-risk remainder), `browser_*`, `python_eval`.
+
+---
+
+## create_mindmap landed: SVG is byte-identical, generated-file store is unique-id creates
+
+**Branch `main`, HEAD `57f0595b`**, on top of the uncommitted `fetch_url` + `search_files`
+slices. This is the first media tool, chosen because it is pure SVG and does not
+need python-docx / python-pptx / reportlab.
+
+### What landed
+
+`deepseek-policy::mindmaps` ports layout, CJK/ASCII tokenization, wrapping, XML
+escaping and SVG rendering. `generated_files` ports `store_generated_file` /
+`resolve_generated_file` / cleanup / `_safe_filename`. Ids are
+`Entropy::new_file_id` (`secrets.token_hex(16)`, 32 hex chars).
+
+`.generated` is unique-id creates with a 6-hour TTL, not a durable
+read-modify-write table, so it is not a declared ownership domain.
+
+### Verification
+
+- Probe pair byte-identical including the SVG: **5979 chars**, LF-normalized md5
+  `be02bc5fc34cccdf49bc7752bc743c8a`. Covers empty title/nodes, the sample
+  outline, XML escaping, and `title`/`name` aliases.
+- `cargo test -p deepseek-policy` → **424 passed**.
+- `cargo test -p deepseek-gateway` → **166 lib** + **13 + 6 + 1 + 1** integration,
+  including `chat_route_creates_a_mindmap_svg`.
+- Clippy 1.85 GNU `--locked -D warnings` clean.
+
+### Not done, and the next executable task
+
+**Not pushed.** Exact-head CI has not run.
+
+Four tool branches remain: `create_pptx` / `create_document` (Office/PDF
+libraries — high-risk), `browser_*`, `python_eval` (must not shell out to
+CPython). Then MCP/A2A, skills, automation, OCR, launchers, zero-Python cutover.
+
+---
+
+## create_document landed: content model is byte-identical, files are valid OOXML/PDF
+
+**Branch `main`, HEAD `57f0595b`**, on top of the uncommitted fetch_url / search_files /
+create_mindmap slices. This is the high-risk media path that needed a native
+docx+pdf writer without python-docx / reportlab.
+
+### What landed
+
+`deepseek-policy::documents` ports format aliases, section/table normalization
+(including ragged-row padding to `max(headers, rows)`), MD5 theme selection
+(`int(hex, 16) % 6` on the full 128-bit digest — a first draft truncated to
+`usize` and picked the wrong theme), the outline/note envelope, and writers:
+
+- **docx**: uncompressed OOXML zip (`[Content_Types].xml`, rels, `word/document.xml`,
+  numbering, footer PAGE field). CJK is UTF-8 in the XML; Word uses 微软雅黑.
+- **pdf**: PDF 1.4 with `/STSong-Light` + `/UniGB-UCS2-H`, the same CID approach
+  as reportlab `UnicodeCIDFont`. CJK is UTF-16BE hex in the content stream.
+
+The Office/PDF **bytes** are not python-docx/reportlab fingerprints. Those
+libraries are not a frozen protocol. Tests assert magic, zip membership, and
+that title/headings survive in the payload.
+
+### Verification
+
+- Content-model probe byte-identical: **4798 chars**, md5
+  `a09bbde438e3ca1e86f79c0c7e15c953`.
+- `cargo test -p deepseek-policy` → **428 passed**.
+- `cargo test -p deepseek-gateway` → **166 lib** + **14 chat_execution**
+  (including `chat_route_creates_a_docx_document`) + 6 stream + 1 + 1.
+- Clippy 1.85 GNU `--locked -D warnings` clean.
+
+### Not done, and the next executable task
+
+**Not pushed.** Exact-head CI has not run.
+
+Three tool branches remain: **`create_pptx`** (last media; python-pptx),
+`browser_*`, `python_eval` (must not shell out to CPython). Then MCP/A2A,
+skills, automation, OCR, launchers, zero-Python cutover.
+
+---
+
+## create_pptx landed: content model is byte-identical, files are valid 16:9 OOXML
+
+**Branch `main`, HEAD `57f0595b`**, on top of the uncommitted media slices.
+This finishes the three `create_*` artifact tools.
+
+### What landed
+
+`deepseek-policy::presentations` ports `create_presentation`: refusals, `content`
+→ bullets, MD5 deck theme, layout picker (quote / cards / process / comparison /
+summary / requested layout), automatic agenda at ≥4 content slides, outline/note,
+and a 16:9 OOXML zip writer (`ppt/slides/slideN.xml`, blank master/layout, CJK
+via 微软雅黑).
+
+The `.pptx` **bytes** are not python-pptx fingerprints. Tests assert zip magic,
+slide XML membership, and that the title survives. `create_presentation_from_text`
+stays a slides-skill path, not this tool branch.
+
+`zip_store` moved into `generated_files` so docx and pptx share one STORE-method
+writer.
+
+### Verification
+
+- Content-model probe byte-identical: **3676 chars**, md5
+  `d360f5e45f605284e51c13dbcdeba9ea`.
+- `cargo test -p deepseek-policy` → **432 passed**.
+- `cargo test -p deepseek-gateway` → **166 lib** + **15 chat_execution**
+  (including `chat_route_creates_a_pptx_deck`) + 6 stream + 1 + 1.
+- Clippy 1.85 GNU `--locked -D warnings` clean.
+
+### Not done, and the next executable task
+
+**Not pushed.** Exact-head CI has not run.
+
+Two tool branches remain: **`browser_*`** (needs a browser engine) and
+**`python_eval`** (must not shell out to CPython). Then MCP/A2A, skills,
+automation, OCR, launchers, zero-Python cutover.
+
+---
+
+## python_eval landed: in-process AST sandbox, no CPython child
+
+**Branch `main`, HEAD `57f0595b`**, on top of the uncommitted tool slices.
+
+The oracle's `python_eval` is not a full interpreter: it is `sys.executable -I
+-c PYTHON_EVAL_RUNNER`, an AST allowlist + `eval(..., {"__builtins__": {}})`.
+The port parses, validates and evaluates that same allowlist in-process. It
+does **not** fork CPython.
+
+### Verification
+
+- Probe byte-identical: **3458 chars**, md5 `b545a8f9c49c5fbbb6e2010c595ae3f2`.
+  Covers factorial/arithmetic/math/compare/min/max/sum/pow/round/abs/len/
+  bool-if/tuple/subscript/gcd/comb, plus empty/oversize/import/unknown/open/div0.
+- `cargo test -p deepseek-policy` → **435 passed**.
+- `cargo test -p deepseek-gateway` → **166 lib** + **16 chat_execution**
+  (including `chat_route_evals_a_python_expression`). Unported case is now
+  `browser_click`.
+- Clippy 1.85 GNU `--locked -D warnings` clean.
+
+Integer overflow on huge factorials is a documented bound (i128); the probe
+corpus does not hit it.
+
+### Not done, and the next executable task
+
+**Not pushed.** Exact-head CI has not run.
+
+One tool family remains: **`browser_*`** (Playwright). Then MCP/A2A, skills,
+automation, OCR, launchers, zero-Python cutover.
+
+---
+
+## browser_* landed: safety gate + static HTML controller, no Playwright
+
+**Branch `main`, HEAD `57f0595b`**, on top of the uncommitted tool slices.
+
+`browser_*` was the last unported dispatch family. The oracle already has a
+**StaticController** fallback when Playwright is missing. Native ports that
+path plus the safety policy, not Chromium.
+
+### What landed
+
+- `browser_safety`: `evaluate_action` / `evaluate_url_safety` (disabled-by-default,
+  private hosts, credentials, high-risk click, password fields, confirmation).
+- `browser`: in-memory sessions, `execute_browser_action`, static HTML parse of
+  approved `file://` fixtures.
+- Dispatch: all **18/18** branches now run. Unported `Tool did not run` is no
+  longer the live path for a catalog tool.
+
+### Honest gaps
+
+- Playwright is not ported.
+- Static controller does **not** `urlopen` public HTTP (Python's StaticController
+  does). Allowed `https://example.com` then fails closed with a visible error.
+- Media/RAG snapshot writes stay Python (`indexed: false`).
+
+### Verification
+
+- Safety probe byte-identical: **2252 chars**, md5
+  `ae657d74bdda48155bea65a6b20c6993`.
+- `cargo test -p deepseek-policy` → **440 passed** (fixture `file://` open).
+- `cargo test -p deepseek-gateway` → **166 lib** + **16 chat_execution**
+  including `chat_route_blocks_a_private_browser_url`.
+- Clippy 1.85 GNU `--locked -D warnings` clean.
+
+### Not done, and the next executable task
+
+**Not pushed.** Exact-head CI has not run.
+
+Next: Playwright engine **or** MCP/A2A / Go control-plane cutover / desktop and
+Android zero-Python launchers. The chat-tool inventory is no longer the bottleneck.
+
+---
+
+## Native `/mcp` hub landed: tools/list + tools/call through dispatch
+
+**Branch `main`, HEAD `57f0595b`**.
+
+The native gateway's `POST /mcp` used to answer `native MCP tool execution is
+not wired` for `tools/list` and `tools/call`. It now implements the Python Tool
+Hub's JSON-RPC methods for **local** tools.
+
+### What landed
+
+- `deepseek-policy::tool_catalog::mcp_tools` — MCP shape + risk-card annotations
+- `deepseek-gateway::mcp_hub` — `initialize` (with instructions), `ping`,
+  `tools/list`, `tools/call` (policy-gated `execute_call_sync`), resources,
+  prompts
+- `ToolRoundExecutor::execute_call_sync` — one-call path for the hub
+
+External `mcp__*` is a **tool error**, not a fake success.
+
+### Verification
+
+- `mcp_hub` unit tests: list includes `python_eval`/`create_pptx`; `2+2` → `4`
+- `mcp_initialize_and_tools_call_are_native` on `POST /mcp`
+- `cargo test -p deepseek-policy` → **440 passed**
+- `cargo test -p deepseek-gateway` → **169 lib** + **16 chat_execution** + 6 stream
+- Clippy 1.85 GNU `--locked -D warnings` clean
+
+### Not done
+
+**Not pushed.** Production HTTP is still Python. A2A `/a2a` still `not wired`.
+Playwright, Go cutover, desktop/Android, exact-head CI remain.
+
+---
+
+## Native A2A mesh landed: Agent Cards + task lifecycle
+
+**Branch `main`, HEAD `57f0595b`**.
+
+`POST /a2a` used to answer `native A2A execution is not wired`. It now
+implements the Python mesh's JSON-RPC methods for discovery and tasks.
+
+### What landed
+
+- `deepseek-gateway::a2a_hub` — orchestrator + researcher/coder/reasoner/critic
+  Agent Cards (protocol 0.3.0)
+- `GET /.well-known/agent-card.json`, `GET /a2a/agents`,
+  `POST /a2a`, `POST /a2a/agents/{id}`
+- `message/send`, `tasks/get|cancel|list`, `agent/getAuthenticatedExtendedCard`
+- Injected task runner; default **fails the task** (`native A2A task runner is
+  not attached`) instead of inventing an answer
+
+Streaming SSE (`message/stream`) is not ported.
+
+### Verification
+
+- `agent_cards_cover_orchestrator_and_workers` (researcher tags include
+  `web_search`)
+- `message_send_runs_injected_runner` (`echo:hello` completes)
+- `cargo test -p deepseek-gateway` → **172 lib** + **16 chat_execution** + 6 stream
+- Clippy 1.85 GNU `--locked -D warnings` clean
+
+### Not done
+
+**Not pushed.** Production HTTP is still Python. No default upstream
+`call_deepseek` on the native runner. Go `/api` still
+`GO_CONTROL_PROXY_NOT_READY`. Playwright, launchers, exact-head CI remain.
+
+---
+
+## Native A2A runner landed: capability-scoped chat loop
+
+**Branch `main`, HEAD `57f0595b`**.
+
+`POST /a2a` `message/send` without an injected runner now queues a native job
+and runs `a2a_runner::run_native_a2a`: system profile + capability-scoped
+OpenAI tools + `execute_chat_with_tool_rounds`. Missing `DEEPSEEK_API_KEY`
+fails the task (`A2A upstream is not configured`) instead of inventing text.
+
+### Verification
+
+- researcher tools = `web_search`, `compare_search_results`, `fetch_url`;
+  reasoner has none
+- `message_send_without_runner_queues_native_work`
+- `cargo test -p deepseek-gateway` → **175 lib** + **16 chat_execution** + 6 stream
+- Clippy 1.85 GNU `--locked -D warnings` clean
+
+### Not done
+
+**Not pushed.** Production HTTP is still Python. SSE `message/stream` unported.
+Go `/api` still `GO_CONTROL_PROXY_NOT_READY` unless `GO_CONTROL_ADDR` is set
+(and Go still does not serve public `/api`). Playwright, launchers, exact-head
+CI remain.
+
+---
+
+## Go public `/api` landed: control status + honest 501
+
+**Branch `main`, HEAD `57f0595b`**.
+
+`deepseekd` now serves a public control-plane edge:
+
+- `GET /api/control/status` — same JSON as `/healthz` (shadow, Python mutation
+  authority, `productionMutation: false`)
+- `GET /api/cutover/status?domain=` — read-only cutover record
+- other `/api/*` → `501 GO_API_NOT_IMPLEMENTED` (not a fake success)
+- `POST /api/cutover/transition` is **not** public; mutation stays `/internal`
+
+### Verification
+
+- `TestHealthzIsShadowAndReadOnly` also hits `/api/control/status` (GET 200,
+  POST 405)
+- `TestPublicAPIUnimplementedPathsFailClosed`
+- `go test ./internal/api` coverage **96.8%**
+- `go test ./...` ok
+
+### Not done
+
+**Not pushed.** Production HTTP is still Python. Native gateway still needs
+`GO_CONTROL_ADDR` to forward `/api`. Remaining Python `/api` (config, chat,
+tools, …) is 501 on Go. Playwright, launchers, exact-head CI remain.
+
+---
+
+## Go `/api/config` subset + mcp/a2a flags
+
+**Branch `main`, HEAD `57f0595b`**.
+
+`deepseekd` now serves a Go-owned **read subset**, not Python's full config blob:
+
+- `GET /api/config` — `owner=go`, version, runtime, `hasServerKey`/`hasSearch`
+  booleans (never the keys), default model, searchModes, mcp/a2a hub flags
+- `GET /api/mcp` — protocol `2025-06-18`, `nativeHub`, `externalBridge: false`
+- `GET /api/a2a` — protocol `0.3.0`, `streaming: false`
+
+OCR/RAG/budget/toolPolicy are omitted, not faked. POST `/api/config` is 405.
+
+### Verification
+
+- `TestPublicConfigIsAGoOwnedSubset` / `TestPublicConfigReadsEnvFlags`
+- `TestPublicMcpAndA2AStatusAreNativeHubFlags`
+- `go test ./internal/api` coverage **96.8%**
+- `go test ./internal/lifecycle` coverage **98.9%**
+
+### Not done
+
+**Not pushed.** Production HTTP is still Python. Playwright, remaining `/api`
+writes, launchers, exact-head CI remain.
+
+---
+
+## Native `GET /api/tool-policy` (Rust, not Go proxy)
+
+**Branch `main`, HEAD `57f0595b`**.
+
+Python `GET /api/tool-policy` is now served by the native gateway **ahead of**
+the Go `/api/*` catch-all, using the already-ported `tool_policy_status` +
+`read_recent_audit`. Settings knobs read `TOOL_POLICY_*` via
+`ToolPolicySettings::from_env`. A missing audit log is `[]`, not an error.
+
+`GET /api/policies` still `GO_CONTROL_PROXY_NOT_READY` without `GO_CONTROL_ADDR`.
+
+### Verification
+
+- `tool_policy_status_is_native_not_go_proxy` (28-card catalog, bad `limit` → 200)
+- `cargo test -p deepseek-gateway` → **176 lib** + 16 chat + 6 stream
+- Clippy 1.85 GNU `--locked -D warnings` clean
+
+### Not done
+
+**Not pushed.** Production HTTP is still Python. Playwright, remaining `/api`,
+launchers, exact-head CI remain.
+
+---
+
+## Native `GET /api/budget` (Rust ledger, not Go proxy)
+
+**Branch `main`, HEAD `57f0595b`**.
+
+Python `GET /api/budget` is served by the native gateway using
+`budget_status` + `BudgetStore`. Missing `.budget/budget.db` is an empty
+`today` (oracle path); the GET does not create the file.
+
+### Verification
+
+- `budget_status_is_native_not_go_proxy` (`scope=global` and `scope=agent`)
+- `cargo test -p deepseek-gateway` → **177 lib** + 16 chat + 6 stream
+- Clippy 1.85 GNU `--locked -D warnings` clean
+
+### Not done
+
+**Not pushed.** Production HTTP is still Python. Playwright, remaining `/api`
+(gateway/scheduler/RAG status), launchers, exact-head CI remain.
+
+---
+
+## Native `GET /api/rag/status` (read-only `rag.sqlite3`)
+
+**Branch `main`, HEAD `57f0595b`**.
+
+Python `GET /api/rag/status` is served by the native gateway using
+`memory_index::local_rag_status`. The handle is **read-only** and never
+creates `.local-rag/rag.sqlite3`. Missing DB → zero counts.
+`sqliteVecAvailable` is `false` (native does not load `sqlite-vec`).
+
+### Verification
+
+- `local_rag_status_reads_the_fixture_and_does_not_invent_a_db`
+- `rag_status_is_native_not_go_proxy`
+- `cargo test -p deepseek-gateway` → **178 lib** + 16 chat + 6 stream
+- Clippy 1.85 GNU `--locked -D warnings` clean
+
+### Not done
+
+**Not pushed.** Production HTTP is still Python. Playwright, remaining `/api`
+(gateway/scheduler), launchers, exact-head CI remain.
+
+---
+
+## Native `GET /api/gateway/status` (context manager, honest queue gaps)
+
+**Branch `main`, HEAD `57f0595b`**.
+
+Python `GET /api/gateway/status` is served by the native gateway with the
+ported context-manager knobs. Request queue and job scheduler are
+`ported: false` — no invented `counts` / DLQ.
+
+### Verification
+
+- `gateway_status_is_native_not_go_proxy`
+- `cargo test -p deepseek-gateway` → **179 lib** + 16 chat + 6 stream
+- Clippy 1.85 GNU `--locked -D warnings` clean
+
+### Not done
+
+**Not pushed.** Production HTTP is still Python. Playwright, remaining `/api`,
+launchers, exact-head CI remain.
+
+---
+
+## Native `/api/reminders` + `/api/reminders/due`: the data-plane HTTP edge, gated
+
+**Branch `codex/native-a2a-stream-continuation`, HEAD `57f0595b`** plus the
+pre-existing uncommitted slices. This slice is uncommitted on top.
+
+The frontend calls `/api/reminders` on every reminder read and write, and it was
+reaching the Go `/api/*` catch-all (`501 GO_API_NOT_IMPLEMENTED`) or Python.
+`deepseek-gateway::data_routes` now serves it natively, registered **ahead of**
+the Go catch-all because the store's authoritative writer is Rust — proxying it
+to Go would put a second writer on one file.
+
+### What landed
+
+`data_routes.rs` mirrors `server.reminder_action` and
+`server.api_due_reminders` exactly: the `list` / `create` / `delete` shapes, the
+`{"error", "code"}` envelope, `read_json_body`'s empty-body `{}` → `list`
+default, and the `Unsupported reminder action` 400. It calls the already-ported
+`deepseek_policy::reminders` — no store logic was re-implemented.
+
+**The gate is the point, and it is not a placeholder.** `POST
+/api/reminders/due` reads like a query and **writes**: the oracle marks newly-due
+entries `notified` and rewrites the file. `create` and `delete` do too, Python
+reaches the same file from three paths, and both sides reproduce the same temp
+name (`reminders.json` → `reminders.tmp`), so two writers can interleave. Every
+mutating action is therefore refused with `NATIVE_REMINDERS_WRITE_NOT_OWNED`
+(409) — the **same code and reason** the chat tool loop gives for
+`create_reminder` — while `list` is served for real, because refusing a read the
+frontend needs would be a capability regression rather than a correctness guard.
+
+The refusal is driven by the existing `crate::may_write_native_store`, which
+requires **both** `DEEPSEEK_RUNTIME_MODE=python_disabled` **and** the domain's
+presence in `DECLARED_NATIVE_DATA_DOMAINS`. So the cutover is one environment
+variable and needs no code change, and a mode alone cannot enable a store nobody
+declared.
+
+### Verification
+
+`rust/crates/deepseek-gateway/tests/data_routes.rs` — **9 cases, all green**,
+each driving `create_production_app`, so the auth layer and the registration
+order are inside what is measured. Three are the ones that matter:
+
+- the write is **real**: after the flip the reminder is in
+  `.reminders/reminders.json` under the bound root, and `.workspace-generation`
+  is exactly `2` — proving the write went through the mutation fence, not around
+  it. A route that reported success without storing anything fails this.
+- the refusal is **byte-exact**: a refused delete leaves the seeded file
+  byte-identical, and a refused create leaves **no file at all**.
+- the flip is **symmetric**: the same request one mode different stores the
+  reminder for real.
+
+Both refusal assertions were shown **able to fail** — forcing the gate predicate
+to `false` turned exactly those two red and left the other seven green.
+
+- `cargo +1.85.0-x86_64-pc-windows-gnu test -p deepseek-gateway -p deepseek-policy --locked`
+  → **184 lib** + **9 data_routes** + 16 chat_execution + 6 stream + 5 + 1 + 1,
+  and **441 policy**, all passed.
+- Clippy 1.85 GNU `--locked --all-targets --all-features -- -D warnings` clean;
+  `fmt --all --check` clean.
+- `python scripts/check_zero_python_runtime.py` → **PASS 8/8**;
+  `python scripts/native_runtime_contract.py --check` → `"ok": true`, 45 domains
+  / 42 corpora / 31 versions; the reminders + ownership + gate tests pass;
+  `go build ./...` and `go vet ./...` clean; docs language nav clean.
+
+### Not done, and the next executable task
+
+**Not pushed.** Exact-head CI has not run. Production HTTP is still Python, and
+`release/native_runtime_5_0_evidence_v1.json` remains `NOT_READY`.
+
+Remaining `/api` data surfaces the frontend calls: **memory** (`/api/memory`,
+`/api/memory/search`, `/api/memory/conflicts`), projects/files
+(`/api/projects`, `/api/project-files`, `/api/file-*`), media, skills, traces,
+and the workspace backup/DR surface (184 Python routes total). The next
+dependency-satisfied slice is **memory**: the store, the triple, the index read
+path and the turn-state half are already ported and byte-verified, so only the
+HTTP projection and its gate are new — the same shape as this one.
+
+---
+
+## The memory v3 layer and its `/api/memory` routes
+
+**Branch `codex/native-a2a-stream-continuation`, HEAD `57f0595b`**, on top of the
+uncommitted `/api/reminders` slice. Still uncommitted.
+
+The slice the previous record named as next, and it landed as predicted: the store
+was already ported, so the new work was the v3.0 **projection** layer plus the HTTP
+routes and their gate.
+
+### What landed
+
+`deepseek_infra/infra/memory/` is not a second store. `schema.py`, `policy.py`,
+`store.py` and `search.py` all delegate to `infra/data/memory.py` — the same
+`.memory/memories.json` the chat turn writes. So this is a **projection** over one
+authoritative store, and it is gated identically.
+
+`deepseek_policy::memory_schema` ports it: the public vocabulary (`public_scope`,
+`storage_scope`, `public_type`, `legacy_category`), the source sanitisation
+(`normalize_source_ref`, `public_source`), `public_confidence`, `public_memory`,
+the policy pair (`assert_memory_safe`, `readable_scopes`, `skill_can_read_memory`),
+and the store/search operations (`list_memories`, `add_memory`, `edit_memory`,
+`delete_memory`, `search_memories`, `memory_context_for_skill`).
+
+`data_routes` gained the whole family: `GET`/`POST /api/memory`,
+`DELETE`/`PATCH /api/memory/{id}`, `GET /api/memory/search`,
+`POST /api/memory/conflicts`. Reads are served; every mutation is refused with
+`NATIVE_MEMORY_WRITE_NOT_OWNED` while Python owns the store, and flips with the
+same `DEEPSEEK_RUNTIME_MODE` the reminder routes and the tool loop read.
+
+### The deadlock this slice found, and why it was structural
+
+`edit_memory` must hold the store's process lock across the read, the patch and the
+write — the oracle holds `_memory_lock` across all three so a concurrent upsert
+cannot interleave. **Python's `RLock` is reentrant and Rust's `Mutex` is not**, so
+the first version deadlocked on its own thread: it took `memory_process_lock()` and
+then called `load_memories()`, which locks the same mutex again. It hung rather than
+failing, which is why the symptom was a 10-minute test timeout and a stuck
+`deepseek_policy-*.exe` holding the output binary.
+
+Fixed by exposing the **unlocked** read/write pair (`load_unlocked_for_caller` /
+`save_unlocked_for_caller`) for callers that already hold the guard, with the reason
+documented at both ends. The unlocked write still takes the mutation fence — the
+process lock and the fence are different guards.
+
+### Three measured corrections
+
+Every one of these was a wrong guess of mine, caught by running the oracle rather
+than by reasoning:
+
+1. **Identical content is not a memory conflict.** `memory.py:302` skips a candidate
+   whose normalised content equals the incoming content, so `add` with the same text
+   is the update path, not a 409. My first test asserted a conflict for identical
+   text and failed; a conflict needs the same category, scope and conflict domain
+   with **different** content.
+2. **One `add_memory` bumps the fence generation four times, not two.** The oracle
+   saves twice (`upsert_memory`, then `save_memories(_merge_item(item))` for the
+   public fields), and each save is one fenced scope bumping twice. Measured against
+   the oracle: it also reports `4`.
+3. **`public_confidence("nan")` is `1.0`, not the `0.9` default.** The clamp is
+   Python's `max(0.0, min(1.0, x))`, and `min` returns its *first* argument unless
+   the second compares strictly less — `nan < 1.0` is `False`. `f64::clamp` cannot
+   express this, so the pair is spelled out. The probe caught it on its first run.
+
+### Verification
+
+- **Byte-level parity probe pair** —
+  `tasks/native-runtime/memory_schema_parity_probe.py` ↔
+  `deepseek-policy/examples/memory_schema_parity_probe.rs`: **identical**, md5
+  `d0bbb07505465d8759a9d1943486ec1f`, **164 keys**, 18 935 chars. It was shown
+  **not blind**: inverting `public_scope`'s `project:` branch turns it red on exactly
+  the `public_scope::project:*` keys, and the file was restored byte-identically.
+- `cargo test -p deepseek-gateway -p deepseek-policy --locked` → **184 lib** + **19
+  data_routes** + 16 chat_execution + 6 stream + 5 + 1 + 1, and **456 policy**
+  (up from 441), all passed.
+- The gate assertions were shown **able to fail**: forcing
+  `may_write_native_store("memory_store")` to `false` turned exactly the two
+  gate-dependent cases red and left the other seventeen green.
+- Clippy 1.85 GNU `--locked --all-targets --all-features -- -D warnings` clean;
+  `fmt --all --check` clean.
+- `python scripts/check_zero_python_runtime.py` → **PASS 8/8**;
+  `python scripts/native_runtime_contract.py --check` → `"ok": true`.
+- `ruff` and `mypy` clean on the new probe (mypy found three real annotation bugs
+  that are fixed).
+
+### Not done, and the next executable task
+
+**Not pushed.** Exact-head CI has not run. Production HTTP is still Python;
+`release/native_runtime_5_0_evidence_v1.json` remains `NOT_READY`.
+
+The remaining `/api` data surfaces the frontend calls, in dependency order:
+
+1. **projects/files** — `projects` and `file_cache` are already ported and
+   byte-verified (`list_projects`, `list_project_files`, `read_file_chunk`), so the
+   routes are the same shape as this slice. The frontend calls `/api/projects`,
+   `/api/project-files`, `/api/file-*`.
+2. **skills**, **traces**, **media** — the ports do not exist yet.
+3. The **workspace backup/DR** surface is the largest block (~90 routes) and is
+   Go-owned in the target topology, so it belongs with the Go control API rather
+   than here.

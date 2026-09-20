@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::DefaultBodyLimit,
+    extract::{DefaultBodyLimit, Path},
     http::{HeaderMap, StatusCode, header::CONTENT_TYPE},
     middleware,
     response::{IntoResponse, Response},
@@ -17,17 +17,25 @@ use deepseek_policy::memory;
 use deepseek_policy::model_router::ModelRouterSettings;
 use deepseek_policy::request_messages::validate_request_messages;
 
+pub mod a2a_control;
+pub mod a2a_hub;
+pub mod a2a_runner;
+pub mod a2a_stream;
 pub mod assembly_env;
 mod auth;
 pub mod chat_execution;
 pub mod chat_stream;
 pub mod chat_tool_loop;
 mod control_proxy;
+pub mod data_routes;
+pub mod fetch_provider;
 pub mod local_clock;
+pub mod mcp_hub;
 pub mod native_chat;
 pub mod observability;
 pub mod openai_facade;
 pub mod policy_routes;
+pub mod project_routes;
 pub mod request_assembly;
 pub mod request_preparation;
 pub mod search_provider;
@@ -59,6 +67,20 @@ fn create_routes() -> Router {
         .route("/mcp/request/prepare", post(mcp_protocol_prepare))
         .route("/.well-known/agent-card.json", get(agent_card))
         .route("/a2a", post(a2a_rpc))
+        .route("/a2a/agents", get(a2a_agents))
+        .route("/a2a/agents/:agent_id", post(a2a_agent_rpc))
+        .route("/api/tool-policy", get(policy_routes::api_tool_policy))
+        .route("/api/budget", get(policy_routes::api_budget))
+        .route("/api/rag/status", get(policy_routes::api_rag_status))
+        .route(
+            "/api/gateway/status",
+            get(policy_routes::api_gateway_status),
+        )
+        // Data-plane routes the frontend calls, served natively ahead of the Go
+        // `/api/*` catch-all. Registered here rather than in the proxy because
+        // the store's authoritative writer is Rust, not Go.
+        .merge(data_routes::router())
+        .merge(project_routes::router())
         .route("/api/*path", any(control_proxy::proxy_api_to_go))
         // Private control handlers must not fall through to either proxy or SPA.
         .route("/internal", any(|| async { StatusCode::NOT_FOUND }))
@@ -115,118 +137,94 @@ fn unavailable(code: &'static str, message: &'static str) -> (StatusCode, Json<s
     )
 }
 
-async fn agent_card() -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::OK,
-        Json(json!({
-            "protocolVersion": "0.3.0",
-            "name": "DeepSeek Infra Orchestrator",
-            "description": "Native agent discovery; A2A execution is not wired",
-            "url": "/a2a",
-            "preferredTransport": "JSONRPC",
-            "version": gateway_version(),
-            "capabilities": {
-                "streaming": false,
-                "pushNotifications": false,
-                "stateTransitionHistory": false
-            },
-            "defaultInputModes": ["text/plain"],
-            "defaultOutputModes": ["text/plain"],
-            "skills": []
-        })),
-    )
+async fn agent_card() -> Response {
+    if !a2a_hub::a2a_enabled() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": {"code": "forbidden", "message": "A2A mesh is disabled"}})),
+        )
+            .into_response();
+    }
+    match a2a_hub::agent_card("orchestrator", "http://127.0.0.1:8000") {
+        Ok(card) => Json(card).into_response(),
+        Err(message) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": {"code": "not_found", "message": message}})),
+        )
+            .into_response(),
+    }
 }
 
-fn jsonrpc_not_ready(body: &Bytes, message: &'static str) -> Json<serde_json::Value> {
-    if body.is_empty() {
-        return Json(json!({
-            "jsonrpc": "2.0",
-            "error": {"code": -32600, "message": "Invalid Request: empty body"},
-            "id": null
-        }));
+async fn a2a_agents() -> Response {
+    if !a2a_hub::a2a_enabled() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": {"code": "forbidden", "message": "A2A mesh is disabled"}})),
+        )
+            .into_response();
     }
-    let val: serde_json::Value = match serde_json::from_slice(body) {
-        Ok(v) => v,
-        Err(_) => {
-            return Json(json!({
-                "jsonrpc": "2.0",
-                "error": {"code": -32700, "message": "Parse error"},
-                "id": null
-            }));
-        }
-    };
-    if !val.is_object() {
-        return Json(json!({
-            "jsonrpc": "2.0",
-            "error": {"code": -32600, "message": "Invalid Request"},
-            "id": null
-        }));
-    }
-    let id = val.get("id").cloned().unwrap_or(serde_json::Value::Null);
     Json(json!({
-        "jsonrpc": "2.0",
-        "error": {"code": -32601, "message": message},
-        "id": id
+        "ok": true,
+        "agents": a2a_hub::agent_cards("http://127.0.0.1:8000"),
     }))
-}
-
-const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
-
-fn jsonrpc_result(id: serde_json::Value, result: serde_json::Value) -> Json<serde_json::Value> {
-    Json(json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "result": result,
-    }))
+    .into_response()
 }
 
 async fn mcp_rpc(body: Bytes) -> Response {
-    if body.is_empty() {
-        return jsonrpc_not_ready(&body, "native MCP execution is not wired").into_response();
-    }
-    let val: serde_json::Value = match serde_json::from_slice(&body) {
-        Ok(v) => v,
-        Err(_) => {
-            return jsonrpc_not_ready(&body, "native MCP execution is not wired").into_response();
-        }
-    };
-    if !val.is_object() {
-        return jsonrpc_not_ready(&body, "native MCP execution is not wired").into_response();
-    }
-    let method = val
-        .get("method")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
-    let notification = val.get("id").is_none();
-    if method == "notifications/initialized" && notification {
-        return StatusCode::ACCEPTED.into_response();
-    }
-    let id = val.get("id").cloned().unwrap_or(serde_json::Value::Null);
-    match method {
-        "initialize" => jsonrpc_result(
-            id,
-            json!({
-                "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": {"tools": {"listChanged": false}},
-                "serverInfo": {
-                    "name": "deepseek-infra",
-                    "title": "DeepSeek Infra MCP Tool Hub",
-                    "version": gateway_version(),
-                },
-            }),
-        )
-        .into_response(),
-        "ping" => jsonrpc_result(id, json!({})).into_response(),
-        "tools/list" | "tools/call" | "resources/list" | "resources/read" | "prompts/list"
-        | "prompts/get" => {
-            jsonrpc_not_ready(&body, "native MCP tool execution is not wired").into_response()
-        }
-        _ => jsonrpc_not_ready(&body, "native MCP execution is not wired").into_response(),
+    match mcp_hub::handle_mcp_bytes(&body) {
+        (202, None) => StatusCode::ACCEPTED.into_response(),
+        (_, Some(response)) => Json(response).into_response(),
+        (_, None) => StatusCode::ACCEPTED.into_response(),
     }
 }
 
-async fn a2a_rpc(body: Bytes) -> Json<serde_json::Value> {
-    jsonrpc_not_ready(&body, "native A2A execution is not wired")
+fn spawn_native_a2a_jobs() {
+    for run in a2a_hub::take_pending() {
+        tokio::spawn(async move {
+            a2a_hub::execute_native(run).await;
+        });
+    }
+}
+
+async fn a2a_rpc(body: Bytes) -> Response {
+    a2a_response(body, "orchestrator").await
+}
+
+async fn a2a_agent_rpc(Path(agent_id): Path<String>, body: Bytes) -> Response {
+    a2a_response(body, &agent_id).await
+}
+
+async fn a2a_response(body: Bytes, agent_id: &str) -> Response {
+    if !a2a_hub::a2a_enabled() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": {
+                "code": "forbidden", "message": "A2A mesh is disabled"
+            }})),
+        )
+            .into_response();
+    }
+    if a2a_control::configured() {
+        return a2a_control::handle_bytes(&body, agent_id).await;
+    }
+    if python_is_de_authorised() {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": {
+            "code":"NATIVE_A2A_CONTROL_NOT_CONFIGURED", "message":"Native A2A requires the Go task control service"
+        }}))).into_response();
+    }
+    let response = match serde_json::from_slice::<Value>(&body) {
+        Ok(message) if a2a_stream::is_stream_request(&message) => {
+            a2a_stream::streaming_response(&message, agent_id)
+        }
+        _ => Json(a2a_hub::handle_a2a_bytes(
+            &body,
+            agent_id,
+            "http://127.0.0.1:8000",
+        ))
+        .into_response(),
+    };
+    spawn_native_a2a_jobs();
+    response
 }
 
 async fn gateway_request_prepare(body: Bytes) -> Json<serde_json::Value> {
@@ -524,7 +522,8 @@ const MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE: &str = "NATIVE_MEMORY_VECTOR_INDEX_N
 ///    4.9.4. A store that is **not** here stays refused whatever the mode says — setting the mode alone
 ///    must not be able to enable a store nobody declared — which is why the list is the second
 ///    condition rather than a detail of the first. A test pins it as a subset of the contract's.
-pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 2] = ["memory_store", "reminders_store"];
+pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 3] =
+    ["memory_store", "reminders_store", "project_metadata_store"];
 
 /// Whether this process may write the store `domain` names.
 ///
@@ -1496,7 +1495,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mcp_initialize_and_ping_are_native_jsonrpc_while_tools_stay_unwired() {
+    async fn mcp_initialize_and_tools_call_are_native() {
         let app = create_app();
         let init = json!({
             "jsonrpc": "2.0",
@@ -1514,21 +1513,42 @@ mod tests {
         let response: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(response["result"]["protocolVersion"], "2025-06-18");
         assert_eq!(response["result"]["serverInfo"]["name"], "deepseek-infra");
+        assert!(
+            response["result"]["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("Tool Hub")
+        );
         assert!(response.get("error").is_none());
 
-        let tools = json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"echo"}})
-            .to_string();
+        let list = json!({"jsonrpc":"2.0","id":8,"method":"tools/list"}).to_string();
+        let (list_status, list_body) = send_request(app.clone(), "POST", "/mcp", Some(list)).await;
+        assert_eq!(list_status, StatusCode::OK);
+        let listed: serde_json::Value = serde_json::from_str(&list_body).unwrap();
+        let names: Vec<&str> = listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert!(names.contains(&"python_eval"));
+
+        let tools = json!({
+            "jsonrpc":"2.0",
+            "id":9,
+            "method":"tools/call",
+            "params":{"name":"python_eval","arguments":{"expression":"2+2"}}
+        })
+        .to_string();
         let (tool_status, tool_body) = send_request(app, "POST", "/mcp", Some(tools)).await;
         assert_eq!(tool_status, StatusCode::OK);
         let tool_response: serde_json::Value = serde_json::from_str(&tool_body).unwrap();
-        assert_eq!(tool_response["error"]["code"], -32601);
-        assert!(
-            tool_response["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("tool execution is not wired")
+        assert!(tool_response.get("error").is_none());
+        assert_eq!(tool_response["result"]["isError"], false);
+        assert_eq!(
+            tool_response["result"]["structuredContent"]["result"]["result"],
+            "4"
         );
-        assert!(tool_response.get("result").is_none());
     }
 
     #[tokio::test]
@@ -1539,12 +1559,13 @@ mod tests {
         assert_eq!(card_status, StatusCode::OK);
         let card: serde_json::Value = serde_json::from_str(&card_body).unwrap();
         assert_eq!(card["protocolVersion"], "0.3.0");
-        assert_eq!(card["capabilities"]["streaming"], false);
+        assert_eq!(card["name"], "DeepSeek Infra Orchestrator");
+        assert_eq!(card["capabilities"]["streaming"], true);
         assert!(
-            card.get("description")
-                .and_then(|value| value.as_str())
+            card["url"]
+                .as_str()
                 .unwrap()
-                .contains("A2A execution is not wired")
+                .ends_with("/a2a/agents/orchestrator")
         );
 
         let a2a_body = json!({"jsonrpc":"2.0","id":"a2a-1","method":"message/send"});
@@ -1552,7 +1573,7 @@ mod tests {
             send_request(app.clone(), "POST", "/a2a", Some(a2a_body.to_string())).await;
         assert_eq!(a2a_status, StatusCode::OK);
         let a2a_response = serde_json::from_str::<serde_json::Value>(&a2a_response).unwrap();
-        assert_eq!(a2a_response["error"]["code"], -32601);
+        assert_eq!(a2a_response["error"]["code"], -32602);
         assert_eq!(a2a_response["id"], "a2a-1");
         assert!(a2a_response.get("result").is_none());
 
@@ -1562,6 +1583,84 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&proxy_body).unwrap()["error"]["code"],
             "GO_CONTROL_PROXY_NOT_READY"
         );
+    }
+
+    #[tokio::test]
+    async fn tool_policy_status_is_native_not_go_proxy() {
+        let app = create_app();
+        let (status, body) = send_request(app.clone(), "GET", "/api/tool-policy", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let payload: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["toolPolicy"]["enabled"], true);
+        assert_eq!(payload["toolPolicy"]["enforceSchema"], false);
+        assert!(
+            payload["toolPolicy"]["tools"]
+                .as_array()
+                .map(|tools| tools.len())
+                .unwrap_or(0)
+                >= 28
+        );
+        assert!(payload["audit"].is_array());
+
+        let (limited_status, limited_body) =
+            send_request(app, "GET", "/api/tool-policy?limit=not-a-number", None).await;
+        assert_eq!(limited_status, StatusCode::OK);
+        let limited: serde_json::Value = serde_json::from_str(&limited_body).unwrap();
+        assert_eq!(limited["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn budget_status_is_native_not_go_proxy() {
+        let app = create_app();
+        let (status, body) = send_request(app.clone(), "GET", "/api/budget", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let payload: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["budget"]["enabled"], true);
+        assert_eq!(payload["budget"]["scope"], "global");
+        assert_eq!(payload["budget"]["overBudget"]["exceeded"], false);
+        assert!(payload["budget"]["today"].is_object());
+
+        let (scoped_status, scoped_body) =
+            send_request(app, "GET", "/api/budget?scope=agent", None).await;
+        assert_eq!(scoped_status, StatusCode::OK);
+        let scoped: serde_json::Value = serde_json::from_str(&scoped_body).unwrap();
+        assert_eq!(scoped["budget"]["scope"], "agent");
+    }
+
+    #[tokio::test]
+    async fn rag_status_is_native_not_go_proxy() {
+        let app = create_app();
+        let (status, body) = send_request(app, "GET", "/api/rag/status", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let payload: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["localRag"]["enabled"], true);
+        assert_eq!(payload["localRag"]["sqliteVecAvailable"], false);
+        assert_eq!(payload["localRag"]["indexedItems"], 0);
+        assert_eq!(payload["localRag"]["hybridSearch"], "bm25+vector");
+    }
+
+    #[tokio::test]
+    async fn gateway_status_is_native_not_go_proxy() {
+        let app = create_app();
+        let (status, body) = send_request(app, "GET", "/api/gateway/status", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let payload: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["gateway"]["contextManager"]["enabled"], true);
+        assert_eq!(
+            payload["gateway"]["contextManager"]["toolOrder"],
+            "function.name"
+        );
+        assert_eq!(
+            payload["gateway"]["contextManager"]["slidingWindowMessages"],
+            36
+        );
+        assert_eq!(payload["gateway"]["requestQueue"]["ported"], false);
+        assert_eq!(payload["gateway"]["scheduler"]["ported"], false);
+        assert!(payload["gateway"]["requestQueue"].get("counts").is_none());
     }
 
     /// Streaming is a first-class transport, so `stream: true` must not be refused as

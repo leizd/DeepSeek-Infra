@@ -17,26 +17,22 @@
 //!
 //! # What runs and what does not
 //!
-//! Eleven of the eighteen dispatch branches execute for real here — the four
-//! request-independent ones plus the seven data branches against the injected
-//! [`WorkspaceContext`]. The other seven are reported honestly to the model:
-//! `execute_tool_calls` resolves an unported branch to the `Tool did not run`
-//! envelope rather than a success, and the loop keeps going. That is a
-//! degradation against the Python oracle for those seven branches (`browser_*`,
-//! `python_eval`, `search_files`, `fetch_url`, `create_mindmap`, `create_pptx`,
-//! `create_document`), stated plainly rather than hidden — this gateway is an
-//! opt-in delegate, and the authority for those tools remains Python.
+//! All eighteen dispatch branches execute for real here. `browser_*` runs the
+//! safety gate and the static HTML controller (the same fallback the oracle
+//! uses when Playwright is absent). Playwright itself is not ported; Media/RAG
+//! snapshot writes stay Python-owned. Private hosts and high-risk clicks are
+//! refused by policy rather than answering `Tool did not run`.
 //!
 //! # What is deliberately not ported from the surrounding oracle loop
 //!
 //! Each of these is a real gap with an owner, not a silent drop:
 //! - the **web-search provider** — no callback is injected, so `web_search` /
 //!   `compare_search_results` answer "not enabled for this request";
-//! - **`mcp__*` bridging** — the external MCP registry is not ported, so a
-//!   bridged name reports `Unsupported tool:`;
+//! - **external `mcp__*` bridging** — native `/mcp` runs local tools; a bridged
+//!   name is a tool error, not a silent success;
 //! - the **artifact terminal check** (`terminal_artifact_result_from_messages`)
-//!   and `ensure_pptx_response` — both exist for `create_pptx` /
-//!   `create_document` / `create_mindmap`, none of which is ported;
+//!   and `ensure_pptx_response` remain out of the loop even though the three
+//!   generators now run;
 //! - semantic cache, memory retrieval between rounds, scheduler leases,
 //!   resiliency retries, traces/spans, the budget ledger, `system_note`
 //!   emission, and the cancel event (a dropped client connection stops the
@@ -64,9 +60,12 @@ use crate::chat_execution::{
     ChatCompletionResult, ChatExecutionError, UpstreamConfig, UpstreamTurn, exchange_turn,
     final_answer, merge_usage_totals,
 };
+use crate::fetch_provider::{locked_http_get, timeout_from_env};
+use crate::search_provider::SearchProvider;
 use crate::tool_rounds::{self, RoundDecision};
 use deepseek_policy::core_utils::SystemClock;
 use deepseek_policy::entropy::SystemEntropy;
+use deepseek_policy::fetch_url::{self, FetchContext};
 use deepseek_policy::file_cache::FileCache;
 use deepseek_policy::tool_batch::{self, execute_tool_calls};
 use deepseek_policy::tool_dispatch::{
@@ -74,8 +73,6 @@ use deepseek_policy::tool_dispatch::{
 };
 use deepseek_policy::tool_policy::{ToolPolicy, ToolPolicyConfig};
 use deepseek_policy::tool_search::ExecutorContext;
-
-use crate::search_provider::SearchProvider;
 
 /// The workspace dependencies the data branches run against, bundled so one
 /// request can hold them and the file cache persists across that request's
@@ -154,6 +151,48 @@ impl ToolRoundExecutor {
         Self::new(workspace, policy_from_env())
     }
 
+    /// Run one tool the way MCP `tools/call` does: policy-gated `dispatch`,
+    /// returning the envelope (success, denial, or unsupported).
+    pub fn execute_call_sync(&self, name: &str, arguments: &Value) -> Value {
+        let view = self.workspace.as_deref().map(|bundle| bundle.view());
+        let callback = self
+            .workspace
+            .as_deref()
+            .map(|bundle| SearchProvider::from_env(bundle.root().to_path_buf()))
+            .map(SearchProvider::callback);
+        let timeout_seconds = timeout_from_env();
+        let now_epoch = fetch_url::system_now();
+        let dns = fetch_url::system_dns;
+        let http = locked_http_get;
+        let fetch = self.workspace.as_deref().map(|bundle| FetchContext {
+            root: bundle.root(),
+            now_epoch,
+            timeout_seconds,
+            dns: &dns,
+            http: &http,
+        });
+        let context = ExecutorContext {
+            web_search: callback
+                .as_ref()
+                .map(|callback| callback as &deepseek_policy::tool_search::WebSearchCallback),
+            workspace: view.as_ref(),
+            fetch: fetch.as_ref(),
+        };
+        let mut policy_guard = self.policy.as_ref().map(|shared| {
+            shared
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        });
+        match dispatch(name, arguments, policy_guard.as_deref_mut(), None, &context) {
+            tool_dispatch::DispatchOutcome::Executed(value)
+            | tool_dispatch::DispatchOutcome::Denied(value)
+            | tool_dispatch::DispatchOutcome::Unsupported(value) => value,
+            tool_dispatch::DispatchOutcome::Unported { tool, .. } => {
+                tool_batch::did_not_run_output(&json!({"function": {"name": tool}}))
+            }
+        }
+    }
+
     /// Execute the finalized calls of one round and assemble the
     /// `role: "tool"` messages, mirroring the keyword arguments threaded
     /// through the oracle's `execute_tool_calls`.
@@ -188,11 +227,23 @@ impl ToolRoundExecutor {
                 .as_deref()
                 .map(|bundle| SearchProvider::from_env(bundle.root().to_path_buf()))
                 .map(SearchProvider::callback);
+            let timeout_seconds = timeout_from_env();
+            let now_epoch = fetch_url::system_now();
+            let dns = fetch_url::system_dns;
+            let http = locked_http_get;
+            let fetch = workspace.as_deref().map(|bundle| FetchContext {
+                root: bundle.root(),
+                now_epoch,
+                timeout_seconds,
+                dns: &dns,
+                http: &http,
+            });
             let context = ExecutorContext {
                 web_search: callback
                     .as_ref()
                     .map(|callback| callback as &deepseek_policy::tool_search::WebSearchCallback),
                 workspace: view.as_ref(),
+                fetch: fetch.as_ref(),
             };
             execute_tool_calls(&selected, &|| false, &|call| {
                 let name = tool_dispatch::tool_call_name(call);

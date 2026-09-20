@@ -1,0 +1,341 @@
+[
+  {
+    "message": null,
+    "text": ""
+  },
+  {
+    "message": [],
+    "text": ""
+  },
+  {
+    "message": {},
+    "text": ""
+  },
+  {
+    "message": {
+      "parts": null
+    },
+    "text": ""
+  },
+  {
+    "message": {
+      "parts": [
+        null,
+        "text"
+      ]
+    },
+    "text": ""
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "text",
+          "text": null
+        }
+      ]
+    },
+    "text": ""
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "text",
+          "text": false
+        }
+      ]
+    },
+    "text": ""
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "text",
+          "text": true
+        }
+      ]
+    },
+    "text": "True"
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "text",
+          "text": 0
+        }
+      ]
+    },
+    "text": ""
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "text",
+          "text": 42
+        }
+      ]
+    },
+    "text": "42"
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "text",
+          "text": -2
+        }
+      ]
+    },
+    "text": "-2"
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "text",
+          "text": 1.5
+        }
+      ]
+    },
+    "text": "1.5"
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "text",
+          "text": ""
+        }
+      ]
+    },
+    "text": ""
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "text",
+          "text": " \t"
+        }
+      ]
+    },
+    "text": ""
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "text",
+          "text": "\u001c\u001f"
+        }
+      ]
+    },
+    "text": ""
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "text",
+          "text": "你好"
+        }
+      ]
+    },
+    "text": "你好"
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "text",
+          "text": []
+        }
+      ]
+    },
+    "text": ""
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "text",
+          "text": {}
+        }
+      ]
+    },
+    "text": ""
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "text",
+          "text": [
+            "a",
+            null,
+            true
+          ]
+        }
+      ]
+    },
+    "text": "['a', None, True]"
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "text",
+          "text": {
+            "a": false,
+            "b": [
+              1,
+              "two"
+            ]
+          }
+        }
+      ]
+    },
+    "text": "{'a': False, 'b': [1, 'two']}"
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": null,
+          "type": "text",
+          "text": "fallback"
+        }
+      ]
+    },
+    "text": "fallback"
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "",
+          "type": "text",
+          "text": "fallback"
+        }
+      ]
+    },
+    "text": "fallback"
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": false,
+          "type": "text",
+          "text": "fallback"
+        }
+      ]
+    },
+    "text": "fallback"
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": 0,
+          "type": "text",
+          "text": "fallback"
+        }
+      ]
+    },
+    "text": "fallback"
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": [],
+          "type": "text",
+          "text": "fallback"
+        }
+      ]
+    },
+    "text": "fallback"
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": {},
+          "type": "text",
+          "text": "fallback"
+        }
+      ]
+    },
+    "text": "fallback"
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": true,
+          "type": "text",
+          "text": "fallback"
+        }
+      ]
+    },
+    "text": ""
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": 1,
+          "type": "text",
+          "text": "fallback"
+        }
+      ]
+    },
+    "text": ""
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": [
+            "text"
+          ],
+          "type": "text",
+          "text": "fallback"
+        }
+      ]
+    },
+    "text": ""
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "kind": "image",
+          "type": "text",
+          "text": "fallback"
+        }
+      ]
+    },
+    "text": ""
+  },
+  {
+    "message": {
+      "parts": [
+        {
+          "type": "text",
+          "text": " first "
+        },
+        {
+          "kind": "text",
+          "text": "second"
+        }
+      ]
+    },
+    "text": "first \nsecond"
+  }
+]

@@ -45,6 +45,7 @@ from deepseek_infra.core.config import (
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.infra.agent_runtime.multi_agent import AGENT_PROFILES, agent_model_for, model_supports_thinking
 from deepseek_infra.infra.gateway import deepseek_client
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 from deepseek_infra.infra.observability.observability import finish_trace, start_span, start_trace
 from deepseek_infra.infra.tool_runtime.tool_policy import capability_tools
 
@@ -175,6 +176,7 @@ def _task_path(task_id: str) -> Any:
 
 def _persist_task(task: dict[str, Any]) -> None:
     """Best-effort JSON snapshot; the in-memory record stays authoritative."""
+    assert_python_writer_allowed("a2a_task_lifecycle")
     try:
         A2A_TASKS_DIR.mkdir(parents=True, exist_ok=True)
         _task_path(str(task.get("id") or "")).write_text(
@@ -248,6 +250,7 @@ def get_task(task_id: str) -> dict[str, Any]:
 
 
 def _update_task(task_id: str, mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+    assert_python_writer_allowed("a2a_task_lifecycle")
     with _TASK_LOCK:
         task = _TASKS.get(task_id)
         if task is None:
@@ -506,6 +509,7 @@ def _fail_task(task_id: str, message: str) -> None:
 
 def submit_message(params: dict[str, Any], *, agent_id: str) -> dict[str, Any]:
     """``message/send``: create a task and execute it in the background."""
+    assert_python_writer_allowed("a2a_task_lifecycle")
     resolved = resolve_agent_id(agent_id)
     message = params.get("message")
     text = _text_from_message(message)
@@ -539,6 +543,7 @@ def submit_message(params: dict[str, Any], *, agent_id: str) -> dict[str, Any]:
 
 
 def cancel_task(task_id: str) -> dict[str, Any]:
+    assert_python_writer_allowed("a2a_task_lifecycle")
     task = get_task(task_id)
     state = str((task.get("status") or {}).get("state") or "")
     if state in TERMINAL_STATES:
