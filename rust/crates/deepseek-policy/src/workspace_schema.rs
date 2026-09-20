@@ -897,16 +897,26 @@ mod tests {
             "Artifact path must stay inside the workspace runtime root"
         );
 
-        // The root marker's exact spelling: one slash, and exactly two is its own root.
-        assert_eq!(
-            runtime_relative_path("//a", generated, projects, root).unwrap(),
-            "//a"
-        );
-        assert_eq!(
-            runtime_relative_path("///a", generated, projects, root).unwrap(),
-            "/a"
-        );
-        // `a/../b` is refused rather than collapsed.
+        // The root marker's exact spelling is reachable only through the *relative*
+        // branch. On POSIX a single leading slash is all it takes to be absolute, so
+        // `//a` and `///a` are refused like any other path outside every root; on
+        // Windows a root without a drive prefix is not absolute, so they reach the
+        // `PurePosixPath.parts` logic the oracle measured. Both halves are asserted —
+        // the same split as `/etc/passwd` above, and the same reason.
+        if cfg!(windows) {
+            assert_eq!(
+                runtime_relative_path("//a", generated, projects, root).unwrap(),
+                "//a"
+            );
+            assert_eq!(
+                runtime_relative_path("///a", generated, projects, root).unwrap(),
+                "/a"
+            );
+        } else {
+            assert!(runtime_relative_path("//a", generated, projects, root).is_err());
+            assert!(runtime_relative_path("///a", generated, projects, root).is_err());
+        }
+        // `a/../b` is refused rather than collapsed, on every platform.
         assert!(runtime_relative_path("a/../b", generated, projects, root).is_err());
     }
 
