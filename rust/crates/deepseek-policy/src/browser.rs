@@ -224,56 +224,497 @@ struct ParsedHtml {
     links: Vec<Value>,
 }
 
+/// Mirrors `_TextAndLinksParser` — a *streaming* scan, not a DOM.
+///
+/// The oracle appends one whitespace-collapsed part per data node and joins them with
+/// `"\n"`, so a port that joins with `" "` reads differently even when every part is
+/// identical. It also pushes tags it will never pop, which is why an unclosed
+/// `<script>` swallows the rest of the document and why `a<br>b` inside `<title>`
+/// keeps `b` out of the title: the innermost open tag is `br`, not `title`. The port
+/// reproduces those quirks rather than tidying them away.
 fn parse_html(html: &str, base_url: &str) -> ParsedHtml {
-    let title = capture(r"(?is)<title[^>]*>(.*?)</title>", html)
-        .map(|text| strip_tags(&text))
-        .unwrap_or_default();
-    let without_script =
-        ["script", "style", "noscript"]
-            .iter()
-            .fold(html.to_string(), |acc, tag| {
-                Regex::new(&format!(r"(?is)<{tag}\b[^>]*>.*?</{tag}>"))
-                    .expect("static regex")
-                    .replace_all(&acc, "")
-                    .into_owned()
+    let mut stack: Vec<String> = Vec::new();
+    let mut title_parts: Vec<String> = Vec::new();
+    let mut text_parts: Vec<String> = Vec::new();
+    let mut links: Vec<Value> = Vec::new();
+    let mut open_link: Option<Link> = None;
+    let mut rest = html;
+
+    while let Some(index) = rest.find('<') {
+        push_data(
+            &rest[..index],
+            &stack,
+            &mut title_parts,
+            &mut open_link,
+            &mut text_parts,
+        );
+        let candidate = &rest[index..];
+        let after = candidate[1..].chars().next();
+        // `HTMLParser` treats a `<` that cannot start a tag as text.
+        let starts_tag = match after {
+            Some('!') | Some('?') | Some('/') => true,
+            Some(character) => character.is_ascii_alphabetic(),
+            None => false,
+        };
+        if !starts_tag {
+            push_data(
+                "<",
+                &stack,
+                &mut title_parts,
+                &mut open_link,
+                &mut text_parts,
+            );
+            rest = &candidate[1..];
+            continue;
+        }
+        let Some(end) = candidate.find('>') else {
+            // Unterminated at the end of input: `HTMLParser.close()` drops it.
+            rest = "";
+            break;
+        };
+        handle_tag(
+            &candidate[1..end],
+            &mut stack,
+            &mut open_link,
+            &mut links,
+            base_url,
+        );
+        rest = &candidate[end + 1..];
+    }
+    if !rest.is_empty() {
+        push_data(
+            rest,
+            &stack,
+            &mut title_parts,
+            &mut open_link,
+            &mut text_parts,
+        );
+    }
+
+    ParsedHtml {
+        title: title_parts.join(" ").trim().to_string(),
+        text: text_parts.join("\n").trim().to_string(),
+        links,
+    }
+}
+
+struct Link {
+    href: String,
+    title: String,
+    parts: Vec<String>,
+}
+
+impl Link {
+    fn into_json(self) -> Value {
+        json!({
+            "href": self.href,
+            "text": collapse(&self.parts.join(" ")),
+            "title": self.title,
+        })
+    }
+}
+
+fn handle_tag(
+    raw: &str,
+    stack: &mut Vec<String>,
+    open_link: &mut Option<Link>,
+    links: &mut Vec<Value>,
+    base_url: &str,
+) {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.starts_with('!') || trimmed.starts_with('?') {
+        return;
+    }
+    let self_closing = trimmed.ends_with('/');
+    let body = trimmed.trim_end_matches('/');
+    let (closing, body) = match body.strip_prefix('/') {
+        Some(rest) => (true, rest),
+        None => (false, body),
+    };
+    let name = body
+        .split(|character: char| character.is_whitespace() || character == '/')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if name.is_empty() {
+        return;
+    }
+    if closing {
+        finish_link(name.as_str(), open_link, links);
+        // The oracle pops whenever the stack is non-empty, matched or not.
+        stack.pop();
+        return;
+    }
+    let attrs = parse_attrs(body);
+    stack.push(name.clone());
+    if name == "a" {
+        if let Some(href) = attrs.get("href").filter(|value| !value.is_empty()) {
+            // A nested `<a>` replaces the open one, as `handle_starttag` does.
+            *open_link = Some(Link {
+                href: resolve_url(base_url, href),
+                title: attrs.get("title").cloned().unwrap_or_default(),
+                parts: Vec::new(),
             });
-    let text = strip_tags(&without_script);
-    let href_re = Regex::new(r#"(?is)<a\b[^>]*\bhref=["']([^"']+)["'][^>]*>(.*?)</a>"#)
-        .expect("static regex");
-    let mut links = Vec::new();
-    for caps in href_re.captures_iter(html) {
-        let href = join_url(base_url, caps.get(1).map(|m| m.as_str()).unwrap_or(""));
-        let text = strip_tags(caps.get(2).map(|m| m.as_str()).unwrap_or(""));
-        links.push(json!({"href": href, "text": text, "title": ""}));
+        }
     }
-    ParsedHtml { title, text, links }
-}
-
-fn capture(pattern: &str, html: &str) -> Option<String> {
-    Regex::new(pattern)
-        .ok()?
-        .captures(html)
-        .and_then(|caps| caps.get(1).map(|m| m.as_str().to_string()))
-}
-
-fn strip_tags(value: &str) -> String {
-    Regex::new(r"(?is)<[^>]+>")
-        .expect("static regex")
-        .replace_all(value, " ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn join_url(base: &str, href: &str) -> String {
-    if href.contains("://") {
-        return href.to_string();
+    if self_closing {
+        // `handle_startendtag` runs the start handler and then the end handler.
+        finish_link(name.as_str(), open_link, links);
+        stack.pop();
     }
-    if let Some(idx) = base.rfind('/') {
-        format!("{}{href}", &base[..=idx])
+}
+
+fn finish_link(name: &str, open_link: &mut Option<Link>, links: &mut Vec<Value>) {
+    if name == "a" {
+        if let Some(link) = open_link.take() {
+            links.push(link.into_json());
+        }
+    }
+}
+
+fn push_data(
+    data: &str,
+    stack: &[String],
+    title_parts: &mut Vec<String>,
+    open_link: &mut Option<Link>,
+    text_parts: &mut Vec<String>,
+) {
+    if data.is_empty()
+        || stack
+            .iter()
+            .any(|tag| matches!(tag.as_str(), "script" | "style" | "noscript"))
+    {
+        return;
+    }
+    let text = collapse(&html_unescape(data));
+    if text.is_empty() {
+        return;
+    }
+    if stack.last().map(String::as_str) == Some("title") {
+        title_parts.push(text.clone());
+    }
+    if let Some(link) = open_link.as_mut() {
+        link.parts.push(text.clone());
+    }
+    text_parts.push(text);
+}
+
+/// `" ".join(value.split())` — Unicode whitespace, collapsed.
+fn collapse(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `html.unescape` for the entities that appear in documents and fixtures: the named
+/// ones from HTML 4 and numeric references. The full HTML5 named table is not ported;
+/// an unknown name is left as written, exactly like Python leaves an unparseable one.
+fn html_unescape(value: &str) -> String {
+    if !value.contains('&') {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let tail = &rest[amp..];
+        let (decoded, consumed) = decode_entity(tail);
+        match decoded {
+            Some(text) => {
+                out.push_str(&text);
+                rest = &tail[consumed..];
+            }
+            None => {
+                out.push('&');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn decode_entity(tail: &str) -> (Option<String>, usize) {
+    let Some(semi) = tail.find(';') else {
+        return (None, 0);
+    };
+    if semi > 32 {
+        return (None, 0);
+    }
+    let body = &tail[1..semi];
+    let consumed = semi + 1;
+    if let Some(digits) = body.strip_prefix("#x").or_else(|| body.strip_prefix("#X")) {
+        return (
+            u32::from_str_radix(digits, 16)
+                .ok()
+                .and_then(char::from_u32)
+                .map(String::from),
+            consumed,
+        );
+    }
+    if let Some(digits) = body.strip_prefix('#') {
+        return (
+            digits
+                .parse::<u32>()
+                .ok()
+                .and_then(char::from_u32)
+                .map(String::from),
+            consumed,
+        );
+    }
+    let named = match body {
+        "amp" => "&",
+        "lt" => "<",
+        "gt" => ">",
+        "quot" => "\"",
+        "apos" => "'",
+        "nbsp" => "\u{a0}",
+        "copy" => "\u{a9}",
+        "reg" => "\u{ae}",
+        "trade" => "\u{2122}",
+        "hellip" => "\u{2026}",
+        "mdash" => "\u{2014}",
+        "ndash" => "\u{2013}",
+        "lsquo" => "\u{2018}",
+        "rsquo" => "\u{2019}",
+        "ldquo" => "\u{201c}",
+        "rdquo" => "\u{201d}",
+        "middot" => "\u{b7}",
+        "laquo" => "\u{ab}",
+        "raquo" => "\u{bb}",
+        "times" => "\u{d7}",
+        "divide" => "\u{f7}",
+        "deg" => "\u{b0}",
+        "plusmn" => "\u{b1}",
+        "euro" => "\u{20ac}",
+        "pound" => "\u{a3}",
+        "yen" => "\u{a5}",
+        "cent" => "\u{a2}",
+        "sect" => "\u{a7}",
+        "para" => "\u{b6}",
+        "bull" => "\u{2022}",
+        "dagger" => "\u{2020}",
+        "permil" => "\u{2030}",
+        "prime" => "\u{2032}",
+        "Prime" => "\u{2033}",
+        "oline" => "\u{203e}",
+        "frasl" => "\u{2044}",
+        _ => return (None, 0),
+    };
+    (Some(named.to_string()), consumed)
+}
+
+/// `name=value` pairs from a tag body, names lowercased, values unescaped — the shape
+/// `handle_starttag` sees through `{key.lower(): str(value or "")}`.
+fn parse_attrs(body: &str) -> HashMap<String, String> {
+    let mut attrs = HashMap::new();
+    let mut rest = match body.find(|character: char| character.is_whitespace()) {
+        Some(index) => &body[index..],
+        None => return attrs,
+    };
+    while let Some(start) =
+        rest.find(|character: char| !character.is_whitespace() && character != '/')
+    {
+        rest = &rest[start..];
+        let name_end = rest
+            .find(|character: char| {
+                character.is_whitespace() || character == '=' || character == '/'
+            })
+            .unwrap_or(rest.len());
+        let name = rest[..name_end].to_ascii_lowercase();
+        rest = &rest[name_end..];
+        let mut value = String::new();
+        if let Some(after_eq) = rest.strip_prefix('=') {
+            let after_eq = after_eq.trim_start();
+            if let Some(quote) = after_eq.chars().next().filter(|c| *c == '"' || *c == '\'') {
+                let inner = &after_eq[quote.len_utf8()..];
+                let end = inner.find(quote).unwrap_or(inner.len());
+                value = inner[..end].to_string();
+                let after_quote = (end + quote.len_utf8()).min(inner.len());
+                rest = &inner[after_quote..];
+            } else {
+                let end = after_eq
+                    .find(|character: char| character.is_whitespace())
+                    .unwrap_or(after_eq.len());
+                value = after_eq[..end].to_string();
+                rest = &after_eq[end..];
+            }
+        }
+        rest = rest.trim_start_matches(|character: char| character.is_whitespace());
+        if !name.is_empty() {
+            attrs.entry(name).or_insert_with(|| html_unescape(&value));
+        }
+    }
+    attrs
+}
+
+/// `urllib.parse.urljoin` for the shapes a document can carry: an absolute URL, a
+/// network-path, a root-relative path, a bare query, a bare fragment, a relative path
+/// with `..`/`.` segments, and the empty reference. Dot segments are removed and an
+/// **empty fragment is dropped**, both measured against the oracle rather than assumed:
+/// `urljoin(base, "#")` answers the base, without a trailing `#`.
+fn resolve_url(base: &str, href: &str) -> String {
+    let (base_scheme, base_authority, base_path, base_query, _) = split_reference(base);
+    let href = href.trim_start_matches(|character: char| character.is_whitespace());
+    if href.is_empty() {
+        return compose(&base_scheme, &base_authority, &base_path, &base_query, "");
+    }
+    if let Some(scheme_end) = href.find(':') {
+        let scheme = &href[..scheme_end];
+        if !scheme.is_empty()
+            && scheme
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        {
+            let (_, authority, path, query, fragment) = split_reference(href);
+            return compose(
+                scheme,
+                &authority,
+                &remove_dot_segments(&path),
+                &query,
+                &fragment,
+            );
+        }
+    }
+    if let Some(after) = href.strip_prefix("//") {
+        let (authority, path, query, fragment) = split_authority(after);
+        return compose(
+            &base_scheme,
+            &authority,
+            &remove_dot_segments(&path),
+            &query,
+            &fragment,
+        );
+    }
+    if href.starts_with('#') {
+        let fragment = href.trim_start_matches('#');
+        return compose(
+            &base_scheme,
+            &base_authority,
+            &base_path,
+            &base_query,
+            fragment,
+        );
+    }
+    let (path, query, fragment) = split_path(href);
+    if path.starts_with('/') {
+        return compose(
+            &base_scheme,
+            &base_authority,
+            &remove_dot_segments(&path),
+            &query,
+            &fragment,
+        );
+    }
+    if path.is_empty() {
+        let query = if query.is_empty() {
+            base_query.clone()
+        } else {
+            query
+        };
+        return compose(&base_scheme, &base_authority, &base_path, &query, &fragment);
+    }
+    let merged = match base_path.rfind('/') {
+        Some(index) => format!("{}{}", &base_path[..=index], path),
+        None => format!("/{path}"),
+    };
+    compose(
+        &base_scheme,
+        &base_authority,
+        &remove_dot_segments(&merged),
+        &query,
+        &fragment,
+    )
+}
+
+fn split_reference(reference: &str) -> (String, String, String, String, String) {
+    let (scheme, rest) = match reference.find(':') {
+        Some(index)
+            if reference[..index]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+                && reference[..index]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphabetic()) =>
+        {
+            (reference[..index].to_string(), &reference[index + 1..])
+        }
+        _ => (String::new(), reference),
+    };
+    if let Some(after) = rest.strip_prefix("//") {
+        let (authority, path, query, fragment) = split_authority(after);
+        (scheme, authority, path, query, fragment)
     } else {
-        href.to_string()
+        let (path, query, fragment) = split_path(rest);
+        (scheme, String::new(), path, query, fragment)
     }
+}
+
+fn split_authority(after: &str) -> (String, String, String, String) {
+    let end = after.find(['/', '?', '#']).unwrap_or(after.len());
+    let (path, query, fragment) = split_path(&after[end..]);
+    (after[..end].to_string(), path, query, fragment)
+}
+
+fn split_path(rest: &str) -> (String, String, String) {
+    let (without_fragment, fragment) = match rest.find('#') {
+        Some(index) => (&rest[..index], &rest[index + 1..]),
+        None => (rest, ""),
+    };
+    let (path, query) = match without_fragment.find('?') {
+        Some(index) => (&without_fragment[..index], &without_fragment[index + 1..]),
+        None => (without_fragment, ""),
+    };
+    (path.to_string(), query.to_string(), fragment.to_string())
+}
+
+fn compose(scheme: &str, authority: &str, path: &str, query: &str, fragment: &str) -> String {
+    let mut out = String::new();
+    if !scheme.is_empty() {
+        out.push_str(scheme);
+        out.push(':');
+    }
+    if !authority.is_empty() || (scheme == "file" && path.starts_with('/')) {
+        out.push_str("//");
+        out.push_str(authority);
+    }
+    out.push_str(path);
+    if !query.is_empty() {
+        out.push('?');
+        out.push_str(query);
+    }
+    if !fragment.is_empty() {
+        out.push('#');
+        out.push_str(fragment);
+    }
+    out
+}
+
+/// RFC 3986 §5.2.4, the same normalisation `urljoin` performs on the merged path.
+fn remove_dot_segments(path: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    let trailing = path.ends_with('/');
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    let mut rendered = if path.starts_with('/') {
+        format!("/{}", out.join("/"))
+    } else {
+        out.join("/")
+    };
+    if trailing && !rendered.ends_with('/') {
+        rendered.push('/');
+    }
+    rendered
 }
 
 fn html_for_selector(html: &str, selector: &str) -> String {
@@ -457,9 +898,10 @@ fn dispatch_action(
         "open_url" => {
             let url = python_or_empty(payload.get("url"));
             let (html, parsed, url) = open_static(&url)?;
+            let title = page_title(&parsed, &url);
             let page = json!({
                 "url": url,
-                "title": parsed.title,
+                "title": title,
                 "text": parsed.text.chars().take(20_000).collect::<String>(),
                 "selector": "",
             });
@@ -478,7 +920,7 @@ fn dispatch_action(
             );
             Ok(json!({
                 "url": session.current_url,
-                "title": parsed.title,
+                "title": page_title(&parsed, &session.current_url),
                 "text": parsed.text,
                 "snapshot": {"type": "webpage", "persisted": false},
                 "segments": [],
@@ -556,7 +998,17 @@ fn link_href(html: &str, selector: &str, base: &str) -> Option<String> {
     let snippet = html_for_selector(html, selector);
     let re = Regex::new(r#"(?i)<a\b[^>]*\bhref=["']([^"']+)["']"#).ok()?;
     let href = re.captures(&snippet)?.get(1)?.as_str();
-    Some(join_url(base, href))
+    Some(resolve_url(base, href))
+}
+
+/// `parsed.title or self.url` — the controller's fallback, which lives outside the
+/// parser: `ParsedHTML.parse` answers an empty title and `open_url` replaces it.
+fn page_title(parsed: &ParsedHtml, url: &str) -> String {
+    if parsed.title.is_empty() {
+        url.to_string()
+    } else {
+        parsed.title.clone()
+    }
 }
 
 fn int_or(value: Option<&Value>, default: i64) -> i64 {
@@ -756,5 +1208,88 @@ mod tests {
         mark_failed(&mut blank, "");
         assert_eq!(blank.status, "failed");
         assert_eq!(blank.controller_kind, CONTROLLER_STATIC_FALLBACK);
+    }
+
+    #[test]
+    fn url_resolution_matches_the_urljoin_shapes_measured_on_the_oracle() {
+        // Every expected string below was read off `urllib.parse.urljoin` with this
+        // base, not inferred from the RFC. `#` is the one that caught the port out: an
+        // empty fragment is dropped rather than appended.
+        let base = "file:///D:/deepseek/tests/fixtures/browser/download.html";
+        for (href, expected) in [
+            (
+                "download.html",
+                "file:///D:/deepseek/tests/fixtures/browser/download.html",
+            ),
+            (
+                "#",
+                "file:///D:/deepseek/tests/fixtures/browser/download.html",
+            ),
+            (
+                "#frag",
+                "file:///D:/deepseek/tests/fixtures/browser/download.html#frag",
+            ),
+            (
+                "?q=1",
+                "file:///D:/deepseek/tests/fixtures/browser/download.html?q=1",
+            ),
+            ("/root.html", "file:///root.html"),
+            ("../up.html", "file:///D:/deepseek/tests/fixtures/up.html"),
+            (
+                "./same.html",
+                "file:///D:/deepseek/tests/fixtures/browser/same.html",
+            ),
+            (
+                "",
+                "file:///D:/deepseek/tests/fixtures/browser/download.html",
+            ),
+            (
+                "a/../b.html",
+                "file:///D:/deepseek/tests/fixtures/browser/b.html",
+            ),
+            ("//host/x.html", "file://host/x.html"),
+            ("https://example.com/r", "https://example.com/r"),
+        ] {
+            assert_eq!(resolve_url(base, href), expected, "href {href:?}");
+        }
+    }
+
+    #[test]
+    fn the_static_parse_mirrors_the_oracles_streaming_rules() {
+        let base = "file:///srv/ws/page.html";
+        // One part per data node, newline-joined, entities decoded.
+        let parsed = parse_html("<title>T &amp; U</title><p>a  b</p><p>c</p>", base);
+        assert_eq!(parsed.title, "T & U");
+        assert_eq!(parsed.text, "T & U\na b\nc");
+        assert_eq!(parse_html("<p>&#65;&#x42;</p>", base).text, "AB");
+
+        // The link carries its own title, and a bare fragment resolves to the page.
+        let parsed = parse_html(r##"<a href="#top" title="Top">go</a>"##, base);
+        assert_eq!(parsed.links[0]["href"], "file:///srv/ws/page.html#top");
+        assert_eq!(parsed.links[0]["text"], "go");
+        assert_eq!(parsed.links[0]["title"], "Top");
+
+        // An unclosed `<script>` keeps the stack inside script, so the rest is not text.
+        assert_eq!(
+            parse_html("<p>before</p><script>let a = 1;", base).text,
+            "before"
+        );
+
+        // A tag inside `<title>` becomes the innermost open tag, so `b` is not title.
+        let parsed = parse_html("<title>a<br>b</title>", base);
+        assert_eq!(parsed.title, "a");
+        assert_eq!(parsed.text, "a\nb");
+    }
+
+    #[test]
+    fn an_empty_title_falls_back_to_the_url_like_open_url() {
+        let parsed = parse_html("<p>no title</p>", "file:///srv/ws/page.html");
+        assert_eq!(parsed.title, "");
+        assert_eq!(
+            page_title(&parsed, "file:///srv/ws/page.html"),
+            "file:///srv/ws/page.html"
+        );
+        let titled = parse_html("<title>Kept</title>", "file:///srv/ws/page.html");
+        assert_eq!(page_title(&titled, "file:///srv/ws/page.html"), "Kept");
     }
 }
