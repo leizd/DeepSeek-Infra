@@ -537,6 +537,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "deepseek-browser"
+version = "0.1.0"
+dependencies = [
+ "deepseek-protocol",
+ "tokio",
+ "tonic",
+]
+
+[[package]]
 name = "deepseek-core"
 version = "0.1.0"
 dependencies = [

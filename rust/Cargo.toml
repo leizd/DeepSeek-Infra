@@ -3,6 +3,7 @@ members = [
     "crates/backup-crypto",
     "crates/deepseek-core",
     "crates/deepseek-backup",
+    "crates/deepseek-browser",
     "crates/deepseek-gateway",
     "crates/deepseek-mcp",
     "crates/deepseek-policy",

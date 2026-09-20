@@ -1,0 +1,164 @@
+syntax = "proto3";
+
+package deepseek.browser.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/leizd/DeepSeek-Infra/go/internal/protocol/browserv1;browserv1";
+
+// The browser engine boundary (ADR-0050). A separate process owns the browser and
+// answers these calls; the gateway keeps `execute_browser_action` and the safety gate
+// where they are and only the controller moves behind this boundary.
+//
+// Call timeouts are the client's business and mirror the oracle's: `OpenUrl` 30 s
+// (`domcontentloaded`), `ReadPage` 2 s, `Click`/`TypeText`/`Select` 5 s, `Download`
+// 15 s. A call that exceeds them is a client deadline, not a distinct error code.
+//
+// Every request binds an `ActionFence` (`actionId + executionEpoch`), as ADR-0049
+// requires of every native boundary; the engine treats it as the call's ordering id.
+//
+// Nothing here writes durable state. `Download` and `Screenshot` return bytes; media
+// and RAG ownership stay where they are.
+service BrowserEngine {
+  rpc Status(StatusRequest) returns (StatusResponse);
+  rpc OpenUrl(OpenUrlRequest) returns (PageResponse);
+  rpc ReadPage(ReadPageRequest) returns (PageResponse);
+  rpc ExtractLinks(SessionRequest) returns (LinksResponse);
+  rpc Screenshot(ScreenshotRequest) returns (ScreenshotResponse);
+  rpc Click(SelectorRequest) returns (ActionResponse);
+  rpc TypeText(TypeTextRequest) returns (ActionResponse);
+  rpc Select(SelectRequest) returns (SelectResponse);
+  rpc Scroll(ScrollRequest) returns (ActionResponse);
+  rpc Download(DownloadRequest) returns (DownloadResponse);
+}
+
+// `Status` says what the engine can actually do right now. A sidecar without a browser
+// answers `available: false` with a reason, and every action above refuses with the
+// same code. That refusal is the static fallback's cue, not a failure: the gateway
+// keeps reporting `playwright_available() == false` until a real engine answers.
+message StatusRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+}
+
+message StatusResponse {
+  bool available = 1;
+  // "cdp_chromium" once the engine exists; empty while it does not.
+  string engine_kind = 2;
+  string chromium_revision = 3;
+  // Empty when available; otherwise why not, in one line.
+  string reason = 4;
+  deepseek.common.v1.ErrorDetail error = 5;
+}
+
+// Mirrors the oracle's `read_page` shape: `{url, title, text, html, selector}`.
+message Page {
+  string url = 1;
+  string title = 2;
+  string text = 3;
+  string html = 4;
+  string selector = 5;
+}
+
+message OpenUrlRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string session_id = 2;
+  string url = 3;
+}
+
+message ReadPageRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string session_id = 2;
+  string selector = 3;
+}
+
+message SessionRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string session_id = 2;
+}
+
+message SelectorRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string session_id = 2;
+  string selector = 3;
+}
+
+message TypeTextRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string session_id = 2;
+  string selector = 3;
+  string text = 4;
+}
+
+message SelectRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string session_id = 2;
+  string selector = 3;
+  string value = 4;
+}
+
+message ScrollRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string session_id = 2;
+  int32 x = 3;
+  int32 y = 4;
+}
+
+message ScreenshotRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string session_id = 2;
+  string selector = 3;
+}
+
+message DownloadRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string session_id = 2;
+  string url = 3;
+  string selector = 4;
+}
+
+// Mirrors `{href, text, title}` from the oracle's `ParsedHTML.links`.
+message Link {
+  string href = 1;
+  string text = 2;
+  string title = 3;
+}
+
+message PageResponse {
+  Page page = 1;
+  deepseek.common.v1.ErrorDetail error = 2;
+}
+
+message LinksResponse {
+  string url = 1;
+  repeated Link links = 2;
+  deepseek.common.v1.ErrorDetail error = 3;
+}
+
+message ScreenshotResponse {
+  string url = 1;
+  string mime_type = 2;
+  bytes data = 3;
+  string selector = 4;
+  deepseek.common.v1.ErrorDetail error = 5;
+}
+
+message SelectResponse {
+  string url = 1;
+  string selector = 2;
+  string value = 3;
+  repeated string selected = 4;
+  deepseek.common.v1.ErrorDetail error = 5;
+}
+
+message DownloadResponse {
+  string url = 1;
+  string filename = 2;
+  bytes data = 3;
+  deepseek.common.v1.ErrorDetail error = 4;
+}
+
+message ActionResponse {
+  string url = 1;
+  string selector = 2;
+  deepseek.common.v1.ErrorDetail error = 3;
+}

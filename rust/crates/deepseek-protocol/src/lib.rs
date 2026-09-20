@@ -15,6 +15,11 @@ pub mod generated {
                 tonic::include_proto!("deepseek.agent.v1");
             }
         }
+        pub mod browser {
+            pub mod v1 {
+                tonic::include_proto!("deepseek.browser.v1");
+            }
+        }
         pub mod control {
             pub mod v1 {
                 tonic::include_proto!("deepseek.control.v1");
