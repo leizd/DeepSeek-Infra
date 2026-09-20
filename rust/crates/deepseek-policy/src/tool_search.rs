@@ -38,6 +38,10 @@ pub struct ExecutorContext<'a> {
     /// carries no workspace, which the data branches report as "not enabled for
     /// this request" rather than silently doing nothing.
     pub workspace: Option<&'a crate::tool_dispatch::WorkspaceContext<'a>>,
+    /// The DNS + HTTP + cache context `fetch_url` runs against. `None` is the
+    /// oracle's explicit "not enabled for this request" path, used when the
+    /// request has no workspace root to hang the cache off.
+    pub fetch: Option<&'a crate::fetch_url::FetchContext<'a>>,
 }
 
 impl<'a> ExecutorContext<'a> {
@@ -45,6 +49,7 @@ impl<'a> ExecutorContext<'a> {
         Self {
             web_search: Some(callback),
             workspace: None,
+            fetch: None,
         }
     }
 
@@ -52,6 +57,7 @@ impl<'a> ExecutorContext<'a> {
         Self {
             web_search: None,
             workspace: Some(workspace),
+            fetch: None,
         }
     }
 }

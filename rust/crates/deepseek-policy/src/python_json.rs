@@ -177,7 +177,21 @@ fn scalar_str(value: &Value) -> String {
     }
 }
 
-/// `str(value)` for the JSON scalars that reach a message.
+/// `str(value)` for the JSON values that reach a message.
+///
+/// **A container is rendered with `repr`, not as JSON.** `str(['x'])` is `"['x']"` in
+/// Python, and `str({'a': 1})` is `"{'a': 1}"` — single quotes, `None`/`True`/`False`
+/// for the scalars, and a space after each `,` and `:`. The first version of this
+/// function used `json.dumps`'s separators for containers, which renders `["x"]` and
+/// `{"a": 1}`: the same shape for an ASCII-only dict, but wrong for every list and for
+/// any container holding a string. Measured against the oracle, which is why
+/// [`python_repr`] exists.
+///
+/// Known bounded limitation: a dict's **key order** here is `serde_json`'s sorted
+/// order, because this workspace compiles `serde_json` without `preserve_order`.
+/// Python dicts iterate in insertion order. That is the same limitation already
+/// recorded for the ordered-JSON renderer, and it only shows up for a dict that
+/// reaches a `str()` call.
 pub fn value_str(value: &Value) -> String {
     match value {
         Value::Null => "None".to_string(),
@@ -185,8 +199,60 @@ pub fn value_str(value: &Value) -> String {
         Value::Bool(false) => "False".to_string(),
         Value::Number(number) => json_number_str(number),
         Value::String(text) => text.clone(),
-        other => dumps_default_separators(other),
+        other => python_repr(other),
     }
+}
+
+/// Python's `repr()` for any JSON value.
+///
+/// `repr` of a container is its bracketed form with each element `repr`'d, which is
+/// what `str()` returns for a container. Strings prefer single quotes and switch to
+/// double only when the text contains a `'` and no `"` — Python's own rule, and the
+/// reason a naive `format!("{:?}")` is not a substitute.
+pub fn python_repr(value: &Value) -> String {
+    match value {
+        Value::Null => "None".to_string(),
+        Value::Bool(true) => "True".to_string(),
+        Value::Bool(false) => "False".to_string(),
+        Value::Number(number) => json_number_str(number),
+        Value::String(text) => python_string_repr(text),
+        Value::Array(items) => {
+            let rendered: Vec<String> = items.iter().map(python_repr).collect();
+            format!("[{}]", rendered.join(", "))
+        }
+        Value::Object(fields) => {
+            let rendered: Vec<String> = sorted_fields(fields)
+                .into_iter()
+                .map(|(key, item)| format!("{}: {}", python_string_repr(key), python_repr(item)))
+                .collect();
+            format!("{{{}}}", rendered.join(", "))
+        }
+    }
+}
+
+/// Python's `repr()` of a `str`, including its quote-selection and escaping rules.
+pub fn python_string_repr(text: &str) -> String {
+    let has_single = text.contains('\'');
+    let has_double = text.contains('"');
+    // Python prefers `'`, and uses `"` only when that avoids escaping.
+    let quote = if has_single && !has_double { '"' } else { '\'' };
+    let mut rendered = String::with_capacity(text.len() + 2);
+    rendered.push(quote);
+    for character in text.chars() {
+        match character {
+            '\\' => rendered.push_str("\\\\"),
+            '\n' => rendered.push_str("\\n"),
+            '\r' => rendered.push_str("\\r"),
+            '\t' => rendered.push_str("\\t"),
+            c if c == quote => {
+                rendered.push('\\');
+                rendered.push(c);
+            }
+            c => rendered.push(c),
+        }
+    }
+    rendered.push(quote);
+    rendered
 }
 
 /// A JSON value that remembers its **key order**.
@@ -658,6 +724,35 @@ mod tests {
         assert_eq!(value_str(&json!(true)), "True");
         assert_eq!(value_str(&json!(null)), "None");
         assert_eq!(value_str(&json!("x")), "x");
+    }
+
+    /// `str()` of a container is `repr`, not JSON. Measured against the oracle; the
+    /// first version of `value_str` used `json.dumps`'s separators here, which agrees
+    /// for a plain ASCII dict and is wrong for every list.
+    #[test]
+    fn value_str_renders_a_container_with_repr_not_json() {
+        assert_eq!(value_str(&json!(["x"])), "['x']");
+        assert_eq!(value_str(&json!([1, null, true])), "[1, None, True]");
+        assert_eq!(value_str(&json!({"a": 1})), "{'a': 1}");
+        assert_eq!(value_str(&json!({"k": [1, "a"]})), "{'k': [1, 'a']}");
+        assert_eq!(value_str(&json!([])), "[]");
+        assert_eq!(value_str(&json!({})), "{}");
+        assert_eq!(value_str(&json!([{"a": 1}])), "[{'a': 1}]");
+        // A float keeps its Python spelling inside a container too.
+        assert_eq!(value_str(&json!([1.0])), "[1.0]");
+    }
+
+    /// Python's quote selection: `'` unless the text has a `'` and no `"`.
+    #[test]
+    fn python_string_repr_picks_pythons_quotes() {
+        assert_eq!(python_string_repr("plain"), "'plain'");
+        assert_eq!(python_string_repr("it's"), "\"it's\"");
+        assert_eq!(python_string_repr("has \"double\""), "'has \"double\"'");
+        // Both kinds present: `'` wins and is escaped.
+        assert_eq!(python_string_repr("a'b\"c"), "'a\\'b\"c'");
+        assert_eq!(python_string_repr("tab\there"), "'tab\\there'");
+        assert_eq!(python_string_repr("nl\nhere"), "'nl\\nhere'");
+        assert_eq!(python_string_repr("back\\slash"), "'back\\\\slash'");
     }
 
     #[test]

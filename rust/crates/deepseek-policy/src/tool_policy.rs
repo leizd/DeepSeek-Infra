@@ -646,6 +646,14 @@ fn render_ip(ip: &IpAddr) -> String {
 /// `fec0::/10` (deprecated site-local) is deliberately absent: it is in neither
 /// `_private_networks` nor `_reserved_networks`, and `fe00::/9` stops at
 /// `fe7f::`, so Python allows it.
+/// Whether a resolved address is a private, local, reserved or multicast target.
+///
+/// Public because [`crate::fetch_url::ensure_public_address`] is the DNS-time
+/// half of the same predicate the static URL guard uses.
+pub fn ip_address_is_blocked(ip: IpAddr) -> bool {
+    ip_is_blocked(&ip)
+}
+
 fn ip_is_blocked(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => ipv4_is_blocked(v4),
@@ -1922,6 +1930,30 @@ impl Default for ToolPolicySettings {
             sanitize_results: true,
             audit_enabled: true,
         }
+    }
+}
+
+impl ToolPolicySettings {
+    /// Mirrors `deepseek_infra.core.config` `_env_bool` for the five knobs.
+    pub fn from_env() -> Self {
+        let defaults = Self::default();
+        Self {
+            enabled: env_flag("TOOL_POLICY_ENABLED", defaults.enabled),
+            enforce_schema: env_flag("TOOL_POLICY_ENFORCE_SCHEMA", defaults.enforce_schema),
+            require_confirm: env_flag("TOOL_POLICY_REQUIRE_CONFIRM", defaults.require_confirm),
+            sanitize_results: env_flag("TOOL_POLICY_SANITIZE_RESULTS", defaults.sanitize_results),
+            audit_enabled: env_flag("TOOL_POLICY_AUDIT_ENABLED", defaults.audit_enabled),
+        }
+    }
+}
+
+fn env_flag(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(raw) if !raw.trim().is_empty() => matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        _ => default,
     }
 }
 

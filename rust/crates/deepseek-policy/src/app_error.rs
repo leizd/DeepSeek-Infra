@@ -37,6 +37,10 @@ pub mod codes {
     pub const UPSTREAM_TIMEOUT: &str = "upstream_timeout";
     /// `ErrorCode.UPSTREAM_FAILURE`
     pub const UPSTREAM_FAILURE: &str = "upstream_failure";
+    /// `ErrorCode.FORBIDDEN`
+    pub const FORBIDDEN: &str = "forbidden";
+    /// `ErrorCode.UPLOAD_TOO_LARGE`
+    pub const UPLOAD_TOO_LARGE: &str = "upload_too_large";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

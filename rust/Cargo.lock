@@ -570,6 +570,7 @@ dependencies = [
  "deepseek-core",
  "deepseek-mcp",
  "deepseek-policy",
+ "deepseek-protocol",
  "deepseek-rag",
  "futures-core",
  "futures-util",
@@ -579,6 +580,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tonic",
  "tower 0.5.3",
  "tower-http",
  "tracing",
@@ -600,6 +602,9 @@ version = "0.1.0"
 dependencies = [
  "blake2",
  "deepseek-core",
+ "encoding_rs",
+ "idna",
+ "md-5",
  "regex",
  "rusqlite",
  "serde",
@@ -798,6 +803,15 @@ dependencies = [
  "sec1",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "encoding_rs"
+version = "0.8.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]

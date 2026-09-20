@@ -14,6 +14,9 @@ serde_json = { workspace = true }
 regex = { workspace = true }
 sha2 = { workspace = true }
 sha1 = { workspace = true }
+md-5 = { workspace = true }
 rusqlite = { workspace = true }
+idna = "1.1.0"
+encoding_rs = "=0.8.35"
 
 [dev-dependencies]

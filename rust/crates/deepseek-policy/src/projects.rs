@@ -845,3 +845,106 @@ pub fn read_file_chunk(
         },
     }))
 }
+
+// --- the write path ---------------------------------------------------------------
+
+/// Mirrors `write_project`: `<PROJECTS_DIR>/<id>/project.json`, through a
+/// `project.tmp` sibling, with the trailing newline `json.dumps(...) + "\n"` implies.
+///
+/// Note the temp name here **replaces** nothing: it is the literal `project.tmp`, not
+/// `project.json.tmp` — a third spelling alongside the reminders store's replaced
+/// suffix and the workspace schema's appended one. Reproduced rather than unified,
+/// because the bytes on disk are the contract.
+pub fn write_project(
+    root: &Path,
+    project: &Value,
+    entropy: &dyn Entropy,
+) -> Result<(), AppError> {
+    let safe_id = validate_project_id(&python_str(project.get("id")))?;
+    let directory = projects_dir(root).join(&safe_id);
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| AppError::invalid_payload(error.to_string()))?;
+    let path = directory.join("project.json");
+    let temporary = directory.join("project.tmp");
+    let mut rendered =
+        crate::python_json::OrderedJson::from_value_with_order(project, &PROJECT_RECORD_KEYS)
+            .render_indent_2();
+    rendered.push('\n');
+    std::fs::write(&temporary, rendered.as_bytes())
+        .map_err(|error| AppError::invalid_payload(error.to_string()))?;
+    std::fs::rename(&temporary, &path).map_err(|error| AppError::invalid_payload(error.to_string()))?;
+    let _ = entropy;
+    Ok(())
+}
+
+/// The key order a project record is written in — the oracle's dict insertion order
+/// from `create_project`.
+const PROJECT_RECORD_KEYS: [&str; 9] = [
+    "id",
+    "name",
+    "documents",
+    "skills",
+    "skillRuns",
+    "savedItems",
+    "artifacts",
+    "createdAt",
+    "updatedAt",
+];
+
+/// Mirrors `create_project`: the 40-project cap, the id minted as
+/// `proj-{secrets.token_hex(6)}` (12 hex characters, not 16), and the seven initial
+/// fields.
+pub fn create_project(
+    name: &str,
+    root: &Path,
+    entropy: &dyn Entropy,
+) -> Result<Value, AppError> {
+    if list_projects(root, entropy)?.len() >= MAX_PROJECTS {
+        return Err(AppError {
+            message: "Too many projects".to_string(),
+            code: crate::app_error::codes::UPLOAD_TOO_LARGE,
+            status: 413,
+        });
+    }
+    let now = entropy.now_millis();
+    // `secrets.token_hex(6)` is 12 characters; `new_id` gives 16, so the id is built
+    // from the first 12 of one draw rather than reusing the helper.
+    let hex = entropy.new_id()?;
+    let project = json!({
+        "id": format!("proj-{}", hex.chars().take(12).collect::<String>()),
+        "name": normalize_project_name(Some(&Value::String(name.to_string()))),
+        "documents": [],
+        "skills": {
+            "enabledPacks": [],
+            "enabledPackVersions": [],
+            "enabledSkills": [],
+            "defaultSkill": "",
+            "recentSkills": [],
+        },
+        "skillRuns": [],
+        "savedItems": [],
+        "artifacts": [],
+        "createdAt": now,
+        "updatedAt": now,
+    });
+    write_project(root, &project, entropy)?;
+    public_project(&project, entropy)
+}
+
+/// Mirrors `delete_project`: `0` when the directory is absent, otherwise the whole
+/// subtree removed.
+///
+/// The oracle also purges the project's RAG rows and media library entries first,
+/// each inside a swallowing `try/except`. Those two subsystems are not ported, and
+/// **this port does not pretend they were cleaned** — it removes the directory and
+/// returns, which is what the oracle does when both blocks raise. Wiring the purge
+/// belongs with the RAG and media slices.
+pub fn delete_project(project_id: &str, root: &Path) -> Result<i64, AppError> {
+    let safe_id = validate_project_id(project_id)?;
+    let path = projects_dir(root).join(&safe_id);
+    if !path.exists() {
+        return Ok(0);
+    }
+    std::fs::remove_dir_all(&path).map_err(|error| AppError::invalid_payload(error.to_string()))?;
+    Ok(1)
+}
