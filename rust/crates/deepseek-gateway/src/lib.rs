@@ -522,7 +522,8 @@ const MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE: &str = "NATIVE_MEMORY_VECTOR_INDEX_N
 ///    4.9.4. A store that is **not** here stays refused whatever the mode says — setting the mode alone
 ///    must not be able to enable a store nobody declared — which is why the list is the second
 ///    condition rather than a detail of the first. A test pins it as a subset of the contract's.
-pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 3] = ["memory_store", "reminders_store", "project_metadata_store"];
+pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 3] =
+    ["memory_store", "reminders_store", "project_metadata_store"];
 
 /// Whether this process may write the store `domain` names.
 ///

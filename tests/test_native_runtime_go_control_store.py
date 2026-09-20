@@ -44,12 +44,26 @@ def test_go_control_tables_cover_go_owned_stores() -> None:
     for table in catalog["tables"]:
         covered.update(table["ownership_ids"])
     covered.update(catalog["writer_plan"].keys())
+    # The Go control plane owns more than the control store: a service-local
+    # database counts as a declared store too, as long as the catalog names it.
+    for store in catalog["companion_stores"]:
+        covered.update(store["ownership_ids"])
     go_control = {
         item["id"]
         for item in ownership["domains"]
         if item.get("durable_store") == "go_control"
     }
     assert go_control <= covered
+
+
+def test_companion_go_stores_are_declared_in_their_go_source() -> None:
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    for store in catalog["companion_stores"]:
+        source = (ROOT / store["declared_in"]).read_text(encoding="utf-8")
+        for key in ("filename", "table", "schema", "writer_lock"):
+            assert store[key] in source, f"{store['id']}: {key} not in {store['declared_in']}"
+        assert store["journal_mode"] in source
+        assert store["synchronous"] in source
 
 
 def test_go_schema_matches_catalog_and_rejects_python_paths() -> None:

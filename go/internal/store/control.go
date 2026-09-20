@@ -220,8 +220,18 @@ func hardenedControlQuery() url.Values {
 }
 
 func controlDatabaseURL(databasePath string, query url.Values) string {
+	return controlDatabaseURLForOS(databasePath, query, runtime.GOOS)
+}
+
+// `controlDatabaseURLForOS` exists so the Windows-only branch is reachable from a
+// POSIX test. `runtime.GOOS` decides whether a drive letter needs a leading slash
+// (`file:///C:/…`); reading it inline left one statement that no test could cover on
+// Linux, and the Go coverage gate measures Linux: 94.98% against its 95.0% floor.
+// Passing the OS in does not change production behaviour — `controlDatabaseURL` still
+// answers with the host's `GOOS`.
+func controlDatabaseURLForOS(databasePath string, query url.Values, goos string) string {
 	path := filepath.ToSlash(databasePath)
-	if runtime.GOOS == "windows" && len(path) >= 2 && path[1] == ':' {
+	if goos == "windows" && len(path) >= 2 && path[1] == ':' {
 		path = "/" + path
 	}
 	return (&url.URL{Scheme: "file", Path: path, RawQuery: query.Encode()}).String()

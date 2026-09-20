@@ -90,6 +90,21 @@
     "config_runtime_lifecycle": "control_store_meta",
     "control_api": "control_store_meta"
   },
+  "companion_stores": [
+    {
+      "id": "a2a_task_lifecycle",
+      "role": "go_service_local_durable_state",
+      "database": "sqlite",
+      "filename": "a2a.sqlite3",
+      "table": "tasks",
+      "schema": "CREATE TABLE tasks (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, state TEXT NOT NULL, document BLOB NOT NULL)",
+      "journal_mode": "WAL",
+      "synchronous": "FULL",
+      "writer_lock": "a2a.writer.lock",
+      "ownership_ids": ["a2a_task_lifecycle"],
+      "declared_in": "go/internal/a2a/store.go"
+    }
+  ],
   "forbidden_python_path_components": [
     ".backup-control",
     ".backup-scheduler",

@@ -867,12 +867,21 @@ mod tests {
         // `"/etc/passwd"` — **with** the leading slash, because `PurePosixPath.parts`
         // keeps the root marker. Rust's `Path::is_absolute()` draws the same line, so
         // the port agrees; asserting one answer here would encode a single platform.
-        let unix_style = runtime_relative_path("/etc/passwd", generated, projects, root).unwrap();
+        //
+        // The `unwrap` has to sit *inside* each branch: on POSIX this call is the
+        // `Err` branch, so unwrapping first panicked on Linux while passing on
+        // Windows. That was measured — the rust-coverage job caught it, this box
+        // could not.
+        let unix_style = runtime_relative_path("/etc/passwd", generated, projects, root);
         if cfg!(windows) {
-            assert_eq!(unix_style, "/etc/passwd", "the root marker survives");
+            assert_eq!(
+                unix_style.unwrap(),
+                "/etc/passwd",
+                "the root marker survives"
+            );
         } else {
             // On POSIX it *is* absolute, and outside every root, so it is refused.
-            assert!(runtime_relative_path("/etc/passwd", generated, projects, root).is_err());
+            assert!(unix_style.is_err());
         }
 
         // A genuinely absolute path outside every root is refused on **both**
