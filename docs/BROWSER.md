@@ -23,7 +23,11 @@ CI on the PR that carries it (35/35 jobs, head `bd1602e3`, merged as `5648329f`)
   script/style/noscript skipped by open-tag stack, and link hrefs resolved the way
   `urllib.parse.urljoin` resolves them (including its dropped empty fragment)
 - Playwright is **not** ported. HTTP fetch by the static controller is refused
-  (`static browser controller only reads approved file:// fixtures`).
+  (`static browser controller only reads approved file:// fixtures`). The engine has an
+  accepted direction — [ADR-0050](adr/ADR-0050-browser-engine-sidecar.md) and its
+  [specification](specs/browser-engine-sidecar.md): a Rust CDP sidecar over versioned
+  gRPC. Nothing in this file changes until that lands; `playwright_available()` stays
+  `false`.
 - Media/RAG snapshot **writes** stay Python-owned (`indexed: false`,
   `snapshot.persisted: false`)
 
