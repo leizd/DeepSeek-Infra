@@ -749,6 +749,11 @@ jobs:
           chrome="$(find "$HOME/.cache/ms-playwright" -maxdepth 3 -type f -name chrome -print -quit)"
           test -x "$chrome"
           echo "DEEPSEEK_BROWSER_CHROMIUM=$chrome" >> "$GITHUB_ENV"
+          # The documented opt-in for a host without user namespaces. The engine's own
+          # end-to-end test sets it for the sidecar it spawns; the live test runs
+          # in-process, so the lane has to. This is the same switch the image leaves to
+          # the operator, used here for the same reason.
+          echo "DEEPSEEK_BROWSER_NO_SANDBOX=1" >> "$GITHUB_ENV"
       # The gateway's end-to-end test spawns the sidecar binary next to the test
       # executable, so the binary is built before the test that spawns it.
       - name: Build the browser engine sidecar
@@ -906,7 +911,7 @@ jobs:
       - name: Build Rust sidecar image for RAG parity
         run: |
           for attempt in 1 2 3; do
-            if docker build -f rust/Dockerfile -t deepseek-rust-gateway:parity .; then
+            if docker build --target gateway -f rust/Dockerfile -t deepseek-rust-gateway:parity .; then
               exit 0
             fi
             if [ "$attempt" -eq 3 ]; then
@@ -970,7 +975,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build release Rust sidecar for binary vector parity
-        run: docker build -f rust/Dockerfile -t deepseek-rust-gateway:rag-vector-binary-parity .
+        run: docker build --target gateway -f rust/Dockerfile -t deepseek-rust-gateway:rag-vector-binary-parity .
       - name: Start Rust sidecar for binary vector parity
         run: |
           docker run --detach \
@@ -1027,7 +1032,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build Rust sidecar image for Gateway request parity
-        run: docker build -f rust/Dockerfile -t deepseek-rust-gateway:request-parity .
+        run: docker build --target gateway -f rust/Dockerfile -t deepseek-rust-gateway:request-parity .
       - name: Start Rust sidecar for Gateway request parity
         run: |
           docker run --detach \
@@ -1084,7 +1089,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build Rust sidecar image for MCP protocol parity
-        run: docker build -f rust/Dockerfile -t deepseek-rust-gateway:mcp-protocol-parity .
+        run: docker build --target gateway -f rust/Dockerfile -t deepseek-rust-gateway:mcp-protocol-parity .
       - name: Start Rust sidecar for MCP protocol parity
         run: |
           docker run --detach \
@@ -1141,7 +1146,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build Rust sidecar image for RAG document preparation parity
-        run: docker build -f rust/Dockerfile -t deepseek-rust-gateway:rag-document-preparation-parity .
+        run: docker build --target gateway -f rust/Dockerfile -t deepseek-rust-gateway:rag-document-preparation-parity .
       - name: Start Rust sidecar for RAG document preparation parity
         run: |
           docker run --detach \

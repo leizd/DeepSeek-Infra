@@ -78,5 +78,8 @@ that answers `Status` with `available: true`.
   `worker` and `gateway` by `scripts/check_native_images.py`
 - CI `native-browser-engine` — installs the Chromium `requirements-browser.txt` pins,
   then runs the live engine tests, the gateway seam, and the engine parity probe
+- A browser that will not start reports **why**: the launch error carries the last of
+  Chromium's own stderr and whether the process exited, because "did not report a
+  DevTools socket" on its own is a failure nobody can act on
 - `chat_route_blocks_a_private_browser_url`
 - `file_fixture_open_returns_page_text`

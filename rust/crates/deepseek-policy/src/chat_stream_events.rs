@@ -595,18 +595,26 @@ mod tests {
             // `ensure_ascii=False`: non-ASCII is not escaped.
             "{\"type\":\"content\",\"text\":\"你好\"}\n"
         );
-        // The event envelope's own field order is the oracle's (`type` first). The
-        // `search` *value* is passed through as the caller built it — `serde_json` is
-        // compiled here without `preserve_order`, so a nested object's keys come out
-        // sorted rather than in Python's insertion order. That is a property of the
-        // value's construction, not of this encoder: the gateway builds it from the
-        // ported `search_for_client`, which fixes the order where it matters.
+        // The event envelope's own field order is the oracle's (`type` first) and is
+        // asserted as bytes. The `search` *value* is the caller's, and its key order is
+        // not the encoder's to guarantee: `serde_json` is built with `preserve_order`
+        // only when the packages that enable it are in the graph, so the same call
+        // sorts these keys under `-p deepseek-policy` and keeps the caller's order under
+        // `--workspace`. Asserting either order as bytes would make this test depend on
+        // build scope — measured on one machine, both ways, before it was rewritten.
+        let line = String::from_utf8(encode_stream_event(&ChatEvent::Search {
+            search: json!({"status": "done", "results": 2}),
+        }))
+        .unwrap();
+        assert!(
+            line.starts_with("{\"type\":\"search\",\"search\":{") && line.ends_with("}\n"),
+            "the envelope order is the encoder's: {line}"
+        );
+        let parsed: Value =
+            serde_json::from_str(line.trim_end()).expect("one JSON object per line");
         assert_eq!(
-            String::from_utf8(encode_stream_event(&ChatEvent::Search {
-                search: json!({"status": "done", "results": 2})
-            }))
-            .unwrap(),
-            "{\"type\":\"search\",\"search\":{\"results\":2,\"status\":\"done\"}}\n"
+            parsed,
+            json!({"type": "search", "search": {"status": "done", "results": 2}})
         );
         assert_eq!(
             String::from_utf8(encode_stream_event(&ChatEvent::Error {

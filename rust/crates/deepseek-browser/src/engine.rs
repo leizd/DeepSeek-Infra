@@ -31,6 +31,13 @@ const NAVIGATE_TIMEOUT: Duration = Duration::from_secs(30);
 const EVALUATE_TIMEOUT: Duration = Duration::from_secs(2);
 /// How long to wait for Chromium to print its DevTools socket.
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
+/// How many of Chromium's stderr lines to keep for a launch failure.
+///
+/// A browser that cannot start says why on stderr — "Running as root without
+/// --no-sandbox is not supported", a missing library, a locked profile. Consuming those
+/// lines and then reporting only "no DevTools socket" produces a failure nobody can act
+/// on, which is what the first CI run of the browser engine lane got.
+const LAUNCH_DIAGNOSTIC_LINES: usize = 8;
 /// The oracle's `expect_download` deadline.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long to let a click's navigation settle before reading the URL.
@@ -146,6 +153,7 @@ impl Engine {
             .ok_or_else(|| AppError::new(codes::INTERNAL, "the browser engine has no stderr"))?;
         let mut lines = BufReader::new(stderr).lines();
         let mut socket_url = String::new();
+        let mut diagnostics: VecDeque<String> = VecDeque::new();
         let read = async {
             while let Ok(Some(line)) = lines.next_line().await {
                 if let Some(index) = line.find("DevTools listening on ") {
@@ -154,12 +162,33 @@ impl Engine {
                         .to_string();
                     break;
                 }
+                if !line.trim().is_empty() {
+                    diagnostics.push_back(line);
+                    if diagnostics.len() > LAUNCH_DIAGNOSTIC_LINES {
+                        diagnostics.pop_front();
+                    }
+                }
             }
         };
         if timeout(LAUNCH_TIMEOUT, read).await.is_err() || socket_url.is_empty() {
+            let state = match child.try_wait() {
+                Ok(Some(status)) => format!("the browser exited with {status}"),
+                _ => "the browser is still running".to_string(),
+            };
+            let detail = if diagnostics.is_empty() {
+                "it printed nothing on stderr".to_string()
+            } else {
+                diagnostics
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            };
             return Err(AppError::new(
                 codes::INTERNAL,
-                "the browser engine did not report a DevTools socket",
+                format!(
+                    "the browser engine did not report a DevTools socket: {state}, and {detail}"
+                ),
             ));
         }
         let (socket, _response) = tokio_tungstenite::connect_async(socket_url.as_str())

@@ -100,8 +100,11 @@ service BrowserEngine { Status, OpenUrl, ReadPage, ExtractLinks, Screenshot,
    its Chromium and profile.
 4. **Image, audit and lane.** `rust/Dockerfile` gained a `browser-runtime` base and a
    `browser` stage (Chromium from the distro, non-root `deepseek`, entrypoint
-   `deepseek-browser`); the existing `gateway` target is now requested explicitly so
-   appending a stage cannot change what the rust-docker lane builds.
+   `deepseek-browser`). **Every** build of that Dockerfile now names its target: adding
+   a stage moved the default, and for one CI run five lanes built the browser image and
+   ran it as their gateway, timing out on a process that speaks gRPC instead of HTTP.
+   `tests/test_rust_docker_config.py` now fails if any build of that file omits
+   `--target`, so the class cannot return quietly.
    `scripts/check_native_images.py` requires the `browser` stage and audits it for the
    same zero-Python, non-root rules as `worker` and `gateway` — a rule shown able to
    fail by deleting the stage. The `native-browser-engine` CI lane installs the
