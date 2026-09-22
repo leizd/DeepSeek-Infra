@@ -38,6 +38,12 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
 /// lines and then reporting only "no DevTools socket" produces a failure nobody can act
 /// on, which is what the first CI run of the browser engine lane got.
 const LAUNCH_DIAGNOSTIC_LINES: usize = 8;
+/// How long to wait for the browser to close itself, and then for its process.
+const BROWSER_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+/// Attempts to remove a session's profile once the browser is gone.
+const PROFILE_REMOVE_ATTEMPTS: usize = 20;
+/// How long to wait between profile-removal attempts.
+const PROFILE_REMOVE_POLL: Duration = Duration::from_millis(100);
 /// The oracle's `expect_download` deadline.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long to let a click's navigation settle before reading the URL.
@@ -883,9 +889,30 @@ impl Engine {
     /// behind a guard without moving it out: the session registry already removed the
     /// map entry, so no new call can reach this engine while it is being torn down.
     pub async fn close(&mut self) {
+        // Ask the browser to close before taking its process away. Chromium's helper
+        // processes outlive a killed parent long enough to keep a handle on
+        // `--user-data-dir`, so removing the profile immediately leaves the directory
+        // behind and the session leaks a profile per close. Measured by the gateway's
+        // end-to-end test: it passed on Windows, where the helpers die with the parent,
+        // and failed on Linux, where they do not.
+        let _ = timeout(
+            BROWSER_CLOSE_TIMEOUT,
+            self.call(None, "Browser.close", json!({})),
+        )
+        .await;
         let _ = self.socket.close(None).await;
-        let _ = self.child.kill().await;
-        let _ = tokio::fs::remove_dir_all(&self.profile_dir).await;
+        if timeout(BROWSER_CLOSE_TIMEOUT, self.child.wait())
+            .await
+            .is_err()
+        {
+            let _ = self.child.kill().await;
+        }
+        for _ in 0..PROFILE_REMOVE_ATTEMPTS {
+            if tokio::fs::remove_dir_all(&self.profile_dir).await.is_ok() {
+                return;
+            }
+            tokio::time::sleep(PROFILE_REMOVE_POLL).await;
+        }
     }
 }
 

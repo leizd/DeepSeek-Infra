@@ -54,6 +54,10 @@ services:
     build:
       context: .
       dockerfile: rust/Dockerfile
+      # The Dockerfile has more than one runtime stage, so the target is named: without
+      # it the build gets whichever stage is last, which is the browser engine, whose
+      # container never answers the gateway's health check.
+      target: gateway
     environment:
       GATEWAY_BIND_ADDR: 0.0.0.0:8787
     healthcheck:
