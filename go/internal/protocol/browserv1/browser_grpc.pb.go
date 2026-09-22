@@ -29,6 +29,7 @@ const (
 	BrowserEngine_Select_FullMethodName       = "/deepseek.browser.v1.BrowserEngine/Select"
 	BrowserEngine_Scroll_FullMethodName       = "/deepseek.browser.v1.BrowserEngine/Scroll"
 	BrowserEngine_Download_FullMethodName     = "/deepseek.browser.v1.BrowserEngine/Download"
+	BrowserEngine_CloseSession_FullMethodName = "/deepseek.browser.v1.BrowserEngine/CloseSession"
 )
 
 // BrowserEngineClient is the client API for BrowserEngine service.
@@ -59,6 +60,15 @@ type BrowserEngineClient interface {
 	Select(ctx context.Context, in *SelectRequest, opts ...grpc.CallOption) (*SelectResponse, error)
 	Scroll(ctx context.Context, in *ScrollRequest, opts ...grpc.CallOption) (*ActionResponse, error)
 	Download(ctx context.Context, in *DownloadRequest, opts ...grpc.CallOption) (*DownloadResponse, error)
+	// CloseSession tears down the browser context the session id names and removes its
+	// profile and staged downloads. It is `CloseSession` rather than a `Status` call
+	// because closing is a real effect: without it a session the gateway has closed
+	// would leave a Chromium and a profile directory behind for the engine's lifetime.
+	//
+	// Idempotent, and it answers `closed: false` for a session this process never had:
+	// the gateway's own registry is the authority on whether the session existed, and
+	// an engine that refused an unknown id would make a double close an error.
+	CloseSession(ctx context.Context, in *CloseSessionRequest, opts ...grpc.CallOption) (*CloseSessionResponse, error)
 }
 
 type browserEngineClient struct {
@@ -169,6 +179,16 @@ func (c *browserEngineClient) Download(ctx context.Context, in *DownloadRequest,
 	return out, nil
 }
 
+func (c *browserEngineClient) CloseSession(ctx context.Context, in *CloseSessionRequest, opts ...grpc.CallOption) (*CloseSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CloseSessionResponse)
+	err := c.cc.Invoke(ctx, BrowserEngine_CloseSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BrowserEngineServer is the server API for BrowserEngine service.
 // All implementations must embed UnimplementedBrowserEngineServer
 // for forward compatibility.
@@ -197,6 +217,15 @@ type BrowserEngineServer interface {
 	Select(context.Context, *SelectRequest) (*SelectResponse, error)
 	Scroll(context.Context, *ScrollRequest) (*ActionResponse, error)
 	Download(context.Context, *DownloadRequest) (*DownloadResponse, error)
+	// CloseSession tears down the browser context the session id names and removes its
+	// profile and staged downloads. It is `CloseSession` rather than a `Status` call
+	// because closing is a real effect: without it a session the gateway has closed
+	// would leave a Chromium and a profile directory behind for the engine's lifetime.
+	//
+	// Idempotent, and it answers `closed: false` for a session this process never had:
+	// the gateway's own registry is the authority on whether the session existed, and
+	// an engine that refused an unknown id would make a double close an error.
+	CloseSession(context.Context, *CloseSessionRequest) (*CloseSessionResponse, error)
 	mustEmbedUnimplementedBrowserEngineServer()
 }
 
@@ -236,6 +265,9 @@ func (UnimplementedBrowserEngineServer) Scroll(context.Context, *ScrollRequest) 
 }
 func (UnimplementedBrowserEngineServer) Download(context.Context, *DownloadRequest) (*DownloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Download not implemented")
+}
+func (UnimplementedBrowserEngineServer) CloseSession(context.Context, *CloseSessionRequest) (*CloseSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CloseSession not implemented")
 }
 func (UnimplementedBrowserEngineServer) mustEmbedUnimplementedBrowserEngineServer() {}
 func (UnimplementedBrowserEngineServer) testEmbeddedByValue()                       {}
@@ -438,6 +470,24 @@ func _BrowserEngine_Download_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BrowserEngine_CloseSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CloseSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BrowserEngineServer).CloseSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BrowserEngine_CloseSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BrowserEngineServer).CloseSession(ctx, req.(*CloseSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BrowserEngine_ServiceDesc is the grpc.ServiceDesc for BrowserEngine service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -484,6 +534,10 @@ var BrowserEngine_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Download",
 			Handler:    _BrowserEngine_Download_Handler,
+		},
+		{
+			MethodName: "CloseSession",
+			Handler:    _BrowserEngine_CloseSession_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

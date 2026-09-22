@@ -215,6 +215,29 @@ async fn the_routes_require_production_auth() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
+/// The taint block is a diagnostics read, but it is still behind the production auth
+/// layer: it names the sensitive tool set and the exfiltration tables, which is
+/// reconnaissance an unauthenticated caller must not get.
+#[tokio::test]
+async fn the_taint_route_is_behind_the_production_auth_layer() {
+    let _env_lock = EnvLock::acquire();
+    let _guard = EnvGuard::set(&[("AUTH_TOKEN", TEST_TOKEN)]);
+    let static_root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(static_root.path().join("ui")).unwrap();
+    std::fs::write(static_root.path().join("ui/index.html"), "<main>ui</main>").unwrap();
+    let app = create_production_app(static_root.path()).unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/taint")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
 /// An unknown action is the oracle's `400 invalid_payload`, and an empty body is
 /// the oracle's `list` default rather than an error.
 #[tokio::test]
@@ -401,6 +424,73 @@ async fn a_create_without_due_at_is_the_oracles_400() {
 
 async fn get(uri: &str) -> (StatusCode, Value) {
     request("GET", uri, None).await
+}
+
+// --- diagnostics status routes -----------------------------------------------------
+//
+// These are the read-only blocks the frontend's config/diagnostics screens read. They
+// used to fall through to the Go `/api/*` catch-all, which answers 503 when no Go
+// control plane is configured — so "the route exists but nothing serves it" was the
+// state being measured, not a working endpoint.
+
+/// `GET /api/taint` serves the ported `taint_status` block.
+///
+/// The block itself is byte-identical to the oracle's (`context_taint` is a complete
+/// port, pinned by the context-taint probe); what this case adds is that the *route*
+/// serves it, honours the environment, and is not the proxy's refusal.
+#[tokio::test]
+async fn the_taint_status_route_serves_the_ported_block() {
+    let _env_lock = EnvLock::acquire();
+    let _guard = EnvGuard::set(&[
+        ("AUTH_TOKEN", TEST_TOKEN),
+        ("TAINT_ENABLED", "0"),
+        ("TAINT_ESCALATE_CONFIRM", "0"),
+        ("TAINT_MAX_SEGMENTS", "999"),
+    ]);
+
+    let (status, body) = get("/api/taint").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert_eq!(body["ok"], true);
+    let taint = &body["contextTaint"];
+    // The two flags this case set, and the default of the one it did not.
+    assert_eq!(taint["enabled"], false);
+    assert_eq!(taint["escalateConfirm"], false);
+    assert_eq!(taint["hardenSearchContext"], true);
+    // The tables the block reports are the ported ones, not constants invented here.
+    assert_eq!(taint["exfiltrationPatterns"], 3);
+    assert!(taint["toolDirectivePatterns"].as_u64().unwrap_or(0) > 0);
+    assert!(
+        taint["sensitiveToolNames"]
+            .as_array()
+            .is_some_and(|names| !names.is_empty()),
+        "the block must name the sensitive tools: {taint}"
+    );
+    assert_eq!(
+        taint["trustLevels"],
+        json!(["trusted", "untrusted"]),
+        "body: {body}"
+    );
+    assert!(
+        taint["sources"]
+            .as_array()
+            .is_some_and(|sources| sources.len() == 10),
+        "body: {body}"
+    );
+}
+
+/// A `TAINT_MAX_SEGMENTS` outside the oracle's range is clamped, not refused, and the
+/// clamp is the oracle's `(4, 200)` — not a bound chosen here.
+#[tokio::test]
+async fn the_taint_segment_cap_is_clamped_like_the_oracle() {
+    let _env_lock = EnvLock::acquire();
+    let _guard = EnvGuard::set(&[("AUTH_TOKEN", TEST_TOKEN), ("TAINT_MAX_SEGMENTS", "999")]);
+    let (status, body) = get("/api/taint").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    // The block does not report the cap, so the clamp is proved through the policy
+    // object the route builds rather than through the JSON.
+    let settings = deepseek_policy::context_taint::ContextTaintSettings::from_env();
+    assert_eq!(settings.max_segments, 200);
+    assert!(settings.enabled, "an unset flag keeps the oracle's default");
 }
 
 #[tokio::test]

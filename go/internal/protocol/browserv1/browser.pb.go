@@ -1242,6 +1242,111 @@ func (x *ActionResponse) GetError() *commonv1.ErrorDetail {
 	return nil
 }
 
+type CloseSessionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Fence         *commonv1.ActionFence  `protobuf:"bytes,1,opt,name=fence,proto3" json:"fence,omitempty"`
+	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CloseSessionRequest) Reset() {
+	*x = CloseSessionRequest{}
+	mi := &file_browser_v1_browser_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CloseSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CloseSessionRequest) ProtoMessage() {}
+
+func (x *CloseSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_browser_v1_browser_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CloseSessionRequest.ProtoReflect.Descriptor instead.
+func (*CloseSessionRequest) Descriptor() ([]byte, []int) {
+	return file_browser_v1_browser_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *CloseSessionRequest) GetFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *CloseSessionRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+type CloseSessionResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// False when this process had no browser for the session id.
+	Closed        bool                  `protobuf:"varint,1,opt,name=closed,proto3" json:"closed,omitempty"`
+	Error         *commonv1.ErrorDetail `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CloseSessionResponse) Reset() {
+	*x = CloseSessionResponse{}
+	mi := &file_browser_v1_browser_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CloseSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CloseSessionResponse) ProtoMessage() {}
+
+func (x *CloseSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_browser_v1_browser_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CloseSessionResponse.ProtoReflect.Descriptor instead.
+func (*CloseSessionResponse) Descriptor() ([]byte, []int) {
+	return file_browser_v1_browser_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *CloseSessionResponse) GetClosed() bool {
+	if x != nil {
+		return x.Closed
+	}
+	return false
+}
+
+func (x *CloseSessionResponse) GetError() *commonv1.ErrorDetail {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
 var File_browser_v1_browser_proto protoreflect.FileDescriptor
 
 const file_browser_v1_browser_proto_rawDesc = "" +
@@ -1341,7 +1446,14 @@ const file_browser_v1_browser_proto_rawDesc = "" +
 	"\x0eActionResponse\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x1a\n" +
 	"\bselector\x18\x02 \x01(\tR\bselector\x125\n" +
-	"\x05error\x18\x03 \x01(\v2\x1f.deepseek.common.v1.ErrorDetailR\x05error2\xec\x06\n" +
+	"\x05error\x18\x03 \x01(\v2\x1f.deepseek.common.v1.ErrorDetailR\x05error\"k\n" +
+	"\x13CloseSessionRequest\x125\n" +
+	"\x05fence\x18\x01 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\"e\n" +
+	"\x14CloseSessionResponse\x12\x16\n" +
+	"\x06closed\x18\x01 \x01(\bR\x06closed\x125\n" +
+	"\x05error\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ErrorDetailR\x05error2\xd1\a\n" +
 	"\rBrowserEngine\x12Q\n" +
 	"\x06Status\x12\".deepseek.browser.v1.StatusRequest\x1a#.deepseek.browser.v1.StatusResponse\x12Q\n" +
 	"\aOpenUrl\x12#.deepseek.browser.v1.OpenUrlRequest\x1a!.deepseek.browser.v1.PageResponse\x12S\n" +
@@ -1353,7 +1465,8 @@ const file_browser_v1_browser_proto_rawDesc = "" +
 	"\bTypeText\x12$.deepseek.browser.v1.TypeTextRequest\x1a#.deepseek.browser.v1.ActionResponse\x12Q\n" +
 	"\x06Select\x12\".deepseek.browser.v1.SelectRequest\x1a#.deepseek.browser.v1.SelectResponse\x12Q\n" +
 	"\x06Scroll\x12\".deepseek.browser.v1.ScrollRequest\x1a#.deepseek.browser.v1.ActionResponse\x12W\n" +
-	"\bDownload\x12$.deepseek.browser.v1.DownloadRequest\x1a%.deepseek.browser.v1.DownloadResponseBJZHgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/browserv1;browserv1b\x06proto3"
+	"\bDownload\x12$.deepseek.browser.v1.DownloadRequest\x1a%.deepseek.browser.v1.DownloadResponse\x12c\n" +
+	"\fCloseSession\x12(.deepseek.browser.v1.CloseSessionRequest\x1a).deepseek.browser.v1.CloseSessionResponseBJZHgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/browserv1;browserv1b\x06proto3"
 
 var (
 	file_browser_v1_browser_proto_rawDescOnce sync.Once
@@ -1367,7 +1480,7 @@ func file_browser_v1_browser_proto_rawDescGZIP() []byte {
 	return file_browser_v1_browser_proto_rawDescData
 }
 
-var file_browser_v1_browser_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_browser_v1_browser_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_browser_v1_browser_proto_goTypes = []any{
 	(*StatusRequest)(nil),        // 0: deepseek.browser.v1.StatusRequest
 	(*StatusResponse)(nil),       // 1: deepseek.browser.v1.StatusResponse
@@ -1388,54 +1501,60 @@ var file_browser_v1_browser_proto_goTypes = []any{
 	(*SelectResponse)(nil),       // 16: deepseek.browser.v1.SelectResponse
 	(*DownloadResponse)(nil),     // 17: deepseek.browser.v1.DownloadResponse
 	(*ActionResponse)(nil),       // 18: deepseek.browser.v1.ActionResponse
-	(*commonv1.ActionFence)(nil), // 19: deepseek.common.v1.ActionFence
-	(*commonv1.ErrorDetail)(nil), // 20: deepseek.common.v1.ErrorDetail
+	(*CloseSessionRequest)(nil),  // 19: deepseek.browser.v1.CloseSessionRequest
+	(*CloseSessionResponse)(nil), // 20: deepseek.browser.v1.CloseSessionResponse
+	(*commonv1.ActionFence)(nil), // 21: deepseek.common.v1.ActionFence
+	(*commonv1.ErrorDetail)(nil), // 22: deepseek.common.v1.ErrorDetail
 }
 var file_browser_v1_browser_proto_depIdxs = []int32{
-	19, // 0: deepseek.browser.v1.StatusRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	20, // 1: deepseek.browser.v1.StatusResponse.error:type_name -> deepseek.common.v1.ErrorDetail
-	19, // 2: deepseek.browser.v1.OpenUrlRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 3: deepseek.browser.v1.ReadPageRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 4: deepseek.browser.v1.SessionRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 5: deepseek.browser.v1.SelectorRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 6: deepseek.browser.v1.TypeTextRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 7: deepseek.browser.v1.SelectRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 8: deepseek.browser.v1.ScrollRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 9: deepseek.browser.v1.ScreenshotRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 10: deepseek.browser.v1.DownloadRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	21, // 0: deepseek.browser.v1.StatusRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	22, // 1: deepseek.browser.v1.StatusResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	21, // 2: deepseek.browser.v1.OpenUrlRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	21, // 3: deepseek.browser.v1.ReadPageRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	21, // 4: deepseek.browser.v1.SessionRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	21, // 5: deepseek.browser.v1.SelectorRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	21, // 6: deepseek.browser.v1.TypeTextRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	21, // 7: deepseek.browser.v1.SelectRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	21, // 8: deepseek.browser.v1.ScrollRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	21, // 9: deepseek.browser.v1.ScreenshotRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	21, // 10: deepseek.browser.v1.DownloadRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	2,  // 11: deepseek.browser.v1.PageResponse.page:type_name -> deepseek.browser.v1.Page
-	20, // 12: deepseek.browser.v1.PageResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	22, // 12: deepseek.browser.v1.PageResponse.error:type_name -> deepseek.common.v1.ErrorDetail
 	12, // 13: deepseek.browser.v1.LinksResponse.links:type_name -> deepseek.browser.v1.Link
-	20, // 14: deepseek.browser.v1.LinksResponse.error:type_name -> deepseek.common.v1.ErrorDetail
-	20, // 15: deepseek.browser.v1.ScreenshotResponse.error:type_name -> deepseek.common.v1.ErrorDetail
-	20, // 16: deepseek.browser.v1.SelectResponse.error:type_name -> deepseek.common.v1.ErrorDetail
-	20, // 17: deepseek.browser.v1.DownloadResponse.error:type_name -> deepseek.common.v1.ErrorDetail
-	20, // 18: deepseek.browser.v1.ActionResponse.error:type_name -> deepseek.common.v1.ErrorDetail
-	0,  // 19: deepseek.browser.v1.BrowserEngine.Status:input_type -> deepseek.browser.v1.StatusRequest
-	3,  // 20: deepseek.browser.v1.BrowserEngine.OpenUrl:input_type -> deepseek.browser.v1.OpenUrlRequest
-	4,  // 21: deepseek.browser.v1.BrowserEngine.ReadPage:input_type -> deepseek.browser.v1.ReadPageRequest
-	5,  // 22: deepseek.browser.v1.BrowserEngine.ExtractLinks:input_type -> deepseek.browser.v1.SessionRequest
-	10, // 23: deepseek.browser.v1.BrowserEngine.Screenshot:input_type -> deepseek.browser.v1.ScreenshotRequest
-	6,  // 24: deepseek.browser.v1.BrowserEngine.Click:input_type -> deepseek.browser.v1.SelectorRequest
-	7,  // 25: deepseek.browser.v1.BrowserEngine.TypeText:input_type -> deepseek.browser.v1.TypeTextRequest
-	8,  // 26: deepseek.browser.v1.BrowserEngine.Select:input_type -> deepseek.browser.v1.SelectRequest
-	9,  // 27: deepseek.browser.v1.BrowserEngine.Scroll:input_type -> deepseek.browser.v1.ScrollRequest
-	11, // 28: deepseek.browser.v1.BrowserEngine.Download:input_type -> deepseek.browser.v1.DownloadRequest
-	1,  // 29: deepseek.browser.v1.BrowserEngine.Status:output_type -> deepseek.browser.v1.StatusResponse
-	13, // 30: deepseek.browser.v1.BrowserEngine.OpenUrl:output_type -> deepseek.browser.v1.PageResponse
-	13, // 31: deepseek.browser.v1.BrowserEngine.ReadPage:output_type -> deepseek.browser.v1.PageResponse
-	14, // 32: deepseek.browser.v1.BrowserEngine.ExtractLinks:output_type -> deepseek.browser.v1.LinksResponse
-	15, // 33: deepseek.browser.v1.BrowserEngine.Screenshot:output_type -> deepseek.browser.v1.ScreenshotResponse
-	18, // 34: deepseek.browser.v1.BrowserEngine.Click:output_type -> deepseek.browser.v1.ActionResponse
-	18, // 35: deepseek.browser.v1.BrowserEngine.TypeText:output_type -> deepseek.browser.v1.ActionResponse
-	16, // 36: deepseek.browser.v1.BrowserEngine.Select:output_type -> deepseek.browser.v1.SelectResponse
-	18, // 37: deepseek.browser.v1.BrowserEngine.Scroll:output_type -> deepseek.browser.v1.ActionResponse
-	17, // 38: deepseek.browser.v1.BrowserEngine.Download:output_type -> deepseek.browser.v1.DownloadResponse
-	29, // [29:39] is the sub-list for method output_type
-	19, // [19:29] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	22, // 14: deepseek.browser.v1.LinksResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	22, // 15: deepseek.browser.v1.ScreenshotResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	22, // 16: deepseek.browser.v1.SelectResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	22, // 17: deepseek.browser.v1.DownloadResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	22, // 18: deepseek.browser.v1.ActionResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	21, // 19: deepseek.browser.v1.CloseSessionRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	22, // 20: deepseek.browser.v1.CloseSessionResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	0,  // 21: deepseek.browser.v1.BrowserEngine.Status:input_type -> deepseek.browser.v1.StatusRequest
+	3,  // 22: deepseek.browser.v1.BrowserEngine.OpenUrl:input_type -> deepseek.browser.v1.OpenUrlRequest
+	4,  // 23: deepseek.browser.v1.BrowserEngine.ReadPage:input_type -> deepseek.browser.v1.ReadPageRequest
+	5,  // 24: deepseek.browser.v1.BrowserEngine.ExtractLinks:input_type -> deepseek.browser.v1.SessionRequest
+	10, // 25: deepseek.browser.v1.BrowserEngine.Screenshot:input_type -> deepseek.browser.v1.ScreenshotRequest
+	6,  // 26: deepseek.browser.v1.BrowserEngine.Click:input_type -> deepseek.browser.v1.SelectorRequest
+	7,  // 27: deepseek.browser.v1.BrowserEngine.TypeText:input_type -> deepseek.browser.v1.TypeTextRequest
+	8,  // 28: deepseek.browser.v1.BrowserEngine.Select:input_type -> deepseek.browser.v1.SelectRequest
+	9,  // 29: deepseek.browser.v1.BrowserEngine.Scroll:input_type -> deepseek.browser.v1.ScrollRequest
+	11, // 30: deepseek.browser.v1.BrowserEngine.Download:input_type -> deepseek.browser.v1.DownloadRequest
+	19, // 31: deepseek.browser.v1.BrowserEngine.CloseSession:input_type -> deepseek.browser.v1.CloseSessionRequest
+	1,  // 32: deepseek.browser.v1.BrowserEngine.Status:output_type -> deepseek.browser.v1.StatusResponse
+	13, // 33: deepseek.browser.v1.BrowserEngine.OpenUrl:output_type -> deepseek.browser.v1.PageResponse
+	13, // 34: deepseek.browser.v1.BrowserEngine.ReadPage:output_type -> deepseek.browser.v1.PageResponse
+	14, // 35: deepseek.browser.v1.BrowserEngine.ExtractLinks:output_type -> deepseek.browser.v1.LinksResponse
+	15, // 36: deepseek.browser.v1.BrowserEngine.Screenshot:output_type -> deepseek.browser.v1.ScreenshotResponse
+	18, // 37: deepseek.browser.v1.BrowserEngine.Click:output_type -> deepseek.browser.v1.ActionResponse
+	18, // 38: deepseek.browser.v1.BrowserEngine.TypeText:output_type -> deepseek.browser.v1.ActionResponse
+	16, // 39: deepseek.browser.v1.BrowserEngine.Select:output_type -> deepseek.browser.v1.SelectResponse
+	18, // 40: deepseek.browser.v1.BrowserEngine.Scroll:output_type -> deepseek.browser.v1.ActionResponse
+	17, // 41: deepseek.browser.v1.BrowserEngine.Download:output_type -> deepseek.browser.v1.DownloadResponse
+	20, // 42: deepseek.browser.v1.BrowserEngine.CloseSession:output_type -> deepseek.browser.v1.CloseSessionResponse
+	32, // [32:43] is the sub-list for method output_type
+	21, // [21:32] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_browser_v1_browser_proto_init() }
@@ -1449,7 +1568,7 @@ func file_browser_v1_browser_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_browser_v1_browser_proto_rawDesc), len(file_browser_v1_browser_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -725,6 +725,50 @@ jobs:
         if: always()
         run: docker compose -f docker-compose.stateless-mcp.yml down --volumes --remove-orphans
 
+  native-browser-engine:
+    needs:
+      - release-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.85.0
+      # The same browser the oracle drives: the pinned Playwright installs a pinned
+      # Chromium, so engine and oracle are compared on one revision rather than two.
+      - name: Install a Chromium for the engine to drive
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -r requirements-browser.txt
+          python -m playwright install --with-deps chromium
+      - name: Point the engine at that Chromium
+        run: |
+          set -euo pipefail
+          chrome="$(find "$HOME/.cache/ms-playwright" -maxdepth 3 -type f -name chrome -print -quit)"
+          test -x "$chrome"
+          echo "DEEPSEEK_BROWSER_CHROMIUM=$chrome" >> "$GITHUB_ENV"
+      # The gateway's end-to-end test spawns the sidecar binary next to the test
+      # executable, so the binary is built before the test that spawns it.
+      - name: Build the browser engine sidecar
+        run: >-
+          cargo build --locked --manifest-path rust/Cargo.toml
+          -p deepseek-browser --examples
+      - name: Live engine tests
+        run: >-
+          cargo test --locked --manifest-path rust/Cargo.toml
+          -p deepseek-browser --tests
+      - name: Gateway to engine seam
+        run: >-
+          cargo test --locked --manifest-path rust/Cargo.toml
+          -p deepseek-gateway --test browser_engine_e2e
+      - name: Engine parity against the Playwright oracle
+        run: >-
+          python tasks/native-runtime/browser_engine_parity_probe.py
+          --rust-example rust/target/debug/examples/browser_engine_parity_probe
+          --report artifacts/browser-engine-parity.json
+
   rust-docker:
     needs:
       - evidence-context
@@ -744,7 +788,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build Rust sidecar image
-        run: docker build -f rust/Dockerfile -t deepseek-rust-gateway:$RELEASE_VERSION .
+        run: docker build --target gateway -f rust/Dockerfile -t deepseek-rust-gateway:$RELEASE_VERSION .
+      - name: Build browser engine image
+        run: docker build --target browser -f rust/Dockerfile -t deepseek-browser-engine:$RELEASE_VERSION .
       - name: Record Rust sidecar image identity
         run: >-
           python scripts/record_rust_sidecar_image.py

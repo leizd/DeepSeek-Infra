@@ -34,6 +34,7 @@
 
 use regex::Regex;
 use serde_json::Value;
+use sha2::Digest;
 
 use crate::python_json::value_str;
 
@@ -362,10 +363,61 @@ pub fn isoformat_seconds(epoch_seconds: i64, offset_seconds: i32) -> String {
     )
 }
 
+/// `deepseek_infra/web/http_utils.py:truthy` — **not** Python truthiness.
+///
+/// The web layer's helper is a string parse: `str(value or "").strip().lower()` must be
+/// one of `1`, `true`, `yes`, `on`. So `"false"`, `"0"`, `"no"` and `"2"` are all
+/// **false**, where [`python_truthy`] would call every non-empty string true. The
+/// distinction is observable: `GET /api/download?id=…&inline=false` is an attachment,
+/// and the download-route test measured the opposite before this helper existed.
+pub fn web_truthy(value: Option<&Value>) -> bool {
+    let raw = match value {
+        Some(found) if python_truthy(found) => value_str(found),
+        _ => String::new(),
+    };
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// The first `length` hex characters of `SHA-256(value)`.
+///
+/// Used where the oracle hashes a secret to key a per-secret window
+/// (`title_generator.check_title_rate_limit`) or to name a content fingerprint: the
+/// digest is what travels, never the value. `length` is clamped to the 64 characters
+/// a SHA-256 digest can produce, so a caller cannot ask for more than exists.
+pub fn sha256_hex_prefix(value: &str, length: usize) -> String {
+    let digest = sha2::Sha256::digest(value.as_bytes());
+    let hex = encode_lower_hex(&digest);
+    hex[..length.min(hex.len())].to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn web_truthy_is_a_string_parse_not_python_truthiness() {
+        // The web layer's set, and only it.
+        for value in ["1", "true", "TRUE", "yes", "on", " 1 "] {
+            assert!(web_truthy(Some(&json!(value))), "{value:?} must be true");
+        }
+        for value in ["", "0", "false", "no", "2", "anything", "off"] {
+            assert!(!web_truthy(Some(&json!(value))), "{value:?} must be false");
+        }
+        // The `or ""` runs first, so an absent, null or falsy value is the empty
+        // string — and a *number* 1 is truthy to Python, then stringified to "1".
+        assert!(!web_truthy(None));
+        assert!(!web_truthy(Some(&Value::Null)));
+        assert!(web_truthy(Some(&json!(1))));
+        assert!(!web_truthy(Some(&json!(0))));
+        // `python_truthy` would call every non-empty string true, which is the
+        // distinction this helper exists for.
+        assert!(python_truthy(&json!("false")));
+        assert!(!web_truthy(Some(&json!("false"))));
+    }
 
     #[test]
     fn query_tokens_normalises_case_and_whitespace() {

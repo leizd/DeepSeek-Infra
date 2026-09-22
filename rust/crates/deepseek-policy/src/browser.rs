@@ -21,6 +21,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use crate::app_error::{AppError, codes};
+use crate::browser_engine::{BrowserEngine, ENGINE_KIND_CDP, EngineAction, EngineFence};
 use crate::browser_safety::{self, BrowserSettings, evaluate_action, file_url_path};
 use crate::core_utils::{python_truthy, utc_now_iso};
 use crate::entropy::Entropy;
@@ -54,12 +55,29 @@ pub fn playwright_available() -> bool {
 }
 
 /// Mirrors `controller._create_controller`.
-fn controller_kind_for(session: &BrowserSession) -> &'static str {
-    if session.engine == ENGINE_PLAYWRIGHT && playwright_available() {
-        ENGINE_PLAYWRIGHT
-    } else {
-        CONTROLLER_STATIC_FALLBACK
+///
+/// The engine is what makes the `playwright` arm reachable: the oracle's condition
+/// is `session.engine == "playwright" and playwright_available()`, and the native
+/// equivalent of "Playwright is importable" is "an engine answers `Status` with
+/// `available: true`". Without one the static fallback is the controller, which is
+/// the deployment this crate has always been able to serve.
+fn controller_kind_for(
+    session: &BrowserSession,
+    engine: Option<&dyn BrowserEngine>,
+) -> &'static str {
+    let Some(engine) = engine else {
+        return CONTROLLER_STATIC_FALLBACK;
+    };
+    let status = engine.status(&EngineFence::for_request(&session.browser_session_id, 1));
+    match status {
+        Ok(status) if status.available && session.engine == ENGINE_PLAYWRIGHT => ENGINE_KIND_CDP,
+        _ => CONTROLLER_STATIC_FALLBACK,
     }
+}
+
+/// The engine action for a tool action, or the reason there is none.
+fn engine_action_for(action: &str) -> Option<EngineAction> {
+    EngineAction::for_tool_action(action)
 }
 
 #[derive(Debug, Clone)]
@@ -794,6 +812,21 @@ pub fn execute_browser_action(
     settings: &BrowserSettings,
     entropy: &dyn Entropy,
 ) -> Result<Value, AppError> {
+    execute_browser_action_with_engine(payload, settings, entropy, None)
+}
+
+/// `execute_browser_action` with an engine behind the controller.
+///
+/// Everything above the controller is identical: the safety gate, the session
+/// registry, the sticky `controller_kind`, the error envelope. Only
+/// [`dispatch_action`] changes, and only for the actions the engine serves — which
+/// is what ADR-0050 means by "the seam does not move".
+pub fn execute_browser_action_with_engine(
+    payload: &Value,
+    settings: &BrowserSettings,
+    entropy: &dyn Entropy,
+    engine: Option<&dyn BrowserEngine>,
+) -> Result<Value, AppError> {
     let Some(object) = payload.as_object() else {
         return Err(AppError {
             message: "Browser action payload must be an object".to_string(),
@@ -804,7 +837,34 @@ pub fn execute_browser_action(
     let action = browser_safety::normalize_action(payload.get("action"));
     let session_id = python_or_empty(payload.get("sessionId")).trim().to_string();
     if action == "close_session" {
+        // The engine's browser context is torn down over the wire, and the registry
+        // entry is closed here. Both happen, in that order, and the engine's failure is
+        // reported **after** the registry is closed: a session whose browser could not
+        // be reached must still leave the registry, or a dead engine would leak a
+        // session for the lifetime of the process.
+        let engine_result = engine.map(|engine| {
+            engine.execute(
+                &engine_fence(payload),
+                &crate::browser_engine::EngineRequest {
+                    action: EngineAction::CloseSession,
+                    session_id: session_id.clone(),
+                    ..Default::default()
+                },
+            )
+        });
         let closed = close_session(&session_id)?;
+        if let Some(Err(error)) = engine_result {
+            return Err(AppError {
+                message: error.message,
+                code: match error.code.as_str() {
+                    crate::browser_engine::ENGINE_SESSION_NOT_FOUND => codes::NOT_FOUND,
+                    codes::INVALID_PAYLOAD => codes::INVALID_PAYLOAD,
+                    codes::UPSTREAM_TIMEOUT => codes::UPSTREAM_TIMEOUT,
+                    _ => codes::INTERNAL,
+                },
+                status: error.status,
+            });
+        }
         return Ok(json!({
             "ok": true,
             "session": closed.to_json(),
@@ -861,11 +921,11 @@ pub fn execute_browser_action(
     // action fails, `mark_failed` overwrites it and a subsequent success does
     // not restore it, because the oracle hands back the cached controller
     // without touching the session again.
-    let live_kind = controller_kind_for(&session);
+    let live_kind = controller_kind_for(&session, engine);
     if session.controller_kind == CONTROLLER_UNSTARTED {
         session.controller_kind = live_kind.to_string();
     }
-    let result = match dispatch_action(&action, payload, &mut session, live_kind) {
+    let result = match dispatch_action(&action, payload, &mut session, live_kind, engine) {
         Ok(result) => result,
         Err(error) => {
             mark_failed(&mut session, &error.message);
@@ -887,13 +947,58 @@ pub fn execute_browser_action(
     }))
 }
 
+/// The fence a browser tool call carries.
+///
+/// The tool surface has no epoch of its own — the browser owns no durable state — so
+/// the request's `requestId` is the ordering id, falling back to the session, and
+/// then to the action itself. The last fallback exists because a tool call need not
+/// carry either: the fence still has to name *something*, and the sidecar's own
+/// admission refuses an empty action id (`EMPTY_ACTION_ID`), which is a fence
+/// validation, not a security boundary. What must never happen is a fence that
+/// pretends to be a different call, which is why the value is derived from the
+/// request rather than minted.
+///
+/// The epoch is the request's, defaulting to `1`: a worker must never advance an
+/// epoch because a caller sent a larger one, and there is no epoch state here to
+/// advance.
+fn engine_fence(payload: &Value) -> crate::browser_engine::EngineFence {
+    let request_id = python_or_empty(payload.get("requestId"));
+    let request_id = if request_id.is_empty() {
+        python_or_empty(payload.get("sessionId"))
+    } else {
+        request_id
+    };
+    let request_id = if request_id.is_empty() {
+        let action = python_or_empty(payload.get("action"));
+        format!("browser-action:{action}")
+    } else {
+        request_id
+    };
+    crate::browser_engine::EngineFence::for_request(&request_id, 1)
+}
+
 fn dispatch_action(
     action: &str,
     payload: &Value,
     session: &mut BrowserSession,
     controller_kind: &str,
+    engine: Option<&dyn BrowserEngine>,
 ) -> Result<Value, AppError> {
     let selector = python_or_empty(payload.get("selector"));
+    // The engine serves this action, and an engine is configured: the action is
+    // executed by a real browser and this crate only owns the session and the
+    // envelope. `close_session` never reaches here — it is the registry's.
+    if let (Some(engine), Some(engine_action)) = (engine, engine_action_for(action)) {
+        if controller_kind == ENGINE_KIND_CDP {
+            return dispatch_through_engine(
+                engine,
+                engine_action,
+                payload,
+                session,
+                controller_kind,
+            );
+        }
+    }
     match action {
         "open_url" => {
             let url = python_or_empty(payload.get("url"));
@@ -994,6 +1099,167 @@ fn dispatch_action(
     }
 }
 
+/// Run one action through the engine and shape its answer like the oracle's.
+///
+/// The result shape is the oracle's per-action shape, not the proto's: the model
+/// sees `{"url", "page"}`, `{"url", "links"}`, `{"url", "selector", "chars"}`, and
+/// so on, whether the answer came from Playwright or from CDP. Getting this wrong is
+/// the kind of divergence a probe cannot catch, because a probe compares *values* —
+/// so the shapes below are the oracle's, copied action by action from
+/// `deepseek_infra/infra/browser/actions.py:_dispatch`.
+fn dispatch_through_engine(
+    engine: &dyn BrowserEngine,
+    engine_action: EngineAction,
+    payload: &Value,
+    session: &mut BrowserSession,
+    controller_kind: &str,
+) -> Result<Value, AppError> {
+    let selector = python_or_empty(payload.get("selector"));
+    let request = crate::browser_engine::EngineRequest {
+        action: engine_action,
+        session_id: session.browser_session_id.clone(),
+        url: python_or_empty(payload.get("url")),
+        selector: selector.clone(),
+        text: python_or_empty(payload.get("text")),
+        value: python_or_empty(payload.get("value")),
+        x: int_or(payload.get("x"), 0) as i32,
+        y: int_or(payload.get("y"), 600) as i32,
+        download_dir: None,
+    };
+    let outcome = engine
+        .execute(&engine_fence(payload), &request)
+        .map_err(|error| {
+            // The engine reports the oracle's codes, and the tool envelope carries the
+            // code — so an engine failure must not be flattened to `internal`, or the
+            // model (and the compatibility corpus) would see a different error for the
+            // same condition depending on which controller answered. Only a code the
+            // oracle has no equivalent for is reported as `internal`.
+            AppError {
+                message: error.message,
+                code: match error.code.as_str() {
+                    crate::browser_engine::ENGINE_SESSION_NOT_FOUND => codes::NOT_FOUND,
+                    crate::browser_engine::ENGINE_NOT_CONFIGURED => codes::INTERNAL,
+                    codes::INVALID_PAYLOAD => codes::INVALID_PAYLOAD,
+                    codes::NOT_FOUND => codes::NOT_FOUND,
+                    codes::UPSTREAM_TIMEOUT => codes::UPSTREAM_TIMEOUT,
+                    _ => codes::INTERNAL,
+                },
+                status: error.status,
+            }
+        })?;
+    let url = if outcome.url.is_empty() {
+        session.current_url.clone()
+    } else {
+        outcome.url.clone()
+    };
+    match engine_action {
+        EngineAction::OpenUrl | EngineAction::ReadPage => {
+            // The oracle's `read_page`/`save_snapshot` arm returns the snapshot
+            // envelope; `open_url` returns the bounded public page. The distinction
+            // is the action, not the engine call, which is why it is here.
+            session.current_url = url.clone();
+            session.title = outcome.title.clone();
+            session.html = outcome.html.clone();
+            session.links = outcome
+                .links
+                .iter()
+                .map(|link| json!({"href": link.href, "text": link.text, "title": link.title}))
+                .collect();
+            session.updated_at = now_iso();
+            if engine_action == EngineAction::OpenUrl {
+                Ok(json!({
+                    "url": url,
+                    "page": {
+                        "url": outcome.url,
+                        "title": outcome.title,
+                        "text": outcome.text.chars().take(20_000).collect::<String>(),
+                        "selector": outcome.selector,
+                    },
+                    "controller": controller_kind,
+                }))
+            } else {
+                Ok(json!({
+                    "url": url,
+                    "title": outcome.title,
+                    "text": outcome.text,
+                    "snapshot": {"type": "webpage", "persisted": false},
+                    "segments": [],
+                    "indexed": false,
+                    "controller": controller_kind,
+                }))
+            }
+        }
+        EngineAction::ExtractLinks => Ok(json!({
+            "url": url,
+            "links": outcome
+                .links
+                .iter()
+                .map(|link| json!({"href": link.href, "text": link.text, "title": link.title}))
+                .collect::<Vec<Value>>(),
+            "controller": controller_kind,
+        })),
+        EngineAction::Screenshot => Ok(json!({
+            "url": url,
+            "screenshot": {
+                "type": "screenshot",
+                "mimeType": outcome.mime_type,
+                "persisted": false,
+                "bytes": outcome.screenshot.map(|data| data.len()).unwrap_or(0),
+            },
+            "controller": controller_kind,
+        })),
+        EngineAction::Click => Ok(json!({
+            "url": url,
+            "selector": if outcome.selector.is_empty() { selector } else { outcome.selector },
+            "controller": controller_kind,
+        })),
+        EngineAction::TypeText => Ok(json!({
+            "url": url,
+            "selector": if outcome.selector.is_empty() { selector.clone() } else { outcome.selector },
+            "chars": request.text.chars().count() as i64,
+            "controller": controller_kind,
+        })),
+        EngineAction::Select => Ok(json!({
+            "url": url,
+            "selector": if outcome.selector.is_empty() { selector } else { outcome.selector },
+            "value": request.value,
+            "selected": outcome.selected,
+            "controller": controller_kind,
+        })),
+        EngineAction::Scroll => Ok(json!({
+            "url": url,
+            "x": request.x,
+            "y": request.y,
+            "controller": controller_kind,
+        })),
+        EngineAction::Download => match outcome.download {
+            Some(download) => Ok(json!({
+                "url": url,
+                "download": {
+                    "filename": download.filename,
+                    "bytes": download.data.len(),
+                    "sourceUrl": url,
+                },
+                "controller": controller_kind,
+            })),
+            None => Err(AppError {
+                message: "the engine reported a download with no file".to_string(),
+                code: codes::INTERNAL,
+                status: 500,
+            }),
+        },
+        EngineAction::Status => Err(AppError {
+            message: "Unsupported browser action: status".to_string(),
+            code: codes::INVALID_PAYLOAD,
+            status: 400,
+        }),
+        // `close_session` never reaches `dispatch_action`: it is handled before the
+        // session is resolved, because closing must work for a session the registry
+        // has already forgotten.
+        EngineAction::CloseSession => Ok(json!({"closed": true, "controller": controller_kind})),
+    }
+}
+
 fn link_href(html: &str, selector: &str, base: &str) -> Option<String> {
     let snippet = html_for_selector(html, selector);
     let re = Regex::new(r#"(?i)<a\b[^>]*\bhref=["']([^"']+)["']"#).ok()?;
@@ -1058,8 +1324,24 @@ mod tests {
         create_session("", None, settings, &SystemEntropy).expect("browser session")
     }
 
+    /// The session registry is process-wide, so two tests that create a session and
+    /// then act on it can interleave with a third test's `reset_sessions_for_tests`
+    /// and lose the session between the two steps. That is a real race in the *tests*,
+    /// not in the code — the registry is per-process by design, exactly as the
+    /// oracle's `_sessions` dict is — so the tests serialize on this mutex.
+    ///
+    /// Measured: adding the engine-backed cases made this fail intermittently at
+    /// `execute_browser_action_with_engine(...).unwrap()` with
+    /// `Browser session not found`, which is what an interleaved reset looks like.
+    fn registry_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     #[test]
     fn file_fixture_open_returns_page_text() {
+        let _registry = registry_lock();
         reset_sessions_for_tests();
         let fixture = fixture_path();
         let settings = fixture_settings(&fixture);
@@ -1078,6 +1360,7 @@ mod tests {
 
     #[test]
     fn private_open_is_forbidden_when_enabled() {
+        let _registry = registry_lock();
         reset_sessions_for_tests();
         let settings = BrowserSettings {
             enabled: true,
@@ -1099,20 +1382,194 @@ mod tests {
 
     #[test]
     fn the_engine_is_reported_unavailable_rather_than_guessed() {
-        // This states the requirement, not the current gap: native runs no
-        // Playwright engine, so it must answer `false` and report the fallback it
-        // actually uses instead of claiming the oracle's engine. Porting the
-        // engine is what flips this, together with `controller_kind_for`.
+        // With no engine attached the static fallback is the controller, and the
+        // session records exactly that. The engine, when one is attached, is what
+        // flips this — `a_configured_engine_selects_the_cdp_controller` below.
         assert!(!playwright_available());
         let settings = fixture_settings(&fixture_path());
         let session = fixture_session(&settings);
-        assert_eq!(controller_kind_for(&session), CONTROLLER_STATIC_FALLBACK);
+        assert_eq!(
+            controller_kind_for(&session, None),
+            CONTROLLER_STATIC_FALLBACK
+        );
         assert_eq!(session.controller_kind, CONTROLLER_UNSTARTED);
         assert_eq!(session.engine, ENGINE_PLAYWRIGHT);
     }
 
+    /// An engine that answers `available: true` selects the CDP controller, and one
+    /// that answers `false` does not — the oracle's `_create_controller` condition,
+    /// with "Playwright is importable" replaced by "an engine answered".
+    struct FakeEngine {
+        available: bool,
+        calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    use crate::browser_engine::{EngineError, EngineOutcome, EngineRequest, EngineStatus};
+
+    impl FakeEngine {
+        fn new(available: bool) -> Self {
+            Self {
+                available,
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().expect("fake engine lock").clone()
+        }
+    }
+
+    impl BrowserEngine for FakeEngine {
+        fn status(&self, _fence: &EngineFence) -> Result<EngineStatus, EngineError> {
+            Ok(EngineStatus {
+                available: self.available,
+                engine_kind: if self.available {
+                    ENGINE_KIND_CDP.to_string()
+                } else {
+                    String::new()
+                },
+                chromium_revision: String::new(),
+                reason: if self.available {
+                    String::new()
+                } else {
+                    "no browser configured".to_string()
+                },
+            })
+        }
+
+        fn execute(
+            &self,
+            _fence: &EngineFence,
+            request: &EngineRequest,
+        ) -> Result<EngineOutcome, EngineError> {
+            self.calls
+                .lock()
+                .expect("fake engine lock")
+                .push(format!("{:?}", request.action));
+            Ok(EngineOutcome {
+                engine_kind: ENGINE_KIND_CDP.to_string(),
+                url: request.url.clone(),
+                title: "Engine Title".to_string(),
+                text: "engine text".to_string(),
+                html: "<html></html>".to_string(),
+                selector: if request.selector.is_empty() {
+                    "body".to_string()
+                } else {
+                    request.selector.clone()
+                },
+                links: vec![crate::browser_engine::EngineLink {
+                    href: "https://example.com/".to_string(),
+                    text: "Example".to_string(),
+                    title: String::new(),
+                }],
+                selected: vec![request.value.clone()],
+                ..Default::default()
+            })
+        }
+    }
+
+    #[test]
+    fn the_request_fence_is_never_empty() {
+        // A tool call need not carry a requestId or a sessionId; the fence still has
+        // to name the call, because the sidecar refuses an empty action id.
+        assert_eq!(engine_fence(&json!({})).action_id, "browser-action:");
+        assert_eq!(
+            engine_fence(&json!({"action": "open_url"})).action_id,
+            "browser-action:open_url"
+        );
+        assert_eq!(
+            engine_fence(&json!({"sessionId": "browser_1"})).action_id,
+            "browser_1"
+        );
+        assert_eq!(
+            engine_fence(&json!({"requestId": "req-1", "sessionId": "browser_1"})).action_id,
+            "req-1"
+        );
+        assert_eq!(engine_fence(&json!({})).execution_epoch, 1);
+    }
+
+    #[test]
+    fn a_configured_engine_selects_the_cdp_controller() {
+        let _registry = registry_lock();
+        reset_sessions_for_tests();
+        let settings = fixture_settings(&fixture_path());
+        let session = fixture_session(&settings);
+        let engine = FakeEngine::new(true);
+        assert_eq!(
+            controller_kind_for(&session, Some(&engine)),
+            ENGINE_KIND_CDP
+        );
+        let absent = FakeEngine::new(false);
+        assert_eq!(
+            controller_kind_for(&session, Some(&absent)),
+            CONTROLLER_STATIC_FALLBACK
+        );
+    }
+
+    #[test]
+    fn an_engine_backed_action_reads_the_engine_and_keeps_the_oracles_shape() {
+        let _registry = registry_lock();
+        reset_sessions_for_tests();
+        let settings = fixture_settings(&fixture_path());
+        let engine = FakeEngine::new(true);
+        let opened = execute_browser_action_with_engine(
+            &json!({"action": "open_url", "url": "https://example.com/page"}),
+            &settings,
+            &SystemEntropy,
+            Some(&engine),
+        )
+        .unwrap();
+        assert_eq!(opened["ok"], true);
+        assert_eq!(opened["session"]["controller"], ENGINE_KIND_CDP);
+        // The oracle's `open_url` shape: `{url, page:{url,title,text,selector}}`.
+        assert_eq!(opened["result"]["url"], "https://example.com/page");
+        assert_eq!(opened["result"]["page"]["title"], "Engine Title");
+        assert_eq!(opened["result"]["page"]["text"], "engine text");
+        assert_eq!(opened["result"]["page"]["selector"], "body");
+        assert_eq!(opened["result"]["controller"], ENGINE_KIND_CDP);
+        assert_eq!(engine.calls(), vec!["OpenUrl".to_string()]);
+
+        let session_id = opened["session"]["browserSessionId"]
+            .as_str()
+            .expect("session id")
+            .to_string();
+        let links = execute_browser_action_with_engine(
+            &json!({"action": "extract_links", "sessionId": session_id}),
+            &settings,
+            &SystemEntropy,
+            Some(&engine),
+        )
+        .unwrap();
+        assert_eq!(links["result"]["links"][0]["href"], "https://example.com/");
+        assert_eq!(links["result"]["links"][0]["text"], "Example");
+        assert_eq!(
+            engine.calls(),
+            vec!["OpenUrl".to_string(), "ExtractLinks".to_string()]
+        );
+    }
+
+    #[test]
+    fn an_engine_that_reports_no_browser_leaves_the_static_controller_in_place() {
+        let _registry = registry_lock();
+        reset_sessions_for_tests();
+        let settings = fixture_settings(&fixture_path());
+        let engine = FakeEngine::new(false);
+        let session_id = fixture_session(&settings).browser_session_id;
+        let read = execute_browser_action_with_engine(
+            &json!({"action": "read_page", "sessionId": session_id}),
+            &settings,
+            &SystemEntropy,
+            Some(&engine),
+        )
+        .unwrap();
+        // The static controller answered, so the engine was never called.
+        assert_eq!(read["result"]["controller"], CONTROLLER_STATIC_FALLBACK);
+        assert!(engine.calls().is_empty());
+    }
+
     #[test]
     fn a_blocked_action_never_reaches_a_controller() {
+        let _registry = registry_lock();
         reset_sessions_for_tests();
         let settings = fixture_settings(&fixture_path());
         let result = execute_browser_action(
@@ -1131,6 +1588,7 @@ mod tests {
 
     #[test]
     fn a_failed_action_marks_the_session_and_the_recorded_kind_stays_sticky() {
+        let _registry = registry_lock();
         reset_sessions_for_tests();
         let fixture = fixture_path();
         let settings = fixture_settings(&fixture);

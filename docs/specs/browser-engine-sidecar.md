@@ -4,7 +4,7 @@
 [中文](../../README.md) / [English](../../README.en.md)
 <!-- docs-language-switcher:end -->
 
-- Status: Accepted direction, **not implemented**
+- Status: Accepted direction, **stages 1–3 implemented and probe-verified locally**
 - Date: 2026-09-20
 - Delivery line: after 4.8.0
 - Architecture decision: [ADR-0050](../adr/ADR-0050-browser-engine-sidecar.md)
@@ -85,11 +85,71 @@ service BrowserEngine { Status, OpenUrl, ReadPage, ExtractLinks, Screenshot,
    `scripts/check_native_images.py`, a CI lane reusing the existing chromium install
    step, and the Chromium revision pin.
 
-## Open items for review before staging 4
+### What each stage actually delivered
 
-- non-root Chromium inside a container: relax the sandbox or configure user
-  namespaces — a security review item.
-- the image grows by 270–420 MB plus Chromium's shared libraries (100–150 MB,
-  estimated: it could not be weighed on Windows).
-- one more `.proto` moves `proto_files` from 8 to 9 and adds generated outputs; the
-  contract assertion pins count and outputs together.
+1. `proto/browser/v1/browser.proto`, `rust/crates/deepseek-browser` (binary
+   `deepseek-browser`, loopback-only listener), the `BrowserEngine` service, and the
+   fail-closed switch. Merged as `bae68f0b`.
+2. The CDP engine (`rust/crates/deepseek-browser/src/engine.rs`) and the sidecar's
+   ten RPCs; `tasks/native-runtime/browser_engine_parity_probe.py` compares the
+   engine against the Playwright oracle over six fixtures.
+3. The gateway seam: `deepseek-policy::browser_engine` declares what the policy crate
+   needs, `deepseek-gateway::browser_engine_client` implements it over the generated
+   tonic client on a dedicated runtime thread, and `ToolRoundExecutor` attaches it to
+   the tool loop. `CloseSession` was added to the proto so a closed session releases
+   its Chromium and profile.
+4. **Image, audit and lane.** `rust/Dockerfile` gained a `browser-runtime` base and a
+   `browser` stage (Chromium from the distro, non-root `deepseek`, entrypoint
+   `deepseek-browser`); the existing `gateway` target is now requested explicitly so
+   appending a stage cannot change what the rust-docker lane builds.
+   `scripts/check_native_images.py` requires the `browser` stage and audits it for the
+   same zero-Python, non-root rules as `worker` and `gateway` — a rule shown able to
+   fail by deleting the stage. The `native-browser-engine` CI lane installs the
+   Chromium that `requirements-browser.txt` pins, points the engine at it, and runs
+   the live engine tests, the gateway seam, and this specification's parity probe.
+
+## Measured parity (stage 3)
+
+`python tasks/native-runtime/browser_engine_parity_probe.py --rust-example
+rust/target/debug/examples/browser_engine_parity_probe.exe` runs the oracle and the
+engine over `basic.html`, `controls.html`, `download.html`, `form.html`,
+`injection.html` and `sample-report.html` and compares them field by field:
+
+| field | result |
+|---|---|
+| `url`, `title`, `text` | **identical**, all six fixtures |
+| `links` | **identical** (after the per-load blob UUID is normalised) |
+| `html` | **0 bytes differ** after collapsing whitespace; the engine reads `documentElement.outerHTML` with the doctype prepended, which is what `page.content()` serialises |
+| `select`, `type_text`, `click`, `scroll` effects | **identical**, read back out of the live page — with one timing note below |
+| a missing element | the oracle raises its timeout error; the engine answers `not_found`/404 — same condition, different code |
+| screenshot | both PNG; byte length differs (12925 vs 17284), which no two Chromium builds agree on |
+| download file name | the oracle reports the link's `download` attribute (`sample-report.html`); CDP's `allowAndName` reports a GUID. The bytes are identical |
+
+### One timing divergence, measured the hard way
+
+Chromium animates a wheel event, and `page.mouse.wheel` returns before the animation
+lands. A probe that reads `window.scrollY` straight afterwards measures the race, not
+the scroll: two consecutive runs produced `oracle 900 / engine 0` and then `oracle 0 /
+engine 900`. The engine therefore waits for the position to settle before answering —
+a deliberate divergence from `mouse.wheel`, since a caller asking the engine to scroll
+wants a scrolled page — and the probe settles **both** sides before reading. With that,
+the pair passes on repeat runs.
+
+## Open items
+
+- **Non-root Chromium inside a container** needs user namespaces or an explicit
+  `DEEPSEEK_BROWSER_NO_SANDBOX=1`. The image does not set it, the compose service does
+  not set it, and both say so — it is a security decision, not a default. A container
+  that has neither the namespaces nor the opt-in fails closed: no engine, static
+  controller, `Status.available == false`.
+- **The image was written, not built here.** Docker is not available on the development
+  machine, so the `browser` stage and the lane are verified by CI's `rust-docker` lane
+  and `native-browser-engine`, not locally. The base size is Chromium plus its
+  libraries (the earlier 100–150 MB figure is an estimate that could not be weighed on
+  Windows).
+- **Three of the four probe pairs are still not CI steps.** The engine's parity probe
+  runs in `native-browser-engine`; `title`, `file_routes` and `chat_stream_events`
+  remain local evidence, as the older pairs are. Making them gates is a separate slice.
+- The browser engine's actions beyond the declared nine — `extract_dom`, `save_snapshot`,
+  `close_session` — stay refused by the seam: the first is carried by `ReadPage`, the
+  second is Python-owned, and the third is `CloseSession` on the engine boundary.

@@ -30,7 +30,24 @@ serde_json = "1.0"
 # Pinned to the version already present in Cargo.lock (pulled in transitively),
 # so promoting it to a direct dependency adds no new crate to the graph.
 regex = "=1.13.0"
-tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread", "signal"] }
+# The one genuinely new dependency family in the tree: CDP speaks WebSocket, and
+# nothing in Cargo.lock can (`hyper`, `reqwest` and `tonic` all stop at HTTP). Hand
+# rolling the frame layer — masking, fragmentation, oversized frames, close and ping
+# handling — is exactly where a mistake is a security bug rather than a bug, so it is
+# a dependency on purpose. Plaintext only: the engine binds loopback, like the worker.
+tokio-tungstenite = "=0.30.0"
+# Already in the graph via tonic; promoted for `SinkExt`/`StreamExt` over the socket.
+futures-util = "=0.3.31"
+tokio = { version = "1", features = [
+    "fs",
+    "io-util",
+    "macros",
+    "net",
+    "process",
+    "rt-multi-thread",
+    "signal",
+    "time",
+] }
 axum = "0.7"
 base64 = "=0.22.1"
 blake2 = "0.10"

@@ -30,6 +30,15 @@ service BrowserEngine {
   rpc Select(SelectRequest) returns (SelectResponse);
   rpc Scroll(ScrollRequest) returns (ActionResponse);
   rpc Download(DownloadRequest) returns (DownloadResponse);
+  // CloseSession tears down the browser context the session id names and removes its
+  // profile and staged downloads. It is `CloseSession` rather than a `Status` call
+  // because closing is a real effect: without it a session the gateway has closed
+  // would leave a Chromium and a profile directory behind for the engine's lifetime.
+  //
+  // Idempotent, and it answers `closed: false` for a session this process never had:
+  // the gateway's own registry is the authority on whether the session existed, and
+  // an engine that refused an unknown id would make a double close an error.
+  rpc CloseSession(CloseSessionRequest) returns (CloseSessionResponse);
 }
 
 // `Status` says what the engine can actually do right now. A sidecar without a browser
@@ -161,4 +170,15 @@ message ActionResponse {
   string url = 1;
   string selector = 2;
   deepseek.common.v1.ErrorDetail error = 3;
+}
+
+message CloseSessionRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string session_id = 2;
+}
+
+message CloseSessionResponse {
+  // False when this process had no browser for the session id.
+  bool closed = 1;
+  deepseek.common.v1.ErrorDetail error = 2;
 }

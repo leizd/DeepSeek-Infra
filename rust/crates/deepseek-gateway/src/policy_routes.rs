@@ -9,6 +9,7 @@ use deepseek_policy::budget_manager::{BudgetSettings, today};
 use deepseek_policy::budget_store::BudgetStore;
 use deepseek_policy::capability::{Capability, RiskLevel, is_capability_allowed};
 use deepseek_policy::context_manager::ContextManagerSettings;
+use deepseek_policy::context_taint::{self, ContextTaintSettings};
 use deepseek_policy::core_utils::utc_now_iso;
 use deepseek_policy::memory_index::local_rag_status;
 use deepseek_policy::path_guard::{PathPolicy, validate_workspace_path};
@@ -92,6 +93,18 @@ pub async fn api_rag_status() -> Json<Value> {
         None => PathBuf::from("."),
     };
     Json(json!({"ok": true, "localRag": local_rag_status(&root)}))
+}
+
+/// Python `GET /api/taint`: the context-taint status block.
+///
+/// The block is the one `/api/config` embeds under `contextTaint`, and the ported
+/// `taint_status` is already byte-identical to the oracle's (`context_taint` is a
+/// complete port), so this route only had to be registered.
+pub async fn api_taint() -> Json<Value> {
+    Json(json!({
+        "ok": true,
+        "contextTaint": context_taint::taint_status(&ContextTaintSettings::from_env()),
+    }))
 }
 
 /// Python `GET /api/gateway/status`: context-manager settings plus honest gaps.

@@ -23,12 +23,17 @@ pub mod a2a_runner;
 pub mod a2a_stream;
 pub mod assembly_env;
 mod auth;
+pub mod browser_engine_client;
 pub mod chat_execution;
+pub mod chat_ndjson;
 pub mod chat_stream;
 pub mod chat_tool_loop;
 mod control_proxy;
 pub mod data_routes;
+pub mod download_route;
 pub mod fetch_provider;
+pub mod file_reader_route;
+pub mod file_source_route;
 pub mod local_clock;
 pub mod mcp_hub;
 pub mod native_chat;
@@ -40,6 +45,7 @@ pub mod request_assembly;
 pub mod request_preparation;
 pub mod search_provider;
 pub mod static_files;
+pub mod title_route;
 pub mod tool_rounds;
 
 pub fn gateway_version() -> &'static str {
@@ -72,6 +78,35 @@ fn create_routes() -> Router {
         .route("/api/tool-policy", get(policy_routes::api_tool_policy))
         .route("/api/budget", get(policy_routes::api_budget))
         .route("/api/rag/status", get(policy_routes::api_rag_status))
+        .route("/api/taint", get(policy_routes::api_taint))
+        .route(
+            "/api/title",
+            post(title_route::api_title).with_state(title_route::TitleRouteState::from_env()),
+        )
+        .route(
+            "/api/download",
+            get(download_route::api_download)
+                .with_state(download_route::DownloadRouteState::from_env()),
+        )
+        .route(
+            "/api/chat",
+            post(chat_ndjson::api_chat).with_state(chat_ndjson::ChatNdjsonState::from_env()),
+        )
+        .route(
+            "/api/file-source",
+            get(file_source_route::api_file_source)
+                .with_state(file_source_route::FileSourceRouteState::from_env()),
+        )
+        .route(
+            "/api/file-reader",
+            post(file_reader_route::api_file_reader)
+                .with_state(file_reader_route::FileReaderRouteState::from_env()),
+        )
+        .route(
+            "/api/file-chunk",
+            post(file_reader_route::api_file_chunk)
+                .with_state(file_reader_route::FileReaderRouteState::from_env()),
+        )
         .route(
             "/api/gateway/status",
             get(policy_routes::api_gateway_status),

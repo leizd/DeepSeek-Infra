@@ -840,7 +840,7 @@ pub fn suggest_memory(
     arguments: &Map<String, Value>,
     default_scope: &str,
     root: &Path,
-    on_suggestion: Option<&dyn Fn(&Value)>,
+    on_suggestion: Option<&(dyn Fn(&Value) + Send + Sync)>,
 ) -> Result<Value, AppError> {
     let scope_argument = arguments.get("scope");
     let scope = match scope_argument {

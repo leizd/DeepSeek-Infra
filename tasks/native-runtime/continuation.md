@@ -8,7 +8,452 @@ This file is the session handoff. Historical plans, checkboxes, VERSION, and
 `release/native_runtime_5_0_evidence_v1.json` are not completion evidence.
 The capability matrix is [`migration-matrix.md`](migration-matrix.md).
 
-## Current continuation checkpoint — 2026-09-20 native project reads
+## Current continuation checkpoint — 2026-09-21 the paginated file reader is wired
+
+Same branch `codex/native-a2a-stream-continuation`; HEAD is still
+`bae68f0b64067708aac81aaed18492c3917a1062`. Everything below is uncommitted. The goal
+remains active and `release/native_runtime_5_0_evidence_v1.json` still says `NOT_READY`
+with `exact_head: null`.
+
+Implemented:
+
+- **`deepseek-policy::file_routes`** gains `file_reader_window`, `file_chunk`,
+  `reader_positive_int`, `reader_file_payload` and `reader_chunk_payload` — the
+  paginated reader the frontend scrolls a long extraction with. The rules are the
+  oracle's: 1-based display indices, the 12-chunk cap, a start past the end clamped to
+  the last chunk, an empty list reported as an all-zero window, a non-object entry
+  skipped by both the payload list and the end index, and a per-field `400`
+  (`Invalid reader start` / `Invalid reader count` / `Invalid chunk index`).
+- **`POST /api/file-reader`** and **`POST /api/file-chunk`**
+  (`deepseek-gateway::file_reader_route`) registered ahead of the Go `/api/*`
+  catch-all. The falsy-value defaults (`chunkStart or 1`, `chunkCount or 6`) are applied
+  at the route, because that `or` is part of the contract.
+- `file_routes_parity_probe.py` grew from 103 to **201 cases**: 56 window shapes across
+  seven cached indexes and 42 chunk lookups, compared against the oracle's own
+  `file_reader_window` and against the `/api/file-chunk` body transcribed from
+  `web/server.py`. The oracle's functions run unmodified — the probe repoints
+  `rag_files.FILE_CACHE_DIR`, which is the name `files.py` actually reads (it imports the
+  constant **by value** at module load, so patching `config.FILE_CACHE_DIR` alone does
+  nothing; that was the first, failing, attempt).
+
+Evidence:
+
+- `tasks/native-runtime/file_routes_parity_probe.py` ↔
+  `rust/crates/deepseek-policy/examples/file_routes_parity_probe.rs`: **PASS** over
+  **201 cases**. Report: `artifacts/file-routes-parity.json`.
+- `cargo test -p deepseek-gateway --test file_reader_route`: **6 PASS** through
+  `create_production_app`.
+- `deepseek-policy` **524** unit tests, 0 failures (three new reader tests);
+  `deepseek-gateway` 190 unit + integration, 0 failures. `cargo fmt --all --check`
+  clean; `cargo clippy --all-targets` reports no finding in any file this slice touched;
+  ruff and mypy pass the probe.
+- Still dirty-workspace local qualification. Not exact-head CI, not Evidence Assembly,
+  not a packaged image.
+
+Next, in order: `/api/file-page-text` (needs `normalize_extracted_text` and
+`page_texts_for_cache`), `/api/file-text` (multipart upload + extraction) and
+`/api/project-files`; then the skills family, `/api/workspace/*`, the diagnostics status
+blocks, search prefetch and edge inference for `/api/chat`, and the browser staging 4.
+`/api/file-page-image`, `/api/file-page-layout` and `/api/file-page-search` need a
+PDF/image renderer, which is a separate decision.
+
+## Previous continuation checkpoint — 2026-09-21 `/api/file-source` is wired, and the web `truthy` helper was wrong
+
+Same branch `codex/native-a2a-stream-continuation`; HEAD is still
+`bae68f0b64067708aac81aaed18492c3917a1062`. Everything below is uncommitted. The goal
+remains active and `release/native_runtime_5_0_evidence_v1.json` still says `NOT_READY`
+with `exact_head: null`.
+
+Implemented:
+
+- **`deepseek-policy::file_routes`**: `clean_filename`, `content_disposition_header`,
+  `original_file_media_type` and `cached_file_source` — the four helpers
+  `web/routes/files.py` needs. The RFC 5987 header is built with Python's `quote` safe
+  set (which keeps `/`), and the media-type ladder follows the oracle's order.
+- **`GET /api/file-source`** (`deepseek-gateway::file_source_route`): the original
+  uploaded bytes, with `X-Content-Type-Options: nosniff`, the oracle's disposition
+  header, `Cache-Control: no-store` and the media type from the cached index. A missing
+  source is `410 file_index_expired`; a malformed id is `400 invalid_payload`.
+- **`deepseek-policy::core_utils::web_truthy`**, and a real defect fixed with it. The
+  web layer's `truthy` is `str(value or "").strip().lower() in {"1","true","yes","on"}`
+  — a **string parse**, not Python truthiness. The `/api/download` route shipped using
+  `python_truthy`, so `?inline=false` rendered the SVG in place where the oracle
+  downloads it, **and its test asserted that wrong answer**. Both are corrected. This is
+  the first defect found by re-reading the oracle rather than by a probe or a test.
+
+Evidence:
+
+- `tasks/native-runtime/file_routes_parity_probe.py` ↔
+  `rust/crates/deepseek-policy/examples/file_routes_parity_probe.rs`: **PASS** over
+  **103 cases** — 26 filenames through `clean_filename` and both dispositions (CJK,
+  emoji, quotes, both separators, percent/plus/hash/query characters, hidden files), 21
+  cached-file shapes through `original_file_media_type`, and the 179/180/181/400-character
+  caps. Report: `artifacts/file-routes-parity.json`.
+- `cargo test -p deepseek-gateway --test file_source_route`: **6 PASS** through
+  `create_production_app` — the original bytes rather than the index JSON, the `download`
+  string parse (six falsy and four truthy spellings), the media-type ladder, `410` for a
+  missing source and `400` for a bad id, a project-scoped read from
+  `.projects/{id}/files`, and the auth boundary.
+- `cargo test -p deepseek-gateway --test download_route`: **6 PASS** with the corrected
+  `inline` rule (`false`, `0`, `no` and an empty value all download; `1`, `true`, `yes`
+  and `on` render in place).
+- `deepseek-policy` **521** unit tests, 0 failures. `cargo fmt --all --check` clean;
+  `cargo clippy --all-targets` reports no finding in any file this slice touched; ruff
+  and mypy pass the new probe. One self-inflicted regression was caught by clippy and
+  fixed: a stray edit had merged a doc comment into a `#[test]` attribute, leaving the
+  test compiled but not run.
+- Still dirty-workspace local qualification. Not exact-head CI, not Evidence Assembly,
+  not a packaged image.
+
+Next, in order: `/api/file-reader`, `/api/file-chunk`, `/api/file-text` and
+`/api/project-files` (the reader window is ported; the routes are not); then the skills
+family, `/api/workspace/*`, the diagnostics status blocks, search prefetch and edge
+inference for `/api/chat`, and the browser staging 4. `/api/file-page-*` needs a
+PDF/image renderer, which is a separate decision.
+
+## Previous continuation checkpoint — 2026-09-21 `/api/chat` is wired, and its diagnostics block is the oracle's
+
+Same branch `codex/native-a2a-stream-continuation`; HEAD is still
+`bae68f0b64067708aac81aaed18492c3917a1062`. Everything below is uncommitted. The goal
+remains active and `release/native_runtime_5_0_evidence_v1.json` still says `NOT_READY`
+with `exact_head: null`.
+
+This round finished the terminal event: `/api/chat`'s `done.diagnostics` was a
+hand-written `{"tools": {...}}` placeholder, and it is now the oracle's own helper chain.
+
+Implemented:
+
+- **`deepseek-policy::chat_diagnostics`**: `diagnostics_with_tools` (count plus the
+  sorted, deduplicated names), `diagnostics_with_usage` (`cacheHitTokens`,
+  `cacheMissTokens`, `cacheHitRate`) and `diagnostics_with_search` (the round and result
+  counts, **absent** when there was no search — `if search_data:` is a truthiness test,
+  not a presence test). `search_round_count` is also here.
+- The route folds tools → search → usage, which is the oracle's order, and passes the
+  result to `accumulator.done(..)`.
+- **`round(x, 1)` was ported twice, and the first version was wrong.** The direct
+  translation — `(value * 10).round_ties_even() / 10.0` — returns `1.0` for `1.05`,
+  because `1.05 * 10` is exactly `10.5` and half-to-even rounds that to `10`, while
+  Python returns `1.1` because the stored double is *above* its decimal tie. Rust's
+  `format!("{value:.1}")` uses the same correctly-rounded decimal algorithm Python's
+  `round` does, and agrees over the whole tie corpus. The unit test caught this before
+  the probe did.
+
+Evidence:
+
+- `tasks/native-runtime/chat_stream_events_parity_probe.py` ↔
+  `rust/crates/deepseek-policy/examples/chat_stream_events_parity_probe.rs`: **PASS**
+  over 21 events (byte-identical text), 11 usage merges, 8 streamed tool-call
+  sequences, **4 tool-diagnostic cases, 17 usage-diagnostic cases over the `round(x, 1)`
+  tie corpus, 5 search-round counts and 6 search-diagnostic cases** — every one compared
+  against the imported oracle functions (`diagnostics_with_tools`,
+  `diagnostics_with_usage`, `diagnostics_with_search`, `_search_round_count`).
+- `cargo test -p deepseek-gateway --test chat_ndjson_route`: **7 PASS**, with the
+  terminal event's diagnostics now asserted field by field — including that a turn with
+  no search carries **no** `searchRoundCount` key.
+- `cargo test -p deepseek-policy --lib`: **516** unit tests, 0 failures.
+  `cargo fmt --all --check` clean; `cargo clippy --all-targets` reports no finding in
+  either new file; ruff and mypy pass the probe.
+- Still dirty-workspace local qualification. Not exact-head CI, not Evidence Assembly,
+  not a packaged image. The gateway-attempt, semantic-cache, cost and trace diagnostics
+  blocks are still absent, because their state is not in this route yet.
+
+Next, in order: search prefetch and edge inference for `/api/chat`; then the file/upload
+and page-render family, the skills family, `/api/workspace/*`, the diagnostics status
+blocks whose Python status functions are not yet ported, and the browser staging 4.
+
+## Previous continuation checkpoint — 2026-09-21 `/api/chat` is wired on the native edge
+
+Same branch `codex/native-a2a-stream-continuation`; HEAD is still
+`bae68f0b64067708aac81aaed18492c3917a1062`. Everything below is uncommitted. The goal
+remains active and `release/native_runtime_5_0_evidence_v1.json` still says `NOT_READY`
+with `exact_head: null`.
+
+The frontend's streaming entry was the largest remaining `503`. It is now served by
+`deepseek-gateway::chat_ndjson` over the protocol ported last round.
+
+Implemented:
+
+- **`deepseek-gateway::chat_ndjson`**: `POST /api/chat` registered ahead of the Go
+  `/api/*` catch-all. It takes the **internal** payload (the route injects
+  `localBaseUrl`), validates it with the ported `validate_deepseek_payload`, runs the
+  message rules and the memory state through `NativeAssembly`, opens the upstream with
+  `stream: true`, and turns each SSE delta into an NDJSON line as it arrives. The
+  tool-round loop is the OpenAI route's, with `RoundDecision`, `append_tool_exchange`
+  and `force_final_answer_without_tools` — so a `browser_*`, `search_files`,
+  `create_document` or `reminders` call behaves identically on both routes.
+- **Memory suggestions are wired on this route and not the other.** `/api/chat` is the
+  one protocol with a `memorySuggestions` channel, so `ToolRoundExecutor` gained
+  `run_round_with_suggestions` and `WorkspaceBundle` gained `view_with`; the callback is
+  `'static` because the round runs under `spawn_blocking`, and the route closes over an
+  `Arc<Mutex<Vec<Value>>>`. `WorkspaceContext::on_memory_suggestion` and
+  `memory::suggest_memory` are now `Send + Sync`.
+- **Three branches are refused, not degraded.** `agentMode`, the model-router cascade
+  and a forced `searchMode` return `501 NATIVE_CHAT_BRANCH_NOT_READY` **before any
+  upstream call**. Their producers are unported, and serving a thinner path would look
+  like success. The forced-search refusal is reachable here even though it is not on
+  `/v1/chat/completions`: the OpenAI facade never forwards `searchMode`, but this route
+  takes the internal payload, so it arrives intact and the oracle's prefetch branch
+  would run.
+
+Evidence:
+
+- `cargo test -p deepseek-gateway --test chat_ndjson_route`: **7 PASS** through
+  `create_production_app` against a scripted SSE upstream — the oracle's event sequence
+  and order (`reasoning`, `content`, `content`, `done`), the accumulated `done` totals,
+  the `length` truncation note before `done`, agent mode and forced search refused with
+  the upstream called **zero** times, the no-user-turn `400`, an upstream failure as an
+  HTTP error rather than a `200` stream, and the production auth layer. Every line is
+  also asserted to be compact JSON.
+- `cargo test -p deepseek-policy -p deepseek-gateway --lib --tests`: 0 failures
+  (`deepseek-policy` 511 unit, `deepseek-gateway` 190 unit + integration).
+  `cargo fmt --all --check` clean; `cargo clippy --all-targets` reports no finding in
+  either new file; frontend `vitest src/api/chatStream.test.ts` 4 passed.
+- Still dirty-workspace local qualification. Not exact-head CI, not Evidence Assembly,
+  not a packaged image. The `done` event's `diagnostics` carries only the tool summary;
+  the oracle's full chain (gateway attempts, search, semantic cache, usage, cost,
+  trace) is not ported.
+
+Next, in order: the `done` diagnostics chain and search prefetch for `/api/chat`; then
+the file/upload and page-render family, the skills family, `/api/workspace/*`, the
+diagnostics status blocks whose Python status functions are not yet ported, and the
+browser staging 4.
+
+## Previous continuation checkpoint — 2026-09-21 the `/api/chat` NDJSON protocol is ported
+
+Same branch `codex/native-a2a-stream-continuation`; HEAD is still
+`bae68f0b64067708aac81aaed18492c3917a1062`. Everything below is uncommitted. The goal
+remains active and `release/native_runtime_5_0_evidence_v1.json` still says `NOT_READY`
+with `exact_head: null`.
+
+`/api/chat` is the frontend's streaming entry and the largest remaining public route.
+It is not one slice: the oracle's `stream_deepseek` runs search prefetch, semantic
+cache, edge inference, gateway retries with a scheduler lease, a streaming tool-round
+loop, budget accounting, trace spans, agent mode and the model-router cascade. This
+round ported the **protocol** — the part every one of those branches writes through —
+so the route work that follows has a verified encoder instead of an assumed one.
+
+Implemented:
+
+- **`deepseek-policy::chat_stream_events`**: the seven-event vocabulary
+  (`system_note`, `search`, `reasoning`, `content`, `memory_suggestion`, `error`,
+  `done`), `encode_stream_event` (compact JSON + `\n`, `ensure_ascii=False`), the
+  `ChatStreamAccumulator` that grows `content`/`reasoning`/`usage` while emitting each
+  delta, `merge_usage_totals`/`usage_int`, and the streaming tool-call merge
+  (`merge_stream_tool_call_deltas` / `finalized_stream_tool_calls`).
+- **`RawJson`**: `usage` is carried as pre-rendered bytes rather than a
+  `serde_json::Value`. This crate compiles `serde_json` **without** `preserve_order`,
+  so a `Value` map is key-sorted, and the oracle writes `usage` in the provider's
+  insertion order. The parity probe caught the reordering on `done_full`
+  (`completion_tokens` before `prompt_tokens`) — the same class of bug the OpenAI SSE
+  encoder in `chat_stream.rs` avoids by building its frames by hand.
+
+Three defects were found by reading the oracle and by the probe, not by inspection:
+
+1. **`merge_usage_totals` was ported wrong first.** The oracle sums only the five token
+   counters in `USAGE_SUM_FIELDS` (each with a camelCase alias), reads them through
+   `usage_int` (`max(0, int(raw))`), and **drops** every other key of the round. The
+   first port summed all numeric fields and kept non-numeric ones.
+2. **The `done` envelope reordered `usage`** (see `RawJson` above).
+3. **A negative tool-call index is a legal key.** The oracle does `int(index_value)`
+   with no non-negativity check, so `-4` is stored as `-4`, sorts first, and its
+   placeholder id is `call_-3`. The first port filtered negatives out, producing
+   `call_1`/`call_2` where the oracle produced `call_-3`/`call_1`. The parity probe
+   measured exactly that.
+
+Evidence:
+
+- `tasks/native-runtime/chat_stream_events_parity_probe.py` ↔
+  `rust/crates/deepseek-policy/examples/chat_stream_events_parity_probe.rs`:
+  **PASS**. 21 events compared **as text** (which is the contract), including CJK,
+  emoji, quotes, tabs, a null id, an empty `content`, a scalar `search`, a
+  non-mapping `memory_suggestion`, and the two `done` shapes; 11 usage merges; 8
+  streamed tool-call sequences (the raw accumulator **and** the finalized list, so a
+  difference in a placeholder id or an appended argument shows up even when the
+  finalizer would drop the entry); and the accumulator's totals. The usage/tool-call
+  sections are compared as parsed JSON because the Rust probe round-trips them through
+  `serde_json::Value`, whose maps are key-sorted — a representation difference, not a
+  value one, and the reason the event bytes are compared as text instead.
+  Report: `artifacts/chat-stream-events-parity.json`.
+- `cargo test -p deepseek-policy --lib chat_stream_events`: **11 PASS** (the byte
+  encodings, the always-present `done` fields, the accumulator, the falsy-id rule, the
+  memory-suggestion spread — where a suggestion's own `type` wins *and keeps the first
+  position*, which is what a Python dict does — the five-counter usage merge, the
+  index-order merge, the missing/unparseable index rule, the empty-fragment rule, the
+  no-name drop, and the negative index).
+- `deepseek-policy` **511** unit tests, 0 failures; `cargo fmt --all --check` clean;
+  `cargo clippy --all-targets` reports no finding in the new file (the three
+  `deepseek-policy` warnings are the same pre-existing files as previous rounds);
+  ruff and mypy pass the new probe.
+- Still dirty-workspace local qualification. Not exact-head CI, not Evidence Assembly,
+  not a packaged image.
+
+Next, in order: wire the `/api/chat` route for the paths this protocol covers
+(non-agent, non-cascade, non-edge, no search prefetch) with the others refused
+explicitly rather than silently degraded; then `search_for_client` (whose key order
+matters for the `search` event), the file/upload and page-render family, the skills
+family, `/api/workspace/*`, and the browser staging 4.
+
+## Previous continuation checkpoint — 2026-09-21 two public `/api` routes stop being 503s
+
+Same branch `codex/native-a2a-stream-continuation`; HEAD is still
+`bae68f0b64067708aac81aaed18492c3917a1062`. Everything below (and the browser-engine
+checkpoint that follows) is uncommitted. The goal remains active and
+`release/native_runtime_5_0_evidence_v1.json` still says `NOT_READY` with
+`exact_head: null`.
+
+The evidence file's first blocker says the public edge is incomplete, and the concrete
+measurement behind that is the `/api/*` catch-all: any route not registered natively
+falls through to the Go proxy, which answers `503 GO_CONTROL_PROXY_NOT_READY` when no
+Go control plane is configured. Three of the frontend's routes were in that state and
+are now native.
+
+Implemented:
+
+- **`POST /api/title`** — the conversation-title route the frontend calls after the
+  first exchange. `deepseek-policy::title` carries the pure half (the prompt, the
+  request body, the truncation limits, `_sanitize_title`, `format_upstream_error`, and
+  the per-key rate window), and `deepseek-gateway::title_route` carries the transport
+  and the oracle's error envelopes. Registered ahead of the `/api/*` catch-all.
+- **`GET /api/download`** — the `downloadUrl` that `create_document`/`create_pptx`/
+  `create_mindmap` hand back. `generated_files::download_descriptor` was the only
+  missing piece (`resolve_generated_file` was already ported); `download_route` reads
+  the bytes and writes the two headers. The id rule stays in the policy crate, so the
+  traversal boundary cannot be forgotten at the route.
+- **`GET /api/taint`** — the context-taint status block. `context_taint` was already a
+  complete port; this route only had to be registered. It also needed
+  `ContextTaintSettings::from_env`, which now mirrors the oracle's reader including the
+  `(4, 200)` clamp on `TAINT_MAX_SEGMENTS`.
+- **Measured correction:** `chat_execution::DEFAULT_UPSTREAM_TIMEOUT_SECONDS` read
+  `120`; the oracle's default is `180` (`_env_int("DEEPSEEK_TIMEOUT_SECONDS", 180)`).
+  Nothing depended on the wrong value — the title route caps its own call at
+  `min(timeout, 20)`, which is what hid it — so it is corrected rather than recorded as
+  a divergence.
+- **Test-race fix:** the browser session registry is process-wide (as the oracle's
+  `_sessions` dict is), so the browser unit tests could interleave a
+  `reset_sessions_for_tests` between another test's session creation and its first
+  action. The engine-backed cases added earlier made that fail intermittently with
+  `Browser session not found`; the tests now serialize on a registry mutex. Three
+  consecutive full `deepseek-policy` runs are green.
+
+Evidence:
+
+- `tasks/native-runtime/title_parity_probe.py` ↔
+  `rust/crates/deepseek-policy/examples/title_parity_probe.rs`: **PASS**, seven sections
+  compared against the imported oracle — the system prompt, 26 sanitiser cases, 9
+  truncations, 6 request bodies, 8 `titleModel` selections, 7 upstream responses, 7
+  upstream-error bodies. Report: `artifacts/title-parity.json`.
+  **The probe found a real bug on its first run**:
+  `choices[0].message.content == null` returned `"None"` instead of `""`, because the
+  port called `str()` without the oracle's `or ""`.
+- `cargo test -p deepseek-gateway --test title_route`: **7 PASS** through
+  `create_production_app` against a scripted loopback upstream that records the bytes it
+  received — the oracle's body and headers, the blank-`userMessage` early return (zero
+  upstream calls), the missing-key `400`, an upstream `503` capped to `502` with the
+  provider's own message, the 13th call in the window as `429` with the upstream called
+  exactly 12 times, and the production auth layer answering `401`.
+- `cargo test -p deepseek-gateway --test download_route`: **6 PASS** — the bytes on the
+  wire equal the bytes on disk for all five registered types, the four `inline`
+  combinations (including `inline=false` being *truthy*, which is Python), a traversal
+  attempt that leaks nothing from outside `.generated/`, the unknown-id `404` envelope,
+  and the auth boundary. `generated_files` unit tests pin the oracle's six MIME/name
+  pairs.
+- `cargo test -p deepseek-gateway --test data_routes`: **28 PASS**, including the two
+  new `/api/taint` cases and its auth boundary.
+- `cargo fmt --all --check` clean; `cargo clippy --all-targets` reports **no** finding
+  in any file this slice touched (the three `deepseek-policy` and five
+  `deepseek-gateway` warnings are the same pre-existing files as last round).
+  Python `pytest -k title`: 12 passed; `pytest -k "download or generated"`: 67 passed.
+  Rust: `deepseek-policy` **500** unit, `deepseek-gateway` **190** unit + integration.
+- Still dirty-workspace local qualification. Not exact-head CI, not Evidence Assembly,
+  not a packaged image.
+
+Next: `/api/chat` (NDJSON) is the frontend's streaming entry and is still a 503; then
+the skills registry/runner family, the file/upload and page-render family
+(`/api/file-source`, `/api/file-page-*`, `/api/file-reader`, `/api/file-chunk`,
+`/api/project-files`, `/api/file-text`), the `/api/workspace/*` backup/DR surface, and
+the diagnostics status blocks whose Python status functions are not yet ported. The
+browser staging 4 (image + audit entry + CI lane + revision pin) also remains open.
+
+## Previous continuation checkpoint — 2026-09-21 the browser engine is real, end to end
+
+Same branch `codex/native-a2a-stream-continuation`; HEAD is still
+`bae68f0b64067708aac81aaed18492c3917a1062` (the committed ADR-0050 stage 1). All work
+below is uncommitted; no commit, push, merge or cleanup was performed. The goal remains
+active and `release/native_runtime_5_0_evidence_v1.json` still says `NOT_READY` with
+`exact_head: null`.
+
+Implemented (ADR-0050 stages 2 and 3):
+
+- **The CDP engine** (`rust/crates/deepseek-browser/src/engine.rs`, new): spawns a
+  headless Chromium with `--remote-debugging-port=0`, reads the DevTools socket off
+  stderr, attaches one page in flat mode, and drives every declared action over CDP —
+  `open_url` (`Page.navigate` + `Page.domContentEventFired`), `read_page`
+  (`innerText` / `documentElement.outerHTML` with the doctype prepended / `title`),
+  `extract_links`, `screenshot` (`Page.captureScreenshot`, element clip via
+  `DOM.getBoxModel`), `click` (a real `Input.dispatchMouseEvent` at the element's
+  viewport centre), `type_text`, `select`, `scroll`, `download`
+  (`Browser.setDownloadBehavior` + `Browser.downloadProgress`). `tokio-tungstenite`
+  is the one new dependency family; the workspace comment says why a hand-rolled frame
+  layer was rejected.
+- **The sidecar** (`src/sidecar.rs`): one browser context per session id, the
+  oracle's timeouts, no durable store, and the `CloseSession` RPC — added to
+  `proto/browser/v1/browser.proto` and regenerated, because without it a closed
+  session left a Chromium and a profile directory behind for the engine's lifetime.
+- **The seam** (`deepseek-policy::browser_engine`, new): the policy crate declares what
+  it needs (`BrowserEngine`), the gateway implements it. The safety gate and the session
+  registry stay in the policy crate and run either way; only the controller changes, and
+  `controller_kind_for` now selects the engine exactly the way the oracle selects
+  Playwright (an engine that answers `Status` with `available: true`).
+- **The client** (`deepseek-gateway::browser_engine_client`, new): the generated tonic
+  client on a dedicated OS thread with its own single-threaded runtime, because the
+  policy seam is synchronous (it runs under `spawn_blocking`) and the client is not. The
+  worker is detached and stops when the channel closes. `ToolRoundExecutor` attaches the
+  engine to the tool loop; with no engine listening, `browser_*` is the static-controller
+  deployment it has always been.
+- `deepseek-policy::browser` gains `execute_browser_action_with_engine` and shapes the
+  engine's answers into the oracle's per-action envelopes; the original
+  `execute_browser_action` is a thin wrapper, so every existing caller and probe is
+  unchanged.
+
+Evidence:
+
+- `tasks/native-runtime/browser_engine_parity_probe.py` ↔
+  `rust/crates/deepseek-browser/examples/browser_engine_parity_probe.rs`:
+  **PASS**, six fixtures, `url`/`title`/`text`/`links` identical, **0 differing HTML
+  bytes** after whitespace collapse. Recorded divergences: the download file name
+  (oracle: `sample-report.html`; CDP `allowAndName`: a GUID), the screenshot byte
+  length (12925 vs 17284 — both PNG), and a missing element (oracle raises its timeout;
+  the engine answers `not_found`/404). Report: `artifacts/browser-engine-parity.json`.
+- `cargo test -p deepseek-browser --test engine_live`: a real Chrome, every declared
+  action, including that a selector which is not in the document is `element_not_found`
+  rather than a click at the origin. Gated on `DEEPSEEK_BROWSER_CHROMIUM`.
+- `cargo test -p deepseek-gateway --test browser_engine_e2e`: **10 PASS** across the
+  real process boundary (gateway client → gRPC → sidecar process → CDP → Chromium →
+  loopback HTTP fixture), including the safety gate refusing a private host *before* the
+  engine is reached, `not_found` for an unknown session, and `close_session` removing
+  both the registry entry and the engine's profile directory.
+- Three real defects were found and fixed by these tests rather than by inspection:
+  `Page.getLayoutMetrics` was sent without a session id (the browser answers
+  `-32601 wasn't found`), the document read dropped the doctype that `page.content()`
+  serialises, and `click` returned the pre-click URL.
+- Pinned-toolchain checks: `cargo fmt --all --check` clean; `cargo clippy
+  --all-targets` reports **no** findings in any file this slice touched (the three
+  `deepseek-policy` and five `deepseek-gateway` warnings it does report are pre-existing
+  files — `memory_schema.rs`, `presentations.rs`, `workspace_schema.rs`, `a2a_control.rs`,
+  `control_proxy.rs` — and `sidecar.rs:207` is the pre-existing `admit`); tests:
+  `deepseek-browser` 11, `deepseek-policy` 491, `deepseek-gateway` 190 + 55 integration,
+  0 failures; `scripts/native_codegen.py --check` and
+  `scripts/check_native_contract_parity.py` pass (47 domains / 9 proto / 14 outputs).
+- This is dirty-workspace local qualification on Windows against the machine's Chrome.
+  It is **not** exact-head CI, not Evidence Assembly, and not a packaged image: staging 4
+  (a Chromium-carrying image, the `scripts/check_native_images.py` entry, a CI lane, and
+  a Chromium revision pin) is open, so no release claim is made.
+
+Next: staging 4 for the browser (image + audit entry + CI lane + revision pin); then the
+remaining public business APIs, the authoritative Go controller and Rust
+worker/provider recovery, and native service/desktop/Android packaging from the matrix.
+
+## Previous continuation checkpoint — 2026-09-20 native project reads
 
 The live workspace advanced externally to HEAD
 `b9b31b90c14406c8d306de98f5291d914062d476` on
@@ -4231,3 +4676,72 @@ The remaining `/api` data surfaces the frontend calls, in dependency order:
 3. The **workspace backup/DR** surface is the largest block (~90 routes) and is
    Go-owned in the target topology, so it belongs with the Go control API rather
    than here.
+
+## Browser engine (ADR-0050 stages 1-4) and the public data routes
+
+Work that was in the tree uncommitted. Stage 1 (`bae68f0b`) is this file's earlier
+entry; stages 2-4 and the public-route helpers are recorded here, verified rather than
+asserted.
+
+### The engine
+
+- `rust/crates/deepseek-browser`: `engine.rs` (spawn headless Chromium, `--remote-
+  debugging-port=0`, read the DevTools socket off stderr, one page session in flat mode)
+  behind `sidecar.rs` (one browser per gateway session id, unknown session is
+  `not_found` rather than an implicit create, fences validated, no durable store, no
+  second safety policy). `CloseSession` was added to the proto so a closed session
+  releases its Chromium and profile.
+- The gateway seam: `deepseek-policy::browser_engine` declares what the policy crate
+  needs, `deepseek-gateway::browser_engine_client` implements it over the generated
+  tonic client, `ToolRoundExecutor` attaches it to the tool loop, and
+  `playwright_available()` remains the single switch — no engine configured means the
+  static controller answers.
+
+### Two defects found by running the probes, not by reading them
+
+1. **`file_routes` had two wrong test expectations**, both of which asserted behaviour
+   the oracle does not have. Measured by running the oracle:
+   `normalized_page_texts(...)` over the nine-entry list returns **2** survivors, not 3
+   (the list's own `pages[2]` assertion duplicated `pages[1]`, which is what a
+   copy-paste looks like), and `page_text_from_cached_chunks({"chunks":[{"text":"chunk
+   text"}]}, requested_page=3, page_count=5)` returns **`"k"`** — `per_page = 10 // 5 =
+   2`, so page 3 is `text[4:6]`. The Rust implementation was already right; the tests
+   now say what the oracle does.
+2. **`scroll` did nothing, and the parity probe was racing.** Chromium animates a wheel
+   and `page.mouse.wheel` returns before it lands, so reading `window.scrollY`
+   immediately measures the race: two consecutive runs gave `oracle 900 / engine 0`
+   then `oracle 0 / engine 900`. The engine now settles the position before answering
+   (a deliberate divergence from `mouse.wheel`, recorded in the spec) and the probe
+   settles both sides before reading. The pair passes on repeat runs.
+
+### Verification
+
+- `browser_engine_parity_probe.py --rust-example …` → **PASS**, six fixtures,
+  `problems: []`, twice in a row: `url`/`title`/`text` identical, `links` identical
+  after blob-UUID normalisation, 0 differing HTML bytes after whitespace collapse.
+- `title_parity_probe` **PASS**; `file_routes_parity_probe` **PASS** (201 cases);
+  `chat_stream_events_parity_probe` **PASS** (21 events) — all four driving their own
+  Rust side and writing a comparison report.
+- `cargo test -p deepseek-policy -p deepseek-browser --locked`: **529** policy lib +
+  9 sidecar + 2 listener + 2 live engine (`the_engine_drives_a_real_browser_through_the_declared_actions`,
+  `a_browser_that_cannot_be_started_is_reported_not_panicked`), all passed, against a
+  real Chromium.
+- `cargo test -p deepseek-gateway --test browser_engine_e2e` → **1 passed**,
+  `the_gateway_reaches_a_real_browser_through_the_sidecar`.
+- `cargo fmt --all --check` clean; clippy `--all-targets --all-features -D warnings`
+  clean; `check_zero_python_runtime` PASS 8/8; `native_runtime_contract --check` `ok`
+  (`proto_files: 9`); docs nav PASS (214) and links OK.
+- The new image-audit rule was shown **able to fail**: deleting the `browser` stage
+  yields `missing required stage 'browser'`.
+
+### Not done
+
+- **The image was written, not built**: no Docker on this machine, so
+  `rust/Dockerfile`'s `browser` stage and the compose service are verified by CI
+  (`rust-docker`, `native-browser-engine`), not locally.
+- The container sandbox remains an operator decision: the image and the compose service
+  deliberately do not set `DEEPSEEK_BROWSER_NO_SANDBOX`, and a container with neither
+  user namespaces nor that opt-in fails closed to the static controller.
+- Three of the four new probe pairs are not CI steps.
+- The `/api` surfaces this file listed earlier (skills, traces, media; the Go-owned
+  workspace backup/DR block) are still unported.

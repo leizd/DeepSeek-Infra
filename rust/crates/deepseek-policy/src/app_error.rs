@@ -41,6 +41,8 @@ pub mod codes {
     pub const FORBIDDEN: &str = "forbidden";
     /// `ErrorCode.UPLOAD_TOO_LARGE`
     pub const UPLOAD_TOO_LARGE: &str = "upload_too_large";
+    /// `ErrorCode.RATE_LIMITED`
+    pub const RATE_LIMITED: &str = "rate_limited";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,7 +1,7 @@
 use std::io;
 use std::net::SocketAddr;
 
-use deepseek_browser::BrowserEngine;
+use deepseek_browser::sidecar::BrowserEngineService;
 use deepseek_protocol::generated::deepseek::browser::v1::browser_engine_server::BrowserEngineServer;
 use tonic::transport::Server;
 
@@ -50,7 +50,7 @@ fn configured_listen_addr(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address = configured_listen_addr(std::env::var(LISTEN_ENV))?;
     Server::builder()
-        .add_service(BrowserEngineServer::new(BrowserEngine))
+        .add_service(BrowserEngineServer::new(BrowserEngineService::from_env()))
         .serve(address)
         .await?;
     Ok(())
