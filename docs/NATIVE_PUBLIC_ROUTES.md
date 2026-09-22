@@ -282,3 +282,11 @@ The rules that are easy to get wrong, and are therefore pinned:
   lookups. The oracle's own `file_reader_window` runs unmodified; the probe repoints
   `rag_files.FILE_CACHE_DIR`, which is the name `files.py` reads (it imports the constant
   by value, so patching `config.FILE_CACHE_DIR` alone does nothing).
+
+## CI
+
+`native-probe-parity` runs `title_parity_probe`, `file_routes_parity_probe` and
+`chat_stream_events_parity_probe` against their own Rust sides and takes the exit code as
+the verdict — each answers `return 0 if not problems else 1`. These three pairs were
+local evidence until that lane existed; the older pairs print JSON for a human to diff and
+still need a harness before they can be gates.

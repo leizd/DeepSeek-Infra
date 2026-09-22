@@ -145,14 +145,17 @@ the pair passes on repeat runs.
   not set it, and both say so — it is a security decision, not a default. A container
   that has neither the namespaces nor the opt-in fails closed: no engine, static
   controller, `Status.available == false`.
-- **The image was written, not built here.** Docker is not available on the development
-  machine, so the `browser` stage and the lane are verified by CI's `rust-docker` lane
-  and `native-browser-engine`, not locally. The base size is Chromium plus its
-  libraries (the earlier 100–150 MB figure is an estimate that could not be weighed on
-  Windows).
-- **Three of the four probe pairs are still not CI steps.** The engine's parity probe
-  runs in `native-browser-engine`; `title`, `file_routes` and `chat_stream_events`
-  remain local evidence, as the older pairs are. Making them gates is a separate slice.
+- **The image now builds locally, and here is what it weighs.** `--target browser` on the
+  development machine produces **1.1 GB** (`deepseek-browser-engine:4.8.0`) against
+  **166 MB** for the gateway built from the same Dockerfile — the delta is Chromium plus
+  its libraries, measured rather than the 100–150 MB this file first estimated.
+  `--target gateway` was built too, and that is what confirms the target fix: an
+  untargeted build would have produced the browser image under the gateway's name.
+- **The probe pairs are CI steps now.** The engine's parity probe runs inside
+  `native-browser-engine`; `title`, `file_routes` and `chat_stream_events` run in
+  `native-probe-parity`, because each drives its own Rust side and answers `return 0 if
+  not problems else 1`. The older pairs print JSON for a human to diff and still need a
+  harness before they can be gates.
 - The browser engine's actions beyond the declared nine — `extract_dom`, `save_snapshot`,
   `close_session` — stay refused by the seam: the first is carried by `ReadPage`, the
   second is Python-owned, and the third is `CloseSession` on the engine boundary.

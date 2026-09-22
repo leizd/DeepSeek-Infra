@@ -75,7 +75,8 @@ that answers `Status` with `available: true`.
   gate refusing before the engine and `close_session` removing the profile
 - `rust/Dockerfile` target `browser` — the engine's own image (Chromium, non-root
   `deepseek`, loopback listener), held to the same zero-Python and non-root rules as
-  `worker` and `gateway` by `scripts/check_native_images.py`
+  `worker` and `gateway` by `scripts/check_native_images.py`; built locally at **1.1 GB**
+  against **166 MB** for the gateway from the same Dockerfile
 - CI `native-browser-engine` — installs the Chromium `requirements-browser.txt` pins,
   then runs the live engine tests, the gateway seam, and the engine parity probe
 - A browser that will not start reports **why**: the launch error carries the last of
