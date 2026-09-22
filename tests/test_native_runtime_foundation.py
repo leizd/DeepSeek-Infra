@@ -16,8 +16,8 @@ def test_native_contract_check_passes() -> None:
     report = check_all()
     assert report["ok"] is True
     assert report["go"] == "1.27.1"
-    assert report["proto_files"] == 8
-    assert report["generated_outputs"] == 12
+    assert report["proto_files"] == 9
+    assert report["generated_outputs"] == 14
 
 
 def test_go_shadow_process_cannot_mutate() -> None:

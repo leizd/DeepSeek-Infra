@@ -109,13 +109,27 @@ impl WorkspaceBundle {
     /// `None`, so a suggestion is still built and returned, just not notified:
     /// the OpenAI envelope has no `memorySuggestions` channel to carry it.
     fn view(&self) -> WorkspaceContext<'_> {
+        self.view_with(None)
+    }
+
+    /// The same view with the `memory_suggestion_callback` wired.
+    ///
+    /// `/api/chat` is the one route with a `memorySuggestions` channel — the NDJSON
+    /// `done` event and the `memory_suggestion` event both carry it — so it supplies a
+    /// callback here and the OpenAI facade does not. `None` is not "no suggestion": the
+    /// branch still builds one and returns it in the tool result; only the notification
+    /// is absent.
+    fn view_with<'a>(
+        &'a self,
+        on_memory_suggestion: Option<&'a (dyn Fn(&Value) + Send + Sync)>,
+    ) -> WorkspaceContext<'a> {
         WorkspaceContext {
             root: &self.root,
             entropy: &self.entropy,
             clock: &self.clock,
             file_cache: &self.file_cache,
             vector_hits: None,
-            on_memory_suggestion: None,
+            on_memory_suggestion,
             default_memory_scope: "global",
         }
     }
@@ -130,6 +144,10 @@ impl WorkspaceBundle {
 pub struct ToolRoundExecutor {
     workspace: Option<Arc<WorkspaceBundle>>,
     policy: Option<Arc<Mutex<ToolPolicy>>>,
+    /// The browser engine, when this deployment has one. `None` is the documented
+    /// static-controller fallback, not a failure: `browser_*` still runs the safety
+    /// gate and the session registry, and only the controller changes.
+    browser_engine: Option<Arc<dyn deepseek_policy::browser_engine::BrowserEngine>>,
 }
 
 impl ToolRoundExecutor {
@@ -137,18 +155,41 @@ impl ToolRoundExecutor {
     /// states: data branches then report "not enabled for this request" and
     /// calls run ungated, both mirroring the oracle's disabled paths.
     pub fn new(workspace: Option<WorkspaceBundle>, policy: Option<ToolPolicy>) -> Self {
+        Self::with_browser_engine(workspace, policy, None)
+    }
+
+    /// Build one with an engine behind the `browser_*` family.
+    pub fn with_browser_engine(
+        workspace: Option<WorkspaceBundle>,
+        policy: Option<ToolPolicy>,
+        browser_engine: Option<Arc<dyn deepseek_policy::browser_engine::BrowserEngine>>,
+    ) -> Self {
         Self {
             workspace: workspace.map(Arc::new),
             policy: policy.map(|policy| Arc::new(Mutex::new(policy))),
+            browser_engine,
         }
     }
 
     /// From the server environment, mirroring the oracle's defaults.
+    ///
+    /// The engine is built from `DEEPSEEK_BROWSER_ENGINE_ADDR` (or the sidecar's
+    /// default loopback address) and probed once: an address that does not answer
+    /// leaves `browser_*` on the static controller, which is what the oracle does
+    /// when `playwright` is not importable.
     pub fn from_env() -> Self {
         let workspace = std::env::var_os("DEEPSEEK_INFRA_ROOT")
             .map(PathBuf::from)
             .map(WorkspaceBundle::new);
-        Self::new(workspace, policy_from_env())
+        Self::with_browser_engine(
+            workspace,
+            policy_from_env(),
+            crate::browser_engine_client::browser_engine_from_env(),
+        )
+    }
+
+    fn browser_engine(&self) -> Option<&dyn deepseek_policy::browser_engine::BrowserEngine> {
+        self.browser_engine.as_deref()
     }
 
     /// Run one tool the way MCP `tools/call` does: policy-gated `dispatch`,
@@ -177,6 +218,7 @@ impl ToolRoundExecutor {
                 .map(|callback| callback as &deepseek_policy::tool_search::WebSearchCallback),
             workspace: view.as_ref(),
             fetch: fetch.as_ref(),
+            browser_engine: self.browser_engine(),
         };
         let mut policy_guard = self.policy.as_ref().map(|shared| {
             shared
@@ -201,8 +243,27 @@ impl ToolRoundExecutor {
     /// mutation gate retries once a second for up to ten) and read stores, none
     /// of which belongs on the async runtime.
     pub async fn run_round(&self, tool_calls: Vec<Value>) -> Vec<Value> {
+        self.run_round_with_suggestions(tool_calls, None).await
+    }
+
+    /// The same round with the `memory_suggestion_callback` wired.
+    ///
+    /// `/api/chat` is the one route whose protocol carries `memorySuggestions` — both
+    /// as its own `memory_suggestion` event and inside the terminal `done` event — so
+    /// it passes a callback here. The OpenAI facade passes `None`, which is not "no
+    /// suggestion": the branch still builds one and returns it in the tool result.
+    ///
+    /// The callback is `'static` because the round runs under `spawn_blocking`, whose
+    /// task cannot borrow from the caller. A caller that needs per-request state closes
+    /// over an `Arc`.
+    pub async fn run_round_with_suggestions(
+        &self,
+        tool_calls: Vec<Value>,
+        on_memory_suggestion: Option<&'static (dyn Fn(&Value) + Send + Sync)>,
+    ) -> Vec<Value> {
         let workspace = self.workspace.clone();
         let policy = self.policy.clone();
+        let engine = self.browser_engine.clone();
         // The JoinError fallback needs the selected calls too, so the truncation
         // is computed once here and a copy is kept for it (it only runs when the
         // blocking task died, which is not the hot path).
@@ -213,7 +274,9 @@ impl ToolRoundExecutor {
             .collect();
         let fallback = selected.clone();
         let joined = tokio::task::spawn_blocking(move || {
-            let view = workspace.as_deref().map(|bundle| bundle.view());
+            let view = workspace
+                .as_deref()
+                .map(|bundle| bundle.view_with(on_memory_suggestion));
             // The web-search provider is per request, like the executor: its memo and
             // turn counter are the oracle's closure variables, so one callback must
             // live across every round of this request.
@@ -244,6 +307,7 @@ impl ToolRoundExecutor {
                     .map(|callback| callback as &deepseek_policy::tool_search::WebSearchCallback),
                 workspace: view.as_ref(),
                 fetch: fetch.as_ref(),
+                browser_engine: engine.as_deref(),
             };
             execute_tool_calls(&selected, &|| false, &|call| {
                 let name = tool_dispatch::tool_call_name(call);

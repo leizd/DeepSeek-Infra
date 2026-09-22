@@ -42,6 +42,11 @@ pub struct ExecutorContext<'a> {
     /// oracle's explicit "not enabled for this request" path, used when the
     /// request has no workspace root to hang the cache off.
     pub fetch: Option<&'a crate::fetch_url::FetchContext<'a>>,
+    /// The browser engine the `browser_*` family drives. `None` means this
+    /// deployment has no engine, which is the documented static-controller
+    /// fallback rather than a failure: the safety gate and the session registry
+    /// run either way, and only the controller changes.
+    pub browser_engine: Option<&'a dyn crate::browser_engine::BrowserEngine>,
 }
 
 impl<'a> ExecutorContext<'a> {
@@ -50,6 +55,7 @@ impl<'a> ExecutorContext<'a> {
             web_search: Some(callback),
             workspace: None,
             fetch: None,
+            browser_engine: None,
         }
     }
 
@@ -58,7 +64,17 @@ impl<'a> ExecutorContext<'a> {
             web_search: None,
             workspace: Some(workspace),
             fetch: None,
+            browser_engine: None,
         }
+    }
+
+    /// Attach the browser engine, keeping every other part of the context.
+    pub fn with_browser_engine(
+        mut self,
+        engine: Option<&'a dyn crate::browser_engine::BrowserEngine>,
+    ) -> Self {
+        self.browser_engine = engine;
+        self
     }
 }
 

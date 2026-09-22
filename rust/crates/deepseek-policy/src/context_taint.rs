@@ -86,6 +86,53 @@ pub struct ContextTaintSettings {
     pub max_segments: usize,
 }
 
+impl ContextTaintSettings {
+    /// The oracle's env reader (`core/config.py`), so `/api/taint` reports the same
+    /// block a configured deployment would: each flag is `_env_bool(name, True)`, and
+    /// `max_segments` is the clamped `TAINT_MAX_SEGMENTS` default.
+    pub fn from_env() -> Self {
+        let defaults = Self::default();
+        Self {
+            enabled: env_flag("TAINT_ENABLED", defaults.enabled),
+            harden_search_context: env_flag(
+                "TAINT_HARDEN_SEARCH_CONTEXT",
+                defaults.harden_search_context,
+            ),
+            harden_file_context: env_flag(
+                "TAINT_HARDEN_FILE_CONTEXT",
+                defaults.harden_file_context,
+            ),
+            escalate_confirm: env_flag("TAINT_ESCALATE_CONFIRM", defaults.escalate_confirm),
+            max_segments: env_usize_clamped("TAINT_MAX_SEGMENTS", defaults.max_segments, 4, 200),
+        }
+    }
+}
+
+/// `_env_bool`: the oracle accepts a fixed truthy set and treats everything else,
+/// including an unparseable value, as false when the variable is present.
+fn env_flag(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => default,
+    }
+}
+
+/// `_env_int_clamped`: a missing or unparseable value keeps the default, and a
+/// present one is clamped into range rather than refused.
+fn env_usize_clamped(name: &str, default: usize, low: usize, high: usize) -> usize {
+    match std::env::var(name) {
+        Ok(value) => value
+            .trim()
+            .parse::<usize>()
+            .map(|parsed| parsed.clamp(low, high))
+            .unwrap_or(default),
+        Err(_) => default,
+    }
+}
+
 impl Default for ContextTaintSettings {
     fn default() -> Self {
         Self {

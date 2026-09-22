@@ -30,7 +30,13 @@ use std::time::Duration;
 /// Mirrors `deepseek_infra.core.config.DEFAULT_DEEPSEEK_API_URL`.
 pub const DEFAULT_UPSTREAM_URL: &str = "https://api.deepseek.com/chat/completions";
 /// Mirrors `settings.deepseek_timeout_seconds`' default.
-pub const DEFAULT_UPSTREAM_TIMEOUT_SECONDS: u64 = 120;
+///
+/// The oracle's default is **180** (`core/config.py`, `_env_int("DEEPSEEK_TIMEOUT_SECONDS", 180)`).
+/// This constant read `120` and was measured against the oracle while porting the
+/// title route, which caps its own call at `min(timeout, 20)` — a cap that hid the
+/// difference. Nothing depended on the wrong value, so it is corrected here rather
+/// than left as a divergence a longer request would eventually expose.
+pub const DEFAULT_UPSTREAM_TIMEOUT_SECONDS: u64 = 180;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChatExecutionError {

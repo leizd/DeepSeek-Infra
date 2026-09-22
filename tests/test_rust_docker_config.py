@@ -90,7 +90,28 @@ def test_ci_builds_and_smokes_rust_image_in_independent_job() -> None:
     workflow = _read(".github/workflows/ci.yml")
 
     assert "rust-docker:" in workflow
-    assert "docker build -f rust/Dockerfile -t deepseek-rust-gateway:$RELEASE_VERSION ." in workflow
+    # Every build of the rust image names its target. The Dockerfile has more than one
+    # runtime stage, so a build without `--target` gets whichever stage is last — which
+    # is how appending the browser stage once turned five lanes' gateway images into
+    # browser images, and how their health checks timed out on a process that listens
+    # for gRPC instead of HTTP.
+    assert "docker build --target gateway -f rust/Dockerfile -t deepseek-rust-gateway:$RELEASE_VERSION ." in workflow
+    assert "docker build --target browser -f rust/Dockerfile -t deepseek-browser-engine:$RELEASE_VERSION ." in workflow
+    untargeted = [
+        line
+        for line in workflow.splitlines()
+        if "docker build" in line and "rust/Dockerfile" in line and "--target" not in line
+    ]
+    assert untargeted == [], f"rust image built without an explicit target: {untargeted}"
+    # Compose builds the same Dockerfile, and its builds are easy to miss: the hybrid
+    # e2e lane's gateway container was unhealthy for exactly this reason.
+    for compose in ("docker-compose.hybrid-test.yml", "docker-compose.rust.yml", "docker-compose.native.yml"):
+        lines = _read(compose).splitlines()
+        for index, line in enumerate(lines):
+            if line.strip() != "dockerfile: rust/Dockerfile":
+                continue
+            block = "\n".join(lines[index : index + 5])
+            assert "target:" in block, f"{compose} builds rust/Dockerfile without a target"
     assert "record_rust_sidecar_image.py" in workflow
     assert "python scripts/smoke_rust_sidecar.py" in workflow
     assert "docker rm --force deepseek-rust-gateway || true" in workflow
@@ -102,7 +123,7 @@ def test_rag_parity_retries_transient_docker_registry_failures() -> None:
     workflow = _read(".github/workflows/ci.yml")
 
     assert "for attempt in 1 2 3; do" in workflow
-    assert "docker build -f rust/Dockerfile -t deepseek-rust-gateway:parity ." in workflow
+    assert "docker build --target gateway -f rust/Dockerfile -t deepseek-rust-gateway:parity ." in workflow
     assert 'if [ "$attempt" -eq 3 ]; then' in workflow
     assert 'sleep "$((attempt * 5))"' in workflow
 

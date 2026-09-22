@@ -152,6 +152,34 @@ pub fn resolve_generated_file(root: &Path, file_id: &str) -> Option<PathBuf> {
     None
 }
 
+/// The `(media type, attachment name)` pair `download_descriptor` returns.
+///
+/// The name is generic per type (`presentation.pptx`, `mindmap.svg`, `notes.md`,
+/// `document.{ext}`) rather than the title the file was generated with: the download
+/// id carries no title, and the oracle does not store one beside the file.
+pub fn download_descriptor(path: &Path) -> (String, String) {
+    let ext = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let media_type = match ext.as_str() {
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "pdf" => "application/pdf",
+        "md" => "text/markdown; charset=utf-8",
+        "svg" => "image/svg+xml",
+        _ => "application/octet-stream",
+    };
+    let base = match ext.as_str() {
+        "pptx" => "presentation",
+        "svg" => "mindmap",
+        "md" => "notes",
+        _ => "document",
+    };
+    (media_type.to_string(), format!("{base}.{ext}"))
+}
+
 fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for &byte in data {
@@ -241,6 +269,36 @@ mod tests {
         assert_eq!(safe_filename("Growth plan!"), "Growth plan");
         assert_eq!(safe_filename("???"), "document");
         assert_eq!(safe_filename("中文标题"), "中文标题");
+    }
+
+    #[test]
+    fn the_download_descriptor_is_the_oracles_per_type_pair() {
+        let cases = [
+            (
+                "a.pptx",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                "presentation.pptx",
+            ),
+            (
+                "a.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "document.docx",
+            ),
+            ("a.pdf", "application/pdf", "document.pdf"),
+            ("a.md", "text/markdown; charset=utf-8", "notes.md"),
+            ("a.svg", "image/svg+xml", "mindmap.svg"),
+            ("a.bin", "application/octet-stream", "document.bin"),
+        ];
+        for (name, media_type, download_name) in cases {
+            let (actual_media, actual_name) = download_descriptor(Path::new(name));
+            assert_eq!(actual_media, media_type, "{name}");
+            assert_eq!(actual_name, download_name, "{name}");
+        }
+        // The extension is lower-cased, so an upper-case suffix still resolves.
+        assert_eq!(
+            download_descriptor(Path::new("a.PPTX")).1,
+            "presentation.pptx"
+        );
     }
 
     #[test]

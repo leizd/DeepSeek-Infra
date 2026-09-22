@@ -558,7 +558,11 @@ pub struct WorkspaceContext<'a> {
     pub vector_hits: Option<&'a crate::memory::VectorHits<'a>>,
     /// The `memory_suggestion_callback`. `None` is not "no suggestion" — the branch
     /// still builds and returns one; it simply is not notified.
-    pub on_memory_suggestion: Option<&'a dyn Fn(&Value)>,
+    ///
+    /// `Send + Sync` because the caller that wires it runs the round on the blocking
+    /// pool: `/api/chat` passes a callback, and the closure has to cross into
+    /// `spawn_blocking`.
+    pub on_memory_suggestion: Option<&'a (dyn Fn(&Value) + Send + Sync)>,
     /// The `default_memory_scope` request argument, which the memory branches fall
     /// back to when the tool call names no scope.
     pub default_memory_scope: &'a str,
@@ -742,8 +746,13 @@ pub fn dispatch(
                 .workspace
                 .map(|workspace| workspace.entropy)
                 .unwrap_or(&fallback);
-            crate::browser::execute_browser_action(&payload, &settings, entropy)
-                .map_err(|error| ToolFailure::from_app_error(&tool, &error))
+            crate::browser::execute_browser_action_with_engine(
+                &payload,
+                &settings,
+                entropy,
+                context.browser_engine,
+            )
+            .map_err(|error| ToolFailure::from_app_error(&tool, &error))
         }
         Branch::PythonEval => crate::python_eval::python_eval(&crate::fetch_url::python_url_arg(
             object.get("expression"),

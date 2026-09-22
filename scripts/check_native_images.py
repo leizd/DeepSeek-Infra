@@ -137,21 +137,21 @@ def audit_rust_dockerfile(dockerfile_path: Path) -> ImageAuditResult:
     violations: list[str] = []
 
     stage_names = {s["name"].lower() for s in stages}
-    for required in ("worker", "gateway", "runtime"):
+    for required in ("worker", "gateway", "runtime", "browser"):
         if required not in stage_names:
             violations.append(f"rust/Dockerfile missing required stage {required!r}")
 
     for stage in stages:
         name = stage["name"].lower()
         # Production runtime stages
-        if name in ("runtime", "worker", "gateway"):
+        if name in ("runtime", "worker", "gateway", "browser-runtime", "browser"):
             for line in stage["lines"]:
                 lowered = line.lower()
                 for token in FORBIDDEN_PYTHON_TOKENS:
                     if re.search(r"\b" + re.escape(token) + r"\b", lowered):
                         violations.append(f"Forbidden token {token!r} in stage {name}: {line}")
 
-            if name in ("worker", "gateway"):
+            if name in ("worker", "gateway", "browser"):
                 if "USER deepseek" not in stage["lines"]:
                     violations.append(f"Stage {name} must enforce non-root execution via 'USER deepseek'")
 

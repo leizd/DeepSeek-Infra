@@ -42,6 +42,7 @@ def test_proto_sources_are_proto3_with_unspecified_zero_enums() -> None:
         "deepseek.control.v1",
         "deepseek.evidence.v1",
         "deepseek.agent.v1",
+        "deepseek.browser.v1",
     }
     checked = check_descriptor()
     assert DESCRIPTOR_PATH.is_file()

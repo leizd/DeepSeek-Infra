@@ -43,5 +43,35 @@ services:
     read_only: true
     restart: unless-stopped
 
+  browser-engine:
+    # Opt-in: `docker compose --profile browser up`. Without the profile the gateway
+    # finds no engine, reports `playwright_available() == false`, and the static
+    # controller answers — the engine is an addition, not a dependency (ADR-0050).
+    profiles: ["browser"]
+    build:
+      context: .
+      dockerfile: rust/Dockerfile
+      target: browser
+    image: deepseek-browser-engine:5.0.0
+    # The engine refuses to bind anything but loopback, so it shares the edge's
+    # network namespace instead of publishing a port. Nothing outside the edge can
+    # reach it, which is the point.
+    network_mode: "service:deepseek-edge"
+    environment:
+      DEEPSEEK_BROWSER_ENGINE_LISTEN: 127.0.0.1:50053
+      DEEPSEEK_BROWSER_CHROMIUM: /usr/bin/chromium
+      DEEPSEEK_BROWSER_PROFILE_ROOT: /data/browser-profiles
+      DEEPSEEK_BROWSER_DOWNLOAD_ROOT: /data/browser-downloads
+      # Chromium's sandbox needs user namespaces. A container without them has to opt
+      # out with DEEPSEEK_BROWSER_NO_SANDBOX=1 — deliberately set by the operator, and
+      # deliberately not set here, because it is a security decision and not a default
+      # this file should be making (ADR-0050 open review item).
+    volumes:
+      - deepseek-browser:/data
+    depends_on:
+      - deepseek-edge
+    restart: unless-stopped
+
 volumes:
   deepseek-control:
+  deepseek-browser:
