@@ -287,6 +287,22 @@ The rules that are easy to get wrong, and are therefore pinned:
 
 `native-probe-parity` runs `title_parity_probe`, `file_routes_parity_probe` and
 `chat_stream_events_parity_probe` against their own Rust sides and takes the exit code as
-the verdict — each answers `return 0 if not problems else 1`. These three pairs were
-local evidence until that lane existed; the older pairs print JSON for a human to diff and
-still need a harness before they can be gates.
+the verdict — each answers `return 0 if not problems else 1`.
+
+The same lane runs `tasks/native-runtime/check_probe_pairs.py`, which drives the older
+pairs: both sides are executed, the **parsed values** are compared (a `serde_json` map's key
+order depends on whether `preserve_order` is in the build graph, which is not a behavioural
+difference), byte equality is reported separately, and a disagreement exits non-zero.
+Measured 2026-09-22: **38 pairs run, 36 identical, 9 of those byte-identical**, with two
+known divergences printed on every run:
+
+- `store` — the oracle reads the wall clock (`bm.today()`) while the Rust example pins
+  `DAY="2026-09-18"`, so the pair only agreed on the day it was written; the raw row now
+  reads `2026-09-22` against `2026-09-18`.
+- `memory` — a real divergence, not a key order: the keys match 194/194, but
+  `state::remember` reports `hitCount` 4 against 3 and omits `[fact] the sky is blue`, and
+  `state::scoped` orders the context list differently.
+
+Three pairs are skipped with reasons the harness prints: `browser_engine` (needs a
+Chromium; runs in `native-browser-engine`), `oracle` (needs the oracle's application
+context), `local_clock` (takes an argument rather than printing a report).

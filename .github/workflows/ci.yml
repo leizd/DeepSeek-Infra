@@ -788,7 +788,7 @@ jobs:
       - name: Install the oracle's dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt -r requirements-dev.txt
       - name: Build the probe examples
-        run: cargo build --locked --manifest-path rust/Cargo.toml -p deepseek-policy --examples
+        run: cargo build --locked --manifest-path rust/Cargo.toml --workspace --examples
       # These three probes drive their own Rust side and answer `return 0 if not problems
       # else 1`, so the lane is the gate and the exit code is the verdict. Until this
       # lane existed they were local evidence only: a change that broke one of them
@@ -805,6 +805,12 @@ jobs:
         run: >-
           python tasks/native-runtime/chat_stream_events_parity_probe.py
           --rust-example rust/target/debug/examples/chat_stream_events_parity_probe
+      # The older pairs print a report for a human to diff. The harness runs both sides of
+      # each one and exits non-zero when a pair disagrees, which is what turns thirty-odd
+      # pairs of local evidence into gates in one step. The pairs it deliberately does not
+      # run, and the two that are known to diverge, are printed on every run.
+      - name: Every other probe pair
+        run: python tasks/native-runtime/check_probe_pairs.py
 
   rust-docker:
     needs:

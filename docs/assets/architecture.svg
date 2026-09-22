@@ -1,4 +1,4 @@
-<svg viewBox="0 0 1200 920" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+<svg viewBox="0 0 1200 1120" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
@@ -9,169 +9,204 @@
   </defs>
 
   <!-- self-contained light card: readable on both GitHub light & dark themes -->
-  <rect x="0" y="0" width="1200" height="920" rx="18" fill="#ffffff"/>
-  <rect x="0.5" y="0.5" width="1199" height="919" rx="18" fill="none" stroke="#dbe3ee"/>
+  <rect x="0" y="0" width="1200" height="1120" rx="18" fill="#ffffff"/>
+  <rect x="0.5" y="0.5" width="1199" height="1119" rx="18" fill="none" stroke="#dbe3ee"/>
 
   <!-- header -->
-  <text x="48" y="54" font-size="26" font-weight="700" fill="#0f172a">DeepSeek Infra</text>
-  <text x="48" y="78" font-size="13.5" fill="#64748b">Local-first Agentic AI Infrastructure Platform — LLM Gateway · Agent DAG · MCP · A2A · Local RAG · Workspace · DR · Observability</text>
-  <rect x="1066" y="34" width="90" height="28" rx="14" fill="#0284c7" />
+  <text x="48" y="52" font-size="26" font-weight="700" fill="#0f172a">DeepSeek Infra</text>
+  <text x="48" y="76" font-size="13" fill="#64748b">Local-first Agentic AI Infrastructure Platform — LLM Gateway · Agent DAG · MCP · A2A · Local RAG · Workspace · DR · Observability</text>
+  <rect x="1066" y="34" width="90" height="28" rx="14" fill="#0284c7"/>
   <text x="1111" y="53" font-size="13" font-weight="600" fill="#ffffff" text-anchor="middle">v4.8.0</text>
 
-  <!-- clients layer -->
-  <rect x="48" y="98" width="1104" height="68" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
-  <text x="64" y="115" font-size="9.5" letter-spacing="1.5" fill="#94a3b8">CLIENTS · REACT FRONTEND &amp; STANDARD PROTOCOL INTEROP</text>
+  <!-- L1: clients layer -->
+  <rect x="48" y="96" width="1104" height="66" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="64" y="113" font-size="9.5" letter-spacing="1.5" fill="#94a3b8">CLIENTS · REACT FRONTEND &amp; STANDARD PROTOCOL INTEROP</text>
   <g font-size="11.5" fill="#334155" text-anchor="middle">
-    <rect x="64" y="122" width="138" height="32" rx="7" fill="#ffffff" stroke="#cbd5e1"/>
-    <text x="133" y="142">React App · /</text>
-    <rect x="210" y="122" width="144" height="32" rx="7" fill="#dbeafe" stroke="#60a5fa"/>
-    <text x="282" y="142" fill="#1d4ed8" font-weight="600">React Alias · /ui/</text>
-    <rect x="362" y="122" width="140" height="32" rx="7" fill="#ffffff" stroke="#cbd5e1"/>
-    <text x="432" y="142">Desktop WebView</text>
-    <rect x="510" y="122" width="124" height="32" rx="7" fill="#ffffff" stroke="#cbd5e1"/>
-    <text x="572" y="142">Android APK</text>
-    <rect x="642" y="122" width="154" height="32" rx="7" fill="#eff6ff" stroke="#93c5fd"/>
-    <text x="719" y="142" fill="#1d4ed8">OpenAI SDK → /v1</text>
-    <rect x="804" y="122" width="156" height="32" rx="7" fill="#eff6ff" stroke="#93c5fd"/>
-    <text x="882" y="142" fill="#1d4ed8">MCP Client → /mcp</text>
-    <rect x="968" y="122" width="168" height="32" rx="7" fill="#eff6ff" stroke="#93c5fd"/>
-    <text x="1052" y="142" fill="#1d4ed8">A2A Peer → /a2a</text>
+    <rect x="64" y="120" width="138" height="32" rx="7" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="133" y="140">React App · /</text>
+    <rect x="210" y="120" width="144" height="32" rx="7" fill="#dbeafe" stroke="#60a5fa"/>
+    <text x="282" y="140" fill="#1d4ed8" font-weight="600">React Alias · /ui/</text>
+    <rect x="362" y="120" width="140" height="32" rx="7" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="432" y="140">Desktop WebView</text>
+    <rect x="510" y="120" width="124" height="32" rx="7" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="572" y="140">Android APK</text>
+    <rect x="642" y="120" width="154" height="32" rx="7" fill="#eff6ff" stroke="#93c5fd"/>
+    <text x="719" y="140" fill="#1d4ed8">OpenAI SDK → /v1</text>
+    <rect x="804" y="120" width="156" height="32" rx="7" fill="#eff6ff" stroke="#93c5fd"/>
+    <text x="882" y="140" fill="#1d4ed8">MCP Client → /mcp</text>
+    <rect x="968" y="120" width="168" height="32" rx="7" fill="#eff6ff" stroke="#93c5fd"/>
+    <text x="1052" y="140" fill="#1d4ed8">A2A Peer → /a2a</text>
   </g>
 
   <!-- arrow clients -> runtime -->
-  <line x1="600" y1="166" x2="600" y2="190" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="616" y="183" font-size="10.5" fill="#94a3b8">HTTP · SSE streaming · JSON-RPC 2.0 · Standard OpenAI / MCP / A2A protocols</text>
+  <line x1="600" y1="162" x2="600" y2="186" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="616" y="179" font-size="10.5" fill="#94a3b8">HTTP · SSE streaming · JSON-RPC 2.0 · Standard OpenAI / MCP / A2A protocols</text>
 
-  <!-- python default runtime -->
-  <rect x="48" y="194" width="760" height="364" rx="12" fill="#eff6ff" stroke="#93c5fd"/>
-  <rect x="48" y="194" width="6" height="364" rx="3" fill="#2563eb"/>
-  <text x="72" y="222" font-size="17" font-weight="700" fill="#1e40af">Python Default Runtime</text>
-  <text x="72" y="240" font-size="11" fill="#3b82f6">FastAPI / ASGI — Authoritative runtime · Default deployment: Python-only</text>
+  <!-- L2: python default runtime -->
+  <rect x="48" y="190" width="760" height="388" rx="12" fill="#eff6ff" stroke="#93c5fd"/>
+  <rect x="48" y="190" width="6" height="388" rx="3" fill="#2563eb"/>
+  <text x="72" y="218" font-size="17" font-weight="700" fill="#1e40af">Python Default Runtime</text>
+  <text x="72" y="236" font-size="11" fill="#3b82f6">FastAPI / ASGI — Authoritative runtime · Default deployment: Python-only · 17 capability modules</text>
 
   <!-- python columns -->
   <g font-size="11.5" fill="#1e3a8a">
     <!-- Col 1: Gateway & Agent -->
-    <text x="72" y="266" font-weight="700" fill="#1e40af">Gateway &amp; Agent Runtime</text>
-    <text x="72" y="288">• Auth · Mutation Gate write fence</text>
-    <text x="72" y="308">• HTTP / SSE / streaming</text>
-    <text x="72" y="328">• Policy Model Router &amp; Cascade</text>
-    <text x="72" y="348">• Context Engine (prefix cache aware)</text>
-    <text x="72" y="368">• Context Taint Injection Firewall</text>
-    <text x="72" y="388">• Agent DAG (Leader/Worker/Critic)</text>
-    <text x="72" y="408">• Agent Runs event-sourced logs</text>
-    <text x="72" y="428">• A2A Agent Mesh &amp; task lifecycle</text>
-    <text x="72" y="448">• Request Scheduler · DLQ · Budget</text>
+    <text x="72" y="260" font-weight="700" fill="#1e40af">Gateway, Security &amp; Agent Runtime</text>
+    <text x="72" y="282">• Auth · Mutation Gate write fence</text>
+    <text x="72" y="302">• HTTP / SSE / streaming response</text>
+    <text x="72" y="322">• Policy Model Router &amp; Cascade</text>
+    <text x="72" y="342">• Context Engine (prefix cache aware)</text>
+    <text x="72" y="362">• Context Taint Injection Firewall</text>
+    <text x="72" y="382">• Agent DAG (Leader/Worker/Critic)</text>
+    <text x="72" y="402">• Agent Runs event-sourced logs</text>
+    <text x="72" y="422">• A2A Agent Mesh &amp; task lifecycle</text>
+    <text x="72" y="442">• Request Scheduler · DLQ · Budget</text>
+    <text x="72" y="462">• Automation engine &amp; run history</text>
+    <text x="72" y="482">• Browser Runtime (controlled sandbox)</text>
 
-    <!-- Col 2: Tools, RAG, Workspace & DR -->
-    <text x="360" y="266" font-weight="700" fill="#1e40af">Capabilities &amp; Data Plane</text>
-    <text x="360" y="288">• Real tool execution (17+ local tools)</text>
-    <text x="360" y="308">• Capability-based Tool Policy engine</text>
-    <text x="360" y="328">• MCP Server transport &amp; sessions</text>
-    <text x="360" y="348">• Local RAG (BM25 + vector hybrid)</text>
-    <text x="360" y="368">• File parsing · PDF render · OCR</text>
-    <text x="360" y="388">• Workspace Core (Projects/Artifacts)</text>
-    <text x="360" y="408">• Automation engine &amp; Browser runtime</text>
-    <text x="360" y="428">• Skills sandbox, versioning &amp; eval</text>
-    <text x="360" y="448">• Object Set v1 DR &amp; Merkle verify</text>
-    <text x="360" y="468">• OpenTelemetry Tracing · /metrics</text>
+    <!-- Col 2: Capabilities, Data Plane & DR -->
+    <text x="416" y="260" font-weight="700" fill="#1e40af">Capabilities, Data Plane &amp; DR</text>
+    <text x="416" y="282">• Real tool execution (17+ local tools)</text>
+    <text x="416" y="302">• Capability-based Tool Policy engine</text>
+    <text x="416" y="322">• MCP Server transport &amp; sessions</text>
+    <text x="416" y="342">• Local RAG (BM25 + vector hybrid)</text>
+    <text x="416" y="362">• File parsing · PDF render · OCR</text>
+    <text x="416" y="382">• Workspace Core (Projects/Artifacts)</text>
+    <text x="416" y="402">• Skills sandbox, versioning &amp; eval</text>
+    <text x="416" y="422">• OpenTelemetry Tracing · /metrics</text>
+    <text x="416" y="442">• RiskSnapshot ledger · Fenced Wave Runner</text>
+    <text x="416" y="462">• Action Journal &amp; Fleet SLO Ledger</text>
+    <text x="416" y="482">• Object Set v1 DR &amp; Merkle verify</text>
   </g>
 
-  <!-- optional rust sidecar -->
-  <rect x="824" y="194" width="328" height="224" rx="12" fill="#fff7ed" stroke="#f59e0b" stroke-dasharray="6 4"/>
-  <rect x="824" y="194" width="5" height="224" rx="2.5" fill="#f59e0b"/>
-  <text x="844" y="222" font-size="15" font-weight="700" fill="#92400e">Optional Rust Sidecar</text>
-  <text x="844" y="238" font-size="9.5" fill="#d97706">Default off · opt-in delegates · Python fallback</text>
-  <g font-size="10.5" fill="#78350f">
-    <text x="844" y="260" font-weight="600">Gateway Request Preparation</text>
-    <text x="844" y="274" font-size="9" fill="#b45309">POST /gateway/request/prepare</text>
-    <text x="844" y="292" font-weight="600">MCP Protocol Preparation</text>
-    <text x="844" y="306" font-size="9" fill="#b45309">POST /mcp/request/prepare</text>
+  <!-- fallback badge -->
+  <rect x="420" y="524" width="372" height="42" rx="7" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="778" y="541" font-size="9.5" fill="#b45309" text-anchor="end">timeout · unavailable · malformed · divergent</text>
+  <text x="778" y="557" font-size="11" fill="#92400e" text-anchor="end" font-weight="700">Python fallback remains authoritative</text>
+
+  <!-- L3: optional native runtime co-processors -->
+  <!-- Block 1: optional rust sidecar -->
+  <rect x="824" y="190" width="328" height="212" rx="12" fill="#fff7ed" stroke="#f59e0b" stroke-dasharray="6 4"/>
+  <rect x="824" y="190" width="5" height="212" rx="2.5" fill="#f59e0b"/>
+  <text x="844" y="214" font-size="14" font-weight="700" fill="#92400e">Optional Rust Sidecar</text>
+  <text x="844" y="230" font-size="9.5" fill="#d97706">Default off · opt-in delegates · Python fallback</text>
+  <g font-size="10" fill="#78350f">
+    <text x="844" y="250" font-weight="600">Helpers: backup-crypto · deepseek-backup</text>
+    <text x="844" y="268" font-weight="600">Gateway Request Preparation</text>
+    <text x="844" y="280" font-size="8.5" fill="#b45309">POST /gateway/request/prepare</text>
+    <text x="844" y="296" font-weight="600">MCP Protocol Preparation</text>
+    <text x="844" y="308" font-size="8.5" fill="#b45309">POST /mcp/request/prepare</text>
     <text x="844" y="324" font-weight="600">Tool Policy Evaluation</text>
-    <text x="844" y="338" font-size="9" fill="#b45309">POST /policy/{url,path,capability}</text>
-    <text x="844" y="356" font-weight="600">RAG Vector Ranking · JSON / compact binary</text>
-    <text x="844" y="370" font-size="8.5" fill="#b45309">POST /rag/vectors/rank · POST /rag/vectors/rank-binary</text>
-    <text x="844" y="388" font-weight="600">RAG Document Preparation &amp; CDC</text>
-    <text x="844" y="402" font-size="8.5" fill="#b45309">POST /rag/documents/prepare · scan-batch · age crypto</text>
+    <text x="844" y="336" font-size="8.5" fill="#b45309">POST /policy/{url,path,capability}</text>
+    <text x="844" y="352" font-weight="600">RAG Vector Ranking · JSON / compact binary</text>
+    <text x="844" y="364" font-size="8" fill="#b45309">POST /rag/vectors/rank · POST /rag/vectors/rank-binary</text>
+    <text x="844" y="380" font-weight="600">RAG Document Preparation &amp; CDC</text>
+    <text x="844" y="392" font-size="8" fill="#b45309">POST /rag/documents/prepare · scan-batch · age crypto</text>
   </g>
 
-  <!-- optional stateless mcp plane -->
-  <rect x="824" y="428" width="328" height="130" rx="12" fill="#faf5ff" stroke="#a855f7" stroke-dasharray="6 4"/>
-  <rect x="824" y="428" width="5" height="130" rx="2.5" fill="#a855f7"/>
-  <text x="844" y="452" font-size="14" font-weight="700" fill="#6b21a8">Optional Stateless MCP Plane</text>
-  <text x="844" y="468" font-size="9.5" fill="#9333ea">Independent scale-out · TypeScript SDK · Dual-instance DR</text>
-  <g font-size="10" fill="#581c87">
-    <text x="844" y="490">• NGINX Load Balancer (:8010) → Dual MCP instances</text>
-    <text x="844" y="508">• Redis AOF (task leases, fencing tokens, idempotency)</text>
-    <text x="844" y="526">• Code search · pytest runner · OpenTelemetry export</text>
-    <text x="844" y="544">• Generation-fenced backup contributor protocol</text>
+  <!-- Block 2: Go Control Plane Shadow -->
+  <rect x="824" y="410" width="328" height="78" rx="10" fill="#ecfeff" stroke="#06b6d4" stroke-dasharray="5 3"/>
+  <rect x="824" y="410" width="5" height="78" rx="2.5" fill="#06b6d4"/>
+  <text x="844" y="430" font-size="12.5" font-weight="700" fill="#164e63">Go Control Plane Shadow (cmd/deepseekd)</text>
+  <text x="844" y="444" font-size="9" fill="#0891b2">Read-only shadow mode · Cross-runtime parity · Hard isolation</text>
+  <g font-size="9.5" fill="#155e75">
+    <text x="844" y="460">• Versioned Protobuf v1 RPC contracts</text>
+    <text x="844" y="474">• pythonDecisionDigest == goDecisionDigest parity</text>
+  </g>
+
+  <!-- Block 3: Optional Stateless MCP Plane -->
+  <rect x="824" y="496" width="328" height="82" rx="10" fill="#faf5ff" stroke="#a855f7" stroke-dasharray="5 3"/>
+  <rect x="824" y="496" width="5" height="82" rx="2.5" fill="#a855f7"/>
+  <text x="844" y="516" font-size="12.5" font-weight="700" fill="#6b21a8">Optional Stateless MCP Plane</text>
+  <text x="844" y="530" font-size="9" fill="#9333ea">Independent scale-out · TypeScript SDK · Dual-instance DR</text>
+  <g font-size="9.5" fill="#581c87">
+    <text x="844" y="548">• NGINX Load Balancer (:8010) → Dual MCP instances</text>
+    <text x="844" y="564">• Redis AOF (task leases, fencing tokens, idempotency)</text>
   </g>
 
   <!-- delegation arrows -->
-  <text x="792" y="296" font-size="9.5" fill="#b45309" text-anchor="end">opt-in deterministic delegate</text>
-  <line x1="770" y1="302" x2="824" y2="302" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#rust-arrow)"/>
-  <line x1="824" y1="350" x2="770" y2="350" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#rust-arrow)"/>
-  <text x="792" y="344" font-size="9.5" fill="#b45309" text-anchor="end">validated result</text>
+  <line x1="770" y1="298" x2="824" y2="298" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#rust-arrow)"/>
+  <line x1="824" y1="344" x2="770" y2="344" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#rust-arrow)"/>
 
-  <!-- fallback badge -->
-  <rect x="520" y="508" width="272" height="40" rx="6" fill="#fff7ed" stroke="#fdba74"/>
-  <text x="782" y="524" font-size="9" fill="#b45309" text-anchor="end">timeout · unavailable · malformed · divergent</text>
-  <text x="782" y="539" font-size="10" fill="#92400e" text-anchor="end" font-weight="600">Python fallback remains authoritative</text>
+  <!-- L4: Signed Federation & Cross-Fleet DR -->
+  <rect x="48" y="590" width="1104" height="136" rx="10" fill="#fef2f2" stroke="#fca5a5"/>
+  <text x="64" y="609" font-size="9.5" letter-spacing="1.5" fill="#b91c1c" font-weight="700">SIGNED FEDERATION &amp; CROSS-FLEET DR · v4.8.0</text>
+  <text x="64" y="625" font-size="10.5" fill="#7f1d1d">Independent Authority trust · Receiver-controlled ingress · Ciphertext offsite custody · Verifiable DR without global consensus</text>
+  <g font-size="10.5" fill="#334155">
+    <!-- Fleet A -->
+    <rect x="64" y="635" width="324" height="78" rx="8" fill="#ffffff" stroke="#fca5a5"/>
+    <text x="78" y="654" font-weight="700" fill="#991b1b">Fleet A (Sovereign Source)</text>
+    <text x="78" y="672" fill="#475569">• Authority A trust root &amp; policies</text>
+    <text x="78" y="688" fill="#475569">• Pinned Ed25519 root + online signers</text>
+    <text x="78" y="704" fill="#475569">• MinIO A1 + A2 storage · Transfer Journal A</text>
 
-  <!-- arrow runtime -> data -->
-  <line x1="428" y1="558" x2="428" y2="578" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <!-- Center Interop -->
+    <rect x="402" y="635" width="396" height="78" rx="8" fill="#fff1f2" stroke="#f87171"/>
+    <text x="600" y="654" font-weight="700" fill="#b91c1c" text-anchor="middle">Signed Handshake &amp; Controlled Ingress</text>
+    <text x="600" y="672" font-size="10" fill="#881337" text-anchor="middle">Ed25519 challenge/readiness ↔ Scope-bound Ingress Grant</text>
+    <text x="600" y="688" font-size="10" fill="#881337" text-anchor="middle">Ciphertext Object-Set-v1 transfer (Streaming Age cipher)</text>
+    <text x="600" y="704" font-size="10" fill="#881337" text-anchor="middle">Receipt v4 + Commit v4 + Attestation evidence assembly</text>
 
-  <!-- local data layer -->
-  <rect x="48" y="578" width="1104" height="172" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
-  <text x="64" y="596" font-size="9.5" letter-spacing="1.5" fill="#94a3b8">LOCAL DATA &amp; OBSERVABILITY · PYTHON-OWNED (ZERO LEAKAGE · LOCAL STORAGE)</text>
+    <!-- Fleet B -->
+    <rect x="812" y="635" width="324" height="78" rx="8" fill="#ffffff" stroke="#fca5a5"/>
+    <text x="826" y="654" font-weight="700" fill="#991b1b">Fleet B (Sovereign Receiver)</text>
+    <text x="826" y="672" fill="#475569">• Authority B trust root &amp; ingress policy</text>
+    <text x="826" y="688" fill="#475569">• Pinned Ed25519 root + online signers</text>
+    <text x="826" y="704" fill="#475569">• MinIO B1 + B2 storage · Transfer Journal B</text>
+  </g>
+
+  <!-- L5: local data layer -->
+  <rect x="48" y="738" width="1104" height="172" rx="10" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="64" y="756" font-size="9.5" letter-spacing="1.5" fill="#94a3b8">LOCAL DATA &amp; OBSERVABILITY · PYTHON-OWNED (ZERO LEAKAGE · LOCAL STORAGE)</text>
   <g font-size="11" fill="#334155" text-anchor="middle">
     <!-- Row 1 -->
-    <rect x="64" y="608" width="260" height="44" rx="8" fill="#ecfdf5" stroke="#a7f3d0"/>
-    <text x="194" y="625" fill="#047857" font-weight="600">SQLite Vector RAG (.local-rag)</text>
-    <text x="194" y="641" font-size="9.5" fill="#059669">BM25 hybrid · incremental chunking · citations</text>
+    <rect x="64" y="768" width="260" height="44" rx="8" fill="#ecfdf5" stroke="#a7f3d0"/>
+    <text x="194" y="785" fill="#047857" font-weight="600">SQLite Vector RAG (.local-rag)</text>
+    <text x="194" y="801" font-size="9.5" fill="#059669">BM25 hybrid · incremental chunking · citations</text>
 
-    <rect x="336" y="608" width="260" height="44" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
-    <text x="466" y="625" font-weight="600">Long-term Memory (.memory)</text>
-    <text x="466" y="641" font-size="9.5" fill="#64748b">scoped · confirmed · conflict detection</text>
+    <rect x="336" y="768" width="260" height="44" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="466" y="785" font-weight="600">Long-term Memory (.memory)</text>
+    <text x="466" y="801" font-size="9.5" fill="#64748b">scoped · confirmed · conflict detection</text>
 
-    <rect x="608" y="608" width="260" height="44" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
-    <text x="738" y="625" font-weight="600">Semantic Cache (.semantic-cache)</text>
-    <text x="738" y="641" font-size="9.5" fill="#64748b">JSON + f64le BLOB dual-write · quality gates</text>
+    <rect x="608" y="768" width="260" height="44" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="738" y="785" font-weight="600">Semantic Cache (.semantic-cache)</text>
+    <text x="738" y="801" font-size="9.5" fill="#64748b">JSON + f64le BLOB dual-write · quality gates</text>
 
-    <rect x="880" y="608" width="260" height="44" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
-    <text x="1010" y="625" font-weight="600">Workspace &amp; Artifacts (.projects)</text>
-    <text x="1010" y="641" font-size="9.5" fill="#64748b">Project 2.0 · Artifact Hub · Export archives</text>
+    <rect x="880" y="768" width="260" height="44" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="1010" y="785" font-weight="600">Workspace &amp; Artifacts (.projects)</text>
+    <text x="1010" y="801" font-size="9.5" fill="#64748b">Project 2.0 · Artifact Hub · Export archives</text>
 
     <!-- Row 2 -->
-    <rect x="64" y="660" width="260" height="44" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
-    <text x="194" y="677" font-weight="600">Agent Runs &amp; Logs (.agent-runs / .a2a)</text>
-    <text x="194" y="693" font-size="9.5" fill="#64748b">Event-sourced logs · Node states · Replay</text>
+    <rect x="64" y="820" width="260" height="44" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="194" y="837" font-weight="600">Agent Runs &amp; Logs (.agent-runs / .a2a)</text>
+    <text x="194" y="853" font-size="9.5" fill="#64748b">Event-sourced logs · Node states · Replay</text>
 
-    <rect x="336" y="660" width="260" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
-    <text x="466" y="677" fill="#1d4ed8" font-weight="600">Encrypted Backup &amp; DR (.backups)</text>
-    <text x="466" y="693" font-size="9.5" fill="#2563eb">Object Set v1 · Age cipher · Projected restore</text>
+    <rect x="336" y="820" width="260" height="44" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+    <text x="466" y="837" fill="#1d4ed8" font-weight="600">Encrypted Backup &amp; DR (.backups)</text>
+    <text x="466" y="853" font-size="9.5" fill="#2563eb">Object Set v1 · Age cipher · Projected restore</text>
 
-    <rect x="608" y="660" width="260" height="44" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
-    <text x="738" y="677" font-weight="600">Trace Runs &amp; Audit (.traces / .tool-audit)</text>
-    <text x="738" y="693" font-size="9.5" fill="#64748b">OpenTelemetry Span tree · Security audit</text>
+    <rect x="608" y="820" width="260" height="44" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="738" y="837" font-weight="600">Trace Runs &amp; Audit (.traces / .tool-audit)</text>
+    <text x="738" y="853" font-size="9.5" fill="#64748b">OpenTelemetry Span tree · Security audit</text>
 
-    <rect x="880" y="660" width="260" height="44" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
-    <text x="1010" y="677" font-weight="600">Request Queue &amp; Budget (.request-queue)</text>
-    <text x="1010" y="693" font-size="9.5" fill="#64748b">Priority scheduler · DLQ · Daily cost ledger</text>
+    <rect x="880" y="820" width="260" height="44" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="1010" y="837" font-weight="600">Request Queue &amp; Budget (.request-queue)</text>
+    <text x="1010" y="853" font-size="9.5" fill="#64748b">Priority scheduler · DLQ · Daily cost ledger</text>
   </g>
-  <text x="600" y="736" font-size="11" fill="#047857" text-anchor="middle" font-weight="600">Persistence remains Python-owned · Rust never reads SQLite · Secrets stay sandboxed</text>
+  <text x="600" y="896" font-size="11" fill="#047857" text-anchor="middle" font-weight="600">Persistence remains Python-owned · Rust never reads SQLite · Secrets stay sandboxed</text>
 
-  <!-- external boundary -->
-  <line x1="48" y1="768" x2="1152" y2="768" stroke="#cbd5e1" stroke-dasharray="6 6"/>
-  <text x="48" y="796" font-size="12" fill="#64748b">Data stays local by default · only explicit calls cross this boundary (strict privacy)</text>
+  <!-- L6: external boundary -->
+  <line x1="48" y1="924" x2="1152" y2="924" stroke="#cbd5e1" stroke-dasharray="6 6"/>
+  <text x="48" y="952" font-size="12" fill="#64748b">Data stays local by default · only explicit calls cross this boundary (strict privacy)</text>
   <g font-size="12" text-anchor="middle">
-    <rect x="660" y="780" width="154" height="32" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
-    <text x="737" y="801" fill="#1d4ed8">DeepSeek API (Pro/Flash)</text>
-    <rect x="826" y="780" width="144" height="32" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
-    <text x="898" y="801" fill="#1d4ed8">Tavily Search</text>
-    <rect x="982" y="780" width="170" height="32" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
-    <text x="1067" y="801" fill="#334155">Ollama / Edge inference</text>
+    <rect x="660" y="936" width="154" height="32" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+    <text x="737" y="957" fill="#1d4ed8">DeepSeek API (Pro/Flash)</text>
+    <rect x="826" y="936" width="144" height="32" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+    <text x="898" y="957" fill="#1d4ed8">Tavily Search</text>
+    <rect x="982" y="936" width="170" height="32" rx="8" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="1067" y="957" fill="#334155">Ollama / Edge inference</text>
   </g>
 
   <!-- footer -->
-  <text x="600" y="890" font-size="10" fill="#94a3b8" text-anchor="middle">v4.8.0: Signed Federation · Cross-Fleet DR (Candidate) · Frozen Wire Formats</text>
+  <text x="600" y="1080" font-size="10.5" fill="#94a3b8" text-anchor="middle">v4.8.0: Signed Federation · Cross-Fleet DR (Candidate) · Frozen Wire Formats · Python Authoritative Core</text>
 </svg>
