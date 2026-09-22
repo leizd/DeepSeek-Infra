@@ -145,11 +145,12 @@ the pair passes on repeat runs.
   not set it, and both say so — it is a security decision, not a default. A container
   that has neither the namespaces nor the opt-in fails closed: no engine, static
   controller, `Status.available == false`.
-- **The image was written, not built here.** Docker is not available on the development
-  machine, so the `browser` stage and the lane are verified by CI's `rust-docker` lane
-  and `native-browser-engine`, not locally. The base size is Chromium plus its
-  libraries (the earlier 100–150 MB figure is an estimate that could not be weighed on
-  Windows).
+- **The image now builds locally, and here is what it weighs.** `--target browser` on the
+  development machine produces **1.1 GB** (`deepseek-browser-engine:4.8.0`) against
+  **166 MB** for the gateway built from the same Dockerfile — the delta is Chromium plus
+  its libraries, measured rather than the 100–150 MB this file first estimated.
+  `--target gateway` was built too, and that is what confirms the target fix: an
+  untargeted build would have produced the browser image under the gateway's name.
 - **Three of the four probe pairs are still not CI steps.** The engine's parity probe
   runs in `native-browser-engine`; `title`, `file_routes` and `chat_stream_events`
   remain local evidence, as the older pairs are. Making them gates is a separate slice.
