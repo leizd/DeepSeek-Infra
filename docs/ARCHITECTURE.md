@@ -127,44 +127,81 @@ Age、Projection semantics、`control-authority-v1`、AuthorityCheckpoint v1 与
 
 ```mermaid
 flowchart TB
-    subgraph Clients["客户端与标准协议接入 (Clients)"]
+    subgraph Clients["客户端与标准协议接入 (Clients & Standard Interop)"]
         C1["React 应用 (/) · React 别名 (/ui/)"]
-        C2["Desktop WebView (pywebview)"]
-        C3["Android APK (Chaquopy)"]
+        C2["Desktop 本地窗口 (pywebview)"]
+        C3["Android 移动端 (Chaquopy + ML Kit)"]
         C4["OpenAI SDK → /v1"]
-        C5["MCP Client → /mcp"]
-        C6["A2A Peer → /a2a"]
+        C5["MCP 客户端 → /mcp (JSON-RPC 2.0)"]
+        C6["A2A 节点 → /a2a (Agent Card 互联)"]
     end
 
     subgraph Python["Python 默认运行时 — FastAPI / ASGI (权威运行时)"]
-        P1["鉴权 & Mutation Gate 变异保护"]
-        P2["HTTP / SSE / 流式传输"]
-        P3["策略驱动模型路由 (Model Router)"]
-        P4["Context Engine (前缀缓存优化) & Taint 注入防火墙"]
-        P5["Agent DAG 编排 (Leader/Worker/Critic) & Runs 事件溯源"]
-        P6["A2A Agent 网格 & 任务生命周期"]
-        P7["受控工具执行 (17+ 本地沙箱) & Tool Policy 引擎"]
-        P8["本地 RAG (BM25+向量) · 文件解析 · PDF 逐页渲染 · OCR"]
-        P9["Workspace Core (Projects / Artifacts) & 导出"]
-        P10["Automation 自动化引擎 & Browser 受控浏览器"]
-        P11["Skills 动态沙箱、版本化与评估"]
-        P12["Object Set v1 加密备份与投影式容灾恢复 (DR Readiness)"]
-        P13["可观测性 (OpenTelemetry Span 树 / /metrics / /healthz)"]
+        subgraph P_Gateway["网关、路由与安全隔离"]
+            PG1["身份认证 & Mutation Gate 写保护围栏"]
+            PG2["HTTP / SSE 流式传输 & 请求级追踪"]
+            PG3["策略驱动模型路由 (Model Router) & 端云级联"]
+            PG4["Context Engine (前缀缓存优化) & Taint 注入防火墙"]
+            PG5["请求调度队列 (Request Queue) · DLQ · Token 预算限额"]
+        end
+
+        subgraph P_Agent["多 Agent 协同与工作流编排"]
+            PA1["Agent DAG 编排 (Planner → Worker [同层并行] → Critic → Synthesizer)"]
+            PA2["Agent Runs 事件溯源持久化 (.agent-runs 断线重放 / 单节点重算)"]
+            PA3["A2A Agent 网格 & 任务生命周期"]
+            PA4["Automation 自动化引擎 (定时/轮询/事件触发器)"]
+            PA5["受控浏览器沙箱 (Browser Runtime · 截图转 RAG)"]
+        end
+
+        subgraph P_Tools["受控工具沙箱与技能体系"]
+            PT1["受控工具执行 (17+ 本地沙箱工具：Python Eval、文件检索、URL 精读等)"]
+            PT2["真实产物生成引擎 (排版 Word、演示 PPTX、PDF、SVG 思维导图)"]
+            PT3["Tool Policy 策略引擎 (路径越界/SSRF/高危写拦截/人工确认)"]
+            PT4["Skills 动态沙箱、版本化与评估"]
+        end
+
+        subgraph P_RAG["多模态与混合检索 RAG 数据层"]
+            PR1["本地 RAG (BM25 + sqlite-vec 稠密向量混合检索)"]
+            PR2["多格式文档解析切块 · PDF 逐页渲染 · 端云自适应 OCR"]
+            PR3["多模态 Media 生命周期 (图片/音频/视频/网页快照)"]
+            PR4["双写语义缓存 (JSON + SQLite f64le BLOB)"]
+        end
+
+        subgraph P_Work["工作区与认知记忆"]
+            PW1["Workspace Core (Project 2.0 · Saved Items · Artifact Hub · 多格式导出)"]
+            PW2["长期认知记忆 (.memory 作用域隔离 · 冲突仲裁 · 确认机制)"]
+        end
+
+        subgraph P_Resilience["可观测性与自治容灾韧性"]
+            PO1["可观测性 (OpenTelemetry Span 树 / 瀑布图 / Prometheus /metrics / 探针)"]
+            PO2["自动化评测闭环 (RAG / Tool / Security / Agent Eval Harness)"]
+            PO3["RiskSnapshot 风险账本 · Fenced Wave Runner (多波次租约与接管)"]
+            PO4["Action Journal (Repair/Rebalance/Drill) · Fleet SLO Ledger"]
+            PO5["Object Set v1 加密备份与投影式容灾恢复 (DR Readiness)"]
+        end
     end
 
-    subgraph Rust["可选 Rust Sidecar — 默认禁用 · Python 兜底"]
-        R1["网关请求准备<br/>POST /gateway/request/prepare"]
-        R2["MCP 协议准备<br/>POST /mcp/request/prepare"]
-        R3["工具策略评估<br/>POST /policy/{url,path,capability}"]
-        R4["RAG 向量排序 · JSON / compact binary<br/>POST /rag/vectors/rank{-binary}"]
-        R5["RAG 文档准备<br/>POST /rag/documents/prepare"]
-        R6["FastCDC 扫描 & 加密辅助<br/>scan-batch / backup-crypto"]
-    end
+    subgraph Native["Native 协同执行与辅助平面 (Native Runtime)"]
+        subgraph Rust["可选 Rust Sidecar — 默认禁用 · Python 兜底"]
+            R1["生产助手: backup-crypto (流式 Age 密码学) · deepseek-backup (FastCDC 扫描)"]
+            R2["网关请求准备: POST /gateway/request/prepare"]
+            R3["MCP 协议准备: POST /mcp/request/prepare"]
+            R4["工具策略评估: POST /policy/{url,path,capability}"]
+            R5["RAG 向量排序 · JSON / compact binary: POST /rag/vectors/rank{-binary}"]
+            R6["RAG 文档准备: POST /rag/documents/prepare"]
+        end
 
-    subgraph StatelessMCP["可选 无状态 MCP 平面 — TS + Redis"]
-        SM1["NGINX (:8010) → 双 MCP 实例"]
-        SM2["Redis AOF (任务租约 / Fencing 令牌 / 幂等)"]
-        SM3["代码检索 · pytest 运行 · 逻辑备份 Contributor"]
+        subgraph Go["Go 控制面 Shadow (cmd/deepseekd · 影子审计)"]
+            G1["版本化 Protobuf v1 RPC 跨进程契约"]
+            G2["Shadow 模式实时核对 (pythonDecisionDigest == goDecisionDigest)"]
+            G3["GO_CONTROL_DOMAINS 机器硬隔离 (Python 越权写物理拦截)"]
+        end
+
+        subgraph StatelessMCP["可选 无状态 MCP 平面 — TS + Redis"]
+            SM1["NGINX (:8010) → 双 MCP 实例"]
+            SM2["Redis AOF (任务租约 / Fencing 令牌 / 幂等)"]
+            SM3["代码检索 · pytest 运行 · 逻辑备份 Contributor"]
+        end
     end
 
     subgraph Data["Python 拥有的本地私有数据 (.dot-dirs)"]
@@ -176,6 +213,20 @@ flowchart TB
         D6["加密容灾备份 (.backups)"]
         D7["链路追踪 & 审计 (.traces / .tool-audit)"]
         D8["请求队列 & 预算 (.request-queue / .budget)"]
+    end
+
+    subgraph Federation["签名联邦与跨 Fleet 容灾面 (v4.8.0 Signed Federation & Multi-Fleet DR)"]
+        subgraph FleetA["Fleet A (Sovereign Source)"]
+            FA1["Authority A · Pinned Root + Online Signer"]
+            FA2["MinIO A1 + A2 真实存储 · Transfer Journal A"]
+        end
+        subgraph FleetB["Fleet B (Sovereign Receiver)"]
+            FB1["Authority B · Pinned Root + Online Signer"]
+            FB2["MinIO B1 + B2 真实存储 · Transfer Journal B"]
+        end
+        FA1 <-->|"Ed25519 签名挑战与握手"| FB1
+        FA2 -->|"范围受限 Ingress 申请 & 密文 Object-Set 异地同步"| FB2
+        FB2 -->|"Receipt v4 + Commit v4 + Attestation 签名取证"| FA2
     end
 
     subgraph External["显式外部调用 (数据默认不出端)"]
@@ -191,9 +242,12 @@ flowchart TB
     Python -. "可选确定性委托" .-> Rust
     Rust -. "已验证结果" .-> Python
     Rust -. "超时 / 不可用 / 畸形 / 分歧" .-> Python
+    Python <-.->|"Protobuf 契约核对"| Go
 
     Clients -. "独立横向扩展" .-> StatelessMCP
     StatelessMCP -. "状态与租约" .-> Data
+
+    Python -->|"容灾快照 / 调度波次 / 证据组装"| Federation
 ```
 
 ### 一句话职责边界
