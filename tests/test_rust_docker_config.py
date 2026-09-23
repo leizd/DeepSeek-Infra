@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import struct
 import threading
 from collections.abc import Iterator
@@ -15,10 +16,67 @@ from scripts import smoke_rust_sidecar as smoke
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+INCLUDE_MACRO = re.compile(r'include_(?:str|bytes)!\("([^"]+)"\)')
 
 
 def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
+
+
+def _builder_copies(dockerfile: str) -> list[str]:
+    """The source arguments of every `COPY` in the stage that runs `cargo build`."""
+    builder = dockerfile.split("AS builder", 1)[1].split("\nFROM ", 1)[0]
+    sources: list[str] = []
+    for line in builder.splitlines():
+        if not line.startswith("COPY "):
+            continue
+        arguments = [argument for argument in line.split()[1:] if not argument.startswith("--")]
+        if len(arguments) >= 2:
+            sources.extend(arguments[:-1])
+    return sources
+
+
+def _includes_outside_the_rust_workspace() -> list[tuple[str, str]]:
+    """Every `include_str!`/`include_bytes!` under `rust/` that reads above `rust/`.
+
+    Returns `(containing source, repo-relative path read)` pairs.
+    """
+    workspace = (ROOT / "rust").resolve()
+    escapes: list[tuple[str, str]] = []
+    for path in sorted((ROOT / "rust").rglob("*.rs")):
+        if "target" in path.parts:
+            continue
+        for literal in INCLUDE_MACRO.findall(path.read_text(encoding="utf-8")):
+            resolved = (path.parent / literal).resolve()
+            if workspace not in resolved.parents:
+                escapes.append((path.relative_to(ROOT).as_posix(), resolved.relative_to(ROOT.resolve()).as_posix()))
+    return escapes
+
+
+def test_every_rust_include_outside_the_workspace_is_copied_into_the_image() -> None:
+    """`include_str!` resolves against the *source file*, not the crate or the workspace root.
+
+    `rust/Dockerfile`'s builder stage copies `rust/` and `proto/` and nothing else, so a source that
+    reaches above `rust/` reads a path that exists on a developer's checkout — where the whole
+    repository is present — and does not exist in the image, where it is not. That asymmetry is
+    invisible to every job that builds in a full checkout (`rust`, `rust-coverage`, clippy,
+    `cargo test`): they all pass, and the image build fails at the last crate with
+
+        error: couldn't read `crates/deepseek-policy/src/skills/../../../../../VERSION`
+
+    which is how a `4.8.0` image, three parity lanes and the hybrid e2e lane all went red on a
+    commit whose Rust, clippy, coverage, protocol and three Python test jobs were green.
+    """
+    copied = _builder_copies(_read("rust/Dockerfile"))
+    for source, relative in _includes_outside_the_rust_workspace():
+        covered = any(
+            relative == entry or relative.startswith(entry.rstrip("/") + "/") for entry in copied
+        )
+        assert covered, (
+            f"{source} reads {relative}, which is outside rust/ and so outside the image's build "
+            f"context; add `COPY {relative} ./{relative}` to the builder stage of rust/Dockerfile "
+            f"(the builder copies: {copied})"
+        )
 
 
 def test_rust_dockerfile_is_multistage_locked_and_non_root() -> None:
