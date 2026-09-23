@@ -64,7 +64,7 @@ def test_every_rust_include_outside_the_workspace_is_copied_into_the_image() -> 
 
         error: couldn't read `crates/deepseek-policy/src/skills/../../../../../VERSION`
 
-    which is how a `4.8.0` image, three parity lanes and the hybrid e2e lane all went red on a
+    which is how the image build, three parity lanes and the hybrid e2e lane all went red on a
     commit whose Rust, clippy, coverage, protocol and three Python test jobs were green.
     """
     copied = _builder_copies(_read("rust/Dockerfile"))
