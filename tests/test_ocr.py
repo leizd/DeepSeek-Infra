@@ -347,10 +347,20 @@ class OcrTests(unittest.TestCase):
         self.assertIs(engine, fake_engine)
         tesseract.assert_not_called()
 
-    @unittest.skipUnless(os.name == "nt", "Windows-only OCR fallback path")
     def test_windows_ocr_engine_uses_temp_image_file(self) -> None:
+        if os.name != "nt":
+            with self.assertRaises(AppError) as cm:
+                ocr.WindowsOcrEngine()
+            self.assertEqual(cm.exception.code, ErrorCode.OCR_UNAVAILABLE)
+            engine = ocr.WindowsOcrEngine.__new__(ocr.WindowsOcrEngine)
+            with patch.object(ocr, "_run_windows_ocr_file", return_value=" windows text ") as run_ocr:
+                text = engine.extract_image(b"\x89PNG\r\n\x1a\nimage")
+            self.assertEqual(text, "windows text")
+            temp_path = run_ocr.call_args.args[0]
+            self.assertFalse(temp_path.exists())
+            return
+
         with (
-            patch.object(ocr.os, "name", "nt"),
             patch.object(ocr, "_powershell_path", return_value="powershell.exe"),
             patch.object(ocr, "_run_windows_ocr_file", return_value=" windows text ") as run_ocr,
         ):
@@ -361,15 +371,14 @@ class OcrTests(unittest.TestCase):
         temp_path = run_ocr.call_args.args[0]
         self.assertFalse(temp_path.exists())
 
-    @unittest.skipUnless(os.name == "nt", "Windows-only OCR fallback path")
     def test_powershell_path_uses_windows_system_fallback(self) -> None:
         with (
             patch.object(ocr.os, "name", "nt"),
             patch.dict(ocr.os.environ, {"SystemRoot": r"C:\Windows"}, clear=True),
             patch.object(ocr.shutil, "which", return_value=None),
             patch.object(
-                ocr.Path,
-                "is_file",
+                ocr.os.path,
+                "isfile",
                 lambda path: str(path).endswith(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
             ),
         ):

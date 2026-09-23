@@ -255,13 +255,11 @@ def _powershell_path() -> str | None:
     if found:
         return found
     if os.name == "nt":
-        system_root = Path(os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows")
-        for candidate in (
-            system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe",
-            system_root / "SysWOW64" / "WindowsPowerShell" / "v1.0" / "powershell.exe",
-        ):
-            if candidate.is_file():
-                return str(candidate)
+        system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+        for sub in ("System32", "SysWOW64"):
+            candidate = f"{system_root}\\{sub}\\WindowsPowerShell\\v1.0\\powershell.exe"
+            if os.path.isfile(candidate):
+                return candidate
     return None
 
 

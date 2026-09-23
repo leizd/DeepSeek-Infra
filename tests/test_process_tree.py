@@ -26,8 +26,10 @@ def test_get_all_system_processes_returns_current_process() -> None:
     assert any(p.pid == my_pid for p in procs)
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Toolhelp32 snapshot is Windows-only")
 def test_windows_process_enumeration_live() -> None:
+    if os.name != "nt":
+        assert _get_all_processes_windows() == []
+        return
     procs = _get_all_processes_windows()
     assert len(procs) > 0
     my_pid = os.getpid()
@@ -36,10 +38,9 @@ def test_windows_process_enumeration_live() -> None:
     assert "python" in found[0].name.lower()
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Toolhelp32 snapshot is Windows-only")
 def test_windows_process_enumeration_null_snapshot() -> None:
     fake_kernel32 = type("Kernel32", (), {"CreateToolhelp32Snapshot": staticmethod(lambda *_args, **_kwargs: -1)})()
-    with patch("ctypes.WinDLL", return_value=fake_kernel32):
+    with patch("ctypes.WinDLL", create=True, return_value=fake_kernel32):
         procs = _get_all_processes_windows()
         assert procs == []
 
