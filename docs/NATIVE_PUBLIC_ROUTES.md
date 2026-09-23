@@ -293,15 +293,25 @@ The same lane runs `tasks/native-runtime/check_probe_pairs.py`, which drives the
 pairs: both sides are executed, the **parsed values** are compared (a `serde_json` map's key
 order depends on whether `preserve_order` is in the build graph, which is not a behavioural
 difference), byte equality is reported separately, and a disagreement exits non-zero.
-Measured 2026-09-22: **38 pairs run, 36 identical, 9 of those byte-identical**, with two
-known divergences printed on every run:
+After correcting memory's dependency isolation, the 2026-09-22 isolated rerun found
+**38 pairs run, 37 identical, 10 of those byte-identical**, with no unexpected failures.
+Both memory examples were rebuilt with `--locked`. Memory is now a strict gate;
+the remaining known divergence is:
 
 - `store` — the oracle reads the wall clock (`bm.today()`) while the Rust example pins
   `DAY="2026-09-18"`, so the pair only agreed on the day it was written; the raw row now
   reads `2026-09-22` against `2026-09-18`.
-- `memory` — a real divergence, not a key order: the keys match 194/194, but
-  `state::remember` reports `hitCount` 4 against 3 and omits `[fact] the sky is blue`, and
-  `state::scoped` orders the context list differently.
+
+The memory difference was reproducible with a real SQLite index: Python returned four
+hits against Rust's three and reordered the scoped context. The Python probe claimed
+`local_rag` was absent but allowed its lazy imports once dependencies were installed;
+the Rust probe explicitly passed `None`. The Python save path also replaced the host
+workspace's memory index with probe records. Imports are now blocked only inside the
+extracted no-index namespace, including the save path, without changing either runtime
+or disabling RAG elsewhere in the process. Three regressions cover both differing states
+and preservation of an existing host index. Rebuilt probe pairs pass **194 memory keys
+and 64 live-index keys**, byte-identically in the local build; the live-index pair still
+measures **7 of 8** queries changed by the vector bonus. See [MEMORY_STORE.md](MEMORY_STORE.md).
 
 Three pairs are skipped with reasons the harness prints: `browser_engine` (needs a
 Chromium; runs in `native-browser-engine`), `oracle` (needs the oracle's application

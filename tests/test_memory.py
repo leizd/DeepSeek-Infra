@@ -1,30 +1,20 @@
 from __future__ import annotations
 
-import shutil
+import os
 import subprocess
 import sys
 import threading
 import unittest
-import uuid
 from pathlib import Path
-from unittest.mock import patch
+
+import pytest
 
 import deepseek_infra.infra.data.memory as memory
 from deepseek_infra.core.errors import AppError
 
 
+@pytest.mark.usefixtures("tmp_settings")
 class MemoryTests(unittest.TestCase):
-    def setUp(self) -> None:
-        memory_dir = Path.cwd() / f".test-memory-{uuid.uuid4().hex}"
-        memory_dir.mkdir()
-        self.memory_dir_patch = patch.object(memory, "MEMORY_DIR", memory_dir)
-        self.memory_file_patch = patch.object(memory, "MEMORY_FILE", memory_dir / "memories.json")
-        self.memory_dir_patch.start()
-        self.memory_file_patch.start()
-        self.addCleanup(lambda: shutil.rmtree(memory_dir, ignore_errors=True))
-        self.addCleanup(self.memory_file_patch.stop)
-        self.addCleanup(self.memory_dir_patch.stop)
-
     def test_upsert_memory_creates_and_updates_existing_item(self) -> None:
         first = memory.upsert_memory("Prefers concise answers", category="preference")
         second = memory.upsert_memory("Prefers concise answers", category="fact")
@@ -124,8 +114,14 @@ class MemoryTests(unittest.TestCase):
             "memory.MEMORY_FILE = memory.MEMORY_DIR / 'memories.json'; "
             "memory.upsert_memory(sys.argv[2], category='project')"
         )
+        # Module monkeypatches do not cross process boundaries. Configure the root
+        # before the child imports memory/local_rag so index writes stay isolated too.
+        environment = {**os.environ, "DEEPSEEK_INFRA_ROOT": str(memory.MEMORY_DIR.parent)}
         processes = [
-            subprocess.Popen([sys.executable, "-c", script, str(memory.MEMORY_DIR), f"Cross process note {index}"], cwd=Path.cwd())
+            subprocess.Popen(
+                [sys.executable, "-c", script, str(memory.MEMORY_DIR), f"Cross process note {index}"],
+                cwd=Path.cwd(), env=environment,
+            )
             for index in range(2)
         ]
 
@@ -146,6 +142,6 @@ class MemoryTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    raise SystemExit(pytest.main([__file__]))
 
 
