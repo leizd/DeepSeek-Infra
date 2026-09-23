@@ -185,3 +185,25 @@ func TestSubmissionIdentityIsDurablyIdempotentAndCannotRebind(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestFileURLPathAppliesTheDriveLetterRuleOnEveryHost(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		path string
+		want string
+	}{
+		{"drive letter gets a leading slash", "C:/state/a2a.sqlite3", "/C:/state/a2a.sqlite3"},
+		{"bare drive", "c:", "/c:"},
+		{"posix path is untouched", "/var/lib/a2a.sqlite3", "/var/lib/a2a.sqlite3"},
+		{"relative path is untouched", "state/a2a.sqlite3", "state/a2a.sqlite3"},
+		{"colon that is not the second character", "ab:c", "ab:c"},
+		{"single character", "x", "x"},
+		{"empty", "", ""},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := fileURLPath(testCase.path); got != testCase.want {
+				t.Fatalf("fileURLPath(%q) = %q, want %q", testCase.path, got, testCase.want)
+			}
+		})
+	}
+}

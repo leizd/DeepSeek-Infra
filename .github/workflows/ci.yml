@@ -1396,7 +1396,17 @@ jobs:
       - run: go test ./...
       - run: go test -race ./...
       - name: Go coverage
-        run: python ../scripts/check_go_coverage.py --dir . --min 95.0
+        # The profile is uploaded so a difference between this job's number and a developer's is
+        # diffed rather than inferred. On this suite the differences are single statements — a
+        # `select` whose two cases race, a drive-letter rule that only a Windows path can reach —
+        # and the gate's whole margin above its 95.0% floor is about two of them.
+        run: python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile coverage.out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-coverage-profile-1.27.1
+          path: go/coverage.out
+          if-no-files-found: warn
       - name: Build fail-closed Rust worker boundary
         run: cargo build --locked --manifest-path ../rust/Cargo.toml -p deepseek-worker
       - name: Run real Go-to-Rust worker boundary
