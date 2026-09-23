@@ -348,8 +348,19 @@ class OcrTests(unittest.TestCase):
         tesseract.assert_not_called()
 
     def test_windows_ocr_engine_uses_temp_image_file(self) -> None:
+        if os.name != "nt":
+            with self.assertRaises(AppError) as cm:
+                ocr.WindowsOcrEngine()
+            self.assertEqual(cm.exception.code, ErrorCode.OCR_UNAVAILABLE)
+            engine = ocr.WindowsOcrEngine.__new__(ocr.WindowsOcrEngine)
+            with patch.object(ocr, "_run_windows_ocr_file", return_value=" windows text ") as run_ocr:
+                text = engine.extract_image(b"\x89PNG\r\n\x1a\nimage")
+            self.assertEqual(text, "windows text")
+            temp_path = run_ocr.call_args.args[0]
+            self.assertFalse(temp_path.exists())
+            return
+
         with (
-            patch.object(ocr.os, "name", "nt"),
             patch.object(ocr, "_powershell_path", return_value="powershell.exe"),
             patch.object(ocr, "_run_windows_ocr_file", return_value=" windows text ") as run_ocr,
         ):
