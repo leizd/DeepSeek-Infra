@@ -42,15 +42,24 @@ func (c *Coordinator) callWithActionLease(ctx context.Context, owner leasedContr
 		for {
 			select {
 			case <-stop:
-				return
 			case <-rpcCtx.Done():
-				return
 			case <-ticker.C:
 				if _, err := owner.RenewActionLease(renewal); err != nil {
 					cancel(err)
 					return
 				}
+				continue
 			}
+			// Either the call has returned and closed `stop`, or the caller's context is done:
+			// both mean this heartbeat is finished. One `return` for the two, because which of
+			// them fires is goroutine scheduling — the call closes `stop` only after it returns,
+			// so a cancelled caller and a returned call race. As two cases with identical bodies
+			// that race decided which block the coverage gate measured: the same commit on the
+			// same host reported 4660 and 4659 statements against a 95.0% floor whose entire
+			// margin is about two. The two empty cases still leave a zero-statement block that
+			// the tool may mark either way; it carries no statements, so the reported number no
+			// longer moves.
+			return
 		}
 	}()
 	resp, rpcErr := func() (*actionv1.StorageMutationResponse, error) {

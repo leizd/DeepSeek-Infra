@@ -147,10 +147,7 @@ func Open(root string, now func() time.Time, lease time.Duration) (*Store, error
 		_ = writer.Close()
 		return nil, err
 	}
-	path := filepath.ToSlash(filepath.Join(root, "a2a.sqlite3"))
-	if len(path) > 1 && path[1] == ':' {
-		path = "/" + path
-	}
+	path := fileURLPath(filepath.ToSlash(filepath.Join(root, "a2a.sqlite3")))
 	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "_pragma=busy_timeout(5000)"}).String()
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -164,6 +161,19 @@ func Open(root string, now func() time.Time, lease time.Duration) (*Store, error
 		return nil, err
 	}
 	return s, nil
+}
+
+// fileURLPath applies the file-URL drive-letter rule to a slash-separated path.
+//
+// The rule is decided by the *path*, not by the host, which is why it is a function: reading it
+// inline meant only a Windows path could ever take the branch, no test on the coverage gate's
+// Linux host could reach it, and two statements sat permanently uncovered. `store.controlDatabaseURLForOS`
+// records the same reasoning for the control store's URL, where it was fixed first.
+func fileURLPath(path string) string {
+	if len(path) > 1 && path[1] == ':' {
+		return "/" + path
+	}
+	return path
 }
 
 func (s *Store) initialize() error {
