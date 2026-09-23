@@ -112,6 +112,14 @@
       "durable_store": "rust_data"
     },
     {
+      "id": "skills_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data"
+    },
+    {
       "id": "project_metadata_store",
       "plane": "data",
       "current_owner": "python",

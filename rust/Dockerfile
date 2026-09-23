@@ -12,6 +12,12 @@ FROM rust:1.85-bookworm AS builder
 WORKDIR /app
 COPY rust ./rust
 COPY proto ./proto
+# `deepseek-policy`'s skills catalog embeds the release version with
+# `include_str!("../../../../../VERSION")`, which resolves from
+# `crates/deepseek-policy/src/skills/` to `/app/VERSION`. Copying the file by name keeps the root
+# `VERSION` the single source of truth and keeps this build context as narrow as the two lines
+# above; without it the whole workspace compiles and then the last crate fails to read it.
+COPY VERSION ./VERSION
 
 RUN cargo build \
     --locked \

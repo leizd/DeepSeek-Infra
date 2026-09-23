@@ -44,6 +44,7 @@ pub mod project_routes;
 pub mod request_assembly;
 pub mod request_preparation;
 pub mod search_provider;
+mod skills_routes;
 pub mod static_files;
 pub mod title_route;
 pub mod tool_rounds;
@@ -116,6 +117,7 @@ fn create_routes() -> Router {
         // the store's authoritative writer is Rust, not Go.
         .merge(data_routes::router())
         .merge(project_routes::router())
+        .merge(skills_routes::router())
         .route("/api/*path", any(control_proxy::proxy_api_to_go))
         // Private control handlers must not fall through to either proxy or SPA.
         .route("/internal", any(|| async { StatusCode::NOT_FOUND }))
@@ -557,8 +559,12 @@ const MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE: &str = "NATIVE_MEMORY_VECTOR_INDEX_N
 ///    4.9.4. A store that is **not** here stays refused whatever the mode says — setting the mode alone
 ///    must not be able to enable a store nobody declared — which is why the list is the second
 ///    condition rather than a detail of the first. A test pins it as a subset of the contract's.
-pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 3] =
-    ["memory_store", "reminders_store", "project_metadata_store"];
+pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 4] = [
+    "memory_store",
+    "reminders_store",
+    "project_metadata_store",
+    "skills_store",
+];
 
 /// Whether this process may write the store `domain` names.
 ///

@@ -73,6 +73,13 @@ RUST_DATA_DOMAINS = frozenset(
         # Project metadata is the project.json record, including conversation
         # snapshots and legacy bindings. Child stores retain separate ownership.
         "project_metadata_store",
+        # The capability registry under `.skills/`: the custom Skill records, the custom
+        # Packs, `disabled.json`, the version history and the security review/trust
+        # records. Python reaches all of it through one scope per module —
+        # `skills.registry.skill_store_scope()` — which is what makes this gate per store
+        # rather than per call site. The run log, the catalog and the eval-case file sit
+        # in the same directory as child stores and keep their own ownership.
+        "skills_store",
     }
 )
 
