@@ -13,6 +13,30 @@ see below.
 `recall_memory` / `forget_memory` branch bodies, and `file_lock.rs` factors out the
 OS lock both this module and the mutation gate need.
 
+## Probe isolation correction — 2026-09-22
+
+The older `memory_parity_probe.py` described `local_rag` as unavailable but never
+blocked the lazy imports in the extracted functions. With repository dependencies
+installed, Python ran against a live index while Rust passed `vector_hits=None`.
+An isolated, real SQLite reproduction changed exactly `state::remember` (four hits
+instead of three) and `state::scoped` (project before preference). Forcing the index
+unavailable restored agreement on all 194 keys. The same import leak let
+`_save_memories_unlocked` replace the host workspace's memory index with test records.
+
+The probe now blocks RAG imports in its extracted namespace only, exercising the
+oracle's existing exception fallback for both reads and saves. Runtime code is
+unchanged. The `memory` known-divergence exemption is removed. Three regression cases
+first failed on hit count, ordering and host-index preservation, then passed with the
+fix; the 32 focused memory tests, Ruff and mypy pass. Freshly rebuilt Rust examples
+match **194 no-index keys and 64 live-index keys**, byte for byte in this build. The
+live-index probe still reports **7 of 8** queries affected by the bonus, so the no-index
+probe's result must not be used as proof that production can omit the provider.
+
+The related legacy `MemoryTests` also isolated only `MEMORY_FILE`/`MEMORY_DIR`, leaving
+index writes pointed at the host workspace. It now uses `tmp_settings`, and its child
+writers receive `DEEPSEEK_INFRA_ROOT` before importing the application. The focused
+32-test rerun checks that both the host memory file and index retain their hashes.
+
 ## Three layers of exclusion, not one
 
 A memory write passes through all three, and each does a different job:

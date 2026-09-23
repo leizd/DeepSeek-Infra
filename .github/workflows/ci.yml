@@ -808,7 +808,7 @@ jobs:
       # The older pairs print a report for a human to diff. The harness runs both sides of
       # each one and exits non-zero when a pair disagrees, which is what turns thirty-odd
       # pairs of local evidence into gates in one step. The pairs it deliberately does not
-      # run, and the two that are known to diverge, are printed on every run.
+      # run, and the remaining store fixture-clock divergence, are printed on every run.
       - name: Every other probe pair
         run: python tasks/native-runtime/check_probe_pairs.py
 

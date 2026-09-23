@@ -36,18 +36,12 @@ EXAMPLES = REPO / "rust" / "target" / "debug" / "examples"
 #: of the verdict so a red run keeps meaning "something changed", and they are printed on
 #: every run so the finding stays visible instead of being buried by a green lane.
 #:
-#: Neither entry is a verdict on the port's correctness -- that is a question for the
-#: oracle's own rules -- and both were measured on 2026-09-22.
+#: The remaining entry is a fixture-clock mismatch, measured on 2026-09-22.
 KNOWN_DIVERGENCES: dict[str, str] = {
     "store": (
         "the oracle reads the wall clock (`bm.today()`) while the Rust example pins "
         "DAY=\"2026-09-18\", so the pair only agreed on the day it was written; the raw "
         "row's day now reads 2026-09-22 against 2026-09-18"
-    ),
-    "memory": (
-        "`state::remember` reports hitCount 4 against 3 and omits `[fact] the sky is blue`, "
-        "and `state::scoped` orders the context list differently (fact, project, preference "
-        "against fact, preference, project)"
     ),
 }
 

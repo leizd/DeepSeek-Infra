@@ -8,6 +8,29 @@ This file is the session handoff. Historical plans, checkboxes, VERSION, and
 `release/native_runtime_5_0_evidence_v1.json` are not completion evidence.
 The capability matrix is [`migration-matrix.md`](migration-matrix.md).
 
+## Current continuation checkpoint — 2026-09-22 memory probe isolation
+
+Investigated the two `memory` differences recorded by `c9606a9a`, on base HEAD
+`1e82d37c`. Python's supposedly absent `local_rag` was importable with dependencies
+installed, so it used a live index while Rust supplied `None`; Python saves also
+replaced the host memory index. A real SQLite fixture reproduced exactly
+`state::remember` and `state::scoped`; forcing the missing dependency gave 194/194
+equal values. The fix confines missing-RAG imports to the extracted namespace and
+removes `memory` from `KNOWN_DIVERGENCES`; production runtime code is unchanged.
+
+Validation: three regressions failed before the fix and pass afterward; 32 focused
+memory tests, Ruff and mypy pass. Both Rust examples were rebuilt with `--locked`;
+194 memory keys and 64 live-index keys match byte for byte in this build. The live
+index still changes 7/8 queries, and the fixed probes leave the host index unchanged.
+An isolated rerun of all 38 older pairs reports 37 passes, zero unexpected failures
+and one remaining known divergence (`store`, fixture clock); 10 are byte-identical.
+The legacy `tests/test_memory.py` had the same index-isolation leak: it now uses
+`tmp_settings` and gives child writers the temporary root before import. The 32-test
+rerun verifies that host memory and index hashes remain unchanged.
+Details: [`docs/MEMORY_STORE.md`](../../docs/MEMORY_STORE.md#probe-isolation-correction--2026-09-22).
+This closes the probe discrepancy, not the remaining production migration work;
+readiness is unchanged. Changes from this investigation are uncommitted.
+
 ## Current continuation checkpoint — 2026-09-21 the paginated file reader is wired
 
 Same branch `codex/native-a2a-stream-continuation`; HEAD is still

@@ -10,8 +10,10 @@ the load/save path, and from `tools.py` the `memory_tool_scopes`,
 is inline in `execute_tool_call`, so it is reproduced here in the same shape.
 
 Pinned: `utc_now_iso` (frozen) so a store write is reproducible, and `local_rag`
-(absent) so `retrieve_memories` takes the oracle's own `except Exception` path — the
-vector bonus is not ported, which is recorded in `docs/MEMORY_STORE.md`.
+(import blocked inside the extracted namespace) so `retrieve_memories` takes the
+oracle's own `except Exception` path, matching Rust's `vector_hits=None`. The live
+index has its own pair, `memory_index_parity_probe.py`; this probe must neither read
+nor replace the host workspace's index when its dependencies are installed.
 
 Usage::
 
@@ -23,6 +25,7 @@ Usage::
 from __future__ import annotations
 
 import ast
+import builtins
 import json
 import shutil
 import sys
@@ -159,7 +162,14 @@ def _extract(source: str, name: str) -> str:
 
 
 def build_namespace(root: Path) -> dict:
-    namespace: dict = {}
+    def import_without_local_rag(name, globals=None, locals=None, fromlist=(), level=0):
+        if level == 0 and (name == "deepseek_infra.infra.rag" or name.startswith("deepseek_infra.infra.rag.")):
+            raise ModuleNotFoundError("local_rag is deliberately unavailable in the no-index memory probe")
+        return builtins.__import__(name, globals, locals, fromlist, level)
+
+    # Scope the missing dependency to these extracted functions, including the lazy
+    # sync import on save. Do not mutate process-wide builtins or sys.modules.
+    namespace: dict = {"__builtins__": {**vars(builtins), "__import__": import_without_local_rag}}
     exec(compile(ERRORS.read_text(encoding="utf-8"), str(ERRORS), "exec"), namespace)  # noqa: S102
 
     import contextlib
@@ -241,6 +251,9 @@ def outcome(call) -> dict:
 
 
 def main() -> int:
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(encoding="utf-8")
     for path in (MEMORY, TOOLS, UTILS, ERRORS):
         if not path.exists():
             print(f"missing {path}", file=sys.stderr)
