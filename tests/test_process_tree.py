@@ -72,6 +72,32 @@ def test_posix_process_enumeration_proc_dir(tmp_path: Any) -> None:
     assert procs[1] == ProcessInfo(pid=101, ppid=100, name="helper")
 
 
+def test_process_enumeration_is_ordered_by_pid_whatever_the_directory_order_is(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """The order has to be a property of the reader, because `os.listdir` gives none.
+
+    This is the requirement `test_posix_process_enumeration_proc_dir` was asserting by accident: on
+    the CI runners `listdir` returned `101` before `100` on two of the three Python shards and the
+    other way round on the third, so the same commit went red and green depending on the host's
+    directory order. The `ps` fallback below has always been pid-ordered — `ps` sorts by pid — so
+    the `/proc` path disagreeing with it was the implementation's doing, not the test's.
+    """
+    proc_dir = tmp_path / "proc"
+    proc_dir.mkdir()
+    for pid, ppid, name in ((101, 100, "helper"), (300, 1, "deepseekd"), (100, 1, "deepseek-worker")):
+        (proc_dir / str(pid)).mkdir()
+        (proc_dir / str(pid) / "stat").write_text(
+            f"{pid} ({name}) S {ppid} {pid} {pid} 0 ...", encoding="utf-8"
+        )
+    (proc_dir / "sys").mkdir()
+    monkeypatch.setattr(os, "listdir", lambda _path: ["300", "101", "sys", "100"])
+
+    procs = _get_all_processes_posix(proc_dir=str(proc_dir))
+
+    assert [proc.pid for proc in procs] == [100, 101, 300]
+
+
 def test_posix_process_enumeration_ps_fallback() -> None:
     ps_output = "PID PPID COMM\n10 1 deepseekd\n20 10 worker\n"
     with patch("os.path.isdir", return_value=False), patch(
