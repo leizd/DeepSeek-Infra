@@ -410,3 +410,64 @@ func TestVerifyAuthorityRequestDocumentEdgeCases(t *testing.T) {
 		t.Fatalf("expected ErrAuthorityRequestInvalid for long lifetime, got: %v", err)
 	}
 }
+
+// The envelope is read before the signature, so a document that has been changed — by a
+// replayer, a partial writer, or a bug — is refused on its own terms rather than as a
+// signature failure. These are the four ways the frozen corpus does not already cover: it
+// has a field-count mismatch and a whole-document digest mismatch, but not a name-for-name
+// swap, a wrong operation, a malformed request id, or a payload digest that disagrees with
+// the payload it describes.
+func TestVerifyAuthorityRequestDocumentRefusesEnvelopeMutations(t *testing.T) {
+	fixture := loadAuthorityRequestFixture(t)
+	context := testAuthorityRequestContext(t, fixture, nil)
+
+	for _, testCase := range []struct {
+		name  string
+		want  error
+		apply func(map[string]any)
+	}{
+		{
+			"a field renamed to another of the same count",
+			ErrAuthorityRequestFieldsInvalid,
+			func(document map[string]any) {
+				document["nonceX"], document["nonce"] = document["nonce"], nil
+				delete(document, "nonce")
+			},
+		},
+		{
+			"an operation nobody serves",
+			ErrAuthorityRequestOperationInvalid,
+			func(document map[string]any) { document["operation"] = "not-an-operation" },
+		},
+		{
+			"a request id that is not a 32-byte hex digest",
+			ErrAuthorityRequestInvalid,
+			func(document map[string]any) { document["requestId"] = "zz" },
+		},
+		{
+			"a payload digest that disagrees with the payload",
+			ErrAuthorityRequestPayloadDigestMismatch,
+			func(document map[string]any) {
+				document["payloadDigest"] = "0000000000000000000000000000000000000000000000000000000000000000"
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var document map[string]any
+			if err := json.Unmarshal([]byte(fixture.CanonicalRequest), &document); err != nil {
+				t.Fatal(err)
+			}
+			testCase.apply(document)
+			if digest, err := authorityRequestDigest(document); err == nil {
+				document["digest"] = digest
+			}
+			raw, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := VerifyAuthorityRequestDocument(raw, context); !errors.Is(err, testCase.want) {
+				t.Fatalf("want %v, got %v", testCase.want, err)
+			}
+		})
+	}
+}
