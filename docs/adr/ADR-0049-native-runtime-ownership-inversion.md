@@ -17,11 +17,12 @@ were optional, default deployment was Python-only, streaming and real MCP tool
 execution stayed in Python, and Python fallback was retained. That was the right
 decision while the native paths were partial.
 
-By 4.8.0 the repository has seven real Rust crates and production-grade backup,
-resilience, Evidence, and signed federation semantics, but production authority
-still resides in the Python package. Continuing to add Python-owned control and
-data paths increases migration cost and leaves the most sensitive boundaries
-split between an authoritative Python runtime and optional native helpers.
+By 4.8.0 the repository had seven initial Rust crates (subsequently expanded
+to 14 crates across worker, storage, transfer, federation, gateway, and sidecar planes)
+and production-grade backup, resilience, Evidence, and signed federation semantics,
+but production authority still resides in the Python package. Continuing to add
+Python-owned control and data paths increases migration cost and leaves the most
+sensitive boundaries split between an authoritative Python runtime and optional native helpers.
 
 The requested end state is now explicit: production ownership must move entirely
 to Rust and Go while repository Python remains only for offline reference,

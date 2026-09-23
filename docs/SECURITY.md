@@ -5,7 +5,7 @@
 <!-- docs-language-switcher:end -->
 
 
-适用版本：v4.5.0（开发中，尚未 release-ready）。
+适用版本：v4.8.0（开发中，尚未 release-ready）。
 
 ## 威胁模型
 
