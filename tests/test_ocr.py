@@ -366,8 +366,8 @@ class OcrTests(unittest.TestCase):
             patch.dict(ocr.os.environ, {"SystemRoot": r"C:\Windows"}, clear=True),
             patch.object(ocr.shutil, "which", return_value=None),
             patch.object(
-                ocr.Path,
-                "is_file",
+                ocr.os.path,
+                "isfile",
                 lambda path: str(path).endswith(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
             ),
         ):
