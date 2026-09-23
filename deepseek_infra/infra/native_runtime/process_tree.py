@@ -19,7 +19,18 @@ class ProcessInfo:
     name: str
 
 
+def _by_pid(proc: ProcessInfo) -> int:
+    return proc.pid
+
+
 def _get_all_processes_windows() -> list[ProcessInfo]:
+    """Every process the snapshot reports, **ordered by pid**.
+
+    A Toolhelp32 snapshot is enumerated in creation order, which is neither pid order nor stable
+    across calls, and [`get_process_descendants`] walks `children_map` in insertion order — so the
+    order is sorted here rather than left to the snapshot. See the POSIX reader for what went wrong
+    when only one of the two was ordered.
+    """
     import ctypes
     from ctypes import wintypes
 
@@ -65,10 +76,21 @@ def _get_all_processes_windows() -> list[ProcessInfo]:
     finally:
         kernel32.CloseHandle(snapshot)
 
+    entries.sort(key=_by_pid)
     return entries
 
 
 def _get_all_processes_posix(proc_dir: str = "/proc") -> list[ProcessInfo]:
+    """Every process `/proc` reports, **ordered by pid**.
+
+    The order is part of what this returns, and it did not use to be. `os.listdir` promises no order
+    at all — the CI runners returned `101` before `100` on two of the three Python shards and the
+    other way round on the third, so a test that read `procs[0]` went red and green on the same
+    commit — while the `ps` fallback below has always been pid-ordered, because `ps` sorts by pid.
+    Two paths of one function disagreeing about their output order is what made the flake possible,
+    so both exits sort. `get_process_descendants` inherits it, and so does the violation list in
+    [`assert_zero_python_process_tree`]'s message.
+    """
     entries: list[ProcessInfo] = []
     # Try reading /proc directly on Linux
     if os.path.isdir(proc_dir):
@@ -89,6 +111,7 @@ def _get_all_processes_posix(proc_dir: str = "/proc") -> list[ProcessInfo]:
             except (OSError, ValueError):
                 continue
         if entries:
+            entries.sort(key=_by_pid)
             return entries
 
     # Fallback to ps -eo pid,ppid,comm
@@ -106,6 +129,7 @@ def _get_all_processes_posix(proc_dir: str = "/proc") -> list[ProcessInfo]:
     except Exception:
         pass
 
+    entries.sort(key=_by_pid)
     return entries
 
 
