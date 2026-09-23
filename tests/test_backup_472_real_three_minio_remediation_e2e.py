@@ -421,6 +421,7 @@ def _actual_copy_evidence(
     }
 
 
+@pytest.mark.integration
 def test_real_three_minio_autonomous_remediation_e2e(
     tmp_settings: Path,
     monkeypatch: pytest.MonkeyPatch,

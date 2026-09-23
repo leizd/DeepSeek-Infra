@@ -1094,9 +1094,16 @@ def test_policy_and_placement_use_matching_rto_and_operator_cost_evidence(tmp_se
             "p90Seconds": 14_400 if target_id == slow_id else 3600,
         }
 
-    with patch(
-        "deepseek_infra.infra.workspace.backup_recovery_class.calibrate_rto",
-        side_effect=_rto_for_target,
+    with (
+        patch(
+            "deepseek_infra.infra.workspace.backup_recovery_class.calibrate_rto",
+            side_effect=_rto_for_target,
+        ),
+        patch.object(
+            backup_targets,
+            "probe_target_capacity",
+            return_value={"totalBytes": 100 * 1024**3, "freeBytes": 80 * 1024**3, "freePercent": 80.0},
+        ),
     ):
         ranked = backup_scheduler.plan_target_placement(
             normalized,

@@ -347,7 +347,6 @@ class OcrTests(unittest.TestCase):
         self.assertIs(engine, fake_engine)
         tesseract.assert_not_called()
 
-    @unittest.skipUnless(os.name == "nt", "Windows-only OCR fallback path")
     def test_windows_ocr_engine_uses_temp_image_file(self) -> None:
         with (
             patch.object(ocr.os, "name", "nt"),
@@ -361,7 +360,6 @@ class OcrTests(unittest.TestCase):
         temp_path = run_ocr.call_args.args[0]
         self.assertFalse(temp_path.exists())
 
-    @unittest.skipUnless(os.name == "nt", "Windows-only OCR fallback path")
     def test_powershell_path_uses_windows_system_fallback(self) -> None:
         with (
             patch.object(ocr.os, "name", "nt"),

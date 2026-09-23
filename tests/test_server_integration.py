@@ -640,7 +640,6 @@ class ServerIntegrationTests(unittest.TestCase):
                 self.assertEqual(status, 204)
                 self.assertIsNone(response.getheader("Access-Control-Allow-Origin"))
 
-    @unittest.skipIf(server_module.multipart_module is None, "multipart dependency is not installed")
     def test_multipart_upload_parses_ocr_field_after_file(self) -> None:
         boundary = "----testboundary"
         body = (
@@ -684,7 +683,6 @@ class ServerIntegrationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["files"][0]["name"], "scan.pdf")
 
-    @unittest.skipIf(server_module.multipart_module is None, "multipart dependency is not installed")
     def test_multipart_upload_rejects_oversized_request_body(self) -> None:
         boundary = "----smallrequest"
         body = self.multipart_body(content=b"hello world", boundary=boundary)
@@ -701,7 +699,6 @@ class ServerIntegrationTests(unittest.TestCase):
         self.assertEqual(status, 413)
         self.assertEqual(payload["code"], ErrorCode.UPLOAD_TOO_LARGE.value)
 
-    @unittest.skipIf(server_module.multipart_module is None, "multipart dependency is not installed")
     def test_multipart_upload_rejects_single_file_above_limit_on_all_upload_routes(self) -> None:
         for path in ["/api/file-text", "/api/project-files?projectId=test-project", "/share-target"]:
             with self.subTest(path=path):
@@ -720,7 +717,6 @@ class ServerIntegrationTests(unittest.TestCase):
                 self.assertEqual(status, 413)
                 self.assertEqual(payload["code"], ErrorCode.UPLOAD_TOO_LARGE.value)
 
-    @unittest.skipIf(server_module.multipart_module is None, "multipart dependency is not installed")
     def test_share_target_imports_prompt_and_files(self) -> None:
         boundary = "----sharetarget"
         body = (
