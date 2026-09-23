@@ -143,3 +143,64 @@ def test_pack_resolution_embedded_reference_and_unknown(tmp_settings: Path) -> N
     with pytest.raises(AppError, match="unknown skillId"):
         registry._resolve_pack_skills({"skills": [{"skillId": "skill_unknown_332"}]})
     assert registry._unresolved_references({"skills": [None, embedded, {"skillId": "skill_unknown_332"}]}) == ["skill_unknown_332"]
+
+
+def test_every_skill_registry_write_path_is_denied_once_python_is_de_authorized(
+    tmp_settings: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`skills_store` is a declared domain (python -> rust, 4.9.4), so the handover is mechanical.
+
+    One scope covers every write into the capability registry —
+    `registry.skill_store_scope()`, taken by `write_disabled_skill_ids`, `write_custom_skill`,
+    `write_custom_pack`, `delete_skill`, `delete_pack`, `versioning.snapshot_skill`,
+    `versioning.snapshot_pack`, `security._append_review` and `security._write_trust_store`. It sits
+    at the store rather than at each call site because a custom Skill write alone reaches three of
+    those sinks (the record, its history revision, its security review) and a gate at the route would
+    have missed the two that the route never names.
+
+    The run log, the catalog and the eval-case file share `.skills/` and are deliberately **not**
+    gated: Rust's `Registry` writes none of them, so denying them would take away a store nobody has
+    taken over — the other half of ADR-0049's "a cutover gate that has not passed leaves the prior
+    owner authoritative; it does not permit dual writers".
+
+    That sentence cuts both ways, so the default mode leaving every path working is asserted here
+    too: a gate that fired early would be a regression, not caution.
+    """
+    from deepseek_infra.infra.native_runtime.authority import (
+        PythonWriterMechanicallyDeniedError,
+        RUST_DATA_DOMAINS,
+    )
+    from deepseek_infra.infra.skills import catalog, security
+
+    assert "skills_store" in RUST_DATA_DOMAINS
+
+    created = registry.create_custom_skill(_skill("skill_handover_332"))
+    skill_id = created["skillId"]
+    stores = {
+        "the custom record": registry.custom_skill_path(skill_id),
+        "a history revision": registry.SKILLS_DIR / "history" / skill_id,
+        "the review log": registry.SKILLS_DIR / "security" / "reviews.jsonl",
+        "the disabled list": registry.disabled_skills_path(),
+        "the trust store": registry.SKILLS_DIR / "security" / "trust-store.json",
+    }
+    registry.set_skill_disabled(skill_id, True)
+    security.trust_skill(skill_id)
+    for label, path in stores.items():
+        assert path.exists(), label
+    catalog_manifest = registry.SKILLS_DIR / "catalog" / "catalog.json"
+    catalog.catalog_refresh()
+    assert catalog_manifest.is_file()
+    written = registry.custom_skill_path(skill_id).read_text(encoding="utf-8")
+
+    monkeypatch.setenv("DEEPSEEK_RUNTIME_MODE", "python_disabled")
+    for write in (
+        lambda: registry.create_custom_skill(_skill("skill_handover_denied_332")),
+        lambda: registry.set_skill_disabled(skill_id, False),
+        lambda: registry.delete_skill(skill_id),
+        lambda: security.trust_skill(skill_id),
+    ):
+        with pytest.raises(PythonWriterMechanicallyDeniedError, match="Domain 'skills_store' write mutation is mechanically denied"):
+            write()
+    assert registry.custom_skill_path(skill_id).read_text(encoding="utf-8") == written
+    assert not registry.custom_skill_path("skill_handover_denied_332").exists()
+    assert catalog.catalog_refresh()["ok"] is True

@@ -45,8 +45,9 @@ def snapshot_skill(skill: dict[str, Any], *, change_summary: str = "", event: st
     metadata = _skill_metadata(config, change_summary=change_summary, event=event)
     payload = {"schemaVersion": SKILL_REVISION_SCHEMA, "metadata": metadata, "skill": config}
     target = skill_history_dir(skill_id) / f"{_safe_version(metadata['version'])}--{metadata['revisionId']}.json"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    with registry.skill_store_scope():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return {**metadata, "path": str(target.relative_to(registry.SKILLS_DIR))}
 
 
@@ -184,8 +185,9 @@ def snapshot_pack(pack: dict[str, Any], *, change_summary: str = "", event: str 
     metadata = _pack_metadata(config, change_summary=change_summary, event=event)
     payload = {"schemaVersion": PACK_REVISION_SCHEMA, "metadata": metadata, "pack": config}
     target = pack_history_dir(pack_id) / f"{_safe_version(metadata['version'])}--{metadata['revisionId']}.json"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    with registry.skill_store_scope():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return {**metadata, "path": str(target.relative_to(registry.SKILLS_DIR))}
 
 

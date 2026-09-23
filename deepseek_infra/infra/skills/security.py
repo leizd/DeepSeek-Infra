@@ -597,10 +597,13 @@ def _load_trust_store() -> dict[str, Any]:
 
 
 def _write_trust_store(store: dict[str, Any]) -> None:
-    security_dir().mkdir(parents=True, exist_ok=True)
-    store["schemaVersion"] = TRUST_STORE_SCHEMA
-    store["updatedAt"] = utc_now_iso()
-    trust_store_path().write_text(json.dumps(store, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    from deepseek_infra.infra.skills import registry
+
+    with registry.skill_store_scope():
+        security_dir().mkdir(parents=True, exist_ok=True)
+        store["schemaVersion"] = TRUST_STORE_SCHEMA
+        store["updatedAt"] = utc_now_iso()
+        trust_store_path().write_text(json.dumps(store, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def _trust_entry(kind: str, item_id: str) -> dict[str, Any]:
@@ -611,6 +614,9 @@ def _trust_entry(kind: str, item_id: str) -> dict[str, Any]:
 
 
 def _append_review(review: dict[str, Any]) -> None:
-    security_dir().mkdir(parents=True, exist_ok=True)
-    with reviews_path().open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(review, ensure_ascii=False, sort_keys=True) + "\n")
+    from deepseek_infra.infra.skills import registry
+
+    with registry.skill_store_scope():
+        security_dir().mkdir(parents=True, exist_ok=True)
+        with reviews_path().open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(review, ensure_ascii=False, sort_keys=True) + "\n")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
@@ -130,7 +131,7 @@ def delete_skill(skill_id: str) -> dict[str, Any]:
     normalized = normalize_skill_id(skill_id)
     path = custom_skill_path(normalized)
     if path.exists():
-        with mutation_gate.mutation_scope(root=SKILLS_DIR.parent):
+        with skill_store_scope():
             try:
                 path.unlink()
             except OSError as exc:
@@ -231,14 +232,38 @@ def disabled_skill_ids() -> list[str]:
     return sorted(set(result))
 
 
+def skill_store_scope() -> AbstractContextManager[None]:
+    """The single scope every write into the capability registry passes through.
+
+    `release/native_runtime_ownership_v1.json` declares `skills_store` python -> rust at
+    4.9.4, and this is the Python half of that handover: under `PYTHON_DISABLED` the
+    registry's writer is Rust, so a Python write here would be the second writer
+    ADR-0049 forbids. It lives at the store rather than at each caller because the
+    registry, its version history and its security records all reach the store through
+    it — `write_disabled_skill_ids`, `write_custom_skill`, `write_custom_pack`,
+    `delete_skill`, `delete_pack`, `versioning.snapshot_skill`, `versioning.snapshot_pack`,
+    `security._append_review` and `security._write_trust_store`.
+
+    It covers `.skills/custom`, `.skills/packs`, `.skills/disabled.json`, `.skills/history`
+    and `.skills/security`. The run log (`.skills/runs`), the catalog (`.skills/catalog`)
+    and the eval-case file (`.skills/eval_cases.jsonl`) live in the same directory as
+    child stores and keep their own ownership, so they are deliberately outside this
+    scope — refusing them here would take away a store Rust does not write yet.
+    """
+    from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
+
+    assert_python_writer_allowed("skills_store")
+    return mutation_gate.mutation_scope(root=SKILLS_DIR.parent)
+
+
 def write_disabled_skill_ids(skill_ids: list[str]) -> None:
-    with mutation_gate.mutation_scope(root=SKILLS_DIR.parent):
+    with skill_store_scope():
         SKILLS_DIR.mkdir(parents=True, exist_ok=True)
         disabled_skills_path().write_text(json.dumps(sorted(set(skill_ids)), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def write_custom_skill(skill: dict[str, Any]) -> None:
-    with mutation_gate.mutation_scope(root=SKILLS_DIR.parent):
+    with skill_store_scope():
         custom_skills_dir().mkdir(parents=True, exist_ok=True)
         path = custom_skill_path(str(skill.get("skillId") or ""))
         path.write_text(json.dumps(skill, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -371,7 +396,7 @@ def delete_pack(pack_id: str) -> dict[str, Any]:
     normalized = normalize_pack_id(pack_id)
     path = custom_pack_path(normalized)
     if path.exists():
-        with mutation_gate.mutation_scope(root=SKILLS_DIR.parent):
+        with skill_store_scope():
             try:
                 path.unlink()
             except OSError as exc:
@@ -421,7 +446,7 @@ def custom_pack_path(pack_id: str) -> Path:
 
 
 def write_custom_pack(pack: dict[str, Any]) -> None:
-    with mutation_gate.mutation_scope(root=SKILLS_DIR.parent):
+    with skill_store_scope():
         custom_packs_dir().mkdir(parents=True, exist_ok=True)
         path = custom_pack_path(str(pack.get("packId") or ""))
         path.write_text(json.dumps(pack, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
