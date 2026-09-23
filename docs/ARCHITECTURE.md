@@ -189,12 +189,18 @@ flowchart TB
             R4["工具策略评估: POST /policy/{url,path,capability}"]
             R5["RAG 向量排序 · JSON / compact binary: POST /rag/vectors/rank{-binary}"]
             R6["RAG 文档准备: POST /rag/documents/prepare"]
+            R7["执行 Worker: deepseek-worker (:50052 gRPC) · actionId+epoch 强纪元围栏 · Effect Journal"]
+            R8["存储与传输: deepseek-storage & -transfer · S3 直连 · Receipt/Commit v4 · 零拷贝通道"]
+            R9["联邦与取证: deepseek-federation (Ed25519 根私钥托管) · deepseek-proof (DR/Predictive 证明)"]
+            R10["扩展引擎: deepseek-browser (受控 CDP 引擎) · deepseek-gateway (:8787 Axum 网关)"]
         end
 
         subgraph Go["Go 控制面 Shadow (cmd/deepseekd · 影子审计)"]
-            G1["版本化 Protobuf v1 RPC 跨进程契约"]
+            G1["版本化 Protobuf v1 RPC 跨进程契约 (proto/*/v1)"]
             G2["Shadow 模式实时核对 (pythonDecisionDigest == goDecisionDigest)"]
-            G3["GO_CONTROL_DOMAINS 机器硬隔离 (Python 越权写物理拦截)"]
+            G3["GO_CONTROL_DOMAINS 机器硬隔离 (Python 越权写物理拦截 · /internal/action/execute 403)"]
+            G4["控制面状态机 (cmd/deepseekd :8090 · Scheduler / Action Lease / Resilience / Agent DAG)"]
+            G5["控制面隔离存储 (go-control/ · 仅 Go 独占写 · 无跨进程共享)"]
         end
 
         subgraph StatelessMCP["可选 无状态 MCP 平面 — TS + Redis"]
@@ -204,7 +210,7 @@ flowchart TB
         end
     end
 
-    subgraph Data["Python 拥有的本地私有数据 (.dot-dirs)"]
+    subgraph Data["本地私有数据 (零出端隔离 · 单表单一权威写入者原则)"]
         D1["SQLite 向量 RAG (.local-rag)"]
         D2["长期记忆 (.memory)"]
         D3["语义缓存 (.semantic-cache)"]
@@ -213,6 +219,8 @@ flowchart TB
         D6["加密容灾备份 (.backups)"]
         D7["链路追踪 & 审计 (.traces / .tool-audit)"]
         D8["请求队列 & 预算 (.request-queue / .budget)"]
+        D9["Go 控制面数据 (go-control/ 独占写)"]
+        D10["Rust 数据面记录 (Effect Journal · Checkpoint)"]
     end
 
     subgraph Federation["签名联邦与跨 Fleet 容灾面 (v4.8.0 Signed Federation & Multi-Fleet DR)"]
@@ -235,19 +243,17 @@ flowchart TB
         E3["Ollama / 端侧边缘推理"]
     end
 
-    Clients --> Python
-    Python --> Data
-    Python --> External
-
-    Python -. "可选确定性委托" .-> Rust
-    Rust -. "已验证结果" .-> Python
-    Rust -. "超时 / 不可用 / 畸形 / 分歧" .-> Python
-    Python <-.->|"Protobuf 契约核对"| Go
-
+    Clients -->|"HTTP · SSE · JSON-RPC 2.0"| Python
+    Python -->|"本地事务读写"| Data
+    Python -. "可选确定性委托 / 生产助手" .-> Rust
+    Rust -. "已验证结果 / 回退" .-> Python
+    Python <-.->|"Protobuf 契约核对 & 决策镜像"| Go
+    Go -.->|"gRPC 派发 (actionId + epoch)"| Rust
+    Rust -.->|"准入判定 / 执行状态"| Go
     Clients -. "独立横向扩展" .-> StatelessMCP
     StatelessMCP -. "状态与租约" .-> Data
-
     Python -->|"容灾快照 / 调度波次 / 证据组装"| Federation
+    Python -->|"显式受控出站"| External
 ```
 
 ### 一句话职责边界

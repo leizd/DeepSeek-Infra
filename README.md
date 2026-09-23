@@ -64,7 +64,7 @@ DeepSeek Infra 是一个**本地优先的 Agentic AI Infra 平台**：一套本�
 
 > 可编辑的架构图与职责边界说明见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 >
-> Python 是默认且权威运行时；Rust 委托是可选、确定性且带 fallback 保护的。
+> Python 是默认且权威运行时；Rust（14 个 Crates，含 Worker 执行面与流式存储/传输）与 Go（`cmd/deepseekd` 影子控制面）遵循版本化 Protobuf v1 契约与单表单写原则协同执行。
 
 ## 核心基础设施模块
 
