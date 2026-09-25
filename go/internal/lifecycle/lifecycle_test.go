@@ -83,6 +83,28 @@ func TestHealthzIsShadowAndReadOnly(t *testing.T) {
 	}
 }
 
+// A daemon that was not configured with an owner still opens its store as the daemon. The
+// default is what keeps the store open at all: `OpenControl` refuses an empty owner outright,
+// so a successful start with `Owner` unset is the assertion.
+func TestListenDefaultsTheWriterOwner(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(200 * time.Millisecond)
+	}()
+	addr, err := Listen(ctx, config.Config{
+		Mode:           config.ModeShadow,
+		Listen:         "127.0.0.1:0",
+		ShadowStoreDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("an unset owner must default rather than open an ownerless store: %v", err)
+	}
+	if addr == "" {
+		t.Fatal("listener address is empty")
+	}
+}
+
 func TestListenOpensIsolatedShadowStore(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer func() {
