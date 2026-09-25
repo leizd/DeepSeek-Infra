@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/leizd/DeepSeek-Infra/go/internal/config"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 )
 
@@ -111,6 +112,45 @@ func TestPublicCutoverStatusRequiresDomain(t *testing.T) {
 	body, _ := io.ReadAll(missing.Body)
 	if !strings.Contains(string(body), "domain required") {
 		t.Fatalf("body %s", body)
+	}
+}
+
+// A view that was never filled in still serves the daemon's defaults. Registering with a zero
+// value is what a caller without a runtime view does, and the answer has to name the version,
+// mode and mutation authority the process actually has — never an empty string.
+func TestPublicViewRegistrationFillsInTheDaemonDefaults(t *testing.T) {
+	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "owner-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	mux := http.NewServeMux()
+	RegisterPublicView(mux, control, PublicView{})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/api/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(body, &document); err != nil {
+		t.Fatal(err)
+	}
+	runtime, ok := document["runtime"].(map[string]any)
+	if !ok {
+		t.Fatalf("runtime block: %v", document["runtime"])
+	}
+	if document["version"] != defaultAppVersion {
+		t.Fatalf("version default: %v", document["version"])
+	}
+	if runtime["mode"] != config.ModeShadow || runtime["mutationAuthority"] != config.MutationAuthority {
+		t.Fatalf("runtime defaults: %v", runtime)
 	}
 }
 

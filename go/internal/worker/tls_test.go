@@ -312,6 +312,20 @@ func TestDialTLSRejectsPartialExpiredAndInvalidTrust(t *testing.T) {
 	}
 }
 
+// A target has to name a port the runtime can actually dial. A port of zero, one the 16-bit
+// field cannot hold, and something that is not a number are configuration errors, not dials
+// that fail later with a message nobody can act on.
+func TestTLSTargetRejectsPortsThatCannotBeDialled(t *testing.T) {
+	for _, target := range []string{"worker.internal:0", "worker.internal:99999", "worker.internal:http"} {
+		if err := validateTLSTarget(target); !errors.Is(err, ErrWorkerTLSConfigInvalid) {
+			t.Fatalf("%s: %v", target, err)
+		}
+	}
+	if err := validateTLSTarget("worker.internal:50052"); err != nil {
+		t.Fatalf("a dialable target must pass: %v", err)
+	}
+}
+
 func TestTLSDialConfigFromEnvPartialFailsClosed(t *testing.T) {
 	t.Setenv(EnvWorkerTarget, "")
 	t.Setenv(EnvWorkerTLSCAFile, "")
