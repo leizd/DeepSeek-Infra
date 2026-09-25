@@ -670,6 +670,7 @@ dependencies = [
 name = "deepseek-protocol"
 version = "0.1.0"
 dependencies = [
+ "indexmap 1.9.3",
  "prost",
  "protox",
  "tonic",

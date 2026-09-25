@@ -30,6 +30,13 @@ serde_json = "1.0"
 # Pinned to the version already present in Cargo.lock (pulled in transitively),
 # so promoting it to a direct dependency adds no new crate to the graph.
 regex = "=1.13.0"
+# tower 0.4.13 depends on indexmap 1.x and does not enable its `std` feature, so indexmap
+# decides whether it has std by probing the sysroot in its build script. Where that probe
+# reports nothing, indexmap compiles as no_std, `IndexMap<K, V>` loses the default hasher
+# parameter (`#[cfg(not(has_std))]` in its `map.rs`), and tower's ready_cache stops compiling —
+# which is what happens on this project's Windows host, while Linux is fine. Naming the feature
+# takes the probe out of the decision, and adds no crate to the graph.
+indexmap = { version = "=1.9.3", features = ["std"] }
 # The one genuinely new dependency family in the tree: CDP speaks WebSocket, and
 # nothing in Cargo.lock can (`hyper`, `reqwest` and `tonic` all stop at HTTP). Hand
 # rolling the frame layer — masking, fragmentation, oversized frames, close and ping
