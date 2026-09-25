@@ -129,6 +129,33 @@ func TestAdmitMapsEveryFrozenWorkerRejection(t *testing.T) {
 	}
 }
 
+func TestKnownRejectionMapsEveryFrozenStorageGrantCode(t *testing.T) {
+	// The worker reports refusals as frozen codes, and a caller decides from the sentinel
+	// whether a grant may be retried, re-signed, or abandoned. Every storage-grant code
+	// therefore has to arrive as itself — falling through to ErrInvalidWorkerResponse loses
+	// that decision — while a code nobody froze is still refused.
+	for _, testCase := range []struct {
+		code string
+		want error
+	}{
+		{store.ErrStorageOperationGrantMissing.Error(), store.ErrStorageOperationGrantMissing},
+		{store.ErrStorageOperationGrantAuthorityMissing.Error(), store.ErrStorageOperationGrantAuthorityMissing},
+		{store.ErrStorageOperationGrantCommandMismatch.Error(), store.ErrStorageOperationGrantCommandMismatch},
+		{store.ErrStorageOperationGrantReplay.Error(), store.ErrStorageOperationGrantReplay},
+		{store.ErrStorageOperationGrantNonceReuse.Error(), store.ErrStorageOperationGrantNonceReuse},
+		{store.ErrStorageOperationGrantReplayConflict.Error(), store.ErrStorageOperationGrantReplayConflict},
+		{store.ErrStorageOperationGrantSignatureInvalid.Error(), store.ErrStorageOperationGrantSignatureInvalid},
+		{store.ErrStorageOperationGrantExpired.Error(), store.ErrStorageOperationGrantExpired},
+	} {
+		if got := knownRejection(testCase.code); got != testCase.want {
+			t.Fatalf("%s mapped to %v, want %v", testCase.code, got, testCase.want)
+		}
+	}
+	if got := knownRejection("NOT_A_FROZEN_CODE"); got != ErrInvalidWorkerResponse {
+		t.Fatalf("a code nobody froze must be refused as an invalid response: %v", got)
+	}
+}
+
 func TestAdmitRejectsInvalidFenceBeforeRPCAndPreservesTransportFailure(t *testing.T) {
 	rpc := &fakeWorkerRPC{err: context.DeadlineExceeded}
 	client := New(rpc)

@@ -47,6 +47,54 @@ func claimedResponse(req *actionv1.StorageMutationRequest) *actionv1.StorageMuta
 		Status: actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_CONFIRMED, State: commonv1.EffectState_EFFECT_STATE_APPLIED}
 }
 
+// A claim that cannot be honoured is refused before anything is dispatched, and the refusal
+// names the reason instead of reporting a mutation that never happened.
+func TestClaimedExecutionRefusesWhatItCannotHonour(t *testing.T) {
+	t.Run("a coordinator with no store", func(t *testing.T) {
+		if _, err := (&Coordinator{}).ExecuteClaimedStorageAction(
+			context.Background(), store.ActionLease{}, storageRequest("unbound-operation"),
+		); !errors.Is(err, internalprotocol.ErrUnknownEffect) {
+			t.Fatalf("a coordinator without a store must report an unknown effect: %v", err)
+		}
+	})
+
+	t.Run("a store that cannot hold a native claim", func(t *testing.T) {
+		// Embedding the interface is enough: the assertion for `leasedControlStore` is the point
+		// of the call, and a store that only satisfies ControlStore must never receive an
+		// unbound dispatch.
+		worker := leasedRPC(func(context.Context, *actionv1.StorageMutationRequest) (*actionv1.StorageMutationResponse, error) {
+			t.Fatal("the worker must not be called for a store that cannot hold a claim")
+			return nil, nil
+		})
+		coordinator := NewCoordinator(controlStoreWithoutClaims{}, worker)
+		if _, err := coordinator.ExecuteClaimedStorageAction(
+			context.Background(), store.ActionLease{ActionID: "leased-action", Owner: "native-coordinator"},
+			storageRequest("unbound-operation"),
+		); !errors.Is(err, store.ErrActionLeaseRequired) {
+			t.Fatalf("a store without native claims must be refused: %v", err)
+		}
+	})
+
+	t.Run("an action whose effect is already unknown", func(t *testing.T) {
+		control, claim, now := nativeClaim(t)
+		if _, err := control.MarkActionEffectUnknown(claim.ActionID, claim.Epoch, claim.ClaimToken); err != nil {
+			t.Fatal(err)
+		}
+		worker := leasedRPC(func(context.Context, *actionv1.StorageMutationRequest) (*actionv1.StorageMutationResponse, error) {
+			t.Fatal("the worker must not be called once the action left CLAIMED")
+			return nil, nil
+		})
+		coordinator := NewCoordinator(control, worker, WithNow(now.Load))
+		if _, err := coordinator.ExecuteClaimedStorageAction(
+			context.Background(), claim, storageRequest("late-operation"),
+		); !errors.Is(err, ErrStorageMutationUncertain) {
+			t.Fatalf("executing an action that is no longer claimed must be uncertain: %v", err)
+		}
+	})
+}
+
+type controlStoreWithoutClaims struct{ ControlStore }
+
 func TestClaimedExecutionVerifiesAppliedAndSettlesOnlyRecordedNoEffect(t *testing.T) {
 	for _, outcome := range []string{"confirmed", "lost ack", "wrong operation", "error alone", "recorded no effect"} {
 		t.Run(outcome, func(t *testing.T) {
