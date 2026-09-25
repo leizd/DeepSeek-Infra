@@ -13,7 +13,7 @@ name: deepseek-storage-control-minio
 
 services:
   minio-a:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+    image: ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
     container_name: deepseek-minio-control-a
     command: ["server", "/data", "--address", ":9000"]
     environment:
@@ -23,7 +23,7 @@ services:
       - "127.0.0.1:9000:9000"
 
   minio-b:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+    image: ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
     container_name: deepseek-minio-control-b
     command: ["server", "/data", "--address", ":9001"]
     environment:
@@ -33,7 +33,7 @@ services:
       - "127.0.0.1:9001:9001"
 
   minio-c:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+    image: ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
     container_name: deepseek-minio-control-c
     command: ["server", "/data", "--address", ":9002"]
     environment:
@@ -43,7 +43,7 @@ services:
       - "127.0.0.1:9002:9002"
 
   minio-d:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+    image: ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
     container_name: deepseek-minio-control-d
     command: ["server", "/data", "--address", ":9003"]
     environment:
@@ -53,7 +53,7 @@ services:
       - "127.0.0.1:9003:9003"
 
   minio-e:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+    image: ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
     container_name: deepseek-minio-control-e
     command: ["server", "/data", "--address", ":9004"]
     environment:

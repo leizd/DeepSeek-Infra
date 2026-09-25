@@ -31,7 +31,7 @@ from deepseek_infra.infra.workspace import backup_crypto  # noqa: E402
 
 COMPOSE_FILE = ROOT / "docker-compose.storage-control-minio.yml"
 MINIO_IMAGE = (
-    "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
+    "ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z"
     "@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2"
 )
 DEFAULT_USER = "deepseekci"
