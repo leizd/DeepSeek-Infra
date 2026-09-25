@@ -88,11 +88,8 @@ func TestHealthzIsShadowAndReadOnly(t *testing.T) {
 // so a successful start with `Owner` unset is the assertion.
 func TestListenDefaultsTheWriterOwner(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer func() {
-		cancel()
-		time.Sleep(200 * time.Millisecond)
-	}()
-	addr, err := Listen(ctx, config.Config{
+	defer cancel()
+	runtime, err := Start(ctx, config.Config{
 		Mode:           config.ModeShadow,
 		Listen:         "127.0.0.1:0",
 		ShadowStoreDir: t.TempDir(),
@@ -100,23 +97,34 @@ func TestListenDefaultsTheWriterOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an unset owner must default rather than open an ownerless store: %v", err)
 	}
-	if addr == "" {
+	if runtime.Addr() == "" {
 		t.Fatal("listener address is empty")
+	}
+	// Observe the stop instead of sleeping past it: the store has to be closed before this
+	// test returns, because Windows cannot unlink an open SQLite file and `t.TempDir` would
+	// fail in cleanup — on Linux, where CI runs, that failure would not happen at all.
+	cancel()
+	if err := awaitStopped(t, runtime); err != nil {
+		t.Fatal(err)
 	}
 }
 
 func TestListenOpensIsolatedShadowStore(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer func() {
-		cancel()
-		time.Sleep(200 * time.Millisecond)
-	}()
-	addr, err := Listen(ctx, config.Config{Mode: config.ModeShadow, Listen: "127.0.0.1:0", Owner: "owner-a", ShadowStoreDir: t.TempDir()})
+	defer cancel()
+	runtime, err := Start(ctx, config.Config{Mode: config.ModeShadow, Listen: "127.0.0.1:0", Owner: "owner-a", ShadowStoreDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Registered after `t.TempDir`, so it runs before the directory is removed.
+	t.Cleanup(func() {
+		cancel()
+		if stopErr := awaitStopped(t, runtime); stopErr != nil {
+			t.Error(stopErr)
+		}
+	})
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://" + addr + "/healthz")
+	resp, err := client.Get("http://" + runtime.Addr() + "/healthz")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,20 +160,23 @@ func TestListenRejectsPythonShadowStore(t *testing.T) {
 
 func TestIdleListenerKeepsItsDurableWriterLease(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer func() {
-		cancel()
-		time.Sleep(200 * time.Millisecond)
-	}()
+	defer cancel()
 	path := t.TempDir()
-	addr, err := Listen(ctx, config.Config{Mode: config.ModeShadow, Listen: "127.0.0.1:0", Owner: "idle-owner", ShadowStoreDir: path})
+	runtime, err := Start(ctx, config.Config{Mode: config.ModeShadow, Listen: "127.0.0.1:0", Owner: "idle-owner", ShadowStoreDir: path})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		cancel()
+		if stopErr := awaitStopped(t, runtime); stopErr != nil {
+			t.Error(stopErr)
+		}
+	})
 	// No control mutations or HTTP requests during a whole initial lease. This
 	// tests the actual default listener and durable database, not a fake timer.
 	time.Sleep(31 * time.Second)
 	client := &http.Client{Timeout: 2 * time.Second}
-	response, err := client.Get("http://" + addr + "/healthz")
+	response, err := client.Get("http://" + runtime.Addr() + "/healthz")
 	if err != nil {
 		t.Fatal(err)
 	}
