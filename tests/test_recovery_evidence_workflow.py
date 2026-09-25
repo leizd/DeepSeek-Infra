@@ -21,7 +21,7 @@ def test_object_set_recovery_evidence_has_an_independent_real_service_job() -> N
     for required in (
         "run_object_set_s3_e2e.py",
         "scripts/build_backup_crypto.py",
-        "quay.io/minio/minio:RELEASE.",
+        "ghcr.io/leizd/minio:RELEASE.",
         "@sha256:",
         "--producer object-set-s3-e2e",
         "evidence-producer-object-set-s3-e2e",

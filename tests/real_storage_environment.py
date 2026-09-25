@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 MINIO_IMAGE = (
-    "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
+    "ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z"
     "@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2"
 )
 ENDPOINT_NAMES = tuple(f"DEEPSEEK_TEST_S3_ENDPOINT_{suffix}" for suffix in "ABCDE")

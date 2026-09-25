@@ -259,7 +259,7 @@ jobs:
           --publish 9000:9000
           --env MINIO_ROOT_USER
           --env MINIO_ROOT_PASSWORD
-          quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+          ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
           server /data --address ":9000"
       - name: Wait for MinIO health endpoint
         run: |
@@ -333,7 +333,7 @@ jobs:
           --publish 9000:9000
           --env MINIO_ROOT_USER
           --env MINIO_ROOT_PASSWORD
-          quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+          ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
           server /data --address ":9000"
       - name: Wait for MinIO health endpoint
         run: |
@@ -458,7 +458,7 @@ jobs:
           --publish 9000:9000
           --env MINIO_ROOT_USER
           --env MINIO_ROOT_PASSWORD
-          quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+          ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
           server /data --address ":9000"
       - name: Start Replica MinIO server (Target B)
         run: >-
@@ -466,7 +466,7 @@ jobs:
           --publish 9001:9001
           --env MINIO_ROOT_USER
           --env MINIO_ROOT_PASSWORD
-          quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+          ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
           server /data --address ":9001"
       - name: Wait for MinIO health endpoints
         run: |
@@ -557,33 +557,33 @@ jobs:
             --publish 9000:9000 \
             --env MINIO_ROOT_USER \
             --env MINIO_ROOT_PASSWORD \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
+            ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
             server /data --address ":9000"
           docker run --detach --name "$DEEPSEEK_TEST_MINIO_CONTAINER_B" \
             --publish 9001:9001 \
             --env MINIO_ROOT_USER \
             --env MINIO_ROOT_PASSWORD \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
+            ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
             server /data --address ":9001"
           docker run --detach --name "$DEEPSEEK_TEST_MINIO_CONTAINER_C" \
             --publish 9002:9002 \
             --env MINIO_ROOT_USER \
             --env MINIO_ROOT_PASSWORD \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
+            ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
             server /data --address ":9002"
           MINIO_ROOT_USER="$FEDERATION_MINIO_ROOT_USER" MINIO_ROOT_PASSWORD="$FEDERATION_MINIO_ROOT_PASSWORD" \
           docker run --detach --name "$DEEPSEEK_TEST_MINIO_CONTAINER_D" \
             --publish 9003:9003 \
             --env MINIO_ROOT_USER \
             --env MINIO_ROOT_PASSWORD \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
+            ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
             server /data --address ":9003"
           MINIO_ROOT_USER="$FEDERATION_MINIO_ROOT_USER" MINIO_ROOT_PASSWORD="$FEDERATION_MINIO_ROOT_PASSWORD" \
           docker run --detach --name "$DEEPSEEK_TEST_MINIO_CONTAINER_E" \
             --publish 9004:9004 \
             --env MINIO_ROOT_USER \
             --env MINIO_ROOT_PASSWORD \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
+            ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
             server /data --address ":9004"
       - name: Wait for all MinIO health endpoints
         run: |
