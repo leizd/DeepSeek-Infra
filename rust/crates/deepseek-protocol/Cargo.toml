@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 prost.workspace = true
 tonic.workspace = true
+indexmap.workspace = true
 
 [build-dependencies]
 protox.workspace = true
