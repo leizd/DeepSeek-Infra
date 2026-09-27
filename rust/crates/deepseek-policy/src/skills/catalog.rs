@@ -253,6 +253,197 @@ pub fn get(r: &Registry, id: &str) -> Result<Value> {
         .find(|v| text(v, "itemId") == id.trim())
         .ok_or_else(|| error("Catalog item not found", 404))
 }
+
+/// `_filter_number`: the value stringified and parsed, and `None` when it is null, the empty
+/// string, or does not parse.
+///
+/// The stringification is the oracle's, so a number, a numeric string and a `bool` all take the
+/// same path — `False` becomes `"False"`, which does not parse, and is therefore not a filter.
+fn filter_number(value: &Value) -> Option<f64> {
+    if value.is_null() || value.as_str() == Some("") {
+        return None;
+    }
+    crate::python_json::value_str(value).parse::<f64>().ok()
+}
+
+/// The key orders the oracle puts on the manifest's own objects, read off
+/// `deepseek_infra/infra/skills/catalog.py`: `catalog_manifest`, `_catalog_summary`, `_skill_item`,
+/// `_pack_item` and `_skill_review`/`_pack_review`. A skill item and a pack item carry the **same
+/// 31 keys in the same order**, so one list serves both. These exist because
+/// `python_json::OrderedJson` renders nested objects **sorted** unless the object's name is
+/// registered, and `catalog_refresh` writes this manifest to disk with
+/// `json.dumps(..., ensure_ascii=False, indent=2)`.
+///
+/// A skill review carries `skillId` where a pack review carries `packId`, and only a pack review
+/// carries `skillReviews`; the merged order emits whichever is present, in the oracle's slot.
+const MANIFEST_KEYS: &[&str] = &[
+    "catalogVersion",
+    "schemaVersion",
+    "version",
+    "generatedAt",
+    "source",
+    "network",
+    "summary",
+    "items",
+];
+const SUMMARY_KEYS: &[&str] = &[
+    "itemCount",
+    "skillCount",
+    "packCount",
+    "trusted",
+    "needsReview",
+    "highRisk",
+    "blocked",
+    "averageEvalScore",
+    "localOnly",
+];
+const ITEM_KEYS: &[&str] = &[
+    "itemId",
+    "kind",
+    "skillId",
+    "packId",
+    "name",
+    "description",
+    "category",
+    "tags",
+    "author",
+    "version",
+    "trustLevel",
+    "riskScore",
+    "evalScore",
+    "installCount",
+    "lastUpdated",
+    "includedSkills",
+    "requiredTools",
+    "artifactTypes",
+    "difficulty",
+    "useCases",
+    "recommendedProjects",
+    "builtin",
+    "disabled",
+    "source",
+    "signed",
+    "contentHash",
+    "schemaHash",
+    "promptHash",
+    "toolGrantHash",
+    "securityReview",
+    "toolPermissionSummary",
+];
+const REVIEW_KEYS: &[&str] = &[
+    "schemaVersion",
+    "reviewId",
+    "kind",
+    "skillId",
+    "packId",
+    "name",
+    "version",
+    "builtin",
+    "trustLevel",
+    "reviewStatus",
+    "riskScore",
+    "allowedToolsRisk",
+    "requiresApprovalCount",
+    "capabilities",
+    "findings",
+    "skillReviews",
+    "manifest",
+    "lastSecurityReviewAt",
+    "signed",
+];
+/// The review's own `manifest` block has **two shapes at the same name and the same path**: a skill
+/// review carries `skillId` and puts `packId` after `toolGrantHash`, a pack review carries `packId`
+/// fourth and no `skillId`. No by-name table can separate them, which is why
+/// `from_value_with_orders_and_shapes` selects on the object's own keys.
+const REVIEW_MANIFEST_SKILL_KEYS: &[&str] = &[
+    "schemaVersion",
+    "kind",
+    "skillId",
+    "version",
+    "contentHash",
+    "schemaHash",
+    "promptHash",
+    "toolGrantHash",
+    "packId",
+    "reviewStatus",
+    "signed",
+];
+const REVIEW_MANIFEST_PACK_KEYS: &[&str] = &[
+    "schemaVersion",
+    "kind",
+    "packId",
+    "version",
+    "contentHash",
+    "schemaHash",
+    "promptHash",
+    "toolGrantHash",
+    "reviewStatus",
+    "signed",
+];
+const TOOL_PERMISSION_KEYS: &[&str] = &["skillId", "embedded", "allowedTools"];
+const ALLOWED_TOOL_KEYS: &[&str] = &["tool", "risk", "requiresApproval"];
+const TOOL_RISK_KEYS: &[&str] = &[
+    "tool",
+    "risk",
+    "riskScore",
+    "network",
+    "filesystem",
+    "sensitive",
+    "requiresApproval",
+];
+const SKILL_REVIEW_KEYS: &[&str] = &[
+    "skillId",
+    "reviewStatus",
+    "riskScore",
+    "findingCount",
+    "toolGrantHash",
+];
+const FINDING_KEYS: &[&str] = &["type", "field", "severity", "message", "suggestion"];
+const MANIFEST_ORDERS: &[(&str, &[&str])] = &[
+    ("summary", SUMMARY_KEYS),
+    ("items", ITEM_KEYS),
+    ("securityReview", REVIEW_KEYS),
+    ("manifest", REVIEW_MANIFEST_PACK_KEYS),
+    ("toolPermissionSummary", TOOL_PERMISSION_KEYS),
+    ("allowedTools", ALLOWED_TOOL_KEYS),
+    ("allowedToolsRisk", TOOL_RISK_KEYS),
+    ("skillReviews", SKILL_REVIEW_KEYS),
+    ("findings", FINDING_KEYS),
+];
+/// `(name, key that decides the shape, order)`.
+const MANIFEST_SHAPE_ORDERS: &[(&str, &str, &[&str])] = &[
+    ("manifest", "skillId", REVIEW_MANIFEST_SKILL_KEYS),
+    ("manifest", "packId", REVIEW_MANIFEST_PACK_KEYS),
+];
+
+/// `catalog_export`: the manifest, without touching the disk.
+pub fn export(r: &Registry) -> Result<Value> {
+    Ok(json!({"ok":true,"catalog":manifest(r)?}))
+}
+
+/// `catalog_refresh`: rebuild the manifest and cache it at `.skills/catalog/catalog.json`.
+///
+/// The oracle writes `json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"`, and this writes
+/// the same bytes through [`MANIFEST_ORDERS`] rather than `serde_json`'s own printer — the latter
+/// keeps insertion order only when the `preserve_order` feature is on, which a single-crate build
+/// does not enable.
+pub fn refresh(r: &Registry) -> Result<Value> {
+    let _guard = r.mutation()?;
+    let manifest = manifest(r)?;
+    let path = r.data.join("catalog").join("catalog.json");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| error(e.to_string(), 500))?;
+    }
+    let rendered = crate::python_json::OrderedJson::from_value_with_orders_and_shapes(
+        &manifest,
+        MANIFEST_KEYS,
+        MANIFEST_ORDERS,
+        MANIFEST_SHAPE_ORDERS,
+    );
+    std::fs::write(&path, format!("{}\n", rendered.render_indent_2()))
+        .map_err(|e| error(e.to_string(), 500))?;
+    Ok(json!({"ok":true,"path":path.to_string_lossy(),"manifest":manifest}))
+}
 pub fn search(r: &Registry, query: &str, filters: &Value) -> Result<Value> {
     let query_lower = query.trim().to_lowercase();
     let mut items = Vec::new();
@@ -289,18 +480,23 @@ pub fn search(r: &Registry, query: &str, filters: &Value) -> Result<Value> {
         if filters["offline"] == true && tools.contains(&"web_search".into()) {
             continue;
         }
-        if truth(filters, "tool") && !tools.contains(&text(filters, "tool").trim().into()) {
-            continue;
-        }
-        if let Ok(max) = text(filters, "maxRiskScore").parse::<f64>() {
-            if item["riskScore"].as_f64().unwrap_or(0.0) > max.trunc() {
+        // `_filter_number` first, then compare: a `0` (or `"0"`) is a **live** filter in the oracle,
+        // so this cannot go through `text()`, whose falsy check swallows zero and silently drops
+        // the filter. The oracle also trims `tool` *before* deciding whether it is set, so a
+        // whitespace-only value is not a filter at all.
+        if let Some(max) = filter_number(&filters["maxRiskScore"]) {
+            if item["riskScore"].as_f64().unwrap_or(0.0).trunc() > max.trunc() {
                 continue;
             }
         }
-        if let Ok(min) = text(filters, "minEvalScore").parse::<f64>() {
+        if let Some(min) = filter_number(&filters["minEvalScore"]) {
             if item["evalScore"].as_f64().unwrap_or(0.0) < min {
                 continue;
             }
+        }
+        let tool = text(filters, "tool").trim().to_string();
+        if !tool.is_empty() && !tools.contains(&tool) {
+            continue;
         }
         items.push(item);
     }

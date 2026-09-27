@@ -633,7 +633,7 @@ fn comparison_slide(title: &str, bullets: &[String], theme: &DeckTheme, page_no:
     let mut slide = SlideXml::new("FFFFFF");
     add_header(&mut slide, theme, title);
     slide.rect(6.62, 1.95, 0.02, 4.45, HAIRLINE);
-    let midpoint = ((bullets.len() + 1) / 2).max(1);
+    let midpoint = bullets.len().div_ceil(2).max(1);
     let left = &bullets[..midpoint.min(bullets.len())];
     let right = if bullets.len() > midpoint {
         &bullets[midpoint..]

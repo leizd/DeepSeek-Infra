@@ -262,8 +262,14 @@ pub fn offline(r: &Registry, id: &str, input: &Value, options: &Value) -> Result
     let output = run.offline_output();
     run.finish(r, Ok(output))
 }
-pub fn dry_run(r: &Registry, id: &str, input: &Value) -> Result<Value> {
-    let skill = r.get(id, false)?;
+/// The dry-run response, for a Skill **configuration the caller supplied**.
+///
+/// This mirrors the oracle's `_dry_run_skill_config`, which takes the config out of the request
+/// (`payload["skill"]`, else the payload minus `action` / `overwrite`) and validates it. It does
+/// **not** look a registry id up: measured against the oracle, a `{"skillId": …}` payload is
+/// `400 "Skill config missing required fields: …"`, so a registry lookup here would answer `200`
+/// to a request the reference implementation refuses.
+pub fn dry_run(r: &Registry, skill: &Value, input: &Value) -> Result<Value> {
     let violations = schema::validate_instance(input, &skill["inputSchema"], "input");
     if !violations.is_empty() {
         return Err(error(
@@ -274,7 +280,7 @@ pub fn dry_run(r: &Registry, id: &str, input: &Value) -> Result<Value> {
             400,
         ));
     }
-    let output = json!({"content":templates::offline(&skill,input,""),"mode":"offline"});
+    let output = json!({"content":templates::offline(skill,input,""),"mode":"offline"});
     let violations = schema::validate_instance(&output, &skill["outputSchema"], "output");
     if !violations.is_empty() {
         return Err(error(
@@ -285,7 +291,10 @@ pub fn dry_run(r: &Registry, id: &str, input: &Value) -> Result<Value> {
             400,
         ));
     }
+    // The key set is the oracle's `_dry_run_skill_config` exactly: it does **not** carry
+    // `skillVersion` (the run journal's `run` record does, this response does not), and the parity
+    // probe fails on the extra key if it is added back.
     Ok(
-        json!({"ok":true,"skillRunId":"dry-run","skillId":skill["skillId"],"skillVersion":skill["version"],"projectId":"","status":"completed","input":input,"output":output,"artifacts":[],"savedItems":[],"traceId":"","startedAt":r.now(),"completedAt":r.now(),"policy":{"allowedTools":schema::skill_allowed_tools(&skill)?},"dryRun":true}),
+        json!({"ok":true,"skillRunId":"dry-run","skillId":skill["skillId"],"projectId":"","status":"completed","input":input,"output":output,"artifacts":[],"savedItems":[],"traceId":"","startedAt":r.now(),"completedAt":r.now(),"policy":{"allowedTools":schema::skill_allowed_tools(skill)?},"dryRun":true}),
     )
 }

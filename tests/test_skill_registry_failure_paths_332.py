@@ -158,19 +158,27 @@ def test_every_skill_registry_write_path_is_denied_once_python_is_de_authorized(
     those sinks (the record, its history revision, its security review) and a gate at the route would
     have missed the two that the route never names.
 
-    The run log, the catalog and the eval-case file share `.skills/` and are deliberately **not**
-    gated: Rust's `Registry` writes none of them, so denying them would take away a store nobody has
-    taken over — the other half of ADR-0049's "a cutover gate that has not passed leaves the prior
-    owner authoritative; it does not permit dual writers".
+    The run log and the eval-case file share `.skills/` and the eval-case file is deliberately
+    **not** gated: Rust's `Registry` writes none of it, so denying it would take away a store nobody
+    has taken over — the other half of ADR-0049's "a cutover gate that has not passed leaves the
+    prior owner authoritative; it does not permit dual writers".
 
     That sentence cuts both ways, so the default mode leaving every path working is asserted here
     too: a gate that fired early would be a regression, not caution.
+
+    The catalog, the run log and the eval-case file used to be on that ungated list. All three moved,
+    each when Rust started writing them (`catalog::refresh`, the offline `run` and the run-analytics
+    writers, `skills::eval`) — the same rule, read the other way: once Rust writes a store, Python
+    must stop. Every child store under `.skills/` is now covered, so this test no longer has an
+    "outside" case to assert; instead it asserts each store's write is denied and its bytes survive.
     """
     from deepseek_infra.infra.native_runtime.authority import (
         PythonWriterMechanicallyDeniedError,
         RUST_DATA_DOMAINS,
     )
+    from deepseek_infra.infra.skills import analytics as skill_analytics
     from deepseek_infra.infra.skills import catalog, security
+    from deepseek_infra.infra.skills import eval as skill_eval
 
     assert "skills_store" in RUST_DATA_DOMAINS
 
@@ -190,7 +198,16 @@ def test_every_skill_registry_write_path_is_denied_once_python_is_de_authorized(
     catalog_manifest = registry.SKILLS_DIR / "catalog" / "catalog.json"
     catalog.catalog_refresh()
     assert catalog_manifest.is_file()
+    skill_analytics.append_run({"skillRunId": "run-handover-332", "skillId": skill_id, "status": "completed"})
+    run_log = skill_analytics.runs_path()
+    assert run_log.is_file()
+    skill_eval.save_eval_case({"caseId": "case-handover-332", "skillId": skill_id, "input": {}})
+    case_file = skill_eval.user_eval_cases_path()
+    assert case_file.is_file()
     written = registry.custom_skill_path(skill_id).read_text(encoding="utf-8")
+    catalog_written = catalog_manifest.read_text(encoding="utf-8")
+    run_log_written = run_log.read_text(encoding="utf-8")
+    case_file_written = case_file.read_text(encoding="utf-8")
 
     monkeypatch.setenv("DEEPSEEK_RUNTIME_MODE", "python_disabled")
     for write in (
@@ -198,9 +215,19 @@ def test_every_skill_registry_write_path_is_denied_once_python_is_de_authorized(
         lambda: registry.set_skill_disabled(skill_id, False),
         lambda: registry.delete_skill(skill_id),
         lambda: security.trust_skill(skill_id),
+        lambda: catalog.catalog_refresh(),
+        lambda: skill_analytics.append_run({"skillRunId": "run-handover-denied-332", "skillId": skill_id}),
+        lambda: skill_analytics.delete_run("run-handover-332"),
+        lambda: skill_analytics.redact_run("run-handover-332"),
+        lambda: skill_analytics.cleanup_runs(status="completed"),
+        lambda: skill_eval.save_eval_case({"caseId": "case-handover-denied-332", "skillId": skill_id}),
+        lambda: skill_eval.delete_eval_case("case-handover-332"),
     ):
         with pytest.raises(PythonWriterMechanicallyDeniedError, match="Domain 'skills_store' write mutation is mechanically denied"):
             write()
     assert registry.custom_skill_path(skill_id).read_text(encoding="utf-8") == written
     assert not registry.custom_skill_path("skill_handover_denied_332").exists()
-    assert catalog.catalog_refresh()["ok"] is True
+    assert catalog_manifest.read_text(encoding="utf-8") == catalog_written
+    assert run_log.read_text(encoding="utf-8") == run_log_written
+    assert case_file.read_text(encoding="utf-8") == case_file_written
+    assert case_file.read_text(encoding="utf-8") == case_file_written

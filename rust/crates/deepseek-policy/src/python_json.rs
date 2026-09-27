@@ -279,6 +279,31 @@ fn sub_order<'a>(key: &str, nested_orders: &'a [(&'a str, &'a [&'a str])]) -> &'
         .unwrap_or(&[])
 }
 
+/// The order tables a render walks with: [`OrderedJson::from_value_with_orders`]'s by-name table,
+/// plus a table selected by **which keys an object carries**.
+struct Orders<'a> {
+    nested: &'a [(&'a str, &'a [&'a str])],
+    shapes: &'a [(&'a str, &'a str, &'a [&'a str])],
+}
+
+/// The order for the value sitting at field `name`: a shape entry whose `when` key the object
+/// itself carries wins, then the by-name table, then none.
+///
+/// The shape table exists because a by-name one cannot express a shape that depends on a sibling.
+/// The catalog's `securityReview.manifest` is named `manifest` in both kinds of item, and puts
+/// `packId` fourth for a pack but after `toolGrantHash` for a skill — the same name, the same
+/// path, two orders. Which one applies is decided by whether the object carries `skillId`.
+fn sub_order_for<'a>(name: &str, item: &Value, orders: &Orders<'a>) -> &'a [&'a str] {
+    if let Value::Object(child) = item {
+        for (shape_name, when, keys) in orders.shapes {
+            if *shape_name == name && child.contains_key(*when) {
+                return keys;
+            }
+        }
+    }
+    sub_order(name, orders.nested)
+}
+
 impl OrderedJson {
     /// Build from a `Value`, taking the given key order for the top-level object.
     ///
@@ -304,13 +329,44 @@ impl OrderedJson {
         order: &[&str],
         nested_orders: &[(&str, &[&str])],
     ) -> Self {
-        Self::build(value, "", order, nested_orders)
+        Self::build(
+            value,
+            "",
+            order,
+            &Orders {
+                nested: nested_orders,
+                shapes: &[],
+            },
+        )
+    }
+
+    /// As [`OrderedJson::from_value_with_orders`], with orders selected by **which keys the object
+    /// carries** — the first entry whose `when` key is present wins.
+    ///
+    /// The catalog needs it: `securityReview.manifest` places `packId` fourth for a pack and after
+    /// `toolGrantHash` for a skill, and both objects are named `manifest`, so no by-name (or
+    /// by-path) table can tell them apart.
+    pub fn from_value_with_orders_and_shapes(
+        value: &Value,
+        order: &[&str],
+        nested_orders: &[(&str, &[&str])],
+        shape_orders: &[(&str, &str, &[&str])],
+    ) -> Self {
+        Self::build(
+            value,
+            "",
+            order,
+            &Orders {
+                nested: nested_orders,
+                shapes: shape_orders,
+            },
+        )
     }
 
     /// `key` is the name this value sits under: an object's property name, or — for an array
     /// element — the **array's** name, so `messages` elements and `tools` elements can be
     /// given different orders.
-    fn build(value: &Value, key: &str, order: &[&str], nested_orders: &[(&str, &[&str])]) -> Self {
+    fn build(value: &Value, key: &str, order: &[&str], orders: &Orders) -> Self {
         match value {
             Value::Object(fields) => {
                 let mut pairs: Vec<(String, OrderedJson)> = Vec::new();
@@ -318,7 +374,7 @@ impl OrderedJson {
                     if let Some(item) = fields.get(*name) {
                         pairs.push((
                             (*name).to_string(),
-                            Self::build(item, name, sub_order(name, nested_orders), nested_orders),
+                            Self::build(item, name, sub_order_for(name, item, orders), orders),
                         ));
                     }
                 }
@@ -328,7 +384,7 @@ impl OrderedJson {
                     }
                     pairs.push((
                         name.clone(),
-                        Self::build(item, name, sub_order(name, nested_orders), nested_orders),
+                        Self::build(item, name, sub_order_for(name, item, orders), orders),
                     ));
                 }
                 OrderedJson::Object(pairs)
@@ -342,7 +398,8 @@ impl OrderedJson {
                 // by the one order the caller passed. An empty inherited order still
                 // renders sorted, so `from_value_with_order(&object, &[])` callers are
                 // unchanged.
-                let element_order = nested_orders
+                let element_order = orders
+                    .nested
                     .iter()
                     .find(|(name, _)| *name == key)
                     .map(|(_, keys)| *keys)
@@ -350,7 +407,7 @@ impl OrderedJson {
                 OrderedJson::List(
                     items
                         .iter()
-                        .map(|item| Self::build(item, key, element_order, nested_orders))
+                        .map(|item| Self::build(item, key, element_order, orders))
                         .collect(),
                 )
             }
@@ -850,5 +907,37 @@ mod tests {
         ]);
         let rendered = document.render_indent_2();
         assert_eq!(loads(&rendered).expect("parses"), document);
+    }
+
+    #[test]
+    fn a_shape_order_is_selected_by_a_key_the_object_carries() {
+        // The catalog's `securityReview.manifest`: the same name and the same path, two orders,
+        // told apart only by which of `skillId` / `packId` the object carries.
+        let skill: &[&str] = &["schemaVersion", "skillId", "packId"];
+        let pack: &[&str] = &["schemaVersion", "packId"];
+        let shapes: &[(&str, &str, &[&str])] =
+            &[("manifest", "skillId", skill), ("manifest", "packId", pack)];
+        let value = json!({
+            "items": [
+                {"review": {"manifest": {"packId": "", "skillId": "s", "schemaVersion": "v"}}},
+                {"review": {"manifest": {"packId": "p", "schemaVersion": "v"}}},
+            ],
+        });
+        let rendered = OrderedJson::from_value_with_orders_and_shapes(
+            &value,
+            &["items"],
+            &[("items", &["review"]), ("review", &["manifest"])],
+            shapes,
+        )
+        .render_indent_2();
+        // `loads` keeps key order and `OrderedJson` compares it, so this asserts the sequence and
+        // not just the set of keys.
+        let expected = loads(
+            "{\"items\":[\
+             {\"review\":{\"manifest\":{\"schemaVersion\":\"v\",\"skillId\":\"s\",\"packId\":\"\"}}},\
+             {\"review\":{\"manifest\":{\"schemaVersion\":\"v\",\"packId\":\"p\"}}}]}",
+        )
+        .expect("parses");
+        assert_eq!(loads(&rendered).expect("parses"), expected);
     }
 }

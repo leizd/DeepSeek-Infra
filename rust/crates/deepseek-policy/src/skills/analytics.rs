@@ -489,6 +489,9 @@ pub fn summary(registry: &Registry, payload: &Value, days: usize) -> Value {
         }
     };
     let round = |value: f64, scale: f64| (value * scale).round_ties_even() / scale;
+    // The oracle resolves the window **inside** `analytics_summary` (`int(days or 7)`, then clamped
+    // to 1..=30), so a zero here means a week and not a one-day trend.
+    let days = if days == 0 { 7 } else { days };
     let now = chrono::DateTime::parse_from_rfc3339(&registry.now())
         .unwrap()
         .date_naive();
@@ -512,10 +515,20 @@ pub fn summary(registry: &Registry, payload: &Value, days: usize) -> Value {
             .collect();
         trend.push(json!({"date":date,"runs":matching.len(),"failed":matching.iter().filter(|r|r["status"]=="failed").count()}));
     }
+    // The oracle's `round(statistics.fmean(latencies), 2) if latencies else 0` is an **int** zero
+    // when nothing completed, and `0` and `0.0` are not the same bytes on the wire.
+    let average_latency = if latencies.is_empty() {
+        json!(0)
+    } else {
+        json!(round(
+            latencies.iter().sum::<i64>() as f64 / latencies.len() as f64,
+            100.0
+        ))
+    };
     json!({"scope":scope,"skillId":text(payload,"skillId"),"packId":text(payload,"packId"),"projectId":text(payload,"projectId"),
         "totalRuns":runs.len(),"successRuns":completed.len(),"failedRuns":failed.len(),
         "successRate":if runs.is_empty() {0.0} else {round(completed.len() as f64/runs.len() as f64,10000.0)},"failureRate":if runs.is_empty() {0.0} else {round(failed.len() as f64/runs.len() as f64,10000.0)},
-        "averageLatencyMs":if latencies.is_empty() {0.0} else {round(latencies.iter().sum::<i64>() as f64/latencies.len() as f64,100.0)},"p50LatencyMs":percentile(50.0),"p90LatencyMs":percentile(90.0),
+        "averageLatencyMs":average_latency,"p50LatencyMs":percentile(50.0),"p90LatencyMs":percentile(90.0),
         "artifactCount":runs.iter().map(|r|safe_int(&r["artifactCount"],0)).sum::<i64>(),"savedItemCount":runs.iter().map(|r|safe_int(&r["savedItemCount"],0)).sum::<i64>(),
         "projectBindingRuns":runs.iter().filter(|r|truth(r,"projectId")).count(),"topSkills":top_counts(runs.iter().map(|r|text(r,"skillId"))),"topPacks":top_counts(runs.iter().map(|r|text(r,"packId"))),
         "failureCategories":top_counts(failed.iter().map(|r|text(r,"failureCategory"))),"securityLevels":top_counts(runs.iter().map(|r|text(r,"runSecurityLevel"))),

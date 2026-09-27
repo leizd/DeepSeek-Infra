@@ -392,9 +392,15 @@ def _read_runs() -> list[dict[str, Any]]:
 
 
 def _write_runs(runs: list[dict[str, Any]]) -> None:
-    runs_dir().mkdir(parents=True, exist_ok=True)
-    text = "".join(json.dumps(normalize_run(run), ensure_ascii=False, sort_keys=True) + "\n" for run in runs)
-    runs_path().write_text(text, encoding="utf-8")
+    # Every write into the run log passes through here — `append_run`, and with the run-analytics
+    # slice `delete_run`, `cleanup_runs` and `redact_run`. Rust writes the same file (the offline
+    # `run` appends to it, and now so do those three), so under `PYTHON_DISABLED` a Python write
+    # here would be the second writer ADR-0049 forbids. Reading it stays free: only the writers
+    # take the scope.
+    with registry.skill_store_scope():
+        runs_dir().mkdir(parents=True, exist_ok=True)
+        text = "".join(json.dumps(normalize_run(run), ensure_ascii=False, sort_keys=True) + "\n" for run in runs)
+        runs_path().write_text(text, encoding="utf-8")
 
 
 def _matches(run: dict[str, Any], *, status: str, skill_id: str, pack_id: str, project_id: str) -> bool:

@@ -56,8 +56,12 @@ def catalog_manifest() -> dict[str, Any]:
 
 def catalog_refresh() -> dict[str, Any]:
     manifest = catalog_manifest()
-    catalog_dir().mkdir(parents=True, exist_ok=True)
-    catalog_manifest_path().write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # The catalog joined the handover once Rust's `catalog::refresh` started writing it: under
+    # `PYTHON_DISABLED` the writer is Rust, so a Python write here would be the second writer
+    # ADR-0049 forbids. Building the manifest stays a read.
+    with registry.skill_store_scope():
+        catalog_dir().mkdir(parents=True, exist_ok=True)
+        catalog_manifest_path().write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return {"ok": True, "path": str(catalog_manifest_path()), "manifest": manifest}
 
 

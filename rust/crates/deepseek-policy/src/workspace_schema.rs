@@ -108,13 +108,8 @@ pub fn timestamp_ms_to_iso(value: Option<&Value>) -> String {
             Some(parsed) => parsed,
             None => return String::new(),
         },
-        Some(Value::Bool(flag)) => {
-            if *flag {
-                1
-            } else {
-                0
-            }
-        }
+        Some(Value::Bool(true)) => 1,
+        Some(Value::Bool(false)) => 0,
         // `None`, `null`, arrays and objects all take the `0` fallback.
         _ => 0,
     };
