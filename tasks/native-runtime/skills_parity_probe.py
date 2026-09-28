@@ -538,7 +538,7 @@ def eval_engine_cases() -> list[tuple[str, Any]]:
         result.append(("eval_skill_results", {"caseResults": case_results, "skillIds": skill_ids, "packMap": pack_map}))
     for case_results, pack_map, selected in (
         (EVAL_RESULT_FIXTURE, {"skill_study_tutor": ["pack_study"]}, ["skill_study_tutor"]),
-        (EVAL_RESULT_FIXTURE, {"skill_study_tutor": []}, ["skill_study_tutor"]),
+        (EVAL_RESULT_FIXTURE, {"skill_study_tutor": list[str]()}, ["skill_study_tutor"]),
         (EVAL_RESULT_FIXTURE, {"skill_other": ["pack_study"]}, ["skill_study_tutor"]),
         ([], {"skill_study_tutor": ["pack_study"]}, ["skill_study_tutor"]),
     ):
