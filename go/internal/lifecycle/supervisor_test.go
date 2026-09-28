@@ -17,6 +17,9 @@ import (
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 )
 
+// supervisorInternalBearer authenticates the control-plane requests below.
+const supervisorInternalBearer = "supervisor-control-bearer-0123456789abcdef"
+
 func TestStartWaitsForWriterReleaseOnCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -84,7 +87,7 @@ func TestSupervisorReportsUnexpectedServeFailure(t *testing.T) {
 func TestStartRejectsAlreadyCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Start(ctx, config.Config{Mode: config.ModeShadow, Listen: "127.0.0.1:0"}); !errors.Is(err, context.Canceled) {
+	if _, err := Start(ctx, config.Config{Mode: config.ModeShadow, Listen: "127.0.0.1:0", InternalAPIBearer: supervisorInternalBearer}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled start: %v", err)
 	}
 }
@@ -92,7 +95,7 @@ func TestStartRejectsAlreadyCancelledContext(t *testing.T) {
 func TestShutdownClosesAnIncompleteUploadAfterTheDrainDeadline(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	runtime, err := Start(ctx, config.Config{Mode: config.ModeShadow, Listen: "127.0.0.1:0"})
+	runtime, err := Start(ctx, config.Config{Mode: config.ModeShadow, Listen: "127.0.0.1:0", InternalAPIBearer: supervisorInternalBearer})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +107,7 @@ func TestShutdownClosesAnIncompleteUploadAfterTheDrainDeadline(t *testing.T) {
 	if err := connection.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	_, err = io.WriteString(connection, "POST /internal/shadow/evaluate HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n")
+	_, err = io.WriteString(connection, "POST /internal/shadow/evaluate HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer "+supervisorInternalBearer+"\r\nContent-Type: application/json\r\nContent-Length: 100\r\nExpect: 100-continue\r\n\r\n")
 	if err != nil {
 		t.Fatal(err)
 	}

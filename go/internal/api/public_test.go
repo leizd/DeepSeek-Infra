@@ -97,7 +97,7 @@ func TestPublicCutoverStatusRequiresDomain(t *testing.T) {
 	}
 	defer control.Close()
 	mux := http.NewServeMux()
-	Register(mux, control)
+	Register(mux, control, testInternalBearer)
 	RegisterPublic(mux, control)
 	withStore := httptest.NewServer(mux)
 	defer withStore.Close()

@@ -242,13 +242,16 @@ def skill_store_scope() -> AbstractContextManager[None]:
     registry, its version history and its security records all reach the store through
     it — `write_disabled_skill_ids`, `write_custom_skill`, `write_custom_pack`,
     `delete_skill`, `delete_pack`, `versioning.snapshot_skill`, `versioning.snapshot_pack`,
-    `security._append_review` and `security._write_trust_store`.
+    `security._append_review`, `security._write_trust_store`,
+    `catalog.catalog_refresh`, `analytics._write_runs` and `eval.save_eval_case` /
+    `eval.delete_eval_case`.
 
-    It covers `.skills/custom`, `.skills/packs`, `.skills/disabled.json`, `.skills/history`
-    and `.skills/security`. The run log (`.skills/runs`), the catalog (`.skills/catalog`)
-    and the eval-case file (`.skills/eval_cases.jsonl`) live in the same directory as
-    child stores and keep their own ownership, so they are deliberately outside this
-    scope — refusing them here would take away a store Rust does not write yet.
+    It covers `.skills/custom`, `.skills/packs`, `.skills/disabled.json`, `.skills/history`,
+    `.skills/security`, `.skills/catalog`, `.skills/runs` and `.skills/eval_cases.jsonl` — every
+    child store under `.skills/`. The catalog, the run log and the case file each joined the set
+    when Rust started writing them (`catalog::refresh`, the offline `run` and the run-analytics
+    writers, `skills::eval`); a store Rust writes is one Python must stop writing, or the handover is
+    the dual write ADR-0049 forbids.
     """
     from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 

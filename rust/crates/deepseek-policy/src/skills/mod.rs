@@ -1,8 +1,10 @@
 //! Native Skill System. The Python skill modules are the offline compatibility oracle.
 pub mod analytics;
 pub mod catalog;
+pub mod eval;
 mod evidence;
 pub mod media;
+pub mod permissions;
 pub mod project_integration;
 pub mod registry;
 pub mod runner;

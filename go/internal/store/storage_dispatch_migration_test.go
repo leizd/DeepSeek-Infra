@@ -22,6 +22,9 @@ func prepareDispatchV3Fixture(t *testing.T, control *Control) {
 	for _, statement := range []string{
 		"DROP TABLE IF EXISTS action_reconciliation_boundary",
 		"DROP TABLE IF EXISTS action_verification_boundary",
+		"DROP TABLE IF EXISTS control_cutover_authorizations",
+		"DROP TABLE IF EXISTS control_authority_checkpoints",
+		"DROP TABLE IF EXISTS control_authority_head",
 		"DROP TABLE IF EXISTS action_resource_leases",
 		"DROP TABLE IF EXISTS action_lease_events",
 		"DROP TABLE IF EXISTS action_leases",

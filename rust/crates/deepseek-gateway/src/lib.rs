@@ -34,17 +34,23 @@ pub mod download_route;
 pub mod fetch_provider;
 pub mod file_reader_route;
 pub mod file_source_route;
+pub mod file_text_route;
 pub mod local_clock;
 pub mod mcp_hub;
 pub mod native_chat;
 pub mod observability;
 pub mod openai_facade;
 pub mod policy_routes;
+pub mod project_files_route;
 pub mod project_routes;
 pub mod request_assembly;
 pub mod request_preparation;
 pub mod search_provider;
 mod skills_routes;
+/// The Skill actions the oracle serves and this edge does not, kept reachable so the route test can
+/// assert that the action it pins as "refused by name" is still on this list — otherwise
+/// implementing that action would silently change what the assertion means.
+pub use skills_routes::ACTION_NOT_MIGRATED;
 pub mod static_files;
 pub mod title_route;
 pub mod tool_rounds;
@@ -109,6 +115,35 @@ fn create_routes() -> Router {
                 .with_state(file_reader_route::FileReaderRouteState::from_env()),
         )
         .route(
+            "/api/file-page-text",
+            post(file_reader_route::api_file_page_text)
+                .with_state(file_reader_route::FileReaderRouteState::from_env()),
+        )
+        .route(
+            "/api/file-page-search",
+            get(file_reader_route::api_file_page_search)
+                .with_state(file_reader_route::FileReaderRouteState::from_env()),
+        )
+        .route(
+            "/api/file-page-image",
+            get(file_reader_route::api_file_page_image)
+                .with_state(file_reader_route::FileReaderRouteState::from_env()),
+        )
+        .route(
+            "/api/file-page-layout",
+            get(file_reader_route::api_file_page_layout)
+                .with_state(file_reader_route::FileReaderRouteState::from_env()),
+        )
+        .route(
+            "/api/file-text",
+            post(file_text_route::api_file_text)
+                .with_state(file_text_route::FileTextRouteState::from_env()),
+        )
+        .route(
+            "/api/project-files",
+            post(project_files_route::api_project_files),
+        )
+        .route(
             "/api/gateway/status",
             get(policy_routes::api_gateway_status),
         )
@@ -136,7 +171,7 @@ fn create_routes() -> Router {
 fn apply_gateway_layers(router: Router) -> Router {
     router
         .layer(DefaultBodyLimit::max(
-            deepseek_rag::document_preparation::MAX_REQUEST_BYTES + 1_000_000,
+            deepseek_policy::file_upload::MAX_UPLOAD_BYTES,
         ))
         .layer(middleware::from_fn(observability::observe_sidecar_request))
 }
@@ -588,6 +623,11 @@ pub(crate) fn python_is_de_authorised_in(mode: &str) -> bool {
 /// undeclared and still Python's. A sibling of [`MEMORY_WRITE_NOT_OWNED`] rather than a shared code:
 /// the two stores have different cutovers, and a caller that sees this one knows which store it was.
 pub(crate) const REMINDERS_WRITE_NOT_OWNED: &str = "NATIVE_REMINDERS_WRITE_NOT_OWNED";
+
+/// `NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED` — `project.json` is still Python's.
+/// The same signal as the memory and reminders refusals: the store is declared,
+/// and only `DEEPSEEK_RUNTIME_MODE=python_disabled` lets this process write it.
+pub(crate) const PROJECT_METADATA_WRITE_NOT_OWNED: &str = "NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED";
 
 async fn chat_completions(
     headers: HeaderMap,
@@ -1282,12 +1322,14 @@ mod tests {
             !python_is_de_authorised(),
             "DEEPSEEK_GO_CONTROL is the control plane and must not grant the data plane"
         );
+        assert!(!may_write_native_store("project_metadata_store"));
         // With the Go flag still set, the mode alone flips it: the store's owner is a mode question.
         let _mode = EnvGuard::with(&[("DEEPSEEK_RUNTIME_MODE", "python_disabled")]);
         assert!(python_is_de_authorised());
         // ...and the mode alone is not enough: the store has to be declared as well.
         assert!(may_write_native_store("memory_store"));
         assert!(may_write_native_store("reminders_store"));
+        assert!(may_write_native_store("project_metadata_store"));
         // A third condition, in effect: the contract declaring a domain does not make *this* gateway
         // its writer. `s3_minio_streaming` is declared python -> rust, and the gateway must still
         // refuse it — an undeclared-here store stays refused whatever the mode says.

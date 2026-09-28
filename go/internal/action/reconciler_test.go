@@ -12,11 +12,14 @@ import (
 )
 
 type fakeControlStore struct {
-	records    map[string]store.Record
-	dispatches map[dispatchKey]store.StorageDispatch
-	lease      store.WriterLease
-	getErr     error
-	putErr     error
+	records         map[string]store.Record
+	dispatches      map[dispatchKey]store.StorageDispatch
+	lease           store.WriterLease
+	getErr          error
+	putErr          error
+	authoritative   bool
+	authorityErr    error
+	authorityDomain string
 }
 
 type dispatchKey struct {
@@ -56,6 +59,17 @@ func (s *fakeControlStore) Put(record store.Record) error {
 
 func (s *fakeControlStore) Writer() store.WriterLease {
 	return s.lease
+}
+
+// IsGoAuthoritative is the durable authority read. The fake records which domain
+// was asked so a test can prove the gate consults the cutover record instead of a
+// caller-supplied flag.
+func (s *fakeControlStore) IsGoAuthoritative(domain string) (bool, error) {
+	s.authorityDomain = domain
+	if s.authorityErr != nil {
+		return false, s.authorityErr
+	}
+	return s.authoritative, nil
 }
 
 func (s *fakeControlStore) ClaimStorageDispatch(record store.Record, intent store.StorageDispatchIntent) error {

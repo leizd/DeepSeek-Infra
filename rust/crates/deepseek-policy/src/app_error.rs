@@ -41,6 +41,14 @@ pub mod codes {
     pub const FORBIDDEN: &str = "forbidden";
     /// `ErrorCode.UPLOAD_TOO_LARGE`
     pub const UPLOAD_TOO_LARGE: &str = "upload_too_large";
+    /// `ErrorCode.UNSUPPORTED_FILE`
+    pub const UNSUPPORTED_FILE: &str = "unsupported_file";
+    /// `ErrorCode.OCR_REQUIRED`
+    pub const OCR_REQUIRED: &str = "ocr_required";
+    /// `ErrorCode.OCR_UNAVAILABLE`
+    pub const OCR_UNAVAILABLE: &str = "ocr_unavailable";
+    /// `ErrorCode.OCR_EMPTY`
+    pub const OCR_EMPTY: &str = "ocr_empty";
     /// `ErrorCode.RATE_LIMITED`
     pub const RATE_LIMITED: &str = "rate_limited";
 }

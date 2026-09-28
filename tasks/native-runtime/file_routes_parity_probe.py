@@ -1,8 +1,9 @@
 """file-route helper parity probe, oracle side.
 
-Compares `clean_filename`, `content_disposition_header` and `original_file_media_type`
-with the Rust port, over a corpus of names and cached-file shapes. The route itself is
-pinned by the gateway's own test; what this probe pins is the byte-level detail.
+Compares `clean_filename`, `content_disposition_header`, `original_file_media_type`,
+`file_reader_window`, the `/api/file-chunk` body and `file_page_text` with the Rust
+port. The routes themselves are pinned by the gateway's own tests; what this probe
+pins is the value-level detail, including a refusal's message, code and status.
 
 Usage::
 
@@ -101,6 +102,27 @@ READER_WINDOWS: list[tuple[int | None, int | None]] = [
 ]
 
 READER_CHUNK_INDEXES: list[int | None] = [None, 0, 1, 2, 99, -3]
+
+# `(label, page)` pairs handed to `file_page_text`. `None` is passed explicitly, so
+# the function's default is not what runs — `_reader_positive_int(None)` is.
+PAGE_CASES: list[tuple[str, Any]] = [
+    ("none", None),
+    ("one", 1),
+    ("two", 2),
+    ("three", 3),
+    ("five", 5),
+    ("ninety-nine", 99),
+    ("zero", 0),
+    ("negative", -4),
+    ("empty", ""),
+    ("bad", "x"),
+    ("float-string", "1.5"),
+    ("padded", " 4 "),
+    ("underscore", "1_0"),
+    ("bool-true", True),
+    ("bool-false", False),
+    ("float", 2.5),
+]
 
 
 def reader_indexes() -> list[tuple[str, dict[str, Any]]]:
@@ -250,6 +272,209 @@ def _oracle_file_chunk(
     }
 
 
+def page_indexes() -> list[tuple[str, str, dict[str, Any]]]:
+    """Cached indexes for `file_page_text`. Ids are shared with the Rust probe."""
+
+    long_text = "a" * 40_001
+    return [
+        (
+            "raised",
+            "a" * 32,
+            {
+                "name": "a.pdf",
+                "kind": "pdf",
+                "type": "application/pdf",
+                "size": 120,
+                "charCount": 18,
+                "pageCount": 2,
+                "sourceAvailable": True,
+                "pageTexts": [
+                    {"page": 1, "text": "page one"},
+                    {"page": 5, "text": "page five"},
+                ],
+                "chunks": [{"index": 0, "text": "chunk text"}],
+            },
+        ),
+        (
+            "chunks",
+            "b" * 32,
+            {
+                "name": "split.txt",
+                "pageCount": 4,
+                "chunks": [{"text": "aaaa"}, {"text": "bbbb"}, {"text": "cccc"}],
+            },
+        ),
+        ("empty", "c" * 32, {"name": "empty.txt", "chunks": []}),
+        (
+            "malformed",
+            "d" * 32,
+            {
+                "name": "m.pdf",
+                "kind": "pdf",
+                "pageCount": 1,
+                "pageTexts": [
+                    {"page": 1, "text": "one"},
+                    {"page": 0, "text": "zero"},
+                    {"page": 2.5, "text": "two-and-a-half"},
+                    {"page": True, "text": "from-bool"},
+                    {"page": "4", "text": "four"},
+                    {"page": "x", "text": "bad"},
+                    {"page": "1.5", "text": "float-string"},
+                    {"page": 3, "text": "   \r\n  "},
+                    "not an object",
+                    {"page": 6, "text": 5},
+                    {"text": "no page"},
+                ],
+                "chunks": [{"text": "fallback"}],
+            },
+        ),
+        (
+            "crlf",
+            "e" * 32,
+            {
+                "name": "lines.txt",
+                "pageCount": 1,
+                "pageTexts": [{"page": 1, "text": "  a  \r\nb\x00c  \n"}],
+                "chunks": [],
+            },
+        ),
+        (
+            "cjk",
+            "1" * 32,
+            {
+                "name": "页.pdf",
+                "kind": "pdf",
+                "pageCount": 1,
+                "pageTexts": [{"page": 1, "text": "第一页"}],
+                "chunks": [],
+            },
+        ),
+        (
+            "capped",
+            "2" * 32,
+            {
+                "name": "long.txt",
+                "pageCount": 1,
+                "pageTexts": [{"page": 1, "text": long_text}],
+                "chunks": [],
+            },
+        ),
+        ("noname", "3" * 32, {"pageCount": 1, "chunks": [{"text": "only"}]}),
+    ]
+
+
+def oracle_page_report() -> dict[str, Any]:
+    """The oracle's own `file_page_text` over the page corpus.
+
+    Same cache-directory repoint as the reader: `files.py` captured `FILE_CACHE_DIR`
+    by value, so the corpus is written under a temporary root and `rag_files.FILE_CACHE_DIR`
+    is what the function actually reads.
+    """
+    import shutil
+    import tempfile
+
+    from deepseek_infra.infra.rag import files as rag_files
+
+    saved = rag_files.FILE_CACHE_DIR
+    root = Path(tempfile.mkdtemp(prefix="file-page-probe-"))
+    cache_dir = root / ".file-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    rag_files.FILE_CACHE_DIR = cache_dir
+    try:
+        pages: dict[str, Any] = {}
+        for label, file_id, index in page_indexes():
+            (cache_dir / f"{file_id}.json").write_text(
+                json.dumps(index, ensure_ascii=False), encoding="utf-8"
+            )
+            for page_label, page in PAGE_CASES:
+                key = f"{label}|{page_label}"
+                pages[key] = _outcome(
+                    lambda file_id=file_id, page=page: rag_files.file_page_text(
+                        file_id, None, page=page
+                    )
+                )
+        pages["missing|one"] = _outcome(
+            lambda: rag_files.file_page_text("9" * 32, None, page=1)
+        )
+        pages["bad-id|one"] = _outcome(
+            lambda: rag_files.file_page_text("../escape", None, page=1)
+        )
+        return {"page_texts": pages}
+    finally:
+        rag_files.FILE_CACHE_DIR = saved
+        shutil.rmtree(root, ignore_errors=True)
+
+
+SEARCH_QUERIES: list[tuple[str, str]] = [
+    ("page", "page"),
+    ("PAGE", "PAGE"),
+    ("padded", "  page  "),
+    ("blank", "   "),
+    ("missing-word", "nope"),
+    ("eszett", "strasse"),
+    ("long", "q" * 201),
+]
+
+
+def search_indexes() -> list[tuple[str, str, dict[str, Any]]]:
+    return [
+        (
+            "pages",
+            "4" * 32,
+            {
+                "name": "a.pdf",
+                "kind": "pdf",
+                "pageCount": 1,
+                "pageTexts": [
+                    {"page": 1, "text": "See Straße and Page"},
+                    {"page": 5, "text": "page five"},
+                ],
+                "chunks": [],
+            },
+        ),
+        (
+            "chunks",
+            "5" * 32,
+            {
+                "name": "c.txt",
+                "pageCount": 2,
+                "chunks": [{"text": "alpha BETA"}, {"text": "gamma"}],
+            },
+        ),
+    ]
+
+
+def oracle_search_report() -> dict[str, Any]:
+    """The oracle's own `file_page_search`, including `str.casefold`."""
+    import shutil
+    import tempfile
+
+    from deepseek_infra.infra.rag import files as rag_files
+
+    saved = rag_files.FILE_CACHE_DIR
+    root = Path(tempfile.mkdtemp(prefix="file-search-probe-"))
+    cache_dir = root / ".file-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    rag_files.FILE_CACHE_DIR = cache_dir
+    try:
+        found: dict[str, Any] = {}
+        for label, file_id, index in search_indexes():
+            (cache_dir / f"{file_id}.json").write_text(
+                json.dumps(index, ensure_ascii=False), encoding="utf-8"
+            )
+            for query_label, query in SEARCH_QUERIES:
+                key = f"{label}|{query_label}"
+                found[key] = _outcome(
+                    lambda file_id=file_id, query=query: rag_files.file_page_search(
+                        file_id, None, query=query
+                    )
+                )
+        return {"page_search": found}
+    finally:
+        rag_files.FILE_CACHE_DIR = saved
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def oracle_report() -> dict[str, Any]:
     return {
         "clean_filename": {case: clean_filename(case) for case in FILENAME_CASES},
@@ -271,6 +496,8 @@ def oracle_report() -> dict[str, Any]:
             for length in LONG_LENGTHS
         },
         **oracle_reader_report(),
+        **oracle_page_report(),
+        **oracle_search_report(),
     }
 
 
@@ -320,6 +547,8 @@ def main() -> int:
         "long_names",
         "reader_windows",
         "reader_chunks",
+        "page_texts",
+        "page_search",
     ):
         expected = oracle.get(section)
         actual = native.get(section)

@@ -1,8 +1,14 @@
-"""Fail-closed control-mutation-request-v1 verifier.
+"""Fail-closed control-mutation-request verifier.
 
-This module is the Python oracle for the frozen native-runtime v17 corpus.
-It verifies canonical JSON mutation proposals. It does not apply production
-mutations, install a live epoch, or hold Federation root private keys.
+This module is the Python oracle for the frozen native-runtime v17 corpus
+(`control-mutation-request-v1`) and for the v32 corpus
+(`control-mutation-request-v2`). v1 verifies canonical JSON mutation *proposals*
+and does not apply production mutations. v2 adds exactly one operation,
+`apply-mutation`, which carries the record body so a Go-authoritative domain can
+apply a production mutation; v1 semantics are unchanged and share no signature
+domain with v2.
+
+Neither version installs a live epoch or holds Federation root private keys.
 """
 
 from __future__ import annotations
@@ -67,9 +73,54 @@ MUTATION_REQUEST_FIELDS = (
     "signerKeyId",
 )
 
+# control-mutation-request-v2 (compat v32). The envelope field set is identical to
+# v1; only the schema identity, the operation, the payload shape and the signature
+# domain differ, and the signature domain differs *on purpose* so a v1 signature
+# can never be replayed as a v2 document.
+MUTATION_REQUEST_V2_SCHEMA = "control-mutation-request-v2"
+MUTATION_REQUEST_V2_SCHEMA_VERSION = 2
+SIGNATURE_DOMAIN_V2 = b"deepseek-infra:control-mutation-request-v2\x00"
+ALLOWED_V2_OPERATIONS = frozenset({"apply-mutation"})
+ALLOWED_V2_INTENTS = frozenset({"apply-mutation"})
+V2_PAYLOAD_FIELDS = ("intent", "recordId", "recordPayload", "revision", "state")
+
 
 class MutationRequestError(AuthorityRequestError):
     pass
+
+
+@dataclass(frozen=True)
+class MutationRequestSpec:
+    """Everything that differs between the frozen v1 and the approved v2 shape."""
+
+    schema: str
+    schema_version: int
+    signature_domain: bytes
+    allowed_operations: frozenset[str]
+    allowed_intents: frozenset[str]
+    payload_fields: tuple[str, ...]
+    requires_record_payload: bool
+
+
+MUTATION_REQUEST_V1_SPEC = MutationRequestSpec(
+    schema=MUTATION_REQUEST_SCHEMA,
+    schema_version=MUTATION_REQUEST_SCHEMA_VERSION,
+    signature_domain=SIGNATURE_DOMAIN,
+    allowed_operations=ALLOWED_OPERATIONS,
+    allowed_intents=ALLOWED_INTENTS,
+    payload_fields=PAYLOAD_FIELDS,
+    requires_record_payload=False,
+)
+
+MUTATION_REQUEST_V2_SPEC = MutationRequestSpec(
+    schema=MUTATION_REQUEST_V2_SCHEMA,
+    schema_version=MUTATION_REQUEST_V2_SCHEMA_VERSION,
+    signature_domain=SIGNATURE_DOMAIN_V2,
+    allowed_operations=ALLOWED_V2_OPERATIONS,
+    allowed_intents=ALLOWED_V2_INTENTS,
+    payload_fields=V2_PAYLOAD_FIELDS,
+    requires_record_payload=True,
+)
 
 
 @dataclass(frozen=True)
@@ -97,11 +148,12 @@ def mutation_request_digest(value: Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(canonical_authority_request_bytes(unsigned)).hexdigest()
 
 
-def sign_mutation_request(
+def _sign_mutation_request(
     unsigned: Mapping[str, Any],
     *,
     private_key: Ed25519PrivateKey,
     public_key: str,
+    spec: MutationRequestSpec,
 ) -> dict[str, Any]:
     payload = dict(unsigned)
     if "signature" in payload:
@@ -110,13 +162,49 @@ def sign_mutation_request(
     payload["signatureAlgorithm"] = SIGNATURE_ALGORITHM
     payload["payloadDigest"] = _payload_digest(payload.get("payload"))
     payload["digest"] = mutation_request_digest(payload)
-    message = SIGNATURE_DOMAIN + canonical_authority_request_bytes(payload)
+    message = spec.signature_domain + canonical_authority_request_bytes(payload)
     signed = dict(payload)
     signed["signature"] = _b64url_encode(private_key.sign(message))
     return signed
 
 
+def sign_mutation_request(
+    unsigned: Mapping[str, Any],
+    *,
+    private_key: Ed25519PrivateKey,
+    public_key: str,
+) -> dict[str, Any]:
+    """Sign a frozen v1 (propose-mutation / shadow-compare) document."""
+    return _sign_mutation_request(
+        unsigned, private_key=private_key, public_key=public_key, spec=MUTATION_REQUEST_V1_SPEC
+    )
+
+
+def sign_mutation_request_v2(
+    unsigned: Mapping[str, Any],
+    *,
+    private_key: Ed25519PrivateKey,
+    public_key: str,
+) -> dict[str, Any]:
+    """Sign a v2 (apply-mutation) document under the v2 signature domain."""
+    return _sign_mutation_request(
+        unsigned, private_key=private_key, public_key=public_key, spec=MUTATION_REQUEST_V2_SPEC
+    )
+
+
 def verify_mutation_request_document(raw: bytes, context: MutationRequestContext) -> dict[str, Any]:
+    """Verify a frozen v1 document. Behavior is unchanged from the v17 freeze."""
+    return _verify_mutation_request(raw, context, MUTATION_REQUEST_V1_SPEC)
+
+
+def verify_mutation_request_v2_document(raw: bytes, context: MutationRequestContext) -> dict[str, Any]:
+    """Verify a v2 `apply-mutation` document, including its record body."""
+    return _verify_mutation_request(raw, context, MUTATION_REQUEST_V2_SPEC)
+
+
+def _verify_mutation_request(
+    raw: bytes, context: MutationRequestContext, spec: MutationRequestSpec
+) -> dict[str, Any]:
     if not raw:
         raise MutationRequestError("MUTATION_REQUEST_INVALID")
     if len(raw) > MAX_MUTATION_REQUEST_BYTES:
@@ -138,8 +226,8 @@ def verify_mutation_request_document(raw: bytes, context: MutationRequestContext
         if exc.code == "AUTHORITY_REQUEST_SECRET_DETECTED":
             raise MutationRequestError("MUTATION_REQUEST_SECRET_DETECTED") from exc
         raise MutationRequestError("MUTATION_REQUEST_INVALID") from exc
-    _verify_envelope(document, context)
-    _verify_signature(document, context)
+    _verify_envelope(document, context, spec)
+    _verify_signature(document, context, spec)
     return document
 
 
@@ -147,10 +235,12 @@ def _payload_digest(payload: Any) -> str:
     return "sha256:" + hashlib.sha256(canonical_authority_request_bytes(payload)).hexdigest()
 
 
-def _verify_envelope(document: Mapping[str, Any], context: MutationRequestContext) -> None:
-    if document["schema"] != MUTATION_REQUEST_SCHEMA or document["schemaVersion"] != MUTATION_REQUEST_SCHEMA_VERSION:
+def _verify_envelope(
+    document: Mapping[str, Any], context: MutationRequestContext, spec: MutationRequestSpec
+) -> None:
+    if document["schema"] != spec.schema or document["schemaVersion"] != spec.schema_version:
         raise MutationRequestError("MUTATION_REQUEST_SCHEMA_INVALID")
-    if document["operation"] not in ALLOWED_OPERATIONS or document["operation"] != context.expected_operation:
+    if document["operation"] not in spec.allowed_operations or document["operation"] != context.expected_operation:
         raise MutationRequestError("MUTATION_REQUEST_OPERATION_INVALID")
     if document["domain"] not in ALLOWED_DOMAINS or document["domain"] != context.expected_domain:
         raise MutationRequestError("MUTATION_REQUEST_DOMAIN_MISMATCH")
@@ -187,9 +277,9 @@ def _verify_envelope(document: Mapping[str, Any], context: MutationRequestContex
     if document["nonce"] in context.seen_nonces:
         raise MutationRequestError("MUTATION_REQUEST_NONCE_REUSE")
     payload = document["payload"]
-    if type(payload) is not dict or tuple(sorted(payload)) != PAYLOAD_FIELDS:
+    if type(payload) is not dict or tuple(sorted(payload)) != spec.payload_fields:
         raise MutationRequestError("MUTATION_REQUEST_INVALID")
-    if payload["intent"] not in ALLOWED_INTENTS:
+    if payload["intent"] not in spec.allowed_intents:
         raise MutationRequestError("MUTATION_REQUEST_INVALID")
     if type(payload["recordId"]) is not str or not _CONTROL_ID_PATTERN.fullmatch(payload["recordId"]):
         raise MutationRequestError("MUTATION_REQUEST_INVALID")
@@ -197,6 +287,19 @@ def _verify_envelope(document: Mapping[str, Any], context: MutationRequestContex
         raise MutationRequestError("MUTATION_REQUEST_INVALID")
     if type(payload["state"]) is not str or not payload["state"]:
         raise MutationRequestError("MUTATION_REQUEST_INVALID")
+    if spec.requires_record_payload:
+        # The record body is part of the signed payload digest, so a v2 apply can
+        # only write bytes the signer committed to. It must be a JSON object: the
+        # canonical encoder accepts None/str/bool/int/list/dict with string keys
+        # and rejects floats, which is what keeps the bytes identical across
+        # Python, Go and Rust.
+        record_payload = payload["recordPayload"]
+        if type(record_payload) is not dict:
+            raise MutationRequestError("MUTATION_REQUEST_INVALID")
+        try:
+            canonical_authority_request_bytes(record_payload)
+        except AuthorityRequestError as exc:
+            raise MutationRequestError("MUTATION_REQUEST_INVALID") from exc
     expected_payload_digest = _payload_digest(payload)
     if document["payloadDigest"] != expected_payload_digest:
         raise MutationRequestError("MUTATION_REQUEST_PAYLOAD_DIGEST_MISMATCH")
@@ -220,7 +323,9 @@ def _verify_envelope(document: Mapping[str, Any], context: MutationRequestContex
         raise MutationRequestError("MUTATION_REQUEST_FUTURE_SKEW")
 
 
-def _verify_signature(document: Mapping[str, Any], context: MutationRequestContext) -> None:
+def _verify_signature(
+    document: Mapping[str, Any], context: MutationRequestContext, spec: MutationRequestSpec
+) -> None:
     if document["signatureAlgorithm"] != SIGNATURE_ALGORITHM:
         raise MutationRequestError("MUTATION_REQUEST_SIGNATURE_INVALID")
     if document["signerKeyId"] != context.signer_key_id or not _SIGNER_KEY_ID_PATTERN.fullmatch(document["signerKeyId"]):
@@ -230,7 +335,7 @@ def _verify_signature(document: Mapping[str, Any], context: MutationRequestConte
     if signature is None or public is None:
         raise MutationRequestError("MUTATION_REQUEST_SIGNATURE_INVALID")
     unsigned = {key: value for key, value in document.items() if key != "signature"}
-    message = SIGNATURE_DOMAIN + canonical_authority_request_bytes(unsigned)
+    message = spec.signature_domain + canonical_authority_request_bytes(unsigned)
     try:
         Ed25519PublicKey.from_public_bytes(public).verify(signature, message)
     except InvalidSignature as exc:

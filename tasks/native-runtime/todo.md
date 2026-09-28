@@ -11,6 +11,35 @@ Evidence Assembly, qualification) remain open and no 4.8.1 release has been cut 
 is [`migration-matrix.md`](migration-matrix.md). This file is the 4.8.1 contract-freeze
 record and is not updated per slice.
 
+## 5.0 active execution — 2026-09-28
+
+The 4.8.1 list below remains a historical contract-freeze record. Current
+work is tracked against the full product matrix, with 5.0 still **未完成**.
+
+- [x] Reconcile the current `c99d3de6` checkout and preserve the existing
+  uncommitted control-plane work; update the matrix's Go control status.
+- [ ] Expand the remaining aggregate matrix rows into per-capability entries
+  with original entry, observable behavior, owner, dependency, implementation,
+  compat case, platform, command, evidence and gap before any final acceptance.
+- [x] Make `control-authority-v1` claim and live-head read reachable only through
+  the authenticated loopback internal API. Locally verify claim → cutover →
+  signed v2 apply → persisted result, exact replay and refusal paths.
+- [x] Refuse cross-domain reuse of a control mutation operation ID; regression
+  tests first reproduced the false `ALREADY_APPLIED` response in both v1 and v2.
+- [x] Re-run the exact Go coverage gate after the new routes and tests without
+  changing its 95.0% statement floor: local result 95.127394% (5115/5377),
+  with fmt/vet/test passing. Windows `go test -race ./...` exits `0xc0000139`
+  before tests execute; Linux CI race evidence remains open.
+- [ ] Add an externally signed per-domain promotion artifact and verify
+  export/import, unique writer fencing, rollback and restart on isolated data.
+- [ ] Prove worker effect reconciliation through real MinIO provider state,
+  process kill, lease loss and takeover; retain `EFFECT_UNKNOWN` until proof.
+- [ ] Complete remaining native control/data APIs, Rust public edge, desktop,
+  Android and server-side TypeScript replacement; measure a successful zero-Python
+  workload on each production platform.
+- [ ] Obtain exact-head CI, provider and platform artifacts, Evidence Assembly,
+  and the final readiness qualification before changing ownership status.
+
 ## Phase 0 — Decision and ownership
 
 - [x] Review/accept 5.0 native runtime specification and ADR-0049.

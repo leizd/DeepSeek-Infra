@@ -169,7 +169,7 @@ fn normalize_media_path(value: Option<&Value>) -> Result<String> {
         .split('/')
         .filter(|part| !part.is_empty() && *part != ".")
         .collect();
-    if parts.iter().any(|part| *part == "..") {
+    if parts.contains(&"..") {
         return Err(error("Media path must not escape the media library", 400));
     }
     Ok(parts.join("/"))

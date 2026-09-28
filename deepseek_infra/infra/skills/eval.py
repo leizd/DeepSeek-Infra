@@ -71,8 +71,11 @@ def save_eval_case(case: dict[str, Any]) -> dict[str, Any]:
     normalized["source"] = "user"
     normalized["updatedAt"] = utc_now_iso()
     cases.append(normalized)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(item, ensure_ascii=False, sort_keys=True) for item in cases) + "\n", encoding="utf-8")
+    # The case file is a store Rust writes (`skills::eval::save`), so under `PYTHON_DISABLED` a
+    # Python write here would be the second writer ADR-0049 forbids. Reading it stays free.
+    with registry.skill_store_scope():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(json.dumps(item, ensure_ascii=False, sort_keys=True) for item in cases) + "\n", encoding="utf-8")
     return normalized
 
 
@@ -85,8 +88,11 @@ def delete_eval_case(case_id: str) -> dict[str, Any]:
     kept = [case for case in cases if case.get("caseId") != normalized]
     if len(kept) == len(cases):
         raise AppError("Skill eval case not found", code=ErrorCode.NOT_FOUND, status=404)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(item, ensure_ascii=False, sort_keys=True) for item in kept) + ("\n" if kept else ""), encoding="utf-8")
+    with registry.skill_store_scope():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # No trailing newline once the file is empty — the oracle's own quirk, and the bytes are the
+        # contract.
+        path.write_text("\n".join(json.dumps(item, ensure_ascii=False, sort_keys=True) for item in kept) + ("\n" if kept else ""), encoding="utf-8")
     return {"ok": True, "deleted": normalized}
 
 

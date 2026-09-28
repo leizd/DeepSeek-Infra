@@ -45,6 +45,11 @@ type OpenOptions struct {
 	Owner        string
 	Now          func() int64
 	LeaseSeconds int64
+	// AuthorizeCutover lets this process become a production control authority:
+	// with it, a control domain may be promoted past dual-evaluate once a valid
+	// control-authority-v1 claim is installed. It defaults to false, so every
+	// existing caller stays mechanically unable to authorize a cutover.
+	AuthorizeCutover bool
 }
 
 type Record struct {
@@ -86,6 +91,7 @@ type Control struct {
 	db                  *sql.DB
 	closed              bool
 	admissionFaultStage string
+	authorizeCutover    bool
 }
 
 type rowScanner interface {
@@ -179,12 +185,13 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 		leaseSeconds = 30
 	}
 	store := &Control{
-		path:         resolved,
-		databasePath: databasePath,
-		owner:        opts.Owner,
-		leaseSeconds: leaseSeconds,
-		now:          nowFn,
-		db:           db,
+		path:             resolved,
+		databasePath:     databasePath,
+		owner:            opts.Owner,
+		leaseSeconds:     leaseSeconds,
+		now:              nowFn,
+		db:               db,
+		authorizeCutover: opts.AuthorizeCutover,
 	}
 	if err := store.bootstrapAndClaim(databaseExisted); err != nil {
 		_ = db.Close()
@@ -373,6 +380,16 @@ func expectedControlUserObjects(schema int) map[string]string {
 				kind = "table"
 			} else if name == "idx_action_resource_leases_action" {
 				kind = "index"
+			}
+			objects[name] = kind
+		}
+	}
+	if schema >= SchemaV8 {
+		for name := range controlAuthoritySchemaObjects {
+			kind := "trigger"
+			switch name {
+			case "control_authority_head", "control_authority_checkpoints", "control_cutover_authorizations":
+				kind = "table"
 			}
 			objects[name] = kind
 		}
@@ -617,6 +634,16 @@ func (store *Control) migrateTx(tx *sql.Tx) error {
 	}
 	if store.schema == SchemaV6 {
 		if err := store.migrateToV7Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV7 {
+		if err := store.migrateToV8Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV8 {
+		if err := store.migrateToV9Tx(tx); err != nil {
 			return err
 		}
 	}
@@ -965,6 +992,17 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 			return err
 		}
 	}
+	if schema >= SchemaV8 {
+		if err := verifyControlAuthoritySchemaTx(tx); err != nil {
+			return err
+		}
+		tables = append(tables, "control_authority_head", "control_authority_checkpoints", "control_cutover_authorizations")
+	}
+	if schema >= SchemaV9 {
+		if err := verifyControlOperationStatusSchemaTx(tx); err != nil {
+			return err
+		}
+	}
 	for _, table := range tables {
 		var marker int
 		if err := tx.QueryRow(
@@ -1119,11 +1157,18 @@ func (store *Control) Put(record Record) error {
 	return store.putControlRecord(record, nil)
 }
 
-func (store *Control) putControlRecord(record Record, dispatch *StorageDispatchIntent) error {
-	return store.putLeasedControlRecord(record, dispatch, "")
+// PutShadow persists a qualification result only while Python still owns the
+// domain. The cutover check shares the write transaction, so promotion cannot
+// race between an earlier read and the actual write.
+func (store *Control) PutShadow(record Record) error {
+	return store.putLeasedControlRecord(record, nil, "", true)
 }
 
-func (store *Control) putLeasedControlRecord(record Record, dispatch *StorageDispatchIntent, claimToken string) error {
+func (store *Control) putControlRecord(record Record, dispatch *StorageDispatchIntent) error {
+	return store.putLeasedControlRecord(record, dispatch, "", false)
+}
+
+func (store *Control) putLeasedControlRecord(record Record, dispatch *StorageDispatchIntent, claimToken string, shadow bool) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.closed {
@@ -1148,6 +1193,19 @@ func (store *Control) putLeasedControlRecord(record Record, dispatch *StorageDis
 	}
 	if err := verifySchemaTx(tx, store.schema); err != nil {
 		return err
+	}
+	// A promoted control domain is written through ApplyMutation, which verifies
+	// the signed v2 request and journals the operation with the record. The
+	// general Put path is also used by shadow persistence and must not bypass
+	// that authority boundary. Fenced domains use their separate lease path.
+	if shadow || !fencedDomains[record.Domain] {
+		cutover, err := readCutoverTx(tx, record.Domain)
+		if err != nil {
+			return err
+		}
+		if IsDomainGoAuthoritative(cutover.State) {
+			return ErrCutoverNotAuthorized
+		}
 	}
 	var actionLeaseUntil int64
 	if claimToken != "" {
@@ -1857,6 +1915,17 @@ func (store *Control) Rollback(version int) error {
 	if store.schema >= SchemaV7 {
 		if _, err := tx.Exec("DROP TABLE action_verification_boundary"); err != nil {
 			return err
+		}
+	}
+	if store.schema >= SchemaV8 {
+		for _, table := range []string{
+			"control_cutover_authorizations",
+			"control_authority_checkpoints",
+			"control_authority_head",
+		} {
+			if _, err := tx.Exec("DROP TABLE " + table); err != nil {
+				return err
+			}
 		}
 	}
 	if store.schema >= SchemaV6 {

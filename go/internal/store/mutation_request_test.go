@@ -420,7 +420,7 @@ func TestSignMutationRequestRejectsUnmarshalableValues(t *testing.T) {
 	}, MutationRequestContext{
 		SignerPublicKey: public,
 		SignerKeyID:     "ctrl-signer-aaaaaaaaaaaaaaaa",
-	}); !errors.Is(err, ErrMutationRequestInvalid) && !errors.Is(err, ErrMutationRequestSignerMismatch) {
+	}, mutationRequestV1Spec); !errors.Is(err, ErrMutationRequestInvalid) && !errors.Is(err, ErrMutationRequestSignerMismatch) {
 		t.Fatalf("unmarshalable signature payload: %v", err)
 	}
 }

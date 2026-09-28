@@ -93,7 +93,7 @@ func (store *Control) ClaimLeasedStorageDispatch(record Record, intent StorageDi
 	if strings.TrimSpace(claimToken) == "" {
 		return ErrInvalidClaimToken
 	}
-	return store.putLeasedControlRecord(record, &intent, claimToken)
+	return store.putLeasedControlRecord(record, &intent, claimToken, false)
 }
 
 func (store *Control) GetStorageDispatch(actionID string, epoch uint64) (StorageDispatch, bool, error) {

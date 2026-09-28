@@ -14,6 +14,8 @@
 //!   original upload.
 //! - [`file_reader_window`] and [`file_chunk`] — the paginated reader the frontend
 //!   scrolls a long extraction with.
+//! - [`file_page_text`] — one page of extracted text, including the chunk-split
+//!   fallback when `pageTexts` has no entry for the requested page.
 //!
 //! # The percent-encoding is Python's `quote`, not a URL encoder
 //!
@@ -36,6 +38,10 @@ pub const FILE_READER_DEFAULT_CHUNKS: usize = 6;
 pub const FILE_READER_MAX_CHUNKS: usize = 12;
 /// `FILE_PAGE_TEXT_CHARS`.
 pub const FILE_PAGE_TEXT_CHARS: usize = 40_000;
+/// `FILE_PAGE_SEARCH_MAX_RESULTS`.
+pub const FILE_PAGE_SEARCH_MAX_RESULTS: usize = 200;
+/// `FILE_PAGE_SEARCH_SNIPPET_CHARS`.
+pub const FILE_PAGE_SEARCH_SNIPPET_CHARS: usize = 90;
 
 /// Mirrors `clean_filename`.
 ///
@@ -201,7 +207,9 @@ fn text_field_or(cached: &Value, key: &str, fallback: &str) -> String {
 /// and is floored at 1.
 ///
 /// The order matters — `value in (None, "")` is checked *before* `int(value)`, so a
-/// missing field is the default while a non-numeric string is a `400`.
+/// missing field is the default while a non-numeric string is a `400`. The parse is
+/// Python's `int()`, not a float parse: `"1.5"` and `"True"` raise, `"1_0"` is 10,
+/// and a float truncates toward zero.
 pub fn reader_positive_int(
     value: Option<&Value>,
     message: &str,
@@ -218,20 +226,27 @@ pub fn reader_positive_int(
             return Ok(default);
         }
     }
-    let parsed = match value {
-        Value::Number(number) => number.as_f64(),
-        Value::String(text) => text.trim().parse::<f64>().ok(),
-        Value::Bool(flag) => Some(if *flag { 1.0 } else { 0.0 }),
-        _ => None,
-    };
-    let Some(parsed) = parsed else {
+    let Some(parsed) = crate::core_utils::python_int_opt(Some(value)) else {
         return Err(AppError {
             message: message.to_string(),
             code: codes::INVALID_PAYLOAD,
             status: 400,
         });
     };
-    Ok((parsed.trunc() as i64).max(1) as usize)
+    // A page or chunk index above `usize::MAX` still means "past the end", which the
+    // callers clamp. Truncating the integer would turn that into a small index.
+    Ok(usize::try_from(parsed.max(1)).unwrap_or(usize::MAX))
+}
+
+/// `int(value or 0)`, or `None` when Python's `int()` raises and the caller skips
+/// the entry.
+fn python_page_number(value: Option<&Value>) -> Option<i64> {
+    match value {
+        Some(raw) if crate::core_utils::python_truthy(raw) => {
+            crate::core_utils::python_int_opt(Some(raw))
+        }
+        _ => Some(0),
+    }
 }
 
 /// `_reader_file_payload`.
@@ -430,14 +445,8 @@ pub fn normalized_page_texts(value: Option<&Value>) -> Vec<Value> {
         let Some(object) = item.as_object() else {
             continue;
         };
-        let page = match object.get("page") {
-            Some(value) if crate::core_utils::python_truthy(value) => {
-                match crate::python_json::value_str(value).trim().parse::<i64>() {
-                    Ok(parsed) => parsed,
-                    Err(_) => continue,
-                }
-            }
-            _ => 0,
+        let Some(page) = python_page_number(object.get("page")) else {
+            continue;
         };
         let text = normalize_extracted_text(&crate::core_utils::text_or_empty(object.get("text")));
         if page <= 0 || text.is_empty() {
@@ -452,15 +461,7 @@ pub fn normalized_page_texts(value: Option<&Value>) -> Vec<Value> {
 /// `page_text_for_index`: the text of one page, or empty.
 pub fn page_text_for_index(page_texts: &[Value], requested_page: i64) -> String {
     for item in page_texts {
-        let page = match item.get("page") {
-            Some(value) if crate::core_utils::python_truthy(value) => {
-                crate::python_json::value_str(value)
-                    .trim()
-                    .parse::<i64>()
-                    .unwrap_or(0)
-            }
-            _ => 0,
-        };
+        let page = python_page_number(item.get("page")).unwrap_or(0);
         if page == requested_page {
             return crate::core_utils::text_or_empty(item.get("text"));
         }
@@ -532,16 +533,7 @@ pub fn file_page_text(
     if !page_texts.is_empty() {
         let highest = page_texts
             .iter()
-            .map(|item| {
-                item.get("page")
-                    .map(|value| {
-                        crate::python_json::value_str(value)
-                            .trim()
-                            .parse::<i64>()
-                            .unwrap_or(0)
-                    })
-                    .unwrap_or(0)
-            })
+            .map(|item| python_page_number(item.get("page")).unwrap_or(0))
             .max()
             .unwrap_or(0);
         page_count = page_count.max(highest);
@@ -562,6 +554,154 @@ pub fn file_page_text(
             "text": capped,
             "hasText": !page_text.trim().is_empty(),
         },
+    }))
+}
+
+/// `fallback_page_texts_from_text`: split one normalized string across `page_count`.
+///
+/// Empty slices are dropped, so the returned list can be shorter than the count. The
+/// last page takes the remainder.
+pub fn fallback_page_texts_from_text(text: &str, page_count: i64) -> Vec<Value> {
+    let normalized = normalize_extracted_text(text);
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+    let count = page_count.max(1);
+    if count <= 1 {
+        return vec![json!({"page": 1, "text": normalized})];
+    }
+    let characters: Vec<char> = normalized.chars().collect();
+    let length = characters.len() as i64;
+    let per_page = (length / count).max(1);
+    let mut pages = Vec::new();
+    for index in 0..count {
+        let start = index * per_page;
+        let end = if index == count - 1 {
+            length
+        } else {
+            length.min((index + 1) * per_page)
+        };
+        if start >= length || start >= end {
+            continue;
+        }
+        let page_text: String = characters[start as usize..end as usize].iter().collect();
+        let page_text = page_text.trim();
+        if !page_text.is_empty() {
+            pages.push(json!({"page": index + 1, "text": page_text}));
+        }
+    }
+    pages
+}
+
+fn char_slice(characters: &[char], start: usize, end: usize) -> String {
+    if start >= characters.len() || start >= end {
+        return String::new();
+    }
+    characters[start..end.min(characters.len())]
+        .iter()
+        .collect()
+}
+
+/// The next `needle` inside `folded`, as a character index at or after `start`.
+fn find_chars(folded: &[char], needle: &[char], start: usize) -> Option<usize> {
+    if needle.is_empty() || start >= folded.len() || needle.len() > folded.len() - start {
+        return None;
+    }
+    folded[start..]
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|offset| start + offset)
+}
+
+/// Mirrors `file_page_search`.
+///
+/// The needle is `casefold` of the normalized query, and the match index is an index
+/// into that folded text. The snippet and the matched `text` are then sliced from the
+/// original page with that same index — which is what Python does, including when
+/// `casefold` changes the length (`ß` becomes `ss`).
+pub fn file_page_search(
+    root: &Path,
+    file_id: &str,
+    project_id: Option<&str>,
+    query: Option<&Value>,
+    cache: &FileCache,
+) -> Result<Value, AppError> {
+    let cached = load_cached_file(root, file_id, project_id, cache)?;
+    let mut search_query = normalize_extracted_text(&crate::core_utils::text_or_empty(query));
+    search_query = search_query.trim().to_string();
+    if search_query.is_empty() {
+        return Err(AppError {
+            message: "Search query is required".to_string(),
+            code: codes::INVALID_PAYLOAD,
+            status: 400,
+        });
+    }
+    let query_chars: Vec<char> = search_query.chars().collect();
+    if query_chars.len() > 200 {
+        search_query = query_chars.into_iter().take(200).collect();
+    }
+    let mut page_count = int_field_or_zero(&cached, "pageCount").max(1);
+    let mut page_texts = normalized_page_texts(cached.get("pageTexts"));
+    if !page_texts.is_empty() {
+        let highest = page_texts
+            .iter()
+            .map(|item| python_page_number(item.get("page")).unwrap_or(0))
+            .max()
+            .unwrap_or(0);
+        page_count = page_count.max(highest);
+    }
+    if page_texts.is_empty() {
+        let joined = page_text_from_cached_chunks(&cached, 1, 1);
+        page_texts = fallback_page_texts_from_text(&joined, page_count);
+    }
+    let needle = crate::python_casefold::python_casefold(&search_query);
+    let needle_chars: Vec<char> = needle.chars().collect();
+    let query_len = search_query.chars().count();
+    let mut matches: Vec<Value> = Vec::new();
+    for page_item in &page_texts {
+        let page_number = python_page_number(page_item.get("page")).unwrap_or(0);
+        let haystack = crate::core_utils::text_or_empty(page_item.get("text"));
+        let original: Vec<char> = haystack.chars().collect();
+        let folded: Vec<char> = crate::python_casefold::python_casefold(&haystack)
+            .chars()
+            .collect();
+        let mut start = 0usize;
+        while matches.len() < FILE_PAGE_SEARCH_MAX_RESULTS {
+            let Some(index) = find_chars(&folded, &needle_chars, start) else {
+                break;
+            };
+            let radius = FILE_PAGE_SEARCH_SNIPPET_CHARS / 2;
+            let snippet_start = index.saturating_sub(radius);
+            let snippet_end = (index + query_len + radius).min(original.len());
+            let prefix = if snippet_start > 0 { "..." } else { "" };
+            let suffix = if snippet_end < original.len() {
+                "..."
+            } else {
+                ""
+            };
+            let body = char_slice(&original, snippet_start, snippet_end);
+            let body = body.trim();
+            matches.push(json!({
+                "index": matches.len(),
+                "page": if page_number == 0 { 1 } else { page_number },
+                "start": index,
+                "end": index + query_len,
+                "text": char_slice(&original, index, index + query_len),
+                "snippet": format!("{prefix}{body}{suffix}"),
+            }));
+            start = index + needle_chars.len().max(1);
+        }
+        if matches.len() >= FILE_PAGE_SEARCH_MAX_RESULTS {
+            break;
+        }
+    }
+    Ok(json!({
+        "ok": true,
+        "file": reader_file_payload(&cached, file_id, project_id, cached_chunk_list(&cached).len()),
+        "query": search_query,
+        "pageCount": page_count,
+        "matches": matches,
+        "truncated": matches.len() >= FILE_PAGE_SEARCH_MAX_RESULTS,
     }))
 }
 
@@ -879,6 +1019,24 @@ mod tests {
     }
 
     #[test]
+    fn a_fractional_page_number_truncates_the_way_python_int_does() {
+        let pages = normalized_page_texts(Some(&json!([
+            {"page": 2.5, "text": "half"},
+            {"page": true, "text": "yes"},
+            {"page": "1.5", "text": "no"},
+            {"page": "1_0", "text": "ten"},
+        ])));
+        assert_eq!(
+            pages,
+            vec![
+                json!({"page": 2, "text": "half"}),
+                json!({"page": 1, "text": "yes"}),
+                json!({"page": 10, "text": "ten"}),
+            ]
+        );
+    }
+
+    #[test]
     fn a_page_lookup_finds_the_page_or_answers_empty() {
         let pages = vec![
             json!({"page": 1, "text": "one"}),
@@ -968,11 +1126,23 @@ mod tests {
             let page = file_page_text(&root, file_id, None, Some(&default), &cache).unwrap();
             assert_eq!(page["page"]["index"], 1, "{default:?}");
         }
-        // A non-numeric page is the oracle's 400.
-        let error = file_page_text(&root, file_id, None, Some(&json!("x")), &cache)
-            .expect_err("a non-numeric page must be refused");
-        assert_eq!(error.code, codes::INVALID_PAYLOAD);
-        assert_eq!(error.message, "Invalid page");
+        // A non-numeric page is the oracle's 400. `"1.5"` is one of those: Python's
+        // `int()` rejects it, where a float parse would have silently truncated.
+        for refused in [json!("x"), json!("1.5"), json!("True")] {
+            let error = file_page_text(&root, file_id, None, Some(&refused), &cache)
+                .expect_err("a non-numeric page must be refused");
+            assert_eq!(error.code, codes::INVALID_PAYLOAD);
+            assert_eq!(error.message, "Invalid page");
+        }
+        assert_eq!(
+            file_page_text(&root, file_id, None, Some(&json!("1_0")), &cache).unwrap()["page"]["index"],
+            5,
+            "int('1_0') is 10, then clamped to the raised page count"
+        );
+        assert_eq!(
+            file_page_text(&root, file_id, None, Some(&json!(2.5)), &cache).unwrap()["page"]["index"],
+            2
+        );
 
         // A file with no pages at all still reports one.
         std::fs::write(
@@ -1026,6 +1196,40 @@ mod tests {
         // A malformed id is a 400, which `load_cached_file` raises before any path.
         let error = cached_file_source(&root, "../escape", None, &cache).expect_err("bad id");
         assert_eq!(error.code, codes::INVALID_PAYLOAD);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn file_page_search_is_casefolded_and_refuses_a_blank_query() {
+        let root = std::env::temp_dir().join(format!("file-page-search-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let directory = file_cache_dir(&root);
+        std::fs::create_dir_all(&directory).unwrap();
+        let file_id = "0123456789abcdef0123456789abcdef";
+        std::fs::write(
+            directory.join(format!("{file_id}.json")),
+            json!({
+                "name": "a.pdf",
+                "kind": "pdf",
+                "pageCount": 1,
+                "pageTexts": [
+                    {"page": 1, "text": "See Straße and Page"},
+                ],
+                "chunks": [],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let cache = FileCache::new();
+        let found =
+            file_page_search(&root, file_id, None, Some(&json!("strasse")), &cache).unwrap();
+        assert_eq!(found["matches"][0]["page"], 1);
+        assert_eq!(found["query"], "strasse");
+        assert_eq!(found["truncated"], false);
+        let blank = file_page_search(&root, file_id, None, Some(&json!("  ")), &cache)
+            .expect_err("a blank query is refused");
+        assert_eq!(blank.message, "Search query is required");
+        assert_eq!(blank.status, 400);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

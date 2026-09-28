@@ -226,15 +226,21 @@ func persistPeers(control *store.Control, decision map[string]any) error {
 }
 
 func remember(control *store.Control, domain, id, state string, epoch uint64, payload any) error {
+	if err := assertShadowWriter(control, domain); err != nil {
+		return err
+	}
 	_, ok, err := control.Get(domain, id)
 	if err != nil || ok {
 		return err
 	}
 	raw, _ := json.Marshal(payload)
-	return control.Put(store.Record{Domain: domain, ID: id, Revision: 1, ExecutionEpoch: epoch, State: state, Payload: raw})
+	return control.PutShadow(store.Record{Domain: domain, ID: id, Revision: 1, ExecutionEpoch: epoch, State: state, Payload: raw})
 }
 
 func advance(control *store.Control, domain, id, state string, payload any) error {
+	if err := assertShadowWriter(control, domain); err != nil {
+		return err
+	}
 	existing, ok, err := control.Get(domain, id)
 	if err != nil || !ok {
 		return err
@@ -243,5 +249,20 @@ func advance(control *store.Control, domain, id, state string, payload any) erro
 	existing.Revision++
 	existing.State = state
 	existing.Payload = raw
-	return control.Put(existing)
+	return control.PutShadow(existing)
+}
+
+// Shadow evaluation may continue during a cutover, but its persistence path
+// must not write a domain after the durable owner has changed to Go. Fenced
+// domains such as action use Put for legitimate production work, so this check
+// belongs at the shadow caller as well as the store's signed-control gate.
+func assertShadowWriter(control *store.Control, domain string) error {
+	authoritative, err := control.IsGoAuthoritative(domain)
+	if err != nil {
+		return err
+	}
+	if authoritative {
+		return store.ErrCutoverNotAuthorized
+	}
+	return nil
 }

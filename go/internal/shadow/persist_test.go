@@ -2,11 +2,67 @@ package shadow
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 )
+
+func TestShadowPersistCannotWritePromotedAction(t *testing.T) {
+	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "shadow-cutover", AuthorizeCutover: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	authority := &store.AuthorityCheckpoint{
+		Schema: store.ControlAuthoritySchema, AuthorityGeneration: 1,
+		CreatedAt: "2026-09-05T00:00:00Z", ControlSchemaVersion: 9,
+		Policies: []any{}, Targets: []any{},
+		ReceiptMutationGenerations: map[string]int64{}, PromotionEpochs: map[string]int64{},
+		DrainGenerations: map[string]int64{}, PlacementGenerations: map[string]int64{},
+	}
+	authority.PayloadDigest, err = store.ComputePayloadDigest(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority.Digest, err = store.ComputeCheckpointDigest(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := control.ClaimControlAuthority(authority); err != nil {
+		t.Fatal(err)
+	}
+	for _, next := range []store.CutoverState{store.CutoverDualEvaluate, store.CutoverGoAuthoritative} {
+		current, err := control.GetCutover("action")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := control.TransitionCutover(store.CutoverTransition{
+			Domain: "action", To: next, ExpectedRevision: current.Revision,
+			ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken,
+			TransferID: "shadow-action-" + string(next), Authority: authority,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := control.PutShadow(store.Record{
+		Domain: "action", ID: "act-direct", Revision: 1, ExecutionEpoch: 1,
+		State: "PENDING", Payload: json.RawMessage(`{}`),
+	}); !errors.Is(err, store.ErrCutoverNotAuthorized) {
+		t.Fatalf("atomic shadow write to promoted action: %v", err)
+	}
+	snapshot := map[string]any{"actions": []any{map[string]any{"actionId": "act-1", "executionEpoch": 1}}}
+	decision := map[string]any{"scheduler": map[string]any{"admissions": []any{
+		map[string]any{"decision": "ADMIT", "actionId": "act-1"},
+	}}}
+	if err := Persist(control, snapshot, decision); !errors.Is(err, store.ErrCutoverNotAuthorized) {
+		t.Fatalf("shadow write to promoted action: %v", err)
+	}
+	if _, exists, err := control.Get("action", "act-1"); err != nil || exists {
+		t.Fatalf("shadow action persisted: exists=%v err=%v", exists, err)
+	}
+}
 
 func TestDispatchAdmittedSwallowsNativeNotAuthoritative(t *testing.T) {
 	control := openStore(t)

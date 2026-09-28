@@ -1,4 +1,4 @@
-//! `POST /api/file-reader` and `POST /api/file-chunk` — the paginated file reader.
+//! `POST /api/file-reader`, `POST /api/file-chunk` and `POST /api/file-page-text`.
 //!
 //! The frontend's file viewer scrolls a long extraction one window at a time
 //! (`file-reader`) and can jump to a single chunk (`file-chunk`). Both fell through to
@@ -22,12 +22,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use deepseek_policy::app_error::AppError;
 use deepseek_policy::file_cache::FileCache;
-use deepseek_policy::file_routes::{file_chunk, file_reader_window};
+use deepseek_policy::file_routes::{
+    file_chunk, file_page_search, file_page_text, file_reader_window,
+};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 /// The workspace root plus the per-process file index cache, shared with
@@ -100,6 +103,173 @@ pub async fn api_file_chunk(
         &string_field(&payload, "fileId"),
         project.as_deref(),
         payload.get("chunkIndex"),
+        &state.cache,
+    ) {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => app_error(error),
+    }
+}
+
+/// `POST /api/file-page-text`.
+///
+/// `page=payload.get("page") or 1`: a falsy page takes page 1, and the policy function
+/// still refuses a non-numeric page with `400 Invalid page`. The handler only reads
+/// the cache; a refusal and a success both leave the index bytes untouched.
+pub async fn api_file_page_text(
+    State(state): State<FileReaderRouteState>,
+    Json(payload): Json<Value>,
+) -> Response {
+    let project = project_id(&payload);
+    let page = payload.get("page").filter(|value| truthy(value)).cloned();
+    match file_page_text(
+        &state.root,
+        &string_field(&payload, "fileId"),
+        project.as_deref(),
+        page.as_ref(),
+        &state.cache,
+    ) {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => app_error(error),
+    }
+}
+
+/// `GET /api/file-page-search?fileId=…&projectId=…&query=…`.
+///
+/// `projectId` uses `get(...) or None`: an empty string selects the global cache, and
+/// a whitespace-only id is kept so the id-shape check can refuse it. The query is
+/// passed through; a blank one is `400 Search query is required` from the policy
+/// function, before any other read side effect.
+#[derive(Debug, Default, Deserialize)]
+pub struct FilePageSearchQuery {
+    #[serde(default, rename = "fileId")]
+    file_id: String,
+    #[serde(default, rename = "projectId")]
+    project_id: Option<String>,
+    #[serde(default)]
+    query: String,
+}
+
+/// `GET /api/file-page-image?fileId=…&page=…&scale=…`.
+///
+/// A PDF page is rendered to PNG and cached beside the source. A non-PDF, a bad
+/// page, or a bad scale is refused before that file is created.
+#[derive(Debug, Default, Deserialize)]
+pub struct FilePageImageQuery {
+    #[serde(default, rename = "fileId")]
+    file_id: String,
+    #[serde(default, rename = "projectId")]
+    project_id: Option<String>,
+    #[serde(default)]
+    page: String,
+    #[serde(default)]
+    scale: String,
+}
+
+pub async fn api_file_page_image(
+    State(state): State<FileReaderRouteState>,
+    Query(query): Query<FilePageImageQuery>,
+) -> Response {
+    let project = query.project_id.filter(|value| !value.is_empty());
+    let page = Value::String(if query.page.is_empty() {
+        "1".to_string()
+    } else {
+        query.page
+    });
+    let scale = Value::String(query.scale);
+    let rendered = tokio::task::spawn_blocking(move || {
+        deepseek_policy::pdf_page::file_page_image(
+            &state.root,
+            &query.file_id,
+            project.as_deref(),
+            Some(&page),
+            Some(&scale),
+            &state.cache,
+        )
+    })
+    .await;
+    match rendered {
+        Ok(Ok(image)) => (
+            StatusCode::OK,
+            [
+                (axum::http::header::CONTENT_TYPE, "image/png".to_string()),
+                (
+                    axum::http::header::HeaderName::from_static("x-file-page"),
+                    image.page.to_string(),
+                ),
+                (
+                    axum::http::header::HeaderName::from_static("x-file-page-count"),
+                    image.page_count.to_string(),
+                ),
+                (axum::http::header::CONTENT_DISPOSITION, image.disposition),
+                (axum::http::header::CACHE_CONTROL, "no-store".to_string()),
+            ],
+            image.png,
+        )
+            .into_response(),
+        Ok(Err(error)) => app_error(error),
+        Err(_) => app_error(AppError {
+            message: "PDF page rendering failed".to_string(),
+            code: deepseek_policy::app_error::codes::INTERNAL,
+            status: 500,
+        }),
+    }
+}
+
+/// `GET /api/file-page-layout?fileId=…&page=…`.
+///
+/// Word boxes for one PDF page. The handler does not write a cache file.
+#[derive(Debug, Default, Deserialize)]
+pub struct FilePageLayoutQuery {
+    #[serde(default, rename = "fileId")]
+    file_id: String,
+    #[serde(default, rename = "projectId")]
+    project_id: Option<String>,
+    #[serde(default)]
+    page: String,
+}
+
+pub async fn api_file_page_layout(
+    State(state): State<FileReaderRouteState>,
+    Query(query): Query<FilePageLayoutQuery>,
+) -> Response {
+    let project = query.project_id.filter(|value| !value.is_empty());
+    let page = Value::String(if query.page.is_empty() {
+        "1".to_string()
+    } else {
+        query.page
+    });
+    match tokio::task::spawn_blocking(move || {
+        deepseek_policy::pdf_page::file_page_layout(
+            &state.root,
+            &query.file_id,
+            project.as_deref(),
+            Some(&page),
+            &state.cache,
+        )
+    })
+    .await
+    {
+        Ok(Ok(value)) => Json(value).into_response(),
+        Ok(Err(error)) => app_error(error),
+        Err(_) => app_error(AppError {
+            message: "PDF page layout failed".to_string(),
+            code: deepseek_policy::app_error::codes::INTERNAL,
+            status: 500,
+        }),
+    }
+}
+
+pub async fn api_file_page_search(
+    State(state): State<FileReaderRouteState>,
+    Query(query): Query<FilePageSearchQuery>,
+) -> Response {
+    let project = query.project_id.filter(|value| !value.is_empty());
+    let query_value = Value::String(query.query);
+    match file_page_search(
+        &state.root,
+        &query.file_id,
+        project.as_deref(),
+        Some(&query_value),
         &state.cache,
     ) {
         Ok(value) => Json(value).into_response(),

@@ -225,14 +225,11 @@ pub fn public_confidence(value: Option<&Value>) -> f64 {
 /// `public_memory`: the v3.0 object plus the legacy fields clients still read.
 pub fn public_memory(item: &Value, clock: &dyn Clock) -> Value {
     let now = clock.now_iso();
-    let memory_id = {
-        let raw = item
-            .get("memoryId")
-            .or_else(|| item.get("id"))
-            .map(python_str)
-            .unwrap_or_default();
-        raw
-    };
+    let memory_id = item
+        .get("memoryId")
+        .or_else(|| item.get("id"))
+        .map(python_str)
+        .unwrap_or_default();
     let content = legacy::normalize_memory_text(item.get("content"));
     let stored_scope = item
         .get("scope")

@@ -2,10 +2,10 @@
 //!
 //! Pins the helpers `web/routes/files.py` and the file-reader routes need:
 //! `clean_filename`, `content_disposition_header`, `original_file_media_type`,
-//! `file_reader_window` and `file_chunk`. The routes themselves are pinned by the
-//! gateway's own tests; what this probe compares is the byte-level detail — the RFC 5987
-//! header, the media-type ladder and the window arithmetic — where a port drifts
-//! silently.
+//! `file_reader_window`, `file_chunk` and `file_page_text`. The routes themselves are
+//! pinned by the gateway's own tests; what this probe compares is the value-level
+//! detail — the RFC 5987 header, the media-type ladder, the window arithmetic and one
+//! page of extracted text — where a port drifts silently.
 //!
 //! Run against `tasks/native-runtime/file_routes_parity_probe.py`; the two outputs must
 //! be byte-identical.
@@ -22,8 +22,8 @@ use std::collections::BTreeMap;
 
 use deepseek_policy::file_cache::FileCache;
 use deepseek_policy::file_routes::{
-    clean_filename, content_disposition_header, file_chunk, file_reader_window,
-    original_file_media_type,
+    clean_filename, content_disposition_header, file_chunk, file_page_search, file_page_text,
+    file_reader_window, original_file_media_type,
 };
 use serde_json::{Value, json};
 
@@ -206,6 +206,51 @@ fn main() {
     }
     out.insert("reader_windows".to_string(), json!(windows));
     out.insert("reader_chunks".to_string(), json!(chunks));
+
+    let mut pages: BTreeMap<String, Value> = BTreeMap::new();
+    for (label, file_id, index) in page_indexes() {
+        std::fs::write(directory.join(format!("{file_id}.json")), index.to_string())
+            .expect("write page index");
+        for (page_label, page) in page_cases() {
+            let key = format!("{label}|{page_label}");
+            let value = file_page_text(&root, &file_id, None, page.as_ref(), &cache);
+            pages.insert(key, outcome(value));
+        }
+    }
+    pages.insert(
+        "missing|one".to_string(),
+        outcome(file_page_text(
+            &root,
+            &"9".repeat(32),
+            None,
+            Some(&json!(1)),
+            &cache,
+        )),
+    );
+    pages.insert(
+        "bad-id|one".to_string(),
+        outcome(file_page_text(
+            &root,
+            "../escape",
+            None,
+            Some(&json!(1)),
+            &cache,
+        )),
+    );
+    out.insert("page_texts".to_string(), json!(pages));
+
+    let mut searches: BTreeMap<String, Value> = BTreeMap::new();
+    for (label, file_id, index) in search_indexes() {
+        std::fs::write(directory.join(format!("{file_id}.json")), index.to_string())
+            .expect("write search index");
+        for (query_label, query) in search_queries() {
+            let key = format!("{label}|{query_label}");
+            let query_value = json!(query);
+            let value = file_page_search(&root, &file_id, None, Some(&query_value), &cache);
+            searches.insert(key, outcome(value));
+        }
+    }
+    out.insert("page_search".to_string(), json!(searches));
     let _ = std::fs::remove_dir_all(&root);
 
     let mut encoded = serde_json::to_string_pretty(&out).expect("serialize");
@@ -266,6 +311,166 @@ fn reader_indexes() -> Vec<(&'static str, Value)> {
             "source_available",
             json!({"name": "e.txt", "kind": "pdf", "type": "application/pdf",
                 "sourceAvailable": true, "pageCount": 3, "chunks": [{"index": 0, "text": "x"}]}),
+        ),
+    ]
+}
+
+fn search_queries() -> Vec<(&'static str, String)> {
+    vec![
+        ("page", "page".to_string()),
+        ("PAGE", "PAGE".to_string()),
+        ("padded", "  page  ".to_string()),
+        ("blank", "   ".to_string()),
+        ("missing-word", "nope".to_string()),
+        ("eszett", "strasse".to_string()),
+        ("long", "q".repeat(201)),
+    ]
+}
+
+fn search_indexes() -> Vec<(&'static str, String, Value)> {
+    vec![
+        (
+            "pages",
+            "4".repeat(32),
+            json!({
+                "name": "a.pdf",
+                "kind": "pdf",
+                "pageCount": 1,
+                "pageTexts": [
+                    {"page": 1, "text": "See Straße and Page"},
+                    {"page": 5, "text": "page five"},
+                ],
+                "chunks": [],
+            }),
+        ),
+        (
+            "chunks",
+            "5".repeat(32),
+            json!({
+                "name": "c.txt",
+                "pageCount": 2,
+                "chunks": [{"text": "alpha BETA"}, {"text": "gamma"}],
+            }),
+        ),
+    ]
+}
+
+/// `(label, page)` pairs. `None` is the missing page, which takes the default.
+fn page_cases() -> Vec<(&'static str, Option<Value>)> {
+    vec![
+        ("none", None),
+        ("one", Some(json!(1))),
+        ("two", Some(json!(2))),
+        ("three", Some(json!(3))),
+        ("five", Some(json!(5))),
+        ("ninety-nine", Some(json!(99))),
+        ("zero", Some(json!(0))),
+        ("negative", Some(json!(-4))),
+        ("empty", Some(json!(""))),
+        ("bad", Some(json!("x"))),
+        ("float-string", Some(json!("1.5"))),
+        ("padded", Some(json!(" 4 "))),
+        ("underscore", Some(json!("1_0"))),
+        ("bool-true", Some(json!(true))),
+        ("bool-false", Some(json!(false))),
+        ("float", Some(json!(2.5))),
+    ]
+}
+
+/// The cached indexes `file_page_text` is compared over. Ids match the Python probe.
+fn page_indexes() -> Vec<(&'static str, String, Value)> {
+    let long_text = "a".repeat(40_001);
+    vec![
+        (
+            "raised",
+            "a".repeat(32),
+            json!({
+                "name": "a.pdf",
+                "kind": "pdf",
+                "type": "application/pdf",
+                "size": 120,
+                "charCount": 18,
+                "pageCount": 2,
+                "sourceAvailable": true,
+                "pageTexts": [
+                    {"page": 1, "text": "page one"},
+                    {"page": 5, "text": "page five"},
+                ],
+                "chunks": [{"index": 0, "text": "chunk text"}],
+            }),
+        ),
+        (
+            "chunks",
+            "b".repeat(32),
+            json!({
+                "name": "split.txt",
+                "pageCount": 4,
+                "chunks": [{"text": "aaaa"}, {"text": "bbbb"}, {"text": "cccc"}],
+            }),
+        ),
+        (
+            "empty",
+            "c".repeat(32),
+            json!({"name": "empty.txt", "chunks": []}),
+        ),
+        (
+            "malformed",
+            "d".repeat(32),
+            json!({
+                "name": "m.pdf",
+                "kind": "pdf",
+                "pageCount": 1,
+                "pageTexts": [
+                    {"page": 1, "text": "one"},
+                    {"page": 0, "text": "zero"},
+                    {"page": 2.5, "text": "two-and-a-half"},
+                    {"page": true, "text": "from-bool"},
+                    {"page": "4", "text": "four"},
+                    {"page": "x", "text": "bad"},
+                    {"page": "1.5", "text": "float-string"},
+                    {"page": 3, "text": "   \r\n  "},
+                    "not an object",
+                    {"page": 6, "text": 5},
+                    {"text": "no page"},
+                ],
+                "chunks": [{"text": "fallback"}],
+            }),
+        ),
+        (
+            "crlf",
+            "e".repeat(32),
+            json!({
+                "name": "lines.txt",
+                "pageCount": 1,
+                "pageTexts": [{"page": 1, "text": "  a  \r\nb\u{0}c  \n"}],
+                "chunks": [],
+            }),
+        ),
+        (
+            "cjk",
+            "1".repeat(32),
+            json!({
+                "name": "页.pdf",
+                "kind": "pdf",
+                "pageCount": 1,
+                "pageTexts": [{"page": 1, "text": "第一页"}],
+                "chunks": [],
+            }),
+        ),
+        (
+            "capped",
+            "2".repeat(32),
+            json!({
+                "name": "long.txt",
+                "pageCount": 1,
+                "pageTexts": [{"page": 1, "text": long_text}],
+                "chunks": [],
+            }),
+        ),
+        (
+            "noname",
+            "3".repeat(32),
+            json!({"pageCount": 1, "chunks": [{"text": "only"}]}),
         ),
     ]
 }

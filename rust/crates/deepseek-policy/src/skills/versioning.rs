@@ -28,8 +28,11 @@ pub fn snapshot(
     };
     let metadata = metadata(registry, &config, pack, summary, event);
     let id = text(&config, if pack { "packId" } else { "skillId" });
+    // Joined as two components on purpose: `join("history/packs")` puts a `/` **inside** one
+    // component, so the path this returns renders as `history/packs\…` on Windows while the
+    // oracle's `Path` renders `history\packs\…`.
     let directory = if pack {
-        registry.data.join("history/packs")
+        registry.data.join("history").join("packs")
     } else {
         registry.data.join("history")
     };
@@ -141,8 +144,10 @@ fn schema_name(pack: bool) -> &'static str {
     }
 }
 fn snapshots(r: &Registry, id: &str, pack: bool) -> Vec<Value> {
+    // Two components, not one with a slash inside — the revision `path` this feeds is rendered, and
+    // `history/packs\…` is not what the oracle writes.
     let directory = if pack {
-        r.data.join("history/packs")
+        r.data.join("history").join("packs")
     } else {
         r.data.join("history")
     }
@@ -415,8 +420,10 @@ pub fn rollback(
         r,
         &current,
         pack,
+        // Lower-case `rollback` in the middle of the sentence, which is how the oracle writes it
+        // (`f"Pack rollback checkpoint before {version}"`).
         &format!(
-            "{}Rollback checkpoint before {version}",
+            "{}rollback checkpoint before {version}",
             if pack { "Pack " } else { "" }
         ),
         "rollback_checkpoint",

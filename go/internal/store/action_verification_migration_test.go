@@ -18,6 +18,9 @@ func prepareVerificationV6Fixture(t *testing.T, control *Control) {
 	defer tx.Rollback()
 	for _, statement := range []string{
 		"DROP TABLE action_verification_boundary",
+		"DROP TABLE control_cutover_authorizations",
+		"DROP TABLE control_authority_checkpoints",
+		"DROP TABLE control_authority_head",
 		`CREATE TABLE control_meta_v6_fixture (
 			singleton INTEGER PRIMARY KEY CHECK(singleton=1), runtime TEXT NOT NULL,
 			mode TEXT NOT NULL, schema_version INTEGER NOT NULL CHECK(schema_version BETWEEN 0 AND 6),

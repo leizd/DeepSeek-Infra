@@ -848,6 +848,83 @@ pub fn read_file_chunk(
 
 // --- the write path ---------------------------------------------------------------
 
+/// Add uploaded files to an existing project, mirroring `add_project_files`.
+///
+/// The caller is the production route, and it must already have decided that this
+/// process owns `project_metadata_store`. This function writes `.projects/<id>/files`
+/// and then `project.json`. It does not write `.local-rag`: that index stays the
+/// Python store's, and calling it here would be a second writer.
+pub fn add_project_files(
+    project_id: &str,
+    files: &[crate::file_upload::UploadedPart],
+    ocr_enabled: bool,
+    root: &Path,
+    entropy: &dyn Entropy,
+) -> Result<Vec<Value>, AppError> {
+    let mut project = require_project(project_id, root, entropy)?;
+    let mut documents = match project.get("documents") {
+        Some(Value::Array(items)) => items.clone(),
+        _ => Vec::new(),
+    };
+    if documents.len() + files.len() > MAX_PROJECT_DOCUMENTS {
+        return Err(AppError {
+            message: "Too many project documents".to_string(),
+            code: crate::app_error::codes::UPLOAD_TOO_LARGE,
+            status: 413,
+        });
+    }
+    let stored_id = python_str(project.get("id"));
+    let mut added = Vec::new();
+    for file in files {
+        let extracted = crate::file_upload::extract_uploaded_file(
+            root,
+            &file.filename,
+            &file.content_type,
+            &file.data,
+            ocr_enabled,
+            Some(stored_id.as_str()),
+        )?;
+        let document = project_document_from_extracted(&extracted, entropy)?;
+        let file_id = python_str(document.get("fileId"));
+        documents.retain(|item| python_str(item.get("fileId")) != file_id);
+        documents.push(document.clone());
+        added.push(document);
+    }
+    if documents.len() > MAX_PROJECT_DOCUMENTS {
+        let skip = documents.len() - MAX_PROJECT_DOCUMENTS;
+        documents = documents.split_off(skip);
+    }
+    let now = entropy.now_millis();
+    if let Some(fields) = project.as_object_mut() {
+        fields.insert("documents".to_string(), Value::Array(documents));
+        fields.insert("updatedAt".to_string(), json!(now));
+    }
+    write_project(root, &project, entropy)?;
+    Ok(added)
+}
+
+fn project_document_from_extracted(
+    extracted: &Value,
+    entropy: &dyn Entropy,
+) -> Result<Value, AppError> {
+    Ok(json!({
+        "id": entropy.new_id()?,
+        "name": python_str(extracted.get("name")).if_empty("文件"),
+        "type": python_str(extracted.get("type")),
+        "size": safe_int(extracted.get("size"), 0),
+        "kind": python_str(extracted.get("kind")).if_empty("text"),
+        "fileId": python_str(extracted.get("fileId")),
+        "projectId": python_str(extracted.get("projectId")),
+        "sourceAvailable": is_truthy(extracted.get("sourceAvailable").unwrap_or(&Value::Null)),
+        "preview": truncate_chars(&python_str(extracted.get("preview")), 1800),
+        "pageCount": safe_int(extracted.get("pageCount"), 0),
+        "charCount": safe_int(extracted.get("charCount"), 0),
+        "chunkCount": safe_int(extracted.get("chunkCount"), 0),
+        "chunked": is_truthy(extracted.get("chunked").unwrap_or(&Value::Null)),
+        "createdAt": entropy.now_millis(),
+    }))
+}
+
 /// Mirrors `write_project`: `<PROJECTS_DIR>/<id>/project.json`, through a
 /// `project.tmp` sibling, with the trailing newline `json.dumps(...) + "\n"` implies.
 ///

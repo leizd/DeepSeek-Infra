@@ -54,7 +54,14 @@ func Start(ctx context.Context, cfg config.Config) (*Server, error) {
 		if owner == "" {
 			owner = "deepseekd"
 		}
-		control, err = store.OpenControl(store.OpenOptions{Path: cfg.ShadowStoreDir, Owner: owner})
+		// The cutover authority is a deployment property and config.Load refuses
+		// it without an authenticated internal control plane, so a process can
+		// never authorize a promotion over an unauthenticated channel.
+		control, err = store.OpenControl(store.OpenOptions{
+			Path:             cfg.ShadowStoreDir,
+			Owner:            owner,
+			AuthorizeCutover: cfg.ControlAuthority,
+		})
 		if err != nil {
 			_ = listener.Close()
 			return nil, err
@@ -80,7 +87,12 @@ func serve(ctx context.Context, cfg config.Config, listener net.Listener, contro
 		}
 		encodeStatus(writer)
 	})
-	api.Register(mux, control)
+	api.RegisterWithOptions(mux, control, api.InternalOptions{
+		Bearer:                  cfg.InternalAPIBearer,
+		MutationSignerPublicKey: cfg.MutationSignerPublicKey,
+		FleetID:                 cfg.FleetID,
+		Environment:             cfg.Environment,
+	})
 	api.RegisterPublicView(mux, control, api.PublicView{
 		Mode:               cfg.Mode,
 		MutationAuthority:  config.MutationAuthority,

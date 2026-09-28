@@ -8,6 +8,1645 @@ This file is the session handoff. Historical plans, checkboxes, VERSION, and
 `release/native_runtime_5_0_evidence_v1.json` are not completion evidence.
 The capability matrix is [`migration-matrix.md`](migration-matrix.md).
 
+## Current continuation checkpoint — 2026-09-28 control authority reaches the running Go API
+
+Branch `codex/indexmap-std-feature`, HEAD
+`c99d3de6ec29c982c681fdd83d50bf400dab89ce`. This checkout already held
+uncommitted control cutover, schema v9, mutation v2, and Rust worker changes when
+this turn began; all were preserved. No push, merge or release. Readiness is
+still `NOT_READY` with `exact_head: null`; the full Rust/Go migration is **未完成**.
+
+### Completed local slice
+
+- `go/internal/api/shadow.go` now exposes loopback-bearer protected
+  `POST /internal/authority/claim` and `GET /internal/authority/head`. The
+  checkpoint is bounded to 16 MiB, decoded without losing additive fields,
+  and handed to the existing integrity, live-chain, writer-lease and
+  deployment-capability checks. An exact replay reports `advanced: false`.
+- An isolated HTTP test drives **claim → cutover → signed v2 apply → persisted
+  policy record**. A started `deepseekd` lifecycle test proves the new claim
+  and head routes are actually mounted. Missing store, malformed/null/oversized
+  checkpoint, tampered digest, disabled capability, unreadable body, and
+  unauthorized calls have refusal tests.
+- A separate replay regression found that `AcceptMutation` and `ApplyMutation`
+  could return `ALREADY_APPLIED` for an operation ID reused in a *different*
+  control domain with an identical payload digest. Both tests were red before
+  the fix. The idempotent fast path now also requires the stored domain to
+  match, and the original operation remains unchanged.
+- Code review found that the shadow evaluation path could still call `Put` after
+  cutover. `PutShadow` now checks the durable owner in the same transaction as
+  its write, including fenced domains such as `action`. Direct `Put` refuses
+  unsigned writes to promoted non-fenced control domains. Both bypasses had
+  failing regression tests before the guards were added.
+- The matrix, 5.0 todo, Go control-store catalog, API/runbook, and readiness
+  blocker text now describe these local capabilities without claiming cutover.
+
+### Verification in this workspace
+
+- `go test ./... -count=1` and `go vet ./...` passed after the shadow-write
+  guards. The exact Go coverage command passed **95.105673% (5130/5394)**;
+  its profile and compact log are
+  `artifacts/go-coverage-native-20260928.out` and `.log` (local ignored
+  artifacts). `gofmt` on changed Go files passed.
+- `cargo +1.85.0-x86_64-pc-windows-gnu test -p deepseek-worker --locked`
+  passed all worker suites including frozen v17/v32, durable-grant and TLS
+  cases. Pinned GNU `cargo check --workspace --locked`, strict workspace
+  Clippy (`--all-targets --all-features -- -D warnings`), and
+  `cargo +1.85.0 fmt --all -- --check` passed. The unsuffixed MSVC
+  toolchain failed before tests because `link.exe` is absent; the installed
+  pinned GNU toolchain provided the completed worker run.
+- The focused Python oracle/catalog/readiness/ownership tests passed (38 cases),
+  as did native contract checking (43 corpora, 32 versions, 48 domains),
+  shadow parity (8/8), doc links and release-version consistency. The static
+  zero-Python topology audit passed 8/8; **it is not** a successful live
+  zero-Python workload measurement.
+- `ruff check .` and `mypy .` now pass (918 source files). The committed
+  skills parity probe's empty list needed an explicit `list[str]()` to satisfy
+  this host's mypy inference; the value is still empty, and its Python/Rust
+  replay passed **655 cases with 0 differences**. Markdown language navigation
+  passes for 217 files after adding the missing links to the prepared 4.9.4
+  amendment. `git diff --check` is clean.
+- `go test -race ./...` could not execute tests on this Windows host: every
+  package exited `0xc0000139`. Docker's CLI is present, but its Linux daemon
+  pipe is absent and no MinIO binary is configured, so this turn produced no
+  real-provider evidence. Exact-head Linux CI is not available without a push.
+
+### Open gates and next executable task
+
+No production domain has an externally signed per-domain promotion artifact,
+isolated export/import and rollback proof, or exact-head ownership revision.
+Worker operation-specific signed admission, Three-MinIO/two-Fleet provider
+effects, process-kill/takeover reconciliation, platform packages and measured
+zero-Python successful workloads remain open. Aggregate rows elsewhere in the
+matrix still need per-capability expansion before final acceptance. The 16 MiB
+claim-body limit also needs checking against a real exported checkpoint before
+any cutover.
+
+Next: implement and freeze the per-domain signed promotion request on the
+existing Go authority/cutover state machine, then exercise export/import and
+rollback on isolated data. Run provider-backed kill/takeover evidence when a
+real MinIO topology is available. Keep `NOT_READY` until those and the other
+matrix gates are proven.
+
+## Current continuation checkpoint — 2026-09-27 the apply channel reaches the wire, with the signer taken from deployment config
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. Slices 1-4 are uncommitted. No push, merge, or
+release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+**Slice 4 is complete**: the contract is frozen from the oracle, Go and Rust both verify it,
+Go applies it atomically, and it is now reachable over the authenticated internal plane.
+
+### The transport, and the one property that matters most
+
+`POST /internal/mutation/apply` takes the **exact canonical `control-mutation-request-v2`
+document as the body** and calls `Control.ApplyMutation` behind the existing loopback-bearer
+guard. The critical decision: **the signer trust material comes from deployment
+configuration, never from the request** — `DEEPSEEKD_MUTATION_SIGNER_KEY` (the base64url
+Ed25519 public key), `DEEPSEEKD_FLEET_ID`, `DEEPSEEKD_ENVIRONMENT`. A caller therefore cannot
+nominate the signer that authorizes its own mutation, and a deployment with no configured
+signer refuses with `503 MUTATION_SIGNER_NOT_CONFIGURED` rather than accepting anything. A
+test asserts that refusal specifically.
+
+`RegisterWithOptions(..., InternalOptions{...})` carries the new options; `Register(mux,
+control, bearer)` remains as a wrapper, so no existing call site or test had to change.
+
+### Proven end to end, over HTTP
+
+`go/internal/api/mutation_apply_route_test.go` drives the real path: an authority-enabled
+store with the `policy` domain durably promoted through the authorized cutover, a v2 request
+signed by the configured key, and a real HTTP `POST`. The response is `200` with
+`status: APPLIED`, the record is then **observable through the authenticated snapshot**, a
+retry returns `ALREADY_APPLIED` without a second apply, and the route refuses: no signer
+configured (`503`), wrong signer (`409`), a domain that is not promoted (`409`, with the
+record provably absent), `GET` (`405`), an oversized body (`413`), and no credential (`401`,
+via the shared all-routes test which now includes this route).
+
+### Verification (local, this workspace, not CI)
+
+- `go vet ./...` clean; `go test ./... -count=1` → see the round's result below.
+- `pytest tests/test_native_runtime_go_control_store.py ...` → the catalog gate now declares
+  the route, asserts it is mounted behind `RequireInternalBearer(internal, options.Bearer)`,
+  and asserts the signer is never caller-supplied.
+- Coverage: this slice adds an HTTP handler with several refusal branches; the gate was
+  re-measured (recorded below) because the previous round left only **4 statements** of
+  headroom.
+
+### Next executable task
+
+The provider-backed kill/takeover reconciliation evidence for
+`EFFECT_RECONCILIATION_UNPROVEN` (a real MinIO/Three-MinIO run, not a library result), then
+the per-domain promotion evidence and the ownership-contract revision.
+
+## Current continuation checkpoint — 2026-09-27 Rust reaches v2 parity, and the float fail-open was in all three implementations
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. Slices 1-4c are uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+Slice 4 steps 1, 2, 3 and 4 have now landed. **A transport for apply (the rest of step 5)
+is the remaining half of slice 4.**
+
+### Rust verifies v2, and the corpus proves it
+
+`rust/crates/deepseek-worker/src/mutation_request.rs` gained the same `MutationRequestSpec`
+split as Python and Go (`verify_mutation_request_v2_document`, `SIGNATURE_DOMAIN_V2`,
+`PAYLOAD_FIELDS_V2`), and `tests/frozen_mutation_request_v32.rs` replays the frozen corpus:
+**all 34 cases pass**, the positive request matches the frozen digest, and the revisions are
+kept disjoint (the v1 verifier refuses a v2 document, and the frozen `v1-signature-domain`
+case proves the reverse). The v17 suite still passes untouched.
+
+### The float fail-open was in all three implementations
+
+Rust's canonical encoder is `serde_json::to_vec(sorted(value))`, so Rust — like Go before it
+— would have **accepted** a record body containing `1.5` that the Python oracle refuses, and
+the body is inside `payloadDigest`. `validate_record_body` now enforces the oracle's
+primitive set in Rust too. The v32 case `record-body-float` is exactly that proof: because
+the canonical encoder accepts floats, the case can only produce `MUTATION_REQUEST_INVALID`
+through this validator.
+
+**Rust's secret rule was already correct** — unlike Go, it had no safe-suffix exemption and
+applies the oracle's rule to the whole document, so `secret-suffixed-key-in-record-body`
+passed without a change. The asymmetry is worth remembering: the three implementations did
+*not* share one bug, they shared one *class* of bug.
+
+### One measured, fail-closed divergence (Rust stricter than the oracle)
+
+Rust's JSON number model is `i64`/`u64`, so an integer outside that range is refused by
+`validate_record_body` while Python (arbitrary precision) and Go (`json.Number`) accept it.
+Rust is **stricter, never looser**, so it cannot apply a body the oracle rejects — but a
+legitimate body carrying a >64-bit integer would be refused by the worker only. No frozen
+case covers it; record it if a real payload ever needs one.
+
+### Verification (local, this workspace, not CI)
+
+- `cargo +1.85.0 fmt --all -- --check` → **clean** (the new test file needed rustfmt first;
+  applied. Checked under the *pinned* rustfmt, because the previous session lost time to a
+  2021-vs-2024 import-order divergence between rustfmt versions).
+- `cargo +1.85.0 clippy --locked --all-targets --all-features -- -D warnings` (the CI command,
+  whole workspace) → **clean**. ⚠️ Under the machine's default `stable` (clippy 0.1.97) the
+  same command fails in **`deepseek-browser/src/sidecar.rs:207`** with
+  `clippy::result_large_err` — a crate this slice never touched. That is a toolchain-version
+  artifact, not a regression: the repo pins 1.85.0, which is installed here and passes.
+- `cargo +1.85.0 test -p deepseek-worker` → **whole crate green** (all test binaries ok,
+  exit 0), including `frozen_mutation_request_v17` (2) and `frozen_mutation_request_v32` (3).
+- **`cargo test --locked --all` (the CI `rust` job's third command) could not be run locally,
+  and this is *not* a PASS.** It fails at **link** time in `deepseek-policy` examples and
+  `deepseek-gateway` test binaries: the host `x86_64-w64-mingw32-gcc` rejects the
+  `.drectve -exclude-symbols:…` directives the host rustc emits (rustls symbols are visible in
+  the warnings). That is environmental, and it is provably **not** this slice:
+  **no crate in the workspace depends on `deepseek-worker`** (checked every
+  `rust/crates/*/Cargo.toml`), and the tokenizer/verifier change is confined to that crate.
+  It also reproduces in an isolated `--target-dir`, so it is not a polluted shared `target/`.
+  CI is Ubuntu and must judge this; do not record it as passing.
+- `deepseek-worker`'s tests also pass under the default toolchain, so the crate is not
+  toolchain-sensitive in a way that would hide a problem.
+- Go side unchanged this slice; its gates were green at the end of the previous round.
+
+### Next executable task
+
+**A transport for `ApplyMutation`**: an authenticated `/internal/*` endpoint (the loopback
+bearer is already in place) so the approved production-apply channel is reachable by an
+operator rather than only in-process, plus the catalog/gate update. Then the provider-backed
+kill/takeover evidence for `EFFECT_RECONCILIATION_UNPROVEN`.
+
+## Current continuation checkpoint — 2026-09-27 Go applies a signed mutation, and two cross-language divergences died on the way
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. Slices 1-4b are uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+Slice 4 steps 1, 2 and 4 have landed: the v2 contract is frozen from the oracle, Go
+verifies it and applies it atomically, and the store-level chain is proven end to end.
+**Step 3 (Rust parity) and a transport for apply are still outstanding.**
+
+### Go now verifies v2 and applies it
+
+`go/internal/store/mutation_request.go` gained a `mutationRequestSpec` and the v2 path
+(`SignMutationRequestV2`, `VerifyMutationRequestV2Document`); v1 keeps its own entry points
+and bytes. All **34 frozen cases replay in Go** through a dedicated v32 loader, decoded
+with `UseNumber` so a case's numeric replacements behave like the frozen document's
+numbers — without that, `stale-epoch` would have failed with the wrong code, because a
+plain `map[string]any` turns every number into `float64` and `asInt` reads `json.Number`
+only.
+
+### The two divergences the corpus work exposed — both were fail-opens in Go
+
+1. **Floats.** Go's canonical encoder is plain `json.Marshal`, so Go would have *accepted*
+   a `recordPayload` containing `1.5` where the Python oracle refuses it. That is not
+   cosmetic: the body is inside `payloadDigest`, so accepting a body the oracle refuses
+   means Go can apply a mutation the contract does not authorize.
+   `validateMutationRecordPayload` now enforces the oracle's exact primitive set
+   (`null`/string/bool/integer/list/object-with-string-keys), including the depth bound.
+2. **Secret-key exemptions.** Go's shared control-record scan exempts keys ending in
+   `digest`/`reference`/`ref`/`id`/`type`/`provider`; the oracle's mutation-channel rule
+   has no such exemption. So `{"myTokenDigest": ...}` was refused by the oracle and
+   accepted by Go. `rejectMutationBodySecretKeys` now applies the oracle's exact rule to
+   the record body — *in addition* to the shared scan, so Go can never be looser than the
+   oracle — and a **new frozen case** (`secret-suffixed-key-in-record-body`) pins it for
+   every implementation, Rust included. The vector grew to 34 cases and its SHA changed to
+   `a650c633…eb8e6`.
+
+I did **not** change the shared rule (v1 and control-record validation depend on it) and I
+did not weaken the Python rule; the v2 path is where the two rules meet.
+
+### Schema v9 — the journal literally could not record an applied result
+
+Through v8, `control_operations` froze `result_status = 'PROPOSED'`, which encoded "nothing
+is ever applied". The first apply attempt failed the CHECK constraint, which is how this
+was found. v9 widens it to `PROPOSED|APPLIED`, **preserves every row**, recreates the
+frozen immutability triggers, and is **verified at open**: a store whose journal still
+cannot record an applied result is refused rather than served with a journal that
+misreports one. The V8→V9 test proves an operation row survives the upgrade — losing one
+would permit a double-apply — and that the same request is still an idempotent no-op after
+the upgrade.
+
+### `Control.ApplyMutation` is the production channel
+
+Every gate is deliberate and tested: the deployment cutover capability; a **durably
+Go-authoritative** domain; the live cutover revision/epoch/fencing token; the request's
+`actionId + executionEpoch`; the exact body the signer committed to; and a refusal for a
+**fenced** domain (`action`/`scheduler_run`/`wave`/`transfer`) whose mutations belong to
+the lease and admission path rather than to this channel. The record write, the operation
+journal row (`result_status = APPLIED`) and the control event are **one transaction** — a
+test proves that a rejected journal insert rolls the record back, and another proves the
+writer-lease cliff before commit does too.
+
+### Verification (local, this workspace, not CI)
+
+- `go vet ./...` clean; `go test ./... -count=1` → **all packages ok, exit 0**.
+- The Go coverage gate (CI command) → **PASS, 95.078258% (5042/5303)**. ⚠️ **That is only
+  4 statements above the 95.0% floor** — the thinnest margin of this session. The 21
+  remaining uncovered statements in this slice's files are `tx.Commit()`/`Rows.Scan`
+  failures and migration-statement failures, which need an `admissionFaultStage`-style hook
+  to reach; the next session must **add** coverage, not spend it, and should consider that
+  hook if the gate ever runs close on CI. (CI is Linux and loses Windows-only statements.)
+- `pytest` over the corpus, both mutation-request suites, the store catalog, foundation,
+  ownership contract, 5.0 evidence and evidence gates → **all passed**;
+  `check_zero_python_runtime.py` → **PASS 8/8**.
+- `gofmt` clean on every changed file (two needed real formatting; applied so the CRLF
+  working tree is preserved).
+- `release/native_runtime_go_control_store_v1.json` + its Python gate now state the truth:
+  v1 cannot authorize production apply, v2 does, `result_status` is
+  `PROPOSED|APPLIED`, the migration list runs 1..9, and the **scope is store API only** —
+  no internal HTTP route yet, no Rust parity.
+
+### Next executable task
+
+**Slice 4 step 3: Rust parity** in `rust/crates/deepseek-worker/src/mutation_request.rs`
+(v2 verification, the cross-revision refusals, and the new secret case), extending the
+existing `frozen_mutation_request_v17.rs` replay rather than adding a parallel harness.
+Then an authenticated internal route for `ApplyMutation`, and the provider-backed
+kill/takeover evidence that `EFFECT_RECONCILIATION_UNPROVEN` still needs.
+
+## Current continuation checkpoint — 2026-09-27 the v2 production-apply contract is frozen from the oracle
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. Slices 1-4a are uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+The maintainer approved production apply on a **versioned new revision**. Slice 4 step 1
+— "freeze the shape before code" — is done, and it was done in the order the plan set:
+**oracle first, then the corpus, then (next) the Go/Rust implementations**.
+
+### What is frozen now
+
+- **`control-mutation-request-v2` (compat v32)**, with exactly four differences from v1:
+  the schema identity, the operation (`apply-mutation`), the payload field set (adds
+  `recordPayload`), and a **distinct signature domain**. The envelope field set, the
+  canonical-JSON rule, the fencing/epoch/identity checks and every error code are shared,
+  so v1 is untouched. The distinct domain is the property that stops cross-revision
+  signature replay — `v1-signature-domain` is a frozen negative case, not a comment.
+- **`recordPayload` is bound by `payloadDigest`**, so a v2 apply can only write bytes the
+  signer committed to. It must be a JSON object. The canonical encoder accepts only
+  `null`/string/bool/int/list/object-with-string-keys — **no floats** — which is exactly
+  why the bytes can be reproduced identically in Python, Go and Rust; `record-body-float`
+  is a frozen refusal.
+- Secrets are still rejected, and the rule now covers the **record body**: a forbidden key
+  inside `recordPayload` is `MUTATION_REQUEST_SECRET_DETECTED`
+  (`secret-key-in-record-body`).
+
+### How the corpus was produced (and why that matters)
+
+`compat/native-runtime/v32/` holds the manifest, a README that states the v1/v2 diff
+table, and `control/mutation_request_v2_vector.json` with **33 negative cases**. The
+vector is **generated by the Python oracle, not hand-written**, and every case was
+**executed against the oracle before being committed** — the generator asserts each
+`error` code, so a case that did not actually fail would have aborted the write. Pinned
+SHA-256 `67550e0b98bc114ff6c8f604bfc35a04d990c526d232ca90b885cbcbfce59c15`.
+
+One case had to change for a real reason: the first secret case embedded the literal
+`age-secret-key-…` in the vector, which the corpus's own "no secret material" gate
+rejects. Rather than weaken that gate, the case now triggers the same rule through a
+forbidden **key** (`privateKey`) inside the record body — which also proves the new body
+path is scanned.
+
+### v1 is provably unchanged
+
+The v17 vector and every existing v1 test still pass, and the new test file asserts both
+cross-refusals: the **v1** verifier refuses a v2 document and the **v2** verifier refuses a
+v1 document (`MUTATION_REQUEST_SCHEMA_INVALID`). The corpus gate also pins v32 **by id and
+by disjointness from v17** instead of only bumping a count from 31 to 32.
+
+### Verification (local, this workspace, not CI)
+
+- `pytest tests/test_native_runtime_corpus.py tests/test_native_runtime_mutation_request.py
+  tests/test_native_runtime_mutation_request_v2.py tests/test_native_runtime_authority_request.py
+  tests/test_native_runtime_foundation.py tests/test_native_runtime_ownership_contract.py
+  tests/test_native_runtime_go_control_store.py tests/test_native_runtime_5_0_evidence.py
+  tests/test_native_runtime_evidence_gate.py -q` → **all passed**.
+- `validate_corpora()` → **32 manifests**, last one
+  `control-mutation-request-v2-semantics-v32`.
+- `ruff check .` clean; `mypy` on the two changed Python files → **no issues**.
+- No Go or Rust change in this slice, so the Go gates were not re-run here; the Go
+  `native-go` gate is unaffected until step 2 lands.
+
+### Next executable task
+
+**Slice 4 step 2: the Go v2 verifier and the atomic apply**, then step 3 (Rust parity),
+step 4 (end-to-end on a promoted `policy` domain), step 5 (flip
+`operations.production_apply*` with the evidence). Details and the exact requirements are
+in the "Slice 4" section of
+[`control-cutover-authorization-plan.md`](control-cutover-authorization-plan.md).
+
+## Current continuation checkpoint — 2026-09-27 production authority stops being a caller-supplied flag
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. Slices 1-3 are uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+Two guards were **inverted placeholders**: they refused the production path precisely
+when a caller *claimed* production authority, without ever consulting durable state.
+
+| Site | Before | Now |
+| --- | --- | --- |
+| `Coordinator.ExecuteStorageAction` | `if c.authoritative { ErrCutoverNotAuthorized }` | durable gate |
+| `Coordinator.ReconcileStorageAction` | same | durable gate |
+| `Coordinator.ReconcileClaimedStorageAction` | same | durable gate |
+| `Coordinator.ExecuteClaimedStorageAction` | same | durable gate |
+
+### What is enforced now
+
+A caller's flag is a **claim**, and `assertProductionAuthority` requires it to be backed
+by the durable cutover record: `store.IsGoAuthoritative("action")` reads the
+`control_cutover` row in a transaction that verifies the schema, so a missing or corrupt
+row is an **error** rather than a silent "not authoritative" (a silent false would look
+like a safe refusal; a silent true would grant authority). A claim with no such record,
+or with a larger epoch, is refused `CUTOVER_NOT_AUTHORIZED` **before any durable write**,
+and the cutover record is left untouched — asserted. A coordinator that makes no claim
+keeps the unchanged non-authoritative qualification path and never consults the record.
+
+That is the §五.4 property applied to the execution plane: authority comes from the
+authority claim/takeover flow, not from what a worker asserts about itself.
+
+### The legal path is proven, end to end
+
+`promotedActionDomain` opens a real authority-enabled store, claims a
+`control-authority-v1` genesis (built through the exported digest helpers), and promotes
+the `action` domain `shadow → dual_evaluate → go_authoritative` through slice 1's
+authorized cutover. With that, `ExecuteStorageAction` on `WithAuthoritative(true)` runs
+for real: the dispatch intent is durably bound, the provider effect identity comes back,
+and the action record reaches terminal `SUCCEEDED`. Against an unpromoted store, all four
+entry points refuse and **no** action row and **no** cutover movement exist afterwards.
+
+### The production-mutation question is a contract question, and it is now precise
+
+`MutateProduction` stays `DenyMutation()`, and `AcceptMutation` still refuses once the
+domain is Go-authoritative. The reason is no longer an omission and is now documented at
+the refusal site: the frozen `control-mutation-request-v1` carries **exactly one** intent,
+`shadow-compare`, whose payload is a comparison expectation
+(`intent`/`recordId`/`revision`/`state`) with **no record body**. It cannot authorize a
+production mutation, and applying it would reinterpret a frozen intent as production
+authorization — which the workspace rules forbid. Authorizing production apply needs an
+**explicitly approved production intent/operation on a versioned revision of that
+contract**; that is a decision for the maintainer, not a silent edit. The refusal writes
+nothing, and a test pins that.
+
+### Verification (local, this workspace, not CI)
+
+- `go vet ./...` clean; `go test ./... -count=1` → **all packages ok, exit 0**.
+- The Go coverage gate (CI command) → **PASS, 95.195487% (4894/5141)**, 10 statements
+  above the 95.0% floor.
+- `python scripts/check_zero_python_runtime.py` → **PASS 8/8**; the catalog gate now also
+  asserts the durable gate exists in `reconciler.go`/`cutover.go` and that the catalog's
+  `production_authority` block matches the four gated entry points.
+- `gofmt` clean on every changed file (normalised line endings).
+- Note for the next session: the coverage script runs `go test` **per package without
+  `-coverpkg`**, so a function is only covered by tests *in its own package*. The store
+  test for `IsGoAuthoritative` had to live in the store package even though the action
+  package is its consumer; that alone was the 0.4% gate failure this slice hit and fixed.
+
+### Next executable task
+
+**Slice 4, and it is now approved rather than pending.** The maintainer approved
+(2026-09-27) adding a production intent/operation on a **versioned new revision** —
+`control-mutation-request-v2` with `apply-mutation` — while **v1 semantics stay
+byte-identical** (do not touch v1, its digest rules, its field list, or the v17 compat
+corpus). The full ordered plan is the "Slice 4" section of
+[`control-cutover-authorization-plan.md`](control-cutover-authorization-plan.md); start by
+freezing the v2 document shape and its v18 compat vector *before* writing code.
+
+Independently of that (and needed for `EFFECT_RECONCILIATION_UNPROVEN` either way): the
+provider-backed kill/takeover reconciliation evidence, which requires a real
+MinIO/Three-MinIO run rather than library results.
+
+## Current continuation checkpoint — 2026-09-27 the internal control plane stops being anonymous
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. This slice (and the one below it) is
+uncommitted. No push, merge, or release. `release/native_runtime_5_0_evidence_v1.json`
+is still `NOT_READY` (`exact_head: null`). The whole migration is **未完成**.
+
+The previous checkpoint ended with "`/internal/*` has no caller authentication, so
+`AuthorizeCutover` must not be enabled in any deployment". That is now false, and the
+cutover capability can be turned on safely.
+
+### What is enforced
+
+- **Every `/internal/*` request needs `Authorization: Bearer $DEEPSEEKD_INTERNAL_BEARER`**
+  (minimum 32 characters) **from a loopback peer**, compared with
+  `crypto/subtle.ConstantTimeCompare`. The scheme is parsed exactly: a bare `Bearer`, a
+  raw token, `Basic …`, and trailing-whitespace-only credentials are all *not*
+  credentials.
+- **Loopback is required independently of `DEEPSEEKD_LISTEN`.** Widening the listener can
+  no longer expose the control plane; `docker-compose.native.yml`'s
+  `DEEPSEEKD_LISTEN: 0.0.0.0:8090` is therefore harmless rather than a hazard.
+- **An unconfigured bearer serves no control plane.** The routes stay mounted and answer
+  `401 INTERNAL_API_UNAUTHORIZED` with a `WWW-Authenticate: Bearer` challenge. Missing,
+  malformed, wrong, and unconfigured credentials get the *same* answer, so the response
+  cannot be used to probe which is true. That is the shipped default.
+- **`DEEPSEEKD_CONTROL_AUTHORITY=1` is refused by `config.Load` unless a bearer is
+  configured**, and `lifecycle` passes it as `AuthorizeCutover`. The migration authority
+  can therefore no longer be claimed over an unauthenticated channel — the coupling is
+  mechanical, not a documented convention.
+- `Register(mux, control, bearer)` makes the credential a **required argument**, so no
+  caller can mount the control plane unauthenticated by omission. `Handler()` now means
+  "public plane only".
+
+The public plane is untouched: `/healthz`, `/api/control/status` and `/api/*` keep
+answering without a credential, and the Rust edge still 404s `/internal/*` (its own
+`public_control_boundary.rs` asserts it), so nothing that worked before needs a token.
+
+### What this slice did not do
+
+- No deployment surface *sets* the bearer yet. `docker-compose.native.yml` sets neither
+  variable, so its control plane is intentionally unreachable — including from sibling
+  containers. Enabling promotion there is an operator edit, which is the point.
+- **`MutateProduction` is still `DenyMutation()`.** Owning the control plane is not the
+  same as serving production writes; that is the next slice.
+- No per-domain signed promotion request; the claim still authorizes *the deployment*.
+
+### What the tests found
+
+1. **The `100-continue` test was a hidden dependency on the unauth path.**
+   `supervisor_test.go` writes a raw `POST /internal/shadow/evaluate` with
+   `Expect: 100-continue` and asserts the server sends `100` — which only happens once a
+   handler *reads* the body. An auth middleware that rejects without reading would have
+   turned that into a `401`. The raw request now carries the credential, so the test still
+   proves "the handler began reading", which is what it was always about.
+2. **Two `Start(...)` call sites**, not one, took the same literal config; both now declare
+   the bearer.
+3. The mechanical part was `http.Post(`/`http.Get(` → a bearer-injecting `*http.Client` in
+   `shadow_test.go` (27 call sites). **The assertions did not move**: every status code the
+   file already pinned is still pinned, and the requests are now authenticated instead of
+   anonymous, which is exactly the behaviour change.
+
+### Verification (local, this workspace, not CI)
+
+- `go vet ./...` clean; `go test ./... -count=1` → **all packages ok, exit 0** (including
+  the two real-process `deepseekd` tests, which now start the daemon with a bearer and
+  present it).
+- `go test ./internal/api/ ./internal/config/ ./internal/lifecycle/` → ok, including the
+  new started-runtime end-to-end test: an authenticated `POST /internal/shadow/evaluate`
+  creates real control state that the authenticated snapshot reports back with the
+  expected writer identity, while the anonymous client gets `401` and `/healthz` still
+  answers.
+- `python scripts/check_zero_python_runtime.py` → **PASS 8/8**;
+  `python scripts/control_plane_shadow.py --check` → `{"ok": true, "passed": 8}`.
+- `python -m pytest tests/test_native_runtime_go_control_store.py
+  tests/test_native_runtime_foundation.py tests/test_native_runtime_ownership_contract.py
+  tests/test_check_zero_python_runtime.py tests/test_native_runtime_5_0_evidence.py
+  tests/test_native_runtime_evidence_gate.py -q` → **all passed**.
+- `gofmt` clean on every changed file (normalised line endings; the checkout is CRLF).
+- The catalog gate now asserts the **coupling** instead of the absence of the capability:
+  `AuthorizeCutover: cfg.ControlAuthority` in `lifecycle`, the refusal
+  `cfg.ControlAuthority && cfg.InternalAPIBearer == ""` in `config`, the constant-time
+  comparison and loopback check in `api/auth.go`, and every catalog-declared internal
+  route mounted behind `RequireInternalBearer(internal, bearer)`. That is a stronger gate
+  than the one it replaces, and Go tests prove the behaviour.
+- `docs/GO_PUBLIC_API.md` and the migration runbook document the credential, the loopback
+  rule, the anonymous default, and the authority coupling.
+- The Go coverage gate (`check_go_coverage.py --dir . --min 95.0 --profile coverage.out`,
+  the CI command): **PASS, 95.186852% (4865/5111)** — 9 statements above the 95.0% floor,
+  up from 7 when this slice started. CI runs on Linux where a Windows-only path is not
+  covered, so headroom still matters: the next slice must **add** coverage, not spend it.
+
+### Next executable task
+
+The **production mutation channel**: `MutateProduction` through the authenticated internal
+plane, so a Go-authoritative domain can actually serve writes. It already has the pieces it
+needs — `AcceptMutation` verifies a signed `control-mutation-request-v1` against the live
+cutover fence/epoch/revision and journals `PROPOSED`, and `ExecuteClaimedStorageAction` is
+gated on `c.authoritative` being *false* today, which is the inverted placeholder that slice
+has to replace.
+
+## Current continuation checkpoint — 2026-09-27 the control authority becomes a state machine, and a domain can finally be promoted
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. This slice is uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+This slice attacks the code half of `CONTROL_CUTOVER_INCOMPLETE` — the blocker that said
+"Go TransitionCutover still returns ErrCutoverNotAuthorized for states requiring
+production authorization". Measured before the slice: `cutover.go` refused
+**unconditionally** at `if cutoverRequiresAuthorization(req.To)`, so **no Go control
+domain could ever become an authoritative owner**, whatever the evidence.
+
+### What is now true that was not
+
+`control-authority-v1` was a *library* in this repo (`go/internal/store/authority.go`: the
+frozen checkpoint format, its digests, the chain rule, the monotonic head CAS) with no
+persistence behind it. **Schema v8** persists it and binds it to the cutover:
+
+- `control_authority_head` — one row, CAS-updated, delete refused.
+- `control_authority_checkpoints` — append-only; generation is the key.
+- `control_cutover_authorizations` — append-only; binds a promotion to the authority tip
+  it consumed (domain, transfer id, generation + digest, from/to state, previous/next
+  revision, epoch and fencing token).
+- `ClaimControlAuthority(checkpoint)` — the **only** path that may advance the authority
+  head: writer fence, checkpoint integrity, the frozen monotonic CAS, journal, head
+  advance, one transaction. An exact replay of the tip is idempotent and writes nothing.
+- `TransitionCutover` now takes `Authority *AuthorityCheckpoint`. A promotion needs a
+  non-nil checkpoint that is byte-identically the live tip, **and** a deployment opened
+  with `OpenOptions.AuthorizeCutover`. The domain's revision/epoch/fencing token advance
+  only inside that transaction, and the consumed authority is journaled.
+
+### The asymmetry is deliberate, and it is the safety property
+
+Promotion is gated; **de-promotion is not**. `python_shadow` → `go_authoritative` and
+`go_authoritative` → `shadow` still need no authority, so ownership can always be rolled
+back — a cutover mistake must never be unrecoverable. The refusal detail is split too:
+the bare `ErrCutoverNotAuthorized` (what the existing `!=` test compares) means "this
+deployment may not authorize", while `ErrCutoverAuthorityStale` means "you presented
+something that is not the live authority".
+
+### What did *not* change, on purpose
+
+- **The default deployment stays mechanically unable to promote.** `deepseekd` does not
+  set `AuthorizeCutover`; `tests/test_native_runtime_go_control_store.py` now asserts that
+  absence, so wiring it on by accident fails a gate. The loopback
+  `/internal/cutover/transition` endpoint therefore gains **no** remotely reachable
+  capability.
+- **No frozen contract was touched.** `control-authority-v1` / AuthorityCheckpoint v1 and
+  every digest rule are unchanged; the slice only persists documents the library already
+  verified. The additive-field support both sides already have (`checkpointDocument` in
+  Go, `_payload_for_digest` in Python, which hashes every key except the three envelope
+  fields) was *not* needed in the end.
+- **`MutateProduction` is still `DenyMutation()`.** Authorizing the ownership change is
+  not the same as authorizing production mutation; that is the separate open item in
+  `4.9.3-plan.md` and the next slice.
+
+### What the tests found
+
+Three of my own expectations were wrong and the assertions, not the code, moved:
+a first claim that skips genesis is `STALE_AUTHORITY_WRITER` (not
+`AUTHORITY_GENERATION_GAP`), a "gap" fixture derived from generation 2 was actually a
+*legal* next checkpoint, and a secret-bearing checkpoint is refused by validation
+**before** any digest is recomputed, so it cannot be resealed. Each is now stated as the
+measured behaviour.
+
+Nine historical-schema fixtures (`action_admission`, `action_reconciliation`,
+`action_verification`, `storage_dispatch`, `operation`, `cutover`, and `Control.Rollback`)
+had to learn about the v8 objects: a pre-v8 shape with v8 tables present is exactly the
+"unexpected sqlite object" that `validateControlUserObjects` exists to catch, so the
+fixtures drop them. `Rollback` gained the same three drops, or a rollback to schema 0
+would have left orphan tables. **No gate was weakened** — the fixtures gained objects to
+remove, never assertions to skip.
+
+### Verification (local, this workspace, not CI)
+
+- `go vet ./...` → clean; `go test ./... -count=1` → **all packages ok**, exit 0.
+- `go test ./internal/store/ -count=1` → **ok** (58 s), including the 9 upgraded fixtures.
+- `go test ./internal/store/ -run TestControlAuthorityClaimAdvancesAtMostOnceUnderConcurrency
+  -count=20` → ok (the concurrency case is deterministic under repetition).
+- `python scripts/check_zero_python_runtime.py` → **PASS 8/8**;
+  `python scripts/control_plane_shadow.py --check` → `{"ok": true, "passed": 8}`.
+- `python -m pytest tests/test_native_runtime_go_control_store.py
+  tests/test_native_runtime_foundation.py tests/test_native_runtime_ownership_contract.py
+  tests/test_check_zero_python_runtime.py -q` → **all passed**.
+- `gofmt` clean on every changed/new file (checked with line endings normalised: the local
+  checkout is CRLF, so a bare `gofmt -l` flags every file in the repo).
+- `ruff check .` → clean. `mypy .` → **1 error, not in this slice**:
+  `tasks/native-runtime/skills_parity_probe.py:539`, a `dict[str, list[Never]]` vs
+  `dict[str, list[str]]` invariance complaint. That file is committed and untouched by
+  this slice, and the local interpreter is **mypy 2.0.0** while the repo only requires
+  `mypy>=1.8.0`, so this is a local-toolchain difference, not a measured regression.
+  Re-check under the version CI resolves before treating it as a repo defect. The Python
+  file this slice did change (`tests/test_native_runtime_go_control_store.py`) is clean.
+- **`go test -race` cannot run on this host.** It fails `exit status 0xc0000139`
+  (`STATUS_ENTRYPOINT_NOT_FOUND`) on **untouched** packages too, e.g.
+  `go test -race ./internal/config/`; the module builds `CGO_ENABLED=0` and this Windows
+  toolchain has no working race runtime. It stays a CI (Linux) gate — **not** a local PASS.
+- The Go coverage gate (`python scripts/check_go_coverage.py --dir . --min 95.0
+  --profile coverage.out`, the CI command): **PASS, 95.145056% (4821/5067)** as measured
+  for *that* slice. Slice 2 re-measured the module at **95.186852% (4865/5111)** — see the
+  checkpoint above for the current figure. Either way the margin is only single-digit
+  statements, and CI runs on Linux where a Windows-only path is not covered, so the
+  *next* slice must **add** headroom rather than spend it. `internal/store` alone
+  measured 93.4% of statements.
+
+### Not done, and the next executable task
+
+`tasks/todo.md` and `tasks/plan.md` are **gate-frozen**:
+`tests/test_native_runtime_ownership_contract.py::test_existing_4_8_0_plan_artifacts_are_unchanged`
+requires `git diff` to be empty for both. They are historical records, not trackers —
+the live trackers are this file and [`migration-matrix.md`](migration-matrix.md), plus this
+slice's [`control-cutover-authorization-plan.md`](control-cutover-authorization-plan.md).
+Editing `todo.md` "to keep it current" breaks a gate.
+
+This is **not** a cutover. No domain is flipped, `current_owner` in
+`release/native_runtime_ownership_v1.json` is untouched, and the store catalog still
+records `mode: shadow`. `CONTROL_CUTOVER_INCOMPLETE` is **partially** cleared: the state
+machine is real and proven, the authorization channel is not.
+
+Next, in dependency order:
+
+1. **Authenticate the internal control API.** `/internal/*` has no caller authentication,
+   so `AuthorizeCutover` must not be enabled in any deployment until that lands. This is
+   also what makes a claim non-self-issued.
+2. **The production mutation channel** — `MutateProduction` through the authenticated
+   signed request, so a Go-authoritative domain can actually serve writes.
+3. Then the per-domain evidence and the ownership-contract revision.
+
+## Current continuation checkpoint — 2026-09-27 the cutover: what it needs, and the gate that found a bug
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. This slice is uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+### The switch is not a code change, and it is not due
+
+`release/native_runtime_ownership_v1.json` carries the switch per domain: `current_owner`
+flips `python` -> the target. Measured: **0 of the 48 domains are flipped** — 47 are
+`python`, and the one non-Python entry (`browser_ui`, `typescript`) is `production: false`.
+`skills_store` is in the `4.9.4` group (`memory_store`, `reminders_store`,
+`project_metadata_store`), and the repository is at **4.8.0**. The file is
+`status: accepted` with `approved_by: ["leizd"]`, so flipping a domain **amends a signed
+contract** and jumps its schedule — that is the maintainer's signature, not mine.
+
+`release/native_runtime_5_0_evidence_v1.json` lists six blockers. All six are outside this
+surface's code: the public edge's parity (`PUBLIC_EDGE_AUTHORITY_INCOMPLETE`), Go's
+`TransitionCutover` (`CONTROL_CUTOVER_INCOMPLETE`), the worker's effect reconciliation
+(`EFFECT_RECONCILIATION_UNPROVEN`), and three **evidence** blockers — live provider runs
+(Three-MinIO, two-Fleet, SIGKILL/takeover), exact-head CI and Evidence Assembly, and
+live-workload-measured zero-Python artifacts. None of them is a skills-surface change, and
+none can be produced from this working tree.
+
+### What this slice did: ran the cutover's own gate, and it failed
+
+`python scripts/check_zero_python_runtime.py` — the executable Zero-Python release gate —
+returned **7/8**, failing `process_tree_isolation`:
+
+```
+[FAIL] process_tree_isolation: Rust production code spawns forbidden process:
+       rust\crates\deepseek-policy\src\skills\eval.rs spawns python
+```
+
+The check's rule is a heuristic: a production `.rs` file that contains `command::new` **and**
+a quoted `"python"` token. `skills/eval.rs` had both — `git_commit` ran
+`std::process::Command::new("git")` to stamp the report, and the report's `environment` block
+carries the field name `"python"` (mirroring the oracle's `{"os", "python", "ci"}`).
+
+**The gate was not touched.** Weakening a release gate to accommodate the code under it is
+the wrong direction, and the gate's *intent* — no Python subprocess in the native runtime —
+is exactly right. The subprocess came out instead: `git_commit` now reports an empty commit,
+which it already did in any container, and the divergence was already recorded for the CI
+source-context half. The report's field shape is unchanged. Re-run: **8/8 PASS**.
+
+That is the honest shape of "继续完成切换": the mechanical half is verified
+(`mechanical_writer_denial` covers all 29 Go control domains and all 4 Rust data domains,
+`skills_store` among them), and the switch itself is the maintainer's call.
+
+### The amendment this surface would need (prepared, not applied)
+
+**Full text: [`cutover-4.9.4-amendment.md`](cutover-4.9.4-amendment.md).** The short version is
+that the contract's **own validator** freezes the fields a cutover would move:
+`current_production_authority` must stay `python` ("4.8.1 production authority must remain
+python"), `source_commit` must stay the 4.8.0 merge SHA, and `current_owner` must be `python`
+or `typescript` **for every domain** — so `"current_owner": "rust"` is **invalid**, not an
+edit. The file is a frozen record of the 4.8.0 snapshot; cutting a domain over is a **new
+accepted revision** (validator + header + source version/commit + the two tests that pin "no
+cutover yet" + the evidence file), and two of its four preconditions are parity/evidence
+conditions no code change in this tree can satisfy.
+
+For `skills_store` and its three 4.9.4 siblings, the switch would be one field each:
+
+```diff
+   {"id": "skills_store", "plane": "data", "current_owner": "python",
+    "target_owner": "rust", "cutover": "4.9.4", "durable_store": "rust_data"}
+```
+```diff
+- "current_owner": "python",
++ "current_owner": "rust",
+```
+
+…plus, in the same file, `current_production_authority` and the `source_version`. That is a
+contract revision and it is not written here. What has to be true before it is signed:
+
+1. The 4.9.4 group's stores are all `rust_data` and each one's Python writers are denied —
+   `skills_store`'s is verified (see the matrix's skills row).
+2. `check_zero_python_runtime.py` is 8/8 on the exact head that will be cut over.
+3. Exact-head CI plus Evidence Assembly exists for that head — which needs a **push**, and
+   that is a separate approval.
+4. The live-workload measurements the readiness file asks for.
+
+### Verification (local, this workspace, not CI)
+
+- `python scripts/check_zero_python_runtime.py` → **PASS, 8/8** (was 7/8 before this slice).
+- `python tasks/native-runtime/skills_parity_probe.py …` → **PASS, 655 cases, 0
+  differences** (`commit` and `environment.python` normalized; see below).
+- `cargo fmt --all -- --check` clean; workspace clippy (the CI command) clean.
+
+## Current continuation checkpoint — 2026-09-27 the eval engine lands; the skills surface is dispatched end to end
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. This slice is uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+**Every one of the 52 `action == …` branches in
+`deepseek_infra/web/routes/skills.py` now has a native branch**, and
+`ACTION_NOT_MIGRATED` is an empty array — it stays so the next surface arrives with one, and
+the route test asserts its contents rather than a pinned name. The last five to land are
+`eval_report`, `eval_upgrade_gate`, `upgrade_pack`, `diff_versions` and `diff_pack_versions`
+— the eval engine and the four actions whose payload embeds its verdict.
+
+**One branch is dispatched but still refuses**: `run` with an API key. Without a key it
+returns the oracle's own `MISSING_API_KEY`; with one it is a precise
+`NATIVE_SKILLS_ACTION_NOT_READY` because the model call is not ported. That is the honest
+state of "52/52": every branch is dispatched, one is a named refusal.
+
+### The engine, complete
+
+`skills/eval.rs` now carries both halves of `eval.py`: the case store, and the report engine
+— `run_case` (a project per case when the case needs one, `runner::offline` with
+`persist=true`, five metrics), `report` (the corpus, one `run_case` each, then the assembly),
+`upgrade_gate_for` and `score_diff`.
+
+The five actions are **writers, not reads**: every case persists a run and may create its own
+eval project, so they carry both gates (`skills_store` and `project_metadata_store`).
+
+### The media fixture, and a mistake the probe caught
+
+`_prepare_media_fixture` registers a media row and substitutes the id it generated.
+**Six** built-in Skills (`audio_transcript_summarizer`, `image_explainer`, `media_to_report`,
+`pdf_reader`, `video_brief_generator`, `webpage_summarizer`) ship an `exampleInputs` entry
+that references `media_example`, so a `scope: "all"` report walks six such cases.
+
+The first version refused the **whole report** for those cases. The probe caught it
+immediately — `eval_report` with `scope: "all"` returned the refusal where the oracle
+returns a report — and that would have been a far larger hole than one case: six cases it
+cannot prepare would have taken the entire corpus report down. **Per-case is the right
+granularity**: the refusal is recorded as that case's failure, the case is not run at all
+(scoring input nobody prepared is exactly the silent difference the refusal exists to
+avoid), and the report completes.
+
+Consequence for the comparison: `scope: "all"` is **not** byte-comparable while those six
+cases differ by design, so the probe drives the per-Skill and per-Pack scopes and names the
+six in a comment. `media_fixture`'s refusal has its own unit test.
+
+### Recorded divergences (all measured, none silent)
+
+- The six media-fixture cases above.
+- `environment.python` is the oracle's interpreter; `commit` reads `git rev-parse` on both
+  sides but the CI source-context half of `evidence_revision` is not ported.
+- `metrics.latencyMs` is wall-clock, so the probe normalizes it (two oracle runs disagree too).
+- `ToolPolicy`'s default `audit=True` writes an audit entry per evaluation in the oracle; this
+  port uses the crate's no-op sink.
+- A `forbidden` pattern Python's `re` accepts but `regex` cannot compile is refused rather
+  than treated as a non-match.
+
+### Verification (local, this workspace, not CI)
+
+- `python tasks/native-runtime/skills_parity_probe.py …` → **PASS, 655 cases, 0
+  differences**.
+- `cargo test -p deepseek-gateway --test skills_routes` → **6 passed**.
+- `cargo test -p deepseek-policy --lib skills::` → **12 passed**.
+- `cargo fmt --all -- --check` clean; workspace clippy (the CI command) clean.
+
+### Not done, and the next executable task
+
+The skills surface is dispatched; what remains is **完成切换**, which is a deployment
+action and not a code one: the default launcher and image still start Python, and `.skills`
+plus `project.json` stay Python's until a process runs `python_disabled`. Beyond that, the
+online `run` needs the model call, and the rest of the file family is a separate surface.
+
+## Current continuation checkpoint — 2026-09-27 the tool-policy blocker was a binding
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. This slice is uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+`ACTION_NOT_MIGRATED` is again **unchanged at 5** — this slice clears a blocker rather than
+wiring. The previous checkpoint listed three unported subsystems behind `_run_case`; one of
+them is now done, and it turned out **not** to be a port.
+
+### `evaluate_skill_tool` was a binding, not a subsystem
+
+`deepseek_infra/infra/skills/permissions.py` is 49 lines and its whole job is to bind a
+Skill's `allowedTools` to the Tool Policy Engine. The engine it binds to —
+`ToolPolicy`, `ToolPolicyConfig`, `evaluate`, `ToolPolicyDecision`, the metadata table,
+the SSRF / path / secret / taint guards — is **already ported** in
+`deepseek-policy/src/tool_policy.rs`, field for field, including
+`ToolPolicyConfig::default()` reading the same `ToolPolicySettings` the oracle reads.
+
+So `skills::permissions` is a new module of ~40 lines: build a policy with the Skill's
+grant, `enforce_schema: false` and the oracle's scope (`project:<id>` when a project is
+bound, else `skill:<skillId or unknown>`), then evaluate with an empty argument object.
+`eval::tool_policy_pass` is the metric that uses it.
+
+**Why the earlier estimate was wrong**: the engine's file is 1 800 lines, and I read the
+class at line 568 of the *Python* file and concluded the port was missing — without
+grepping the Rust crate for `ToolPolicy`. The Rust type exists and is more complete than
+the binding needs.
+
+**One divergence, in a side effect**: the oracle's `ToolPolicy` defaults to `audit=True`
+and writes an audit entry per evaluation, so its `evaluate_skill_tool` leaves a line in
+the tool-audit directory; this port evaluates with the crate's default (no-op) sink, so
+nothing is written. The returned decision is unaffected.
+
+### Verification
+
+- `python tasks/native-runtime/skills_parity_probe.py …` → **PASS, 645 cases, 0
+  differences** (72 new: four Skill grants × nine tool names through
+  `evaluate_skill_tool`'s `to_dict()`, and the same four × nine cases through the metric).
+- `cargo test -p deepseek-policy --lib skills::` → **11 passed** (three new in `permissions`).
+- `cargo fmt --all -- --check` clean; workspace clippy (the CI command) clean.
+
+### Not done, and the next executable task
+
+Two blockers remain for `_run_case`, and both are already scoped:
+
+1. **Media ingestion.** Only a case whose input references the `media_example` fixture needs it,
+   so the plan is a precise refusal for that case rather than porting the pipeline.
+2. **Python `re`** for a case's `forbidden` patterns — `content_pass` already uses the `regex`
+   crate and refuses a pattern that cannot compile.
+
+With those, `_run_case` plus `build_skill_eval_report`'s existing assembly is the whole of the
+remaining work, and then the five actions wire. `projects::create_project`
+(`entropy`-taking) and `projects::export_project` are the two project-side calls to confirm.
+
+## Current continuation checkpoint — 2026-09-27 the eval engine, split at its seam
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. This slice is uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+`ACTION_NOT_MIGRATED` is **unchanged at 5** — nothing was wired this slice. What landed is
+the larger half of the dependency those five share: `deepseek-policy/src/skills/eval.rs`
+grew from the case store into the **scoring, aggregation and comparison** half of
+`build_skill_eval_report`, all of it compared against the unmodified oracle.
+
+### Where the engine splits, and why
+
+`_run_case` is the execution half: it calls `run_skill(..., offline=True, persist=True)`,
+creates a real project per case when the case needs one, prepares the media fixture, and
+scores five metrics. Three things it needs are **not ported**, and each is a subsystem
+rather than a function:
+
+| missing | what it is | what the port does instead |
+| --- | --- | --- |
+| media ingestion | `ingestion.register_from_payload` + processing, for a case whose input references `media_example` | refuses that case by name; it will not score an input it did not prepare |
+| `permissions.evaluate_skill_tool` | the `deniedTools` half of the tool-policy metric | refusal, same reason — no Rust port exists |
+| Python `re` | a case's `forbidden` patterns | the `regex` crate, and a pattern Python accepts but `regex` cannot compile is a refusal, not a silent non-match |
+
+Everything else in `build_skill_eval_report` is a function of `case_results`, so it is
+ported: `_json_path`, `_artifact_pass`, `_content_pass`, `_sample_input`, `_synthetic_case`,
+`_selected_skill_ids`, `_pack_membership`, `_cases_for_skills`, `_dedupe_case_results`,
+`_ratio`, `_aggregate_result`, `_skill_results`, `_pack_results`, `_compare_item`,
+`compare_reports`, and the assembly itself as `report_from_results`. `upgrade_gate` is the
+`eval_aware_upgrade_gate` extraction, and `git_commit` / `platform_system` feed the report's
+identity fields.
+
+### Recorded divergences (the report's own bytes)
+
+- `environment.python` is the oracle's `platform.python_version()`; the port reports the OS
+  it maps and an empty interpreter. `environment.os` is mapped (`windows` -> `Windows`).
+- `commit` runs `git rev-parse --short=12 HEAD` on both sides, so a checkout agrees; the
+  **source-context** half of `evidence_revision` (the CI path, where the tested revision is
+  handed in) is not ported, so a CI run would report `unknown`.
+- `metrics.latencyMs` is a wall-clock measurement and can never match; the probe normalizes
+  it, as it does `dry_run`'s timestamps.
+
+### What the comparison found
+
+`skills_parity_probe.py` grew from 523 to **573 cases**, and the assembly is driven with
+`_run_case` stubbed by a fixture — the **execution** half is stubbed, not the subject, so
+aggregation, scoring and the baseline comparison are still the oracle's own code.
+
+Three divergences, all in this port:
+
+1. `selected_skill_ids` passed `builtin_only = true` to `Registry::list`, so the custom
+   Skills were missing from the "all" scope (18 against 19).
+2. `Registry::list` does **not** sort, while the oracle's `list_skills` sorts by
+   `(bool(builtin) is False, name)` — built-ins first, then custom, each by display name.
+   The catalog never noticed because it sorts its own items; the eval selection applies the
+   sort locally. **This is worth a look on its own**: `list` is the oracle for
+   `list_skills`, and any other caller of `list` whose order is observable has the same gap.
+3. The port's own test expectations for `compare_reports` were wrong twice — a PASS->FAIL
+   transition is a *new failure*, not a score drop — which the unit tests caught before the
+   probe did.
+
+### Verification (local, this workspace, not CI)
+
+- `python tasks/native-runtime/skills_parity_probe.py …` → **PASS, 573 cases, 0
+  differences**.
+- `cargo test -p deepseek-policy --lib skills::eval` → **8 passed** (five new: `json_path`,
+  `content_pass`, `artifact_pass`, `sample_input`, `compare_reports`).
+- `cargo fmt --all -- --check` clean; workspace clippy (the CI command) clean.
+
+### Not done, and the next executable task
+
+Five actions still answer `501`, and the remaining work is `_run_case` plus the wiring of
+`eval_report`, `diff_versions`, `diff_pack_versions`, `upgrade_pack` and `eval_upgrade_gate`.
+Three of the five need nothing new beyond `_run_case`; `diff_versions` / `diff_pack_versions`
+go through `_score_diff` -> `eval_aware_upgrade_gate` -> the report, whose extraction is
+already ported.
+
+Next executable slice, in order:
+
+1. `permissions.evaluate_skill_tool` — the smallest missing piece, and the only one that is
+   pure policy rather than I/O.
+2. `_run_case` with the media path refused, then the five actions.
+
+## Current continuation checkpoint — 2026-09-27 the eval case store, and the last child store Python stops writing
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. This slice is uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+The eval **case store** is wired: `list_eval_cases` reads, `create_eval_case` and
+`delete_eval_case` write. `ACTION_NOT_MIGRATED` fell from 8 names to **5**, so the native
+edge now serves **47 of the 52** `action == …` branches in
+`deepseek_infra/web/routes/skills.py` — measured, not counted: 47 arms + 5 names, no
+overlap, nothing unaccounted for.
+
+This is a **new module**, `deepseek-policy/src/skills/eval.rs`, not a wiring of an existing
+one: only the case half of `eval.py` is ported — `normalize_eval_case`,
+`load_case_file` / `load_eval_cases`, `save_eval_case`, `delete_eval_case` — over the golden
+corpus and `.skills/eval_cases.jsonl`. The module's header says why the report half is not
+there.
+
+### The last child store closes the third place
+
+`.skills/eval_cases.jsonl` was the last thing under `.skills/` still outside
+`registry.skill_store_scope()`, listed there as "deliberately **not** gated: Rust writes
+none of them". `skills::eval::save` / `delete` make that false, so `eval.save_eval_case`
+and `eval.delete_eval_case` now take the scope — and with that **every** child store under
+`.skills/` is gated on the Python side, which is the state the handover needs.
+
+`tests/test_skill_registry_failure_paths_332.py` no longer has an "outside" case to assert:
+its docstring said two of the three ungated stores had already moved, and now the third has.
+It asserts each store's write is denied under `python_disabled` and its bytes survive.
+
+### Quirks the port had to keep, because the bytes are the contract
+
+- `save` always ends the file with a newline; **`delete` does not** once it empties the file.
+- Both write `json.dumps(item, ensure_ascii=False, sort_keys=True)`, so a record's key order
+  is sorted rather than the order it was built in.
+- `normalize_eval_case`'s `"source": str(data.get("source") or "golden")` is **not**
+  stripped — the probe caught the port trimming it, which is what `" user "` in the corpus
+  is for.
+- Every alias is an `or` chain, so a falsy `caseId` reaches `id` and a falsy
+  `expectedKeywords` reaches `keywords`; a whitespace-only `caseId` is *chosen* and then
+  strips to empty.
+- `_dedupe_cases` keeps the **last** value for an id in the **first** position it appeared,
+  which is why `list_eval_cases` prefers a user row over a golden one with the same id.
+
+### What the comparison found
+
+`skills_parity_probe.py` grew from 496 to **523 cases**. One divergence, in the port rather
+than in the oracle: the `source` trim above. Two were the probe's own — the oracle's
+`updatedAt` needed the same clock anchor as the other stores, and the corpus's bare
+"payload minus `action`" shape belongs to the route (which resolves it before the policy
+function sees it), so it moved to `tests/skills_routes.rs`.
+
+### Verification (local, this workspace, not CI)
+
+- `python tasks/native-runtime/skills_parity_probe.py …` → **PASS, 523 cases, 0
+  differences**, including the byte comparison of the two `catalog.json` files.
+- `cargo test -p deepseek-gateway --test skills_routes` → **6 passed** (the sixth covers the
+  case store: the golden-first listing, both refusals before cutover, the bare create form,
+  both required ids, a missing Skill, the golden-then-user order, and the empty file with no
+  trailing newline).
+- `cargo test -p deepseek-policy --lib skills::eval` → **3 passed** (the new unit tests).
+- `pytest tests/test_skill_registry_failure_paths_332.py tests/test_web_skills_routes.py
+  tests/test_web_skills_routes_extra.py -q` → **39 passed**.
+- `cargo fmt --all -- --check` clean; workspace clippy (the CI command) clean.
+- Full `cargo test --all` with the two known environment skips: **green**, 87
+  binaries and **1170 passed** (four more than before this slice: the eval case-store
+  router test and its three unit tests).
+
+### Not done, and the next executable task
+
+Five names remain, and all five are the same dependency: the eval **report engine**.
+`skills.eval.build_skill_eval_report` runs every case through the runner, prepares media
+fixtures, and scores artifacts, project bindings and content — `eval_report` returns its
+report and the other four (`diff_versions`, `diff_pack_versions`, `upgrade_pack`,
+`eval_upgrade_gate`) embed its verdict. Its response also carries Python's own identity
+(`environment.python`, `commit`), which a port has to record as a known divergence.
+
+Then the online `run` — the gateway already has the provider client and the tool loop
+(`chat_execution::exchange_turn`, `tool_rounds::decide_round`), so that slice is prompt
+assembly plus the skill's tool grant, not a new client.
+
+## Current continuation checkpoint — 2026-09-27 the security overview and the version family, and what the eval engine blocks
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. This slice is uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+Six more actions are wired: `security_summary`, `list_versions`, `list_pack_versions` and
+`migration_plan` read; `rollback_skill` and `rollback_pack` write. `ACTION_NOT_MIGRATED`
+fell from 14 names to **8**, so the native edge now serves **44 of the 52** `action == …`
+branches in `deepseek_infra/web/routes/skills.py` — measured, not counted: 44 arms + 8
+names, no overlap, nothing unaccounted for.
+
+`rollback_skill` / `rollback_pack` join the route's `skills_store` gate: they rewrite the
+item, take a history checkpoint and write a revision, and a pack rollback can also change a
+project binding. The other four write nothing.
+
+### Why the other eight are still refused — and it is not eight separate ports
+
+The oracle's version diffs carry an `evalScoreDiff`, and `upgrade_pack` /
+`eval_upgrade_gate` carry an `evalAwareUpgradeGate`. Both are built by
+`skills.eval.build_skill_eval_report`, through
+`_score_diff` → `eval_aware_upgrade_gate` → `build_skill_eval_report`. So **four** of the
+eight are blocked by one dependency, and the other four (`eval_report`,
+`list_eval_cases`, `create_eval_case`, `delete_eval_case`) *are* that dependency.
+
+That engine is `deepseek_infra/infra/skills/eval.py` — **570 lines**, and
+`build_skill_eval_report` is not a pure function: `_run_case` executes each eval case
+through the runner (preparing media fixtures, then checking artifacts, project bindings and
+content with JSON-path assertions) and aggregates the results into a scored report. Wiring
+the two diffs with a placeholder `evalScoreDiff` was tried and rejected: it would answer
+`null` where the oracle answers a gate verdict, which is a silent behaviour difference
+rather than a refusal.
+
+The eval response also embeds Python's own identity — `environment.python` is
+`platform.python_version()` and `commit` is `evidence.git_commit()` — so a full port needs
+those two fields treated as known divergences rather than compared.
+
+The **case store** is the smaller half: `list_eval_cases`, `create_eval_case` and
+`delete_eval_case` need only `load_eval_cases` / `save_eval_case` / `delete_eval_case` /
+`normalize_eval_case` over `.skills/eval_cases.jsonl` and the golden file, not the engine.
+That file is the **last** child store still outside `registry.skill_store_scope()`, so
+taking it over closes the same third place the catalog and the run log closed.
+
+### The online `run`
+
+Its Python side is `runner.run_skill(..., llm_callable=…)` — the route injects the model
+call through `SkillsRouteDeps`, so the policy function is model-agnostic by design. The
+native side has the offline path only. What is missing is the model call, and the gateway
+**already has one**: `chat_execution::exchange_turn` / `open_chat_stream` and
+`tool_rounds::{decide_round, append_tool_exchange}` are the provider client and the tool
+loop the chat routes use. So this is a slice built on existing pieces — prompt assembly from
+the ported `runner::prepare`, the skill's tool grant, and that loop — not a new provider
+client. It is also the one action a parity probe cannot compare without a model.
+
+### What the comparison found
+
+`skills_parity_probe.py` grew from 463 to **496 cases**. Two real divergences, both from
+rendering a path or a sentence:
+
+1. **The pack history directory was built as one component with a slash inside.**
+   `registry.data.join("history/packs")` renders `history/packs\…` on Windows where the
+   oracle's `Path` renders `history\packs\…`, and that string reaches the response as a
+   revision `path`. Fixed by joining two components; `versioning::snapshots` had the same.
+2. **The rollback checkpoint's sentence was capitalised.** The port wrote
+   `Pack rollback checkpoint before 1.0.0`; the oracle writes `Pack rollback checkpoint
+   before {version}`.
+
+The probe also needed the revision listings' absolute paths normalised to the part below
+`.skills/` — the same treatment `catalog_refresh` already had — because the two roots are
+different directories by construction.
+
+### The by-name refusal is now self-checking
+
+`catalog_list` and then `list_versions` each stood as the pinned "refused by name" action in
+`tests/skills_routes.rs`, and each had to be moved when it was implemented. The assertion
+now checks the name against `ACTION_NOT_MIGRATED` first — re-exported from the crate for
+exactly this — so implementing the pinned action fails at that guard with the reason instead
+of quietly changing what the test means.
+
+### Verification (local, this workspace, not CI)
+
+- `python tasks/native-runtime/skills_parity_probe.py …` → **PASS, 496 cases, 0
+  differences**, including the byte comparison of the two `catalog.json` files.
+- `cargo test -p deepseek-gateway --test skills_routes` → **5 passed** (the fifth covers the
+  security overview's scope default and the version family over a custom Skill's revisions).
+- `pytest tests/test_skill_registry_failure_paths_332.py tests/test_web_skills_routes.py
+  tests/test_web_skills_routes_extra.py -q` → **39 passed**.
+- `cargo fmt --all -- --check` clean; workspace clippy (the CI command) clean.
+- Full `cargo test --all` with the two known environment skips: **green**, 87
+  binaries and **1166 passed** (one more than before this slice: the version-family
+  router test). The first attempt died on the host's `os error 5` writing an
+  example's `.d` dep file — the same false failure as the previous slice; the
+  retry was clean.
+
+### Not done, and the next executable task
+
+The eight refusals above, and the online `run`. Nothing here is **完成切换**: the default
+launcher and image still start Python, and `.skills` and `project.json` stay Python's until
+a deployment runs `python_disabled`.
+
+Next executable slice, in this order:
+
+1. `list_eval_cases` / `create_eval_case` / `delete_eval_case` — the case store, with
+   `.skills/eval_cases.jsonl` joining `skill_store_scope()` (the last third place).
+2. `eval_report`, then the four dependents that embed its verdict.
+3. The online `run`, on top of `chat_execution` and `tool_rounds`.
+
+## Current continuation checkpoint — 2026-09-27 the run journal becomes Rust's, writers included
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. This slice is uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+The five run-analytics actions are wired: `delete_run`, `cleanup_runs`, `redact_run`
+write the run journal, `export_runs` and `analytics_summary` only read it.
+`ACTION_NOT_MIGRATED` fell from 19 names to **14**, so the native edge now serves **38 of
+the 52** `action == …` branches in `deepseek_infra/web/routes/skills.py` — measured, not
+counted: 38 arms + 14 names, no overlap, nothing unaccounted for.
+
+### The third place, again: Python stops writing `.skills/runs`
+
+The scope's docstring listed the run log among the stores "deliberately **not** gated:
+Rust's `Registry` writes none of them". That had already stopped being true — the offline
+`run` appends to `.skills/runs/runs.jsonl` — and this slice finishes the job. So
+`analytics._write_runs`, the single choke point every run-log write passes through
+(`append_run`, and now `delete_run` / `cleanup_runs` / `redact_run`), takes
+`registry.skill_store_scope()`. Reads stay free: only the writer is wrapped.
+
+`tests/test_skill_registry_failure_paths_332.py` now asserts four run-log writes are denied
+under `python_disabled` and that the file's bytes are unchanged afterwards, where it
+previously asserted `catalog_refresh` still worked. The same docstring's rule, read the
+other way: once Rust writes a store, Python must stop. Only the eval-case file is still
+outside the scope.
+
+### What the comparison found
+
+`skills_parity_probe.py` grew from 440 to **463 cases**. Two things came out of the
+run-analytics family:
+
+1. **`averageLatencyMs` was a float zero where the oracle writes an int.** Python's
+   `round(statistics.fmean(latencies), 2) if latencies else 0` returns the **int** `0` when
+   nothing completed, and `0` and `0.0` are not the same bytes on the wire. Fixed by
+   emitting `json!(0)` for the empty case; every other field in that response already
+   agreed.
+2. **A layering slip in the probe, not in the port.** `days` is resolved by
+   `int(days or 7)` **inside** the oracle's `analytics_summary`, so a `days: 0` request
+   means a week — the probe was reading the trend length as 1 on the Rust side because the
+   `or 7` lived in the gateway helper instead. Fixed by moving the resolution into
+   `analytics::summary`, where the oracle has it, and leaving the gateway with
+   `limit_of(payload, "days", 7)`. The route test now pins both ends of the window
+   (`days: 0` → 7 buckets, `days: 365` → 30).
+
+The trend's dates also needed an anchor: `_recent_trend` calls `datetime.now(timezone.utc)`
+directly, so pinning `utc_now_iso` was not enough — the probe now patches
+`analytics.datetime` with a subclass whose `now` returns the instant the Rust registry
+clock is set to. Both sides bucket the same seven days.
+
+### Verification (local, this workspace, not CI)
+
+- `python tasks/native-runtime/skills_parity_probe.py …` → **PASS, 463 cases, 0
+  differences**, including the byte comparison of the two `catalog.json` files.
+- `cargo test -p deepseek-gateway --test skills_routes` → **4 passed** (the fourth test
+  covers the run journal: its three writers refusing while its four readers answer, then
+  redact over two real runs, a `keepRecent` cleanup, an idempotent delete and a summary
+  over the emptied log).
+- `pytest tests/test_skill_registry_failure_paths_332.py tests/test_web_skills_routes.py
+  tests/test_web_skills_routes_extra.py -q` → **39 passed**.
+- `python -m mypy .` clean, `ruff check .` clean.
+- `cargo fmt --all -- --check` clean; workspace clippy (the CI command) clean.
+- Full `cargo test --all` with the two known environment skips: **green**, 87
+  binaries and **1165 passed** (one more than before this slice: the run-journal
+  router test). The first attempt died on the host's `os error 5` writing a
+  `.fingerprint` file — a known false failure on this machine; the retry was clean.
+
+### Not done, and the next executable task
+
+The remaining 14 names: `security_summary`, the four eval cases/reports, and the nine
+version diff/rollback/upgrade gates. The online `run` still needs the model call. Nothing
+here is **完成切换**: the default launcher and image still start Python, and `.skills` and
+`project.json` stay Python's until a deployment runs `python_disabled`.
+
+Next executable slice: `security_summary` (it reads records this edge already writes), or
+the nine version gates — `list_versions` / `diff_versions` already have their policy
+functions ported in `skills::versioning`.
+
+## Current continuation checkpoint — 2026-09-26 the catalog, and the cache Python stops writing
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. This slice is uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+All **seven** `catalog_*` actions are on the native edge: `catalog_list`, `catalog_get`,
+`catalog_search`, `catalog_install`, `catalog_uninstall`, `catalog_refresh`,
+`catalog_export`. `ACTION_NOT_MIGRATED` fell from 26 names to **19**, so the native edge
+now serves **33 of the 52** `action == …` branches in
+`deepseek_infra/web/routes/skills.py` — still measured, not counted: 33 arms + 19 names,
+no overlap, nothing unaccounted for.
+
+`deepseek-policy::catalog` already carried `list`, `summary`, `manifest`, `get`, `search`,
+`preview`, `install` and `uninstall`; this slice added `refresh` and `export`, wired all
+seven, and added the gateway's `item_id` helper (`itemId`, else `skillId`, else `packId`,
+else `id` — one `or` chain, so a whitespace-only `itemId` is *chosen* and then strips to
+empty rather than falling through).
+
+### Two stores, two cutovers, two refusals
+
+The catalog writes in two places, so it carries two gates rather than one:
+
+- `catalog_refresh` rewrites `.skills/catalog/catalog.json` → `409
+  NATIVE_SKILLS_WRITE_NOT_OWNED` unless `skills_store` is Rust's.
+- `catalog_install` (without `dryRun`/`preview`) and `catalog_uninstall` change a
+  **project's** Skill binding, which lives in `project.json` → `409
+  NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED` unless `project_metadata_store` is Rust's. The
+  oracle returns before it writes anything when `dryRun` is set, so that branch is left
+  available while Python still owns the project store — gating the whole action would have
+  removed a working preview.
+
+### The third place: Python stops writing `.skills/catalog`
+
+`registry.skill_store_scope()`'s docstring said the catalog was outside the scope
+"because Rust writes none of them". `catalog::refresh` makes that false, and the same
+docstring states the rule in the other direction — a store Rust writes is one Python must
+stop writing. So `catalog_refresh` now takes the scope, and
+`tests/test_skill_registry_failure_paths_332.py` — whose docstring documents this exact
+boundary — moved `catalog_refresh` from its "still works under `python_disabled`"
+assertion into the denied set, with the file's bytes asserted unchanged afterwards.
+`project.json` needed no change: `infra/data/projects.py::write_project` has carried
+`assert_python_writer_allowed("project_metadata_store")` since the project-files slice.
+
+### What the comparison found, including one thing only the file check could
+
+`skills_parity_probe.py` grew from 391 to **440 cases**, all compared against the
+unmodified oracle. Both roots now also hold the same `evals/reports/*` and one project, so
+`evalScore` and `installCount` are non-zero — a catalog comparison over an empty repository
+would agree on `0.0` and prove nothing.
+
+1. **The numeric filters were silently ignored.** `catalog`, `search`'s `maxRiskScore` /
+   `minEvalScore` were read through `text()`, whose falsy check swallows `0`, so
+   `{"maxRiskScore": 0}` was not a filter at all: the oracle answered **5** items and the
+   port **22**. Fixed with a `filter_number` helper that mirrors the oracle's
+   `float(str(value))`. The same pass found `tool` checked for truthiness *before* being
+   trimmed, where the oracle trims first — a whitespace-only `tool` is not a filter.
+2. **One thing only the file check could find.** `catalog_refresh`'s *product* is a file,
+   and a JSON parse is order-insensitive, so comparing the response alone would have
+   passed while every key-order constant in the write was wrong. The probe now diffs the
+   two `catalog.json` files byte-for-byte too, and that check immediately failed: the
+   oracle's `securityReview.manifest` carries `packId` **fourth** for a pack and **after
+   `toolGrantHash`** for a skill. Same name, same path, two orders — no by-name table can
+   express it, so `python_json` gained
+   `OrderedJson::from_value_with_orders_and_shapes`, which selects an order by **which key
+   the object carries**. The name-keyed entry points are unchanged and their tests still
+   pass; the new mechanism has its own unit test.
+
+`first_difference` reports the first differing line rather than two whole manifests, which
+is how the above was found in one run.
+
+### Verification (local, this workspace, not CI)
+
+- `python tasks/native-runtime/skills_parity_probe.py …` → **PASS, 440 cases, 0
+  differences**, including the byte comparison of the two `catalog.json` files.
+- `cargo test -p deepseek-gateway --test skills_routes` → **3 passed** (a third test now
+  covers the catalog: the five reads, the by-name `501` that moved off `catalog_list`, both
+  refusals, and the refresh write under `python_disabled`).
+- `cargo test -p deepseek-policy --lib python_json` → **13 passed**.
+- `pytest tests/test_skill_registry_failure_paths_332.py tests/test_web_skills_routes.py
+  tests/test_web_skills_routes_extra.py -q` → **39 passed**.
+- `python -m mypy .` → no issues in 917 files; `ruff check .` clean.
+- `cargo fmt --all -- --check` clean; workspace clippy (the CI command) clean.
+- Full `cargo test --all` with the two known environment skips: **green**, 87
+  binaries and **1164 passed** (two more than before this slice: the new
+  `python_json` shape test and the catalog router test).
+
+### Not done, and the next executable task
+
+The remaining 19 names: the eval cases/reports (`eval_report`, `list_eval_cases`,
+`create_eval_case`, `delete_eval_case`), `security_summary`, the five run-analytics writes,
+and the nine version diff/rollback/upgrade gates. The online `run` still needs the model
+call. Nothing here is **完成切换**: the default launcher and image still start Python, and
+`.skills` and `project.json` stay Python's until a deployment runs `python_disabled`.
+
+Next executable slice: the run-analytics writes (`delete_run`, `cleanup_runs`,
+`redact_run`, `export_runs`, `analytics_summary`) — they share the journal this edge already
+reads — or the version gates.
+
+## Current continuation checkpoint — 2026-09-26 the skills runner and run analytics
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. **The code for this slice was already in
+the tree uncommitted when this session started**; this session measured it, fixed
+what it found, and recorded it here (the slice's own handoff note was never written).
+No push, merge, or release. `release/native_runtime_5_0_evidence_v1.json` is still
+`NOT_READY` (`exact_head: null`). The whole migration is **未完成**.
+
+`POST /api/skills` serves four more actions — `run` (its offline path), `dry_run`,
+`list_runs`, `get_run` — so `ACTION_NOT_MIGRATED` fell from 30 names to **26** and the
+implemented arms rose from 22 to **26 of the 52** `action == …` branches in
+`deepseek_infra/web/routes/skills.py`. The split is measured, not counted by hand:
+26 arms + 26 names, **no overlap and nothing unaccounted for** (the same measurement
+the earlier 22/30 split was made with). `POST /api/skills/{skill_id}/run` is the same
+dispatcher with the path id winning.
+
+Writes obey the store gate: a mutating action **and** `run` require
+`may_write_native_store("skills_store")`, so they answer
+`409 NATIVE_SKILLS_WRITE_NOT_OWNED` before touching anything unless the deployment is
+`DEEPSEEK_RUNTIME_MODE=python_disabled` and the domain is declared. `dry_run`,
+`list_runs` and `get_run` are deliberately not gated: the first writes nothing and the
+other two only read the journal. An online `run` (a DeepSeek key is available) still
+answers `501 NATIVE_SKILLS_ACTION_NOT_READY` by name — the model call is not ported —
+but a run that has no key first persists the prepared failure, which is the oracle's
+behaviour.
+
+### What this session found and fixed
+
+The slice did not pass its own test when it was picked up, and it carried three
+further defects that only a gate would have caught:
+
+1. **A cross-test environment leak made the result order-dependent.**
+   `tests/skills_routes.rs` sets process-global variables in both tests but had none
+   of the `EnvLock`/`EnvGuard` convention the other thirteen env-reading gateway test
+   files use. The offline-run test sets `DEEPSEEK_RUNTIME_MODE=python_disabled` and
+   never cleared it, so whichever test ran second inherited it: the registry test then
+   read `200` from a `create` whose entire point is the `409` refusal. Fixed by
+   taking the process lock and declaring the mode each test needs — `EnvGuard` saves
+   and restores, and `None` removes, so a test asks for the default deployment instead
+   of inheriting the previous one. **Verified order-independent**: sequential, at the
+   default thread count, and each test alone all pass; the pre-fix failure is the
+   reproduction.
+2. **Dead code that `-D warnings` turns into a build failure.** `action_not_ready`
+   survived the refactor with no caller. Removed.
+3. **The uncommitted work was formatted with a different rustfmt than CI pins.**
+   Fifty files under `deepseek-gateway` and `deepseek-policy` failed
+   `cargo fmt --all -- --check`. The style in the tree is rustfmt's **2021** item
+   ordering (`use serde_json::{json, Value}` — case-insensitive, `self` first); the
+   crates are edition 2024 and CI pins `dtolnay/rust-toolchain@1.85.0`, whose rustfmt
+   wants the 2024 order (`{Value, json}`). Re-ran the **pinned** toolchain's
+   formatter. **The divergence is known to be formatting-only** because 23 of the 50
+   files then matched `HEAD` byte for byte and dropped out of the working tree diff
+   entirely — they had no other change. None of the remaining files' content was
+   lost; `cargo fmt --all -- --check` is clean under the pinned toolchain.
+4. **One real clippy error in a new file.** `deepseek-policy/src/file_upload.rs:94`
+   built a hex string with `map(format!).collect()`, which `-D warnings` refuses
+   (`clippy::format_collect`). Rewritten to append into one `String`; the digest and
+   the 32-character truncation are unchanged. The family's earlier "clippy exit 0"
+   note was taken with `--no-deps` over a narrower target set and did not cover this
+   file.
+
+### Verification (local, this workspace, not CI)
+
+- `cargo test -p deepseek-gateway --manifest-path rust/Cargo.toml --test skills_routes`
+  → **2 passed**, run three ways (sequential with `--test-threads=1`, at the default
+  thread count, and once per test in isolation).
+- `cargo +1.85.0-x86_64-pc-windows-gnu fmt --all -- --check` → **clean**.
+- `cargo +1.85.0-x86_64-pc-windows-gnu clippy --locked --manifest-path rust/Cargo.toml
+  --all-targets --all-features -- -D warnings` (the CI command, whole workspace) →
+  **clean**.
+- `python tasks/native-runtime/skills_parity_probe.py --rust-example
+  rust/target/debug/examples/skills_parity_probe.exe --output artifacts/skills-parity.json`
+  → **PASS, 391 cases, 0 differences**, against the unmodified oracle, and shown
+  able to fail (18 differences when `dry_run`'s `skillRunId` was renamed; restored
+  byte-identically).
+
+### One environment failure in the local full suite, diagnosed and not a repo defect
+
+`cargo test --all` stops in `deepseek-policy --lib`: **531 passed, 1 failed** —
+`file_lock::tests::locks_serialize_between_threads`, `acquire: Os { code: 5,
+PermissionDenied }`. `file_lock.rs` is byte-identical to `HEAD`, the failure is at
+the `.expect("acquire")` on the `open`, not on the lock wait (the test ends in 4 s,
+far short of the 9 s ten retries would take), and the cause is this machine, not the
+crate: in **pure Python**, six threads opening **one** path at the same instant get
+`PermissionError(13)` too — with the sandbox off as well, while six threads on six
+**different** paths never fail. So this is a same-path concurrent-open race in the
+host's filesystem stack (most likely a real-time filter driver), not a code defect.
+
+Locally, run the suite as
+`cargo test --all -- --skip locks_serialize_between_threads
+--skip concurrent_transitions_converge_or_conflict_without_duplicate_events`; those
+two are CI's (Linux) to judge. Worth recording separately: the Windows lock path
+retries `LockFileEx` ten times but does **not** retry `OpenOptions::open`, so a
+transient open denial is fatal — a real robustness gap, **out of this slice's scope
+and left alone**.
+
+The second of those two is the same signature in another crate:
+`deepseek-transfer --test federated_journal` fails
+`concurrent_transitions_converge_or_conflict_without_duplicate_events` at
+`results.iter().all(Result::is_ok)`. Measured: **deterministic** (4/4, ~0.8 s — and
+`BUSY_TIMEOUT` is 30 s, so it is not a timeout), **independent of the temp
+directory**, in a crate that is **byte-identical to `HEAD`**. Reading
+`advance_transfer`, the losing thread should take the idempotent branch
+(`current.state == next_state` with an equal digest) and return `Ok`, so that branch
+is the suspect. The assertion swallows the error text, so **the mechanism is not
+established** — do not record a guessed cause. It shares the one-file-two-handles
+shape with the `file_lock` failure above.
+
+**With those two skipped the suite is green**: `cargo test --all` → **87 test
+binaries, 1162 passed, 0 failed**, exit 0.
+
+### The runner's oracle comparison landed, and it found two divergences
+
+`skills_parity_probe.py` grew from 312 to **391 cases** and the pair is **PASS with
+0 differences**. Four new case families, all byte-compared against the unmodified
+oracle:
+
+- `offline_output` — each of the 18 built-in skills' own `exampleInputs` entry
+  rendered through `runner::prepare().offline_output()` vs `_offline_output`,
+  including the media half of the context composed the way `run_skill` composes it.
+- `offline_refusal` — the entry the route calls, with inputs the schema rejects,
+  four ids no registry holds, and non-object inputs, so the refusal **message** is
+  compared and not only its status.
+- `list_runs` / `get_run` — a **fixture journal** written byte-identically into both
+  roots (a `runId`-alias record, a record `normalize_run` rejects and `_read_runs`
+  skips, a redacted run, runs differing on every filter axis), across eleven
+  filter/limit shapes and six id shapes.
+
+The corpus is built from the built-in **documents**, not their file names: a name is
+not a skill id (`code_review.json` declares `skill_code_review`). My first attempt
+used file names and the probe failed on exactly that.
+
+Two real divergences came out of it, both in `dry_run`, both fixed:
+
+1. **An extra response key.** Rust's `dry_run` emitted `skillVersion`; the oracle's
+   `_dry_run_skill_config` does not. Measured: 22 differences, all `dry_run`, the
+   key-level diff naming `only in actual: ['skillVersion']`. The frontend never
+   reads `dryRun`/`skillVersion` and the Python route never emits it, so the key was
+   removed rather than kept.
+2. **A different payload contract.** The oracle takes the Skill **configuration**
+   out of the request (`payload["skill"]`, else the payload minus `action` /
+   `overwrite`); a `{"skillId": …}`-only payload is the oracle's own
+   `400 "Skill config missing required fields: name, description, version, …"`.
+   Rust's route looked the **id** up in the registry and answered `200` — i.e. it
+   accepted a request the reference implementation refuses. `runner::dry_run` now
+   takes the validated config and the gateway validates it from the payload, and the
+   route test asserts **both** halves (the `400` and the `200`).
+
+The probe was shown **able to fail** on the new axis: renaming `dry_run`'s
+`skillRunId` produced `FAIL, 391 cases, differences: 18` — exactly the 18 successful
+dry runs, nothing else — and the file was restored byte-identically (md5 unchanged).
+
+### Not done, and the next executable task
+
+**Not pushed.** Exact-head CI has not run. Production HTTP is still Python. A
+registered route, a green test, and a green clippy are not migration evidence.
+
+- The runner's comparison is in place; what it cannot cover is the **online** `run`,
+  because the model call is not ported. That branch stays `501
+  NATIVE_SKILLS_ACTION_NOT_READY` by name.
+- Phases 3-5 remain: `catalog_*`, the run-analytics writes (`delete_run`,
+  `cleanup_runs`, `redact_run`, `export_runs`, `analytics_summary`), and the version
+  diff/rollback/upgrade gates — each removing names from `ACTION_NOT_MIGRATED`.
+- Skills are still **集成通过**, not **完成切换**: `.skills` is Python's until the
+  process is actually started with `python_disabled`.
+
+Next executable slice: `catalog_*`, or the workspace backup/DR HTTP surface.
+
+## Current continuation checkpoint — 2026-09-26 PDF page image and layout
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. This slice is uncommitted. No push,
+merge, or release. `release/native_runtime_5_0_evidence_v1.json` is still
+`NOT_READY` (`exact_head: null`). The whole migration is **未完成**.
+
+`GET /api/file-page-image` and `GET /api/file-page-layout` are on the native
+edge. A legal PDF page is rendered by `pdftoppm` and cached as
+`{fileId}.page-{n}-{scaleKey}.png`. The response is `image/png` with
+`X-File-Page` and `X-File-Page-Count`. A repeat read returns those cached
+bytes. Layout returns the word boxes and writes nothing. A non-PDF is `415`.
+A bad page or scale is `400`. A missing token is `401`. Those refusals do not
+add a cache file.
+
+For unembedded Helvetica the boxes match PyMuPDF `get_text("words")`, including
+the text line matrix: `Td` moves from the line origin, not from the glyph
+cursor. The PNG bytes are not MuPDF's pixmap. The probe allows a 4-pixel
+difference from `ceil(points * scale)`.
+
+Evidence (local, this workspace, not CI):
+
+- `cargo test -p deepseek-policy --lib pdf_page::tests::helvetica_words_match_the_mupdf_boxes`: **passed**.
+- `cargo test -p deepseek-gateway --test file_page_render_route`: **1 passed** through `create_production_app`.
+- `python tasks/native-runtime/file_page_render_probe.py --rust-example rust/target/debug/examples/file_page_render_probe.exe --report artifacts/file-page-render.json`: **3 PDFs, PASS** against unmodified `render_pdf_page_layout` and `render_pdf_page_png`.
+- `ruff check` on the probe: all checks passed.
+- `cargo clippy -p deepseek-policy --all-targets -- -D warnings --no-deps`: exit 0.
+
+Next executable slice: skills registry/runner, or the workspace backup/DR HTTP
+surface. Diagnostics, chat prefetch, A2A, launchers, provider kill/takeover,
+zero-Python packaging, and exact-head CI remain open. Default `Dockerfile`
+and `launch.py` still start Python. Embedded non-Helvetica page fonts still
+use Helvetica advances.
+
+## Continuation checkpoint — 2026-09-26 `/api/project-files`
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. This slice is uncommitted. No push,
+merge, or release. `release/native_runtime_5_0_evidence_v1.json` is still
+`NOT_READY` (`exact_head: null`). The whole migration is **未完成**.
+
+`POST /api/project-files` is on the native edge, ahead of the Go `/api/*`
+catch-all. The store is `project_metadata_store` (`project.json`). Rust writes
+it only when `DEEPSEEK_RUNTIME_MODE=python_disabled`, the same rule as
+`may_write_native_store`. In every other mode the route returns
+`409 NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED` before it parses the body, and
+`project.json` stays byte-identical. A legal text upload in the disabled mode
+writes `.projects/<id>/files` and the document list, and
+`GET /api/workspace/projects/<id>` reads that document back. The upload does
+not call `index_file_payload`. Other project mutations are still `501`.
+
+Evidence (local, this workspace, not CI):
+
+- `cargo test -p deepseek-gateway --manifest-path rust/Cargo.toml --test project_files_route -- --test-threads=1`: **3 passed**.
+- The success case checks the on-disk `project.json`, the source bytes, the workspace GET, `/api/file-reader`, and `/api/file-source`.
+- The refusal case covers an empty mode, `python_authoritative`, and `go_authoritative`.
+- A missing token is `401`, an unsupported file is `415`, and a missing project is `404`; none of those change `project.json`.
+- `cargo test -p deepseek-gateway --lib the_memory_store_owner_is_the_mode_and_not_go_control`: **passed**. `may_write_native_store("project_metadata_store")` is false while Go control is on and the mode is empty, and true only under `python_disabled`.
+- `cargo test -p deepseek-gateway --test data_routes project_mutations_stay_closed`: **passed**. Create, rename, delete, and the workspace child writes stay `501` and write nothing.
+- `cargo test -p deepseek-gateway --test file_text_route`: **10 passed** after the shared multipart reader moved.
+- `cargo clippy -p deepseek-policy --all-targets -- -D warnings --no-deps`: exit 0. `cargo clippy -p deepseek-gateway --all-targets -- -D warnings` still fails in pre-existing `a2a_control.rs` and `control_proxy.rs` (`result_large_err`); those findings are not in this slice.
+
+Next executable slice: `/api/file-page-image` and `/api/file-page-layout` still
+need a PDF renderer that can match the oracle. Skills, workspace backup/DR,
+diagnostics, chat prefetch, A2A, launchers, provider kill/takeover,
+zero-Python packaging, and exact-head CI remain open. Default `Dockerfile`
+and `launch.py` still start Python.
+
+## Continuation checkpoint — 2026-09-26 image and textless-PDF OCR
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. The file-text and OCR work is
+uncommitted. No push, merge, or release.
+`release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+This slice replaces the `501` on `POST /api/file-text` for an image and for a
+textless PDF when the request enables OCR. A legal image is cached as kind
+`image` and is readable again through `/api/file-source` (original bytes) and
+`/api/file-reader` (the OCR text). A legal textless PDF is cached with
+`[PDF 第 N 页 (OCR)]` labels. OCR off stays `415 ocr_required` for an image and
+`422 ocr_required` for a textless PDF. A blank page with OCR on is
+`422 ocr_empty`. A missing engine is `415 ocr_unavailable`. Refusals write no
+cache file. The batch error path keeps those codes; it used to rewrite an
+unknown code to `invalid_payload`.
+
+Engine order follows the oracle when no DeepSeek API key is set: an explicit
+`OCR_FORMULA_CMD`, otherwise pix2tex or latexocr on `PATH`, then Tesseract,
+then Windows OCR. A tied score keeps the earlier engine. This host's pix2tex
+returns different strings for the same image, so the probe and the route tests
+set `OCR_FORMULA_CMD` to `cmd /c exit 1` before settings are imported. That is
+a determinism pin for the comparison, not a production disable: an unset
+variable still selects pix2tex when it is on `PATH`. cv2 preprocessing and
+formula-region snippets are not ported. The parity image is 360×140 so the
+oracle's region filter skips snippets and Tesseract returns `HELLO`.
+
+Already wired on this same edge, still **集成通过** and not cut over:
+`/api/file-page-text`, `/api/file-page-search`, and `/api/file-text` for text,
+HTML, DOCX, PPTX, XLSX, selectable PDF and EPUB. Evidence for those rows is in
+`migration-matrix.md`.
+
+Evidence for this slice (local, this workspace, not CI):
+
+- `cargo test -p deepseek-gateway --manifest-path rust/Cargo.toml --test file_text_route -- --test-threads=8`: **10 passed**. The OCR PDF case checks the `HELLO` page and that a blank page leaves the cache unchanged.
+- `python tasks/native-runtime/file_text_parity_probe.py --rust-example rust/target/debug/examples/file_text_parity_probe.exe --report artifacts/file-text-parity.json`: **31 cases, PASS**, exit 0, compared with unmodified `extract_uploaded_file`. The probe still stubs `local_rag.index_file_payload`.
+- `ruff check tasks/native-runtime/file_text_parity_probe.py`: all checks passed.
+- `cargo clippy -p deepseek-policy --manifest-path rust/Cargo.toml --all-targets -- -D warnings --no-deps`: exit 0.
+- Windows gnu link still needs, for that process only, `RUSTFLAGS=-C link-self-contained=yes -C link-arg=-Wl,--allow-multiple-definition`. Not a repo change.
+
+Not done: `/api/project-files` (needs one writer for `project.json`),
+`/api/file-page-image` and `/api/file-page-layout` (PDF renderer), the sqlite
+file index (`index_file_payload` stays Python-owned; this route does not write
+`.local-rag`), skills, workspace backup/DR HTTP, the remaining diagnostics
+blocks, chat search prefetch and edge inference, full A2A parity, launchers
+and images, provider kill/takeover, zero-Python packaging, exact-head CI.
+Default `Dockerfile` and `launch.py` still start Python.
+
+`/api/project-files` is the checkpoint above. `/api/file-page-image` and
+`/api/file-page-layout` still need a PDF renderer. Do not dual-write
+`.local-rag`.
+
 ## Current continuation checkpoint — 2026-09-22 memory probe isolation
 
 Investigated the two `memory` differences recorded by `c9606a9a`, on base HEAD
@@ -4768,3 +6407,46 @@ asserted.
 - Three of the four new probe pairs are not CI steps.
 - The `/api` surfaces this file listed earlier (skills, traces, media; the Go-owned
   workspace backup/DR block) are still unported.
+
+## 2026-09-28 — control authority batch, PR #182, and native OCR CI follow-up
+
+Branch: `codex/indexmap-std-feature`. The implementation HEAD before this
+continuation update is `e42c591c0c3ab14ced46e0f524a287284b6d6a32`; PR #182 is a
+draft against `main`. The control authority, signed apply, shadow denial, skills
+parity, and native OCR repair lines have local validation before this push.
+
+- Go schema v8/v9 persists an authority claim, per-domain cutover, and signed v2
+  `apply-mutation` with an atomic result journal. Direct `Put` and `PutShadow`
+  cannot bypass a promoted domain, including a shadow-write race. The protected
+  loopback routes expose claim/head, transition, and apply. Frozen v1 request
+  behavior remains unchanged; the v2 Python/Go/Rust corpus is versioned as v32.
+- Local Go `test ./...`, `vet ./...`, and the 95.0% coverage gate passed at
+  **95.105673% (5130/5394)**. `mypy .`, `ruff check .`, focused Python native
+  contract/parity tests, shadow parity, docs checks, and the native contract
+  check passed. Windows `go test -race` exits before running tests; the Linux
+  `native-go` CI job is the race gate.
+- PR CI exposed two missing Rust job dependencies (`pdftoppm`, then Tesseract
+  and Python OCR packages); both jobs now provision them. With OCR available,
+  Ubuntu Tesseract hallucinated `a` on the Rust gateway's 569-byte blank PDF.
+  The Python oracle skips a completely white page, and the **native Rust** PDF
+  path now checks the decoded Poppler PNG before accepting nonempty OCR text.
+  Engine-unavailable errors still return unchanged.
+- The native blank-pixel unit test passed, and the real gateway
+  `file_text_route` suite passed **10/10** locally with the pinned Rust 1.85
+  toolchain and its bundled GCC 14 linker. Rust fmt, check, and strict policy
+  Clippy passed. The machine's unrelated MinGW 8.1 linker failed to link the
+  same test; it is not a test assertion failure.
+
+The latest analyzed PR run before the native Rust fix, `36418657422` at
+`849dec70`, had Rust and Rust coverage failures from the same blank-PDF
+assertion; Evidence Assembly then failed downstream. Exact-head CI for the
+new native fix remains open until the final batch commit is pushed and the
+result is collected. `release/native_runtime_5_0_evidence_v1.json` remains
+`NOT_READY`: no production ownership flip, real provider reconciliation,
+desktop/Android zero-Python proof, or final release qualification is claimed.
+
+Next executable work after this batch's exact-head CI: add an externally signed
+per-domain promotion artifact and prove export/import, unique-writer fencing,
+rollback, and restart on isolated data. Continue the remaining native API,
+worker/provider, desktop, Android, and server-side TypeScript replacement
+lines against `migration-matrix.md`.

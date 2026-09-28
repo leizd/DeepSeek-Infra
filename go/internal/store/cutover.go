@@ -55,6 +55,50 @@ type CutoverTransition struct {
 	ExpectedEpoch    int64
 	FencingToken     int64
 	TransferID       string
+	// Authority is the control-authority-v1 checkpoint that authorizes a
+	// promotion to an authoritative state. It is required exactly when the
+	// target state requires authorization, and it must be the current persisted
+	// authority tip. De-promotion never requires it, so ownership can always be
+	// rolled back.
+	Authority *AuthorityCheckpoint
+}
+
+// IsGoAuthoritative reports whether the durable cutover record of a domain is in
+// a state where Go writes are production-authoritative. It is the only durable
+// answer to "may this process act as the production owner of this domain?".
+//
+// A caller must never self-assert production authority: a constructor flag or a
+// larger epoch is not authority. The record is read in a transaction that
+// verifies the schema, so a missing or corrupt row is an error rather than a
+// silent "not authoritative".
+func (store *Control) IsGoAuthoritative(domain string) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.closed {
+		return false, ErrWriterFenceHeld
+	}
+	if _, ok := tableForDomain(domain); !ok {
+		return false, ErrUnknownDomain
+	}
+	if store.schema < SchemaV2 {
+		return false, ErrSchemaInactive
+	}
+	tx, err := store.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	if err := verifySchemaTx(tx, store.schema); err != nil {
+		return false, err
+	}
+	record, err := readCutoverTx(tx, domain)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return IsDomainGoAuthoritative(record.State), nil
 }
 
 // LegalCutoverTransition returns true if the cutover from → to is a valid transition.
@@ -207,7 +251,9 @@ func (store *Control) TransitionCutover(req CutoverTransition) (CutoverRecord, e
 		return CutoverRecord{}, ErrIllegalCutover
 	}
 	if cutoverRequiresAuthorization(req.To) {
-		return CutoverRecord{}, ErrCutoverNotAuthorized
+		if err := store.assertCutoverAuthorityTx(tx, req.Authority); err != nil {
+			return CutoverRecord{}, err
+		}
 	}
 	if current.Epoch == math.MaxInt64 || current.FencingToken == math.MaxInt64 {
 		return CutoverRecord{}, ErrStaleCutoverFence
@@ -274,11 +320,70 @@ func (store *Control) TransitionCutover(req CutoverTransition) (CutoverRecord, e
 	); err != nil {
 		return CutoverRecord{}, err
 	}
+	if cutoverRequiresAuthorization(req.To) {
+		if _, err := tx.Exec(
+			`INSERT INTO control_cutover_authorizations(
+				domain, transfer_id, authority_generation, authority_digest,
+				from_state, to_state, previous_revision, revision,
+				previous_epoch, epoch, previous_fencing_token, fencing_token,
+				writer_fencing_token, recorded_at
+			) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			next.Domain,
+			next.TransferID,
+			req.Authority.AuthorityGeneration,
+			req.Authority.Digest,
+			string(current.State),
+			string(next.State),
+			current.Revision,
+			next.Revision,
+			current.Epoch,
+			next.Epoch,
+			current.FencingToken,
+			next.FencingToken,
+			store.token,
+			now,
+		); err != nil {
+			return CutoverRecord{}, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return CutoverRecord{}, err
 	}
 	store.leaseUntil = leaseUntil
 	return next, nil
+}
+
+// assertCutoverAuthorityTx is the production-authorization gate for a control
+// domain. Epoch advance and ownership change happen only inside a transaction
+// that passes it, so a caller cannot promote a domain by presenting a larger
+// epoch, a self-issued checkpoint, or a checkpoint that is not the live
+// authority tip.
+func (store *Control) assertCutoverAuthorityTx(tx *sql.Tx, authority *AuthorityCheckpoint) error {
+	if !store.authorizeCutover {
+		return ErrCutoverNotAuthorized
+	}
+	if authority == nil {
+		return ErrCutoverNotAuthorized
+	}
+	if err := VerifyAuthorityCheckpointIntegrity(authority); err != nil {
+		return fmt.Errorf("%w: %v", ErrCutoverAuthorityStale, err)
+	}
+	head, exists, err := readAuthorityHeadTx(tx)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("%w: no control authority is installed", ErrCutoverAuthorityStale)
+	}
+	if authority.AuthorityGeneration != head.Generation || authority.Digest != head.Digest {
+		return fmt.Errorf(
+			"%w: presented generation %d, installed generation %d",
+			ErrCutoverAuthorityStale,
+			authority.AuthorityGeneration,
+			head.Generation,
+		)
+	}
+	return nil
 }
 
 type cutoverEvent struct {

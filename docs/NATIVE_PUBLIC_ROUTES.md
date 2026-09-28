@@ -1,12 +1,20 @@
-# `/api/title`, `/api/download`, `/api/chat`, `/api/file-source`, `/api/file-reader` and `/api/file-chunk`
+# `/api/title`, `/api/download`, `/api/chat`, `/api/file-source`, `/api/file-reader`, `/api/file-chunk`, `/api/file-page-text`, `/api/file-page-search`, `/api/file-page-image`, `/api/file-page-layout`, `/api/file-text` and `/api/project-files`
 
 <!-- docs-language-switcher:start -->
 [中文](../README.md) / [English](../README.en.md)
 <!-- docs-language-switcher:end -->
 
-Status: **ported and wired on the native edge.** All six were
+Status: **ported and wired on the native edge.** These routes were
 `503 GO_CONTROL_PROXY_NOT_READY` (the Go `/api/*` catch-all with no Go control plane
-configured); all six are now registered ahead of that catch-all and serve for real.
+configured). They are now registered ahead of that catch-all. `/api/file-text`
+extracts text, HTML, DOCX, PPTX, XLSX, selectable PDF text, EPUB chapters, and
+OCR for an image or a textless PDF when the upload asks for OCR. An image with
+OCR off is `415 ocr_required`. A textless PDF with OCR off is `422 ocr_required`.
+An OCR pass that recognizes nothing is `422 ocr_empty`. A missing engine is
+`415 ocr_unavailable`. Those refusals do not write a cache entry.
+`/api/project-files` writes `project.json` only when
+`DEEPSEEK_RUNTIME_MODE=python_disabled`. Every other mode is
+`409 NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED` and does not touch the file.
 
 ## The web layer's `truthy` is not Python truthiness
 
@@ -127,9 +135,9 @@ falsy and downloads. The test pins all four combinations.
   the unknown-id envelope, and the auth boundary.
 - `cargo test -p deepseek-policy generated_files` — the six MIME/name pairs and the
   lower-cased extension.
-- The page-render family (`/api/file-page-image`, `/api/file-page-layout`,
-  `/api/file-page-search`) is still the proxy's 503: it needs a PDF/image renderer,
-  which is not ported.
+- `/api/file-page-search`, `/api/file-page-image` and `/api/file-page-layout`
+  are registered on the native edge. Search is covered with the reader routes.
+  Image and layout are covered below.
 
 ## `/api/file-source`
 
@@ -169,10 +177,11 @@ form.
   string parse (six falsy and four truthy spellings), the media-type ladder, `410` for a
   missing source and `400` for a bad id, a project-scoped read from
   `.projects/{id}/files`, and the auth boundary.
-- `tasks/native-runtime/file_routes_parity_probe.py` — **103 cases** against the
-  imported oracle: 26 filenames through `clean_filename` and both dispositions, 21
-  cached-file shapes through `original_file_media_type`, and the 179/180/181/400-character
-  caps.
+- `tasks/native-runtime/file_routes_parity_probe.py` — the filename, disposition and
+  media-type corpus (26 names, 21 cached-file shapes, and the 179/180/181/400-character
+  caps) against the imported oracle. The same probe now also carries the reader and
+  page-text and page-search corpora; the current run is **345 cases** and is
+  recorded under `/api/file-page-text` and `GET /api/file-page-search`.
 
 ## `/api/chat`
 
@@ -277,11 +286,187 @@ The rules that are easy to get wrong, and are therefore pinned:
   `hasPrevious`/`hasNext`, the falsy-value defaults with a per-field `400`, the 12-chunk
   cap, the empty-list shape, the 1-based single chunk with its `404` and `400`, an
   unknown id's `410`, and the auth boundary.
-- `tasks/native-runtime/file_routes_parity_probe.py` — **201 cases** against the
-  imported oracle, including 56 window shapes across seven cached indexes and 42 chunk
-  lookups. The oracle's own `file_reader_window` runs unmodified; the probe repoints
+- `tasks/native-runtime/file_routes_parity_probe.py` — the reader corpus (56 window
+  shapes across seven cached indexes and 42 chunk lookups) against the imported
+  oracle. The oracle's own `file_reader_window` runs unmodified; the probe repoints
   `rag_files.FILE_CACHE_DIR`, which is the name `files.py` reads (it imports the constant
-  by value, so patching `config.FILE_CACHE_DIR` alone does nothing).
+  by value, so patching `config.FILE_CACHE_DIR` alone does nothing). The current run of
+  this probe is **345 cases**, including the page-text and page-search corpora
+  below.
+
+## `/api/file-page-text`
+
+One page of extracted text for the document reader's text pane.
+`deepseek_infra/web/server.py` → `deepseek-gateway::file_reader_route::api_file_page_text`,
+over `deepseek-policy::file_routes::file_page_text`.
+
+| | |
+|---|---|
+| Entry | `POST /api/file-page-text` |
+| Body | `{fileId, projectId?, page?}` |
+| Answer | `{ok, file, page: {index, pageCount, text, hasText}}` |
+| Default | `page or 1` |
+| `400` | `Invalid page`, `Invalid file id`, `Invalid project id` |
+| `410` | uploaded index missing (`file_index_expired`) |
+
+The rules that are easy to get wrong, and are therefore pinned:
+
+- **The page count is raised** to the highest `pageTexts` entry, then floored at 1. A
+  request past that count clamps to the last page; it is not a 404.
+- **A page with no extracted text falls back to an even character split of the chunk
+  text.** For the measured fixture (`"chunk text"` across 5 pages) page 3 is `"k"`.
+- **`int()` is not a float parse.** `"1.5"` and `"True"` are `400 Invalid page`.
+  `"1_0"` is 10 and then clamped. `2.5` truncates toward zero. `True` is page 1.
+- **`hasText` is `bool(page_text.strip())` on the uncapped text.** A file with no pages
+  still answers one page whose `hasText` is false.
+- **The route only reads.** A success and a refusal leave the cache bytes and mtimes
+  unchanged, and an unknown id does not create a file.
+
+### Verification
+
+- `cargo test -p deepseek-gateway --test file_page_text_route` — 7 real-HTTP cases
+  through `create_production_app`: the extracted page and the clamp, the chunk-split
+  fallback, falsy defaults, `"x"` / `"1.5"` / `"True"` refused with the cache unchanged,
+  an empty extraction, a bad id and a missing index, a project-scoped read that does not
+  return the global file, and the auth boundary.
+- `tasks/native-runtime/file_routes_parity_probe.py` — **345 cases**, **PASS**. The
+  `page_texts` section is 8 cached indexes × 16 page values, plus a missing id and a
+  malformed id, compared with the imported `file_page_text`. The same run includes
+  `page_search` (below). Report: `artifacts/file-routes-parity.json`.
+
+## `GET /api/file-page-search`
+
+Keyword search across extracted pages. `deepseek_infra/web/routes/files.py` →
+`deepseek-gateway::file_reader_route::api_file_page_search`, over
+`deepseek-policy::file_routes::file_page_search`.
+
+| | |
+|---|---|
+| Entry | `GET /api/file-page-search?fileId=…&projectId=…&query=…` |
+| Answer | `{ok, file, query, pageCount, matches, truncated}` |
+| `400` | blank query (`Search query is required`), bad file id, bad project id |
+| `410` | uploaded index missing |
+
+The match index is an index into `str.casefold` of the page, then applied to the
+original text. `ß` folds to `ss`, so a query of `strasse` hits `Straße`. A query
+longer than 200 characters is truncated before the search. `truncated` is true once
+200 matches have been kept, which is the oracle's `>=` check. An empty `pageTexts`
+list falls back to splitting the joined chunk text. The route only reads.
+
+### Verification
+
+- `cargo test -p deepseek-gateway --test file_page_text_route` includes
+  `a_page_search_finds_a_match_and_a_blank_query_writes_nothing`: `page` hits both
+  pages of the fixture, a blank query is `400` with the cache bytes and mtimes
+  unchanged, and a missing token is `401`.
+- The parity probe's `page_search` section (2 indexes × 7 queries, including
+  `strasse` against `Straße`) is inside the **345** passing cases.
+
+## `GET /api/file-page-image` and `GET /api/file-page-layout`
+
+`/api/file-page-image` renders one PDF page and caches
+`{fileId}.page-{n}-{scaleKey}.png` next to the source. The response is
+`image/png` with `X-File-Page`, `X-File-Page-Count` and an inline
+`Content-Disposition`. `/api/file-page-layout` returns the word boxes and does
+not write a file.
+
+The boxes for unembedded Helvetica match PyMuPDF. The PNG is produced by
+`pdftoppm` at `round(scale * 72)` DPI, so its bytes are not MuPDF's pixmap and
+its pixel size stays within a few pixels of `ceil(points * scale)`.
+
+| | |
+|---|---|
+| Image entry | `GET /api/file-page-image?fileId=&page=&scale=` |
+| Layout entry | `GET /api/file-page-layout?fileId=&page=` |
+| Non-PDF | `415 unsupported_file`, no cache write |
+| Bad page or scale | `400 invalid_payload`, no cache write |
+| Missing token | `401`, no cache write |
+
+### Verification
+
+- `cargo test -p deepseek-gateway --test file_page_render_route` — one production
+  case: the PNG is cached and a repeat read returns the same bytes; the layout
+  text is `Hello pdf` / `World`; a text file and a bad page or scale leave the
+  cache names unchanged.
+- `tasks/native-runtime/file_page_render_probe.py` — **3 PDFs, PASS** against
+  unmodified `render_pdf_page_layout` and `render_pdf_page_png`.
+
+## `POST /api/file-text`
+
+Multipart upload. `deepseek_infra/web/server.py` → `deepseek-gateway::file_text_route`,
+over `deepseek-policy::file_upload` for text, HTML, DOCX, PPTX, XLSX, selectable PDF text, EPUB, and OCR. The extracted file is written
+to `.file-cache/{fileId}.json` and `{fileId}.source`, which `/api/file-reader` and
+`/api/file-source` then read back.
+
+| | |
+|---|---|
+| Entry | `POST /api/file-text` (`multipart/form-data`, field `files`) |
+| Answer | `{files, errors, file}` |
+| Text / HTML / DOCX / PPTX / XLSX / selectable PDF / EPUB | extracted, chunked, cached |
+| Image or textless PDF, OCR on | recognized and cached. Image text is the OCR text. Each textless PDF page is labeled `[PDF 第 N 页 (OCR)]` |
+| Image, OCR off | `415 ocr_required`, no cache write |
+| Textless PDF, OCR off | `422 ocr_required`, no cache write |
+| OCR recognized nothing | `422 ocr_empty`, no cache write |
+| OCR engine missing | `415 ocr_unavailable`, no cache write |
+| Broken DOCX or PPTX | `422` invalid file or invalid XML, no cache write |
+| Broken or unloadable XLSX | `422 Invalid xlsx file`, no cache write |
+| Corrupt PDF | `422 Could not extract text from this PDF`, no cache write |
+| Corrupt EPUB | `422 Invalid epub file`, no cache write |
+| EPUB with no chapter text | `422 No readable text found in this file`, no cache write |
+| Empty / binary | `400` empty file, `415 unsupported_file` |
+
+### Verification
+
+- `cargo test -p deepseek-gateway --test file_text_route` — 10 real-HTTP cases through
+  `create_production_app`: a text upload, a DOCX upload, a PPTX upload, an XLSX
+  upload, a two-page PDF, an EPUB, an OCR image and an OCR PDF come back from
+  `/api/file-source` as the original bytes and from `/api/file-reader` as the
+  extracted text. Empty, binary, an image with OCR off, a truncated PDF, a
+  textless PDF with OCR off, a blank PDF with OCR on, a nav-only EPUB and corrupt
+  DOCX/PPTX/XLSX/EPUB leave the cache empty. HTML drops the script. The route
+  tests set `OCR_FORMULA_CMD` to `cmd /c exit 1` so pix2tex, whose text changes
+  between processes, is not the winning engine.
+- `tasks/native-runtime/file_text_parity_probe.py` — **31 cases, PASS** against
+  unmodified `extract_uploaded_file`. The PPTX case keeps an empty middle slide in
+  the page number (`第 1 页` then `第 3 页`) and strips each text run. The XLSX
+  cases cover an openpyxl workbook (strings, numbers, bools, styled dates and an
+  empty sheet), shared strings, a bad ZIP, broken content types, and a ZIP that
+  has worksheet XML but no `[Content_Types].xml`. The PDF cases cover a two-page
+  literal-text file, a PyMuPDF drawing, a textless page and a corrupt header.
+  The EPUB case sorts `C.HTML` before `a.xhtml`, drops `nav.xhtml` and
+  `toc.xhtml`, and drops script text. The two OCR cases are a 360×140 `HELLO`
+  PNG and a one-page PDF of that image. The probe sets `OCR_FORMULA_CMD` to
+  `cmd /c exit 1` before importing settings, for the same pix2tex reason. The
+  probe does not call the host RAG index.
+
+## `POST /api/project-files`
+
+Multipart upload onto an existing project. `deepseek_infra/web/routes/workspace.py`
+→ `deepseek-gateway::project_files_route`, over `deepseek-policy::projects::add_project_files`
+and the same extractor as `/api/file-text`. The file cache is
+`.projects/{projectId}/files/`. The document list is `project.json`.
+
+| | |
+|---|---|
+| Entry | `POST /api/project-files?projectId=` (`multipart/form-data`, field `files`) |
+| Answer | `{ok, documents}` |
+| Python still owns the store | `409 NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED`, no write |
+| `python_disabled`, legal file | cached under the project and recorded in `project.json` |
+| Read back | `GET /api/workspace/projects/{projectId}` returns the document |
+| Missing project | `404 Project not found`, no directory created |
+| Unsupported file | `415 unsupported_file`, `project.json` unchanged |
+| Missing token | `401` |
+
+The route does not write `.local-rag`. Other project mutations stay
+`501 NATIVE_PROJECTS_MUTATIONS_NOT_READY`.
+
+### Verification
+
+- `cargo test -p deepseek-gateway --test project_files_route` — 3 real-HTTP cases
+  through `create_production_app`. The success case reads the document back from
+  the workspace GET, `/api/file-reader`, and `/api/file-source`. The refusal case
+  covers an empty runtime mode, `python_authoritative`, and `go_authoritative`,
+  and compares `project.json` bytes.
 
 ## CI
 

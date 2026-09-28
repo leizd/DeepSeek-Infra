@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Additive control-mutation-request-v2 apply-mutation corpus. v1 semantics, digests, field set and signature domain are unchanged, and v2 uses a distinct signature domain so no v1 signature can be replayed as a v2 document.",
+  "normalization": "LF-normalized SHA-256 of public inventory/fixture bytes",
+  "corpora": [
+    {
+      "id": "control-mutation-request-v2-semantics-v32",
+      "path": "compat/native-runtime/v32/control/mutation_request_v2_vector.json",
+      "eventual_owner": "go",
+      "sensitivity": "public",
+      "title": "Frozen control-mutation-request-v2 apply-mutation verification vector",
+      "sha256": "a650c633430705db871f2d27023f82bff3185e3ef6a0d44ad710f0cb164eb8e6"
+    }
+  ]
+}
