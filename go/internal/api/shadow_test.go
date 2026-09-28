@@ -4,17 +4,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
+
 	"testing"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 )
 
 func TestActionDispatchFailsClosedWithoutAuthority(t *testing.T) {
-	server := httptest.NewServer(Handler())
+	server, client := newInternalServer(t, HandlerWithBearer(testInternalBearer))
 	defer server.Close()
 	post := func(body string) *http.Response {
-		resp, err := http.Post(server.URL+"/internal/action/dispatch", "application/json", bytes.NewReader([]byte(body)))
+		resp, err := client.Post(server.URL+"/internal/action/dispatch", "application/json", bytes.NewReader([]byte(body)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -57,7 +57,7 @@ func TestActionDispatchFailsClosedWithoutAuthority(t *testing.T) {
 	if sign.StatusCode != http.StatusConflict {
 		t.Fatalf("sign %d", sign.StatusCode)
 	}
-	get, err := http.Get(server.URL + "/internal/action/dispatch")
+	get, err := client.Get(server.URL + "/internal/action/dispatch")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,9 +83,7 @@ func TestActionDispatchUsesLocallyStoredEpoch(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	mux := http.NewServeMux()
-	Register(mux, control)
-	server := httptest.NewServer(mux)
+	server, client := newInternalServer(t, internalHandler(control))
 	defer server.Close()
 
 	post := func(actionID string, epoch uint64) map[string]string {
@@ -94,7 +92,7 @@ func TestActionDispatchUsesLocallyStoredEpoch(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		response, err := http.Post(server.URL+"/internal/action/dispatch", "application/json", bytes.NewReader(body))
+		response, err := client.Post(server.URL+"/internal/action/dispatch", "application/json", bytes.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -129,7 +127,7 @@ func TestActionDispatchUsesLocallyStoredEpoch(t *testing.T) {
 }
 
 func TestShadowEvaluateAndMutationDenied(t *testing.T) {
-	server := httptest.NewServer(Handler())
+	server, client := newInternalServer(t, HandlerWithBearer(testInternalBearer))
 	defer server.Close()
 	body, _ := json.Marshal(map[string]any{
 		"nowUnix":               1756771200,
@@ -141,7 +139,7 @@ func TestShadowEvaluateAndMutationDenied(t *testing.T) {
 		"localFleetId":          "fleet-a",
 		"federationTransitions": []any{},
 	})
-	resp, err := http.Post(server.URL+"/internal/shadow/evaluate", "application/json", bytes.NewReader(body))
+	resp, err := client.Post(server.URL+"/internal/shadow/evaluate", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +154,7 @@ func TestShadowEvaluateAndMutationDenied(t *testing.T) {
 	if payload["mutationDenied"] != true {
 		t.Fatalf("payload %+v", payload)
 	}
-	denied, err := http.Post(server.URL+"/internal/action/execute", "application/json", bytes.NewReader([]byte(`{}`)))
+	denied, err := client.Post(server.URL+"/internal/action/execute", "application/json", bytes.NewReader([]byte(`{}`)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,9 +165,9 @@ func TestShadowEvaluateAndMutationDenied(t *testing.T) {
 }
 
 func TestShadowEvaluateRejectsBadRequests(t *testing.T) {
-	server := httptest.NewServer(Handler())
+	server, client := newInternalServer(t, HandlerWithBearer(testInternalBearer))
 	defer server.Close()
-	get, err := http.Get(server.URL + "/internal/shadow/evaluate")
+	get, err := client.Get(server.URL + "/internal/shadow/evaluate")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +175,7 @@ func TestShadowEvaluateRejectsBadRequests(t *testing.T) {
 	if get.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("get %d", get.StatusCode)
 	}
-	bad, err := http.Post(server.URL+"/internal/shadow/evaluate", "application/json", bytes.NewReader([]byte("{")))
+	bad, err := client.Post(server.URL+"/internal/shadow/evaluate", "application/json", bytes.NewReader([]byte("{")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,9 +191,7 @@ func TestShadowEvaluatePersistsAdmittedActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer control.Close()
-	mux := http.NewServeMux()
-	Register(mux, control)
-	server := httptest.NewServer(mux)
+	server, client := newInternalServer(t, internalHandler(control))
 	defer server.Close()
 	body, _ := json.Marshal(map[string]any{
 		"nowUnix":   1756771200,
@@ -209,7 +205,7 @@ func TestShadowEvaluatePersistsAdmittedActions(t *testing.T) {
 		"localFleetId":          "fleet-a",
 		"federationTransitions": []any{},
 	})
-	resp, err := http.Post(server.URL+"/internal/shadow/evaluate", "application/json", bytes.NewReader(body))
+	resp, err := client.Post(server.URL+"/internal/shadow/evaluate", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,11 +218,9 @@ func TestShadowEvaluatePersistsAdmittedActions(t *testing.T) {
 		t.Fatalf("persisted %+v %v %v", record, ok, err)
 	}
 	_ = control.Close()
-	mux = http.NewServeMux()
-	Register(mux, control)
-	closed := httptest.NewServer(mux)
+	closed, _ := newInternalServer(t, internalHandler(control))
 	defer closed.Close()
-	again, err := http.Post(closed.URL+"/internal/shadow/evaluate", "application/json", bytes.NewReader(body))
+	again, err := client.Post(closed.URL+"/internal/shadow/evaluate", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,11 +239,9 @@ func TestShadowSnapshotReport(t *testing.T) {
 	if err := control.Put(store.Record{Domain: "policy", ID: "p1", Revision: 1, State: "ACTIVE", Payload: json.RawMessage(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
-	mux := http.NewServeMux()
-	Register(mux, control)
-	server := httptest.NewServer(mux)
+	server, client := newInternalServer(t, internalHandler(control))
 	defer server.Close()
-	post, err := http.Post(server.URL+"/internal/shadow/snapshot", "application/json", bytes.NewReader([]byte("{}")))
+	post, err := client.Post(server.URL+"/internal/shadow/snapshot", "application/json", bytes.NewReader([]byte("{}")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +249,7 @@ func TestShadowSnapshotReport(t *testing.T) {
 	if post.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("post %d", post.StatusCode)
 	}
-	resp, err := http.Get(server.URL + "/internal/shadow/snapshot")
+	resp, err := client.Get(server.URL + "/internal/shadow/snapshot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,9 +264,9 @@ func TestShadowSnapshotReport(t *testing.T) {
 	if report["runtime"] != "go" || report["mode"] != "shadow" || report["digest"] == "" {
 		t.Fatalf("report %+v", report)
 	}
-	missing := httptest.NewServer(Handler())
+	missing, _ := newInternalServer(t, HandlerWithBearer(testInternalBearer))
 	defer missing.Close()
-	none, err := http.Get(missing.URL + "/internal/shadow/snapshot")
+	none, err := client.Get(missing.URL + "/internal/shadow/snapshot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,9 +275,9 @@ func TestShadowSnapshotReport(t *testing.T) {
 		t.Fatalf("missing %d", none.StatusCode)
 	}
 	_ = control.Close()
-	closedSnap := httptest.NewServer(mux)
+	closedSnap, _ := newInternalServer(t, internalHandler(control))
 	defer closedSnap.Close()
-	conflict, err := http.Get(closedSnap.URL + "/internal/shadow/snapshot")
+	conflict, err := client.Get(closedSnap.URL + "/internal/shadow/snapshot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,16 +294,14 @@ func TestCutoverStatusAndTransitionEndpoints(t *testing.T) {
 	}
 	defer control.Close()
 
-	mux := http.NewServeMux()
-	Register(mux, control)
-	server := httptest.NewServer(mux)
+	server, client := newInternalServer(t, internalHandler(control))
 	defer server.Close()
 
-	nilServer := httptest.NewServer(Handler())
+	nilServer, _ := newInternalServer(t, HandlerWithBearer(testInternalBearer))
 	defer nilServer.Close()
 
 	// 1. Nil control -> 503
-	resp, err := http.Get(nilServer.URL + "/internal/cutover/status?domain=policy")
+	resp, err := client.Get(nilServer.URL + "/internal/cutover/status?domain=policy")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +311,7 @@ func TestCutoverStatusAndTransitionEndpoints(t *testing.T) {
 	}
 
 	// 2. Missing domain -> 400
-	resp, err = http.Get(server.URL + "/internal/cutover/status")
+	resp, err = client.Get(server.URL + "/internal/cutover/status")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +321,7 @@ func TestCutoverStatusAndTransitionEndpoints(t *testing.T) {
 	}
 
 	// 3. Unknown domain -> 404
-	resp, err = http.Get(server.URL + "/internal/cutover/status?domain=nonexistent_domain")
+	resp, err = client.Get(server.URL + "/internal/cutover/status?domain=nonexistent_domain")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +331,7 @@ func TestCutoverStatusAndTransitionEndpoints(t *testing.T) {
 	}
 
 	// 4. Existing domain initial status -> 200 OK, State = "shadow"
-	resp, err = http.Get(server.URL + "/internal/cutover/status?domain=policy")
+	resp, err = client.Get(server.URL + "/internal/cutover/status?domain=policy")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +348,7 @@ func TestCutoverStatusAndTransitionEndpoints(t *testing.T) {
 	}
 
 	// 5. Method not allowed
-	postToStatus, err := http.Post(server.URL+"/internal/cutover/status?domain=policy", "application/json", bytes.NewReader([]byte("{}")))
+	postToStatus, err := client.Post(server.URL+"/internal/cutover/status?domain=policy", "application/json", bytes.NewReader([]byte("{}")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +366,7 @@ func TestCutoverStatusAndTransitionEndpoints(t *testing.T) {
 		"fencingToken":     rec.FencingToken,
 		"transferId":       "test-trans-1",
 	})
-	transResp, err := http.Post(server.URL+"/internal/cutover/transition", "application/json", bytes.NewReader(transBody))
+	transResp, err := client.Post(server.URL+"/internal/cutover/transition", "application/json", bytes.NewReader(transBody))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +383,7 @@ func TestCutoverStatusAndTransitionEndpoints(t *testing.T) {
 	}
 
 	// 7a. Idempotent replay with same transferId -> 200 OK
-	replayResp, err := http.Post(server.URL+"/internal/cutover/transition", "application/json", bytes.NewReader(transBody))
+	replayResp, err := client.Post(server.URL+"/internal/cutover/transition", "application/json", bytes.NewReader(transBody))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +401,7 @@ func TestCutoverStatusAndTransitionEndpoints(t *testing.T) {
 		"fencingToken":     rec.FencingToken,
 		"transferId":       "test-trans-conflict-2",
 	})
-	conflictResp, err := http.Post(server.URL+"/internal/cutover/transition", "application/json", bytes.NewReader(conflictBody))
+	conflictResp, err := client.Post(server.URL+"/internal/cutover/transition", "application/json", bytes.NewReader(conflictBody))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +411,7 @@ func TestCutoverStatusAndTransitionEndpoints(t *testing.T) {
 	}
 
 	// 8. Invalid JSON -> 400 Bad Request
-	badJsonResp, err := http.Post(server.URL+"/internal/cutover/transition", "application/json", bytes.NewReader([]byte("{bad")))
+	badJsonResp, err := client.Post(server.URL+"/internal/cutover/transition", "application/json", bytes.NewReader([]byte("{bad")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,7 +421,7 @@ func TestCutoverStatusAndTransitionEndpoints(t *testing.T) {
 	}
 
 	// 9. Method not allowed (GET to transition endpoint)
-	getTransResp, err := http.Get(server.URL + "/internal/cutover/transition")
+	getTransResp, err := client.Get(server.URL + "/internal/cutover/transition")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +431,7 @@ func TestCutoverStatusAndTransitionEndpoints(t *testing.T) {
 	}
 
 	// 10. Nil control on transition endpoint -> 503
-	nilTransResp, err := http.Post(nilServer.URL+"/internal/cutover/transition", "application/json", bytes.NewReader([]byte("{}")))
+	nilTransResp, err := client.Post(nilServer.URL+"/internal/cutover/transition", "application/json", bytes.NewReader([]byte("{}")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,11 +447,11 @@ func TestEvaluateShadowEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer control.Close()
-	server := httptest.NewServer(Handler())
+	server, client := newInternalServer(t, HandlerWithBearer(testInternalBearer))
 	defer server.Close()
 
 	// 1. Method not allowed (GET)
-	getResp, err := http.Get(server.URL + "/internal/shadow/evaluate")
+	getResp, err := client.Get(server.URL + "/internal/shadow/evaluate")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -471,7 +461,7 @@ func TestEvaluateShadowEndpoint(t *testing.T) {
 	}
 
 	// 2. Bad JSON
-	badResp, err := http.Post(server.URL+"/internal/shadow/evaluate", "application/json", bytes.NewReader([]byte("{")))
+	badResp, err := client.Post(server.URL+"/internal/shadow/evaluate", "application/json", bytes.NewReader([]byte("{")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,11 +471,9 @@ func TestEvaluateShadowEndpoint(t *testing.T) {
 	}
 
 	// 3. Success
-	mux := http.NewServeMux()
-	Register(mux, control)
-	cServer := httptest.NewServer(mux)
+	cServer, _ := newInternalServer(t, internalHandler(control))
 	defer cServer.Close()
-	okResp, err := http.Post(cServer.URL+"/internal/shadow/evaluate", "application/json", bytes.NewReader([]byte("{}")))
+	okResp, err := client.Post(cServer.URL+"/internal/shadow/evaluate", "application/json", bytes.NewReader([]byte("{}")))
 	if err != nil {
 		t.Fatal(err)
 	}

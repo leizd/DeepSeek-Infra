@@ -27,7 +27,7 @@ func TestDeepseekdKilledProcessPreservesAcknowledgedStateAndWriterFence(t *testi
 	binary := buildDeepseekd(t)
 	stateRoot := t.TempDir()
 	first := startDeepseekd(t, binary, stateRoot, "process-first")
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := processInternalClient(3 * time.Second)
 	defer client.CloseIdleConnections()
 	response, err := client.Post("http://"+first.address+"/internal/shadow/evaluate", "application/json", strings.NewReader(`{"policies":[{"policyId":"process-survives-kill","name":"acknowledged policy"}]}`))
 	if err != nil {
@@ -98,7 +98,7 @@ func TestDeepseekdProcessStopsAdmissionAndExitsOnBlockedRenewal(t *testing.T) {
 	binary := buildDeepseekd(t)
 	stateRoot := t.TempDir()
 	child := startDeepseekd(t, binary, stateRoot, "blocked-process")
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := processInternalClient(3 * time.Second)
 	defer client.CloseIdleConnections()
 	before := processSnapshot(t, client, child.address)
 	blocker, err := sql.Open("sqlite", filepath.Join(stateRoot, store.ControlDatabaseFilename))
@@ -224,7 +224,7 @@ func processEnvironment(stateRoot, owner string) []string {
 			values = append(values, value)
 		}
 	}
-	return append(values, "DEEPSEEKD_MODE=shadow", "DEEPSEEKD_LISTEN=127.0.0.1:0", "DEEPSEEKD_OWNER="+owner, "DEEPSEEKD_SHADOW_STORE="+stateRoot, "DEEPSEEKD_PRODUCTION_STORE=")
+	return append(values, "DEEPSEEKD_MODE=shadow", "DEEPSEEKD_LISTEN=127.0.0.1:0", "DEEPSEEKD_OWNER="+owner, "DEEPSEEKD_SHADOW_STORE="+stateRoot, "DEEPSEEKD_PRODUCTION_STORE=", "DEEPSEEKD_INTERNAL_BEARER="+processInternalBearer)
 }
 
 func (child *deepseekdProcess) assertRunning(t *testing.T) {
@@ -251,6 +251,22 @@ func (child *deepseekdProcess) killAndWait(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Error("terminated child was not reaped")
 	}
+}
+
+// processInternalBearer is the credential every started deepseekd is given and
+// every control-plane request must present: the internal API is never anonymous.
+const processInternalBearer = "deepseekd-process-bearer-0123456789abcdef"
+
+type processBearerTransport struct{}
+
+func (processBearerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	clone := request.Clone(request.Context())
+	clone.Header.Set("Authorization", "Bearer "+processInternalBearer)
+	return http.DefaultTransport.RoundTrip(clone)
+}
+
+func processInternalClient(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout, Transport: processBearerTransport{}}
 }
 
 func processSnapshot(t *testing.T, client *http.Client, address string) store.Snapshot {

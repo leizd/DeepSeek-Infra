@@ -46,6 +46,36 @@
       "version": 3,
       "up": "create append-only replay-safe control operation journal; widen schema_version bound to 3",
       "down": "drop operation journal together with domain and cutover tables during rollback to schema 0"
+    },
+    {
+      "version": 4,
+      "up": "bind storage dispatch intent to the action claim; widen schema_version bound to 4",
+      "down": "drop storage dispatch intent tables during rollback to schema 0"
+    },
+    {
+      "version": 5,
+      "up": "create action leases and atomic resource admission; widen schema_version bound to 5",
+      "down": "drop action lease and resource lease tables during rollback to schema 0"
+    },
+    {
+      "version": 6,
+      "up": "create the immutable action reconciliation boundary; widen schema_version bound to 6",
+      "down": "drop the reconciliation boundary during rollback to schema 0"
+    },
+    {
+      "version": 7,
+      "up": "create the immutable action verification boundary; widen schema_version bound to 7",
+      "down": "drop the verification boundary during rollback to schema 0"
+    },
+    {
+      "version": 8,
+      "up": "create control authority head, append-only checkpoint journal, and append-only cutover authorizations; widen schema_version bound to 8",
+      "down": "drop cutover authorizations, authority checkpoints, and the authority head during rollback to schema 0"
+    },
+    {
+      "version": 9,
+      "up": "widen the control operation journal result status to PROPOSED or APPLIED, preserving every row and the frozen immutability triggers; widen schema_version bound to 9",
+      "down": "no down migration: a journal row that records an applied result cannot be rewritten as a proposal"
     }
   ],
   "tables": [
@@ -67,21 +97,126 @@
     "events": "control_cutover_events",
     "default_state": "shadow",
     "first_candidate_domain": "policy",
-    "go_authoritative": "cutover-not-authorized",
+    "go_authoritative": "authorized-by-control-authority-claim",
     "states": [
       "shadow",
       "dual_evaluate",
       "go_authoritative",
       "python_shadow",
       "python_disabled"
+    ],
+    "promotion_preconditions": [
+      "the deployment opened the store with the cutover-authority capability (default off)",
+      "a control-authority-v1 checkpoint is installed as the live authority head",
+      "the presented checkpoint is that live tip (generation and digest)",
+      "the transition is legal, and the revision, epoch and fencing token expectations match"
+    ],
+    "de_promotion": "requires no authority so ownership is always recoverable",
+    "epoch_advance": "only inside the authorizing transaction"
+  },
+  "production_authority": {
+    "source": "the durable control_cutover record, read through store.IsGoAuthoritative(domain)",
+    "governed_domain": "action",
+    "self_assertion": "rejected: WithAuthoritative(true) is a claim that must be backed by the durable record, and a larger epoch is never authority",
+    "gated_entry_points": [
+      "Coordinator.ExecuteStorageAction",
+      "Coordinator.ReconcileStorageAction",
+      "Coordinator.ReconcileClaimedStorageAction",
+      "Coordinator.ExecuteClaimedStorageAction"
+    ],
+    "non_authoritative_path": "unchanged qualification path; it does not consult the cutover record",
+    "refusal": "CUTOVER_NOT_AUTHORIZED before any durable write, with the cutover record left untouched"
+  },
+  "internal_api": {
+    "prefix": "/internal/",
+    "routes": [
+      "/internal/shadow/evaluate",
+      "/internal/shadow/snapshot",
+      "/internal/action/execute",
+      "/internal/action/dispatch",
+      "/internal/cutover/status",
+      "/internal/cutover/transition",
+      "/internal/authority/head",
+      "/internal/authority/claim",
+      "/internal/mutation/apply"
+    ],
+    "authority_claim": {
+      "body": "a control-authority-v1 checkpoint, bounded to 16 MiB and checked by the store for integrity, live chain, writer lease and deployment capability",
+      "success": "200 with head and advanced; an exact replay returns advanced=false without a second journal append",
+      "unclaimed_head": "GET /internal/authority/head returns 404 CONTROL_AUTHORITY_NOT_CLAIMED before the first claim",
+      "refusals": "400 malformed or null checkpoint, 413 oversized checkpoint, 409 invalid chain or disabled cutover capability"
+    },
+    "mutation_apply": {
+      "body": "the exact canonical control-mutation-request-v2 document bytes",
+      "authority": "the signer public key, fleet id and environment come from DEEPSEEKD_MUTATION_SIGNER_KEY / DEEPSEEKD_FLEET_ID / DEEPSEEKD_ENVIRONMENT, never from the request",
+      "unconfigured_signer": "503 MUTATION_SIGNER_NOT_CONFIGURED",
+      "refusal": "409 with the store error code (for example CUTOVER_NOT_AUTHORIZED)",
+      "success": "200 with the operation result; a retry of the same operation is ALREADY_APPLIED and never applies twice",
+      "oversized_body": "413 MUTATION_REQUEST_TOO_LARGE"
+    },
+    "authentication": "Authorization: Bearer <DEEPSEEKD_INTERNAL_BEARER>",
+    "credential_min_length": 32,
+    "peer": "loopback-only, independent of the listener address",
+    "comparison": "constant-time",
+    "anonymous_deployment": "routes stay mounted but every request answers 401 INTERNAL_API_UNAUTHORIZED",
+    "unauthorized_response": {
+      "status": 401,
+      "body": {"error": "INTERNAL_API_UNAUTHORIZED"},
+      "challenge": "WWW-Authenticate: Bearer"
+    },
+    "public_api_unaffected": ["/healthz", "/api/control/status", "/api/*"],
+    "cutover_coupling": "DEEPSEEKD_CONTROL_AUTHORITY is refused unless an internal API bearer is configured, so the migration authority cannot be claimed over an unauthenticated channel"
+  },
+  "authority": {
+    "schema": "control-authority-v1",
+    "head": {
+      "table": "control_authority_head",
+      "single_row": true,
+      "immutable": "insert-or-cas-update only; delete refused"
+    },
+    "checkpoints": {
+      "table": "control_authority_checkpoints",
+      "mutation": "insert-only",
+      "chain": "monotonic generation; previous digest must match the live tip"
+    },
+    "cutover_authorizations": {
+      "table": "control_cutover_authorizations",
+      "mutation": "insert-only",
+      "binds": [
+        "domain",
+        "transferId",
+        "authority generation and digest",
+        "from and to state",
+        "previous and next revision, epoch and fencing token"
+      ]
+    },
+    "claim": "store.ClaimControlAuthority advances the head; it is the only path that installs production control authority, reachable through bearer-guarded POST /internal/authority/claim",
+    "deployment_gate": "store.OpenOptions.AuthorizeCutover, taken from DEEPSEEKD_CONTROL_AUTHORITY, which config refuses unless an internal API bearer is configured",
+    "open_gaps": [
+      "no per-domain externally signed promotion request exists yet",
+      "no provider-backed kill/takeover reconciliation evidence exists yet",
+      "no production ownership cutover or exact-head release evidence exists yet"
     ]
   },
   "operations": {
     "table": "control_operations",
     "mutation": "insert-only",
-    "result_status": "PROPOSED",
+    "result_status": "PROPOSED for a v1 proposal; APPLIED for a v2 apply-mutation",
     "already_applied": "computed-on-accept-retry",
-    "production_apply": "denied",
+    "production_apply": "implemented-through-v2-apply-mutation",
+    "production_apply_scope": "reachable over the authenticated internal plane at POST /internal/mutation/apply (the body is the canonical v2 document; the signer key is deployment configuration, never caller-supplied). Verification parity is complete across Python, Go and Rust (compat v32, 34 cases).",
+    "production_apply_reason": "the frozen control-mutation-request-v1 carries exactly one intent, shadow-compare, whose payload is a comparison expectation with no record body; it cannot authorize a production mutation, and reinterpreting it as one is forbidden. Acceptance is therefore refused once the domain is Go-authoritative, before any durable write.",
+    "production_apply_contract_revision": "control-mutation-request-v2 (compat v32): operation apply-mutation, payload field recordPayload, and a distinct signature domain. Applied by Control.ApplyMutation, which requires the deployment cutover capability, a durably Go-authoritative domain, the live cutover revision/epoch/fencing token, the request's actionId + executionEpoch, and the record body the signer committed to.",
+    "production_apply_atomicity": "the record write, the operation journal row and the control event are one transaction; a retry of the same operation is idempotent and never applies twice",
+    "shadow_write_guard": "shadow persistence uses PutShadow, which checks the durable cutover in the write transaction for every domain; direct Put also refuses unsigned writes to promoted non-fenced control domains. A promoted domain cannot be mutated through the shadow API instead of the signed v2 apply channel",
+    "production_apply_refusals": [
+      "no cutover capability or a domain that is not durably Go-authoritative",
+      "a fenced domain (action/scheduler_run/wave/transfer) whose mutations belong to the lease and admission path",
+      "a stale cutover revision, epoch or fencing token",
+      "a record revision that is not the next one",
+      "a record body carrying secret material, or one using floats",
+      "reuse of an operation ID in a different control domain, even with an identical payload digest"
+    ],
     "first_candidate_domain": "policy"
   },
   "writer_plan": {
