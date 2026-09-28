@@ -7,9 +7,18 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 pub const MUTATION_REQUEST_SCHEMA: &str = "control-mutation-request-v1";
+/// The approved versioned revision that carries a record body and the
+/// `apply-mutation` operation. v1 keeps its schema identity, field set, digests
+/// and signature domain unchanged.
+pub const MUTATION_REQUEST_V2_SCHEMA: &str = "control-mutation-request-v2";
 pub const MAX_MUTATION_REQUEST_BYTES: usize = 16 * 1024;
 const SIGNATURE_DOMAIN: &[u8] = b"deepseek-infra:control-mutation-request-v1\x00";
+/// Deliberately different from v1: the separator is what stops a v1 signature
+/// from being replayed as a v2 document (or the reverse).
+const SIGNATURE_DOMAIN_V2: &[u8] = b"deepseek-infra:control-mutation-request-v2\x00";
 const MAX_LIFETIME_SECONDS: i64 = 300;
+/// Mirrors the Python oracle's recursion bound for a record body.
+const MAX_RECORD_PAYLOAD_DEPTH: usize = 128;
 const MUTATION_REQUEST_FIELDS: &[&str] = &[
     "actionId",
     "digest",
@@ -37,6 +46,41 @@ const MUTATION_REQUEST_FIELDS: &[&str] = &[
     "signerKeyId",
 ];
 const PAYLOAD_FIELDS: &[&str] = &["intent", "recordId", "revision", "state"];
+/// v2 adds the record body the apply operation commits to, and nothing else.
+const PAYLOAD_FIELDS_V2: &[&str] = &["intent", "recordId", "recordPayload", "revision", "state"];
+
+/// Everything that differs between the frozen v1 document and the approved v2
+/// revision. The envelope field set, canonical-JSON rule, checks and error codes
+/// are shared.
+struct MutationRequestSpec {
+    schema: &'static str,
+    schema_version: i64,
+    signature_domain: &'static [u8],
+    allowed_operations: &'static [&'static str],
+    intent: &'static str,
+    payload_fields: &'static [&'static str],
+    requires_record_body: bool,
+}
+
+const V1_SPEC: MutationRequestSpec = MutationRequestSpec {
+    schema: MUTATION_REQUEST_SCHEMA,
+    schema_version: 1,
+    signature_domain: SIGNATURE_DOMAIN,
+    allowed_operations: &["propose-mutation"],
+    intent: "shadow-compare",
+    payload_fields: PAYLOAD_FIELDS,
+    requires_record_body: false,
+};
+
+const V2_SPEC: MutationRequestSpec = MutationRequestSpec {
+    schema: MUTATION_REQUEST_V2_SCHEMA,
+    schema_version: 2,
+    signature_domain: SIGNATURE_DOMAIN_V2,
+    allowed_operations: &["apply-mutation"],
+    intent: "apply-mutation",
+    payload_fields: PAYLOAD_FIELDS_V2,
+    requires_record_body: true,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MutationRequestError {
@@ -75,9 +119,27 @@ pub struct MutationRequestContext<'a> {
     pub max_future_skew_seconds: i64,
 }
 
+/// Verifies a frozen v1 document. Behavior is unchanged from the v17 freeze.
 pub fn verify_mutation_request_document(
     raw: &[u8],
     context: &MutationRequestContext<'_>,
+) -> Result<Value, MutationRequestError> {
+    verify_mutation_request_document_with(raw, context, &V1_SPEC)
+}
+
+/// Verifies a v2 `apply-mutation` document, including the record body it commits
+/// to.
+pub fn verify_mutation_request_v2_document(
+    raw: &[u8],
+    context: &MutationRequestContext<'_>,
+) -> Result<Value, MutationRequestError> {
+    verify_mutation_request_document_with(raw, context, &V2_SPEC)
+}
+
+fn verify_mutation_request_document_with(
+    raw: &[u8],
+    context: &MutationRequestContext<'_>,
+    spec: &MutationRequestSpec,
 ) -> Result<Value, MutationRequestError> {
     if raw.is_empty() {
         return Err(MutationRequestError::new("MUTATION_REQUEST_INVALID"));
@@ -106,22 +168,56 @@ pub fn verify_mutation_request_document(
         return Err(MutationRequestError::new("MUTATION_REQUEST_FIELDS_INVALID"));
     }
     reject_secrets(&document)?;
-    verify_envelope(object, context)?;
-    verify_signature(object, context)?;
+    verify_envelope(object, context, spec)?;
+    verify_signature(object, context, spec)?;
     Ok(document)
+}
+
+/// Enforces exactly the primitive set the Python oracle's canonical encoder
+/// accepts for a record body: null, string, bool, integer, list, and object with
+/// string keys. A float is refused on both sides, which is what keeps the signed
+/// bytes reproducible in every implementation.
+///
+/// One measured, fail-closed divergence: Rust's JSON number model is i64/u64, so
+/// an integer outside that range is refused here while Python (arbitrary
+/// precision) and Go (json.Number) would accept it. Rust is stricter, never
+/// looser, so it cannot apply a body the oracle rejects.
+fn validate_record_body(value: &Value, depth: usize) -> Result<(), MutationRequestError> {
+    if depth > MAX_RECORD_PAYLOAD_DEPTH {
+        return Err(MutationRequestError::new("MUTATION_REQUEST_INVALID"));
+    }
+    match value {
+        Value::Null | Value::Bool(_) | Value::String(_) => Ok(()),
+        Value::Number(number) => {
+            if number.is_i64() || number.is_u64() {
+                Ok(())
+            } else {
+                Err(MutationRequestError::new("MUTATION_REQUEST_INVALID"))
+            }
+        }
+        Value::Array(items) => items
+            .iter()
+            .try_for_each(|item| validate_record_body(item, depth + 1)),
+        Value::Object(map) => map
+            .values()
+            .try_for_each(|item| validate_record_body(item, depth + 1)),
+    }
 }
 
 fn verify_envelope(
     document: &Map<String, Value>,
     context: &MutationRequestContext<'_>,
+    spec: &MutationRequestSpec,
 ) -> Result<(), MutationRequestError> {
-    if string_field(document, "schema") != Some(MUTATION_REQUEST_SCHEMA)
-        || document.get("schemaVersion") != Some(&Value::from(1))
+    if string_field(document, "schema") != Some(spec.schema)
+        || document.get("schemaVersion") != Some(&Value::from(spec.schema_version))
     {
         return Err(MutationRequestError::new("MUTATION_REQUEST_SCHEMA_INVALID"));
     }
     if string_field(document, "operation") != Some(context.expected_operation)
-        || string_field(document, "operation") != Some("propose-mutation")
+        || !spec
+            .allowed_operations
+            .contains(&string_field(document, "operation").unwrap_or(""))
     {
         return Err(MutationRequestError::new(
             "MUTATION_REQUEST_OPERATION_INVALID",
@@ -197,14 +293,15 @@ fn verify_envelope(
         .and_then(Value::as_object)
         .ok_or_else(|| MutationRequestError::new("MUTATION_REQUEST_INVALID"))?;
     let payload_keys: BTreeSet<&str> = payload.keys().map(String::as_str).collect();
-    if payload_keys.len() != PAYLOAD_FIELDS.len()
-        || PAYLOAD_FIELDS
+    if payload_keys.len() != spec.payload_fields.len()
+        || spec
+            .payload_fields
             .iter()
             .any(|field| !payload_keys.contains(field))
     {
         return Err(MutationRequestError::new("MUTATION_REQUEST_INVALID"));
     }
-    if string_field(payload, "intent") != Some("shadow-compare") {
+    if string_field(payload, "intent") != Some(spec.intent) {
         return Err(MutationRequestError::new("MUTATION_REQUEST_INVALID"));
     }
     if !valid_control_id(string_field(payload, "recordId").unwrap_or("")) {
@@ -215,6 +312,13 @@ fn verify_envelope(
     }
     if string_field(payload, "state").unwrap_or("").is_empty() {
         return Err(MutationRequestError::new("MUTATION_REQUEST_INVALID"));
+    }
+    if spec.requires_record_body {
+        let record_payload = payload
+            .get("recordPayload")
+            .and_then(Value::as_object)
+            .ok_or_else(|| MutationRequestError::new("MUTATION_REQUEST_INVALID"))?;
+        validate_record_body(&Value::Object(record_payload.clone()), 0)?;
     }
     let payload_digest = typed_digest(&Value::Object(payload.clone()))?;
     if string_field(document, "payloadDigest") != Some(payload_digest.as_str()) {
@@ -254,6 +358,7 @@ fn verify_envelope(
 fn verify_signature(
     document: &Map<String, Value>,
     context: &MutationRequestContext<'_>,
+    spec: &MutationRequestSpec,
 ) -> Result<(), MutationRequestError> {
     if string_field(document, "signatureAlgorithm") != Some("Ed25519") {
         return Err(MutationRequestError::new(
@@ -270,7 +375,7 @@ fn verify_signature(
     let public_key = decode_fixed(context.signer_public_key, 32)?;
     let mut unsigned = document.clone();
     unsigned.remove("signature");
-    let mut message = SIGNATURE_DOMAIN.to_vec();
+    let mut message = spec.signature_domain.to_vec();
     message.extend(
         canonical_json_bytes(&Value::Object(unsigned))
             .map_err(|_| MutationRequestError::new("MUTATION_REQUEST_INVALID"))?,

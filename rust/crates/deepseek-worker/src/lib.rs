@@ -27,8 +27,9 @@ pub use authority_request::{
     MAX_AUTHORITY_REQUEST_BYTES, verify_authority_request_document,
 };
 pub use mutation_request::{
-    MAX_MUTATION_REQUEST_BYTES, MUTATION_REQUEST_SCHEMA, MutationRequestContext,
-    MutationRequestError, verify_mutation_request_document,
+    MAX_MUTATION_REQUEST_BYTES, MUTATION_REQUEST_SCHEMA, MUTATION_REQUEST_V2_SCHEMA,
+    MutationRequestContext, MutationRequestError, verify_mutation_request_document,
+    verify_mutation_request_v2_document,
 };
 pub use operation_grant::{
     MAX_STORAGE_OPERATION_GRANT_BYTES, STORAGE_OPERATION_GRANT_SCHEMA, StorageOperationCommand,
