@@ -37,8 +37,10 @@ Do not cut over mutation until that gate stays green.
 
 ## Shadow safety
 
-- Go shadow evaluation writes only decision digests. `ExecuteRepair` and every
-  other mutation entry return `MUTATION_DENIED`.
+- Go shadow evaluation may persist qualification records in the Go-owned store.
+  `PutShadow` checks each domain in the write transaction and refuses writes
+  after its durable cutover to Go. `/internal/action/execute` remains
+  `MUTATION_DENIED`; promoted non-fenced control records use signed v2 apply.
 - Shadow mode rejects a configured production store path.
 - Do not point Go or Rust at Python SQLite files.
 
@@ -102,7 +104,33 @@ transport-security guarantee. Do not publish the Go port.
 `/internal`, `/internal/`, and `/internal/*` return 404 on both development and
 production Edge routers, without contacting Go or falling through to the SPA.
 Go's shadow and cutover handlers remain private management APIs; their existence
-does not authorize public exposure or production cutover.
+does not authorize public exposure or production cutover. On `deepseekd` itself
+every `/internal/*` request must present `Authorization: Bearer
+$DEEPSEEKD_INTERNAL_BEARER` (at least 32 characters) **from a loopback peer**;
+with no bearer configured the routes stay mounted and answer `401
+INTERNAL_API_UNAUTHORIZED`. `DEEPSEEKD_CONTROL_AUTHORITY=1` — the flag that lets a
+control domain be promoted past `dual_evaluate` — is refused by config unless that
+bearer is configured, so the migration authority cannot be claimed over an
+unauthenticated channel. A configured deployment can inspect the live tip at
+`GET /internal/authority/head` and submit the checked `control-authority-v1`
+checkpoint to `POST /internal/authority/claim`; an exact replay advances no state.
+This local claim is not the missing externally signed per-domain promotion
+artifact. See `docs/GO_PUBLIC_API.md`.
+
+Production authority is durable everywhere it is consumed. The Go coordinator's
+four worker execution/recovery entry points (`ExecuteStorageAction`,
+`ReconcileStorageAction`, `ReconcileClaimedStorageAction`,
+`ExecuteClaimedStorageAction`) read the `action` domain's cutover record; a
+coordinator that claims production authority without that durable record — or that
+presents a larger epoch — is refused with `CUTOVER_NOT_AUTHORIZED` before any
+durable write, and the cutover record is left untouched. Do not treat
+`WithAuthoritative(true)` as authority: it is a claim that must be backed by the
+record. The frozen `control-mutation-request-v1` still carries only the
+`shadow-compare` intent and cannot authorize production mutation. The approved
+`control-mutation-request-v2` can apply a signed control mutation through
+`POST /internal/mutation/apply`, but only after the target domain is durably
+Go-authoritative; its signer public key is deployment configuration. A reused
+operation ID from a different domain is a replay conflict, not a reported apply.
 
 Forwarding uses the original encoded path and rejects URL normalization that
 changes it. Query order, duplicate parameters and existing escapes are retained;

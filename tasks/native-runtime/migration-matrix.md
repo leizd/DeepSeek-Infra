@@ -8,6 +8,20 @@ Generated from ownership JSON, route modules, launchers, Compose files, Go/Rust
 packages, and CI jobs — not from README claims. Completeness is **wired native
 behavior with evidence**, not file/crate counts.
 
+**2026-09-28 current checkout:** branch `codex/indexmap-std-feature`, HEAD
+`c99d3de6ec29c982c681fdd83d50bf400dab89ce`, with pre-existing uncommitted
+native-control changes preserved. The Go control-claim, cutover and signed-apply
+HTTP chain is **集成通过 locally** on an isolated store; it is not a production
+ownership transfer. No domain is flipped in the default deployment,
+`release/native_runtime_ownership_v1.json` remains the baseline, and 5.0
+readiness is `NOT_READY`. The 2026-09-26 and 2026-09-27 entries below remain
+historical snapshots, including their then-current HEAD values.
+Sections 2-4 still aggregate some routes and platform flows; they do not yet
+provide a per-capability source entry, observable behavior, implementation,
+compatibility case, platform and evidence record for every existing feature.
+That inventory work remains open and no aggregate row may be counted as
+完成验收. The control-authority slice below records those details explicitly.
+
 Re-verified 2026-09-26 against branch `codex/indexmap-std-feature`, HEAD
 `79aba745c7f17101349e64edc8e2cca101c873df`, clean worktree at the start of the
 slice. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`. Rows
@@ -20,6 +34,18 @@ The `/api/skills` row and the `skills` row were re-measured later the same day w
 this slice's files still uncommitted in the worktree, so "clean worktree" above
 describes the start of the earlier slice, not that measurement.
 
+**2026-09-27 addendum (uncommitted worktree on the same HEAD):** the Go control
+plane gained schema v8 — a `control-authority-v1` authority head, its append-only
+checkpoint journal, and append-only cutover authorizations — so a control domain can
+now actually be promoted, but only when the deployment opts in
+(`DEEPSEEKD_CONTROL_AUTHORITY`) **and** presents the live authority tip. Opting in is
+refused unless `DEEPSEEKD_INTERNAL_BEARER` is configured, and every `/internal/*`
+request now requires that bearer from a loopback peer (401 otherwise; no control plane
+at all when unconfigured), so the shipped default is unchanged. Section 5's
+`internal/store`, `internal control API` and `cutover` rows and section 9 item 7 were
+re-measured by that slice; **no domain is flipped** and
+`release/native_runtime_ownership_v1.json` is untouched.
+
 Companion files: [`continuation.md`](continuation.md),
 [`go-action-admission-plan.md`](go-action-admission-plan.md),
 [`worker-execution-plan.md`](worker-execution-plan.md). Historical 4.8.1–4.9.x
@@ -31,7 +57,7 @@ or public entry uses it; `local` this workspace verified; `ci` exact-head CI;
 
 ## 1. Machine-readable ownership domains
 
-Source: `release/native_runtime_ownership_v1.json` (46 domains). Current
+Source: `release/native_runtime_ownership_v1.json` (48 domains). Current
 production authority is Python. Target owners are 5.0 goals.
 
 | Domain | Target | Current prod | Native code | Wired | Evidence | Blocker |
@@ -195,15 +221,36 @@ public inventory but does not implement behavior.
 
 | Module | Role | Schema / status | Tests | Remaining |
 | --- | --- | --- | --- | --- |
-| `internal/store` | isolated SQLite, unique writer | CurrentSchema v7 in this tree | store tests | v30 oracle replay |
+| `internal/store` | isolated SQLite, unique writer | CurrentSchema **v9** in this tree | store tests | v30 oracle replay |
+| production apply (control mutation) | `control-mutation-request-v2` + `Control.ApplyMutation`, schema v9 journal admits `APPLIED`; **Python/Go/Rust verification parity** (34 frozen cases) | **集成通过 locally** at `POST /internal/mutation/apply` with deployment-pinned signer | `mutation_apply_route_test.go` (HTTP success/refusals), `mutation_request_v2_test.go` and `operation_test.go` (cross-domain replay refusal), `frozen_mutation_request_v32.rs` (Rust), `test_native_runtime_mutation_request_v2.py` (oracle) | exact-head CI, per-domain promotion evidence and production cutover |
 | admission v5 | claim/lease/resources | implemented | local historically | policy identity |
 | reconciliation v6 | RECONCILING takeover | implemented | local historically | coordinator wiring |
 | verification v7 | VERIFYING / ASSESSING_EFFECT | this tree | this session | outcome/risk verifiers |
+| authority v8 | `control_authority_head` + append-only checkpoint journal + append-only `control_cutover_authorizations` | **集成通过 locally**, default-off; `POST /internal/authority/claim` and `GET /internal/authority/head` are loopback-bearer protected | `authority_claim_route_test.go` (claim → cutover → signed apply), `internal_api_test.go` (started runtime), store authority and cutover tests | externally signed per-domain promotion artifact, provider and exact-head evidence |
 | `internal/action` | leased execute + recover | VERIFYING on APPLIED | this session | signed ops |
+| production authority (worker execution plane) | durable `action`-domain cutover record; `WithAuthoritative(true)` is a claim, not authority | **durable gate implemented; refused before any write while unpromoted** | `production_authority_test.go` (promoted success + four refusals + durable read), `cutover_authority_read_test.go` | provider-backed kill/takeover evidence; signed ops |
 | `internal/worker` | gRPC client + TLS dial | this tree | this session | CI TLS + signed ops |
-| `internal/shadow` | decision digest | implemented | go + script | not mutation |
+| `internal/shadow` | decision digest and qualification persistence | implemented locally; `PutShadow` refuses promoted domains in the write transaction | Go shadow tests, including promoted action refusal | production cutover evidence |
 | `cmd/deepseekd` | lifecycle, shadow HTTP | shadow | process tests | production auth |
-| cutover | `ErrCutoverNotAuthorized` | fail-closed | tests | authorization protocol |
+| internal control API | nine `/internal/*` handlers | **集成通过 locally** for claim → cutover → apply; bearer + loopback required, anonymous deployment serves no control plane | `internal_auth_test.go` (every route × method refused), `authority_claim_route_test.go`, `mutation_apply_route_test.go`, `internal_api_test.go` (started runtime) | per-domain signed promotion request and release evidence |
+| cutover | promotion authorized by a `control-authority-v1` claim; `DEEPSEEKD_CONTROL_AUTHORITY` refused without a bearer | fail-closed by default, **authorized path implemented** | `cutover_authorization_test.go` + `authority_state_test.go` (slice 1), `internal_api_test.go` (slice 2) | production mutation channel; per-domain evidence |
+
+Control-authority slice audit (current checkout): original production entry is
+Python's `deepseek_infra/infra/workspace/backup_control_authority.py` checkpoint
+export and Python-owned policy/target state. The observable native behavior is
+an authenticated local claim of the live head, legal shadow → dual-evaluate →
+Go-authoritative transition, signed `policy` apply, persisted snapshot, exact
+replay and cross-domain replay refusal. Go uniquely owns `go-control/` tables;
+Rust worker parity verifies the frozen v32 request without writing those
+tables. Dependencies are the v8/v9 migrations, deployment bearer and signer,
+and a valid `control-authority-v1` checkpoint. Implementation is in
+`go/internal/api/{shadow,auth}.go` and `go/internal/store/{authority_state,
+cutover,operation}.go`. Compatibility checks are v17/v32 oracle and Rust
+worker replays; local verification is Go tests, 95.0% coverage gate, the
+started-runtime HTTP test, and the contract checker. Platform coverage is
+Windows local only; Linux exact-head CI, desktop/Android production callers,
+external per-domain authorization, export/import and provider recovery remain
+unverified. Status: **集成通过 locally**, with no ownership cutover.
 
 ## 6. Rust data / security plane
 
@@ -250,5 +297,14 @@ Unmigrated business modules above are **not** oracles.
    (forced-search mode, the file vector index).
 6. All 18 chat-tool branches run; native `/mcp` `/a2a` (including SSE/resubscribe) `/api/tool-policy` `/api/budget` `/api/rag/status` `/api/gateway/status` `/api/taint` `/api/title` `/api/download` `/api/file-source` `/api/file-reader` `/api/file-chunk` `/api/file-page-text` `/api/file-page-search` `/api/chat` (ordinary streaming turns + tool rounds; agent mode, cascade and forced search refused); Go `/api/config` subset. Remaining: the eval **report engine** (`eval_report`) and the four actions whose payload embeds its verdict (`upgrade_pack`, `eval_upgrade_gate`, `diff_versions`, `diff_pack_versions`), the online `run`, the rest of the file family (`/api/file-text`, `/api/project-files`, `/api/file-page-image` and `/api/file-page-layout` are wired; project metadata writes only when `python_disabled`; page PNG bytes follow `pdftoppm`), the whole `/api/workspace/*` backup/DR surface, the remaining diagnostics status blocks (`/api/mcp`, `/api/scheduler`, `/api/semantic-cache/status`, `/api/edge/status`, `/api/rust/status` — each needs its Python status function ported first), search prefetch and edge inference for `/api/chat`, A2A Python-task migration/retention/peer clients/telemetry/full parity, launchers.
 7. Per-domain cutover shadow → dual-evaluate → Go-authoritative → Python-disabled.
+   **The mechanism exists, is authenticated, its consumers check it durably, Go can apply a
+   signed production mutation, and the verification has full three-language parity** (slices
+   1-4: authority claim + authorized cutover + loopback-bearer `/internal/*` + durable
+   production-authority gate + v2 apply with schema v9 + Rust v2 parity). The claim,
+   live-head read, cutover and apply are now wired through the internal HTTP plane and
+   have isolated local success/refusal tests. No production domain is flipped and the
+   deployment gate is off. What remains: an externally signed **per-domain** promotion
+   artifact and migration evidence, provider-backed kill/takeover evidence, exact-head
+   CI, and the ownership-contract revision.
 8. Launchers/images/Android without Python.
 9. Exact-head CI, Evidence Assembly, performance, zero-Python workload.

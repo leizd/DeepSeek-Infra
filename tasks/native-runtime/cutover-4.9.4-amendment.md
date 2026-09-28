@@ -1,5 +1,9 @@
 # The 4.9.4 cutover amendment — prepared, not applied
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
 **Status: prepared. Not applied, and it cannot be applied from this tree.** The maintainer
 asked for it to be signed on 2026-09-26; this file records why signing is a **new accepted
 revision of the contract** and not an edit, with everything such a revision has to touch.

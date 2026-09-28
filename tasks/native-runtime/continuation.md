@@ -8,6 +8,682 @@ This file is the session handoff. Historical plans, checkboxes, VERSION, and
 `release/native_runtime_5_0_evidence_v1.json` are not completion evidence.
 The capability matrix is [`migration-matrix.md`](migration-matrix.md).
 
+## Current continuation checkpoint — 2026-09-28 control authority reaches the running Go API
+
+Branch `codex/indexmap-std-feature`, HEAD
+`c99d3de6ec29c982c681fdd83d50bf400dab89ce`. This checkout already held
+uncommitted control cutover, schema v9, mutation v2, and Rust worker changes when
+this turn began; all were preserved. No push, merge or release. Readiness is
+still `NOT_READY` with `exact_head: null`; the full Rust/Go migration is **未完成**.
+
+### Completed local slice
+
+- `go/internal/api/shadow.go` now exposes loopback-bearer protected
+  `POST /internal/authority/claim` and `GET /internal/authority/head`. The
+  checkpoint is bounded to 16 MiB, decoded without losing additive fields,
+  and handed to the existing integrity, live-chain, writer-lease and
+  deployment-capability checks. An exact replay reports `advanced: false`.
+- An isolated HTTP test drives **claim → cutover → signed v2 apply → persisted
+  policy record**. A started `deepseekd` lifecycle test proves the new claim
+  and head routes are actually mounted. Missing store, malformed/null/oversized
+  checkpoint, tampered digest, disabled capability, unreadable body, and
+  unauthorized calls have refusal tests.
+- A separate replay regression found that `AcceptMutation` and `ApplyMutation`
+  could return `ALREADY_APPLIED` for an operation ID reused in a *different*
+  control domain with an identical payload digest. Both tests were red before
+  the fix. The idempotent fast path now also requires the stored domain to
+  match, and the original operation remains unchanged.
+- Code review found that the shadow evaluation path could still call `Put` after
+  cutover. `PutShadow` now checks the durable owner in the same transaction as
+  its write, including fenced domains such as `action`. Direct `Put` refuses
+  unsigned writes to promoted non-fenced control domains. Both bypasses had
+  failing regression tests before the guards were added.
+- The matrix, 5.0 todo, Go control-store catalog, API/runbook, and readiness
+  blocker text now describe these local capabilities without claiming cutover.
+
+### Verification in this workspace
+
+- `go test ./... -count=1` and `go vet ./...` passed after the shadow-write
+  guards. The exact Go coverage command passed **95.105673% (5130/5394)**;
+  its profile and compact log are
+  `artifacts/go-coverage-native-20260928.out` and `.log` (local ignored
+  artifacts). `gofmt` on changed Go files passed.
+- `cargo +1.85.0-x86_64-pc-windows-gnu test -p deepseek-worker --locked`
+  passed all worker suites including frozen v17/v32, durable-grant and TLS
+  cases. Pinned GNU `cargo check --workspace --locked`, strict workspace
+  Clippy (`--all-targets --all-features -- -D warnings`), and
+  `cargo +1.85.0 fmt --all -- --check` passed. The unsuffixed MSVC
+  toolchain failed before tests because `link.exe` is absent; the installed
+  pinned GNU toolchain provided the completed worker run.
+- The focused Python oracle/catalog/readiness/ownership tests passed (38 cases),
+  as did native contract checking (43 corpora, 32 versions, 48 domains),
+  shadow parity (8/8), doc links and release-version consistency. The static
+  zero-Python topology audit passed 8/8; **it is not** a successful live
+  zero-Python workload measurement.
+- `ruff check .` and `mypy .` now pass (918 source files). The committed
+  skills parity probe's empty list needed an explicit `list[str]()` to satisfy
+  this host's mypy inference; the value is still empty, and its Python/Rust
+  replay passed **655 cases with 0 differences**. Markdown language navigation
+  passes for 217 files after adding the missing links to the prepared 4.9.4
+  amendment. `git diff --check` is clean.
+- `go test -race ./...` could not execute tests on this Windows host: every
+  package exited `0xc0000139`. Docker's CLI is present, but its Linux daemon
+  pipe is absent and no MinIO binary is configured, so this turn produced no
+  real-provider evidence. Exact-head Linux CI is not available without a push.
+
+### Open gates and next executable task
+
+No production domain has an externally signed per-domain promotion artifact,
+isolated export/import and rollback proof, or exact-head ownership revision.
+Worker operation-specific signed admission, Three-MinIO/two-Fleet provider
+effects, process-kill/takeover reconciliation, platform packages and measured
+zero-Python successful workloads remain open. Aggregate rows elsewhere in the
+matrix still need per-capability expansion before final acceptance. The 16 MiB
+claim-body limit also needs checking against a real exported checkpoint before
+any cutover.
+
+Next: implement and freeze the per-domain signed promotion request on the
+existing Go authority/cutover state machine, then exercise export/import and
+rollback on isolated data. Run provider-backed kill/takeover evidence when a
+real MinIO topology is available. Keep `NOT_READY` until those and the other
+matrix gates are proven.
+
+## Current continuation checkpoint — 2026-09-27 the apply channel reaches the wire, with the signer taken from deployment config
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. Slices 1-4 are uncommitted. No push, merge, or
+release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+**Slice 4 is complete**: the contract is frozen from the oracle, Go and Rust both verify it,
+Go applies it atomically, and it is now reachable over the authenticated internal plane.
+
+### The transport, and the one property that matters most
+
+`POST /internal/mutation/apply` takes the **exact canonical `control-mutation-request-v2`
+document as the body** and calls `Control.ApplyMutation` behind the existing loopback-bearer
+guard. The critical decision: **the signer trust material comes from deployment
+configuration, never from the request** — `DEEPSEEKD_MUTATION_SIGNER_KEY` (the base64url
+Ed25519 public key), `DEEPSEEKD_FLEET_ID`, `DEEPSEEKD_ENVIRONMENT`. A caller therefore cannot
+nominate the signer that authorizes its own mutation, and a deployment with no configured
+signer refuses with `503 MUTATION_SIGNER_NOT_CONFIGURED` rather than accepting anything. A
+test asserts that refusal specifically.
+
+`RegisterWithOptions(..., InternalOptions{...})` carries the new options; `Register(mux,
+control, bearer)` remains as a wrapper, so no existing call site or test had to change.
+
+### Proven end to end, over HTTP
+
+`go/internal/api/mutation_apply_route_test.go` drives the real path: an authority-enabled
+store with the `policy` domain durably promoted through the authorized cutover, a v2 request
+signed by the configured key, and a real HTTP `POST`. The response is `200` with
+`status: APPLIED`, the record is then **observable through the authenticated snapshot**, a
+retry returns `ALREADY_APPLIED` without a second apply, and the route refuses: no signer
+configured (`503`), wrong signer (`409`), a domain that is not promoted (`409`, with the
+record provably absent), `GET` (`405`), an oversized body (`413`), and no credential (`401`,
+via the shared all-routes test which now includes this route).
+
+### Verification (local, this workspace, not CI)
+
+- `go vet ./...` clean; `go test ./... -count=1` → see the round's result below.
+- `pytest tests/test_native_runtime_go_control_store.py ...` → the catalog gate now declares
+  the route, asserts it is mounted behind `RequireInternalBearer(internal, options.Bearer)`,
+  and asserts the signer is never caller-supplied.
+- Coverage: this slice adds an HTTP handler with several refusal branches; the gate was
+  re-measured (recorded below) because the previous round left only **4 statements** of
+  headroom.
+
+### Next executable task
+
+The provider-backed kill/takeover reconciliation evidence for
+`EFFECT_RECONCILIATION_UNPROVEN` (a real MinIO/Three-MinIO run, not a library result), then
+the per-domain promotion evidence and the ownership-contract revision.
+
+## Current continuation checkpoint — 2026-09-27 Rust reaches v2 parity, and the float fail-open was in all three implementations
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. Slices 1-4c are uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+Slice 4 steps 1, 2, 3 and 4 have now landed. **A transport for apply (the rest of step 5)
+is the remaining half of slice 4.**
+
+### Rust verifies v2, and the corpus proves it
+
+`rust/crates/deepseek-worker/src/mutation_request.rs` gained the same `MutationRequestSpec`
+split as Python and Go (`verify_mutation_request_v2_document`, `SIGNATURE_DOMAIN_V2`,
+`PAYLOAD_FIELDS_V2`), and `tests/frozen_mutation_request_v32.rs` replays the frozen corpus:
+**all 34 cases pass**, the positive request matches the frozen digest, and the revisions are
+kept disjoint (the v1 verifier refuses a v2 document, and the frozen `v1-signature-domain`
+case proves the reverse). The v17 suite still passes untouched.
+
+### The float fail-open was in all three implementations
+
+Rust's canonical encoder is `serde_json::to_vec(sorted(value))`, so Rust — like Go before it
+— would have **accepted** a record body containing `1.5` that the Python oracle refuses, and
+the body is inside `payloadDigest`. `validate_record_body` now enforces the oracle's
+primitive set in Rust too. The v32 case `record-body-float` is exactly that proof: because
+the canonical encoder accepts floats, the case can only produce `MUTATION_REQUEST_INVALID`
+through this validator.
+
+**Rust's secret rule was already correct** — unlike Go, it had no safe-suffix exemption and
+applies the oracle's rule to the whole document, so `secret-suffixed-key-in-record-body`
+passed without a change. The asymmetry is worth remembering: the three implementations did
+*not* share one bug, they shared one *class* of bug.
+
+### One measured, fail-closed divergence (Rust stricter than the oracle)
+
+Rust's JSON number model is `i64`/`u64`, so an integer outside that range is refused by
+`validate_record_body` while Python (arbitrary precision) and Go (`json.Number`) accept it.
+Rust is **stricter, never looser**, so it cannot apply a body the oracle rejects — but a
+legitimate body carrying a >64-bit integer would be refused by the worker only. No frozen
+case covers it; record it if a real payload ever needs one.
+
+### Verification (local, this workspace, not CI)
+
+- `cargo +1.85.0 fmt --all -- --check` → **clean** (the new test file needed rustfmt first;
+  applied. Checked under the *pinned* rustfmt, because the previous session lost time to a
+  2021-vs-2024 import-order divergence between rustfmt versions).
+- `cargo +1.85.0 clippy --locked --all-targets --all-features -- -D warnings` (the CI command,
+  whole workspace) → **clean**. ⚠️ Under the machine's default `stable` (clippy 0.1.97) the
+  same command fails in **`deepseek-browser/src/sidecar.rs:207`** with
+  `clippy::result_large_err` — a crate this slice never touched. That is a toolchain-version
+  artifact, not a regression: the repo pins 1.85.0, which is installed here and passes.
+- `cargo +1.85.0 test -p deepseek-worker` → **whole crate green** (all test binaries ok,
+  exit 0), including `frozen_mutation_request_v17` (2) and `frozen_mutation_request_v32` (3).
+- **`cargo test --locked --all` (the CI `rust` job's third command) could not be run locally,
+  and this is *not* a PASS.** It fails at **link** time in `deepseek-policy` examples and
+  `deepseek-gateway` test binaries: the host `x86_64-w64-mingw32-gcc` rejects the
+  `.drectve -exclude-symbols:…` directives the host rustc emits (rustls symbols are visible in
+  the warnings). That is environmental, and it is provably **not** this slice:
+  **no crate in the workspace depends on `deepseek-worker`** (checked every
+  `rust/crates/*/Cargo.toml`), and the tokenizer/verifier change is confined to that crate.
+  It also reproduces in an isolated `--target-dir`, so it is not a polluted shared `target/`.
+  CI is Ubuntu and must judge this; do not record it as passing.
+- `deepseek-worker`'s tests also pass under the default toolchain, so the crate is not
+  toolchain-sensitive in a way that would hide a problem.
+- Go side unchanged this slice; its gates were green at the end of the previous round.
+
+### Next executable task
+
+**A transport for `ApplyMutation`**: an authenticated `/internal/*` endpoint (the loopback
+bearer is already in place) so the approved production-apply channel is reachable by an
+operator rather than only in-process, plus the catalog/gate update. Then the provider-backed
+kill/takeover evidence for `EFFECT_RECONCILIATION_UNPROVEN`.
+
+## Current continuation checkpoint — 2026-09-27 Go applies a signed mutation, and two cross-language divergences died on the way
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. Slices 1-4b are uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+Slice 4 steps 1, 2 and 4 have landed: the v2 contract is frozen from the oracle, Go
+verifies it and applies it atomically, and the store-level chain is proven end to end.
+**Step 3 (Rust parity) and a transport for apply are still outstanding.**
+
+### Go now verifies v2 and applies it
+
+`go/internal/store/mutation_request.go` gained a `mutationRequestSpec` and the v2 path
+(`SignMutationRequestV2`, `VerifyMutationRequestV2Document`); v1 keeps its own entry points
+and bytes. All **34 frozen cases replay in Go** through a dedicated v32 loader, decoded
+with `UseNumber` so a case's numeric replacements behave like the frozen document's
+numbers — without that, `stale-epoch` would have failed with the wrong code, because a
+plain `map[string]any` turns every number into `float64` and `asInt` reads `json.Number`
+only.
+
+### The two divergences the corpus work exposed — both were fail-opens in Go
+
+1. **Floats.** Go's canonical encoder is plain `json.Marshal`, so Go would have *accepted*
+   a `recordPayload` containing `1.5` where the Python oracle refuses it. That is not
+   cosmetic: the body is inside `payloadDigest`, so accepting a body the oracle refuses
+   means Go can apply a mutation the contract does not authorize.
+   `validateMutationRecordPayload` now enforces the oracle's exact primitive set
+   (`null`/string/bool/integer/list/object-with-string-keys), including the depth bound.
+2. **Secret-key exemptions.** Go's shared control-record scan exempts keys ending in
+   `digest`/`reference`/`ref`/`id`/`type`/`provider`; the oracle's mutation-channel rule
+   has no such exemption. So `{"myTokenDigest": ...}` was refused by the oracle and
+   accepted by Go. `rejectMutationBodySecretKeys` now applies the oracle's exact rule to
+   the record body — *in addition* to the shared scan, so Go can never be looser than the
+   oracle — and a **new frozen case** (`secret-suffixed-key-in-record-body`) pins it for
+   every implementation, Rust included. The vector grew to 34 cases and its SHA changed to
+   `a650c633…eb8e6`.
+
+I did **not** change the shared rule (v1 and control-record validation depend on it) and I
+did not weaken the Python rule; the v2 path is where the two rules meet.
+
+### Schema v9 — the journal literally could not record an applied result
+
+Through v8, `control_operations` froze `result_status = 'PROPOSED'`, which encoded "nothing
+is ever applied". The first apply attempt failed the CHECK constraint, which is how this
+was found. v9 widens it to `PROPOSED|APPLIED`, **preserves every row**, recreates the
+frozen immutability triggers, and is **verified at open**: a store whose journal still
+cannot record an applied result is refused rather than served with a journal that
+misreports one. The V8→V9 test proves an operation row survives the upgrade — losing one
+would permit a double-apply — and that the same request is still an idempotent no-op after
+the upgrade.
+
+### `Control.ApplyMutation` is the production channel
+
+Every gate is deliberate and tested: the deployment cutover capability; a **durably
+Go-authoritative** domain; the live cutover revision/epoch/fencing token; the request's
+`actionId + executionEpoch`; the exact body the signer committed to; and a refusal for a
+**fenced** domain (`action`/`scheduler_run`/`wave`/`transfer`) whose mutations belong to
+the lease and admission path rather than to this channel. The record write, the operation
+journal row (`result_status = APPLIED`) and the control event are **one transaction** — a
+test proves that a rejected journal insert rolls the record back, and another proves the
+writer-lease cliff before commit does too.
+
+### Verification (local, this workspace, not CI)
+
+- `go vet ./...` clean; `go test ./... -count=1` → **all packages ok, exit 0**.
+- The Go coverage gate (CI command) → **PASS, 95.078258% (5042/5303)**. ⚠️ **That is only
+  4 statements above the 95.0% floor** — the thinnest margin of this session. The 21
+  remaining uncovered statements in this slice's files are `tx.Commit()`/`Rows.Scan`
+  failures and migration-statement failures, which need an `admissionFaultStage`-style hook
+  to reach; the next session must **add** coverage, not spend it, and should consider that
+  hook if the gate ever runs close on CI. (CI is Linux and loses Windows-only statements.)
+- `pytest` over the corpus, both mutation-request suites, the store catalog, foundation,
+  ownership contract, 5.0 evidence and evidence gates → **all passed**;
+  `check_zero_python_runtime.py` → **PASS 8/8**.
+- `gofmt` clean on every changed file (two needed real formatting; applied so the CRLF
+  working tree is preserved).
+- `release/native_runtime_go_control_store_v1.json` + its Python gate now state the truth:
+  v1 cannot authorize production apply, v2 does, `result_status` is
+  `PROPOSED|APPLIED`, the migration list runs 1..9, and the **scope is store API only** —
+  no internal HTTP route yet, no Rust parity.
+
+### Next executable task
+
+**Slice 4 step 3: Rust parity** in `rust/crates/deepseek-worker/src/mutation_request.rs`
+(v2 verification, the cross-revision refusals, and the new secret case), extending the
+existing `frozen_mutation_request_v17.rs` replay rather than adding a parallel harness.
+Then an authenticated internal route for `ApplyMutation`, and the provider-backed
+kill/takeover evidence that `EFFECT_RECONCILIATION_UNPROVEN` still needs.
+
+## Current continuation checkpoint — 2026-09-27 the v2 production-apply contract is frozen from the oracle
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. Slices 1-4a are uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+The maintainer approved production apply on a **versioned new revision**. Slice 4 step 1
+— "freeze the shape before code" — is done, and it was done in the order the plan set:
+**oracle first, then the corpus, then (next) the Go/Rust implementations**.
+
+### What is frozen now
+
+- **`control-mutation-request-v2` (compat v32)**, with exactly four differences from v1:
+  the schema identity, the operation (`apply-mutation`), the payload field set (adds
+  `recordPayload`), and a **distinct signature domain**. The envelope field set, the
+  canonical-JSON rule, the fencing/epoch/identity checks and every error code are shared,
+  so v1 is untouched. The distinct domain is the property that stops cross-revision
+  signature replay — `v1-signature-domain` is a frozen negative case, not a comment.
+- **`recordPayload` is bound by `payloadDigest`**, so a v2 apply can only write bytes the
+  signer committed to. It must be a JSON object. The canonical encoder accepts only
+  `null`/string/bool/int/list/object-with-string-keys — **no floats** — which is exactly
+  why the bytes can be reproduced identically in Python, Go and Rust; `record-body-float`
+  is a frozen refusal.
+- Secrets are still rejected, and the rule now covers the **record body**: a forbidden key
+  inside `recordPayload` is `MUTATION_REQUEST_SECRET_DETECTED`
+  (`secret-key-in-record-body`).
+
+### How the corpus was produced (and why that matters)
+
+`compat/native-runtime/v32/` holds the manifest, a README that states the v1/v2 diff
+table, and `control/mutation_request_v2_vector.json` with **33 negative cases**. The
+vector is **generated by the Python oracle, not hand-written**, and every case was
+**executed against the oracle before being committed** — the generator asserts each
+`error` code, so a case that did not actually fail would have aborted the write. Pinned
+SHA-256 `67550e0b98bc114ff6c8f604bfc35a04d990c526d232ca90b885cbcbfce59c15`.
+
+One case had to change for a real reason: the first secret case embedded the literal
+`age-secret-key-…` in the vector, which the corpus's own "no secret material" gate
+rejects. Rather than weaken that gate, the case now triggers the same rule through a
+forbidden **key** (`privateKey`) inside the record body — which also proves the new body
+path is scanned.
+
+### v1 is provably unchanged
+
+The v17 vector and every existing v1 test still pass, and the new test file asserts both
+cross-refusals: the **v1** verifier refuses a v2 document and the **v2** verifier refuses a
+v1 document (`MUTATION_REQUEST_SCHEMA_INVALID`). The corpus gate also pins v32 **by id and
+by disjointness from v17** instead of only bumping a count from 31 to 32.
+
+### Verification (local, this workspace, not CI)
+
+- `pytest tests/test_native_runtime_corpus.py tests/test_native_runtime_mutation_request.py
+  tests/test_native_runtime_mutation_request_v2.py tests/test_native_runtime_authority_request.py
+  tests/test_native_runtime_foundation.py tests/test_native_runtime_ownership_contract.py
+  tests/test_native_runtime_go_control_store.py tests/test_native_runtime_5_0_evidence.py
+  tests/test_native_runtime_evidence_gate.py -q` → **all passed**.
+- `validate_corpora()` → **32 manifests**, last one
+  `control-mutation-request-v2-semantics-v32`.
+- `ruff check .` clean; `mypy` on the two changed Python files → **no issues**.
+- No Go or Rust change in this slice, so the Go gates were not re-run here; the Go
+  `native-go` gate is unaffected until step 2 lands.
+
+### Next executable task
+
+**Slice 4 step 2: the Go v2 verifier and the atomic apply**, then step 3 (Rust parity),
+step 4 (end-to-end on a promoted `policy` domain), step 5 (flip
+`operations.production_apply*` with the evidence). Details and the exact requirements are
+in the "Slice 4" section of
+[`control-cutover-authorization-plan.md`](control-cutover-authorization-plan.md).
+
+## Current continuation checkpoint — 2026-09-27 production authority stops being a caller-supplied flag
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. Slices 1-3 are uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+Two guards were **inverted placeholders**: they refused the production path precisely
+when a caller *claimed* production authority, without ever consulting durable state.
+
+| Site | Before | Now |
+| --- | --- | --- |
+| `Coordinator.ExecuteStorageAction` | `if c.authoritative { ErrCutoverNotAuthorized }` | durable gate |
+| `Coordinator.ReconcileStorageAction` | same | durable gate |
+| `Coordinator.ReconcileClaimedStorageAction` | same | durable gate |
+| `Coordinator.ExecuteClaimedStorageAction` | same | durable gate |
+
+### What is enforced now
+
+A caller's flag is a **claim**, and `assertProductionAuthority` requires it to be backed
+by the durable cutover record: `store.IsGoAuthoritative("action")` reads the
+`control_cutover` row in a transaction that verifies the schema, so a missing or corrupt
+row is an **error** rather than a silent "not authoritative" (a silent false would look
+like a safe refusal; a silent true would grant authority). A claim with no such record,
+or with a larger epoch, is refused `CUTOVER_NOT_AUTHORIZED` **before any durable write**,
+and the cutover record is left untouched — asserted. A coordinator that makes no claim
+keeps the unchanged non-authoritative qualification path and never consults the record.
+
+That is the §五.4 property applied to the execution plane: authority comes from the
+authority claim/takeover flow, not from what a worker asserts about itself.
+
+### The legal path is proven, end to end
+
+`promotedActionDomain` opens a real authority-enabled store, claims a
+`control-authority-v1` genesis (built through the exported digest helpers), and promotes
+the `action` domain `shadow → dual_evaluate → go_authoritative` through slice 1's
+authorized cutover. With that, `ExecuteStorageAction` on `WithAuthoritative(true)` runs
+for real: the dispatch intent is durably bound, the provider effect identity comes back,
+and the action record reaches terminal `SUCCEEDED`. Against an unpromoted store, all four
+entry points refuse and **no** action row and **no** cutover movement exist afterwards.
+
+### The production-mutation question is a contract question, and it is now precise
+
+`MutateProduction` stays `DenyMutation()`, and `AcceptMutation` still refuses once the
+domain is Go-authoritative. The reason is no longer an omission and is now documented at
+the refusal site: the frozen `control-mutation-request-v1` carries **exactly one** intent,
+`shadow-compare`, whose payload is a comparison expectation
+(`intent`/`recordId`/`revision`/`state`) with **no record body**. It cannot authorize a
+production mutation, and applying it would reinterpret a frozen intent as production
+authorization — which the workspace rules forbid. Authorizing production apply needs an
+**explicitly approved production intent/operation on a versioned revision of that
+contract**; that is a decision for the maintainer, not a silent edit. The refusal writes
+nothing, and a test pins that.
+
+### Verification (local, this workspace, not CI)
+
+- `go vet ./...` clean; `go test ./... -count=1` → **all packages ok, exit 0**.
+- The Go coverage gate (CI command) → **PASS, 95.195487% (4894/5141)**, 10 statements
+  above the 95.0% floor.
+- `python scripts/check_zero_python_runtime.py` → **PASS 8/8**; the catalog gate now also
+  asserts the durable gate exists in `reconciler.go`/`cutover.go` and that the catalog's
+  `production_authority` block matches the four gated entry points.
+- `gofmt` clean on every changed file (normalised line endings).
+- Note for the next session: the coverage script runs `go test` **per package without
+  `-coverpkg`**, so a function is only covered by tests *in its own package*. The store
+  test for `IsGoAuthoritative` had to live in the store package even though the action
+  package is its consumer; that alone was the 0.4% gate failure this slice hit and fixed.
+
+### Next executable task
+
+**Slice 4, and it is now approved rather than pending.** The maintainer approved
+(2026-09-27) adding a production intent/operation on a **versioned new revision** —
+`control-mutation-request-v2` with `apply-mutation` — while **v1 semantics stay
+byte-identical** (do not touch v1, its digest rules, its field list, or the v17 compat
+corpus). The full ordered plan is the "Slice 4" section of
+[`control-cutover-authorization-plan.md`](control-cutover-authorization-plan.md); start by
+freezing the v2 document shape and its v18 compat vector *before* writing code.
+
+Independently of that (and needed for `EFFECT_RECONCILIATION_UNPROVEN` either way): the
+provider-backed kill/takeover reconciliation evidence, which requires a real
+MinIO/Three-MinIO run rather than library results.
+
+## Current continuation checkpoint — 2026-09-27 the internal control plane stops being anonymous
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. This slice (and the one below it) is
+uncommitted. No push, merge, or release. `release/native_runtime_5_0_evidence_v1.json`
+is still `NOT_READY` (`exact_head: null`). The whole migration is **未完成**.
+
+The previous checkpoint ended with "`/internal/*` has no caller authentication, so
+`AuthorizeCutover` must not be enabled in any deployment". That is now false, and the
+cutover capability can be turned on safely.
+
+### What is enforced
+
+- **Every `/internal/*` request needs `Authorization: Bearer $DEEPSEEKD_INTERNAL_BEARER`**
+  (minimum 32 characters) **from a loopback peer**, compared with
+  `crypto/subtle.ConstantTimeCompare`. The scheme is parsed exactly: a bare `Bearer`, a
+  raw token, `Basic …`, and trailing-whitespace-only credentials are all *not*
+  credentials.
+- **Loopback is required independently of `DEEPSEEKD_LISTEN`.** Widening the listener can
+  no longer expose the control plane; `docker-compose.native.yml`'s
+  `DEEPSEEKD_LISTEN: 0.0.0.0:8090` is therefore harmless rather than a hazard.
+- **An unconfigured bearer serves no control plane.** The routes stay mounted and answer
+  `401 INTERNAL_API_UNAUTHORIZED` with a `WWW-Authenticate: Bearer` challenge. Missing,
+  malformed, wrong, and unconfigured credentials get the *same* answer, so the response
+  cannot be used to probe which is true. That is the shipped default.
+- **`DEEPSEEKD_CONTROL_AUTHORITY=1` is refused by `config.Load` unless a bearer is
+  configured**, and `lifecycle` passes it as `AuthorizeCutover`. The migration authority
+  can therefore no longer be claimed over an unauthenticated channel — the coupling is
+  mechanical, not a documented convention.
+- `Register(mux, control, bearer)` makes the credential a **required argument**, so no
+  caller can mount the control plane unauthenticated by omission. `Handler()` now means
+  "public plane only".
+
+The public plane is untouched: `/healthz`, `/api/control/status` and `/api/*` keep
+answering without a credential, and the Rust edge still 404s `/internal/*` (its own
+`public_control_boundary.rs` asserts it), so nothing that worked before needs a token.
+
+### What this slice did not do
+
+- No deployment surface *sets* the bearer yet. `docker-compose.native.yml` sets neither
+  variable, so its control plane is intentionally unreachable — including from sibling
+  containers. Enabling promotion there is an operator edit, which is the point.
+- **`MutateProduction` is still `DenyMutation()`.** Owning the control plane is not the
+  same as serving production writes; that is the next slice.
+- No per-domain signed promotion request; the claim still authorizes *the deployment*.
+
+### What the tests found
+
+1. **The `100-continue` test was a hidden dependency on the unauth path.**
+   `supervisor_test.go` writes a raw `POST /internal/shadow/evaluate` with
+   `Expect: 100-continue` and asserts the server sends `100` — which only happens once a
+   handler *reads* the body. An auth middleware that rejects without reading would have
+   turned that into a `401`. The raw request now carries the credential, so the test still
+   proves "the handler began reading", which is what it was always about.
+2. **Two `Start(...)` call sites**, not one, took the same literal config; both now declare
+   the bearer.
+3. The mechanical part was `http.Post(`/`http.Get(` → a bearer-injecting `*http.Client` in
+   `shadow_test.go` (27 call sites). **The assertions did not move**: every status code the
+   file already pinned is still pinned, and the requests are now authenticated instead of
+   anonymous, which is exactly the behaviour change.
+
+### Verification (local, this workspace, not CI)
+
+- `go vet ./...` clean; `go test ./... -count=1` → **all packages ok, exit 0** (including
+  the two real-process `deepseekd` tests, which now start the daemon with a bearer and
+  present it).
+- `go test ./internal/api/ ./internal/config/ ./internal/lifecycle/` → ok, including the
+  new started-runtime end-to-end test: an authenticated `POST /internal/shadow/evaluate`
+  creates real control state that the authenticated snapshot reports back with the
+  expected writer identity, while the anonymous client gets `401` and `/healthz` still
+  answers.
+- `python scripts/check_zero_python_runtime.py` → **PASS 8/8**;
+  `python scripts/control_plane_shadow.py --check` → `{"ok": true, "passed": 8}`.
+- `python -m pytest tests/test_native_runtime_go_control_store.py
+  tests/test_native_runtime_foundation.py tests/test_native_runtime_ownership_contract.py
+  tests/test_check_zero_python_runtime.py tests/test_native_runtime_5_0_evidence.py
+  tests/test_native_runtime_evidence_gate.py -q` → **all passed**.
+- `gofmt` clean on every changed file (normalised line endings; the checkout is CRLF).
+- The catalog gate now asserts the **coupling** instead of the absence of the capability:
+  `AuthorizeCutover: cfg.ControlAuthority` in `lifecycle`, the refusal
+  `cfg.ControlAuthority && cfg.InternalAPIBearer == ""` in `config`, the constant-time
+  comparison and loopback check in `api/auth.go`, and every catalog-declared internal
+  route mounted behind `RequireInternalBearer(internal, bearer)`. That is a stronger gate
+  than the one it replaces, and Go tests prove the behaviour.
+- `docs/GO_PUBLIC_API.md` and the migration runbook document the credential, the loopback
+  rule, the anonymous default, and the authority coupling.
+- The Go coverage gate (`check_go_coverage.py --dir . --min 95.0 --profile coverage.out`,
+  the CI command): **PASS, 95.186852% (4865/5111)** — 9 statements above the 95.0% floor,
+  up from 7 when this slice started. CI runs on Linux where a Windows-only path is not
+  covered, so headroom still matters: the next slice must **add** coverage, not spend it.
+
+### Next executable task
+
+The **production mutation channel**: `MutateProduction` through the authenticated internal
+plane, so a Go-authoritative domain can actually serve writes. It already has the pieces it
+needs — `AcceptMutation` verifies a signed `control-mutation-request-v1` against the live
+cutover fence/epoch/revision and journals `PROPOSED`, and `ExecuteClaimedStorageAction` is
+gated on `c.authoritative` being *false* today, which is the inverted placeholder that slice
+has to replace.
+
+## Current continuation checkpoint — 2026-09-27 the control authority becomes a state machine, and a domain can finally be promoted
+
+Branch `codex/indexmap-std-feature`. HEAD
+`79aba745c7f17101349e64edc8e2cca101c873df`. This slice is uncommitted. No push, merge,
+or release. `release/native_runtime_5_0_evidence_v1.json` is still `NOT_READY`
+(`exact_head: null`). The whole migration is **未完成**.
+
+This slice attacks the code half of `CONTROL_CUTOVER_INCOMPLETE` — the blocker that said
+"Go TransitionCutover still returns ErrCutoverNotAuthorized for states requiring
+production authorization". Measured before the slice: `cutover.go` refused
+**unconditionally** at `if cutoverRequiresAuthorization(req.To)`, so **no Go control
+domain could ever become an authoritative owner**, whatever the evidence.
+
+### What is now true that was not
+
+`control-authority-v1` was a *library* in this repo (`go/internal/store/authority.go`: the
+frozen checkpoint format, its digests, the chain rule, the monotonic head CAS) with no
+persistence behind it. **Schema v8** persists it and binds it to the cutover:
+
+- `control_authority_head` — one row, CAS-updated, delete refused.
+- `control_authority_checkpoints` — append-only; generation is the key.
+- `control_cutover_authorizations` — append-only; binds a promotion to the authority tip
+  it consumed (domain, transfer id, generation + digest, from/to state, previous/next
+  revision, epoch and fencing token).
+- `ClaimControlAuthority(checkpoint)` — the **only** path that may advance the authority
+  head: writer fence, checkpoint integrity, the frozen monotonic CAS, journal, head
+  advance, one transaction. An exact replay of the tip is idempotent and writes nothing.
+- `TransitionCutover` now takes `Authority *AuthorityCheckpoint`. A promotion needs a
+  non-nil checkpoint that is byte-identically the live tip, **and** a deployment opened
+  with `OpenOptions.AuthorizeCutover`. The domain's revision/epoch/fencing token advance
+  only inside that transaction, and the consumed authority is journaled.
+
+### The asymmetry is deliberate, and it is the safety property
+
+Promotion is gated; **de-promotion is not**. `python_shadow` → `go_authoritative` and
+`go_authoritative` → `shadow` still need no authority, so ownership can always be rolled
+back — a cutover mistake must never be unrecoverable. The refusal detail is split too:
+the bare `ErrCutoverNotAuthorized` (what the existing `!=` test compares) means "this
+deployment may not authorize", while `ErrCutoverAuthorityStale` means "you presented
+something that is not the live authority".
+
+### What did *not* change, on purpose
+
+- **The default deployment stays mechanically unable to promote.** `deepseekd` does not
+  set `AuthorizeCutover`; `tests/test_native_runtime_go_control_store.py` now asserts that
+  absence, so wiring it on by accident fails a gate. The loopback
+  `/internal/cutover/transition` endpoint therefore gains **no** remotely reachable
+  capability.
+- **No frozen contract was touched.** `control-authority-v1` / AuthorityCheckpoint v1 and
+  every digest rule are unchanged; the slice only persists documents the library already
+  verified. The additive-field support both sides already have (`checkpointDocument` in
+  Go, `_payload_for_digest` in Python, which hashes every key except the three envelope
+  fields) was *not* needed in the end.
+- **`MutateProduction` is still `DenyMutation()`.** Authorizing the ownership change is
+  not the same as authorizing production mutation; that is the separate open item in
+  `4.9.3-plan.md` and the next slice.
+
+### What the tests found
+
+Three of my own expectations were wrong and the assertions, not the code, moved:
+a first claim that skips genesis is `STALE_AUTHORITY_WRITER` (not
+`AUTHORITY_GENERATION_GAP`), a "gap" fixture derived from generation 2 was actually a
+*legal* next checkpoint, and a secret-bearing checkpoint is refused by validation
+**before** any digest is recomputed, so it cannot be resealed. Each is now stated as the
+measured behaviour.
+
+Nine historical-schema fixtures (`action_admission`, `action_reconciliation`,
+`action_verification`, `storage_dispatch`, `operation`, `cutover`, and `Control.Rollback`)
+had to learn about the v8 objects: a pre-v8 shape with v8 tables present is exactly the
+"unexpected sqlite object" that `validateControlUserObjects` exists to catch, so the
+fixtures drop them. `Rollback` gained the same three drops, or a rollback to schema 0
+would have left orphan tables. **No gate was weakened** — the fixtures gained objects to
+remove, never assertions to skip.
+
+### Verification (local, this workspace, not CI)
+
+- `go vet ./...` → clean; `go test ./... -count=1` → **all packages ok**, exit 0.
+- `go test ./internal/store/ -count=1` → **ok** (58 s), including the 9 upgraded fixtures.
+- `go test ./internal/store/ -run TestControlAuthorityClaimAdvancesAtMostOnceUnderConcurrency
+  -count=20` → ok (the concurrency case is deterministic under repetition).
+- `python scripts/check_zero_python_runtime.py` → **PASS 8/8**;
+  `python scripts/control_plane_shadow.py --check` → `{"ok": true, "passed": 8}`.
+- `python -m pytest tests/test_native_runtime_go_control_store.py
+  tests/test_native_runtime_foundation.py tests/test_native_runtime_ownership_contract.py
+  tests/test_check_zero_python_runtime.py -q` → **all passed**.
+- `gofmt` clean on every changed/new file (checked with line endings normalised: the local
+  checkout is CRLF, so a bare `gofmt -l` flags every file in the repo).
+- `ruff check .` → clean. `mypy .` → **1 error, not in this slice**:
+  `tasks/native-runtime/skills_parity_probe.py:539`, a `dict[str, list[Never]]` vs
+  `dict[str, list[str]]` invariance complaint. That file is committed and untouched by
+  this slice, and the local interpreter is **mypy 2.0.0** while the repo only requires
+  `mypy>=1.8.0`, so this is a local-toolchain difference, not a measured regression.
+  Re-check under the version CI resolves before treating it as a repo defect. The Python
+  file this slice did change (`tests/test_native_runtime_go_control_store.py`) is clean.
+- **`go test -race` cannot run on this host.** It fails `exit status 0xc0000139`
+  (`STATUS_ENTRYPOINT_NOT_FOUND`) on **untouched** packages too, e.g.
+  `go test -race ./internal/config/`; the module builds `CGO_ENABLED=0` and this Windows
+  toolchain has no working race runtime. It stays a CI (Linux) gate — **not** a local PASS.
+- The Go coverage gate (`python scripts/check_go_coverage.py --dir . --min 95.0
+  --profile coverage.out`, the CI command): **PASS, 95.145056% (4821/5067)** as measured
+  for *that* slice. Slice 2 re-measured the module at **95.186852% (4865/5111)** — see the
+  checkpoint above for the current figure. Either way the margin is only single-digit
+  statements, and CI runs on Linux where a Windows-only path is not covered, so the
+  *next* slice must **add** headroom rather than spend it. `internal/store` alone
+  measured 93.4% of statements.
+
+### Not done, and the next executable task
+
+`tasks/todo.md` and `tasks/plan.md` are **gate-frozen**:
+`tests/test_native_runtime_ownership_contract.py::test_existing_4_8_0_plan_artifacts_are_unchanged`
+requires `git diff` to be empty for both. They are historical records, not trackers —
+the live trackers are this file and [`migration-matrix.md`](migration-matrix.md), plus this
+slice's [`control-cutover-authorization-plan.md`](control-cutover-authorization-plan.md).
+Editing `todo.md` "to keep it current" breaks a gate.
+
+This is **not** a cutover. No domain is flipped, `current_owner` in
+`release/native_runtime_ownership_v1.json` is untouched, and the store catalog still
+records `mode: shadow`. `CONTROL_CUTOVER_INCOMPLETE` is **partially** cleared: the state
+machine is real and proven, the authorization channel is not.
+
+Next, in dependency order:
+
+1. **Authenticate the internal control API.** `/internal/*` has no caller authentication,
+   so `AuthorizeCutover` must not be enabled in any deployment until that lands. This is
+   also what makes a claim non-self-issued.
+2. **The production mutation channel** — `MutateProduction` through the authenticated
+   signed request, so a Go-authoritative domain can actually serve writes.
+3. Then the per-domain evidence and the ownership-contract revision.
+
 ## Current continuation checkpoint — 2026-09-27 the cutover: what it needs, and the gate that found a bug
 
 Branch `codex/indexmap-std-feature`. HEAD
