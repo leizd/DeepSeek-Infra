@@ -1,5 +1,10 @@
 # Slice plan — authorized control cutover (`control-authority-v1` claim), Go schema v8
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 Status at 2026-09-28: **slices 1-4 and the internal authority-claim transport are
 implemented and locally verified; the blocker they target is partially cleared.**
 The isolated HTTP chain now claims the authority head, promotes a domain and
