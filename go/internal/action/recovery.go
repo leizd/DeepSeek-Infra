@@ -28,8 +28,8 @@ func (c *Coordinator) ReconcileClaimedStorageAction(ctx context.Context, claim s
 	if c == nil || c.store == nil || c.worker == nil || ctx == nil {
 		return nil, internalprotocol.ErrUnknownEffect
 	}
-	if c.authoritative {
-		return nil, store.ErrCutoverNotAuthorized
+	if err := c.assertProductionAuthority(); err != nil {
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

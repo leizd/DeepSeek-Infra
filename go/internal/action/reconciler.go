@@ -28,6 +28,9 @@ type ControlStore interface {
 	ClaimStorageDispatch(record store.Record, intent store.StorageDispatchIntent) error
 	GetStorageDispatch(actionID string, epoch uint64) (store.StorageDispatch, bool, error)
 	Writer() store.WriterLease
+	// IsGoAuthoritative reads the durable cutover record. Production authority is
+	// never a caller-supplied flag, and never inferred from an epoch.
+	IsGoAuthoritative(domain string) (bool, error)
 }
 
 type WorkerClient interface {
@@ -79,6 +82,34 @@ func NewCoordinator(store ControlStore, worker WorkerClient, opts ...Coordinator
 	return c
 }
 
+// authorityDomain is the control domain whose cutover record governs the worker
+// execution plane: the action journal is where a claim, its dispatch intent and
+// its effect state live.
+const authorityDomain = "action"
+
+// assertProductionAuthority gates the production path of the worker execution
+// plane. A coordinator that does not claim production authority keeps running the
+// non-authoritative qualification path unchanged. A coordinator that does claim
+// it must prove that claim against the durable cutover record: a self-asserted
+// flag, a larger epoch, or a caller-supplied option is not authority, and a
+// domain still owned by Python stays refused.
+func (c *Coordinator) assertProductionAuthority() error {
+	if !c.authoritative {
+		return nil
+	}
+	if c.store == nil {
+		return internalprotocol.ErrUnknownEffect
+	}
+	authoritative, err := c.store.IsGoAuthoritative(authorityDomain)
+	if err != nil {
+		return err
+	}
+	if !authoritative {
+		return store.ErrCutoverNotAuthorized
+	}
+	return nil
+}
+
 func (c *Coordinator) ExecuteStorageAction(ctx context.Context, actionID string, req *actionv1.StorageMutationRequest) (*actionv1.StorageMutationResponse, error) {
 	if c == nil || c.store == nil || c.worker == nil {
 		return nil, internalprotocol.ErrUnknownEffect
@@ -87,9 +118,10 @@ func (c *Coordinator) ExecuteStorageAction(ctx context.Context, actionID string,
 		return nil, internalprotocol.ErrEmptyActionID
 	}
 
-	// 1. Cutover authorization check: production authoritative without cutover approval fails closed.
-	if c.authoritative {
-		return nil, store.ErrCutoverNotAuthorized
+	// 1. Durable cutover authorization. A claim of production authority is only
+	// accepted when the action domain's cutover record says Go owns it.
+	if err := c.assertProductionAuthority(); err != nil {
+		return nil, err
 	}
 
 	// 2. Fetch action from durable store
@@ -225,8 +257,8 @@ func (c *Coordinator) ReconcileStorageAction(ctx context.Context, actionID strin
 	if c == nil || c.store == nil || c.worker == nil {
 		return nil, internalprotocol.ErrUnknownEffect
 	}
-	if c.authoritative {
-		return nil, store.ErrCutoverNotAuthorized
+	if err := c.assertProductionAuthority(); err != nil {
+		return nil, err
 	}
 
 	// 1. Fetch action from durable store
