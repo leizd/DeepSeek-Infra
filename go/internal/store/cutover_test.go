@@ -358,6 +358,9 @@ func TestCutoverJournalRejectsMutationAndControlMigratesFromV1(t *testing.T) {
 	}
 	db := sql.OpenDB(connector)
 	for _, statement := range []string{
+		"DROP TABLE IF EXISTS control_cutover_authorizations",
+		"DROP TABLE IF EXISTS control_authority_checkpoints",
+		"DROP TABLE IF EXISTS control_authority_head",
 		"DROP TABLE IF EXISTS action_reconciliation_boundary",
 		"DROP TABLE IF EXISTS action_verification_boundary",
 		"DROP TABLE IF EXISTS action_resource_leases",

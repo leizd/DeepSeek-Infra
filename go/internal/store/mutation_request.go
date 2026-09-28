@@ -3,8 +3,11 @@ package store
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
@@ -19,9 +22,41 @@ const (
 	DefaultMutationRequestSkew   = 30
 	MutationIntentShadowCompare  = "shadow-compare"
 	MutationOperationPropose     = "propose-mutation"
+	// MutationRequestV2Schema is the approved versioned revision that carries a
+	// record body and the apply-mutation operation. v1 keeps its schema identity,
+	// field set, digests and signature domain unchanged.
+	MutationRequestV2Schema        = "control-mutation-request-v2"
+	MutationRequestV2SchemaVersion = 2
+	MutationOperationApply         = "apply-mutation"
+	MutationIntentApply            = "apply-mutation"
+	// maxRecordPayloadDepth mirrors the Python oracle's recursion bound.
+	maxRecordPayloadDepth = 128
 )
 
 var mutationRequestDomain = []byte("deepseek-infra:control-mutation-request-v1\x00")
+
+// mutationRequestDomainV2 is deliberately different from v1: the domain
+// separator is what prevents a v1 signature from being replayed as a v2
+// document (or the reverse).
+var mutationRequestDomainV2 = []byte("deepseek-infra:control-mutation-request-v2\x00")
+
+// integerNumberPattern accepts exactly the JSON number literals the Python oracle
+// maps to `int`. Anything else (a fraction, an exponent) is a float there and must
+// be refused here, or the two implementations would disagree on a signed body.
+var integerNumberPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
+
+// mutationRequestSpec is everything that differs between the frozen v1 document
+// and the approved v2 revision. The field set, canonical-JSON rule, checks and
+// error codes are shared.
+type mutationRequestSpec struct {
+	schema             string
+	schemaVersion      int64
+	signatureDomain    []byte
+	allowedOperations  map[string]bool
+	intent             string
+	payloadFields      []string
+	requiresRecordBody bool
+}
 
 var mutationRequestFields = []string{
 	"actionId", "digest", "domain", "environment", "executionEpoch", "expiresAt",
@@ -31,6 +66,10 @@ var mutationRequestFields = []string{
 }
 
 var mutationPayloadFields = []string{"intent", "recordId", "revision", "state"}
+
+// mutationPayloadV2Fields adds the record body the apply operation commits to,
+// and nothing else.
+var mutationPayloadV2Fields = []string{"intent", "recordId", "recordPayload", "revision", "state"}
 
 var (
 	ErrMutationRequestInvalid               = errors.New("MUTATION_REQUEST_INVALID")
@@ -56,9 +95,34 @@ var (
 	ErrMutationRequestStaleFencingToken     = errors.New("MUTATION_REQUEST_STALE_FENCING_TOKEN")
 	ErrMutationRequestSignerMismatch        = errors.New("MUTATION_REQUEST_SIGNER_MISMATCH")
 	ErrMutationRequestSecretDetected        = errors.New("MUTATION_REQUEST_SECRET_DETECTED")
+	// ErrMutationRequestDomainFenced refuses a domain whose mutations belong to
+	// the lease and admission path (action/scheduler_run/wave/transfer) rather
+	// than to the signed control-mutation channel.
+	ErrMutationRequestDomainFenced = errors.New("MUTATION_REQUEST_DOMAIN_FENCED")
 )
 
 var allowedMutationOps = map[string]bool{MutationOperationPropose: true}
+
+var allowedMutationV2Ops = map[string]bool{MutationOperationApply: true}
+
+var mutationRequestV1Spec = mutationRequestSpec{
+	schema:            MutationRequestSchema,
+	schemaVersion:     MutationRequestSchemaVersion,
+	signatureDomain:   mutationRequestDomain,
+	allowedOperations: allowedMutationOps,
+	intent:            MutationIntentShadowCompare,
+	payloadFields:     mutationPayloadFields,
+}
+
+var mutationRequestV2Spec = mutationRequestSpec{
+	schema:             MutationRequestV2Schema,
+	schemaVersion:      MutationRequestV2SchemaVersion,
+	signatureDomain:    mutationRequestDomainV2,
+	allowedOperations:  allowedMutationV2Ops,
+	intent:             MutationIntentApply,
+	payloadFields:      mutationPayloadV2Fields,
+	requiresRecordBody: true,
+}
 
 type MutationRequestContext struct {
 	Now                  time.Time
@@ -80,6 +144,16 @@ type MutationRequestContext struct {
 }
 
 func SignMutationRequest(unsigned map[string]any, privateKey ed25519.PrivateKey, publicKey string) (map[string]any, []byte, error) {
+	return signMutationRequest(unsigned, privateKey, publicKey, mutationRequestV1Spec)
+}
+
+// SignMutationRequestV2 signs a v2 apply-mutation document under the v2 signature
+// domain.
+func SignMutationRequestV2(unsigned map[string]any, privateKey ed25519.PrivateKey, publicKey string) (map[string]any, []byte, error) {
+	return signMutationRequest(unsigned, privateKey, publicKey, mutationRequestV2Spec)
+}
+
+func signMutationRequest(unsigned map[string]any, privateKey ed25519.PrivateKey, publicKey string, spec mutationRequestSpec) (map[string]any, []byte, error) {
 	if unsigned == nil {
 		return nil, nil, ErrMutationRequestInvalid
 	}
@@ -113,7 +187,7 @@ func SignMutationRequest(unsigned map[string]any, privateKey ed25519.PrivateKey,
 	if err != nil {
 		return nil, nil, ErrMutationRequestInvalid
 	}
-	message := append(append([]byte{}, mutationRequestDomain...), canonical...)
+	message := append(append([]byte{}, spec.signatureDomain...), canonical...)
 	payload["signature"] = base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, message))
 	raw, err := canonicalAuthorityJSON(payload)
 	if err != nil {
@@ -122,7 +196,19 @@ func SignMutationRequest(unsigned map[string]any, privateKey ed25519.PrivateKey,
 	return payload, raw, nil
 }
 
+// VerifyMutationRequestDocument verifies a frozen v1 document. Behavior is
+// unchanged from the v17 freeze.
 func VerifyMutationRequestDocument(raw []byte, context MutationRequestContext) (map[string]any, error) {
+	return verifyMutationRequestDocument(raw, context, mutationRequestV1Spec)
+}
+
+// VerifyMutationRequestV2Document verifies a v2 apply-mutation document,
+// including the record body it commits to.
+func VerifyMutationRequestV2Document(raw []byte, context MutationRequestContext) (map[string]any, error) {
+	return verifyMutationRequestDocument(raw, context, mutationRequestV2Spec)
+}
+
+func verifyMutationRequestDocument(raw []byte, context MutationRequestContext, spec mutationRequestSpec) (map[string]any, error) {
 	if len(raw) == 0 {
 		return nil, ErrMutationRequestInvalid
 	}
@@ -156,21 +242,110 @@ func VerifyMutationRequestDocument(raw []byte, context MutationRequestContext) (
 		}
 		return nil, ErrMutationRequestInvalid
 	}
-	if err := verifyMutationRequestEnvelope(document, context); err != nil {
+	if err := verifyMutationRequestEnvelope(document, context, spec); err != nil {
 		return nil, err
 	}
-	if err := verifyMutationRequestSignature(document, context); err != nil {
+	if err := verifyMutationRequestSignature(document, context, spec); err != nil {
 		return nil, err
 	}
 	return document, nil
 }
 
-func verifyMutationRequestEnvelope(document map[string]any, context MutationRequestContext) error {
-	if asString(document["schema"]) != MutationRequestSchema || asInt(document["schemaVersion"]) != MutationRequestSchemaVersion {
+// validateMutationRecordPayload enforces exactly the primitive set the Python
+// oracle's canonical encoder accepts: null, string, bool, integer, list, and
+// object with string keys. A float is refused on both sides, which is what keeps
+// the signed record bytes reproducible in every implementation.
+func validateMutationRecordPayload(value any, depth int) error {
+	if depth > maxRecordPayloadDepth {
+		return ErrMutationRequestInvalid
+	}
+	switch typed := value.(type) {
+	case nil, bool, string:
+		return nil
+	case json.Number:
+		if !integerNumberPattern.MatchString(typed.String()) {
+			return ErrMutationRequestInvalid
+		}
+		return nil
+	case []any:
+		for _, item := range typed {
+			if err := validateMutationRecordPayload(item, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	case map[string]any:
+		for _, item := range typed {
+			if err := validateMutationRecordPayload(item, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return ErrMutationRequestInvalid
+	}
+}
+
+// rejectMutationBodySecretKeys mirrors the Python oracle's mutation-channel key
+// rule exactly. It is deliberately stricter than the shared control-record rule
+// (`rejectControlSecretMaterial`, which exempts keys ending in
+// digest/reference/ref/id/type/provider): Go must never be *looser* than the
+// oracle, or a record body the oracle refuses could still be applied here. The
+// oracle's flagged set is a subset of the shared rule's, so applying both adds no
+// refusal the oracle would accept.
+func rejectMutationBodySecretKeys(value any, depth int) error {
+	if depth > maxRecordPayloadDepth {
+		return ErrMutationRequestInvalid
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, nested := range typed {
+			if mutationChannelSecretKey(key) {
+				return ErrMutationRequestSecretDetected
+			}
+			if err := rejectMutationBodySecretKeys(nested, depth+1); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, nested := range typed {
+			if err := rejectMutationBodySecretKeys(nested, depth+1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func mutationChannelSecretKey(key string) bool {
+	var normalized strings.Builder
+	for _, character := range strings.ToLower(key) {
+		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' {
+			normalized.WriteRune(character)
+		}
+	}
+	name := normalized.String()
+	switch name {
+	case "fencingtoken", "signature", "signaturealgorithm", "signerkeyid":
+		return false
+	}
+	for _, fragment := range []string{
+		"password", "passwd", "privatekey", "ageidentity", "apikey", "accesskey",
+		"secretkey", "token", "credential", "oauth", "bearer", "secret",
+	} {
+		if strings.Contains(name, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+func verifyMutationRequestEnvelope(document map[string]any, context MutationRequestContext, spec mutationRequestSpec) error {
+	if asString(document["schema"]) != spec.schema || asInt(document["schemaVersion"]) != spec.schemaVersion {
 		return ErrMutationRequestSchemaInvalid
 	}
 	operation := asString(document["operation"])
-	if !allowedMutationOps[operation] || operation != context.ExpectedOperation {
+	if !spec.allowedOperations[operation] || operation != context.ExpectedOperation {
 		return ErrMutationRequestOperationInvalid
 	}
 	domain := asString(document["domain"])
@@ -234,15 +409,15 @@ func verifyMutationRequestEnvelope(document map[string]any, context MutationRequ
 		payloadKeys = append(payloadKeys, key)
 	}
 	sort.Strings(payloadKeys)
-	if len(payloadKeys) != len(mutationPayloadFields) {
+	if len(payloadKeys) != len(spec.payloadFields) {
 		return ErrMutationRequestInvalid
 	}
 	for index, key := range payloadKeys {
-		if key != mutationPayloadFields[index] {
+		if key != spec.payloadFields[index] {
 			return ErrMutationRequestInvalid
 		}
 	}
-	if asString(payload["intent"]) != MutationIntentShadowCompare {
+	if asString(payload["intent"]) != spec.intent {
 		return ErrMutationRequestInvalid
 	}
 	if !controlIDPattern.MatchString(asString(payload["recordId"])) {
@@ -253,6 +428,18 @@ func verifyMutationRequestEnvelope(document map[string]any, context MutationRequ
 	}
 	if asString(payload["state"]) == "" {
 		return ErrMutationRequestInvalid
+	}
+	if spec.requiresRecordBody {
+		recordPayload, ok := payload["recordPayload"].(map[string]any)
+		if !ok {
+			return ErrMutationRequestInvalid
+		}
+		if err := rejectMutationBodySecretKeys(recordPayload, 0); err != nil {
+			return err
+		}
+		if err := validateMutationRecordPayload(recordPayload, 0); err != nil {
+			return err
+		}
 	}
 	expectedPayloadDigest, err := typedDigest(payload)
 	if err != nil || asString(document["payloadDigest"]) != expectedPayloadDigest {
@@ -290,7 +477,7 @@ func verifyMutationRequestEnvelope(document map[string]any, context MutationRequ
 	return nil
 }
 
-func verifyMutationRequestSignature(document map[string]any, context MutationRequestContext) error {
+func verifyMutationRequestSignature(document map[string]any, context MutationRequestContext, spec mutationRequestSpec) error {
 	if asString(document["signatureAlgorithm"]) != authorityRequestAlgorithm {
 		return ErrMutationRequestSignatureInvalid
 	}
@@ -311,7 +498,7 @@ func verifyMutationRequestSignature(document map[string]any, context MutationReq
 	if err != nil {
 		return ErrMutationRequestInvalid
 	}
-	message := append(append([]byte{}, mutationRequestDomain...), canonical...)
+	message := append(append([]byte{}, spec.signatureDomain...), canonical...)
 	if !ed25519.Verify(publicKey, message, signature) {
 		return ErrMutationRequestSignatureInvalid
 	}

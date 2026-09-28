@@ -80,6 +80,11 @@ func TestAcceptMutationReplayAndNonceFailClosed(t *testing.T) {
 	if _, err := store.AcceptMutation(signPolicyMutation(t, store, private, public, hex64(0x88), hex64(0x22), hex64(0x99), now, nil), mutationAuth(public, now)); !errors.Is(err, ErrMutationRequestNonceReuse) {
 		t.Fatalf("nonce reuse: %v", err)
 	}
+	if _, err := store.AcceptMutation(signPolicyMutation(t, store, private, public, hex64(0xaa), hex64(0xbb), hex64(0x33), now, func(document map[string]any) {
+		document["domain"] = "target"
+	}), mutationAuth(public, now)); !errors.Is(err, ErrMutationRequestReplayConflict) {
+		t.Fatalf("same operation id in a different domain must conflict: %v", err)
+	}
 	if policyRowCount(t, store) != 0 {
 		t.Fatal("conflict paths must not persist a policy record")
 	}
@@ -337,6 +342,9 @@ func TestControlMigratesFromV2ToOperationJournal(t *testing.T) {
 	for _, statement := range []string{
 		"DROP TABLE IF EXISTS action_reconciliation_boundary",
 		"DROP TABLE IF EXISTS action_verification_boundary",
+		"DROP TABLE IF EXISTS control_cutover_authorizations",
+		"DROP TABLE IF EXISTS control_authority_checkpoints",
+		"DROP TABLE IF EXISTS control_authority_head",
 		"DROP TABLE IF EXISTS action_resource_leases",
 		"DROP TABLE IF EXISTS action_lease_events",
 		"DROP TABLE IF EXISTS action_leases",
@@ -569,6 +577,11 @@ func TestOperationHelpersAndCorruptJournalFailClosed(t *testing.T) {
 
 	narrow := openShadow(t)
 	defer narrow.Close()
+	// The request is built while the store is still well-formed: the fixture is
+	// about the *store's* shape, and schema verification now refuses a journal
+	// that cannot record a result before any request is read.
+	narrowNow := time.Unix(narrow.now(), 0).UTC()
+	narrowRaw := signPolicyMutation(t, narrow, private, public, hex64(0x11), hex64(0x22), hex64(0x33), narrowNow, nil)
 	if _, err := narrow.db.Exec("DROP TABLE control_operations"); err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +607,7 @@ func TestOperationHelpersAndCorruptJournalFailClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = time.Unix(narrow.now(), 0).UTC()
-	if _, err := narrow.AcceptMutation(signPolicyMutation(t, narrow, private, public, hex64(0x11), hex64(0x22), hex64(0x33), now, nil), mutationAuth(public, now)); err == nil {
+	if _, err := narrow.AcceptMutation(narrowRaw, mutationAuth(public, narrowNow)); err == nil {
 		t.Fatal("narrow operations table must fail closed")
 	}
 	if _, _, err := narrow.GetOperation(hex64(0x33)); err == nil {
@@ -612,6 +625,9 @@ func TestOperationHelpersAndCorruptJournalFailClosed(t *testing.T) {
 
 	nullable := openControlAt(t, now.Unix())
 	defer nullable.Close()
+	// Built before the corruption, for the same reason as the narrow fixture.
+	nullableNow := time.Unix(nullable.now(), 0).UTC()
+	nullableRaw := signPolicyMutation(t, nullable, private, public, hex64(0x11), hex64(0x22), hex64(0x33), nullableNow, nil)
 	if _, err := nullable.db.Exec("DROP TABLE control_operations"); err != nil {
 		t.Fatal(err)
 	}
@@ -646,7 +662,7 @@ func TestOperationHelpersAndCorruptJournalFailClosed(t *testing.T) {
 	if _, err := nullable.db.Exec("INSERT INTO control_operations(operation_id) VALUES(?)", hex64(0x33)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := nullable.AcceptMutation(signPolicyMutation(t, nullable, private, public, hex64(0x11), hex64(0x22), hex64(0x33), now, nil), mutationAuth(public, now)); err == nil {
+	if _, err := nullable.AcceptMutation(nullableRaw, mutationAuth(public, nullableNow)); err == nil {
 		t.Fatal("null operation row must fail closed")
 	}
 }

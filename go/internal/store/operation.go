@@ -9,6 +9,7 @@ import (
 
 const (
 	MutationProposed       = "PROPOSED"
+	MutationApplied        = "APPLIED"
 	MutationAlreadyApplied = "ALREADY_APPLIED"
 )
 
@@ -62,6 +63,13 @@ func (store *Control) AcceptMutation(raw []byte, auth MutationAuthority) (Mutati
 	if err != nil {
 		return MutationResult{}, err
 	}
+	// A frozen control-mutation-request-v1 carries exactly one intent,
+	// `shadow-compare`, and its payload is a comparison expectation
+	// (intent/recordId/revision/state) with no record body. That cannot authorize
+	// a production mutation, so acceptance stops here once the domain is Go's:
+	// applying it would reinterpret a frozen intent as production authorization.
+	// Authorizing production apply needs an explicitly approved operation/intent
+	// on the versioned request contract, not a reinterpretation of this one.
 	if IsDomainGoAuthoritative(cutover.State) {
 		return MutationResult{}, ErrCutoverNotAuthorized
 	}
@@ -107,7 +115,7 @@ func (store *Control) AcceptMutation(raw []byte, auth MutationAuthority) (Mutati
 		return MutationResult{}, err
 	}
 	if existing != nil {
-		if existing.OperationID != operationID || existing.PayloadDigest != payloadDigest {
+		if existing.OperationID != operationID || existing.Domain != domain || existing.PayloadDigest != payloadDigest {
 			return MutationResult{}, ErrMutationRequestReplayConflict
 		}
 		if err := tx.Commit(); err != nil {
@@ -154,6 +162,190 @@ func (store *Control) AcceptMutation(raw []byte, auth MutationAuthority) (Mutati
 	store.leaseUntil = leaseUntil
 	return MutationResult{
 		Status:        MutationProposed,
+		OperationID:   operationID,
+		RequestID:     requestID,
+		Domain:        domain,
+		PayloadDigest: payloadDigest,
+		RequestDigest: requestDigest,
+	}, nil
+}
+
+// ApplyMutation applies a v2 `apply-mutation` request to domain state. This is the
+// production control-plane mutation channel, and every gate is deliberate:
+//
+//   - the deployment must have cutover authority, and the target domain must be
+//     durably Go-authoritative (a signed request cannot promote a domain);
+//   - the request is verified against the live cutover revision, epoch and fencing
+//     token, its own actionId + executionEpoch, replay/nonce state, and the record
+//     body it commits to;
+//   - the record write, the operation journal row (`result_status = APPLIED`) and
+//     the control event are one transaction, so a crash cannot leave an applied
+//     record without its journal entry (or the reverse);
+//   - a retry of the same operation is idempotent and never applies twice;
+//   - a fenced domain (action/scheduler_run/wave/transfer) is refused, because its
+//     mutations belong to the lease and admission path, not to this channel.
+func (store *Control) ApplyMutation(raw []byte, auth MutationAuthority) (MutationResult, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.closed {
+		return MutationResult{}, ErrWriterFenceHeld
+	}
+	if store.schema != CurrentSchema {
+		return MutationResult{}, ErrSchemaInactive
+	}
+	if !store.authorizeCutover {
+		return MutationResult{}, ErrCutoverNotAuthorized
+	}
+	tx, err := store.db.Begin()
+	if err != nil {
+		return MutationResult{}, err
+	}
+	defer tx.Rollback()
+	nowUnix := store.now()
+	leaseUntil, err := store.assertWriterTx(tx, nowUnix)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if err := verifySchemaTx(tx, store.schema); err != nil {
+		return MutationResult{}, err
+	}
+	var preview map[string]any
+	if err := decodeSingleJSON(raw, &preview); err != nil || preview == nil {
+		return MutationResult{}, ErrMutationRequestInvalid
+	}
+	domain := asString(preview["domain"])
+	if _, ok := tableForDomain(domain); !ok {
+		return MutationResult{}, ErrUnknownDomain
+	}
+	if fencedDomains[domain] {
+		return MutationResult{}, ErrMutationRequestDomainFenced
+	}
+	cutover, err := readCutoverTx(tx, domain)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if !IsDomainGoAuthoritative(cutover.State) {
+		return MutationResult{}, ErrCutoverNotAuthorized
+	}
+	now := auth.Now
+	if now.IsZero() {
+		now = time.Unix(nowUnix, 0).UTC()
+	}
+	signerKeyID, err := SignerKeyIDForPublicKey(auth.SignerPublicKey)
+	if err != nil {
+		return MutationResult{}, ErrMutationRequestSignerMismatch
+	}
+	document, err := VerifyMutationRequestV2Document(raw, MutationRequestContext{
+		Now:                  now,
+		SignerPublicKey:      auth.SignerPublicKey,
+		SignerKeyID:          signerKeyID,
+		ExpectedDomain:       domain,
+		ExpectedOperation:    MutationOperationApply,
+		ExpectedRuntime:      RuntimeGo,
+		ExpectedMode:         ModeShadow,
+		ExpectedFleetID:      auth.FleetID,
+		ExpectedEnvironment:  auth.Environment,
+		ExpectedRole:         "control-plane",
+		CurrentFencingToken:  cutover.FencingToken,
+		LiveEpoch:            cutover.Epoch,
+		SeenRequestIDs:       map[string]bool{},
+		SeenNonces:           map[string]bool{},
+		SeenOperationDigests: map[string]string{},
+		MaxFutureSkewSeconds: DefaultMutationRequestSkew,
+	})
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if asInt(document["revision"]) != cutover.Revision {
+		return MutationResult{}, ErrRevisionConflict
+	}
+	operationID := asString(document["operationId"])
+	requestID := asString(document["requestId"])
+	nonce := asString(document["nonce"])
+	payloadDigest := asString(document["payloadDigest"])
+	requestDigest := asString(document["digest"])
+	existing, err := lookupControlOperationTx(tx, operationID, requestID, nonce)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if existing != nil {
+		if existing.OperationID != operationID || existing.Domain != domain || existing.PayloadDigest != payloadDigest {
+			return MutationResult{}, ErrMutationRequestReplayConflict
+		}
+		if err := tx.Commit(); err != nil {
+			return MutationResult{}, err
+		}
+		store.leaseUntil = leaseUntil
+		existing.Status = MutationAlreadyApplied
+		return *existing, nil
+	}
+	payload, ok := document["payload"].(map[string]any)
+	if !ok {
+		return MutationResult{}, ErrMutationRequestInvalid
+	}
+	recordPayload, err := canonicalAuthorityJSON(payload["recordPayload"])
+	if err != nil {
+		return MutationResult{}, ErrMutationRequestInvalid
+	}
+	record := Record{
+		Domain:   domain,
+		ID:       asString(payload["recordId"]),
+		Revision: asInt(payload["revision"]),
+		State:    asString(payload["state"]),
+		Payload:  recordPayload,
+	}
+	write, err := prepareControlRecordWrite(record, nil)
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if err := store.putControlRecordTx(tx, write, nowUnix); err != nil {
+		return MutationResult{}, err
+	}
+	resultJSON, err := json.Marshal(map[string]any{
+		"status":        MutationApplied,
+		"operationId":   operationID,
+		"domain":        domain,
+		"recordId":      record.ID,
+		"revision":      record.Revision,
+		"state":         record.State,
+		"payloadDigest": payloadDigest,
+	})
+	if err != nil {
+		return MutationResult{}, err
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO control_operations(
+			operation_id, request_id, nonce, domain, action_id, execution_epoch, fencing_token,
+			payload_digest, request_digest, canonical_request, result_status, result_json,
+			writer_fencing_token, recorded_at
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		operationID,
+		requestID,
+		nonce,
+		domain,
+		asString(document["actionId"]),
+		asInt(document["executionEpoch"]),
+		asInt(document["fencingToken"]),
+		payloadDigest,
+		requestDigest,
+		string(raw),
+		MutationApplied,
+		string(resultJSON),
+		store.token,
+		nowUnix,
+	); err != nil {
+		return MutationResult{}, err
+	}
+	commitNow := store.now()
+	if commitNow < 0 || commitNow >= leaseUntil {
+		return MutationResult{}, ErrWriterFenceHeld
+	}
+	if err := tx.Commit(); err != nil {
+		return MutationResult{}, err
+	}
+	store.leaseUntil = leaseUntil
+	return MutationResult{
+		Status:        MutationApplied,
 		OperationID:   operationID,
 		RequestID:     requestID,
 		Domain:        domain,

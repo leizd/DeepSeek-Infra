@@ -23,6 +23,9 @@ func prepareReconciliationV5Fixture(t *testing.T, control *Control) {
 	for _, statement := range []string{
 		"DROP TABLE action_reconciliation_boundary", metadata,
 		"DROP TABLE action_verification_boundary",
+		"DROP TABLE control_cutover_authorizations",
+		"DROP TABLE control_authority_checkpoints",
+		"DROP TABLE control_authority_head",
 		"INSERT INTO control_meta_v5_fixture SELECT singleton,runtime,mode,5,unique_writer FROM control_store_meta",
 		"DROP TABLE control_store_meta", "ALTER TABLE control_meta_v5_fixture RENAME TO control_store_meta",
 		"DELETE FROM schema_migrations WHERE version>=6", "PRAGMA user_version=5",

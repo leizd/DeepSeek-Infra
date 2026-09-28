@@ -14,6 +14,7 @@ var (
 	ErrDomainNotAuthoritative   = errors.New("DOMAIN_NOT_AUTHORITATIVE")
 	ErrIllegalCutover           = errors.New("ILLEGAL_CUTOVER_TRANSITION")
 	ErrCutoverNotAuthorized     = errors.New("CUTOVER_NOT_AUTHORIZED")
+	ErrCutoverAuthorityStale    = errors.New("CUTOVER_AUTHORITY_STALE")
 	ErrStaleCutoverFence        = errors.New("STALE_CUTOVER_FENCE")
 	ErrCutoverReplayConflict    = errors.New("CUTOVER_REPLAY_CONFLICT")
 	ErrRevisionConflict         = errors.New("REVISION_CONFLICT")
@@ -48,7 +49,9 @@ const (
 	SchemaV5      = 5
 	SchemaV6      = 6
 	SchemaV7      = 7
-	CurrentSchema = SchemaV7
+	SchemaV8      = 8
+	SchemaV9      = 9
+	CurrentSchema = SchemaV9
 )
 
 var controlTableNames = [...]string{
