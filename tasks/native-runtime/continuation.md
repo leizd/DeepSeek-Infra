@@ -6407,3 +6407,46 @@ asserted.
 - Three of the four new probe pairs are not CI steps.
 - The `/api` surfaces this file listed earlier (skills, traces, media; the Go-owned
   workspace backup/DR block) are still unported.
+
+## 2026-09-28 — control authority batch, PR #182, and native OCR CI follow-up
+
+Branch: `codex/indexmap-std-feature`. The implementation HEAD before this
+continuation update is `e42c591c0c3ab14ced46e0f524a287284b6d6a32`; PR #182 is a
+draft against `main`. The control authority, signed apply, shadow denial, skills
+parity, and native OCR repair lines have local validation before this push.
+
+- Go schema v8/v9 persists an authority claim, per-domain cutover, and signed v2
+  `apply-mutation` with an atomic result journal. Direct `Put` and `PutShadow`
+  cannot bypass a promoted domain, including a shadow-write race. The protected
+  loopback routes expose claim/head, transition, and apply. Frozen v1 request
+  behavior remains unchanged; the v2 Python/Go/Rust corpus is versioned as v32.
+- Local Go `test ./...`, `vet ./...`, and the 95.0% coverage gate passed at
+  **95.105673% (5130/5394)**. `mypy .`, `ruff check .`, focused Python native
+  contract/parity tests, shadow parity, docs checks, and the native contract
+  check passed. Windows `go test -race` exits before running tests; the Linux
+  `native-go` CI job is the race gate.
+- PR CI exposed two missing Rust job dependencies (`pdftoppm`, then Tesseract
+  and Python OCR packages); both jobs now provision them. With OCR available,
+  Ubuntu Tesseract hallucinated `a` on the Rust gateway's 569-byte blank PDF.
+  The Python oracle skips a completely white page, and the **native Rust** PDF
+  path now checks the decoded Poppler PNG before accepting nonempty OCR text.
+  Engine-unavailable errors still return unchanged.
+- The native blank-pixel unit test passed, and the real gateway
+  `file_text_route` suite passed **10/10** locally with the pinned Rust 1.85
+  toolchain and its bundled GCC 14 linker. Rust fmt, check, and strict policy
+  Clippy passed. The machine's unrelated MinGW 8.1 linker failed to link the
+  same test; it is not a test assertion failure.
+
+The latest analyzed PR run before the native Rust fix, `36418657422` at
+`849dec70`, had Rust and Rust coverage failures from the same blank-PDF
+assertion; Evidence Assembly then failed downstream. Exact-head CI for the
+new native fix remains open until the final batch commit is pushed and the
+result is collected. `release/native_runtime_5_0_evidence_v1.json` remains
+`NOT_READY`: no production ownership flip, real provider reconciliation,
+desktop/Android zero-Python proof, or final release qualification is claimed.
+
+Next executable work after this batch's exact-head CI: add an externally signed
+per-domain promotion artifact and prove export/import, unique-writer fencing,
+rollback, and restart on isolated data. Continue the remaining native API,
+worker/provider, desktop, Android, and server-side TypeScript replacement
+lines against `migration-matrix.md`.
