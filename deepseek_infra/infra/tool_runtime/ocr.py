@@ -1276,6 +1276,10 @@ class TesseractEngine:
         return "\n\n".join(pages)
 
     def extract_page_image(self, image: object) -> str:
+        from PIL import Image
+
+        if isinstance(image, Image.Image) and image.convert("L").getextrema() == (255, 255):
+            return ""
         return self._recognize_image(image)
 
     def extract_image(self, image_bytes: bytes) -> str:

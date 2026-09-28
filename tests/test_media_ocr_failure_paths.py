@@ -326,6 +326,16 @@ def test_formula_windows_and_tesseract_engines_use_stub_backends(monkeypatch: py
     assert tess.extract_image(png_bytes("RGBA")) == "text"
 
 
+def test_tesseract_skips_blank_pdf_page_before_ocr(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = ocr.TesseractEngine.__new__(ocr.TesseractEngine)
+    monkeypatch.setattr(engine, "_recognize_image", lambda image: "a")
+    blank = Image.new("RGB", (32, 32), "white")
+    assert engine.extract_page_image(blank) == ""
+
+    blank.putpixel((16, 16), (0, 0, 0))
+    assert engine.extract_page_image(blank) == "a"
+
+
 def test_ocr_backend_unavailable_and_candidate_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(AppError, match="Missing DeepSeek API Key"):
         ocr.DeepSeekApiOcrEngine("")
