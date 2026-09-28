@@ -1277,10 +1277,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install PDF renderer used by gateway tests
+      - name: Install PDF renderer and OCR engine used by gateway tests
         run: |
           sudo apt-get update -qq
-          sudo apt-get install --yes --no-install-recommends poppler-utils
+          sudo apt-get install --yes --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements-ocr.txt
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: rustfmt, clippy
@@ -1536,10 +1540,10 @@ jobs:
       CARGO_LLVM_COV_VERSION: "0.6.21"
     steps:
       - uses: actions/checkout@v4
-      - name: Install PDF renderer used by gateway tests
+      - name: Install PDF renderer and OCR engine used by gateway tests
         run: |
           sudo apt-get update -qq
-          sudo apt-get install --yes --no-install-recommends poppler-utils
+          sudo apt-get install --yes --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng
       - name: Resolve release version
         run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
@@ -1549,6 +1553,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - run: python -m pip install -r requirements-ocr.txt
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: llvm-tools-preview
