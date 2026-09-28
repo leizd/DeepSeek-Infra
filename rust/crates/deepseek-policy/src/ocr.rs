@@ -6,6 +6,7 @@
 //! key is configured. The highest `_ocr_text_score` wins. A tied score keeps
 //! the earlier engine.
 
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -27,6 +28,13 @@ pub fn ocr_pdf(data: &[u8]) -> Result<String, AppError> {
     for (index, page) in pages.iter().enumerate() {
         match recognize(page, PDF_EMPTY, PDF_UNAVAILABLE) {
             Ok(text) => {
+                // OCR engines can hallucinate a glyph on a completely white
+                // rendered page. Keep the engine's unavailable result above,
+                // but do not persist text that has no source pixels.
+                if is_blank_pdf_page_png(page) {
+                    saw_empty = true;
+                    continue;
+                }
                 let text = text.trim();
                 if text.is_empty() {
                     saw_empty = true;
@@ -45,6 +53,34 @@ pub fn ocr_pdf(data: &[u8]) -> Result<String, AppError> {
         return Err(unavailable(PDF_UNAVAILABLE));
     }
     Ok(blocks.join("\n\n"))
+}
+
+fn is_blank_pdf_page_png(page: &[u8]) -> bool {
+    let Ok(mut reader) = png::Decoder::new(Cursor::new(page)).read_info() else {
+        return false;
+    };
+    if !matches!(
+        reader.output_color_type(),
+        (
+            png::ColorType::Rgb | png::ColorType::Grayscale,
+            png::BitDepth::Eight
+        )
+    ) {
+        return false;
+    }
+    let mut saw_row = false;
+    loop {
+        match reader.next_row() {
+            Ok(Some(row)) => {
+                saw_row = true;
+                if row.data().iter().any(|channel| *channel != 255) {
+                    return false;
+                }
+            }
+            Ok(None) => return saw_row,
+            Err(_) => return false,
+        }
+    }
 }
 
 fn recognize(
@@ -530,3 +566,30 @@ try {
   if ($null -ne $stream) { $stream.Dispose() }
 }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::is_blank_pdf_page_png;
+
+    fn rendered_png(rgb: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 2, 1);
+            encoder.set_color(png::ColorType::Rgb);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().expect("PNG header");
+            writer.write_image_data(rgb).expect("PNG pixels");
+        }
+        bytes
+    }
+
+    #[test]
+    fn blank_pdf_page_check_requires_all_source_pixels_to_be_white() {
+        let white = rendered_png(&[255; 6]);
+        assert!(is_blank_pdf_page_png(&white));
+
+        let marked = rendered_png(&[255, 255, 255, 255, 255, 254]);
+        assert!(!is_blank_pdf_page_png(&marked));
+        assert!(!is_blank_pdf_page_png(b"not a PNG"));
+    }
+}

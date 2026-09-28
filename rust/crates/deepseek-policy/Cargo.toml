@@ -29,6 +29,8 @@ quick-xml = "=0.31.0"
 # Selectable PDF text. `lopdf` reads classic and compressed xref tables and
 # inflates content streams; the text walk then follows pypdf's plain mode.
 lopdf = "=0.36.0"
+# Inspect pdftoppm's rendered PNG pixels before accepting OCR text from a blank PDF page.
+png = "=0.18.1"
 
 [dev-dependencies]
 tempfile = "3.27.0"
