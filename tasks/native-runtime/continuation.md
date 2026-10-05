@@ -10,6 +10,25 @@ The capability matrix is [`migration-matrix.md`](migration-matrix.md).
 
 ## Current verification checkpoint — 2026-10-05 push and CI repairs
 
+The first repair checkpoint was pushed as
+`181dbdf6c52158cd9a674f789e953e12e1bc06ea`. Its exact-head CI run
+[37279108498](https://github.com/leizd/DeepSeek-Infra/actions/runs/37279108498)
+passes 31 jobs, including native Go, MCP failover and hybrid reference tests.
+Three upstream jobs still fail: Rust and Rust coverage lack the generated Vite
+build required by `production_contract`; native S3 passes seven storage and ten
+worker tests, then Go tries to download modules through the deliberately refused
+proxy. Evidence Assembly and RC readiness fail downstream of those gates.
+
+The next repair builds the frontend in both Rust jobs and downloads/verifies Go
+modules before proxy isolation; the provider step sets `GOPROXY=off`. It retains
+the production contract, proxy refusal and all coverage thresholds. Locally, the
+Vite build, both actual Linux production-contract tests, ten workflow guards,
+Ruff/mypy and Go module verification pass. Exact-head CI/Evidence still needs a
+new complete run; these checks do not establish full native product readiness.
+The combined provider runner also passes seven storage tests, ten worker tests
+and three Go recovery subcases with `GOPROXY=off` and no container network.
+Log: `artifacts/native-20261005-ci-181dbdf6-s3-prefetched-offline.log`.
+
 Branch `codex/indexmap-std-feature`. The earlier shared checkpoint was committed
 and pushed as `7fe490d6e52d2317a2f5123cd45a57e167fa7a9b` (300 files); remote HEAD
 matched and the worktree was clean after that push. The current repair tree is
@@ -46,7 +65,7 @@ The whole project is **未完成**, readiness `NOT_READY`.
   compiles and executes on Windows. MCP has 23 passing tests; 108 source/runtime
   guards pass. Source zero-Python checks say `scope=source_contract` and
   `deployment_verified=false`; they do not establish deployment or full parity.
-- Next: collect current repair CI, resolve the first upstream failure, refresh
+- Next: push the prerequisite repair, collect current CI, resolve any upstream failure, refresh
   whole Rust coverage, then continue production Rust key custody, full Go action/
   epoch admission, remaining route/domain cutovers and desktop/Android qualification.
 

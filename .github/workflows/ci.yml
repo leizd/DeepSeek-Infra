@@ -1277,6 +1277,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - name: Build frontend for the production gateway contract
+        run: npm run build --prefix frontend
       - name: Install PDF renderer and OCR engine used by gateway tests
         run: |
           sudo apt-get update -qq
@@ -1323,11 +1331,18 @@ jobs:
           echo "$install_dir/go/bin" >> "$GITHUB_PATH"
       - run: test "$(go env GOVERSION)" = "go1.27.1"
       - run: python -m pip install -r requirements.txt -r requirements-s3-e2e.txt
+      - name: Download and verify Go modules before proxy isolation
+        working-directory: go
+        run: |
+          go mod download
+          go mod verify
       - name: Check native transport on the frozen MSRV
         run: cargo clippy --locked --manifest-path rust/Cargo.toml -p deepseek-storage --all-targets --all-features -- -D warnings
       - name: Native S3 boundary tests
         run: cargo test --locked --manifest-path rust/Cargo.toml -p deepseek-storage --features s3 --lib --test s3_transport
       - name: Real three-MinIO Rust bytes and Go control recovery tests
+        env:
+          GOPROXY: "off"
         run: python scripts/run_native_s3_e2e.py
 
   native-protocol:
@@ -1560,6 +1575,14 @@ jobs:
       CARGO_LLVM_COV_VERSION: "0.6.21"
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - name: Build frontend for the production gateway contract
+        run: npm run build --prefix frontend
       - name: Install PDF renderer and OCR engine used by gateway tests
         run: |
           sudo apt-get update -qq

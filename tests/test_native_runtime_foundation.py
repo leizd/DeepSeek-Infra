@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+import pytest
+import yaml
+
 from scripts.native_runtime_contract import check_all
 
 
@@ -69,6 +72,21 @@ def test_ci_has_native_go_and_protocol_gates() -> None:
     assert (ROOT / "scripts/check_native_contract_parity.py").is_file()
     assert re.search(r"go test -race(?: -timeout=30m)? \./\.\.\.", workflow)
     assert "scripts/check_go_coverage.py" in workflow
+
+
+@pytest.mark.parametrize("job_name", ["rust", "rust-coverage"])
+def test_rust_gates_build_the_frontend_before_running_production_contracts(job_name: str) -> None:
+    workflow = yaml.safe_load(_read(".github/workflows/ci.yml"))
+    steps = workflow["jobs"][job_name]["steps"]
+    node_index = next(index for index, step in enumerate(steps) if step.get("uses") == "actions/setup-node@v4")
+    assert steps[node_index]["with"]["node-version"] == "24"
+    install_index = next(index for index, step in enumerate(steps) if step.get("run") == "npm ci --prefix frontend")
+    build_index = next(index for index, step in enumerate(steps) if step.get("run") == "npm run build --prefix frontend")
+    gate_index = next(
+        index for index, step in enumerate(steps)
+        if "cargo test " in step.get("run", "") or "scripts/run_rust_coverage.py" in step.get("run", "")
+    )
+    assert node_index < install_index < build_index < gate_index
 
 
 def test_ci_runs_real_go_to_rust_worker_boundary() -> None:

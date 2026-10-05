@@ -8,6 +8,14 @@ Generated from ownership JSON, route modules, launchers, Compose files, Go/Rust
 packages, and CI jobs — not from README claims. Completeness is **wired native
 behavior with evidence**, not file/crate counts.
 
+**2026-10-05 CI prerequisite repair:** pushed `181dbdf6` passes 31 complete jobs,
+including native Go, MCP failover and hybrid. Rust tests/coverage need the actual
+Vite build, and the Go provider stage needs module downloads before proxy refusal.
+The workflow now prepares those inputs and disables Go module lookup during the
+provider run. Both local Linux production-contract cases, the frontend build,
+ten workflow guards and module verification pass. Exact-head CI/Evidence remains
+open; status remains **未完成 / NOT_READY**.
+
 **2026-10-05 pushed checkpoint and CI repairs:** `7fe490d6` is pushed; its exact-head
 CI passes 28 jobs and the Go format/vet/whole-test/race/coverage stages, but six
 upstream jobs fail before complete Evidence qualification. Current repairs isolate

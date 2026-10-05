@@ -19,6 +19,12 @@ def test_ci_builds_native_s3_on_msrv_and_runs_real_provider_suite() -> None:
     assert "sha256sum --check --strict" in commands
     assert job["env"]["CGO_ENABLED"] == "0"
     assert job["env"]["GOTOOLCHAIN"] == "local"
+    download_index = next(index for index, step in enumerate(steps) if "go mod download\n" in step.get("run", ""))
+    provider_index = next(index for index, step in enumerate(steps) if "python scripts/run_native_s3_e2e.py" in step.get("run", ""))
+    assert steps[download_index]["working-directory"] == "go"
+    assert "go mod verify" in steps[download_index]["run"]
+    assert download_index < provider_index
+    assert steps[provider_index]["env"]["GOPROXY"] == "off"
     assert "continue-on-error" not in job
     assert all(not step.get("continue-on-error", False) for step in steps)
     assert "native-s3-transport" in workflow["jobs"]["evidence-assembly"]["needs"]

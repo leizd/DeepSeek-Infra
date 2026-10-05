@@ -72,8 +72,12 @@ record; the active section below records current slices without rewriting that h
   failures. Repair oracle setup, versioned-read expectations, isolated MCP/native
   fixture and hybrid reference images, and default-worker TLS authority refusal.
   Local MCP/source/runtime guards and the Windows TLS process pass.
-- [ ] Obtain complete exact-head CI/Evidence for the repaired source; the first
-  pushed run is failed evidence despite its passing Python, Go and provider gates.
+- [x] Collect repair checkpoint `181dbdf6` CI: 31 jobs pass, including native Go,
+  MCP failover and hybrid. Repair missing Vite preparation in both Rust jobs and
+  Go dependency downloads before S3 proxy isolation. The actual Linux production
+  contract and ten workflow guards pass; coverage floors remain unchanged.
+- [ ] Obtain complete exact-head CI/Evidence for the repaired source; both pushed
+  runs are failed evidence despite their passing Python, Go and provider stages.
 - [ ] Refresh complete Rust coverage after repairing the exact `python_disabled`
   packaging false positive; frozen `f67263e3` failed that test after fmt/check/clippy passed.
 - [ ] Close mirror malformed-JSON/integer parity, browser upload, native handback,
