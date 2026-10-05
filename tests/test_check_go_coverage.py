@@ -8,7 +8,7 @@ import pytest
 from scripts import check_go_coverage
 
 from scripts.check_go_coverage import is_generated_only_package
-from scripts.run_rust_coverage import GENERATED_PROTO_COVERAGE_OMIT
+from scripts.run_rust_coverage import GENERATED_PROTO_COVERAGE_OMIT, TEST_INVENTORY_COMMAND
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -82,6 +82,7 @@ def test_rust_coverage_omits_only_generated_proto_out_dir_sources() -> None:
     assert "v1" in GENERATED_PROTO_COVERAGE_OMIT
     runner = (ROOT / "scripts/run_rust_coverage.py").read_text(encoding="utf-8")
     assert runner.count('"--ignore-filename-regex"') == 2
-    assert runner.count('"--locked"') >= 3
+    assert runner.count('"--locked"') >= 4
     assert '"coverageOmit": [GENERATED_PROTO_COVERAGE_OMIT]' in runner
-    assert "cargo test --locked --manifest-path" in runner
+    assert TEST_INVENTORY_COMMAND[:2] == ["cargo", "llvm-cov"]
+    assert {"--locked", "--no-report"}.issubset(TEST_INVENTORY_COMMAND)

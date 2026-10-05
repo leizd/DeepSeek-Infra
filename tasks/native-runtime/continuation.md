@@ -8,6 +8,27 @@ This file is the session handoff. Historical plans, checkboxes, VERSION, and
 `release/native_runtime_5_0_evidence_v1.json` are not completion evidence.
 The capability matrix is [`migration-matrix.md`](migration-matrix.md).
 
+## Current verification checkpoint — 2026-10-05 coverage inventory assertion repair
+
+Both exact-head CI runs for `529e40deba31f71d004c63e03e24675e06da819e`
+([37299410760](https://github.com/leizd/DeepSeek-Infra/actions/runs/37299410760)
+and [37299941770](https://github.com/leizd/DeepSeek-Infra/actions/runs/37299941770))
+finish with **34/37 passing jobs**. Each Python version fails only
+`test_rust_coverage_omits_only_generated_proto_out_dir_sources`: its legacy source
+substring still demands `cargo test --locked --manifest-path` after inventory
+switched to the locked instrumented build. Each matrix has 5,639 other passing
+tests and 61 passing subtests; Python coverage remains **95.50–95.57%**. Rust,
+Rust coverage, Go race/coverage, Evidence Assembly and RC jobs pass, but the whole
+CI run is failed and is not a green qualification.
+
+The assertion now checks the actual `TEST_INVENTORY_COMMAND` tool and its
+`--locked`/`--no-report` flags, and requires all four lock-consuming command
+sites. Generated-Protobuf coverage exclusions and all thresholds stay intact.
+The failing assertion is reproduced before this fix; **56** related tests and
+whole-repository Ruff/mypy pass afterward. No runtime implementation changes
+are part of this repair. The next complete exact-head CI is still required.
+Full product readiness remains **NOT_READY**.
+
 ## Current verification checkpoint — 2026-10-05 Rust test disk reduction
 
 The preceding repair commit `4560422dfdcc9bb31d1e9712174b23211ded6a11`
