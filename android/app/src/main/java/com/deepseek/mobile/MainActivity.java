@@ -23,11 +23,7 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.chaquo.python.PyObject;
-import com.chaquo.python.Python;
-import com.chaquo.python.android.AndroidPlatform;
-
-import org.json.JSONObject;
+import java.io.File;
 
 public class MainActivity extends Activity {
     private static final String TAG = "DeepSeekMobile";
@@ -44,7 +40,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         buildLayout();
         configureWebView();
-        startPythonServer();
+        startNativeServer();
     }
 
     private void buildLayout() {
@@ -116,30 +112,55 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void startPythonServer() {
+    private void startNativeServer() {
         new Thread(() -> {
-            String dependencyProbe = "not run";
+            String runtimeStatus = "native runtime not started";
             try {
-                if (!Python.isStarted()) {
-                    Python.start(new AndroidPlatform(this));
-                }
                 AndroidOcrBridge.initialize(getApplicationContext());
-                PyObject module = Python.getInstance().getModule("deepseek_infra.android_entry");
-                dependencyProbe = module.callAttr("dependency_versions").toString();
-                Log.i(TAG, "Python dependency probe: " + dependencyProbe);
-                PyObject result = module.callAttr("start_json", getFilesDir().getAbsolutePath(), SERVER_PORT, "", "", false);
-                JSONObject payload = new JSONObject(result.toString());
-                String url = payload.getString("url");
+                File binary = nativeGatewayBinary();
+                if (binary == null) {
+                    throw new IllegalStateException("native gateway binary is not packaged");
+                }
+                ProcessBuilder builder = new ProcessBuilder(binary.getAbsolutePath());
+                builder.environment().put("GATEWAY_BIND_ADDR", "127.0.0.1:" + SERVER_PORT);
+                builder.environment().put("DEEPSEEK_INFRA_ROOT", getFilesDir().getAbsolutePath());
+                builder.environment().put("DEEPSEEK_INFRA_STATIC_DIR", new File(getFilesDir(), "static").getAbsolutePath());
+                builder.environment().put("DEEPSEEK_RUNTIME_MODE", "python_disabled");
+                builder.redirectErrorStream(true);
+                builder.start();
+                runtimeStatus = binary.getName();
+                String url = "http://127.0.0.1:" + SERVER_PORT + "/";
                 runOnUiThread(() -> {
                     progressBar.setVisibility(ProgressBar.GONE);
                     webView.loadUrl(url);
                 });
             } catch (Exception exc) {
-                String finalDependencyProbe = dependencyProbe;
-                Log.e(TAG, "Startup failed after dependency probe: " + finalDependencyProbe, exc);
-                runOnUiThread(() -> showStartupError(exc, finalDependencyProbe));
+                String finalStatus = runtimeStatus;
+                Log.e(TAG, "Startup failed: " + finalStatus, exc);
+                runOnUiThread(() -> showStartupError(exc, finalStatus));
             }
-        }, "deepseek-python-start").start();
+        }, "deepseek-native-start").start();
+    }
+
+    private File nativeGatewayBinary() {
+        String[] names = new String[] {"libdeepseek_gateway.so", "deepseek-gateway", "deepseek-gateway.exe"};
+        File[] roots = new File[] {
+            new File(getApplicationInfo().nativeLibraryDir),
+            getFilesDir(),
+            new File(getApplicationInfo().dataDir, "bin")
+        };
+        for (File root : roots) {
+            if (root == null) {
+                continue;
+            }
+            for (String name : names) {
+                File candidate = new File(root, name);
+                if (candidate.isFile() && candidate.canExecute()) {
+                    return candidate;
+                }
+            }
+        }
+        return null;
     }
 
     private boolean isLocalAppUrl(Uri uri) {

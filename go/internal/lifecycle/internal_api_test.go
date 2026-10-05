@@ -3,6 +3,8 @@ package lifecycle
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -111,9 +113,12 @@ func TestStartedRuntimeServesAnAuthenticatedControlPlane(t *testing.T) {
 func TestStartedRuntimeClaimsControlAuthorityOverInternalAPI(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	promotionPrivate := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x73}, ed25519.SeedSize))
+	promotionPublic := base64.RawURLEncoding.EncodeToString(promotionPrivate.Public().(ed25519.PublicKey))
 	runtime, err := Start(ctx, config.Config{
 		Mode: config.ModeShadow, Listen: "127.0.0.1:0", Owner: "authority-runtime-owner",
 		ShadowStoreDir: t.TempDir(), InternalAPIBearer: lifecycleBearer, ControlAuthority: true,
+		PromotionSignerPublicKey: promotionPublic, FleetID: "lifecycle-fleet", Environment: "test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -170,6 +175,62 @@ func TestStartedRuntimeClaimsControlAuthorityOverInternalAPI(t *testing.T) {
 	if headResponse.StatusCode != http.StatusOK || decodeErr != nil || head != claim.Head {
 		t.Fatalf("started runtime head: status=%d head=%+v decode=%v", headResponse.StatusCode, head, decodeErr)
 	}
+	currentResponse, err := authenticated.Get(address + "/internal/cutover/status?domain=action")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var current store.CutoverRecord
+	decodeErr = json.NewDecoder(currentResponse.Body).Decode(&current)
+	currentResponse.Body.Close()
+	if currentResponse.StatusCode != http.StatusOK || decodeErr != nil {
+		t.Fatalf("started runtime cutover status: status=%d decode=%v", currentResponse.StatusCode, decodeErr)
+	}
+	postTransition := func(req store.CutoverTransition, want int) store.CutoverRecord {
+		t.Helper()
+		body, marshalErr := json.Marshal(req)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		response, postErr := authenticated.Post(address+"/internal/cutover/transition", "application/json", bytes.NewReader(body))
+		if postErr != nil {
+			t.Fatal(postErr)
+		}
+		defer response.Body.Close()
+		var result store.CutoverRecord
+		if response.StatusCode != want {
+			payload, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+			t.Fatalf("started runtime transition: status=%d want=%d body=%s", response.StatusCode, want, payload)
+		}
+		if want == http.StatusOK {
+			if decodeErr := json.NewDecoder(response.Body).Decode(&result); decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+		}
+		return result
+	}
+	dual := postTransition(store.CutoverTransition{
+		Domain: "action", To: store.CutoverDualEvaluate,
+		ExpectedRevision: current.Revision, ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken,
+		TransferID: "lifecycle-dual",
+	}, http.StatusOK)
+	promote := store.CutoverTransition{
+		Domain: "action", To: store.CutoverGoAuthoritative,
+		ExpectedRevision: dual.Revision, ExpectedEpoch: dual.Epoch, FencingToken: dual.FencingToken,
+		TransferID: "lifecycle-promote", Authority: authority,
+	}
+	postTransition(promote, http.StatusConflict)
+	artifact := store.PromotionArtifactForTransition(promote, dual, time.Now().Unix(), "lifecycle-fleet", "test")
+	promote.Promotion, err = store.SignPromotionArtifact(artifact, promotionPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promoted := postTransition(promote, http.StatusOK)
+	if promoted.State != store.CutoverGoAuthoritative || promoted.Epoch != dual.Epoch+1 {
+		t.Fatalf("started runtime did not promote signed domain: %+v", promoted)
+	}
+	postTransition(promote, http.StatusOK)
+	promote.Promotion = nil
+	postTransition(promote, http.StatusConflict)
 }
 
 // A runtime with no configured credential serves no control plane, which is the

@@ -65,7 +65,29 @@ def test_control_plane_has_no_mutation_rpc() -> None:
     _, descriptor = _binary_contract()
     control = next(item for item in descriptor["files"] if item["package"] == "deepseek.control.v1")
     rpcs = [rpc["name"] for service in control["services"] for rpc in service["rpcs"]]
-    assert rpcs == ["Health", "ShadowEvaluate"]
+    assert rpcs == ["Health", "ShadowEvaluate", "GetBackupPolicyRecipients"]
+
+
+@pytest.mark.parametrize("tamper", ["request-field", "response-field", "group-field", "streaming", "wrong-response"])
+def test_recipient_read_rpc_cannot_smuggle_a_mutation_shape(tamper: str) -> None:
+    descriptor_set = load_binary_descriptor()
+    control = next(item for item in descriptor_set.file if item.package == "deepseek.control.v1")
+    service = next(item for item in control.service if item.name == "ControlPlane")
+    rpc = next(item for item in service.method if item.name == "GetBackupPolicyRecipients")
+    if tamper == "streaming":
+        rpc.client_streaming = True
+    elif tamper == "wrong-response":
+        rpc.output_type = ".deepseek.control.v1.HealthResponse"
+    else:
+        name = {
+            "request-field": "BackupPolicyRecipientsRequest",
+            "response-field": "BackupPolicyRecipientsResponse",
+            "group-field": "BackupRecipientGroup",
+        }[tamper]
+        message = next(item for item in control.message_type if item.name == name)
+        message.field.add(name="mutation_body", number=99, type=descriptor_pb2.FieldDescriptorProto.TYPE_BYTES)
+    with pytest.raises(ContractError, match="control proto cannot expose mutation RPCs"):
+        validate_descriptor_invariants(descriptor_set_to_contract(descriptor_set))
 
 
 def test_binary_descriptor_does_not_hide_streaming_or_optioned_rpcs() -> None:

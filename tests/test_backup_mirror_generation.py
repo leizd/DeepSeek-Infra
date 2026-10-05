@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
+from threading import Event
 
 import pytest
 
 from deepseek_infra.core import config
 from deepseek_infra.core.errors import AppError
-from deepseek_infra.infra.workspace import backup_crypto, backup_mirror, backup_unattended
+from deepseek_infra.infra.workspace import backup_crypto, backup_mirror, backup_unattended, mutation_gate
 
 
 RECIPIENT_A = "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
@@ -78,6 +80,44 @@ def test_put_creates_immutable_generation_layout(tmp_settings: Path, stub_crypto
     assert backup_unattended.sha256_file(ciphertext) == variant["ciphertextSha256"]
     head = json.loads((root / "HEAD.json").read_text(encoding="utf-8"))
     assert head["generationId"] == metadata["generationId"]
+
+
+def test_mirror_writer_rechecks_restore_fence_after_waiting_for_the_workspace_lock(tmp_settings: Path, stub_crypto: None) -> None:
+    started = Event()
+
+    def upload() -> dict[str, object]:
+        started.set()
+        return backup_mirror.put_frontend_mirror(
+            "mirror_main", _envelope("restore-window"), source_epoch="epoch-restore-window",
+            recipients=[RECIPIENT_A], client_sequence=1,
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with mutation_gate.exclusive_gate(root=tmp_settings):
+            result = pool.submit(upload)
+            assert started.wait(timeout=2)
+            with pytest.raises(TimeoutError):
+                result.result(timeout=0.2)
+            assert not _mirror_root(tmp_settings).exists()
+            mutation_gate.write_fence({"restoreId": "mirror-restore-window"}, root=tmp_settings)
+        with pytest.raises(AppError, match="restore is in progress") as refused:
+            result.result(timeout=3)
+    assert refused.value.status == 423
+    assert not _mirror_root(tmp_settings).exists()
+    assert mutation_gate.clear_fence("mirror-restore-window", root=tmp_settings)
+    assert upload()["creationVerified"] is True
+    assert (_mirror_root(tmp_settings) / "HEAD.json").is_file()
+
+
+@pytest.mark.parametrize("profile", [".", ".."])
+def test_profile_cannot_alias_the_store_or_its_parent(tmp_settings: Path, stub_crypto: None, profile: str) -> None:
+    with pytest.raises(AppError, match="Invalid backup mirror profile id"):
+        backup_mirror.put_frontend_mirror(
+            profile, _envelope("scope-probe"), source_epoch="epoch-scope",
+            recipients=[RECIPIENT_A], client_sequence=1,
+        )
+    assert not (tmp_settings / ".backup-mirror").exists()
+    assert not (tmp_settings / "HEAD.json").exists()
 
 
 def test_read_uses_single_immutable_generation(tmp_settings: Path, stub_crypto: None) -> None:

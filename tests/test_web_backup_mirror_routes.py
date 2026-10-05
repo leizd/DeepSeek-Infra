@@ -110,3 +110,47 @@ def test_mirror_status_missing(client: TestClient) -> None:
     resp = client.get("/api/workspace/backup-mirrors/mirror_missing")
     assert resp.status_code == 200
     assert resp.json()["status"] == "missing"
+
+
+@pytest.mark.parametrize(
+    ("body", "length", "status", "message", "code"),
+    [
+        ("", "0", 400, "Request body is empty", "invalid_payload"),
+        ("[]", "2", 400, "Request body must be a JSON object", "invalid_payload"),
+        ("{}", "64000001", 413, "Request body is too large", "upload_too_large"),
+        ("{}", "-1", 400, "Invalid Content-Length", "invalid_payload"),
+        ("{}", "bad", 400, "Invalid Content-Length", "invalid_payload"),
+    ],
+)
+def test_mirror_public_body_guards_oracle(
+    client: TestClient, tmp_settings: Path, body: str, length: str, status: int, message: str, code: str
+) -> None:
+    response = client.put(
+        "/api/workspace/backup-mirrors/body_guards/frontend", content=body, headers={"Content-Length": length}
+    )
+    assert response.status_code == status
+    assert response.json() == {"error": message, "code": code}
+    assert not (tmp_settings / ".backup-mirror" / "body_guards").exists()
+
+
+@pytest.mark.parametrize(
+    ("epoch", "expected_epoch", "replica", "expected_replica"),
+    [(True, "True", True, "True"), (42, "42", 3.5, "3.5"), (["epoch"], "['epoch']", ["replica"], "['replica']"), ("epoch-text", "epoch-text", False, "")],
+)
+def test_mirror_public_text_coercion_oracle(
+    client: TestClient, epoch: Any, expected_epoch: str, replica: Any, expected_replica: str
+) -> None:
+    # This exercises the unchanged public Python oracle. Crypto is stubbed by this
+    # module's fixture; native age round-trip evidence lives in the process tests.
+    backup_policies.create_policy({"name": "body-oracle", "enabled": True, "protection": {"mode": "age-recipient", "recipients": [
+        "age1fu59d59ghmr8x2t5dyzjs9xdcjgnakujp7mjy7cz2v7fq6vjqypskh4e62"
+    ]}})
+    payload = {"envelope": _envelope(), "sourceEpoch": epoch, "clientReplicaId": replica,
+               "clientSequence": 1, "acknowledgedAt": False, "expectedHeadGenerationId": False}
+    response = client.put(
+        "/api/workspace/backup-mirrors/body_text/frontend",
+        content=json.dumps(payload), headers={"Content-Type": "text/plain"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["sourceEpoch"] == expected_epoch
+    assert response.json()["clientReplicaId"] == expected_replica

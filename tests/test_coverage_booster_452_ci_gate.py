@@ -107,7 +107,8 @@ def test_evidence_revision_git_errors_and_validate(monkeypatch: pytest.MonkeyPat
         raise subprocess.TimeoutExpired(cmd="git", timeout=15)
 
     monkeypatch.setattr(subprocess, "run", timeout_run)
-    assert revision_module._git(tmp_path, "status", "--porcelain") == ""  # noqa: SLF001
+    with pytest.raises(ValueError, match="Git status unavailable"):
+        revision_module._git(tmp_path, "status", "--porcelain")  # noqa: SLF001
 
     base = {
         "schemaVersion": 2,

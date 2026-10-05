@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"syscall"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/a2a"
 	"github.com/leizd/DeepSeek-Infra/go/internal/config"
@@ -24,7 +25,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	runtime, err := lifecycle.Start(ctx, cfg)
 	if err != nil {

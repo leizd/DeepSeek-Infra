@@ -26,6 +26,8 @@ def test_gate_passes_on_current_repository() -> None:
     assert report["passed"] is True
     assert report["checks_failed"] == 0
     assert report["checks_passed"] == 8
+    assert report["scope"] == "source_contract"
+    assert report["deployment_verified"] is False
 
 
 def test_gate_cli_invocation_strict() -> None:
@@ -36,7 +38,9 @@ def test_gate_cli_invocation_strict() -> None:
         cwd=str(ROOT),
     )
     assert result.returncode == 0
-    assert "Overall Verdict: PASS" in result.stdout
+    assert "Source-contract verdict: PASS" in result.stdout
+    assert "Deployment/process/provider qualification: UNVERIFIED" in result.stdout
+    assert "Overall Verdict" not in result.stdout
 
 
 def test_gate_cli_invocation_json() -> None:
@@ -50,6 +54,8 @@ def test_gate_cli_invocation_json() -> None:
     payload = json.loads(result.stdout)
     assert payload["status"] == "PASS"
     assert payload["passed"] is True
+    assert payload["scope"] == "source_contract"
+    assert payload["deployment_verified"] is False
     assert len(payload["results"]) == 8
 
 

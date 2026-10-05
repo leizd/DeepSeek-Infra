@@ -17,6 +17,12 @@ func prepareOperationV8Fixture(t *testing.T, control *Control) {
 	}
 	defer tx.Rollback()
 	for _, statement := range []string{
+		"DROP TABLE IF EXISTS control_operator_mutations",
+		"DROP TABLE IF EXISTS backup_target_health",
+		"DROP TABLE IF EXISTS control_target_health_imports",
+		"DROP TABLE control_inventory_handbacks",
+		"DROP TABLE control_inventory_imports",
+		"DROP TABLE control_promotion_artifacts",
 		"DROP TRIGGER control_operations_no_update",
 		"DROP TRIGGER control_operations_no_delete",
 		"ALTER TABLE control_operations RENAME TO control_operations_v9_fixture",

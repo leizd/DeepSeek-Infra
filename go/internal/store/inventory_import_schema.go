@@ -1,0 +1,80 @@
+package store
+
+import (
+	"database/sql"
+	"fmt"
+	"strings"
+)
+
+// Schema v11 records the inventory and its source attestation in the same
+// transaction as the imported records and events. The journal does not make
+// the Python and Go SQLite databases one atomic store.
+var inventoryImportSchemaObjects = map[string]string{
+	"control_inventory_imports": `CREATE TABLE control_inventory_imports (
+		domain TEXT PRIMARY KEY CHECK(domain IN ('policy','target')),
+		transfer_id TEXT NOT NULL CHECK(length(transfer_id)>0),
+		manifest_digest TEXT NOT NULL CHECK(length(manifest_digest)=64 AND manifest_digest=lower(manifest_digest)),
+		source_digest TEXT NOT NULL CHECK(length(source_digest)=64 AND source_digest=lower(source_digest)),
+		authority_generation INTEGER NOT NULL CHECK(authority_generation>=1),
+		authority_digest TEXT NOT NULL CHECK(length(authority_digest)=64 AND authority_digest=lower(authority_digest)),
+		source_schema_version INTEGER NOT NULL CHECK(source_schema_version=8),
+		source_boot_epoch INTEGER NOT NULL CHECK(source_boot_epoch>=0),
+		row_count INTEGER NOT NULL CHECK(row_count>=0),
+		source_attested INTEGER NOT NULL CHECK(source_attested IN (0,1)),
+		writer_fencing_token INTEGER NOT NULL CHECK(writer_fencing_token>=1),
+		recorded_at INTEGER NOT NULL CHECK(recorded_at>=0)
+	) STRICT`,
+	"control_inventory_imports_no_update": `CREATE TRIGGER control_inventory_imports_no_update BEFORE UPDATE ON control_inventory_imports
+	BEGIN SELECT RAISE(ABORT,'INVENTORY_IMPORT_IMMUTABLE'); END`,
+	"control_inventory_imports_no_delete": `CREATE TRIGGER control_inventory_imports_no_delete BEFORE DELETE ON control_inventory_imports
+	BEGIN SELECT RAISE(ABORT,'INVENTORY_IMPORT_IMMUTABLE'); END`,
+}
+
+func (store *Control) migrateToV11Tx(tx *sql.Tx) error {
+	for _, statement := range []string{
+		`CREATE TABLE control_store_meta_v11 (
+			singleton INTEGER PRIMARY KEY CHECK(singleton=1), runtime TEXT NOT NULL,
+			mode TEXT NOT NULL, schema_version INTEGER NOT NULL CHECK(schema_version BETWEEN 0 AND 11),
+			unique_writer TEXT NOT NULL) STRICT`,
+		`INSERT INTO control_store_meta_v11 SELECT singleton,runtime,mode,schema_version,unique_writer FROM control_store_meta`,
+		`DROP TABLE control_store_meta`,
+		`ALTER TABLE control_store_meta_v11 RENAME TO control_store_meta`,
+		inventoryImportSchemaObjects["control_inventory_imports"],
+		inventoryImportSchemaObjects["control_inventory_imports_no_update"],
+		inventoryImportSchemaObjects["control_inventory_imports_no_delete"],
+	} {
+		if _, err := tx.Exec(statement); err != nil {
+			return err
+		}
+	}
+	now := store.now()
+	if now < 0 {
+		return ErrWriterFenceHeld
+	}
+	if _, err := tx.Exec("INSERT INTO schema_migrations VALUES(11,?,?)", now, "record fenced Python inventory provenance"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("UPDATE control_store_meta SET schema_version=11 WHERE singleton=1"); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("PRAGMA user_version=11"); err != nil {
+		return err
+	}
+	store.schema = SchemaV11
+	return nil
+}
+
+func verifyInventoryImportSchemaTx(tx *sql.Tx, schema int) error {
+	objects := inventoryImportSchemaObjects
+	if schema >= SchemaV13 {
+		objects = inventoryImportSchemaObjectsV13
+	}
+	for name, expected := range objects {
+		var actual string
+		if err := tx.QueryRow("SELECT sql FROM sqlite_schema WHERE name=?", name).Scan(&actual); err != nil ||
+			strings.TrimSpace(actual) != strings.TrimSpace(expected) {
+			return fmt.Errorf("%w: inventory import schema %s", ErrForeignRuntimeStore, name)
+		}
+	}
+	return nil
+}

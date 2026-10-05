@@ -50,6 +50,12 @@ type OpenOptions struct {
 	// control-authority-v1 claim is installed. It defaults to false, so every
 	// existing caller stays mechanically unable to authorize a cutover.
 	AuthorizeCutover bool
+	// PromotionSignerPublicKey is the deployment-pinned Ed25519 key for a
+	// separately signed, per-domain ownership transition. Empty refuses every
+	// promotion, even when AuthorizeCutover is enabled.
+	PromotionSignerPublicKey string
+	FleetID                  string
+	Environment              string
 }
 
 type Record struct {
@@ -92,6 +98,9 @@ type Control struct {
 	closed              bool
 	admissionFaultStage string
 	authorizeCutover    bool
+	promotionSignerKey  string
+	fleetID             string
+	environment         string
 }
 
 type rowScanner interface {
@@ -185,13 +194,16 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 		leaseSeconds = 30
 	}
 	store := &Control{
-		path:             resolved,
-		databasePath:     databasePath,
-		owner:            opts.Owner,
-		leaseSeconds:     leaseSeconds,
-		now:              nowFn,
-		db:               db,
-		authorizeCutover: opts.AuthorizeCutover,
+		path:               resolved,
+		databasePath:       databasePath,
+		owner:              opts.Owner,
+		leaseSeconds:       leaseSeconds,
+		now:                nowFn,
+		db:                 db,
+		authorizeCutover:   opts.AuthorizeCutover,
+		promotionSignerKey: opts.PromotionSignerPublicKey,
+		fleetID:            opts.FleetID,
+		environment:        opts.Environment,
 	}
 	if err := store.bootstrapAndClaim(databaseExisted); err != nil {
 		_ = db.Close()
@@ -389,6 +401,51 @@ func expectedControlUserObjects(schema int) map[string]string {
 			kind := "trigger"
 			switch name {
 			case "control_authority_head", "control_authority_checkpoints", "control_cutover_authorizations":
+				kind = "table"
+			}
+			objects[name] = kind
+		}
+	}
+	if schema >= SchemaV10 {
+		for name := range promotionArtifactSchemaObjects {
+			kind := "trigger"
+			if name == "control_promotion_artifacts" {
+				kind = "table"
+			}
+			objects[name] = kind
+		}
+	}
+	if schema >= SchemaV11 {
+		for name := range inventoryImportSchemaObjects {
+			kind := "trigger"
+			if name == "control_inventory_imports" {
+				kind = "table"
+			}
+			objects[name] = kind
+		}
+	}
+	if schema >= SchemaV12 {
+		for name := range inventoryHandbackSchemaObjects {
+			kind := "trigger"
+			if name == "control_inventory_handbacks" {
+				kind = "table"
+			}
+			objects[name] = kind
+		}
+	}
+	if schema >= SchemaV14 {
+		for name := range targetHealthSchemaObjects {
+			kind := "trigger"
+			if name == "backup_target_health" || name == "control_target_health_imports" {
+				kind = "table"
+			}
+			objects[name] = kind
+		}
+	}
+	if schema >= SchemaV15 {
+		for name := range operatorMutationSchemaObjects {
+			kind := "trigger"
+			if name == operatorMutationTable {
 				kind = "table"
 			}
 			objects[name] = kind
@@ -644,6 +701,36 @@ func (store *Control) migrateTx(tx *sql.Tx) error {
 	}
 	if store.schema == SchemaV8 {
 		if err := store.migrateToV9Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV9 {
+		if err := store.migrateToV10Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV10 {
+		if err := store.migrateToV11Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV11 {
+		if err := store.migrateToV12Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV12 {
+		if err := store.migrateToV13Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV13 {
+		if err := store.migrateToV14Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV14 {
+		if err := store.migrateToV15Tx(tx); err != nil {
 			return err
 		}
 	}
@@ -1003,6 +1090,36 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 			return err
 		}
 	}
+	if schema >= SchemaV10 {
+		if err := verifyPromotionArtifactSchemaTx(tx); err != nil {
+			return err
+		}
+		tables = append(tables, "control_promotion_artifacts")
+	}
+	if schema >= SchemaV11 {
+		if err := verifyInventoryImportSchemaTx(tx, schema); err != nil {
+			return err
+		}
+		tables = append(tables, "control_inventory_imports")
+	}
+	if schema >= SchemaV12 {
+		if err := verifyInventoryHandbackSchemaTx(tx); err != nil {
+			return err
+		}
+		tables = append(tables, "control_inventory_handbacks")
+	}
+	if schema >= SchemaV14 {
+		if err := verifyTargetHealthSchemaTx(tx); err != nil {
+			return err
+		}
+		tables = append(tables, "backup_target_health", "control_target_health_imports")
+	}
+	if schema >= SchemaV15 {
+		if err := verifyOperatorMutationSchemaTx(tx); err != nil {
+			return err
+		}
+		tables = append(tables, operatorMutationTable)
+	}
 	for _, table := range tables {
 		var marker int
 		if err := tx.QueryRow(
@@ -1010,6 +1127,11 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 			table,
 		).Scan(&marker); err != nil {
 			return fmt.Errorf("%w: missing table %s", ErrForeignRuntimeStore, table)
+		}
+	}
+	if schema >= SchemaV10 {
+		if err := verifyCurrentPromotionBindingsTx(tx); err != nil {
+			return err
 		}
 	}
 	var runtimeName, mode, uniqueWriter string
@@ -1248,12 +1370,13 @@ func (store *Control) putLeasedControlRecord(record Record, dispatch *StorageDis
 // A prepared write owns its canonical bytes, including a dispatch's operation
 // identity. It cannot be rebound by modifying the caller's payload or intent.
 type controlRecordWrite struct {
-	record          Record
-	table           string
-	intentJSON      []byte
-	intentDigest    string
-	operationID     string
-	allowBoundLease bool
+	record                Record
+	table                 string
+	intentJSON            []byte
+	intentDigest          string
+	operationID           string
+	allowBoundLease       bool
+	allowImportedBaseline bool
 }
 
 func prepareControlRecordWrite(record Record, dispatch *StorageDispatchIntent) (controlRecordWrite, error) {
@@ -1292,6 +1415,17 @@ func prepareControlRecordWrite(record Record, dispatch *StorageDispatchIntent) (
 // https://go.dev/doc/database/execute-transactions#best-practices
 func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, now int64) error {
 	record, table := write.record, write.table
+	if store.schema >= SchemaV11 && (record.Domain == "policy" || record.Domain == "target") {
+		var imports int
+		if err := tx.QueryRow("SELECT COUNT(*) FROM control_inventory_imports WHERE domain=?", record.Domain).Scan(&imports); err != nil {
+			return err
+		}
+		if write.allowImportedBaseline || imports != 0 {
+			if err := validateInventoryCASPayload(record); err != nil {
+				return err
+			}
+		}
+	}
 	existing, exists, err := readControlRecord(tx.QueryRow(
 		fmt.Sprintf(
 			"SELECT id, revision, execution_epoch, state, payload_json, record_digest, writer_fencing_token, updated_at FROM %s WHERE id = ?",
@@ -1339,6 +1473,9 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 		return ErrIllegalTransition
 	}
 	if exists {
+		if write.allowImportedBaseline {
+			return ErrInventoryImportConflict
+		}
 		if record.Revision != existing.Revision+1 {
 			return ErrRevisionConflict
 		}
@@ -1351,7 +1488,7 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 			}
 		}
 	} else {
-		if record.Revision != 1 {
+		if record.Revision != 1 && !write.allowImportedBaseline {
 			return ErrRevisionConflict
 		}
 		if fencedDomains[record.Domain] {
@@ -1579,6 +1716,12 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 		if err != nil {
 			return err
 		}
+		if previousState == "" && event.Revision > 1 {
+			if err := validateImportedBaselineTx(tx, event, metadata); err != nil {
+				return err
+			}
+			expectedRevision = event.Revision
+		}
 		legal := LegalTransition(latest.Domain, previousState, event.State)
 		versionedEdge := (eventID > reconciliationBoundary && reconciliationTransition(previousState, event.State, previousEpoch, event.ExecutionEpoch)) ||
 			(eventID > verificationBoundary && verificationTransition(previousState, event.State, previousEpoch, event.ExecutionEpoch))
@@ -1591,7 +1734,7 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 		if !exists || event.Revision != expectedRevision || !legal {
 			return fmt.Errorf("%w: invalid control event sequence", ErrCorruptRecord)
 		}
-		if expectedRevision > 1 &&
+		if previousState != "" &&
 			(metadata.writerToken < previousWriterToken || metadata.timestamp < previousTimestamp) {
 			return fmt.Errorf("%w: regressing control event metadata", ErrCorruptRecord)
 		}
@@ -1917,7 +2060,65 @@ func (store *Control) Rollback(version int) error {
 			return err
 		}
 	}
+	if store.schema >= SchemaV14 {
+		for _, table := range []string{"backup_target_health", "control_target_health_imports"} {
+			var rows int
+			if err := tx.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&rows); err != nil {
+				return err
+			}
+			if rows != 0 {
+				return ErrInventoryHistoryRetained
+			}
+			if _, err := tx.Exec("DROP TABLE " + table); err != nil {
+				return err
+			}
+		}
+	}
+	if store.schema >= SchemaV15 {
+		if err := validateOperatorMutationHistoryTx(tx); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DROP TABLE " + operatorMutationTable); err != nil {
+			return err
+		}
+	}
 	if store.schema >= SchemaV8 {
+		var promotionCount int
+		if err := tx.QueryRow("SELECT COUNT(*) FROM control_cutover_authorizations").Scan(&promotionCount); err != nil {
+			return err
+		}
+		if promotionCount != 0 {
+			return ErrPromotionHistoryRetained
+		}
+		if store.schema >= SchemaV11 {
+			var importCount int
+			if err := tx.QueryRow("SELECT COUNT(*) FROM control_inventory_imports").Scan(&importCount); err != nil {
+				return err
+			}
+			if importCount != 0 {
+				return ErrInventoryHistoryRetained
+			}
+			if _, err := tx.Exec("DROP TABLE control_inventory_imports"); err != nil {
+				return err
+			}
+		}
+		if store.schema >= SchemaV12 {
+			var handbackCount int
+			if err := tx.QueryRow("SELECT COUNT(*) FROM control_inventory_handbacks").Scan(&handbackCount); err != nil {
+				return err
+			}
+			if handbackCount != 0 {
+				return ErrInventoryHandbackHistoryRetained
+			}
+			if _, err := tx.Exec("DROP TABLE control_inventory_handbacks"); err != nil {
+				return err
+			}
+		}
+		if store.schema >= SchemaV10 {
+			if _, err := tx.Exec("DROP TABLE control_promotion_artifacts"); err != nil {
+				return err
+			}
+		}
 		for _, table := range []string{
 			"control_cutover_authorizations",
 			"control_authority_checkpoints",

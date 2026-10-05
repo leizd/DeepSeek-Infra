@@ -83,6 +83,20 @@ fn configured_worker(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address = configured_listen_addr(std::env::var("DEEPSEEK_WORKER_LISTEN"))?;
     let transport = load_worker_transport(|name| std::env::var(name))?;
+    // Validate provider configuration before opening the durable authority store.
+    #[cfg(feature = "s3")]
+    let storage = deepseek_worker::load_worker_storage_transport(|name| std::env::var(name))?;
+    #[cfg(not(feature = "s3"))]
+    if deepseek_worker::WORKER_S3_ENV_NAMES
+        .iter()
+        .any(|name| !matches!(std::env::var(name), Err(std::env::VarError::NotPresent)))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "worker was built without S3 storage support",
+        )
+        .into());
+    }
     let worker = configured_worker(|name| std::env::var(name))?;
     let authority = if worker.authority_configured() {
         "configured"
@@ -95,6 +109,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "plaintext-loopback"
     };
     let service = WorkerRpcService::new_with_authenticator(worker, transport.authenticator);
+    #[cfg(feature = "s3")]
+    let service = match storage {
+        Some(storage) => service.with_transport(storage),
+        None => service,
+    };
     println!(
         "deepseek-worker listening on {address} authority={authority} mutation=denied transport={transport_name}"
     );

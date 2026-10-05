@@ -129,9 +129,14 @@ async fn rpc_created_intent_preserves_operation_identity_on_three_real_providers
             .await
             .unwrap();
         let confirmed = query(&service, &fence, operation).await;
-        assert_eq!(confirmed.status(), StorageMutationStatus::Confirmed);
-        assert_eq!(confirmed.operation_id, operation);
-        assert_eq!(confirmed.etag, result.etag);
+        assert_eq!(confirmed, result);
+        assert_eq!(
+            WorkerRpc::execute_storage_mutation(&service, authenticated(request.clone()))
+                .await
+                .unwrap()
+                .into_inner(),
+            result
+        );
 
         for substitute in ["Operation-A", " Operation-B "] {
             assert_mismatch(&query(&service, &fence, substitute).await);

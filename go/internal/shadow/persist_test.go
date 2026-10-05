@@ -1,16 +1,23 @@
 package shadow
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 )
 
 func TestShadowPersistCannotWritePromotedAction(t *testing.T) {
-	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "shadow-cutover", AuthorizeCutover: true})
+	promotionPrivate := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x55}, ed25519.SeedSize))
+	promotionPublic := base64.RawURLEncoding.EncodeToString(promotionPrivate.Public().(ed25519.PublicKey))
+	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "shadow-cutover", AuthorizeCutover: true,
+		PromotionSignerPublicKey: promotionPublic, FleetID: "fleet-a", Environment: "production"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,11 +45,19 @@ func TestShadowPersistCannotWritePromotedAction(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := control.TransitionCutover(store.CutoverTransition{
+		req := store.CutoverTransition{
 			Domain: "action", To: next, ExpectedRevision: current.Revision,
 			ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken,
 			TransferID: "shadow-action-" + string(next), Authority: authority,
-		}); err != nil {
+		}
+		if store.IsDomainGoAuthoritative(next) {
+			artifact := store.PromotionArtifactForTransition(req, current, time.Now().Unix(), "fleet-a", "production")
+			req.Promotion, err = store.SignPromotionArtifact(artifact, promotionPrivate)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := control.TransitionCutover(req); err != nil {
 			t.Fatal(err)
 		}
 	}

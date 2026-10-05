@@ -66,6 +66,31 @@ func RegisterPublicView(mux *http.ServeMux, control *store.Control, view PublicV
 	mux.HandleFunc("/api/cutover/status", func(writer http.ResponseWriter, request *http.Request) {
 		cutoverStatus(writer, request, control)
 	})
+	mux.HandleFunc("/api/workspace/backup-policies", func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost {
+			backupPoliciesCreate(writer, request, control)
+			return
+		}
+		backupPoliciesList(writer, request, control)
+	})
+	mux.HandleFunc("/api/workspace/backup-policies/", func(writer http.ResponseWriter, request *http.Request) {
+		policyID := strings.TrimPrefix(request.URL.Path, "/api/workspace/backup-policies/")
+		if policyID == "" || strings.Contains(policyID, "/") {
+			notImplemented(writer, request)
+			return
+		}
+		switch request.Method {
+		case http.MethodPatch:
+			backupPoliciesUpdate(writer, request, policyID, control)
+		case http.MethodDelete:
+			backupPoliciesDelete(writer, request, policyID, control)
+		default:
+			writer.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/api/workspace/backup-targets", func(writer http.ResponseWriter, request *http.Request) {
+		backupTargetsList(writer, request, control)
+	})
 	mux.HandleFunc("/api/", notImplemented)
 }
 
@@ -84,10 +109,21 @@ func publicConfig(view PublicView) map[string]any {
 		"hasServerKey": envSet("DEEPSEEK_API_KEY"),
 		"hasSearch":    envSet("TAVILY_API_KEY"),
 		"defaultModel": envOr("DEEPSEEK_DEFAULT_MODEL", defaultModel),
+		"models":       publicModels(),
+		"modelRoutes":  map[string]string{"fast": "deepseek-v4-flash", "expert": "deepseek-v4-pro"},
 		"searchModes":  []string{"off", "auto", "on"},
-		"mcp":          mcpStatus(),
-		"a2a":          a2aStatus(),
+		"uploadLimits": map[string]any{
+			"fileMaxBytes":    200_000_000,
+			"requestMaxBytes": 220_000_000,
+			"maxFiles":        20,
+		},
+		"mcp": mcpStatus(),
+		"a2a": a2aStatus(),
 	}
+}
+
+func publicModels() []string {
+	return []string{"deepseek-v4-pro", "deepseek-v4-flash"}
 }
 
 func mcpStatus() map[string]any {

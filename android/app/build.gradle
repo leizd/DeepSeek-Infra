@@ -1,10 +1,7 @@
 plugins {
     id "com.android.application"
-    id "com.chaquo.python"
 }
 
-def syncedPythonDir = layout.buildDirectory.dir("generated/python")
-def configuredBuildPython = (findProperty("DEEPSEEK_BUILD_PYTHON") ?: System.getenv("DEEPSEEK_BUILD_PYTHON"))?.toString()?.trim()
 def releaseStoreFilePath = findProperty("DEEPSEEK_RELEASE_STORE_FILE") ?: System.getenv("DEEPSEEK_RELEASE_STORE_FILE")
 def releaseStorePassword = findProperty("DEEPSEEK_RELEASE_STORE_PASSWORD") ?: System.getenv("DEEPSEEK_RELEASE_STORE_PASSWORD")
 def releaseKeyAlias = findProperty("DEEPSEEK_RELEASE_KEY_ALIAS") ?: System.getenv("DEEPSEEK_RELEASE_KEY_ALIAS")
@@ -16,27 +13,16 @@ if (!hasReleaseSigning && releaseStoreFilePath) {
 }
 
 tasks.register("buildReactFrontend", Exec) {
-    // static/ui is a required, gitignored build artifact.
+    // static/ui is a required, gitignored build artifact. npm builds it; the
+    // APK does not package a language runtime for the server.
     workingDir rootProject.projectDir.parentFile
-    def pythonCmd = configuredBuildPython ?: (org.gradle.internal.os.OperatingSystem.current().isWindows() ? "python" : "python3")
-    commandLine pythonCmd, "scripts/build_frontend.py"
+    def npmCmd = org.gradle.internal.os.OperatingSystem.current().isWindows() ? "npm.cmd" : "npm"
+    commandLine npmCmd, "run", "build", "--prefix", "frontend"
     ignoreExitValue false
     doLast {
         if (!file("${rootProject.projectDir}/../static/ui/index.html").exists()) {
-            throw new GradleException("React frontend build is missing. Run scripts/build_frontend.py.")
+            throw new GradleException("React frontend build is missing. Run npm run build --prefix frontend.")
         }
-    }
-}
-
-tasks.register("syncPythonSources", Sync) {
-    dependsOn("buildReactFrontend")
-    into syncedPythonDir
-    from("${rootProject.projectDir}/../deepseek_infra") {
-        into "deepseek_infra"
-        exclude "**/__pycache__/**", "**/*.pyc"
-    }
-    from("${rootProject.projectDir}/../static") {
-        into "static"
     }
 }
 
@@ -80,28 +66,4 @@ dependencies {
     implementation "com.google.mlkit:text-recognition-chinese:16.0.1"
 }
 
-chaquopy {
-    defaultConfig {
-        version = "3.13"
-        if (configuredBuildPython) {
-            buildPython configuredBuildPython
-        }
-        extractPackages("deepseek_infra")
-        pip {
-            install "-r", "${rootProject.projectDir}/../requirements-mobile.txt"
-        }
-    }
-
-    sourceSets {
-        getByName("main") {
-            srcDir syncedPythonDir
-        }
-    }
-}
-
-preBuild.dependsOn syncPythonSources
-tasks.configureEach { task ->
-    if (task.name != "syncPythonSources" && task.name.toLowerCase().contains("python")) {
-        task.dependsOn syncPythonSources
-    }
-}
+preBuild.dependsOn buildReactFrontend

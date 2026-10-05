@@ -9,11 +9,15 @@ services:
     image: deepseek-edge:5.0.0
     environment:
       GATEWAY_BIND_ADDR: 0.0.0.0:8000
-      GO_CONTROL_ADDR: http://deepseekd:8090
+      GO_CONTROL_ADDR: http://127.0.0.1:8090
+      DEEPSEEK_RUNTIME_MODE: python_disabled
+      DEEPSEEK_INFRA_ROOT: /data
+      AUTH_TOKEN: ${AUTH_TOKEN:-}
+      DEEPSEEK_INTERNAL_BEARER: ${DEEPSEEK_INTERNAL_BEARER:-}
+    volumes:
+      - deepseek-native-data:/data
     ports:
       - "127.0.0.1:8000:8000"
-    depends_on:
-      - deepseekd
     restart: unless-stopped
 
   deepseekd:
@@ -21,13 +25,19 @@ services:
       context: ./go
       dockerfile: Dockerfile
     image: deepseekd:5.0.0
+    network_mode: "service:deepseek-edge"
     environment:
-      DEEPSEEKD_LISTEN: 0.0.0.0:8090
-      DEEPSEEKD_MODE: shadow
-      DEEPSEEKD_OWNER: deepseekd-compose-shadow
-      DEEPSEEKD_SHADOW_STORE: /data/go-control
+      DEEPSEEKD_LISTEN: 127.0.0.1:8090
+      DEEPSEEKD_MODE: authoritative
+      DEEPSEEKD_OWNER: deepseekd
+      DEEPSEEKD_PRODUCTION_STORE: /data/go-control
+      DEEPSEEKD_INTERNAL_BEARER: ${DEEPSEEK_INTERNAL_BEARER:-}
     volumes:
       - deepseek-control:/data/go-control
+    depends_on:
+      deepseek-edge:
+        condition: service_started
+        restart: true
     restart: unless-stopped
 
   deepseek-worker:
@@ -36,11 +46,24 @@ services:
       dockerfile: rust/Dockerfile
       target: worker
     image: deepseek-worker:5.0.0
+    network_mode: "service:deepseek-edge"
+    # Optional operator file: dedicated authority, TLS and S3 values are
+    # validated by the worker. An absent file grants no mutation authority.
+    env_file:
+      - path: ${DEEPSEEK_WORKER_ENV_FILE:-.env.native-worker}
+        required: false
     environment:
       # Plaintext gRPC remains loopback-only until an authenticated authority
       # synchronization channel is selected and implemented.
       DEEPSEEK_WORKER_LISTEN: 127.0.0.1:50052
+      DEEPSEEK_WORKER_STATE_ROOT: /data
+    volumes:
+      - deepseek-worker-state:/data
     read_only: true
+    depends_on:
+      deepseek-edge:
+        condition: service_started
+        restart: true
     restart: unless-stopped
 
   browser-engine:
@@ -69,9 +92,13 @@ services:
     volumes:
       - deepseek-browser:/data
     depends_on:
-      - deepseek-edge
+      deepseek-edge:
+        condition: service_started
+        restart: true
     restart: unless-stopped
 
 volumes:
+  deepseek-native-data:
   deepseek-control:
+  deepseek-worker-state:
   deepseek-browser:

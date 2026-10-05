@@ -53,6 +53,43 @@ def _profile_lock(profile: str) -> threading.Lock:
         return _profile_locks.setdefault(profile, threading.Lock())
 
 
+def mirror_handoff_fence_path(root: Path) -> Path:
+    """Keep the durable handoff fence outside the profile namespace."""
+    return root.with_name(root.name + ".native-handoff.json")
+
+
+def _guard_mirror_mutation(operation: str, *, profile_id: str = "") -> None:
+    """Deny the Python mirror writer once the Rust data plane owns this store.
+
+    ``frontend_mirror_store`` is declared python -> rust at 4.9.4 in
+    ``release/native_runtime_ownership_v1.json``. Every Python mutation of
+    ``.backup-mirror/`` runs inside ``put_frontend_mirror`` — the generation
+    directories, ``HEAD.json``, the legacy 4.4.4 cleanup and the generation prune
+    are all in its critical section — so gating there is what makes the handover
+    mechanical instead of a convention. Reads (``list_mirrors``,
+    ``mirror_status``, ``mirror_files``) stay available: the scheduler and the
+    restore path can read a Rust-written mirror. A verified handback is a
+    separate operation; changing the runtime mode must not release this fence.
+    """
+    from deepseek_infra.infra.native_runtime.authority import PythonWriterMechanicallyDeniedError, assert_python_writer_allowed
+
+    assert_python_writer_allowed("frontend_mirror_store")
+    fences = (
+        mirror_handoff_fence_path(BACKUP_MIRROR_DIR),
+        BACKUP_MIRROR_DIR.with_name(BACKUP_MIRROR_DIR.name + ".native-import.json"),
+    )
+    for fence in fences:
+        try:
+            fence.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise PythonWriterMechanicallyDeniedError(
+                "frontend_mirror_store is persistently fenced: native mirror fence absence cannot be attested"
+            ) from exc
+        raise PythonWriterMechanicallyDeniedError("frontend_mirror_store is persistently fenced for native handoff")
+
+
 def _int_or(value: Any, default: int) -> int:
     try:
         return int(value)
@@ -67,7 +104,7 @@ def _now_iso(now: datetime | None = None) -> str:
 
 def _profile_id(value: Any) -> str:
     text = str(value or "").strip()
-    if not text or len(text) > 64 or not all(char.isalnum() or char in "._-" for char in text):
+    if not text or text in {".", ".."} or len(text) > 64 or not all(char.isalnum() or char in "._-" for char in text):
         raise AppError("Invalid backup mirror profile id", code=ErrorCode.INVALID_PAYLOAD)
     return text
 
@@ -226,7 +263,34 @@ def put_frontend_mirror(
     expected_head_generation_id: str | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
+    """Serialize with restore and handoff, then check fencing before any write."""
     profile = _profile_id(profile_id)
+    # A disabled writer must not even create the workspace lock file. The check
+    # inside the locked helper is still required if authority changes while waiting.
+    _guard_mirror_mutation("put_frontend_mirror", profile_id=profile)
+    with mutation_gate.exclusive_gate(root=_gate_root()):
+        return _put_frontend_mirror_locked(
+            profile, envelope, source_epoch=source_epoch, recipients=recipients,
+            acknowledged_at=acknowledged_at, client_replica_id=client_replica_id,
+            client_sequence=client_sequence, expected_head_generation_id=expected_head_generation_id,
+            now=now,
+        )
+
+
+def _put_frontend_mirror_locked(
+    profile_id: str,
+    envelope: dict[str, Any],
+    *,
+    source_epoch: str,
+    recipients: tuple[str, ...] | list[str] | None,
+    acknowledged_at: str | None,
+    client_replica_id: str,
+    client_sequence: int,
+    expected_head_generation_id: str | None,
+    now: datetime | None,
+) -> dict[str, Any]:
+    profile = _profile_id(profile_id)
+    _guard_mirror_mutation("put_frontend_mirror", profile_id=profile)
     if mutation_gate.read_fence(root=_gate_root()) is not None:
         raise AppError(
             "Backup mirror updates are fenced while a workspace restore is in progress",

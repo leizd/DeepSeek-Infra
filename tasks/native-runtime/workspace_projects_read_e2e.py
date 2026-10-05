@@ -72,13 +72,13 @@ def run(binary: Path, output: Path) -> dict[str, Any]:
                 env["GATEWAY_BIND_ADDR"] = f"127.0.0.1:{port}"
                 origin = f"http://127.0.0.1:{port}"
 
-                def request(path: str, body: dict[str, Any] | None = None, *, authenticated: bool = True) -> tuple[int, Any]:
+                def request(path: str, body: dict[str, Any] | None = None, *, authenticated: bool = True, method: str | None = None) -> tuple[int, Any]:
                     headers = {"Authorization": f"Bearer {token}"} if authenticated else {}
                     data = None
                     if body is not None:
                         headers["Content-Type"] = "application/json"
                         data = json.dumps(body).encode()
-                    req = urllib.request.Request(origin + path, data=data, headers=headers)
+                    req = urllib.request.Request(origin + path, data=data, headers=headers, method=method)
                     try:
                         with opener.open(req, timeout=5) as response:
                             return response.status, json.load(response)
@@ -120,8 +120,14 @@ def run(binary: Path, output: Path) -> dict[str, Any]:
                         check(f"cycle_{cycle} legacy_get", status == 200 and actual == {"ok": True, "project": expected["get"]["ok"]})
                         status, actual = request("/api/workspace/projects", authenticated=False)
                         check(f"cycle_{cycle} auth_required", status == 401)
-                        status, actual = request("/api/projects", {"action": "delete", "id": "proj-read"})
-                        check(f"cycle_{cycle} mutation_closed", status == 501 and actual.get("code") == "NATIVE_PROJECTS_MUTATIONS_NOT_READY")
+                        status, created = request("/api/workspace/projects", {"name": "probe", "description": "roundtrip"})
+                        created_id = str((created.get("project") or {}).get("id") or "")
+                        check(
+                            f"cycle_{cycle} mutation_create",
+                            status == 200 and created.get("ok") is True and created_id.startswith("proj-") and created_id != "proj-read",
+                        )
+                        status, removed = request(f"/api/workspace/projects/{created_id}", method="DELETE")
+                        check(f"cycle_{cycle} mutation_delete", status == 200 and removed.get("deleted") == 1)
                         check(f"cycle_{cycle} unchanged_workspace", snapshot(root) == before)
                     finally:
                         if process.poll() is None:

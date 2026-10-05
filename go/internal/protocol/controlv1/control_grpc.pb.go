@@ -19,8 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ControlPlane_Health_FullMethodName         = "/deepseek.control.v1.ControlPlane/Health"
-	ControlPlane_ShadowEvaluate_FullMethodName = "/deepseek.control.v1.ControlPlane/ShadowEvaluate"
+	ControlPlane_Health_FullMethodName                    = "/deepseek.control.v1.ControlPlane/Health"
+	ControlPlane_ShadowEvaluate_FullMethodName            = "/deepseek.control.v1.ControlPlane/ShadowEvaluate"
+	ControlPlane_GetBackupPolicyRecipients_FullMethodName = "/deepseek.control.v1.ControlPlane/GetBackupPolicyRecipients"
 )
 
 // ControlPlaneClient is the client API for ControlPlane service.
@@ -29,6 +30,7 @@ const (
 type ControlPlaneClient interface {
 	Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
 	ShadowEvaluate(ctx context.Context, in *ShadowEvaluateRequest, opts ...grpc.CallOption) (*ShadowEvaluateResponse, error)
+	GetBackupPolicyRecipients(ctx context.Context, in *BackupPolicyRecipientsRequest, opts ...grpc.CallOption) (*BackupPolicyRecipientsResponse, error)
 }
 
 type controlPlaneClient struct {
@@ -59,12 +61,23 @@ func (c *controlPlaneClient) ShadowEvaluate(ctx context.Context, in *ShadowEvalu
 	return out, nil
 }
 
+func (c *controlPlaneClient) GetBackupPolicyRecipients(ctx context.Context, in *BackupPolicyRecipientsRequest, opts ...grpc.CallOption) (*BackupPolicyRecipientsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BackupPolicyRecipientsResponse)
+	err := c.cc.Invoke(ctx, ControlPlane_GetBackupPolicyRecipients_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ControlPlaneServer is the server API for ControlPlane service.
 // All implementations must embed UnimplementedControlPlaneServer
 // for forward compatibility.
 type ControlPlaneServer interface {
 	Health(context.Context, *HealthRequest) (*HealthResponse, error)
 	ShadowEvaluate(context.Context, *ShadowEvaluateRequest) (*ShadowEvaluateResponse, error)
+	GetBackupPolicyRecipients(context.Context, *BackupPolicyRecipientsRequest) (*BackupPolicyRecipientsResponse, error)
 	mustEmbedUnimplementedControlPlaneServer()
 }
 
@@ -80,6 +93,9 @@ func (UnimplementedControlPlaneServer) Health(context.Context, *HealthRequest) (
 }
 func (UnimplementedControlPlaneServer) ShadowEvaluate(context.Context, *ShadowEvaluateRequest) (*ShadowEvaluateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ShadowEvaluate not implemented")
+}
+func (UnimplementedControlPlaneServer) GetBackupPolicyRecipients(context.Context, *BackupPolicyRecipientsRequest) (*BackupPolicyRecipientsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetBackupPolicyRecipients not implemented")
 }
 func (UnimplementedControlPlaneServer) mustEmbedUnimplementedControlPlaneServer() {}
 func (UnimplementedControlPlaneServer) testEmbeddedByValue()                      {}
@@ -138,6 +154,24 @@ func _ControlPlane_ShadowEvaluate_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ControlPlane_GetBackupPolicyRecipients_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BackupPolicyRecipientsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlPlaneServer).GetBackupPolicyRecipients(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlPlane_GetBackupPolicyRecipients_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlPlaneServer).GetBackupPolicyRecipients(ctx, req.(*BackupPolicyRecipientsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ControlPlane_ServiceDesc is the grpc.ServiceDesc for ControlPlane service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -152,6 +186,10 @@ var ControlPlane_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ShadowEvaluate",
 			Handler:    _ControlPlane_ShadowEvaluate_Handler,
+		},
+		{
+			MethodName: "GetBackupPolicyRecipients",
+			Handler:    _ControlPlane_GetBackupPolicyRecipients_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

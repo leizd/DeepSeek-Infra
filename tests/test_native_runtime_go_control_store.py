@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from scripts.native_runtime_contract import load_ownership
@@ -96,8 +97,125 @@ def test_go_control_tables_cover_go_owned_stores() -> None:
     assert catalog["operations"]["result_status"].startswith("PROPOSED")
     assert catalog["operations"]["production_apply"].startswith("implemented-through")
     assert catalog["operations"]["first_candidate_domain"] == "policy"
-    assert catalog["migrations"][-1]["version"] == 9
-    assert [item["version"] for item in catalog["migrations"]] == list(range(1, 10))
+    assert catalog["migrations"][-1]["version"] == 15
+    assert [item["version"] for item in catalog["migrations"]] == list(range(1, 16))
+    # The operator channel is a second journal, not a widened status on the signed one.
+    # Both halves of that claim are pinned: the signed CHECK must stay narrow, and the
+    # operator table must exist in Go with its authorization stated.
+    operator = catalog["operator_mutation"]
+    assert operator["table"] == "control_operator_mutations"
+    assert operator["mutation"] == "insert-only"
+    assert "CHECK-constrained" in operator["why_a_separate_table"]
+    assert "AuthorizeCutover" in operator["authorization"]
+    assert "go_authoritative" in operator["authorization"]
+    assert "inside the write transaction" in operator["epoch_source"]
+    assert "one transaction" in operator["atomicity"]
+    assert "ALREADY_APPLIED" in operator["already_applied"]
+    assert "MUTATION_REQUEST_REPLAY_CONFLICT" in operator["already_applied"]
+    assert len(operator["refusals"]) == 6
+    assert "fenced domain" in operator["refusals"][2]
+    assert "shared record rule" in operator["refusals"][4]
+    assert "would make the domain unwritable" in operator["transport_rules_not_applied"]
+    assert operator["open_gap"].startswith("no public route")
+    operator_source = (ROOT / operator["declared_in"]).read_text(encoding="utf-8")
+    assert "func (store *Control) ApplyOperatorMutation(" in operator_source
+    # The operator channel applies the record engine's shared secret rule and *not* the
+    # signed channel's transport rules, and the reason has to stay in the source: the
+    # mutation primitive set refuses floats and `rejectMutationBodySecretKeys` flags the
+    # bare fragment `credential`, both of which every stored policy carries.
+    assert "rejectControlSecretMaterial" in operator_source
+    assert "rejectMutationBodySecretKeys" in operator_source
+    assert "validateMutationRecordPayload" in operator_source
+    assert "credentialRef" in operator_source
+    assert "ErrMutationRequestDomainFenced" in operator_source
+    operator_schema = (ROOT / "go/internal/store/operator_mutation_schema.go").read_text(encoding="utf-8")
+    assert operator["table"] in operator_schema
+    assert "migrateToV15Tx" in operator_schema
+    assert "verifyOperatorMutationSchemaTx" in operator_schema
+    assert "OPERATOR_MUTATION_IMMUTABLE" in operator_schema
+    assert "SchemaV15" in (ROOT / "go/internal/store/schema.go").read_text(encoding="utf-8")
+    assert "migrateToV15Tx" in (ROOT / "go/internal/store/control.go").read_text(encoding="utf-8")
+    # The public write routes are declared with the same care as the channel they use:
+    # the delete refusal names its reason, and the create-revision narrowing is recorded
+    # rather than left as an undocumented divergence from the oracle.
+    routes = catalog["policy_write_routes"]
+    assert routes["create"].startswith("POST /api/workspace/backup-policies")
+    assert routes["update"].startswith("PATCH /api/workspace/backup-policies/")
+    assert routes["delete"].startswith("DELETE /api/workspace/backup-policies/")
+    assert "GO_POLICY_DELETE_UNSUPPORTED" in routes["delete"]
+    assert "orphaned control events" in routes["delete_reason"]
+    assert "lazily" in routes["target_bindings"]
+    assert "must start at policyRevision 1" in routes["create_revision_narrowing"]
+    routes_source = (ROOT / routes["declared_in"]).read_text(encoding="utf-8")
+    assert "func backupPoliciesCreate(" in routes_source
+    assert "func backupPoliciesUpdate(" in routes_source
+    assert "func backupPoliciesDelete(" in routes_source
+    assert "ApplyOperatorMutation(" in routes_source
+    assert "policy.NormalizePolicy(" in routes_source
+    for field in ("name", "enabled", "schedule", "protection", "replication", "incremental"):
+        assert f'"{field}"' in routes_source, f"patch field missing: {field}"
+    # The policy state table is the store's, and its shape is what makes a disabled
+    # create and an in-place rewrite legal.
+    schema_source = (ROOT / "go/internal/store/schema.go").read_text(encoding="utf-8")
+    assert '"":         {"ACTIVE", "DISABLED"}' in schema_source
+    assert '"ACTIVE":   {"ACTIVE", "DISABLED", TombstoneState}' in schema_source
+    assert 'TombstoneState = "DELETED"' in schema_source
+    promotion = catalog["promotion_artifact"]
+    assert promotion["schema"] == "control-domain-promotion-v1"
+    assert promotion["table"] == "control_promotion_artifacts"
+    assert "deployment-pinned" in promotion["signer"]
+    assert "in one transaction" in promotion["mutation"]
+    assert "cannot be silently upgraded" in promotion["history"]
+    inventory = catalog["inventory_import"]
+    assert inventory["table"] == "control_inventory_imports"
+    assert "one transaction" in inventory["mutation"]
+    assert "unverified direct imports cannot promote" in inventory["source_attestation"]
+    assert "first signed promotion rereads both source and projection" in inventory["first_promotion_reattestation"]
+    assert "signed artifact" in inventory["signed_promotion"]
+    health = inventory["target_health"]
+    assert health["export_schema"] == "python-control-inventory-export-v2"
+    assert health["binding_schema"] == "python-backup-target-health-v1"
+    assert health["tables"] == ["backup_target_health", "control_target_health_imports"]
+    assert "same Go transaction" in health["mutation"]
+    assert "TARGET_HEALTH_NOT_TRANSFERRED" in health["public_read"]
+    health_source = (ROOT / "go/internal/store/target_health_schema.go").read_text(encoding="utf-8")
+    for table in health["tables"]:
+        assert f'"{table}"' in health_source
+    # The fence must freeze the state the transfer binds, not only the exported
+    # rows, and both runtimes must derive the exact same objects from it.
+    linked = inventory["linked_fence"]
+    assert len(linked["tables"]) == 6
+    assert linked["objects"].startswith("18 triggers")
+    assert "PythonWriterMechanicallyDeniedError" in linked["python_denial"]
+    assert "byte for byte" in linked["verification"]
+    assert "last fence is lifted" in linked["lift"]
+    source = (ROOT / "go/internal/store/inventory_source.go").read_text(encoding="utf-8")
+    assert "linkedFenceTriggerSQL" in source
+    assert "linkedFenceObjects()" in source
+    assert "native_control_fence_" in source
+    for table in linked["tables"]:
+        assert f'{{table: "{table}"' in source, f"linked fence table missing from Go: {table}"
+    handoff = (ROOT / "scripts/native_control_handoff.py").read_text(encoding="utf-8")
+    assert "linked_fence_objects" in handoff
+    for table in linked["tables"]:
+        assert f'"{table}":' in handoff, f"linked fence table missing from Python: {table}"
+    # The reverse transfer must be declared, gated and reachable in Go, and its
+    # Python verifier must consume exactly the Go document bytes.
+    handback = catalog["inventory_handback"]
+    assert handback["schema"] == "control-inventory-handback-v1"
+    assert handback["table"] == "control_inventory_handbacks"
+    assert "same transaction" in handback["mutation"]
+    assert handback["python_receipt"].startswith("python-control-inventory-handback-receipt-v1")
+    assert len(handback["preconditions"]) == 5
+    handback_source = (ROOT / "go/internal/store/inventory_handback.go").read_text(encoding="utf-8")
+    assert handback["schema"] in handback_source
+    assert "control_inventory_handbacks" in (
+        ROOT / "go/internal/store/inventory_handback_schema.go"
+    ).read_text(encoding="utf-8")
+    handoff_source = (ROOT / "scripts/native_control_handoff.py").read_text(encoding="utf-8")
+    assert handback["schema"] in handoff_source
+    assert "python-control-inventory-handback-receipt-v1" in handoff_source
+    assert "--rollback" in handoff_source
     covered: set[str] = set()
     for table in catalog["tables"]:
         covered.update(table["ownership_ids"])
@@ -157,11 +275,21 @@ def test_go_schema_matches_catalog_and_rejects_python_paths() -> None:
     assert '"control_authority_checkpoints"' in authority_source
     assert '"control_cutover_authorizations"' in authority_source
     lifecycle = (ROOT / "go/internal/lifecycle/lifecycle.go").read_text(encoding="utf-8")
-    assert "AuthorizeCutover: cfg.ControlAuthority" in lifecycle
+    assert re.search(r"AuthorizeCutover:\s+cfg\.ControlAuthority", lifecycle)
     assert "cfg.InternalAPIBearer" in lifecycle
     config_source = (ROOT / "go/internal/config/config.go").read_text(encoding="utf-8")
     assert "DEEPSEEKD_INTERNAL_BEARER" in config_source
     assert "DEEPSEEKD_CONTROL_AUTHORITY" in config_source
+    assert "DEEPSEEKD_PROMOTION_SIGNER_KEY" in config_source
+    assert re.search(r"PromotionSignerPublicKey:\s+cfg\.PromotionSignerPublicKey", lifecycle)
+    promotion_source = (ROOT / "go/internal/store/promotion.go").read_text(encoding="utf-8")
+    assert "ed25519.Verify" in promotion_source
+    assert "artifact.Domain != req.Domain" in promotion_source
+    assert "artifact.ExecutionEpoch != current.Epoch" in promotion_source
+    assert "artifact.AuthorityDigest != req.Authority.Digest" in promotion_source
+    cutover_source = (ROOT / "go/internal/store/cutover.go").read_text(encoding="utf-8")
+    assert "verifyPromotionArtifact(" in cutover_source
+    assert "INSERT INTO control_promotion_artifacts" in cutover_source
     assert 'cfg.ControlAuthority && cfg.InternalAPIBearer == ""' in config_source, (
         "control authority must be refused without an authenticated control plane"
     )

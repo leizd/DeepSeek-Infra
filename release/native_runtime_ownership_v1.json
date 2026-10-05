@@ -74,7 +74,7 @@
     {
       "id": "public_http_listener",
       "plane": "data",
-      "current_owner": "python",
+      "current_owner": "rust",
       "target_owner": "rust",
       "cutover": "4.9.2",
       "durable_store": null
@@ -82,7 +82,7 @@
     {
       "id": "llm_gateway_sse",
       "plane": "data",
-      "current_owner": "python",
+      "current_owner": "rust",
       "target_owner": "rust",
       "cutover": "4.9.2",
       "durable_store": null
@@ -90,7 +90,7 @@
     {
       "id": "chat_completions_fast_path",
       "plane": "data",
-      "current_owner": "python",
+      "current_owner": "rust",
       "target_owner": "rust",
       "cutover": "4.9.2",
       "durable_store": null
@@ -98,7 +98,7 @@
     {
       "id": "memory_store",
       "plane": "data",
-      "current_owner": "python",
+      "current_owner": "rust",
       "target_owner": "rust",
       "cutover": "4.9.4",
       "durable_store": "rust_data"
@@ -106,7 +106,7 @@
     {
       "id": "reminders_store",
       "plane": "data",
-      "current_owner": "python",
+      "current_owner": "rust",
       "target_owner": "rust",
       "cutover": "4.9.4",
       "durable_store": "rust_data"
@@ -114,7 +114,7 @@
     {
       "id": "skills_store",
       "plane": "data",
-      "current_owner": "python",
+      "current_owner": "rust",
       "target_owner": "rust",
       "cutover": "4.9.4",
       "durable_store": "rust_data"
@@ -122,7 +122,15 @@
     {
       "id": "project_metadata_store",
       "plane": "data",
-      "current_owner": "python",
+      "current_owner": "rust",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data"
+    },
+    {
+      "id": "frontend_mirror_store",
+      "plane": "data",
+      "current_owner": "rust",
       "target_owner": "rust",
       "cutover": "4.9.4",
       "durable_store": "rust_data"
@@ -130,7 +138,7 @@
     {
       "id": "mcp_jsonrpc",
       "plane": "data",
-      "current_owner": "python",
+      "current_owner": "rust",
       "target_owner": "rust",
       "cutover": "4.9.2",
       "durable_store": null
@@ -138,7 +146,7 @@
     {
       "id": "rag_hot_path",
       "plane": "data",
-      "current_owner": "python",
+      "current_owner": "rust",
       "target_owner": "rust",
       "cutover": "4.9.2",
       "durable_store": null
@@ -146,7 +154,7 @@
     {
       "id": "tool_sandbox",
       "plane": "security",
-      "current_owner": "python",
+      "current_owner": "rust",
       "target_owner": "rust",
       "cutover": "4.9.2",
       "durable_store": null
@@ -154,7 +162,7 @@
     {
       "id": "url_path_capability_policy",
       "plane": "security",
-      "current_owner": "python",
+      "current_owner": "rust",
       "target_owner": "rust",
       "cutover": "4.9.2",
       "durable_store": null

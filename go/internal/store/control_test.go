@@ -284,7 +284,7 @@ func TestClosedStoreAndEmptyOwnerAreRejected(t *testing.T) {
 	if _, err := store.GetCutover("policy"); err != ErrWriterFenceHeld {
 		t.Fatalf("closed cutover: %v", err)
 	}
-	if _, err := store.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, store, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: 1, ExpectedEpoch: 1, FencingToken: 1, TransferID: "closed",
 	}); err != ErrWriterFenceHeld {
 		t.Fatalf("closed transition: %v", err)

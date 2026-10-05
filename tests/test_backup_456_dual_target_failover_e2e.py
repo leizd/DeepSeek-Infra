@@ -50,7 +50,7 @@ def _utc_iso(dt: datetime | None = None) -> str:
     return current.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def test_complete_e2e_failover_catchup_and_failback_flow(tmp_settings: Path) -> None:
+def test_complete_e2e_failover_catchup_and_failback_flow(tmp_settings: Path, healthy_filesystem_target_capacity: None) -> None:
     """Full lifecycle: primary down -> failover to B -> primary recovers -> B->A catch-up -> governed failback -> primary active."""
     pri_dir = tmp_settings / "e2e_primary"
     sec_dir = tmp_settings / "e2e_secondary"

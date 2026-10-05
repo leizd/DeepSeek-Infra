@@ -491,7 +491,8 @@ def test_replica_lag_calculation_branches(tmp_settings) -> None:
     assert lag3["lagSeconds"] == 300
 
 
-def test_write_failover_and_dr_readiness(tmp_settings, monkeypatch) -> None:
+@pytest.mark.parametrize("used_percent,can_fail_over", [(20, True), (95, False)])
+def test_write_failover_and_dr_readiness(tmp_settings, monkeypatch, used_percent: int, can_fail_over: bool) -> None:
     """Test write placement failover and DR readiness writeContinuity block."""
     policy = {
         "policyId": "pol-stability",
@@ -528,6 +529,21 @@ def test_write_failover_and_dr_readiness(tmp_settings, monkeypatch) -> None:
         raise AppError("unknown", status=404)
 
     monkeypatch.setattr(backup_publish, "resolve_target", mock_resolve)
+    # Unit placement inputs must not depend on the developer's host disk usage.
+    # Keep the real admission path, including refusal above its 90% watermark.
+    total_bytes = 100 * 1024**3
+    used_bytes = total_bytes * used_percent // 100
+    monkeypatch.setattr(
+        backup_targets,
+        "probe_target_capacity",
+        lambda tid: {
+            "targetId": tid,
+            "totalBytes": total_bytes,
+            "usedBytes": used_bytes,
+            "freeBytes": total_bytes - used_bytes,
+            "freePercent": 100 - used_percent,
+        },
+    )
     backup_capacity.record_physical_size_evidence(
         policy_id="pol-stability",
         backup_id="bk-capacity-evidence",
@@ -537,9 +553,13 @@ def test_write_failover_and_dr_readiness(tmp_settings, monkeypatch) -> None:
 
     # Evaluate write placement
     placement = backup_scheduler.evaluate_write_placement(policy)
-    assert placement["isFailover"] is True
-    assert placement["selectedWriteTargetId"] == "target_replica_healthy"
-    assert placement["forceFull"] is True
+    assert placement["isFailover"] is can_fail_over
+    assert placement["forceFull"] is can_fail_over
+    if can_fail_over:
+        assert placement["selectedWriteTargetId"] == "target_replica_healthy"
+    else:
+        assert placement["selectedWriteTargetId"] == "target_primary_unavailable"
+        assert "no-eligible-candidates" in placement["reason"]
 
     # Test DR readiness writeContinuity block
     readiness = backup_dr_readiness.evaluate_scope_readiness("target_replica_healthy")

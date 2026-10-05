@@ -1,27 +1,26 @@
-FROM node:24-bookworm-slim
+FROM rust:1.85-bookworm AS build
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+WORKDIR /src
+COPY rust/Cargo.toml rust/Cargo.lock rust/
+COPY rust/crates rust/crates
+WORKDIR /src/rust
+RUN cargo build --release --locked -p deepseek-stateless-mcp
+
+FROM debian:bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-pip ripgrep \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends ca-certificates curl ripgrep \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --home /var/lib/deepseek --create-home deepseek
+
+COPY --from=build /src/rust/target/release/deepseek-stateless-mcp /usr/local/bin/deepseek-stateless-mcp
+
+ENV MCP_HOST=0.0.0.0 \
+    MCP_PORT=8010 \
+    MCP_WORKSPACE_ROOT=/workspace
 
 WORKDIR /workspace
-
-COPY requirements.txt requirements-dev.txt requirements-s3-e2e.txt requirements-native-protocol.txt ./
-RUN python3 -m pip install --break-system-packages --no-cache-dir -r requirements.txt -r requirements-dev.txt
-
-COPY stateless-mcp/package.json stateless-mcp/package-lock.json ./stateless-mcp/
-RUN npm ci --prefix stateless-mcp
-
-COPY . .
-RUN npm run build --prefix stateless-mcp
-
-ENV MCP_PORT=8010 \
-    MCP_WORKSPACE_ROOT=/workspace \
-    PYTHON_EXECUTABLE=python3
-
+USER deepseek
 EXPOSE 8010
 
-CMD ["node", "stateless-mcp/dist/src/server.js"]
+CMD ["deepseek-stateless-mcp"]

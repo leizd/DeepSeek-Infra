@@ -7,9 +7,9 @@ export interface HttpClientOptions {
 }
 
 export interface ApiErrorPayload {
-  error?: string;
-  message?: string;
-  code?: string;
+  error?: unknown;
+  message?: unknown;
+  code?: unknown;
   [key: string]: unknown;
 }
 
@@ -22,9 +22,23 @@ export class ApiError extends Error {
     super(message);
     this.name = "ApiError";
     this.status = status;
-    this.code = typeof payload.code === "string" ? payload.code : undefined;
+    const nested = payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)
+      ? payload.error as { code?: unknown; message?: unknown }
+      : undefined;
+    this.code = typeof payload.code === "string" ? payload.code :
+      typeof nested?.code === "string" ? nested.code : undefined;
     this.payload = payload;
   }
+}
+
+function errorMessage(payload: ApiErrorPayload, status: number): string {
+  if (typeof payload.error === "string" && payload.error) return payload.error;
+  if (payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)) {
+    const nested = payload.error as { message?: unknown };
+    if (typeof nested.message === "string" && nested.message) return nested.message;
+  }
+  if (typeof payload.message === "string" && payload.message) return payload.message;
+  return `Request failed (${status})`;
 }
 
 async function errorPayload(response: Response): Promise<ApiErrorPayload> {
@@ -65,8 +79,7 @@ export class HttpClient {
     });
     if (!response.ok) {
       const payload = await errorPayload(response);
-      const message = payload.error || payload.message || `Request failed (${response.status})`;
-      throw new ApiError(message, response.status, payload);
+      throw new ApiError(errorMessage(payload, response.status), response.status, payload);
     }
     return response;
   }

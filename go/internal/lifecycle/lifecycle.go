@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/api"
@@ -20,13 +21,13 @@ type Status struct {
 	ShadowStore        bool   `json:"shadowStore"`
 }
 
-func StatusFrom(cfg config.Config, shadowStore bool) Status {
+func StatusFrom(cfg config.Config, storeOpen bool) Status {
 	return Status{
 		OK:                 true,
 		Mode:               cfg.Mode,
-		MutationAuthority:  config.MutationAuthority,
-		ProductionMutation: false,
-		ShadowStore:        shadowStore,
+		MutationAuthority:  cfg.ReportedMutationAuthority(),
+		ProductionMutation: cfg.ProductionMutationsEnabled(),
+		ShadowStore:        cfg.Mode == config.ModeShadow && storeOpen,
 	}
 }
 
@@ -48,8 +49,19 @@ func Start(ctx context.Context, cfg config.Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.Mode == config.ModeAuthoritative && (strings.TrimSpace(cfg.ProductionStoreDir) == "" || strings.TrimSpace(cfg.ShadowStoreDir) != "") {
+		_ = listener.Close()
+		return nil, config.ErrInvalidConfig
+	}
 	var control *store.Control
-	if cfg.ShadowStoreDir != "" {
+	storeDir := ""
+	switch cfg.Mode {
+	case config.ModeAuthoritative:
+		storeDir = cfg.ProductionStoreDir
+	default:
+		storeDir = cfg.ShadowStoreDir
+	}
+	if storeDir != "" {
 		owner := cfg.Owner
 		if owner == "" {
 			owner = "deepseekd"
@@ -58,9 +70,12 @@ func Start(ctx context.Context, cfg config.Config) (*Server, error) {
 		// it without an authenticated internal control plane, so a process can
 		// never authorize a promotion over an unauthenticated channel.
 		control, err = store.OpenControl(store.OpenOptions{
-			Path:             cfg.ShadowStoreDir,
-			Owner:            owner,
-			AuthorizeCutover: cfg.ControlAuthority,
+			Path:                     storeDir,
+			Owner:                    owner,
+			AuthorizeCutover:         cfg.ControlAuthority,
+			PromotionSignerPublicKey: cfg.PromotionSignerPublicKey,
+			FleetID:                  cfg.FleetID,
+			Environment:              cfg.Environment,
 		})
 		if err != nil {
 			_ = listener.Close()
@@ -95,12 +110,23 @@ func serve(ctx context.Context, cfg config.Config, listener net.Listener, contro
 	})
 	api.RegisterPublicView(mux, control, api.PublicView{
 		Mode:               cfg.Mode,
-		MutationAuthority:  config.MutationAuthority,
-		ProductionMutation: false,
-		ShadowStore:        control != nil,
+		MutationAuthority:  cfg.ReportedMutationAuthority(),
+		ProductionMutation: cfg.ProductionMutationsEnabled(),
+		ShadowStore:        cfg.Mode == config.ModeShadow && control != nil,
 	})
-	server := &http.Server{Handler: mux, BaseContext: func(net.Listener) context.Context { return runCtx }}
-	runtime := &Server{address: listener.Addr().String(), done: make(chan error, 1)}
+	rpc := api.NewControlRPC(control, cfg.InternalAPIBearer, api.HealthFor(cfg))
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.ProtoMajor == 2 && strings.HasPrefix(request.Header.Get("Content-Type"), "application/grpc") {
+			rpc.ServeHTTP(writer, request)
+			return
+		}
+		mux.ServeHTTP(writer, request)
+	})
+	server := &http.Server{Handler: handler, Protocols: protocols, BaseContext: func(net.Listener) context.Context { return runCtx }}
+	runtime := &Server{address: listener.Addr().String(), done: make(chan error, 1), stopRPC: rpc.Stop}
 	served := make(chan error, 1)
 	go func() {
 		served <- server.Serve(listener)

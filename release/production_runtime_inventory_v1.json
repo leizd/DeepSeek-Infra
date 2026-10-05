@@ -1,0 +1,819 @@
+{
+  "schema": "deepseek.production_runtime_inventory.v1",
+  "current_production_authority": "python",
+  "summary": "Default server, desktop, Android bridge, backup worker, and federation node still execute Python. The stateless MCP server and its task worker execute in Rust. Container entrypoints can start Rust and Go, and twelve ownership domains are declared rust, but those domains are not the sole executors while the Python entries above remain. current_production_authority stays python until every production domain has left Python.",
+  "legacy_production_entries": [
+    {
+      "id": "root_app_shim",
+      "path": "app.py",
+      "kind": "server",
+      "executor": "python",
+      "marker": "deepseek_infra.app",
+      "marker_present": true
+    },
+    {
+      "id": "python_http_server",
+      "path": "deepseek_infra/app.py",
+      "kind": "server",
+      "executor": "python",
+      "marker": "assert_production_python_allowed",
+      "marker_present": true
+    },
+    {
+      "id": "launch_desktop_server_mobile",
+      "path": "launch.py",
+      "kind": "desktop",
+      "executor": "python",
+      "marker": "deepseek_infra.desktop_app",
+      "marker_present": true
+    },
+    {
+      "id": "desktop_webview",
+      "path": "deepseek_infra/desktop_app.py",
+      "kind": "desktop",
+      "executor": "python",
+      "marker": "webview",
+      "marker_present": true
+    },
+    {
+      "id": "launcher_server_command",
+      "path": "deepseek_infra/launcher/runtime.py",
+      "kind": "desktop",
+      "executor": "python",
+      "marker": "deepseek_infra.app",
+      "marker_present": true
+    },
+    {
+      "id": "launcher_gui",
+      "path": "deepseek_infra/launcher/gui.py",
+      "kind": "desktop",
+      "executor": "python",
+      "marker": "tkinter",
+      "marker_present": true
+    },
+    {
+      "id": "launcher_mobile",
+      "path": "deepseek_infra/launcher/mobile.py",
+      "kind": "desktop",
+      "executor": "python",
+      "marker": "def main(",
+      "marker_present": true
+    },
+    {
+      "id": "android_python_bridge",
+      "path": "deepseek_infra/android_entry.py",
+      "kind": "android",
+      "executor": "python",
+      "marker": "prepare_and_start",
+      "marker_present": true
+    },
+    {
+      "id": "desktop_pyinstaller_spec",
+      "path": "scripts/build_exe.py",
+      "kind": "desktop",
+      "executor": "python",
+      "marker": "PyInstaller",
+      "marker_present": true,
+      "generated_artifact": "DeepSeekInfra.spec"
+    },
+    {
+      "id": "mobile_pyinstaller_spec",
+      "path": "scripts/build_exe.py",
+      "kind": "desktop",
+      "executor": "python",
+      "marker": "PyInstaller",
+      "marker_present": true,
+      "generated_artifact": "DeepSeekMobile.spec"
+    },
+    {
+      "id": "pyinstaller_build",
+      "path": "scripts/build_exe.py",
+      "kind": "desktop",
+      "executor": "python",
+      "marker": "PyInstaller",
+      "marker_present": true
+    },
+    {
+      "id": "backup_worker",
+      "path": "deepseek_infra/backup_worker.py",
+      "kind": "background_worker",
+      "executor": "python",
+      "marker": "BackupWorker",
+      "marker_present": true
+    },
+    {
+      "id": "federation_node",
+      "path": "deepseek_infra/federation_app.py",
+      "kind": "server",
+      "executor": "python",
+      "marker": "uvicorn",
+      "marker_present": true
+    },
+    {
+      "id": "federation_http_app",
+      "path": "deepseek_infra/web/federation_app.py",
+      "kind": "server",
+      "executor": "python",
+      "marker": "FastAPI",
+      "marker_present": true
+    }
+  ],
+  "native_or_gap_entries": [
+    {
+      "id": "root_container_image",
+      "path": "Dockerfile",
+      "kind": "server",
+      "executor": "rust_go",
+      "marker": "deepseek-gateway",
+      "marker_present": true
+    },
+    {
+      "id": "root_compose",
+      "path": "docker-compose.yml",
+      "kind": "server",
+      "executor": "rust_go",
+      "marker": "deepseek-infra:5.0.0",
+      "marker_present": true
+    },
+    {
+      "id": "native_compose",
+      "path": "docker-compose.native.yml",
+      "kind": "server",
+      "executor": "rust_go",
+      "marker": "DEEPSEEKD_MODE: authoritative",
+      "marker_present": true
+    },
+    {
+      "id": "native_entrypoint",
+      "path": "packaging/native/entrypoint.sh",
+      "kind": "server",
+      "executor": "rust_go",
+      "marker": "exec deepseek-launch --server",
+      "marker_present": true
+    },
+    {
+      "id": "android_activity",
+      "path": "android/app/src/main/java/com/deepseek/mobile/MainActivity.java",
+      "kind": "android",
+      "executor": "rust_go_unpackaged",
+      "marker": "startNativeServer",
+      "marker_present": true,
+      "packaged_native_binary": false
+    },
+    {
+      "id": "native_supervisor",
+      "path": "go/cmd/deepseek-launch/main.go",
+      "kind": "server",
+      "executor": "rust_go",
+      "marker": "launch.ProductionPlan",
+      "marker_present": true
+    },
+    {
+      "id": "stateless_mcp_server",
+      "path": "rust/crates/deepseek-stateless-mcp/src/main.rs",
+      "kind": "stateless_mcp",
+      "executor": "rust",
+      "marker": "stateless_mcp_listening",
+      "marker_present": true
+    },
+    {
+      "id": "stateless_mcp_image",
+      "path": "stateless-mcp/Dockerfile",
+      "kind": "stateless_mcp",
+      "executor": "rust",
+      "marker": "deepseek-stateless-mcp",
+      "marker_present": true
+    },
+    {
+      "id": "stateless_mcp_compose",
+      "path": "docker-compose.stateless-mcp.yml",
+      "kind": "stateless_mcp",
+      "executor": "rust",
+      "marker": "deepseek-stateless-mcp",
+      "marker_present": true
+    },
+    {
+      "id": "stateless_mcp_task_worker",
+      "path": "rust/crates/deepseek-stateless-mcp/src/runner.rs",
+      "kind": "background_worker",
+      "executor": "rust",
+      "marker": "MCP_TASK_PROGRAM",
+      "marker_present": true
+    }
+  ],
+  "background_workers_still_python_or_typescript": [
+    {
+      "id": "embedded_backup_worker",
+      "owner_module": "deepseek_infra/backup_worker.py",
+      "started_from": "deepseek_infra/app.py"
+    },
+    {
+      "id": "recovery_lease_keeper",
+      "owner_module": "deepseek_infra/infra/workspace/backup_recovery_keeper.py",
+      "started_from": "deepseek_infra/app.py"
+    },
+    {
+      "id": "gateway_scheduler_orphan_recovery",
+      "owner_module": "deepseek_infra/infra/gateway/scheduler.py",
+      "started_from": "deepseek_infra/app.py"
+    },
+    {
+      "id": "cache_cleanup_loop",
+      "owner_module": "deepseek_infra/app.py",
+      "started_from": "deepseek_infra/app.py"
+    },
+    {
+      "id": "agent_run_auto_resume",
+      "owner_module": "deepseek_infra/infra/agent_runtime/agent_runs.py",
+      "started_from": "deepseek_infra/app.py"
+    },
+    {
+      "id": "automation_scheduler",
+      "owner_module": "deepseek_infra/infra/automation/scheduler.py",
+      "started_from": "deepseek_infra/web/routes/automation.py"
+    }
+  ],
+  "ownership_domains_current_owner_python": [
+    "a2a_task_lifecycle",
+    "fastcdc_chunk_pipeline",
+    "age_crypto",
+    "s3_minio_streaming",
+    "object_set_validation",
+    "receipt_commit_verification",
+    "backup_restore_data_movement",
+    "federation_ciphertext_transfer",
+    "ed25519_sign_verify",
+    "evidence_crypto_verifier",
+    "federation_private_key_custody",
+    "transfer_jobs",
+    "data_plane_effect_journal",
+    "worker_checkpoint",
+    "config_runtime_lifecycle",
+    "control_api",
+    "policy_crud",
+    "target_registry",
+    "backup_scheduler",
+    "agent_dag_scheduler",
+    "job_controller",
+    "lease_fencing",
+    "action_journal",
+    "wave_scheduler",
+    "risk_lifecycle",
+    "capacity_forecast",
+    "maintenance_controller",
+    "resilience_coordinator",
+    "federation_peer_registry",
+    "federation_session_lifecycle",
+    "ingress_grant_lifecycle",
+    "federated_transfer_journal",
+    "dr_orchestration",
+    "health_readiness"
+  ],
+  "ownership_domains_current_owner_rust": [
+    "public_http_listener",
+    "llm_gateway_sse",
+    "chat_completions_fast_path",
+    "memory_store",
+    "reminders_store",
+    "skills_store",
+    "project_metadata_store",
+    "frontend_mirror_store",
+    "mcp_jsonrpc",
+    "rag_hot_path",
+    "tool_sandbox",
+    "url_path_capability_policy"
+  ],
+  "ownership_domains_current_owner_go": [],
+  "non_production_left_on_python_or_typescript": [
+    "offline_eval_oracle",
+    "migration_release_tooling",
+    "browser_ui"
+  ],
+  "http_routes_only_on_python": [
+    {
+      "method": "get",
+      "path": "/api/automation",
+      "file": "deepseek_infra/web/routes/automation.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/automation",
+      "file": "deepseek_infra/web/routes/automation.py"
+    },
+    {
+      "method": "patch",
+      "path": "/api/workspace/backup-policies/{policy_id}",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "delete",
+      "path": "/api/workspace/backup-policies/{policy_id}",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/backup-policies/{policy_id}/promote-primary",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/backup-policies/{policy_id}/continuity",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/backup-policies/{policy_id}/run",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/backup-targets/register-new",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/backup-targets/{target_id}/probe",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "delete",
+      "path": "/api/workspace/backup-targets/{target_id}",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/backup-targets/{target_id}/adopt",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/backup-targets/{target_id}/drain",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/backup-targets/{target_id}/activate",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/backup-rebalances",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/backup-rebalances",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/disaster-recovery/status",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/disaster-recovery/audit",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/disaster-recovery/audit/{audit_id}/resume",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/disaster-recovery/plan",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/disaster-recovery/failover/{restore_id}",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/disaster-recovery/drills",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/disaster-recovery/drills/schedule/{policy_id}",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/backup-catalog",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/backup-catalog/{backup_id}/pin",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "delete",
+      "path": "/api/workspace/backup-catalog/{backup_id}/pin",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/retention/preview",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/retention/apply",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/backups/{backup_id}/scrub",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/backups/{backup_id}/verify-unlock",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/restores/from-target/preview",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/restores/from-target",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/restores/{restore_id}/fetch",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/restores/{restore_id}/preflight",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/restores/{restore_id}/materialize",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/backup-target-capabilities",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/backup-targets/{target_id}/drain/cancel",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/backup-targets/{target_id}/drain",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/backup-capacity/summary",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/backup-transfer-budget",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/authority/history-snapshot",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/authority/retention/policy",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/authority/retention/policy",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/authority/retention/explain",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/authority/retention/plan",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/authority/retention/compact",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/disaster-recovery/drills/run",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/disaster-recovery/slo",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/resilience/snapshot",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/resilience/readiness",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/resilience/assess",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/resilience/plan",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/resilience/coordination-plan",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/resilience/coordination-plan",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/resilience/execute",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/resilience/simulate",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/resilience/explain",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/resilience/journal",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/resilience/forecast",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/resilience/optimizer",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/resilience/waves",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/resilience/waves/admit",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/resilience/waves/run",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/resilience/capacity-forecast",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/resilience/whatif",
+      "file": "deepseek_infra/web/routes/backup_governance.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/edge/reload",
+      "file": "deepseek_infra/web/routes/edge.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/edge/route-preview",
+      "file": "deepseek_infra/web/routes/edge.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/mcp/external/tools",
+      "file": "deepseek_infra/web/routes/mcp.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/media",
+      "file": "deepseek_infra/web/routes/media.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/media",
+      "file": "deepseek_infra/web/routes/media.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/media/{media_id}",
+      "file": "deepseek_infra/web/routes/media.py"
+    },
+    {
+      "method": "patch",
+      "path": "/api/media/{media_id}",
+      "file": "deepseek_infra/web/routes/media.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/media/{media_id}/process",
+      "file": "deepseek_infra/web/routes/media.py"
+    },
+    {
+      "method": "delete",
+      "path": "/api/media/{media_id}",
+      "file": "deepseek_infra/web/routes/media.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/rag/reindex",
+      "file": "deepseek_infra/web/routes/rag.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/rag/verify-citation",
+      "file": "deepseek_infra/web/routes/rag.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/rag/eval",
+      "file": "deepseek_infra/web/routes/rag.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/semantic-cache/status",
+      "file": "deepseek_infra/web/routes/status.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/projects/{project_id}/provenance",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/artifacts/{artifact_id}/download",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/exports",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/exports/{export_id}/download",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/backups/capabilities",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/backups",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/backups/recovery-identities",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "put",
+      "path": "/api/workspace/backups/{backup_id}/secret",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "put",
+      "path": "/api/workspace/backups/{backup_id}/frontend-state",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/backups/{backup_id}/finalize",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/backups/{backup_id}",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/backups/{backup_id}/download",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "delete",
+      "path": "/api/workspace/backups/{backup_id}",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/restores/inspect",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/restores",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/restores/cleanup",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "put",
+      "path": "/api/workspace/restores/{restore_id}/secret",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/restores/{restore_id}/unlock",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "get",
+      "path": "/api/workspace/restores/{restore_id}",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "delete",
+      "path": "/api/workspace/restores/{restore_id}",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/restores/{restore_id}/prepare",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "put",
+      "path": "/api/workspace/restores/{restore_id}/frontend-prepared",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/restores/{restore_id}/commit",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/restores/{restore_id}/complete",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/restores/{restore_id}/abort",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/restores/{restore_id}/pause",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/restores/{restore_id}/resume",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    },
+    {
+      "method": "post",
+      "path": "/api/workspace/restores/{restore_id}/apply",
+      "file": "deepseek_infra/web/routes/workspace.py"
+    }
+  ]
+}

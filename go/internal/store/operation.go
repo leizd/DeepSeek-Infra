@@ -283,6 +283,17 @@ func (store *Control) ApplyMutation(raw []byte, auth MutationAuthority) (Mutatio
 	if !ok {
 		return MutationResult{}, ErrMutationRequestInvalid
 	}
+	recordBody, ok := payload["recordPayload"].(map[string]any)
+	if !ok {
+		return MutationResult{}, ErrMutationRequestInvalid
+	}
+	// The signed transport document is valid JSON, but a policy/target payload
+	// whose identity disagrees with its target row would make public lists and
+	// recovery address different objects. Refuse it before any journal/write.
+	if (domain == "policy" && asString(recordBody["policyId"]) != asString(payload["recordId"])) ||
+		(domain == "target" && asString(recordBody["targetId"]) != asString(payload["recordId"])) {
+		return MutationResult{}, ErrMutationRequestInvalid
+	}
 	recordPayload, err := canonicalAuthorityJSON(payload["recordPayload"])
 	if err != nil {
 		return MutationResult{}, ErrMutationRequestInvalid

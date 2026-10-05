@@ -493,8 +493,12 @@ def _connect() -> Iterator[sqlite3.Connection]:
         _quick_check_or_fail(conn)
         yield conn
         conn.commit()
-    except BaseException:
+    except BaseException as exc:
         conn.rollback()
+        if isinstance(exc, sqlite3.DatabaseError) and "PYTHON_CONTROL_SOURCE_FENCED" in str(exc):
+            from deepseek_infra.infra.native_runtime.authority import PythonWriterMechanicallyDeniedError
+
+            raise PythonWriterMechanicallyDeniedError("Python control source is fenced for native handoff") from exc
         raise
     finally:
         conn.close()
@@ -532,6 +536,10 @@ def create_policy(policy: dict[str, Any]) -> dict[str, Any]:
             prepared = _prepare_authority_intent_if_configured(conn, kind="policy-mutation")
         except sqlite3.IntegrityError as exc:
             conn.execute("ROLLBACK")
+            if "PYTHON_CONTROL_SOURCE_FENCED" in str(exc):
+                from deepseek_infra.infra.native_runtime.authority import PythonWriterMechanicallyDeniedError
+
+                raise PythonWriterMechanicallyDeniedError("Python control source is fenced for native handoff") from exc
             raise AppError("Backup policy id collision; retry", code=ErrorCode.INVALID_REQUEST, status=409) from exc
         conn.execute("COMMIT")
     _anchor_after_non_rebuildable_mutation(kind="policy-mutation", prepared=prepared)

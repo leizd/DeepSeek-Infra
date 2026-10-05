@@ -1,0 +1,2829 @@
+{
+  "cases": [
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "ok": {
+          "costObjectives": {},
+          "createdAt": "2026-10-01T00:00:00Z",
+          "enabled": false,
+          "federatedDurability": {
+            "allowedJurisdictions": [],
+            "allowedPeerFleets": [],
+            "enabled": false,
+            "maxFederatedCopyAge": 2592000,
+            "minDistinctFleets": 1,
+            "minFederatedCopies": 1
+          },
+          "frontendMirror": {
+            "maxAgeSeconds": 3600,
+            "mode": "best-effort"
+          },
+          "incremental": {
+            "fullIntervalDays": 7,
+            "largeFileMode": "cdc",
+            "largeFileThresholdBytes": 16777216,
+            "maxChainDepth": 8,
+            "maxDeltaRatio": 0.6,
+            "mode": "off"
+          },
+          "name": "nightly",
+          "placement": {
+            "hardWatermarkPercent": 90.0,
+            "maintenanceWindow": null,
+            "maxCopiesPerFailureDomain": null,
+            "minFreeBytes": 10737418240,
+            "minFreePercent": 10.0,
+            "softWatermarkPercent": 80.0
+          },
+          "policyId": "policy_0000",
+          "policyRevision": 1,
+          "primaryTargetId": "managed-local",
+          "protection": {
+            "mode": "age-recipient",
+            "recipients": [
+              "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
+            ]
+          },
+          "recoveryDrill": {
+            "credentialRef": null,
+            "cron": null,
+            "enabled": false,
+            "provider": null
+          },
+          "recoveryObjectives": {},
+          "recoveryPlacement": {
+            "archiveAfterSeconds": 2592000,
+            "enabled": false,
+            "hotRestoreP90Seconds": 300,
+            "hotWindowSeconds": 86400,
+            "minHotCopies": 1,
+            "minWarmRegions": 0,
+            "warmRestoreP90Seconds": 1800,
+            "warmWindowSeconds": 604800
+          },
+          "replication": {
+            "enabled": false,
+            "minCommittedCopies": 1,
+            "minFailureDomains": 1,
+            "minRegions": 1,
+            "targets": []
+          },
+          "retentionPolicyId": "default",
+          "retry": {
+            "initialBackoffSeconds": 60,
+            "maxAttempts": 3,
+            "maxBackoffSeconds": 900
+          },
+          "schedule": {
+            "catchupWindowSeconds": 86400,
+            "cron": "0 3 * * *",
+            "jitterSeconds": 0,
+            "misfirePolicy": "skip",
+            "timezone": "UTC"
+          },
+          "schemaVersion": 2,
+          "scope": {
+            "coveragePolicy": "strict",
+            "includeExternalState": true,
+            "includeHistory": true,
+            "mode": "full",
+            "projectIds": []
+          },
+          "targetId": "managed-local",
+          "updatedAt": "<now>"
+        }
+      },
+      "name": "minimal",
+      "payload": {
+        "name": "nightly"
+      },
+      "policyId": "policy_0000"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "ok": {
+          "costObjectives": {},
+          "createdAt": "2026-10-01T00:00:00Z",
+          "enabled": false,
+          "federatedDurability": {
+            "allowedJurisdictions": [],
+            "allowedPeerFleets": [],
+            "enabled": false,
+            "maxFederatedCopyAge": 2592000,
+            "minDistinctFleets": 1,
+            "minFederatedCopies": 1
+          },
+          "frontendMirror": {
+            "maxAgeSeconds": 3600,
+            "mode": "best-effort"
+          },
+          "incremental": {
+            "fullIntervalDays": 7,
+            "largeFileMode": "cdc",
+            "largeFileThresholdBytes": 16777216,
+            "maxChainDepth": 8,
+            "maxDeltaRatio": 0.6,
+            "mode": "off"
+          },
+          "name": "nightly",
+          "placement": {
+            "hardWatermarkPercent": 90.0,
+            "maintenanceWindow": null,
+            "maxCopiesPerFailureDomain": null,
+            "minFreeBytes": 10737418240,
+            "minFreePercent": 10.0,
+            "softWatermarkPercent": 80.0
+          },
+          "policyId": "policy_0001",
+          "policyRevision": 1,
+          "primaryTargetId": "managed-local",
+          "protection": {
+            "mode": "age-recipient",
+            "recipients": [
+              "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
+            ]
+          },
+          "recoveryDrill": {
+            "credentialRef": null,
+            "cron": null,
+            "enabled": false,
+            "provider": null
+          },
+          "recoveryObjectives": {},
+          "recoveryPlacement": {
+            "archiveAfterSeconds": 2592000,
+            "enabled": false,
+            "hotRestoreP90Seconds": 300,
+            "hotWindowSeconds": 86400,
+            "minHotCopies": 1,
+            "minWarmRegions": 0,
+            "warmRestoreP90Seconds": 1800,
+            "warmWindowSeconds": 604800
+          },
+          "replication": {
+            "enabled": false,
+            "minCommittedCopies": 1,
+            "minFailureDomains": 1,
+            "minRegions": 1,
+            "targets": []
+          },
+          "retentionPolicyId": "default",
+          "retry": {
+            "initialBackoffSeconds": 60,
+            "maxAttempts": 3,
+            "maxBackoffSeconds": 900
+          },
+          "schedule": {
+            "catchupWindowSeconds": 86400,
+            "cron": "0 3 * * *",
+            "jitterSeconds": 0,
+            "misfirePolicy": "skip",
+            "timezone": "UTC"
+          },
+          "schemaVersion": 2,
+          "scope": {
+            "coveragePolicy": "strict",
+            "includeExternalState": true,
+            "includeHistory": true,
+            "mode": "full",
+            "projectIds": []
+          },
+          "targetId": "managed-local",
+          "updatedAt": "<now>"
+        }
+      },
+      "name": "schema-version-1-accepted",
+      "payload": {
+        "name": "nightly",
+        "schemaVersion": 1
+      },
+      "policyId": "policy_0001"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "ok": {
+          "costObjectives": {},
+          "createdAt": "2026-10-01T00:00:00Z",
+          "enabled": false,
+          "federatedDurability": {
+            "allowedJurisdictions": [],
+            "allowedPeerFleets": [],
+            "enabled": false,
+            "maxFederatedCopyAge": 2592000,
+            "minDistinctFleets": 1,
+            "minFederatedCopies": 1
+          },
+          "frontendMirror": {
+            "maxAgeSeconds": 3600,
+            "mode": "best-effort"
+          },
+          "incremental": {
+            "fullIntervalDays": 7,
+            "largeFileMode": "cdc",
+            "largeFileThresholdBytes": 16777216,
+            "maxChainDepth": 8,
+            "maxDeltaRatio": 0.6,
+            "mode": "off"
+          },
+          "name": "nightly",
+          "placement": {
+            "hardWatermarkPercent": 90.0,
+            "maintenanceWindow": null,
+            "maxCopiesPerFailureDomain": null,
+            "minFreeBytes": 10737418240,
+            "minFreePercent": 10.0,
+            "softWatermarkPercent": 80.0
+          },
+          "policyId": "policy_0002",
+          "policyRevision": 1,
+          "primaryTargetId": "target_s3_primary",
+          "protection": {
+            "mode": "age-recipient",
+            "recipients": [
+              "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
+            ]
+          },
+          "recoveryDrill": {
+            "credentialRef": null,
+            "cron": null,
+            "enabled": false,
+            "provider": null
+          },
+          "recoveryObjectives": {},
+          "recoveryPlacement": {
+            "archiveAfterSeconds": 2592000,
+            "enabled": false,
+            "hotRestoreP90Seconds": 300,
+            "hotWindowSeconds": 86400,
+            "minHotCopies": 1,
+            "minWarmRegions": 0,
+            "warmRestoreP90Seconds": 1800,
+            "warmWindowSeconds": 604800
+          },
+          "replication": {
+            "enabled": false,
+            "minCommittedCopies": 1,
+            "minFailureDomains": 1,
+            "minRegions": 1,
+            "targets": []
+          },
+          "retentionPolicyId": "default",
+          "retry": {
+            "initialBackoffSeconds": 60,
+            "maxAttempts": 3,
+            "maxBackoffSeconds": 900
+          },
+          "schedule": {
+            "catchupWindowSeconds": 86400,
+            "cron": "0 3 * * *",
+            "jitterSeconds": 0,
+            "misfirePolicy": "skip",
+            "timezone": "UTC"
+          },
+          "schemaVersion": 2,
+          "scope": {
+            "coveragePolicy": "strict",
+            "includeExternalState": true,
+            "includeHistory": true,
+            "mode": "full",
+            "projectIds": []
+          },
+          "targetId": "target_s3_primary",
+          "updatedAt": "<now>"
+        }
+      },
+      "name": "explicit-target",
+      "payload": {
+        "name": "nightly",
+        "primaryTargetId": "target_s3_primary"
+      },
+      "policyId": "policy_0002"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "ok": {
+          "costObjectives": {},
+          "createdAt": "2026-10-01T00:00:00Z",
+          "enabled": false,
+          "federatedDurability": {
+            "allowedJurisdictions": [],
+            "allowedPeerFleets": [],
+            "enabled": false,
+            "maxFederatedCopyAge": 2592000,
+            "minDistinctFleets": 1,
+            "minFederatedCopies": 1
+          },
+          "frontendMirror": {
+            "maxAgeSeconds": 3600,
+            "mode": "best-effort"
+          },
+          "incremental": {
+            "fullIntervalDays": 7,
+            "largeFileMode": "cdc",
+            "largeFileThresholdBytes": 16777216,
+            "maxChainDepth": 8,
+            "maxDeltaRatio": 0.6,
+            "mode": "off"
+          },
+          "name": "nightly",
+          "placement": {
+            "hardWatermarkPercent": 90.0,
+            "maintenanceWindow": null,
+            "maxCopiesPerFailureDomain": null,
+            "minFreeBytes": 10737418240,
+            "minFreePercent": 10.0,
+            "softWatermarkPercent": 80.0
+          },
+          "policyId": "policy_0003",
+          "policyRevision": 1,
+          "primaryTargetId": "target_s3_legacy",
+          "protection": {
+            "mode": "age-recipient",
+            "recipients": [
+              "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
+            ]
+          },
+          "recoveryDrill": {
+            "credentialRef": null,
+            "cron": null,
+            "enabled": false,
+            "provider": null
+          },
+          "recoveryObjectives": {},
+          "recoveryPlacement": {
+            "archiveAfterSeconds": 2592000,
+            "enabled": false,
+            "hotRestoreP90Seconds": 300,
+            "hotWindowSeconds": 86400,
+            "minHotCopies": 1,
+            "minWarmRegions": 0,
+            "warmRestoreP90Seconds": 1800,
+            "warmWindowSeconds": 604800
+          },
+          "replication": {
+            "enabled": false,
+            "minCommittedCopies": 1,
+            "minFailureDomains": 1,
+            "minRegions": 1,
+            "targets": []
+          },
+          "retentionPolicyId": "default",
+          "retry": {
+            "initialBackoffSeconds": 60,
+            "maxAttempts": 3,
+            "maxBackoffSeconds": 900
+          },
+          "schedule": {
+            "catchupWindowSeconds": 86400,
+            "cron": "0 3 * * *",
+            "jitterSeconds": 0,
+            "misfirePolicy": "skip",
+            "timezone": "UTC"
+          },
+          "schemaVersion": 2,
+          "scope": {
+            "coveragePolicy": "strict",
+            "includeExternalState": true,
+            "includeHistory": true,
+            "mode": "full",
+            "projectIds": []
+          },
+          "targetId": "target_s3_legacy",
+          "updatedAt": "<now>"
+        }
+      },
+      "name": "legacy-target-alias",
+      "payload": {
+        "name": "nightly",
+        "targetId": "target_s3_legacy"
+      },
+      "policyId": "policy_0003"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy replication target must not repeat the primary targetId",
+          "status": 400
+        }
+      },
+      "name": "full-schedule",
+      "payload": {
+        "costObjectives": {
+          "maxMonthlyEgressCostUsd": 3,
+          "maxMonthlyStorageCostUsd": 12.5,
+          "maxRebalanceCostUsdPerDay": 0,
+          "requireKnownRates": true
+        },
+        "enabled": true,
+        "federatedDurability": {
+          "allowedJurisdictions": [
+            "cn-beijing",
+            "eu-west"
+          ],
+          "allowedPeerFleets": [
+            "fleet-b",
+            "fleet-a"
+          ],
+          "enabled": true,
+          "maxFederatedCopyAge": 86400,
+          "minDistinctFleets": 2,
+          "minFederatedCopies": 2
+        },
+        "frontendMirror": {
+          "maxAgeSeconds": 7200,
+          "mode": "required",
+          "profileId": "mirror_main"
+        },
+        "incremental": {
+          "fullIntervalDays": 3,
+          "largeFileMode": "whole",
+          "largeFileThresholdBytes": 2097152,
+          "maxChainDepth": 4,
+          "maxDeltaRatio": 0.5,
+          "maxInFlightBytes": 16777216,
+          "mode": "cdc",
+          "scanWorkers": 2
+        },
+        "name": "full",
+        "placement": {
+          "hardWatermarkPercent": 85,
+          "maintenanceWindow": {
+            "end": "05:00",
+            "start": "01:00",
+            "timezone": "UTC"
+          },
+          "maxCopiesPerFailureDomain": 3,
+          "minFreeBytes": 1073741824,
+          "minFreePercent": 5.5,
+          "softWatermarkPercent": 70
+        },
+        "policyRevision": 7,
+        "protection": {
+          "mode": "age-recipient",
+          "recipients": [
+            "age1fu59d59ghmr8x2t5dyzjs9xdcjgnakujp7mjy7cz2v7fq6vjqypskh4e62",
+            "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
+          ]
+        },
+        "recoveryDrill": {
+          "credentialRef": "env:DRILL",
+          "cron": "0 4 * * 0",
+          "enabled": true,
+          "provider": "managed-local"
+        },
+        "recoveryObjectives": {
+          "maxDrillAgeSeconds": 1209600,
+          "maxReplicaLagSeconds": 120,
+          "maxRpoSeconds": 900,
+          "maxRtoSeconds": 1800,
+          "maxScrubAgeSeconds": 172800
+        },
+        "recoveryPlacement": {
+          "archiveAfterSeconds": 86400,
+          "enabled": false,
+          "hotRestoreP90Seconds": 60,
+          "hotWindowSeconds": 3600,
+          "minHotCopies": 0,
+          "minWarmRegions": 2,
+          "warmRestoreP90Seconds": 900,
+          "warmWindowSeconds": 7200
+        },
+        "replication": {
+          "enabled": true,
+          "maxCopiesPerFailureDomain": 2,
+          "maxReplicaLagSeconds": 600,
+          "minCommittedCopies": 2,
+          "minFailureDomains": 1,
+          "minRegions": 1,
+          "targets": [
+            {
+              "mode": "best-effort",
+              "targetId": "target_replica_a"
+            },
+            {
+              "targetId": "managed-local"
+            }
+          ]
+        },
+        "retentionPolicyId": "keep-30",
+        "retry": {
+          "initialBackoffSeconds": 30,
+          "maxAttempts": 5,
+          "maxBackoffSeconds": 600
+        },
+        "schedule": {
+          "catchupWindowSeconds": 3600,
+          "cron": "*/15 1-5 * * 1,3",
+          "jitterSeconds": 30,
+          "misfirePolicy": "run-once",
+          "timezone": "Asia/Shanghai"
+        },
+        "scope": {
+          "coveragePolicy": "best-effort",
+          "includeExternalState": false,
+          "includeHistory": false,
+          "mode": "project",
+          "projectIds": [
+            "alpha",
+            "beta.gamma"
+          ]
+        }
+      },
+      "policyId": "policy_0004"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "ok": {
+          "costObjectives": {},
+          "createdAt": "2026-10-01T00:00:00Z",
+          "enabled": false,
+          "federatedDurability": {
+            "allowedJurisdictions": [],
+            "allowedPeerFleets": [],
+            "enabled": false,
+            "maxFederatedCopyAge": 2592000,
+            "minDistinctFleets": 1,
+            "minFederatedCopies": 1
+          },
+          "frontendMirror": {
+            "maxAgeSeconds": 3600,
+            "mode": "best-effort"
+          },
+          "incremental": {
+            "fullIntervalDays": 7,
+            "largeFileMode": "cdc",
+            "largeFileThresholdBytes": 16777216,
+            "maxChainDepth": 8,
+            "maxDeltaRatio": 0.6,
+            "mode": "off"
+          },
+          "name": "nulls",
+          "placement": {
+            "hardWatermarkPercent": 90.0,
+            "maintenanceWindow": null,
+            "maxCopiesPerFailureDomain": null,
+            "minFreeBytes": 10737418240,
+            "minFreePercent": 10.0,
+            "softWatermarkPercent": 80.0
+          },
+          "policyId": "policy_0005",
+          "policyRevision": 1,
+          "primaryTargetId": "managed-local",
+          "protection": {
+            "mode": "age-recipient",
+            "recipients": [
+              "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
+            ]
+          },
+          "recoveryDrill": {
+            "credentialRef": null,
+            "cron": null,
+            "enabled": false,
+            "provider": null
+          },
+          "recoveryObjectives": {},
+          "recoveryPlacement": {
+            "archiveAfterSeconds": 2592000,
+            "enabled": false,
+            "hotRestoreP90Seconds": 300,
+            "hotWindowSeconds": 86400,
+            "minHotCopies": 1,
+            "minWarmRegions": 0,
+            "warmRestoreP90Seconds": 1800,
+            "warmWindowSeconds": 604800
+          },
+          "replication": {
+            "enabled": false,
+            "minCommittedCopies": 1,
+            "minFailureDomains": 1,
+            "minRegions": 1,
+            "targets": []
+          },
+          "retentionPolicyId": "default",
+          "retry": {
+            "initialBackoffSeconds": 60,
+            "maxAttempts": 3,
+            "maxBackoffSeconds": 900
+          },
+          "schedule": {
+            "catchupWindowSeconds": 86400,
+            "cron": "0 3 * * *",
+            "jitterSeconds": 0,
+            "misfirePolicy": "skip",
+            "timezone": "UTC"
+          },
+          "schemaVersion": 2,
+          "scope": {
+            "coveragePolicy": "strict",
+            "includeExternalState": true,
+            "includeHistory": true,
+            "mode": "full",
+            "projectIds": []
+          },
+          "targetId": "managed-local",
+          "updatedAt": "<now>"
+        }
+      },
+      "name": "sections-as-explicit-nulls",
+      "payload": {
+        "costObjectives": null,
+        "federatedDurability": null,
+        "frontendMirror": null,
+        "incremental": null,
+        "name": "nulls",
+        "placement": null,
+        "protection": null,
+        "recoveryDrill": null,
+        "recoveryObjectives": null,
+        "recoveryPlacement": null,
+        "replication": null,
+        "retry": null,
+        "schedule": null,
+        "scope": null
+      },
+      "policyId": "policy_0005"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "ok": {
+          "costObjectives": {},
+          "createdAt": "2026-10-01T00:00:00Z",
+          "enabled": false,
+          "federatedDurability": {
+            "allowedJurisdictions": [],
+            "allowedPeerFleets": [],
+            "enabled": false,
+            "maxFederatedCopyAge": 2592000,
+            "minDistinctFleets": 1,
+            "minFederatedCopies": 1
+          },
+          "frontendMirror": {
+            "maxAgeSeconds": 3600,
+            "mode": "best-effort"
+          },
+          "incremental": {
+            "fullIntervalDays": 7,
+            "largeFileMode": "cdc",
+            "largeFileThresholdBytes": 16777216,
+            "maxChainDepth": 8,
+            "maxDeltaRatio": 0.6,
+            "mode": "off"
+          },
+          "name": "off",
+          "placement": {
+            "hardWatermarkPercent": 90.0,
+            "maintenanceWindow": null,
+            "maxCopiesPerFailureDomain": null,
+            "minFreeBytes": 10737418240,
+            "minFreePercent": 10.0,
+            "softWatermarkPercent": 80.0
+          },
+          "policyId": "policy_0006",
+          "policyRevision": 1,
+          "primaryTargetId": "managed-local",
+          "protection": {
+            "mode": "age-recipient",
+            "recipients": [
+              "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
+            ]
+          },
+          "recoveryDrill": {
+            "credentialRef": null,
+            "cron": null,
+            "enabled": false,
+            "provider": null
+          },
+          "recoveryObjectives": {},
+          "recoveryPlacement": {
+            "archiveAfterSeconds": 2592000,
+            "enabled": false,
+            "hotRestoreP90Seconds": 300,
+            "hotWindowSeconds": 86400,
+            "minHotCopies": 1,
+            "minWarmRegions": 0,
+            "warmRestoreP90Seconds": 1800,
+            "warmWindowSeconds": 604800
+          },
+          "replication": {
+            "enabled": false,
+            "minCommittedCopies": 1,
+            "minFailureDomains": 1,
+            "minRegions": 1,
+            "targets": []
+          },
+          "retentionPolicyId": "default",
+          "retry": {
+            "initialBackoffSeconds": 60,
+            "maxAttempts": 3,
+            "maxBackoffSeconds": 900
+          },
+          "schedule": {
+            "catchupWindowSeconds": 86400,
+            "cron": "0 3 * * *",
+            "jitterSeconds": 0,
+            "misfirePolicy": "skip",
+            "timezone": "UTC"
+          },
+          "schemaVersion": 2,
+          "scope": {
+            "coveragePolicy": "strict",
+            "includeExternalState": true,
+            "includeHistory": true,
+            "mode": "full",
+            "projectIds": []
+          },
+          "targetId": "managed-local",
+          "updatedAt": "<now>"
+        }
+      },
+      "name": "incremental-off-hides-scan-fields",
+      "payload": {
+        "incremental": {
+          "mode": "off"
+        },
+        "name": "off"
+      },
+      "policyId": "policy_0006"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "ok": {
+          "costObjectives": {},
+          "createdAt": "2026-10-01T00:00:00Z",
+          "enabled": false,
+          "federatedDurability": {
+            "allowedJurisdictions": [],
+            "allowedPeerFleets": [],
+            "enabled": false,
+            "maxFederatedCopyAge": 2592000,
+            "minDistinctFleets": 1,
+            "minFederatedCopies": 1
+          },
+          "frontendMirror": {
+            "maxAgeSeconds": 3600,
+            "mode": "best-effort"
+          },
+          "incremental": {
+            "fullIntervalDays": 7,
+            "largeFileMode": "cdc",
+            "largeFileThresholdBytes": 16777216,
+            "maxChainDepth": 8,
+            "maxDeltaRatio": 0.6,
+            "maxInFlightBytes": 67108864,
+            "mode": "off",
+            "scanWorkers": 3
+          },
+          "name": "off2",
+          "placement": {
+            "hardWatermarkPercent": 90.0,
+            "maintenanceWindow": null,
+            "maxCopiesPerFailureDomain": null,
+            "minFreeBytes": 10737418240,
+            "minFreePercent": 10.0,
+            "softWatermarkPercent": 80.0
+          },
+          "policyId": "policy_0007",
+          "policyRevision": 1,
+          "primaryTargetId": "managed-local",
+          "protection": {
+            "mode": "age-recipient",
+            "recipients": [
+              "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
+            ]
+          },
+          "recoveryDrill": {
+            "credentialRef": null,
+            "cron": null,
+            "enabled": false,
+            "provider": null
+          },
+          "recoveryObjectives": {},
+          "recoveryPlacement": {
+            "archiveAfterSeconds": 2592000,
+            "enabled": false,
+            "hotRestoreP90Seconds": 300,
+            "hotWindowSeconds": 86400,
+            "minHotCopies": 1,
+            "minWarmRegions": 0,
+            "warmRestoreP90Seconds": 1800,
+            "warmWindowSeconds": 604800
+          },
+          "replication": {
+            "enabled": false,
+            "minCommittedCopies": 1,
+            "minFailureDomains": 1,
+            "minRegions": 1,
+            "targets": []
+          },
+          "retentionPolicyId": "default",
+          "retry": {
+            "initialBackoffSeconds": 60,
+            "maxAttempts": 3,
+            "maxBackoffSeconds": 900
+          },
+          "schedule": {
+            "catchupWindowSeconds": 86400,
+            "cron": "0 3 * * *",
+            "jitterSeconds": 0,
+            "misfirePolicy": "skip",
+            "timezone": "UTC"
+          },
+          "schemaVersion": 2,
+          "scope": {
+            "coveragePolicy": "strict",
+            "includeExternalState": true,
+            "includeHistory": true,
+            "mode": "full",
+            "projectIds": []
+          },
+          "targetId": "managed-local",
+          "updatedAt": "<now>"
+        }
+      },
+      "name": "incremental-off-with-scan-workers",
+      "payload": {
+        "incremental": {
+          "mode": "off",
+          "scanWorkers": 3
+        },
+        "name": "off2"
+      },
+      "policyId": "policy_0007"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "ok": {
+          "costObjectives": {
+            "maxEstimatedMonthlyEgressUsd": 2.0,
+            "maxEstimatedMonthlyStorageUsd": 1.0,
+            "maxMonthlyEgressCostUsd": 2.0,
+            "maxMonthlyStorageCostUsd": 1.0
+          },
+          "createdAt": "2026-10-01T00:00:00Z",
+          "enabled": false,
+          "federatedDurability": {
+            "allowedJurisdictions": [],
+            "allowedPeerFleets": [],
+            "enabled": false,
+            "maxFederatedCopyAge": 2592000,
+            "minDistinctFleets": 1,
+            "minFederatedCopies": 1
+          },
+          "frontendMirror": {
+            "maxAgeSeconds": 3600,
+            "mode": "best-effort"
+          },
+          "incremental": {
+            "fullIntervalDays": 7,
+            "largeFileMode": "cdc",
+            "largeFileThresholdBytes": 16777216,
+            "maxChainDepth": 8,
+            "maxDeltaRatio": 0.6,
+            "mode": "off"
+          },
+          "name": "cost",
+          "placement": {
+            "hardWatermarkPercent": 90.0,
+            "maintenanceWindow": null,
+            "maxCopiesPerFailureDomain": null,
+            "minFreeBytes": 10737418240,
+            "minFreePercent": 10.0,
+            "softWatermarkPercent": 80.0
+          },
+          "policyId": "policy_0008",
+          "policyRevision": 1,
+          "primaryTargetId": "managed-local",
+          "protection": {
+            "mode": "age-recipient",
+            "recipients": [
+              "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
+            ]
+          },
+          "recoveryDrill": {
+            "credentialRef": null,
+            "cron": null,
+            "enabled": false,
+            "provider": null
+          },
+          "recoveryObjectives": {},
+          "recoveryPlacement": {
+            "archiveAfterSeconds": 2592000,
+            "enabled": false,
+            "hotRestoreP90Seconds": 300,
+            "hotWindowSeconds": 86400,
+            "minHotCopies": 1,
+            "minWarmRegions": 0,
+            "warmRestoreP90Seconds": 1800,
+            "warmWindowSeconds": 604800
+          },
+          "replication": {
+            "enabled": false,
+            "minCommittedCopies": 1,
+            "minFailureDomains": 1,
+            "minRegions": 1,
+            "targets": []
+          },
+          "retentionPolicyId": "default",
+          "retry": {
+            "initialBackoffSeconds": 60,
+            "maxAttempts": 3,
+            "maxBackoffSeconds": 900
+          },
+          "schedule": {
+            "catchupWindowSeconds": 86400,
+            "cron": "0 3 * * *",
+            "jitterSeconds": 0,
+            "misfirePolicy": "skip",
+            "timezone": "UTC"
+          },
+          "schemaVersion": 2,
+          "scope": {
+            "coveragePolicy": "strict",
+            "includeExternalState": true,
+            "includeHistory": true,
+            "mode": "full",
+            "projectIds": []
+          },
+          "targetId": "managed-local",
+          "updatedAt": "<now>"
+        }
+      },
+      "name": "cost-alias-both-spellings",
+      "payload": {
+        "costObjectives": {
+          "maxEstimatedMonthlyEgressUsd": 2,
+          "maxEstimatedMonthlyStorageUsd": 1,
+          "maxMonthlyStorageCostUsd": 9
+        },
+        "name": "cost"
+      },
+      "policyId": "policy_0008"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "ok": {
+          "costObjectives": {
+            "maxEstimatedMonthlyStorageUsd": 0.0,
+            "maxMonthlyStorageCostUsd": 0.0
+          },
+          "createdAt": "2026-10-01T00:00:00Z",
+          "enabled": false,
+          "federatedDurability": {
+            "allowedJurisdictions": [],
+            "allowedPeerFleets": [],
+            "enabled": false,
+            "maxFederatedCopyAge": 2592000,
+            "minDistinctFleets": 1,
+            "minFederatedCopies": 1
+          },
+          "frontendMirror": {
+            "maxAgeSeconds": 3600,
+            "mode": "best-effort"
+          },
+          "incremental": {
+            "fullIntervalDays": 7,
+            "largeFileMode": "cdc",
+            "largeFileThresholdBytes": 16777216,
+            "maxChainDepth": 8,
+            "maxDeltaRatio": 0.6,
+            "mode": "off"
+          },
+          "name": "cost0",
+          "placement": {
+            "hardWatermarkPercent": 90.0,
+            "maintenanceWindow": null,
+            "maxCopiesPerFailureDomain": null,
+            "minFreeBytes": 10737418240,
+            "minFreePercent": 10.0,
+            "softWatermarkPercent": 80.0
+          },
+          "policyId": "policy_0009",
+          "policyRevision": 1,
+          "primaryTargetId": "managed-local",
+          "protection": {
+            "mode": "age-recipient",
+            "recipients": [
+              "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
+            ]
+          },
+          "recoveryDrill": {
+            "credentialRef": null,
+            "cron": null,
+            "enabled": false,
+            "provider": null
+          },
+          "recoveryObjectives": {},
+          "recoveryPlacement": {
+            "archiveAfterSeconds": 2592000,
+            "enabled": false,
+            "hotRestoreP90Seconds": 300,
+            "hotWindowSeconds": 86400,
+            "minHotCopies": 1,
+            "minWarmRegions": 0,
+            "warmRestoreP90Seconds": 1800,
+            "warmWindowSeconds": 604800
+          },
+          "replication": {
+            "enabled": false,
+            "minCommittedCopies": 1,
+            "minFailureDomains": 1,
+            "minRegions": 1,
+            "targets": []
+          },
+          "retentionPolicyId": "default",
+          "retry": {
+            "initialBackoffSeconds": 60,
+            "maxAttempts": 3,
+            "maxBackoffSeconds": 900
+          },
+          "schedule": {
+            "catchupWindowSeconds": 86400,
+            "cron": "0 3 * * *",
+            "jitterSeconds": 0,
+            "misfirePolicy": "skip",
+            "timezone": "UTC"
+          },
+          "schemaVersion": 2,
+          "scope": {
+            "coveragePolicy": "strict",
+            "includeExternalState": true,
+            "includeHistory": true,
+            "mode": "full",
+            "projectIds": []
+          },
+          "targetId": "managed-local",
+          "updatedAt": "<now>"
+        }
+      },
+      "name": "cost-zero-is-kept",
+      "payload": {
+        "costObjectives": {
+          "maxMonthlyStorageCostUsd": 0
+        },
+        "name": "cost0"
+      },
+      "policyId": "policy_0009"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "ok": {
+          "costObjectives": {},
+          "createdAt": "2026-10-01T00:00:00Z",
+          "enabled": false,
+          "federatedDurability": {
+            "allowedJurisdictions": [],
+            "allowedPeerFleets": [],
+            "enabled": false,
+            "maxFederatedCopyAge": 2592000,
+            "minDistinctFleets": 1,
+            "minFederatedCopies": 1
+          },
+          "frontendMirror": {
+            "maxAgeSeconds": 3600,
+            "mode": "best-effort"
+          },
+          "incremental": {
+            "fullIntervalDays": 7,
+            "largeFileMode": "cdc",
+            "largeFileThresholdBytes": 16777216,
+            "maxChainDepth": 8,
+            "maxDeltaRatio": 0.6,
+            "mode": "off"
+          },
+          "name": "rpo",
+          "placement": {
+            "hardWatermarkPercent": 90.0,
+            "maintenanceWindow": null,
+            "maxCopiesPerFailureDomain": null,
+            "minFreeBytes": 10737418240,
+            "minFreePercent": 10.0,
+            "softWatermarkPercent": 80.0
+          },
+          "policyId": "policy_0010",
+          "policyRevision": 1,
+          "primaryTargetId": "managed-local",
+          "protection": {
+            "mode": "age-recipient",
+            "recipients": [
+              "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
+            ]
+          },
+          "recoveryDrill": {
+            "credentialRef": null,
+            "cron": null,
+            "enabled": false,
+            "provider": null
+          },
+          "recoveryObjectives": {
+            "maxRpoSeconds": 60
+          },
+          "recoveryPlacement": {
+            "archiveAfterSeconds": 2592000,
+            "enabled": false,
+            "hotRestoreP90Seconds": 300,
+            "hotWindowSeconds": 86400,
+            "minHotCopies": 1,
+            "minWarmRegions": 0,
+            "warmRestoreP90Seconds": 1800,
+            "warmWindowSeconds": 604800
+          },
+          "replication": {
+            "enabled": false,
+            "minCommittedCopies": 1,
+            "minFailureDomains": 1,
+            "minRegions": 1,
+            "targets": []
+          },
+          "retentionPolicyId": "default",
+          "retry": {
+            "initialBackoffSeconds": 60,
+            "maxAttempts": 3,
+            "maxBackoffSeconds": 900
+          },
+          "schedule": {
+            "catchupWindowSeconds": 86400,
+            "cron": "0 3 * * *",
+            "jitterSeconds": 0,
+            "misfirePolicy": "skip",
+            "timezone": "UTC"
+          },
+          "schemaVersion": 2,
+          "scope": {
+            "coveragePolicy": "strict",
+            "includeExternalState": true,
+            "includeHistory": true,
+            "mode": "full",
+            "projectIds": []
+          },
+          "targetId": "managed-local",
+          "updatedAt": "<now>"
+        }
+      },
+      "name": "recovery-objectives-subset",
+      "payload": {
+        "name": "rpo",
+        "recoveryObjectives": {
+          "maxRpoSeconds": 60
+        }
+      },
+      "policyId": "policy_0010"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "ok": {
+          "costObjectives": {},
+          "createdAt": "2026-10-01T00:00:00Z",
+          "enabled": false,
+          "federatedDurability": {
+            "allowedJurisdictions": [],
+            "allowedPeerFleets": [],
+            "enabled": false,
+            "maxFederatedCopyAge": 2592000,
+            "minDistinctFleets": 1,
+            "minFederatedCopies": 1
+          },
+          "frontendMirror": {
+            "maxAgeSeconds": 3600,
+            "mode": "best-effort"
+          },
+          "incremental": {
+            "fullIntervalDays": 7,
+            "largeFileMode": "cdc",
+            "largeFileThresholdBytes": 16777216,
+            "maxChainDepth": 8,
+            "maxDeltaRatio": 0.6,
+            "mode": "off"
+          },
+          "name": "repl",
+          "placement": {
+            "hardWatermarkPercent": 90.0,
+            "maintenanceWindow": null,
+            "maxCopiesPerFailureDomain": null,
+            "minFreeBytes": 10737418240,
+            "minFreePercent": 10.0,
+            "softWatermarkPercent": 80.0
+          },
+          "policyId": "policy_0011",
+          "policyRevision": 1,
+          "primaryTargetId": "managed-local",
+          "protection": {
+            "mode": "age-recipient",
+            "recipients": [
+              "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
+            ]
+          },
+          "recoveryDrill": {
+            "credentialRef": null,
+            "cron": null,
+            "enabled": false,
+            "provider": null
+          },
+          "recoveryObjectives": {},
+          "recoveryPlacement": {
+            "archiveAfterSeconds": 2592000,
+            "enabled": false,
+            "hotRestoreP90Seconds": 300,
+            "hotWindowSeconds": 86400,
+            "minHotCopies": 1,
+            "minWarmRegions": 0,
+            "warmRestoreP90Seconds": 1800,
+            "warmWindowSeconds": 604800
+          },
+          "replication": {
+            "enabled": false,
+            "minCommittedCopies": 1,
+            "minFailureDomains": 1,
+            "minRegions": 1,
+            "targets": []
+          },
+          "retentionPolicyId": "default",
+          "retry": {
+            "initialBackoffSeconds": 60,
+            "maxAttempts": 3,
+            "maxBackoffSeconds": 900
+          },
+          "schedule": {
+            "catchupWindowSeconds": 86400,
+            "cron": "0 3 * * *",
+            "jitterSeconds": 0,
+            "misfirePolicy": "skip",
+            "timezone": "UTC"
+          },
+          "schemaVersion": 2,
+          "scope": {
+            "coveragePolicy": "strict",
+            "includeExternalState": true,
+            "includeHistory": true,
+            "mode": "full",
+            "projectIds": []
+          },
+          "targetId": "managed-local",
+          "updatedAt": "<now>"
+        }
+      },
+      "name": "replication-disabled-defaults",
+      "payload": {
+        "name": "repl",
+        "replication": {}
+      },
+      "policyId": "policy_0011"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "ok": {
+          "costObjectives": {},
+          "createdAt": "2026-10-01T00:00:00Z",
+          "enabled": false,
+          "federatedDurability": {
+            "allowedJurisdictions": [],
+            "allowedPeerFleets": [],
+            "enabled": false,
+            "maxFederatedCopyAge": 2592000,
+            "minDistinctFleets": 1,
+            "minFederatedCopies": 1
+          },
+          "frontendMirror": {
+            "maxAgeSeconds": 3600,
+            "mode": "best-effort"
+          },
+          "incremental": {
+            "fullIntervalDays": 7,
+            "largeFileMode": "cdc",
+            "largeFileThresholdBytes": 16777216,
+            "maxChainDepth": 8,
+            "maxDeltaRatio": 0.6,
+            "mode": "off"
+          },
+          "name": "fed",
+          "placement": {
+            "hardWatermarkPercent": 90.0,
+            "maintenanceWindow": null,
+            "maxCopiesPerFailureDomain": null,
+            "minFreeBytes": 10737418240,
+            "minFreePercent": 10.0,
+            "softWatermarkPercent": 80.0
+          },
+          "policyId": "policy_0012",
+          "policyRevision": 1,
+          "primaryTargetId": "managed-local",
+          "protection": {
+            "mode": "age-recipient",
+            "recipients": [
+              "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
+            ]
+          },
+          "recoveryDrill": {
+            "credentialRef": null,
+            "cron": null,
+            "enabled": false,
+            "provider": null
+          },
+          "recoveryObjectives": {},
+          "recoveryPlacement": {
+            "archiveAfterSeconds": 2592000,
+            "enabled": false,
+            "hotRestoreP90Seconds": 300,
+            "hotWindowSeconds": 86400,
+            "minHotCopies": 1,
+            "minWarmRegions": 0,
+            "warmRestoreP90Seconds": 1800,
+            "warmWindowSeconds": 604800
+          },
+          "replication": {
+            "enabled": false,
+            "minCommittedCopies": 1,
+            "minFailureDomains": 1,
+            "minRegions": 1,
+            "targets": []
+          },
+          "retentionPolicyId": "default",
+          "retry": {
+            "initialBackoffSeconds": 60,
+            "maxAttempts": 3,
+            "maxBackoffSeconds": 900
+          },
+          "schedule": {
+            "catchupWindowSeconds": 86400,
+            "cron": "0 3 * * *",
+            "jitterSeconds": 0,
+            "misfirePolicy": "skip",
+            "timezone": "UTC"
+          },
+          "schemaVersion": 2,
+          "scope": {
+            "coveragePolicy": "strict",
+            "includeExternalState": true,
+            "includeHistory": true,
+            "mode": "full",
+            "projectIds": []
+          },
+          "targetId": "managed-local",
+          "updatedAt": "<now>"
+        }
+      },
+      "name": "federated-disabled-defaults",
+      "payload": {
+        "federatedDurability": {},
+        "name": "fed"
+      },
+      "policyId": "policy_0012"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "ok": {
+          "costObjectives": {},
+          "createdAt": "2026-10-01T00:00:00Z",
+          "enabled": false,
+          "federatedDurability": {
+            "allowedJurisdictions": [],
+            "allowedPeerFleets": [],
+            "enabled": false,
+            "maxFederatedCopyAge": 2592000,
+            "minDistinctFleets": 1,
+            "minFederatedCopies": 1
+          },
+          "frontendMirror": {
+            "maxAgeSeconds": 3600,
+            "mode": "excluded"
+          },
+          "incremental": {
+            "fullIntervalDays": 7,
+            "largeFileMode": "cdc",
+            "largeFileThresholdBytes": 16777216,
+            "maxChainDepth": 8,
+            "maxDeltaRatio": 0.6,
+            "mode": "off"
+          },
+          "name": "mirror",
+          "placement": {
+            "hardWatermarkPercent": 90.0,
+            "maintenanceWindow": null,
+            "maxCopiesPerFailureDomain": null,
+            "minFreeBytes": 10737418240,
+            "minFreePercent": 10.0,
+            "softWatermarkPercent": 80.0
+          },
+          "policyId": "policy_0013",
+          "policyRevision": 1,
+          "primaryTargetId": "managed-local",
+          "protection": {
+            "mode": "age-recipient",
+            "recipients": [
+              "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
+            ]
+          },
+          "recoveryDrill": {
+            "credentialRef": null,
+            "cron": null,
+            "enabled": false,
+            "provider": null
+          },
+          "recoveryObjectives": {},
+          "recoveryPlacement": {
+            "archiveAfterSeconds": 2592000,
+            "enabled": false,
+            "hotRestoreP90Seconds": 300,
+            "hotWindowSeconds": 86400,
+            "minHotCopies": 1,
+            "minWarmRegions": 0,
+            "warmRestoreP90Seconds": 1800,
+            "warmWindowSeconds": 604800
+          },
+          "replication": {
+            "enabled": false,
+            "minCommittedCopies": 1,
+            "minFailureDomains": 1,
+            "minRegions": 1,
+            "targets": []
+          },
+          "retentionPolicyId": "default",
+          "retry": {
+            "initialBackoffSeconds": 60,
+            "maxAttempts": 3,
+            "maxBackoffSeconds": 900
+          },
+          "schedule": {
+            "catchupWindowSeconds": 86400,
+            "cron": "0 3 * * *",
+            "jitterSeconds": 0,
+            "misfirePolicy": "skip",
+            "timezone": "UTC"
+          },
+          "schemaVersion": 2,
+          "scope": {
+            "coveragePolicy": "strict",
+            "includeExternalState": true,
+            "includeHistory": true,
+            "mode": "full",
+            "projectIds": []
+          },
+          "targetId": "managed-local",
+          "updatedAt": "<now>"
+        }
+      },
+      "name": "frontend-mirror-without-profile",
+      "payload": {
+        "frontendMirror": {
+          "mode": "excluded"
+        },
+        "name": "mirror"
+      },
+      "policyId": "policy_0013"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "ok": {
+          "costObjectives": {},
+          "createdAt": "2026-10-01T00:00:00Z",
+          "enabled": false,
+          "federatedDurability": {
+            "allowedJurisdictions": [],
+            "allowedPeerFleets": [],
+            "enabled": false,
+            "maxFederatedCopyAge": 2592000,
+            "minDistinctFleets": 1,
+            "minFederatedCopies": 1
+          },
+          "frontendMirror": {
+            "maxAgeSeconds": 3600,
+            "mode": "best-effort"
+          },
+          "incremental": {
+            "fullIntervalDays": 7,
+            "largeFileMode": "cdc",
+            "largeFileThresholdBytes": 16777216,
+            "maxChainDepth": 8,
+            "maxDeltaRatio": 0.6,
+            "mode": "off"
+          },
+          "name": "drill",
+          "placement": {
+            "hardWatermarkPercent": 90.0,
+            "maintenanceWindow": null,
+            "maxCopiesPerFailureDomain": null,
+            "minFreeBytes": 10737418240,
+            "minFreePercent": 10.0,
+            "softWatermarkPercent": 80.0
+          },
+          "policyId": "policy_0014",
+          "policyRevision": 1,
+          "primaryTargetId": "managed-local",
+          "protection": {
+            "mode": "age-recipient",
+            "recipients": [
+              "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq0"
+            ]
+          },
+          "recoveryDrill": {
+            "credentialRef": null,
+            "cron": null,
+            "enabled": false,
+            "provider": null
+          },
+          "recoveryObjectives": {},
+          "recoveryPlacement": {
+            "archiveAfterSeconds": 2592000,
+            "enabled": false,
+            "hotRestoreP90Seconds": 300,
+            "hotWindowSeconds": 86400,
+            "minHotCopies": 1,
+            "minWarmRegions": 0,
+            "warmRestoreP90Seconds": 1800,
+            "warmWindowSeconds": 604800
+          },
+          "replication": {
+            "enabled": false,
+            "minCommittedCopies": 1,
+            "minFailureDomains": 1,
+            "minRegions": 1,
+            "targets": []
+          },
+          "retentionPolicyId": "default",
+          "retry": {
+            "initialBackoffSeconds": 60,
+            "maxAttempts": 3,
+            "maxBackoffSeconds": 900
+          },
+          "schedule": {
+            "catchupWindowSeconds": 86400,
+            "cron": "0 3 * * *",
+            "jitterSeconds": 0,
+            "misfirePolicy": "skip",
+            "timezone": "UTC"
+          },
+          "schemaVersion": 2,
+          "scope": {
+            "coveragePolicy": "strict",
+            "includeExternalState": true,
+            "includeHistory": true,
+            "mode": "full",
+            "projectIds": []
+          },
+          "targetId": "managed-local",
+          "updatedAt": "<now>"
+        }
+      },
+      "name": "recovery-drill-empties",
+      "payload": {
+        "name": "drill",
+        "recoveryDrill": {
+          "credentialRef": "",
+          "cron": "",
+          "enabled": false,
+          "provider": ""
+        }
+      },
+      "policyId": "policy_0014"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy name must be 1-120 characters",
+          "status": 400
+        }
+      },
+      "name": "refuse-blank-name",
+      "payload": {
+        "name": "   "
+      },
+      "policyId": "policy_0015"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy name must be 1-120 characters",
+          "status": 400
+        }
+      },
+      "name": "refuse-missing-name",
+      "payload": {},
+      "policyId": "policy_0016"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy name must be 1-120 characters",
+          "status": 400
+        }
+      },
+      "name": "refuse-long-name",
+      "payload": {
+        "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "policyId": "policy_0017"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Unsupported backup policy schemaVersion",
+          "status": 400
+        }
+      },
+      "name": "refuse-schema-version",
+      "payload": {
+        "name": "n",
+        "schemaVersion": 3
+      },
+      "policyId": "policy_0018"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field $.retentionPolicyId must not contain private keys, passwords, tokens or credentials",
+          "status": 400
+        }
+      },
+      "name": "refuse-secret-marker",
+      "payload": {
+        "name": "n",
+        "retentionPolicyId": "AGE-SECRET-KEY-1"
+      },
+      "policyId": "policy_0019"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field $.recoveryDrill.credentialRef must not contain private keys, passwords, tokens or credentials",
+          "status": 400
+        }
+      },
+      "name": "refuse-secret-in-nested",
+      "payload": {
+        "name": "n",
+        "recoveryDrill": {
+          "credentialRef": "Bearer abc"
+        }
+      },
+      "policyId": "policy_0020"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy targetId must be managed-local or a registered target_... id",
+          "status": 400
+        }
+      },
+      "name": "refuse-target-id",
+      "payload": {
+        "name": "n",
+        "primaryTargetId": "bucket-name"
+      },
+      "policyId": "policy_0021"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Cron expression must have five fields",
+          "status": 400
+        }
+      },
+      "name": "refuse-cron-four-fields",
+      "payload": {
+        "name": "n",
+        "schedule": {
+          "cron": "* * * *",
+          "timezone": "UTC"
+        }
+      },
+      "policyId": "policy_0022"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Invalid cron expression: cron field value out of range 0-59: 99",
+          "status": 400
+        }
+      },
+      "name": "refuse-cron-range",
+      "payload": {
+        "name": "n",
+        "schedule": {
+          "cron": "99 * * * *",
+          "timezone": "UTC"
+        }
+      },
+      "policyId": "policy_0023"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Invalid cron expression: invalid literal for int() with base 10: 'x'",
+          "status": 400
+        }
+      },
+      "name": "refuse-cron-nan",
+      "payload": {
+        "name": "n",
+        "schedule": {
+          "cron": "x * * * *",
+          "timezone": "UTC"
+        }
+      },
+      "policyId": "policy_0024"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Invalid cron expression: cron step must be positive",
+          "status": 400
+        }
+      },
+      "name": "refuse-cron-zero-step",
+      "payload": {
+        "name": "n",
+        "schedule": {
+          "cron": "*/0 * * * *",
+          "timezone": "UTC"
+        }
+      },
+      "policyId": "policy_0025"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Invalid cron expression: empty cron field part",
+          "status": 400
+        }
+      },
+      "name": "refuse-cron-empty-part",
+      "payload": {
+        "name": "n",
+        "schedule": {
+          "cron": "1,,2 * * * *",
+          "timezone": "UTC"
+        }
+      },
+      "policyId": "policy_0026"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Invalid cron expression: cron field value out of range 0-59: 5-3",
+          "status": 400
+        }
+      },
+      "name": "refuse-cron-descending-range",
+      "payload": {
+        "name": "n",
+        "schedule": {
+          "cron": "5-3 * * * *",
+          "timezone": "UTC"
+        }
+      },
+      "policyId": "policy_0027"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Unknown IANA timezone: Mars/Phobos",
+          "status": 400
+        }
+      },
+      "name": "refuse-timezone",
+      "payload": {
+        "name": "n",
+        "schedule": {
+          "cron": "0 3 * * *",
+          "timezone": "Mars/Phobos"
+        }
+      },
+      "policyId": "policy_0028"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy schedule.timezone is required",
+          "status": 400
+        }
+      },
+      "name": "refuse-blank-timezone",
+      "payload": {
+        "name": "n",
+        "schedule": {
+          "cron": "0 3 * * *",
+          "timezone": " "
+        }
+      },
+      "policyId": "policy_0029"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field schedule.misfirePolicy must be one of skip, run-once",
+          "status": 400
+        }
+      },
+      "name": "refuse-schedule-misfire",
+      "payload": {
+        "name": "n",
+        "schedule": {
+          "cron": "0 3 * * *",
+          "misfirePolicy": "later",
+          "timezone": "UTC"
+        }
+      },
+      "policyId": "policy_0030"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field schedule.catchupWindowSeconds must be between 60 and 604800",
+          "status": 400
+        }
+      },
+      "name": "refuse-schedule-catchup-low",
+      "payload": {
+        "name": "n",
+        "schedule": {
+          "catchupWindowSeconds": 59,
+          "cron": "0 3 * * *",
+          "timezone": "UTC"
+        }
+      },
+      "policyId": "policy_0031"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field schedule.jitterSeconds must be between 0 and 3600",
+          "status": 400
+        }
+      },
+      "name": "refuse-schedule-jitter",
+      "payload": {
+        "name": "n",
+        "schedule": {
+          "cron": "0 3 * * *",
+          "jitterSeconds": 3601,
+          "timezone": "UTC"
+        }
+      },
+      "policyId": "policy_0032"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy section schedule must be an object",
+          "status": 400
+        }
+      },
+      "name": "refuse-schedule-not-object",
+      "payload": {
+        "name": "n",
+        "schedule": "0 3 * * *"
+      },
+      "policyId": "policy_0033"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy scope.projectIds is required for project mode",
+          "status": 400
+        }
+      },
+      "name": "refuse-scope-project-without-ids",
+      "payload": {
+        "name": "n",
+        "scope": {
+          "mode": "project"
+        }
+      },
+      "policyId": "policy_0034"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field scope.projectIds has an invalid identifier",
+          "status": 400
+        }
+      },
+      "name": "refuse-scope-project-id",
+      "payload": {
+        "name": "n",
+        "scope": {
+          "mode": "project",
+          "projectIds": [
+            "Bad Id"
+          ]
+        }
+      },
+      "policyId": "policy_0035"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field scope.mode must be one of full, project",
+          "status": 400
+        }
+      },
+      "name": "refuse-scope-mode",
+      "payload": {
+        "name": "n",
+        "scope": {
+          "mode": "partial"
+        }
+      },
+      "policyId": "policy_0036"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field frontendMirror.mode must be one of required, best-effort, excluded",
+          "status": 400
+        }
+      },
+      "name": "refuse-mirror-mode",
+      "payload": {
+        "frontendMirror": {
+          "mode": "maybe"
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0037"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field frontendMirror.profileId has an invalid identifier",
+          "status": 400
+        }
+      },
+      "name": "refuse-mirror-profile",
+      "payload": {
+        "frontendMirror": {
+          "profileId": "Bad Profile"
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0038"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field frontendMirror.maxAgeSeconds must be between 60 and 86400",
+          "status": 400
+        }
+      },
+      "name": "refuse-mirror-max-age",
+      "payload": {
+        "frontendMirror": {
+          "maxAgeSeconds": 10
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0039"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Scheduled backup policies do not support unattended passphrase protection",
+          "status": 400
+        }
+      },
+      "name": "refuse-protection-passphrase",
+      "payload": {
+        "name": "n",
+        "protection": {
+          "mode": "passphrase"
+        }
+      },
+      "policyId": "policy_0040"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Scheduled backup policies require protection.mode age-recipient",
+          "status": 400
+        }
+      },
+      "name": "refuse-protection-missing-mode",
+      "payload": {
+        "name": "n",
+        "protection": {}
+      },
+      "policyId": "policy_0041"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy requires between 1 and 16 age recipients",
+          "status": 400
+        }
+      },
+      "name": "refuse-protection-no-recipients",
+      "payload": {
+        "name": "n",
+        "protection": {
+          "mode": "age-recipient",
+          "recipients": []
+        }
+      },
+      "policyId": "policy_0042"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy recipients must be public age1... recipients",
+          "status": 400
+        }
+      },
+      "name": "refuse-protection-not-age1",
+      "payload": {
+        "name": "n",
+        "protection": {
+          "mode": "age-recipient",
+          "recipients": [
+            "nope"
+          ]
+        }
+      },
+      "policyId": "policy_0043"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy requires between 1 and 16 age recipients",
+          "status": 400
+        }
+      },
+      "name": "refuse-protection-too-many",
+      "payload": {
+        "name": "n",
+        "protection": {
+          "mode": "age-recipient",
+          "recipients": [
+            "age10",
+            "age11",
+            "age12",
+            "age13",
+            "age14",
+            "age15",
+            "age16",
+            "age17",
+            "age18",
+            "age19",
+            "age110",
+            "age111",
+            "age112",
+            "age113",
+            "age114",
+            "age115",
+            "age116"
+          ]
+        }
+      },
+      "policyId": "policy_0044"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field incremental.mode must be one of off, file-delta, cdc",
+          "status": 400
+        }
+      },
+      "name": "refuse-incremental-mode",
+      "payload": {
+        "incremental": {
+          "mode": "delta"
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0045"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field incremental.maxDeltaRatio must be between 0.10 and 0.90",
+          "status": 400
+        }
+      },
+      "name": "refuse-incremental-ratio",
+      "payload": {
+        "incremental": {
+          "maxDeltaRatio": 0.95
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0046"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field incremental.maxDeltaRatio must be a number",
+          "status": 400
+        }
+      },
+      "name": "refuse-incremental-ratio-bool",
+      "payload": {
+        "incremental": {
+          "maxDeltaRatio": true
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0047"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field incremental.maxChainDepth must be between 1 and 64",
+          "status": 400
+        }
+      },
+      "name": "refuse-incremental-depth",
+      "payload": {
+        "incremental": {
+          "maxChainDepth": 0
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0048"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field incremental.largeFileMode must be one of whole, cdc",
+          "status": 400
+        }
+      },
+      "name": "refuse-incremental-large-mode",
+      "payload": {
+        "incremental": {
+          "largeFileMode": "chunk"
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0049"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy retry.maxBackoffSeconds must be >= initialBackoffSeconds",
+          "status": 400
+        }
+      },
+      "name": "refuse-retry-order",
+      "payload": {
+        "name": "n",
+        "retry": {
+          "initialBackoffSeconds": 900,
+          "maxBackoffSeconds": 60
+        }
+      },
+      "policyId": "policy_0050"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field retry.maxAttempts must be between 1 and 10",
+          "status": 400
+        }
+      },
+      "name": "refuse-retry-attempts",
+      "payload": {
+        "name": "n",
+        "retry": {
+          "maxAttempts": 11
+        }
+      },
+      "policyId": "policy_0051"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field recoveryObjectives.maxRpoSeconds must be between 60 and 31536000",
+          "status": 400
+        }
+      },
+      "name": "refuse-rpo-low",
+      "payload": {
+        "name": "n",
+        "recoveryObjectives": {
+          "maxRpoSeconds": 30
+        }
+      },
+      "policyId": "policy_0052"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field costObjectives.maxRebalanceCostUsdPerDay must be a finite non-negative number",
+          "status": 400
+        }
+      },
+      "name": "refuse-rebalance-negative",
+      "payload": {
+        "costObjectives": {
+          "maxRebalanceCostUsdPerDay": -1
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0053"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field costObjectives.maxEstimatedMonthlyStorageUsd must be a number",
+          "status": 400
+        }
+      },
+      "name": "refuse-cost-not-number",
+      "payload": {
+        "costObjectives": {
+          "maxMonthlyStorageCostUsd": "cheap"
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0054"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Cron expression must have five fields",
+          "status": 400
+        }
+      },
+      "name": "refuse-drill-cron",
+      "payload": {
+        "name": "n",
+        "recoveryDrill": {
+          "cron": "bad",
+          "enabled": true
+        }
+      },
+      "policyId": "policy_0055"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field replication.targets must be an array",
+          "status": 400
+        }
+      },
+      "name": "refuse-replication-not-array",
+      "payload": {
+        "name": "n",
+        "replication": {
+          "targets": "target_a"
+        }
+      },
+      "policyId": "policy_0056"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field replication.targets[0] must be an object",
+          "status": 400
+        }
+      },
+      "name": "refuse-replication-entry",
+      "payload": {
+        "name": "n",
+        "replication": {
+          "targets": [
+            "target_a"
+          ]
+        }
+      },
+      "policyId": "policy_0057"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy replication target must not repeat the primary targetId",
+          "status": 400
+        }
+      },
+      "name": "refuse-replication-primary-repeat",
+      "payload": {
+        "name": "n",
+        "primaryTargetId": "target_a",
+        "replication": {
+          "targets": [
+            {
+              "targetId": "target_a"
+            }
+          ]
+        }
+      },
+      "policyId": "policy_0058"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy replication targets must be unique",
+          "status": 400
+        }
+      },
+      "name": "refuse-replication-duplicate",
+      "payload": {
+        "name": "n",
+        "replication": {
+          "targets": [
+            {
+              "targetId": "target_b"
+            },
+            {
+              "targetId": "target_b"
+            }
+          ]
+        }
+      },
+      "policyId": "policy_0059"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy replication.minCommittedCopies exceeds configured targets",
+          "status": 400
+        }
+      },
+      "name": "refuse-replication-min-copies",
+      "payload": {
+        "name": "n",
+        "replication": {
+          "enabled": true,
+          "minCommittedCopies": 5,
+          "targets": [
+            {
+              "targetId": "target_b"
+            }
+          ]
+        }
+      },
+      "policyId": "policy_0060"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy replication.targets[0].targetId must be a registered target_... id",
+          "status": 400
+        }
+      },
+      "name": "refuse-replication-bad-target",
+      "payload": {
+        "name": "n",
+        "replication": {
+          "targets": [
+            {
+              "targetId": "bucket"
+            }
+          ]
+        }
+      },
+      "policyId": "policy_0061"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy federatedDurability contains unsupported fields",
+          "status": 400
+        }
+      },
+      "name": "refuse-federated-unknown-field",
+      "payload": {
+        "federatedDurability": {
+          "extra": true,
+          "minFederatedCopies": 1
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0062"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy federatedDurability.minDistinctFleets exceeds minFederatedCopies",
+          "status": 400
+        }
+      },
+      "name": "refuse-federated-min-fleets",
+      "payload": {
+        "federatedDurability": {
+          "minDistinctFleets": 3,
+          "minFederatedCopies": 2
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0063"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Enabled federatedDurability requires allowedPeerFleets and allowedJurisdictions",
+          "status": 400
+        }
+      },
+      "name": "refuse-federated-enabled-empty",
+      "payload": {
+        "federatedDurability": {
+          "enabled": true
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0064"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy federatedDurability.minFederatedCopies exceeds allowedPeerFleets",
+          "status": 400
+        }
+      },
+      "name": "refuse-federated-enabled-min-copies",
+      "payload": {
+        "federatedDurability": {
+          "allowedJurisdictions": [
+            "cn"
+          ],
+          "allowedPeerFleets": [
+            "fleet-a"
+          ],
+          "enabled": true,
+          "minDistinctFleets": 1,
+          "minFederatedCopies": 3
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0065"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field federatedDurability.allowedPeerFleets must be unique",
+          "status": 400
+        }
+      },
+      "name": "refuse-federated-duplicate-fleet",
+      "payload": {
+        "federatedDurability": {
+          "allowedPeerFleets": [
+            "fleet-a",
+            "fleet-a"
+          ]
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0066"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field federatedDurability.allowedPeerFleets[0] is invalid",
+          "status": 400
+        }
+      },
+      "name": "refuse-federated-bad-fleet",
+      "payload": {
+        "federatedDurability": {
+          "allowedPeerFleets": [
+            "Fleet A"
+          ]
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0067"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field federatedDurability.allowedJurisdictions[0] is invalid",
+          "status": 400
+        }
+      },
+      "name": "refuse-federated-bad-jurisdiction",
+      "payload": {
+        "federatedDurability": {
+          "allowedJurisdictions": [
+            "/etc/passwd"
+          ]
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0068"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field federatedDurability.allowedPeerFleets must be an array",
+          "status": 400
+        }
+      },
+      "name": "refuse-federated-peers-not-array",
+      "payload": {
+        "federatedDurability": {
+          "allowedPeerFleets": "fleet-a"
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0069"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field federatedDurability.maxFederatedCopyAge must be between 1 and 315360000",
+          "status": 400
+        }
+      },
+      "name": "refuse-federated-max-age",
+      "payload": {
+        "federatedDurability": {
+          "maxFederatedCopyAge": 0
+        },
+        "name": "n"
+      },
+      "policyId": "policy_0070"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field placement.minFreeBytes must be between 0 and 109951162777600",
+          "status": 400
+        }
+      },
+      "name": "refuse-placement-min-free",
+      "payload": {
+        "name": "n",
+        "placement": {
+          "minFreeBytes": -1
+        }
+      },
+      "policyId": "policy_0071"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field placement.maxCopiesPerFailureDomain must be between 1 and 16",
+          "status": 400
+        }
+      },
+      "name": "refuse-placement-copies",
+      "payload": {
+        "name": "n",
+        "placement": {
+          "maxCopiesPerFailureDomain": 17
+        }
+      },
+      "policyId": "policy_0072"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "recoveryPlacement windows must satisfy 0 <= hot <= warm <= archiveAfter",
+          "status": 400
+        }
+      },
+      "name": "refuse-recovery-placement-order",
+      "payload": {
+        "name": "n",
+        "recoveryPlacement": {
+          "hotWindowSeconds": 100,
+          "warmWindowSeconds": 50
+        }
+      },
+      "policyId": "policy_0073"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "recoveryPlacement must be an object",
+          "status": 400
+        }
+      },
+      "name": "refuse-recovery-placement-not-object",
+      "payload": {
+        "name": "n",
+        "recoveryPlacement": "hot"
+      },
+      "policyId": "policy_0074"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field retentionPolicyId has an invalid identifier",
+          "status": 400
+        }
+      },
+      "name": "refuse-retention-policy-id",
+      "payload": {
+        "name": "n",
+        "retentionPolicyId": "Keep 30"
+      },
+      "policyId": "policy_0075"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "error": {
+          "code": "invalid_payload",
+          "message": "Backup policy field enabled must be a boolean",
+          "status": 400
+        }
+      },
+      "name": "refuse-enabled-not-bool",
+      "payload": {
+        "enabled": "yes",
+        "name": "n"
+      },
+      "policyId": "policy_0076"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "message": "invalid literal for int() with base 10: 'many'",
+        "uncaught": "ValueError"
+      },
+      "name": "refuse-policy-revision-not-int",
+      "payload": {
+        "name": "n",
+        "policyRevision": "many"
+      },
+      "policyId": "policy_0077"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "message": "could not convert string to float: 'True'",
+        "uncaught": "ValueError"
+      },
+      "name": "quirk-placement-percent-bool",
+      "payload": {
+        "name": "n",
+        "placement": {
+          "minFreePercent": true
+        }
+      },
+      "policyId": "policy_0078"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "message": "could not convert string to float: 'lots'",
+        "uncaught": "ValueError"
+      },
+      "name": "quirk-placement-percent-text",
+      "payload": {
+        "name": "n",
+        "placement": {
+          "minFreePercent": "lots"
+        }
+      },
+      "policyId": "policy_0079"
+    },
+    {
+      "createdAt": "2026-10-01T00:00:00Z",
+      "expected": {
+        "message": "invalid literal for int() with base 10: 'soon'",
+        "uncaught": "ValueError"
+      },
+      "name": "quirk-recovery-placement-text",
+      "payload": {
+        "name": "n",
+        "recoveryPlacement": {
+          "hotWindowSeconds": "soon"
+        }
+      },
+      "policyId": "policy_0080"
+    }
+  ],
+  "oracle": "deepseek_infra.infra.workspace.backup_policies.normalize_policy",
+  "schema": "policy-normalization-fixture-v1",
+  "sourceVersion": "4.8.0"
+}

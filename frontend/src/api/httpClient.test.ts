@@ -20,6 +20,23 @@ describe("HttpClient", () => {
     });
   });
 
+  it("reads the Go native API error envelope without stringifying its object", async () => {
+    const client = new HttpClient({
+      fetchImpl: async () =>
+        new Response(JSON.stringify({ error: { code: "GO_API_NOT_IMPLEMENTED", message: "native route pending" } }), {
+          status: 501,
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+
+    await expect(client.request("/api/workspace/backup-targets")).rejects.toMatchObject({
+      name: "ApiError",
+      message: "native route pending",
+      status: 501,
+      code: "GO_API_NOT_IMPLEMENTED",
+    });
+  });
+
   it("adds injected bearer auth without reading persistent browser storage", async () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);

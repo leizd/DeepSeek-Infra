@@ -234,11 +234,12 @@ async fn real_provider_specific_key_rejection_is_never_reported_as_success() {
     if !minio_configured() {
         return;
     }
-    let store = store(&endpoints()[0]);
+    let endpoint = endpoints()[0].clone();
+    let (proxy_endpoint, observation) = observe_provider_put(endpoint.clone()).await;
     let payload = Bytes::from_static(b"provider key domain");
     let digest = Sha256::digest(&payload).into();
     let key = "provider-domain/data?#.age";
-    let result = store
+    let result = store(&proxy_endpoint)
         .put_chunk(
             key,
             payload.clone(),
@@ -247,17 +248,160 @@ async fn real_provider_specific_key_rejection_is_never_reported_as_success() {
             ConditionalWrite::Create,
         )
         .await;
-    // Windows MinIO stores object paths on Windows and rejects '?'. This is a
-    // real rejection test, not a skipped case or a silently rewritten object key.
-    if cfg!(windows) {
+    let observed = observation.await.unwrap();
+    let bucket = std::env::var("DEEPSEEK_NATIVE_S3_BUCKET").unwrap();
+    assert_eq!(
+        observed.request_target,
+        format!("/{bucket}/native-byte-tests/provider-domain/data%3F%23.age")
+    );
+    eprintln!(
+        "observed MinIO PUT: status={} key={}",
+        observed.status, observed.request_target
+    );
+    // The provider's object-key domain belongs to the server, not the client
+    // OS. A Windows client can use Linux MinIO in Docker. Observe the actual
+    // unchanged signed request and response; never infer rejection from cfg!.
+    if observed.status == 400 {
+        assert!(
+            observed
+                .body
+                .contains("<Code>XMinioInvalidObjectName</Code>")
+                || observed.body.contains("<Code>InvalidObjectName</Code>"),
+            "provider must explicitly reject this object name: {}",
+            observed.body
+        );
         assert_eq!(result, Err(S3Error::EffectUnknown));
     } else {
+        assert_eq!(observed.status, 200, "unexpected provider response");
         result.unwrap();
-        store
+        let direct = store(&endpoint);
+        direct
             .download_verified(key, payload.len() as u64, digest, &mut HashSink::default())
             .await
             .unwrap();
+        // Percent escapes must remain literal only on the wire. A rewritten
+        // logical key must not have been created beside the exact requested key.
+        assert!(
+            direct
+                .stat("provider-domain/data%3F%23.age")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
+}
+
+struct ProviderPutObservation {
+    request_target: String,
+    status: u16,
+    body: String,
+}
+
+// A bounded one-request observer forwards the real signed PUT and the actual
+// MinIO response. It does not generate S3 success/error fields or provider data.
+async fn observe_provider_put(
+    endpoint: String,
+) -> (String, tokio::task::JoinHandle<ProviderPutObservation>) {
+    use std::time::Duration;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        time::timeout,
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let observation = tokio::spawn(async move {
+        timeout(Duration::from_secs(20), async move {
+            let (mut downstream, _) = listener.accept().await.unwrap();
+            let mut raw = Vec::new();
+            let header_end = loop {
+                let mut part = [0; 1024];
+                let count = downstream.read(&mut part).await.unwrap();
+                assert!(count > 0, "client closed before request headers");
+                raw.extend_from_slice(&part[..count]);
+                assert!(
+                    raw.len() <= 65536,
+                    "request headers exceeded observer bound"
+                );
+                if let Some(end) = raw.windows(4).position(|part| part == b"\r\n\r\n") {
+                    break end + 4;
+                }
+            };
+            let header_text = std::str::from_utf8(&raw[..header_end]).unwrap();
+            let mut lines = header_text.lines();
+            let request_line: Vec<_> = lines.next().unwrap().split_whitespace().collect();
+            assert_eq!(request_line.len(), 3);
+            assert_eq!(request_line[0], "PUT");
+            assert_eq!(request_line[2], "HTTP/1.1");
+            let request_target = request_line[1].to_owned();
+            let mut headers = reqwest::header::HeaderMap::new();
+            for line in lines.filter(|line| !line.is_empty()) {
+                let (name, value) = line.split_once(':').unwrap();
+                headers.append(
+                    reqwest::header::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                    reqwest::header::HeaderValue::from_str(value.trim()).unwrap(),
+                );
+            }
+            let length: usize = headers[reqwest::header::CONTENT_LENGTH]
+                .to_str()
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert!(length <= 1024, "probe payload exceeded observer bound");
+            let mut body = raw[header_end..].to_vec();
+            assert!(body.len() <= length);
+            body.resize(length, 0);
+            downstream
+                .read_exact(&mut body[raw.len() - header_end..])
+                .await
+                .unwrap();
+            let response = reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap()
+                .put(format!("{endpoint}{request_target}"))
+                .headers(headers)
+                .body(body)
+                .send()
+                .await
+                .unwrap();
+            let status = response.status();
+            let headers = response.headers().clone();
+            let response_body = response.bytes().await.unwrap();
+            assert!(
+                response_body.len() <= 65536,
+                "provider response exceeded bound"
+            );
+            let mut reply = format!(
+                "HTTP/1.1 {} {}\r\nConnection: close\r\nContent-Length: {}\r\n",
+                status.as_u16(),
+                status.canonical_reason().unwrap(),
+                response_body.len()
+            );
+            for (name, value) in &headers {
+                if !matches!(
+                    name.as_str(),
+                    "content-length" | "connection" | "transfer-encoding"
+                ) {
+                    reply.push_str(&format!("{}: {}\r\n", name, value.to_str().unwrap()));
+                }
+            }
+            reply.push_str("\r\n");
+            downstream.write_all(reply.as_bytes()).await.unwrap();
+            downstream.write_all(&response_body).await.unwrap();
+            downstream.shutdown().await.unwrap();
+            ProviderPutObservation {
+                request_target,
+                status: status.as_u16(),
+                body: String::from_utf8(response_body.to_vec()).unwrap(),
+            }
+        })
+        .await
+        .unwrap()
+    });
+    (proxy_endpoint, observation)
 }
 
 #[tokio::test]

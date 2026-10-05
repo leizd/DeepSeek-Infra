@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Executable release gate for Zero-Python Production Runtime.
+"""Source-contract checks for Zero-Python Production Runtime.
 
 Enforces:
-1. Production Docker Compose topology runs exclusively Rust + Go services (zero Python).
+1. Docker Compose topology declares exclusively Rust + Go services (zero Python).
 2. Native codebases (Rust/Go) have zero Python/PyO3/cgo dependencies.
 3. Ownership matrix in release/native_runtime_ownership_v1.json designates zero Python target owners.
 4. Mechanical writer denial blocks all Python writers for Go control domains.
 5. Server startup is denied under python_disabled mode without DEEPSEEK_LEGACY_PYTHON=1.
 6. Gateway reverse proxy is wired to Go control plane with fail-closed fallbacks.
-7. Storage & transfer execution paths are natively implemented in Rust with frozen contract validation.
+7. Storage & transfer sources contain required native declarations and validation guards.
+
+These checks do not observe built images, running processes, provider effects,
+full route parity, or production ownership. Deployment qualification is separate.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -67,14 +71,18 @@ def check_compose_topology(root: Path) -> GateCheckResult:
             )
 
     # Zero Python in default topology
-    lowered = content.lower()
+    executable_lines = "\n".join(line for line in content.splitlines() if not line.lstrip().startswith("#"))
+    # This mode denies the legacy runtime. Ignore only that exact environment
+    # declaration; Python images, services and commands remain forbidden.
+    scanned = re.sub(r"(?m)^\s+DEEPSEEK_RUNTIME_MODE: python_disabled\s*$", "", executable_lines)
+    lowered = scanned.lower()
     if "python" in lowered:
         return GateCheckResult(
             name="topology_manifest",
             passed=False,
             details="Forbidden 'python' reference found in docker-compose.native.yml",
         )
-    if "deepseek_infra" in lowered or "uvicorn" in lowered or "gunicorn" in lowered:
+    if re.search(r"\b(?:deepseek_infra|uvicorn|gunicorn)\b", lowered):
         return GateCheckResult(
             name="topology_manifest",
             passed=False,
@@ -82,11 +90,27 @@ def check_compose_topology(root: Path) -> GateCheckResult:
         )
 
     # Proxy configuration
-    if "GO_CONTROL_ADDR: http://deepseekd:8090" not in content:
+    edge = _compose_service_text(executable_lines, "deepseek-edge")
+    control = _compose_service_text(executable_lines, "deepseekd")
+    worker = _compose_service_text(executable_lines, "deepseek-worker")
+    if "GO_CONTROL_ADDR: http://127.0.0.1:8090" not in edge or "DEEPSEEK_RUNTIME_MODE: python_disabled" not in edge:
         return GateCheckResult(
             name="topology_manifest",
             passed=False,
-            details="deepseek-edge missing GO_CONTROL_ADDR proxy target to deepseekd",
+            details="deepseek-edge requires the private loopback control origin and disabled legacy runtime",
+        )
+    if (
+        'network_mode: "service:deepseek-edge"' not in control
+        or 'network_mode: "service:deepseek-edge"' not in worker
+        or "DEEPSEEKD_LISTEN: 127.0.0.1:8090" not in control
+        or "DEEPSEEK_WORKER_LISTEN: 127.0.0.1:50052" not in worker
+        or "deepseek-edge:\n        condition: service_started\n        restart: true" not in control
+        or "deepseek-edge:\n        condition: service_started\n        restart: true" not in worker
+    ):
+        return GateCheckResult(
+            name="topology_manifest",
+            passed=False,
+            details="Go control and Rust worker require private loopback listeners, the edge namespace and dependent restart",
         )
 
     # Go Dockerfile CGO_ENABLED=0 check
@@ -108,9 +132,14 @@ def check_compose_topology(root: Path) -> GateCheckResult:
     return GateCheckResult(
         name="topology_manifest",
         passed=True,
-        details="Production topology contains exclusively Rust+Go services with zero Python",
+        details="Native topology declares exclusively Rust+Go services with zero Python",
         data={"services": required_services},
     )
+
+
+def _compose_service_text(content: str, service: str) -> str:
+    match = re.search(rf"(?ms)^  {re.escape(service)}:\s*\n(.*?)(?=^  [A-Za-z0-9_-]+:|\Z)", content)
+    return match.group(1) if match else ""
 
 
 def check_native_dependency_isolation(root: Path) -> GateCheckResult:
@@ -360,7 +389,7 @@ def check_native_storage_and_transfer(root: Path) -> GateCheckResult:
     return GateCheckResult(
         name="native_storage_transfer",
         passed=True,
-        details="Rust storage backup/restore and transfer engines natively implemented and contract-verified",
+        details="Native storage/transfer sources contain required declarations and validation guards",
     )
 
 
@@ -401,7 +430,7 @@ def check_gateway_route_cutover(root: Path) -> GateCheckResult:
     return GateCheckResult(
         name="gateway_route_cutover",
         passed=True,
-        details="Gateway route matrix wires all public endpoints and reverse-proxies /api/* to Go control plane",
+        details="Gateway sources declare the Go reverse proxy and fail-closed errors; route parity is unverified",
     )
 
 
@@ -424,9 +453,29 @@ def check_container_image_isolation(root: Path) -> GateCheckResult:
     return GateCheckResult(
         name="container_image_isolation",
         passed=True,
-        details=f"All {report['audits_total']} container targets pass zero-Python isolation audits",
+        details=f"All {report['audits_total']} container recipes pass source isolation checks; built images are unverified",
         data=report,
     )
+
+
+def _native_supervisor_contract(path: Path, root: Path, text: str) -> bool:
+    """Allow the bounded native launcher, never arbitrary control-plane exec."""
+    if path.relative_to(root).as_posix() != "go/internal/launch/plan.go":
+        return False
+    calls = re.findall(r"exec\.Command(?:Context)?\s*\(([^)]*)\)", text)
+    if [re.sub(r"\s+", "", call) for call in calls] != ["ctx,process.Path"]:
+        return False
+    names = re.search(r"names\s*:=\s*\[\]string\s*\{([^}]+)\}", text)
+    if names is None or re.findall(r'"([^"]+)"', names.group(1)) != ["deepseekd", "deepseek-worker", "deepseek-gateway"]:
+        return False
+    guard = text.find("if legacyCommand(process.Path)")
+    spawn = text.find("exec.CommandContext")
+    legacy = re.search(r"func legacyCommand\(path string\) bool\s*\{(.*?)\n\}", text, re.DOTALL)
+    if not 0 <= guard < spawn or legacy is None:
+        return False
+    blocked = ["python", "python.exe", "python3", "python3.exe", "node", "node.exe", "py", "py.exe"]
+    return (all(f'"{name}"' in legacy.group(1) for name in blocked)
+            and "return true" in legacy.group(1) and 'runtimeMode = "python_disabled"' in text)
 
 
 def check_process_tree_isolation(root: Path) -> GateCheckResult:
@@ -450,15 +499,20 @@ def check_process_tree_isolation(root: Path) -> GateCheckResult:
             details=f"Rust production code spawns forbidden process: {'; '.join(rust_violations)}",
         )
 
-    # 2. Audit Go codebase for os/exec imports
+    # The native supervisor legitimately starts Rust/Go children. Its bounded
+    # binary set and interpreter guard are checked; other exec imports fail.
     go_root = root / "go"
     go_violations: list[str] = []
+    native_supervisors = 0
     for go_file in go_root.rglob("*.go"):
         if "_test.go" in go_file.name:
             continue
         text = go_file.read_text(encoding="utf-8")
         if '"os/exec"' in text:
-            go_violations.append(f"{go_file.relative_to(root)} imports os/exec")
+            if _native_supervisor_contract(go_file, root, text):
+                native_supervisors += 1
+            else:
+                go_violations.append(f"{go_file.relative_to(root)} imports os/exec outside the bounded native supervisor")
 
     if go_violations:
         return GateCheckResult(
@@ -470,11 +524,13 @@ def check_process_tree_isolation(root: Path) -> GateCheckResult:
     return GateCheckResult(
         name="process_tree_isolation",
         passed=True,
-        details="Rust and Go production binaries spawn zero Python subprocesses; process tree isolation verified",
+        details="Source invocation checks pass, including the bounded native supervisor; deployment process observation remains required",
         data={
             "rust_production_crates_checked": True,
             "go_production_packages_checked": True,
             "external_executors_detected": 0,
+            "native_supervisors_checked": native_supervisors,
+            "scope": "source_contract",
         },
     )
 
@@ -494,6 +550,8 @@ def run_all_checks(root: Path) -> dict[str, Any]:
     all_passed = all(c.passed for c in checks)
     return {
         "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+        "scope": "source_contract",
+        "deployment_verified": False,
         "status": "PASS" if all_passed else "FAIL",
         "passed": all_passed,
         "checks_total": len(checks),
@@ -504,7 +562,7 @@ def run_all_checks(root: Path) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Check Zero-Python Production Runtime release gate")
+    parser = argparse.ArgumentParser(description="Check Zero-Python Production Runtime source contracts")
     parser.add_argument("--json", action="store_true", help="Emit structured JSON output")
     parser.add_argument("--strict", action="store_true", help="Exit 1 on any gate failure (CI default)")
     args = parser.parse_args(argv)
@@ -515,13 +573,14 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print("=" * 70)
-        print(" ZERO-PYTHON PRODUCTION RUNTIME GATE VERIFICATION")
+        print(" ZERO-PYTHON RUNTIME SOURCE-CONTRACT CHECKS")
         print("=" * 70)
         for check in report["results"]:
             icon = "[PASS]" if check["passed"] else "[FAIL]"
             print(f" {icon} {check['name']}: {check['details']}")
         print("-" * 70)
-        print(f" Overall Verdict: {report['status']} ({report['checks_passed']}/{report['checks_total']} passed)")
+        print(f" Source-contract verdict: {report['status']} ({report['checks_passed']}/{report['checks_total']} passed)")
+        print(" Deployment/process/provider qualification: UNVERIFIED")
         print("=" * 70)
 
     if not report["passed"] and args.strict:

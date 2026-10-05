@@ -39,8 +39,12 @@ def _git(root: Path, *args: str) -> str:
             text=True,
             timeout=15,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as error:
+        if args == ("status", "--porcelain"):
+            raise ValueError("Git status unavailable; cannot attest evidence source cleanliness") from error
         return ""
+    if result.returncode != 0 and args == ("status", "--porcelain"):
+        raise ValueError("Git status unavailable; cannot attest evidence source cleanliness")
     return result.stdout.strip() if result.returncode == 0 else ""
 
 

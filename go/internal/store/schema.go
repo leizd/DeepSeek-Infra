@@ -39,19 +39,28 @@ var (
 )
 
 const (
-	RuntimeGo     = "go"
-	OwnerPython   = "python"
-	ModeShadow    = "shadow"
-	SchemaV1      = 1
-	SchemaV2      = 2
-	SchemaV3      = 3
-	SchemaV4      = 4
-	SchemaV5      = 5
-	SchemaV6      = 6
-	SchemaV7      = 7
-	SchemaV8      = 8
-	SchemaV9      = 9
-	CurrentSchema = SchemaV9
+	RuntimeGo   = "go"
+	OwnerPython = "python"
+	ModeShadow  = "shadow"
+	// TombstoneState is the terminal state a delete writes. A record in it is absent from
+	// every authoritative read while its row and immutable events stay consistent.
+	TombstoneState = "DELETED"
+	SchemaV1       = 1
+	SchemaV2       = 2
+	SchemaV3       = 3
+	SchemaV4       = 4
+	SchemaV5       = 5
+	SchemaV6       = 6
+	SchemaV7       = 7
+	SchemaV8       = 8
+	SchemaV9       = 9
+	SchemaV10      = 10
+	SchemaV11      = 11
+	SchemaV12      = 12
+	SchemaV13      = 13
+	SchemaV14      = 14
+	SchemaV15      = 15
+	CurrentSchema  = SchemaV15
 )
 
 var controlTableNames = [...]string{
@@ -163,9 +172,22 @@ var pythonStoreFiles = map[string]bool{
 
 var transitions = map[string]map[string][]string{
 	"policy": {
-		"":         {"ACTIVE"},
-		"ACTIVE":   {"DISABLED"},
-		"DISABLED": {"ACTIVE"},
+		// A policy is created in whichever state its `enabled` flag names — the oracle
+		// stores disabled policies routinely — and it is *rewritten in place* by an
+		// update that does not touch `enabled` (a schedule or recipient edit). Without the
+		// self-transitions, every such update would be refused as an illegal state move
+		// even though the state did not move. The rest of the domains keep the strict
+		// "a write is a state change" rule.
+		//
+		// `DELETED` is the terminal tombstone a delete writes. The row is **kept**: the
+		// control event journal is append-only and immutable, and a record whose events
+		// outlive it makes every later read of that id fail closed with `CORRUPT_RECORD`
+		// ("orphaned control events"). A tombstone is therefore a *state*, and it is
+		// absent from the map's keys, so nothing can leave it: the id is consumed for
+		// good, exactly as the oracle's row removal consumes it for that deployment.
+		"":         {"ACTIVE", "DISABLED"},
+		"ACTIVE":   {"ACTIVE", "DISABLED", TombstoneState},
+		"DISABLED": {"DISABLED", "ACTIVE", TombstoneState},
 	},
 	"target": {
 		"":         {"ACTIVE"},

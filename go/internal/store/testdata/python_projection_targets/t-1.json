@@ -1,0 +1,6 @@
+{
+  "credentialReference": "env:FIXTURE_TARGET",
+  "kind": "s3",
+  "targetId": "t-1",
+  "topologyGeneration": 1
+}

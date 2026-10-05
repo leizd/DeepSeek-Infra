@@ -169,7 +169,7 @@ func TestAcceptMutationDualEvaluateStillJournalsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dual, err := store.TransitionCutover(CutoverTransition{
+	dual, err := signedTransition(t, store, CutoverTransition{
 		Domain:           "policy",
 		To:               CutoverDualEvaluate,
 		ExpectedRevision: current.Revision,
@@ -202,7 +202,7 @@ func TestAcceptMutationDualEvaluateStillJournalsOnly(t *testing.T) {
 	}
 }
 
-func TestAcceptMutationGoAuthoritativeRemainsUnauthorized(t *testing.T) {
+func TestAcceptMutationForgedGoAuthoritativeCutoverFailsClosed(t *testing.T) {
 	now := mutationNow()
 	store := openControlAt(t, now.Unix())
 	defer store.Close()
@@ -211,8 +211,8 @@ func TestAcceptMutationGoAuthoritativeRemainsUnauthorized(t *testing.T) {
 	if _, err := store.db.Exec("UPDATE control_cutover SET state = 'go_authoritative', owner = 'go' WHERE domain = 'policy'"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AcceptMutation(raw, mutationAuth(public, now)); !errors.Is(err, ErrCutoverNotAuthorized) {
-		t.Fatalf("go authoritative accept: %v", err)
+	if _, err := store.AcceptMutation(raw, mutationAuth(public, now)); !errors.Is(err, ErrForeignRuntimeStore) {
+		t.Fatalf("forged authoritative cutover was accepted: %v", err)
 	}
 	if operationRowCount(t, store) != 0 {
 		t.Fatal("unauthorized cutover must not journal")
@@ -340,8 +340,14 @@ func TestControlMigratesFromV2ToOperationJournal(t *testing.T) {
 	}
 	db := sql.OpenDB(connector)
 	for _, statement := range []string{
+		"DROP TABLE IF EXISTS control_operator_mutations",
+		"DROP TABLE IF EXISTS backup_target_health",
+		"DROP TABLE IF EXISTS control_target_health_imports",
+		"DROP TABLE IF EXISTS control_inventory_handbacks",
+		"DROP TABLE IF EXISTS control_inventory_imports",
 		"DROP TABLE IF EXISTS action_reconciliation_boundary",
 		"DROP TABLE IF EXISTS action_verification_boundary",
+		"DROP TABLE IF EXISTS control_promotion_artifacts",
 		"DROP TABLE IF EXISTS control_cutover_authorizations",
 		"DROP TABLE IF EXISTS control_authority_checkpoints",
 		"DROP TABLE IF EXISTS control_authority_head",

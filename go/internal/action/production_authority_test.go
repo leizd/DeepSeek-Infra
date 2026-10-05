@@ -1,7 +1,10 @@
 package action
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"testing"
 
@@ -45,11 +48,15 @@ func genesisAuthority(t *testing.T) *store.AuthorityCheckpoint {
 // cutover of the action domain to go_authoritative.
 func promotedActionDomain(t *testing.T) *store.Control {
 	t.Helper()
+	promotionPrivate := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x54}, ed25519.SeedSize))
+	promotionPublic := base64.RawURLEncoding.EncodeToString(promotionPrivate.Public().(ed25519.PublicKey))
 	control, err := store.OpenControl(store.OpenOptions{
-		Path:             t.TempDir(),
-		Owner:            "production-owner",
-		Now:              func() int64 { return 500 },
-		AuthorizeCutover: true,
+		Path:                     t.TempDir(),
+		Owner:                    "production-owner",
+		Now:                      func() int64 { return 500 },
+		AuthorizeCutover:         true,
+		PromotionSignerPublicKey: promotionPublic,
+		FleetID:                  "fleet-a", Environment: "production",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +71,7 @@ func promotedActionDomain(t *testing.T) *store.Control {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := control.TransitionCutover(store.CutoverTransition{
+		req := store.CutoverTransition{
 			Domain:           authorityDomain,
 			To:               to,
 			ExpectedRevision: current.Revision,
@@ -72,7 +79,15 @@ func promotedActionDomain(t *testing.T) *store.Control {
 			FencingToken:     current.FencingToken,
 			TransferID:       "action-promote-" + string(to),
 			Authority:        authority,
-		}); err != nil {
+		}
+		if store.IsDomainGoAuthoritative(to) {
+			artifact := store.PromotionArtifactForTransition(req, current, 500, "fleet-a", "production")
+			req.Promotion, err = store.SignPromotionArtifact(artifact, promotionPrivate)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := control.TransitionCutover(req); err != nil {
 			t.Fatalf("promote %s: %v", to, err)
 		}
 	}

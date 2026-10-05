@@ -827,7 +827,7 @@ def test_target_topology_generation_allows_only_one_cross_process_winner(tmp_set
     assert final["drainReason"] in {"drain-a", "drain-b"}
 
 
-def test_placement_counts_only_the_selected_logical_recovery_point(tmp_settings: Path) -> None:
+def test_placement_counts_only_the_selected_logical_recovery_point(tmp_settings: Path, healthy_filesystem_target_capacity: None) -> None:
     primary_id = "target_scope_primary"
     candidate_id = "target_scope_candidate"
     backup_targets.register_filesystem_target(
@@ -882,7 +882,7 @@ def test_placement_counts_only_the_selected_logical_recovery_point(tmp_settings:
     assert [target_id for _, target_id in ranked] == [candidate_id]
 
 
-def test_next_full_failover_can_reuse_target_holding_parent_copy(tmp_settings: Path) -> None:
+def test_next_full_failover_can_reuse_target_holding_parent_copy(tmp_settings: Path, healthy_filesystem_target_capacity: None) -> None:
     primary_id = "target_next_full_primary"
     candidate_id = "target_next_full_candidate"
     policy_id = "policy_next_full_failover"
@@ -943,7 +943,7 @@ def test_next_full_failover_can_reuse_target_holding_parent_copy(tmp_settings: P
     assert placement["forceFull"] is True
 
 
-def test_placement_enforces_region_and_failure_domain_independently(tmp_settings: Path) -> None:
+def test_placement_enforces_region_and_failure_domain_independently(tmp_settings: Path, healthy_filesystem_target_capacity: None) -> None:
     primary_id = "target_region_primary"
     same_region_id = "target_region_same"
     second_region_id = "target_region_second"

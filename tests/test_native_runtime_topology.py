@@ -16,7 +16,7 @@ def test_native_compose_topology_contains_zero_python_services() -> None:
     assert "deepseek-worker:" in content
 
     # Zero python services in default production topology
-    assert "python" not in content.lower()
+    assert "python" not in content.lower().replace("python_disabled", "")
     assert "deepseek_infra" not in content
 
     # Edge owns port 8000
@@ -33,12 +33,12 @@ def test_native_compose_selects_real_rust_binary_targets() -> None:
     assert "target: worker" in worker
     assert "DEEPSEEK_WORKER_LISTEN: 127.0.0.1:50052" in worker
     assert "WORKER_ROLE" not in worker
-    assert "DEEPSEEKD_LISTEN: 0.0.0.0:8090" in control
-    assert "DEEPSEEKD_MODE: shadow" in control
-    assert "DEEPSEEKD_SHADOW_STORE: /data/go-control" in control
+    assert "DEEPSEEKD_LISTEN: 127.0.0.1:8090" in control
+    assert "DEEPSEEKD_MODE: authoritative" in control
+    assert "DEEPSEEKD_PRODUCTION_STORE: /data/go-control" in control
+    assert "DEEPSEEKD_SHADOW_STORE" not in control
     assert "CONTROL_BIND_ADDR" not in control
     assert "CONTROL_MODE" not in control
-    assert "authoritative" not in control
 
 
 def test_deepseekd_dockerfile_is_cgo_disabled() -> None:

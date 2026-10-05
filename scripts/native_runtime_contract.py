@@ -90,8 +90,9 @@ def validate_ownership(data: dict[str, Any]) -> None:
         raise ContractError("ownership schema_version must be 1")
     if data.get("status") != "accepted":
         raise ContractError("ownership contract must be accepted")
-    if data.get("current_production_authority") != "python":
-        raise ContractError("4.8.1 production authority must remain python")
+    authority = data.get("current_production_authority")
+    if authority not in {"python", "rust_go"}:
+        raise ContractError("production authority must be python or rust_go")
     if data.get("source_commit") != "a37735c68398fc8f795babaa269e2de6a5acd567":
         raise ContractError("ownership source_commit must freeze 4.8.0 merge SHA")
     domains = data.get("domains")
@@ -108,11 +109,15 @@ def validate_ownership(data: dict[str, Any]) -> None:
         seen.add(domain_id)
         current = str(item.get("current_owner") or "")
         target = str(item.get("target_owner") or "")
-        if current not in {"python", "typescript"}:
-            raise ContractError(f"{domain_id} current_owner must be python or typescript")
+        production = item.get("production", True)
+        if current not in {"python", "typescript", "rust", "go"}:
+            raise ContractError(f"{domain_id} current_owner is invalid")
+        if production is True and current in {"rust", "go"} and current != target:
+            raise ContractError(f"{domain_id} cut-over owner must match its target_owner")
+        if production is True and current == "typescript":
+            raise ContractError(f"{domain_id} production current_owner cannot be typescript")
         if target not in TARGET_OWNERS:
             raise ContractError(f"{domain_id} target_owner is invalid")
-        production = item.get("production", True)
         if production is True and target not in PRODUCTION_OWNERS and target != "python":
             raise ContractError(f"{domain_id} production target_owner is invalid")
         if production is True and target == "python" and item.get("plane") != "reference":
@@ -149,6 +154,14 @@ def validate_ownership(data: dict[str, Any]) -> None:
     production_python = [item["id"] for item in domains if item.get("production", True) is True and item.get("target_owner") == "python"]
     if production_python:
         raise ContractError(f"5.0 production python owners are forbidden: {production_python}")
+    if authority == "rust_go":
+        still_python = [
+            item["id"]
+            for item in domains
+            if item.get("production", True) is True and item.get("current_owner") == "python"
+        ]
+        if still_python:
+            raise ContractError(f"rust_go authority still has python production domains: {still_python}")
 
 
 _SCALAR_FIELD_TYPES = {
@@ -351,6 +364,46 @@ def descriptor_set_to_contract(descriptor_set: Any) -> dict[str, Any]:
     }
 
 
+def _policy_recipient_read_rpc(document: dict[str, Any], service: dict[str, Any], rpc: dict[str, Any]) -> bool:
+    """Admit only this complete typed read; an arbitrary new control RPC stays denied.
+
+    The frozen baseline is unchanged. This additive read cannot carry an action,
+    mutation payload, streaming request or secret, and exposes only public age
+    recipients and counts. The implementation also checks durable policy ownership.
+    """
+    if (
+        service["name"] != "ControlPlane"
+        or rpc["name"] != "GetBackupPolicyRecipients"
+        or rpc["request"] != "BackupPolicyRecipientsRequest"
+        or rpc["response"] != "BackupPolicyRecipientsResponse"
+        or rpc.get("client_streaming", False)
+        or rpc.get("server_streaming", False)
+        or rpc.get("options_hex", "")
+    ):
+        return False
+    shapes = {
+        "BackupPolicyRecipientsRequest": set(),
+        "BackupRecipientGroup": {("recipients", 1, "string", "repeated")},
+        "BackupPolicyRecipientsResponse": {
+            ("authoritative", 1, "bool", "singular"),
+            ("recipients", 2, "string", "repeated"),
+            ("enabled_recipient_groups", 3, "BackupRecipientGroup", "repeated"),
+            ("policy_count", 4, "uint64", "singular"),
+            ("enabled_policy_count", 5, "uint64", "singular"),
+        },
+    }
+    messages = {item["name"]: item for item in document["messages"]}
+    for name, expected in shapes.items():
+        message = messages.get(name)
+        if message is None or message.get("oneofs") or message.get("options_hex", ""):
+            return False
+        fields = message["fields"]
+        actual = {(field["name"], int(field["number"]), field["type"], field.get("label", "singular")) for field in fields}
+        if actual != expected or len(fields) != len(expected) or any(field.get("options_hex", "") for field in fields):
+            return False
+    return True
+
+
 def validate_descriptor_invariants(descriptor: dict[str, Any]) -> None:
     fence_found = False
     unknown_found = False
@@ -395,7 +448,7 @@ def validate_descriptor_invariants(descriptor: dict[str, Any]) -> None:
         if document["package"] == "deepseek.control.v1":
             for service in document["services"]:
                 for rpc in service["rpcs"]:
-                    if rpc["name"] not in {"Health", "ShadowEvaluate"}:
+                    if rpc["name"] not in {"Health", "ShadowEvaluate"} and not _policy_recipient_read_rpc(document, service, rpc):
                         control_mutation_rpcs.append(rpc["name"])
     if not fence_found:
         raise ContractError("ActionFence is missing")

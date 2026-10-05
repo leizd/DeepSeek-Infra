@@ -15,6 +15,7 @@ import (
 type Server struct {
 	address string
 	done    chan error
+	stopRPC func()
 }
 
 func (runtime *Server) Addr() string       { return runtime.address }
@@ -71,6 +72,9 @@ monitor:
 	// past lease expiry. Cancellation never creates a replacement writer claim.
 	cancel()
 	cancelRenewal()
+	if runtime.stopRPC != nil {
+		runtime.stopRPC()
+	}
 	shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		terminal = errors.Join(terminal, err, server.Close())
