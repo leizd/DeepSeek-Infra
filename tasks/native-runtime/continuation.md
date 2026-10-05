@@ -8,7 +8,73 @@ This file is the session handoff. Historical plans, checkboxes, VERSION, and
 `release/native_runtime_5_0_evidence_v1.json` are not completion evidence.
 The capability matrix is [`migration-matrix.md`](migration-matrix.md).
 
-## Current verification checkpoint — 2026-10-05 push and CI repairs
+## Current verification checkpoint — 2026-10-05 coverage inventory assertion repair
+
+Both exact-head CI runs for `529e40deba31f71d004c63e03e24675e06da819e`
+([37299410760](https://github.com/leizd/DeepSeek-Infra/actions/runs/37299410760)
+and [37299941770](https://github.com/leizd/DeepSeek-Infra/actions/runs/37299941770))
+finish with **34/37 passing jobs**. Each Python version fails only
+`test_rust_coverage_omits_only_generated_proto_out_dir_sources`: its legacy source
+substring still demands `cargo test --locked --manifest-path` after inventory
+switched to the locked instrumented build. Each matrix has 5,639 other passing
+tests and 61 passing subtests; Python coverage remains **95.50–95.57%**. Rust,
+Rust coverage, Go race/coverage, Evidence Assembly and RC jobs pass, but the whole
+CI run is failed and is not a green qualification.
+
+The assertion now checks the actual `TEST_INVENTORY_COMMAND` tool and its
+`--locked`/`--no-report` flags, and requires all four lock-consuming command
+sites. Generated-Protobuf coverage exclusions and all thresholds stay intact.
+The failing assertion is reproduced before this fix; **56** related tests and
+whole-repository Ruff/mypy pass afterward. No runtime implementation changes
+are part of this repair. The next complete exact-head CI is still required.
+Full product readiness remains **NOT_READY**.
+
+## Current verification checkpoint — 2026-10-05 Rust test disk reduction
+
+The preceding repair commit `4560422dfdcc9bb31d1e9712174b23211ded6a11`
+passes all **37/37** jobs in exact-head CI
+[37284124549](https://github.com/leizd/DeepSeek-Infra/actions/runs/37284124549),
+including Go race/95% coverage, Rust/80% coverage and Evidence Assembly.
+That closes the earlier CI prerequisite failures; full product ownership remains
+**NOT_READY**.
+
+The disk reduction keeps workspace file/line debugging and dev/test runtime
+checks, removes dependency DWARF, and enumerates tests with locked, complete
+`cargo llvm-cov --no-report -- --list` instead of building a second plain Cargo
+test tree. The machine contract rejects an unlocked, partial or cleaning
+inventory. Forty-three related Python guards and whole-repository Ruff/mypy pass.
+
+With explicit user approval, only the old Windows validation and Docker Cargo
+cache directories were cleaned. Windows host space increased by **25.020 GiB**;
+the Docker volume reclaimed **16.374 GiB** of guest allocation. Docker VHDX host
+allocation need not shrink immediately. All 74 retained Windows files, including
+the qualified worker and dependency DLLs, and all 1,229 retained Docker files,
+including 1,213 coverage profiles, pass hash preservation checks. The retained
+Windows worker also passes the real Go-to-Rust TLS boundary again. Source,
+registry/SDK caches, validation logs and runtime stores were outside cleanup.
+Manifests: `artifacts/native-20261005-rust-cleanup-{windows,docker}.json`.
+
+The fresh all-features Rust run has **1,345 passed executions / 1 ignored** and
+**1,346 inventoried tests**. Inventory changes no compiled dependency files,
+preserves existing profiles and creates zero ordinary `target/debug` files.
+The representative `backup_mirror_routes` coverage executable drops from
+143,472,488 to 113,397,008 bytes (**20.96%**). The initial coverage data measures
+**80.78683883047346% (70,762/87,591 lines)** with the unchanged 80% gate. Its first
+producer fails on the 15-second Git-status timeout through a Windows Docker bind
+mount, after tests, LCOV and inventory finish; that incomplete producer is not
+release evidence. For the rerun, capture the existing schema-v2 source context
+on a genuinely clean host HEAD and pass it to the producer. Keep the failed log
+and report as `native-20261005-rust-disk-validation-first.{log,json}`.
+
+The downloaded Go profile matches the user's report exactly:
+**95.03319108582266% (8,017/8,436 statements)**. Its 419 missing statements are
+dominated by `internal/store`: **93.42%, 319 missing**, including `control.go`
+(84), `action_admission.go` (33) and `operator_mutation.go` (23). Go source is
+unchanged. Weighted package/file totals, lowest functions and actual uncovered
+blocks are in `artifacts/native-20261005-go-coverage-debt.{md,json}`; these are
+diagnostic priorities rather than a claim that all error paths are qualified.
+
+## Previous verification checkpoint — 2026-10-05 push and CI repairs
 
 The first repair checkpoint was pushed as
 `181dbdf6c52158cd9a674f789e953e12e1bc06ea`. Its exact-head CI run

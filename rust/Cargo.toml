@@ -80,15 +80,15 @@ rusqlite = { version = "=0.37.0", features = ["bundled"] }
 [profile.release]
 lto = true
 
-# A dev build was producing **283 MB** per binary, and this workspace has 47 `examples/*.rs` parity
-# probes plus a hashed copy of each in `deps`: `target/debug` had grown to 49 GB, and every recycled
-# build artifact on this host lands in `D:\$RECYCLE.BIN` rather than freeing space.
-#
-# `line-tables-only` keeps `file:line` in a backtrace (which is what a failing test needs) while
-# dropping the type and variable debuginfo that makes up most of the size. `incremental` is off
-# because every documented build in this repo already sets `CARGO_INCREMENTAL=0` — and the
-# incremental cache is the one artifact that can never be reused across a toolchain change, so it
-# only ever grows.
+# Keep workspace file/line information without full type/variable DWARF in the
+# many independently linked test and parity binaries. The test profile inherits
+# these settings. Runtime checks and optimization levels retain their defaults.
 [profile.dev]
 debug = "line-tables-only"
 incremental = false
+
+# Dependency debug information is repeated in every executable. Keep source
+# locations for this workspace, while avoiding dependency DWARF in dev/test
+# artifacts. Full dependency debugging can be enabled with a Cargo config override.
+[profile.dev.package."*"]
+debug = false

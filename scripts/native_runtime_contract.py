@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import re
@@ -828,8 +829,21 @@ def validate_toolchain_consumers() -> None:
     if "cargo clippy --locked" not in workflow or "cargo test --locked" not in workflow:
         raise ContractError("native Rust CI must consume Cargo.lock fail-closed")
     rust_coverage = (ROOT / "scripts" / "run_rust_coverage.py").read_text(encoding="utf-8")
-    if rust_coverage.count('"--locked"') < 3 or "cargo test --locked --manifest-path" not in rust_coverage:
-        raise ContractError("Rust coverage evidence must consume Cargo.lock fail-closed")
+    try:
+        assignments = [
+            node for node in ast.parse(rust_coverage).body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "TEST_INVENTORY_COMMAND" for target in node.targets)
+        ]
+        inventory = ast.literal_eval(assignments[0].value) if len(assignments) == 1 else None
+    except (SyntaxError, ValueError, TypeError) as error:
+        raise ContractError("Rust coverage test inventory must be a literal locked command") from error
+    expected_inventory = [
+        "cargo", "llvm-cov", "--locked", "--manifest-path", "rust/Cargo.toml",
+        "--workspace", "--all-features", "--no-report", "--", "--list", "--format", "terse",
+    ]
+    if rust_coverage.count('"--locked"') < 4 or inventory != expected_inventory:
+        raise ContractError("Rust coverage evidence must consume Cargo.lock and reuse the complete instrumented test inventory")
 
 
 def validate_command_codes(path: Path = COMMAND_CODES_PATH) -> dict[str, Any]:

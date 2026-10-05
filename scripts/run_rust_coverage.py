@@ -22,6 +22,11 @@ GENERATED_PROTO_COVERAGE_OMIT = (
     r"[/\\]target[/\\].*[/\\]build[/\\]deepseek-protocol-[^/\\]+[/\\]out[/\\]deepseek\.[^/\\]+\.v1\.rs$"
 )
 
+TEST_INVENTORY_COMMAND = [
+    "cargo", "llvm-cov", "--locked", "--manifest-path", "rust/Cargo.toml",
+    "--workspace", "--all-features", "--no-report", "--", "--list", "--format", "terse",
+]
+
 
 def _run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -71,25 +76,16 @@ def _workspace_crates() -> list[str]:
 
 
 def _test_count() -> int:
-    result = _run(
-        [
-            "cargo",
-            "test",
-            "--locked",
-            "--manifest-path",
-            "rust/Cargo.toml",
-            "--workspace",
-            "--all-features",
-            "--",
-            "--list",
-            "--format",
-            "terse",
-        ],
-        capture=True,
-    )
+    # Reuse the instrumented test binaries. Plain `cargo test --list` creates
+    # another uninstrumented workspace and compiles non-test examples as well.
+    # --no-report retains the existing coverage data; --list runs no tests.
+    result = _run(TEST_INVENTORY_COMMAND, capture=True)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "unable to enumerate Rust tests")
-    return sum(1 for line in result.stdout.splitlines() if line.rstrip().endswith(": test"))
+    count = sum(1 for line in result.stdout.splitlines() if line.rstrip().endswith(": test"))
+    if not count:
+        raise ValueError("Cargo test inventory contains no tests")
+    return count
 
 
 def _summary(raw: dict[str, Any]) -> dict[str, Any]:
@@ -199,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         "commands": {
             "measure": coverage_command,
             "lcov": lcov_command,
-            "testInventory": "cargo test --locked --manifest-path rust/Cargo.toml --workspace --all-features -- --list --format terse",
+            "testInventory": " ".join(TEST_INVENTORY_COMMAND),
         },
         "artifacts": {
             "summary": str(artifact_out.relative_to(ROOT)).replace("\\", "/"),
