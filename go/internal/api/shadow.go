@@ -66,6 +66,11 @@ func RegisterWithOptions(mux *http.ServeMux, control *store.Control, options Int
 	internal.HandleFunc("/internal/mutation/apply", func(writer http.ResponseWriter, request *http.Request) {
 		applyMutation(writer, request, control, options)
 	})
+	// The sealed frontend mirror's recipient source: the native edge seals a generation
+	// per enabled policy, and the policy records are this control plane's.
+	internal.HandleFunc("/internal/control/backup-policy-recipients", func(writer http.ResponseWriter, request *http.Request) {
+		backupPolicyRecipients(writer, request, control)
+	})
 	mux.Handle("/internal/", RequireInternalBearer(internal, options.Bearer))
 }
 

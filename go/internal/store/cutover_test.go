@@ -30,6 +30,42 @@ func TestCutoverLegalTransitions(t *testing.T) {
 	}
 }
 
+func TestCutoverReplayRefusesWriterLeaseExpiringBeforeCommit(t *testing.T) {
+	control := openAuthority(t)
+	defer control.Close()
+	shadow, err := control.GetCutover("policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := CutoverTransition{
+		Domain: "policy", To: CutoverDualEvaluate,
+		ExpectedRevision: shadow.Revision, ExpectedEpoch: shadow.Epoch,
+		FencingToken: shadow.FencingToken, TransferID: "replay-lease-boundary",
+	}
+	dual, err := control.TransitionCutover(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	control.now = func() int64 {
+		calls++
+		if calls == 1 {
+			return 1000
+		}
+		return 2000
+	}
+	if _, err := control.TransitionCutover(req); !errors.Is(err, ErrWriterFenceHeld) {
+		t.Fatalf("replay accepted after writer lease expired: %v", err)
+	}
+	control.now = func() int64 { return 1000 }
+	if current, err := control.GetCutover("policy"); err != nil || current != dual {
+		t.Fatalf("expired replay changed cutover: %+v %v", current, err)
+	}
+	if replayed, err := control.TransitionCutover(req); err != nil || replayed != dual {
+		t.Fatalf("valid replay no longer works: %+v %v", replayed, err)
+	}
+}
+
 func TestCutoverIllegalTransitions(t *testing.T) {
 	illegal := []struct {
 		from, to CutoverState
@@ -130,7 +166,7 @@ func TestPolicyDualEvaluateIsFencedAndReversibleWithoutProductionMutation(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	dual, err := store.TransitionCutover(CutoverTransition{
+	dual, err := signedTransition(t, store, CutoverTransition{
 		Domain:           "policy",
 		To:               CutoverDualEvaluate,
 		ExpectedRevision: current.Revision,
@@ -153,7 +189,7 @@ func TestPolicyDualEvaluateIsFencedAndReversibleWithoutProductionMutation(t *tes
 		t.Fatalf("production mutation during dual-evaluate: %v", err)
 	}
 
-	replay, err := store.TransitionCutover(CutoverTransition{
+	replay, err := signedTransition(t, store, CutoverTransition{
 		Domain:           "policy",
 		To:               CutoverDualEvaluate,
 		ExpectedRevision: current.Revision,
@@ -165,7 +201,7 @@ func TestPolicyDualEvaluateIsFencedAndReversibleWithoutProductionMutation(t *tes
 		t.Fatalf("idempotent replay: %+v %v", replay, err)
 	}
 
-	rolled, err := store.TransitionCutover(CutoverTransition{
+	rolled, err := signedTransition(t, store, CutoverTransition{
 		Domain:           "policy",
 		To:               CutoverShadow,
 		ExpectedRevision: dual.Revision,
@@ -190,7 +226,7 @@ func TestGoAuthoritativeCutoverRemainsUnauthorized(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, store, CutoverTransition{
 		Domain:           "policy",
 		To:               CutoverGoAuthoritative,
 		ExpectedRevision: current.Revision,
@@ -200,7 +236,7 @@ func TestGoAuthoritativeCutoverRemainsUnauthorized(t *testing.T) {
 	}); err != ErrIllegalCutover {
 		t.Fatalf("skip to go_authoritative: %v", err)
 	}
-	dual, err := store.TransitionCutover(CutoverTransition{
+	dual, err := signedTransition(t, store, CutoverTransition{
 		Domain:           "policy",
 		To:               CutoverDualEvaluate,
 		ExpectedRevision: current.Revision,
@@ -211,7 +247,7 @@ func TestGoAuthoritativeCutoverRemainsUnauthorized(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, store, CutoverTransition{
 		Domain:           "policy",
 		To:               CutoverGoAuthoritative,
 		ExpectedRevision: dual.Revision,
@@ -237,48 +273,48 @@ func TestCutoverRejectsStaleFenceEpochRevisionAndReplayConflict(t *testing.T) {
 	if _, err := store.GetCutover("missing"); err != ErrUnknownDomain {
 		t.Fatalf("unknown get: %v", err)
 	}
-	if _, err := store.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, store, CutoverTransition{
 		Domain: "missing", To: CutoverDualEvaluate, ExpectedRevision: 1, ExpectedEpoch: 1, FencingToken: 1, TransferID: "x",
 	}); err != ErrUnknownDomain {
 		t.Fatalf("unknown domain: %v", err)
 	}
-	if _, err := store.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, store, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: 1, ExpectedEpoch: 1, FencingToken: 1, TransferID: "",
 	}); err != ErrEmptyRecordID {
 		t.Fatalf("empty transfer: %v", err)
 	}
-	if _, err := store.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, store, CutoverTransition{
 		Domain: "policy", To: "bogus", ExpectedRevision: current.Revision, ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken, TransferID: "bad-state",
 	}); err != ErrIllegalCutover {
 		t.Fatalf("bogus state: %v", err)
 	}
-	if _, err := store.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, store, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: current.Revision + 1, ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken, TransferID: "stale-rev",
 	}); err != ErrRevisionConflict {
 		t.Fatalf("revision: %v", err)
 	}
-	if _, err := store.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, store, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: current.Revision, ExpectedEpoch: current.Epoch + 1, FencingToken: current.FencingToken, TransferID: "stale-epoch",
 	}); err != internalprotocol.ErrStaleEpoch {
 		t.Fatalf("epoch: %v", err)
 	}
-	if _, err := store.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, store, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: current.Revision, ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken + 1, TransferID: "stale-fence",
 	}); err != ErrStaleCutoverFence {
 		t.Fatalf("fence: %v", err)
 	}
-	if _, err := store.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, store, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: current.Revision, ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken, TransferID: CutoverGenesisTransferID,
 	}); err != ErrCutoverReplayConflict {
 		t.Fatalf("genesis replay conflict: %v", err)
 	}
 
-	if _, err := store.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, store, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: current.Revision, ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken, TransferID: "policy-dual-conflict",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, store, CutoverTransition{
 		Domain: "policy", To: CutoverShadow, ExpectedRevision: current.Revision, ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken, TransferID: "policy-dual-conflict",
 	}); err != ErrCutoverReplayConflict {
 		t.Fatalf("transfer reuse: %v", err)
@@ -302,7 +338,7 @@ func TestStaleWriterCannotTransitionCutover(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer second.Close()
-	if _, err := first.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, first, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: current.Revision, ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken, TransferID: "stale-writer",
 	}); err != ErrWriterFenceHeld {
 		t.Fatalf("stale writer: %v", err)
@@ -327,7 +363,7 @@ func TestCutoverEventFailureRollsBackDomainState(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, store, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: current.Revision, ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken, TransferID: "policy-dual-fail",
 	}); err == nil {
 		t.Fatal("event failure must abort cutover")
@@ -358,6 +394,12 @@ func TestCutoverJournalRejectsMutationAndControlMigratesFromV1(t *testing.T) {
 	}
 	db := sql.OpenDB(connector)
 	for _, statement := range []string{
+		"DROP TABLE IF EXISTS control_operator_mutations",
+		"DROP TABLE IF EXISTS backup_target_health",
+		"DROP TABLE IF EXISTS control_target_health_imports",
+		"DROP TABLE IF EXISTS control_inventory_handbacks",
+		"DROP TABLE IF EXISTS control_inventory_imports",
+		"DROP TABLE IF EXISTS control_promotion_artifacts",
 		"DROP TABLE IF EXISTS control_cutover_authorizations",
 		"DROP TABLE IF EXISTS control_authority_checkpoints",
 		"DROP TABLE IF EXISTS control_authority_head",
@@ -414,7 +456,7 @@ func TestCutoverHelpersAndCorruptRowsFailClosed(t *testing.T) {
 
 	store := openShadow(t)
 	defer store.Close()
-	if _, err := store.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, store, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: 1, ExpectedEpoch: 1, FencingToken: 1, TransferID: "after-rollback",
 	}); err != nil {
 		t.Fatal(err)
@@ -422,7 +464,7 @@ func TestCutoverHelpersAndCorruptRowsFailClosed(t *testing.T) {
 	if err := store.Rollback(0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, store, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: 1, ExpectedEpoch: 1, FencingToken: 1, TransferID: "inactive",
 	}); err != ErrSchemaInactive {
 		t.Fatalf("inactive transition: %v", err)
@@ -465,7 +507,7 @@ func TestCutoverHelpersAndCorruptRowsFailClosed(t *testing.T) {
 	if _, err := overflow.db.Exec("UPDATE control_cutover SET epoch = ? WHERE domain = 'policy'", int64(math.MaxInt64)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := overflow.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, overflow, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: 1, ExpectedEpoch: math.MaxInt64, FencingToken: 1, TransferID: "overflow-epoch",
 	}); err != ErrStaleCutoverFence {
 		t.Fatalf("epoch overflow: %v", err)
@@ -473,7 +515,7 @@ func TestCutoverHelpersAndCorruptRowsFailClosed(t *testing.T) {
 	if _, err := overflow.db.Exec("UPDATE control_cutover SET epoch = 1, fencing_token = ? WHERE domain = 'target'", int64(math.MaxInt64)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := overflow.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, overflow, CutoverTransition{
 		Domain: "target", To: CutoverDualEvaluate, ExpectedRevision: 1, ExpectedEpoch: 1, FencingToken: math.MaxInt64, TransferID: "overflow-fence",
 	}); err != ErrStaleCutoverFence {
 		t.Fatalf("fence overflow: %v", err)
@@ -487,7 +529,7 @@ func TestCutoverHelpersAndCorruptRowsFailClosed(t *testing.T) {
 	if _, err := broken.GetCutover("policy"); !errors.Is(err, ErrForeignRuntimeStore) {
 		t.Fatalf("foreign get: %v", err)
 	}
-	if _, err := broken.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, broken, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: 1, ExpectedEpoch: 1, FencingToken: 1, TransferID: "foreign-schema",
 	}); !errors.Is(err, ErrForeignRuntimeStore) {
 		t.Fatalf("foreign transition: %v", err)
@@ -498,7 +540,7 @@ func TestCutoverHelpersAndCorruptRowsFailClosed(t *testing.T) {
 	if _, err := events.db.Exec("DROP TABLE control_cutover_events"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := events.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, events, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: 1, ExpectedEpoch: 1, FencingToken: 1, TransferID: "missing-events",
 	}); err == nil {
 		t.Fatal("missing cutover events must fail")
@@ -608,7 +650,7 @@ func TestCutoverRemainingFailClosedBranches(t *testing.T) {
 	if _, err := closedDB.GetCutover("policy"); err == nil {
 		t.Fatal("closed db get")
 	}
-	if _, err := closedDB.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, closedDB, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: 1, ExpectedEpoch: 1, FencingToken: 1, TransferID: "closed-db",
 	}); err == nil {
 		t.Fatal("closed db transition")
@@ -625,7 +667,7 @@ func TestCutoverRemainingFailClosedBranches(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ignore.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, ignore, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: 1, ExpectedEpoch: 1, FencingToken: 1, TransferID: "ignored-update",
 	}); err != ErrRevisionConflict {
 		t.Fatalf("ignored update: %v", err)
@@ -642,7 +684,7 @@ func TestCutoverRemainingFailClosedBranches(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := abortUpdate.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, abortUpdate, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: 1, ExpectedEpoch: 1, FencingToken: 1, TransferID: "aborted-update",
 	}); err == nil {
 		t.Fatal("aborted update must fail")
@@ -774,7 +816,7 @@ func TestCutoverRemainingFailClosedBranches(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := narrow.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, narrow, CutoverTransition{
 		Domain: "policy", To: CutoverDualEvaluate, ExpectedRevision: 1, ExpectedEpoch: 1, FencingToken: 1, TransferID: "narrow-events",
 	}); err == nil {
 		t.Fatal("narrow cutover events must fail closed")
@@ -900,30 +942,30 @@ func TestCutoverInputValidation(t *testing.T) {
 	defer control.Close()
 
 	// 1. Unknown domain
-	if _, err := control.TransitionCutover(CutoverTransition{Domain: "unknown", TransferID: "t1", To: CutoverDualEvaluate}); !errors.Is(err, ErrUnknownDomain) {
+	if _, err := signedTransition(t, control, CutoverTransition{Domain: "unknown", TransferID: "t1", To: CutoverDualEvaluate}); !errors.Is(err, ErrUnknownDomain) {
 		t.Fatalf("expected ErrUnknownDomain, got: %v", err)
 	}
 
 	// 2. Empty transfer ID
-	if _, err := control.TransitionCutover(CutoverTransition{Domain: "policy", TransferID: "", To: CutoverDualEvaluate}); !errors.Is(err, ErrEmptyRecordID) {
+	if _, err := signedTransition(t, control, CutoverTransition{Domain: "policy", TransferID: "", To: CutoverDualEvaluate}); !errors.Is(err, ErrEmptyRecordID) {
 		t.Fatalf("expected ErrEmptyRecordID, got: %v", err)
 	}
 
 	// 3. Illegal cutover target state
-	if _, err := control.TransitionCutover(CutoverTransition{Domain: "policy", TransferID: "t1", To: "INVALID_STATE"}); !errors.Is(err, ErrIllegalCutover) {
+	if _, err := signedTransition(t, control, CutoverTransition{Domain: "policy", TransferID: "t1", To: "INVALID_STATE"}); !errors.Is(err, ErrIllegalCutover) {
 		t.Fatalf("expected ErrIllegalCutover, got: %v", err)
 	}
 
 	// 4. Schema inactive
 	control.schema = 0
-	if _, err := control.TransitionCutover(CutoverTransition{Domain: "policy", TransferID: "t1", To: CutoverDualEvaluate}); !errors.Is(err, ErrSchemaInactive) {
+	if _, err := signedTransition(t, control, CutoverTransition{Domain: "policy", TransferID: "t1", To: CutoverDualEvaluate}); !errors.Is(err, ErrSchemaInactive) {
 		t.Fatalf("expected ErrSchemaInactive, got: %v", err)
 	}
 	control.schema = CurrentSchema
 
 	// 5. Closed control
 	_ = control.Close()
-	if _, err := control.TransitionCutover(CutoverTransition{Domain: "policy", TransferID: "t1", To: CutoverDualEvaluate}); !errors.Is(err, ErrWriterFenceHeld) {
+	if _, err := signedTransition(t, control, CutoverTransition{Domain: "policy", TransferID: "t1", To: CutoverDualEvaluate}); !errors.Is(err, ErrWriterFenceHeld) {
 		t.Fatalf("expected ErrWriterFenceHeld, got: %v", err)
 	}
 }

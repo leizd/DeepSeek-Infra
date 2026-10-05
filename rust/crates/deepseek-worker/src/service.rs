@@ -724,12 +724,7 @@ impl WorkerRpc for WorkerRpcService {
                     operation_id: input.operation_id,
                     effect_id: format!("{}:{}", fence.action_id, fence.execution_epoch),
                     etag: observation.etag.clone(),
-                    provider_metadata: serde_json::json!({
-                        "etag": observation.etag,
-                        "size": observation.length,
-                        "version": observation.version,
-                    })
-                    .to_string(),
+                    provider_metadata: crate::storage_put_metadata(&observation),
                     error: None,
                 })),
                 Err(crate::WorkerStorageError::OperationMismatch) => {
@@ -751,6 +746,39 @@ impl WorkerRpc for WorkerRpcService {
                     )))
                 }
                 Err(crate::WorkerStorageError::ReplayRejected) => {
+                    // A completed, identical RPC returns its committed receipt.
+                    // Reconciliation validates the operation and provider binding
+                    // before returning a terminal record, without redispatching.
+                    if let Ok(record) = worker
+                        .reconcile_storage_mutation_for_operation(
+                            &transport,
+                            fence,
+                            Some(&input.operation_id),
+                        )
+                        .await
+                    {
+                        if record.state == crate::StorageEffectState::Confirmed {
+                            if let (Some(etag), Some(metadata)) =
+                                (record.etag, record.provider_metadata)
+                            {
+                                if !etag.is_empty() {
+                                    return Ok(Response::new(StorageMutationResponse {
+                                        status: StorageMutationStatus::Confirmed as i32,
+                                        state: EffectState::Applied as i32,
+                                        fence: Some(fence.clone()),
+                                        operation_id: input.operation_id,
+                                        effect_id: format!(
+                                            "{}:{}",
+                                            fence.action_id, fence.execution_epoch
+                                        ),
+                                        etag,
+                                        provider_metadata: metadata,
+                                        error: None,
+                                    }));
+                                }
+                            }
+                        }
+                    }
                     Ok(Response::new(storage_rejected(
                         Some(fence.clone()),
                         input.operation_id,

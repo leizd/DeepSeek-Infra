@@ -21,22 +21,34 @@ pub mod a2a_control;
 pub mod a2a_hub;
 pub mod a2a_runner;
 pub mod a2a_stream;
+mod artifact_preview_routes;
 pub mod assembly_env;
 mod auth;
+mod automation_definition_routes;
+mod automation_run_routes;
+mod automation_template_routes;
+mod backup_drill_routes;
+pub mod backup_mirror_routes;
+mod backup_replication_routes;
+mod backup_retirement_routes;
+mod backup_run_routes;
 pub mod browser_engine_client;
 pub mod chat_execution;
 pub mod chat_ndjson;
 pub mod chat_stream;
 pub mod chat_tool_loop;
 mod control_proxy;
+mod conversation_search;
 pub mod data_routes;
 pub mod download_route;
+mod edge_status_routes;
 pub mod fetch_provider;
 pub mod file_reader_route;
 pub mod file_source_route;
 pub mod file_text_route;
 pub mod local_clock;
 pub mod mcp_hub;
+mod media_segment_routes;
 pub mod native_chat;
 pub mod observability;
 pub mod openai_facade;
@@ -45,8 +57,12 @@ pub mod project_files_route;
 pub mod project_routes;
 pub mod request_assembly;
 pub mod request_preparation;
+mod resilience_federation_routes;
+mod rust_status_routes;
+mod scheduler_routes;
 pub mod search_provider;
 mod skills_routes;
+mod workspace_home_routes;
 /// The Skill actions the oracle serves and this edge does not, kept reachable so the route test can
 /// assert that the action it pins as "refused by name" is still on this list — otherwise
 /// implementing that action would silently change what the assertion means.
@@ -56,13 +72,21 @@ pub mod title_route;
 pub mod tool_rounds;
 
 pub fn gateway_version() -> &'static str {
-    deepseek_core::version_info().version
+    // Root VERSION is the release the public routes already advertised.
+    include_str!("../../../../VERSION").trim()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HealthzResponse {
     pub ok: bool,
     pub service: String,
+    /// Preserved public liveness fields. `status` is the probe contract the
+    /// React shell and deployment checks already read.
+    pub status: String,
+    pub version: String,
+    pub runtime: String,
+    pub provider: String,
+    pub auth_enabled: bool,
 }
 
 pub fn create_app() -> Router {
@@ -72,6 +96,7 @@ pub fn create_app() -> Router {
 fn create_routes() -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
         .route("/metrics", get(observability::metrics))
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(chat_completions))
@@ -89,6 +114,10 @@ fn create_routes() -> Router {
         .route(
             "/api/title",
             post(title_route::api_title).with_state(title_route::TitleRouteState::from_env()),
+        )
+        .route(
+            "/api/conversations/search",
+            post(conversation_search::api_conversation_search),
         )
         .route(
             "/api/download",
@@ -147,12 +176,28 @@ fn create_routes() -> Router {
             "/api/gateway/status",
             get(policy_routes::api_gateway_status),
         )
+        .route("/api/config", get(api_config))
         // Data-plane routes the frontend calls, served natively ahead of the Go
         // `/api/*` catch-all. Registered here rather than in the proxy because
         // the store's authoritative writer is Rust, not Go.
         .merge(data_routes::router())
         .merge(project_routes::router())
+        .merge(workspace_home_routes::router())
         .merge(skills_routes::router())
+        .merge(backup_mirror_routes::router())
+        .merge(backup_retirement_routes::router())
+        .merge(backup_run_routes::router())
+        .merge(backup_replication_routes::router())
+        .merge(backup_drill_routes::router())
+        .merge(automation_template_routes::router())
+        .merge(automation_run_routes::router())
+        .merge(automation_definition_routes::router())
+        .merge(media_segment_routes::router())
+        .merge(resilience_federation_routes::router())
+        .merge(artifact_preview_routes::router())
+        .merge(scheduler_routes::router())
+        .merge(edge_status_routes::router())
+        .merge(rust_status_routes::router())
         .route("/api/*path", any(control_proxy::proxy_api_to_go))
         // Private control handlers must not fall through to either proxy or SPA.
         .route("/internal", any(|| async { StatusCode::NOT_FOUND }))
@@ -540,11 +585,61 @@ async fn rag_document_prepare(body: Bytes) -> Json<serde_json::Value> {
     ))
 }
 
-async fn healthz() -> Json<HealthzResponse> {
-    Json(HealthzResponse {
+fn liveness() -> HealthzResponse {
+    HealthzResponse {
         ok: true,
         service: "deepseek-gateway-rs".to_string(),
-    })
+        status: "ok".to_string(),
+        version: gateway_version().to_string(),
+        runtime: "local".to_string(),
+        provider: "deepseek".to_string(),
+        auth_enabled: auth::production_auth_enabled(),
+    }
+}
+
+async fn healthz() -> Json<HealthzResponse> {
+    Json(liveness())
+}
+
+async fn readyz() -> Json<serde_json::Value> {
+    let configured = !std::env::var("DEEPSEEK_API_KEY")
+        .unwrap_or_default()
+        .trim()
+        .is_empty();
+    Json(json!({
+        "status": "ready",
+        "version": gateway_version(),
+        "checks": {
+            "tracing": "disabled",
+            "model_provider": if configured { "configured" } else { "unconfigured" },
+        }
+    }))
+}
+
+/// Public `GET /api/config`. The fields are the ones the React shell reads
+/// (`chatApi.ts`) and the ones the previous server put on this route.
+async fn api_config() -> Json<serde_json::Value> {
+    let default_model = std::env::var("DEEPSEEK_DEFAULT_MODEL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "deepseek-v4-pro".to_string());
+    Json(json!({
+        "version": gateway_version(),
+        "hasServerKey": !std::env::var("DEEPSEEK_API_KEY").unwrap_or_default().trim().is_empty(),
+        "hasSearch": !std::env::var("TAVILY_API_KEY").unwrap_or_default().trim().is_empty(),
+        "defaultModel": default_model,
+        "models": ["deepseek-v4-pro", "deepseek-v4-flash"],
+        "modelRoutes": {"fast": "deepseek-v4-flash", "expert": "deepseek-v4-pro"},
+        "searchModes": ["off", "auto", "on"],
+        "uploadLimits": {
+            "fileMaxBytes": deepseek_policy::file_upload::MAX_UPLOAD_FILE_BYTES,
+            "requestMaxBytes": deepseek_policy::file_upload::MAX_UPLOAD_BYTES,
+            "maxFiles": 20,
+        },
+        "mcp": {"enabled": true, "protocolVersion": "2025-06-18", "endpoint": "/mcp"},
+        "a2a": {"enabled": true, "protocolVersion": "0.3.0", "endpoint": "/a2a"},
+    }))
 }
 
 async fn models() -> (StatusCode, Json<serde_json::Value>) {
@@ -594,11 +689,15 @@ const MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE: &str = "NATIVE_MEMORY_VECTOR_INDEX_N
 ///    4.9.4. A store that is **not** here stays refused whatever the mode says — setting the mode alone
 ///    must not be able to enable a store nobody declared — which is why the list is the second
 ///    condition rather than a detail of the first. A test pins it as a subset of the contract's.
-pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 4] = [
+pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 5] = [
     "memory_store",
     "reminders_store",
     "project_metadata_store",
     "skills_store",
+    // The sealed frontend replica mirror under `.backup-mirror/`: immutable generations
+    // of age ciphertext plus the `HEAD.json` pointer. Same rule as the others — declared
+    // python -> rust at 4.9.4, and only `python_disabled` lets this process write it.
+    "frontend_mirror_store",
 ];
 
 /// Whether this process may write the store `domain` names.
@@ -1226,7 +1325,7 @@ mod tests {
 
     #[test]
     fn gateway_version_matches_core() {
-        assert_eq!(gateway_version(), deepseek_core::version_info().version);
+        assert_eq!(gateway_version(), "4.8.0");
     }
 
     #[tokio::test]
@@ -1357,7 +1456,7 @@ mod tests {
             .expect("domains[] is an array")
             .iter()
             .filter(|item| {
-                item["current_owner"] == json!("python")
+                (item["current_owner"] == json!("python") || item["current_owner"] == json!("rust"))
                     && item["target_owner"] == json!("rust")
                     && item["durable_store"] == json!("rust_data")
             })

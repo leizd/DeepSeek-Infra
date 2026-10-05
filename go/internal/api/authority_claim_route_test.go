@@ -15,6 +15,8 @@ func unclaimedAuthorityStore(t *testing.T, enabled bool) *store.Control {
 	t.Helper()
 	control, err := store.OpenControl(store.OpenOptions{
 		Path: t.TempDir(), Owner: "authority-route-owner", Now: func() int64 { return 1000 }, AuthorizeCutover: enabled,
+		PromotionSignerPublicKey: promotionRoutePublic,
+		FleetID:                  mutationFleetID, Environment: mutationEnvironment,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -74,12 +76,20 @@ func TestAuthorityClaimRouteEnablesSignedApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var imported *store.PythonInventoryImportResult
 	for _, next := range []store.CutoverState{store.CutoverDualEvaluate, store.CutoverGoAuthoritative} {
-		transition, err := json.Marshal(store.CutoverTransition{
+		transferID := "http-policy-" + string(next)
+		if next == store.CutoverGoAuthoritative {
+			result := attestedEmptyPolicyImport(t, control)
+			imported = &result
+			transferID = result.TransferID
+		}
+		req := signedPromotionRoute(t, store.CutoverTransition{
 			Domain: "policy", To: next, ExpectedRevision: current.Revision,
 			ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken,
-			TransferID: "http-policy-" + string(next), Authority: authority,
-		})
+			TransferID: transferID, Authority: authority,
+		}, current, 1000, imported)
+		transition, err := json.Marshal(req)
 		if err != nil {
 			t.Fatal(err)
 		}

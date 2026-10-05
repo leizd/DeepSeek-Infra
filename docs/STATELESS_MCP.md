@@ -7,7 +7,7 @@
 
 适用版本：v4.8.0。
 
-`stateless-mcp/` 是可横向扩展的独立 MCP 服务。它使用官方 TypeScript SDK 的 Streamable HTTP 入口；每个 HTTP 请求都创建一个新的 `McpServer`，进程内不保存客户端会话。现有 Python `POST /mcp` 继续作为兼容端点，迁移期间不会被替换。
+`stateless-mcp/` 是可横向扩展的独立 MCP 服务。生产进程是 Rust 二进制 `deepseek-stateless-mcp`：每个 HTTP 请求都不在进程内保存客户端会话，任务状态放在 Redis。`stateless-mcp/src` 的 TypeScript 实现保留为行为对照和故障演练客户端，不进入生产镜像。网关自己的 `POST /mcp` 仍是另一套工具面。
 
 ## 架构
 
@@ -76,7 +76,7 @@ docker compose -f docker-compose.stateless-mcp.yml up -d --build
 | `MCP_TASK_LEASE_MS` / `MCP_TASK_POLL_MS` | `15000` / `250` | owner 租约和待处理任务轮询间隔。 |
 | `MCP_TASK_TIMEOUT_SECONDS` | `600` | 单个 pytest 任务的最长运行时间。 |
 | `MCP_MAX_OUTPUT_BYTES` | `262144` | 每个任务可保留的输出上限。 |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | 未设置 | 设置后启用 OTLP/HTTP trace 和 metrics 导出。 |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Compose 指向 Collector | Collector 仍监听 `:9464`。Rust 进程目前不导出 OTLP。 |
 
 ## 故障恢复演练
 

@@ -1,5 +1,10 @@
 services:
   deepseek-infra:
+    # The legacy delegation checks run against an isolated offline oracle.
+    build:
+      context: .
+      dockerfile: tests/fixtures/Dockerfile.python-oracle
+    image: deepseek-infra-offline-oracle:4.8.0
     environment:
       AUTH_DISABLED: "1"
       MCP_ENABLED: "1"

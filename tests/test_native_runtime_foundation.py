@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
+
+import pytest
+import yaml
 
 from scripts.native_runtime_contract import check_all
 
@@ -26,7 +30,7 @@ def test_go_shadow_process_cannot_mutate() -> None:
     fence = _read("go/internal/protocol/fence.go")
     assert "ErrMutationDenied" in fence
     assert "return protocol.DenyMutation()" in shadow
-    assert 'ModeShadow        = "shadow"' in config
+    assert re.search(r'ModeShadow\s*=\s*"shadow"', config)
     assert "database/sql" not in shadow
     assert "sqlite" not in shadow.lower()
     assert "C.CString" not in _read("go/cmd/deepseekd/main.go")
@@ -46,8 +50,8 @@ def test_ci_has_native_go_and_protocol_gates() -> None:
     workflow = _read(".github/workflows/ci.yml")
     assert "native-go:" in workflow
     assert "native-protocol:" in workflow
-    assert workflow.count("https://go.dev/dl/go1.27.1.linux-amd64.tar.gz") == 2
-    assert workflow.count("63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445") == 2
+    assert workflow.count("https://go.dev/dl/go1.27.1.linux-amd64.tar.gz") == 3
+    assert workflow.count("63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445") == 3
     assert workflow.count("GOTOOLCHAIN: local") >= 2
     assert "python scripts/native_codegen.py --check" in workflow
     assert "--require-hashes" in workflow
@@ -66,8 +70,23 @@ def test_ci_has_native_go_and_protocol_gates() -> None:
     assert (ROOT / "go/pkg/protocol/canonical.go").is_file()
     assert (ROOT / "scripts/native_codegen.py").is_file()
     assert (ROOT / "scripts/check_native_contract_parity.py").is_file()
-    assert "go test -race ./..." in workflow
+    assert re.search(r"go test -race(?: -timeout=30m)? \./\.\.\.", workflow)
     assert "scripts/check_go_coverage.py" in workflow
+
+
+@pytest.mark.parametrize("job_name", ["rust", "rust-coverage"])
+def test_rust_gates_build_the_frontend_before_running_production_contracts(job_name: str) -> None:
+    workflow = yaml.safe_load(_read(".github/workflows/ci.yml"))
+    steps = workflow["jobs"][job_name]["steps"]
+    node_index = next(index for index, step in enumerate(steps) if step.get("uses") == "actions/setup-node@v4")
+    assert steps[node_index]["with"]["node-version"] == "24"
+    install_index = next(index for index, step in enumerate(steps) if step.get("run") == "npm ci --prefix frontend")
+    build_index = next(index for index, step in enumerate(steps) if step.get("run") == "npm run build --prefix frontend")
+    gate_index = next(
+        index for index, step in enumerate(steps)
+        if "cargo test " in step.get("run", "") or "scripts/run_rust_coverage.py" in step.get("run", "")
+    )
+    assert node_index < install_index < build_index < gate_index
 
 
 def test_ci_runs_real_go_to_rust_worker_boundary() -> None:

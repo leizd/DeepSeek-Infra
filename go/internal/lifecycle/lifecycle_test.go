@@ -150,6 +150,56 @@ func TestListenRejectsBadAddress(t *testing.T) {
 	}
 }
 
+func TestListenAuthoritativeReportsGoMutationAuthority(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		time.Sleep(200 * time.Millisecond)
+	}()
+	addr, err := Listen(ctx, config.Config{
+		Mode:               config.ModeAuthoritative,
+		Listen:             "127.0.0.1:0",
+		Owner:              "owner-a",
+		ProductionStoreDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + addr + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var status Status
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Mode != config.ModeAuthoritative || status.MutationAuthority != config.MutationAuthorityGo || !status.ProductionMutation || status.ShadowStore {
+		t.Fatalf("status %+v", status)
+	}
+	controlResp, err := client.Get("http://" + addr + "/api/control/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controlResp.Body.Close()
+	var control Status
+	if err := json.NewDecoder(controlResp.Body).Decode(&control); err != nil {
+		t.Fatal(err)
+	}
+	if control.Mode != status.Mode || control.MutationAuthority != status.MutationAuthority || control.ProductionMutation != status.ProductionMutation || control.ShadowStore != status.ShadowStore {
+		t.Fatalf("control status %+v health %+v", control, status)
+	}
+}
+
+func TestListenRejectsAuthoritativeWithoutStore(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := Listen(ctx, config.Config{Mode: config.ModeAuthoritative, Listen: "127.0.0.1:0", Owner: "owner-a"}); err == nil {
+		t.Fatal("authoritative mode without a production store must fail")
+	}
+}
+
 func TestListenRejectsPythonShadowStore(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

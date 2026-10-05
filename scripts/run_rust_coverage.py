@@ -18,19 +18,6 @@ if str(ROOT) not in sys.path:
 from deepseek_infra.core.config import APP_VERSION  # noqa: E402
 from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
 
-WORKSPACE_CRATES = (
-    "deepseek-core",
-    "deepseek-gateway",
-    "deepseek-mcp",
-    "deepseek-policy",
-    "deepseek-rag",
-    "deepseek-protocol",
-    "deepseek-worker",
-    "deepseek-storage",
-    "deepseek-transfer",
-    "deepseek-federation",
-    "deepseek-proof",
-)
 GENERATED_PROTO_COVERAGE_OMIT = (
     r"[/\\]target[/\\].*[/\\]build[/\\]deepseek-protocol-[^/\\]+[/\\]out[/\\]deepseek\.[^/\\]+\.v1\.rs$"
 )
@@ -54,6 +41,33 @@ def _git_commit() -> str:
 def _tool_version() -> str:
     result = _run(["cargo", "llvm-cov", "--version"], capture=True)
     return (result.stdout or result.stderr).strip() if result.returncode == 0 else "unknown"
+
+
+def _workspace_crates() -> list[str]:
+    result = _run(
+        [
+            "cargo", "metadata", "--locked", "--offline", "--no-deps",
+            "--format-version", "1", "--manifest-path", "rust/Cargo.toml",
+        ],
+        capture=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "unable to enumerate Rust workspace crates")
+    metadata = json.loads(result.stdout)
+    members = metadata.get("workspace_members")
+    packages = metadata.get("packages")
+    if not isinstance(members, list) or not members or not all(isinstance(member, str) for member in members):
+        raise ValueError("cargo metadata is missing workspace members")
+    if not isinstance(packages, list):
+        raise ValueError("cargo metadata is missing workspace packages")
+    names = {
+        package["id"]: package["name"]
+        for package in packages
+        if isinstance(package, dict) and isinstance(package.get("id"), str) and isinstance(package.get("name"), str)
+    }
+    if len(set(members)) != len(members) or any(member not in names for member in members):
+        raise ValueError("cargo metadata does not describe every workspace member")
+    return sorted(names[member] for member in members)
 
 
 def _test_count() -> int:
@@ -120,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
     raw_out = artifact_out.with_name(artifact_out.stem + "-raw.json")
     for path in (artifact_out, lcov_out, evidence_out, raw_out):
         path.parent.mkdir(parents=True, exist_ok=True)
+    workspace_crates = _workspace_crates()
 
     coverage_command = [
         "cargo",
@@ -171,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
         "generatedAt": generated_at,
         "status": "PASS" if passed else "FAIL",
         "threshold": {"metric": "line", "minimumPercent": args.threshold},
-        "workspaceCrates": list(WORKSPACE_CRATES),
+        "workspaceCrates": workspace_crates,
         "coverage": {
             "lines": line_metric,
             "functions": _coverage_metric(totals, "functions"),

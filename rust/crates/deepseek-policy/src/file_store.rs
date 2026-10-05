@@ -14,8 +14,9 @@
 //!
 //! `project_id` reaches `project_file_cache_dir` only when it is **truthy**, matching
 //! `if project_id:`, and that path validates `[a-zA-Z0-9_-]{4,64}` first. When the project is
-//! empty the oracle memoises on `(file_id, mtime_ns)`; so does this, and the eviction order
-//! of that memo is not observable — a changed file changes the key.
+//! empty the oracle memoises on `(file_id, mtime_ns)`. Native reads verify the content
+//! before reusing parsed JSON: equal-length writes can retain the same timestamp, and
+//! cached data must not hide a rewrite or corruption.
 //!
 //! # What is not here, on purpose
 //!
@@ -32,9 +33,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::UNIX_EPOCH;
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::app_error::{AppError, codes};
 
@@ -57,8 +58,8 @@ pub fn vector_index_not_ready() -> AppError {
 pub struct FileStore {
     file_cache_dir: PathBuf,
     projects_dir: PathBuf,
-    /// `lru_cache(maxsize=64)` on `(file_id, mtime_ns)`; the capacity is not observable.
-    memo: Mutex<HashMap<(String, i64), Value>>,
+    /// Bounded parsed-document cache; reuse requires the current content digest.
+    memo: Mutex<HashMap<(String, [u8; 32]), Value>>,
 }
 
 impl FileStore {
@@ -111,22 +112,18 @@ impl FileStore {
                 status: 410,
             });
         }
-        let modified = std::fs::metadata(&path)
+        std::fs::metadata(&path)
             .and_then(|metadata| metadata.modified())
             .map_err(|_| AppError {
                 message: "Uploaded file index is unreadable".to_string(),
                 code: codes::INTERNAL,
                 status: 500,
             })?;
-        let mtime_ns = modified
-            .duration_since(UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_nanos() as i64)
-            .unwrap_or(0);
-
+        let text = read_index_text(&path)?;
         if !project.is_empty() {
-            return read_index_document(&path);
+            return parse_index_document(&text);
         }
-        let key = (file_id.to_string(), mtime_ns);
+        let key = (file_id.to_string(), Sha256::digest(text.as_bytes()).into());
         if let Some(cached) = self
             .memo
             .lock()
@@ -135,7 +132,7 @@ impl FileStore {
         {
             return Ok(cached.clone());
         }
-        let document = read_index_document(&path)?;
+        let document = parse_index_document(&text)?;
         let mut memo = self
             .memo
             .lock()
@@ -150,13 +147,16 @@ impl FileStore {
 
 /// The read the two branches share: a missing or malformed document is `INTERNAL`, and a
 /// document that is not an object says so separately.
-fn read_index_document(path: &Path) -> Result<Value, AppError> {
-    let text = std::fs::read_to_string(path).map_err(|_| AppError {
+fn read_index_text(path: &Path) -> Result<String, AppError> {
+    std::fs::read_to_string(path).map_err(|_| AppError {
         message: "Uploaded file index is unreadable".to_string(),
         code: codes::INTERNAL,
         status: 500,
-    })?;
-    let document: Value = serde_json::from_str(&text).map_err(|_| AppError {
+    })
+}
+
+fn parse_index_document(text: &str) -> Result<Value, AppError> {
+    let document: Value = serde_json::from_str(text).map_err(|_| AppError {
         message: "Uploaded file index is unreadable".to_string(),
         code: codes::INTERNAL,
         status: 500,
@@ -342,16 +342,54 @@ mod tests {
             store.load_cached_file(&file_id, None).unwrap()["name"],
             "v1"
         );
+        let original_modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let original_size = std::fs::metadata(&path).unwrap().len();
 
         std::fs::write(
             &path,
             serde_json::to_string(&json!({"name": "v2"})).unwrap(),
         )
         .unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(original_modified))
+            .unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), original_size);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            original_modified
+        );
         assert_eq!(
             store.load_cached_file(&file_id, None).unwrap()["name"],
             "v2"
         );
+    }
+
+    #[test]
+    fn a_cached_document_does_not_hide_a_corrupt_same_timestamp_rewrite() {
+        let scratch = Scratch::new("rewrite-corrupt");
+        let store = scratch.store();
+        let file_id = "e".repeat(32);
+        let path = scratch.cache.join(format!("{file_id}.json"));
+        std::fs::write(&path, r#"{"name":"v1"}"#).unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(
+            store.load_cached_file(&file_id, None).unwrap()["name"],
+            "v1"
+        );
+
+        std::fs::write(&path, "xxxxxxxxxxxxx").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        let error = store.load_cached_file(&file_id, None).unwrap_err();
+        assert_eq!(error.code, codes::INTERNAL);
+        assert_eq!(error.message, "Uploaded file index is unreadable");
     }
 
     #[test]

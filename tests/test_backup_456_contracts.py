@@ -84,7 +84,7 @@ def _setup_target(path: Path, label: str, failure_domain: str = "zone-a", priori
 # ── Gate A: Transactional Publication Failover ──────────────────────────────
 
 
-def test_transactional_failover_when_target_a_publish_fails(tmp_settings: Path) -> None:
+def test_transactional_failover_when_target_a_publish_fails(tmp_settings: Path, healthy_filesystem_target_capacity: None) -> None:
     """When publish to target A fails before commit, reconcile proves missing on A and fails over to B with same spool."""
     t_a_dir = tmp_settings / "target_a"
     t_b_dir = tmp_settings / "target_b"
@@ -443,7 +443,9 @@ def test_promote_primary_validation_and_cas(tmp_settings: Path) -> None:
 # ── Gate D: Failure-Domain Placement & Online Rebalancing ───────────────────
 
 
-def test_failure_domain_policy_normalization_and_placement_ranking(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_failure_domain_policy_normalization_and_placement_ranking(
+    tmp_settings: Path, monkeypatch: pytest.MonkeyPatch, healthy_filesystem_target_capacity: None
+) -> None:
     """Placement evaluation prioritizes failure domain diversity and filters out draining targets."""
     t_a_dir = tmp_settings / "target_a"
     t_b_dir = tmp_settings / "target_b"
@@ -669,7 +671,7 @@ def test_incremental_parent_lineage_eligibility_enforced(tmp_settings: Path, mon
     assert outcome["phase"] == "failed"
 
 
-def test_zero_resnapshot_and_zero_reencrypt_invariants(tmp_settings: Path) -> None:
+def test_zero_resnapshot_and_zero_reencrypt_invariants(tmp_settings: Path, healthy_filesystem_target_capacity: None) -> None:
     """During failover, backupId, objectSetDigest, and spool package are preserved without re-snapshotting."""
     t_a_dir = tmp_settings / "target_a"
     t_b_dir = tmp_settings / "target_b"

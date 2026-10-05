@@ -10,10 +10,12 @@ import (
 func openAuthority(t *testing.T) *Control {
 	t.Helper()
 	control, err := OpenControl(OpenOptions{
-		Path:             t.TempDir(),
-		Owner:            "authority-owner",
-		Now:              func() int64 { return 1000 },
-		AuthorizeCutover: true,
+		Path:                     t.TempDir(),
+		Owner:                    "authority-owner",
+		Now:                      func() int64 { return 1000 },
+		AuthorizeCutover:         true,
+		PromotionSignerPublicKey: promotionTestPublic,
+		FleetID:                  "fleet-a", Environment: "production",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -297,6 +299,12 @@ func prepareAuthorityV7Fixture(t *testing.T, control *Control) {
 	}
 	defer tx.Rollback()
 	for _, statement := range []string{
+		"DROP TABLE IF EXISTS control_operator_mutations",
+		"DROP TABLE IF EXISTS backup_target_health",
+		"DROP TABLE IF EXISTS control_target_health_imports",
+		"DROP TABLE IF EXISTS control_inventory_handbacks",
+		"DROP TABLE IF EXISTS control_inventory_imports",
+		"DROP TABLE IF EXISTS control_promotion_artifacts",
 		"DROP TABLE control_cutover_authorizations",
 		"DROP TABLE control_authority_checkpoints",
 		"DROP TABLE control_authority_head",

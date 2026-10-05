@@ -720,10 +720,10 @@ jobs:
         run: npm run smoke:failover --prefix stateless-mcp
       - name: Show stateless MCP logs
         if: failure()
-        run: docker compose -f docker-compose.stateless-mcp.yml logs --no-color
+        run: docker compose -f docker-compose.stateless-mcp.yml -f stateless-mcp/compose.failover.yml logs --no-color
       - name: Stop stateless MCP stack
         if: always()
-        run: docker compose -f docker-compose.stateless-mcp.yml down --volumes --remove-orphans
+        run: docker compose -f docker-compose.stateless-mcp.yml -f stateless-mcp/compose.failover.yml down --volumes --remove-orphans
 
   native-browser-engine:
     needs:
@@ -1277,6 +1277,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - name: Build frontend for the production gateway contract
+        run: npm run build --prefix frontend
       - name: Install PDF renderer and OCR engine used by gateway tests
         run: |
           sudo apt-get update -qq
@@ -1284,7 +1292,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -r requirements-ocr.txt
+      - name: Install offline compatibility oracle dependencies
+        run: python -m pip install -r requirements.txt -r requirements-ocr.txt
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: rustfmt, clippy
@@ -1296,6 +1305,9 @@ jobs:
     needs: release-version
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+      CGO_ENABLED: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -1304,12 +1316,33 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: clippy
+      - name: Install checksum-pinned Go 1.27.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+          install_dir="$RUNNER_TEMP/go-1.27.1"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+          echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir"
+          echo "$install_dir/go/bin" >> "$GITHUB_PATH"
+      - run: test "$(go env GOVERSION)" = "go1.27.1"
       - run: python -m pip install -r requirements.txt -r requirements-s3-e2e.txt
+      - name: Download and verify Go modules before proxy isolation
+        working-directory: go
+        run: |
+          go mod download
+          go mod verify
       - name: Check native transport on the frozen MSRV
         run: cargo clippy --locked --manifest-path rust/Cargo.toml -p deepseek-storage --all-targets --all-features -- -D warnings
       - name: Native S3 boundary tests
         run: cargo test --locked --manifest-path rust/Cargo.toml -p deepseek-storage --features s3 --lib --test s3_transport
-      - name: Real three-MinIO Rust bytes and lost-response tests
+      - name: Real three-MinIO Rust bytes and Go control recovery tests
+        env:
+          GOPROXY: "off"
         run: python scripts/run_native_s3_e2e.py
 
   native-protocol:
@@ -1402,7 +1435,9 @@ jobs:
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test ./...
-      - run: go test -race ./...
+      # Pure-Go SQLite instrumentation runs hundreds of exact-schema fixtures.
+      # The measured full store suite can exceed Go's default ten-minute bound.
+      - run: go test -race -timeout=30m ./...
       - name: Go coverage
         # The profile is uploaded so a difference between this job's number and a developer's is
         # diffed rather than inferred. On this suite the differences are single statements — a
@@ -1540,6 +1575,14 @@ jobs:
       CARGO_LLVM_COV_VERSION: "0.6.21"
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - name: Build frontend for the production gateway contract
+        run: npm run build --prefix frontend
       - name: Install PDF renderer and OCR engine used by gateway tests
         run: |
           sudo apt-get update -qq
@@ -1553,7 +1596,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -r requirements-ocr.txt
+      - name: Install offline compatibility oracle dependencies
+        run: python -m pip install -r requirements.txt -r requirements-ocr.txt
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: llvm-tools-preview

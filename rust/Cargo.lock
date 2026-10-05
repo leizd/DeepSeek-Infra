@@ -688,6 +688,7 @@ dependencies = [
  "futures-util",
  "percent-encoding",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
@@ -712,6 +713,7 @@ dependencies = [
 name = "deepseek-policy"
 version = "0.1.0"
 dependencies = [
+ "backup-crypto",
  "base64",
  "blake2",
  "chrono",
@@ -765,6 +767,18 @@ dependencies = [
  "deepseek-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "deepseek-stateless-mcp"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tower 0.5.3",
 ]
 
 [[package]]

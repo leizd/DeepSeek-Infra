@@ -11,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -26,16 +28,57 @@ const (
 
 var mutationRequestNow = time.Date(2026, 9, 5, 0, 0, 40, 0, time.UTC)
 
+var promotionRoutePrivate = ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x53}, ed25519.SeedSize))
+var promotionRoutePublic = base64.RawURLEncoding.EncodeToString(promotionRoutePrivate.Public().(ed25519.PublicKey))
+
+func signedPromotionRoute(t *testing.T, req store.CutoverTransition, current store.CutoverRecord, now int64,
+	imported *store.PythonInventoryImportResult) store.CutoverTransition {
+	t.Helper()
+	if store.IsDomainGoAuthoritative(req.To) {
+		artifact := store.PromotionArtifactForTransition(req, current, now, mutationFleetID, mutationEnvironment)
+		if imported != nil {
+			artifact.InventoryManifestDigest = imported.ManifestDigest
+			artifact.InventorySourceDigest = imported.SourceDigest
+		}
+		var err error
+		req.Promotion, err = store.SignPromotionArtifact(artifact, promotionRoutePrivate)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return req
+}
+
+func attestedEmptyPolicyImport(t *testing.T, control *store.Control) store.PythonInventoryImportResult {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "store", "testdata", "python_empty_policy_inventory_export_v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := copyPythonSourceFixture(t, "python_empty_control_source_v1.sqlite3", "policy")
+	attestation, err := store.AttestPythonInventorySource(path, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := control.ImportAttestedPythonInventory(raw, attestation)
+	if err != nil || result.Imported != 0 {
+		t.Fatalf("attested empty policy import: %+v %v", result, err)
+	}
+	return result
+}
+
 // applyStore opens an authority-enabled store and durably promotes the policy
 // domain through the authorized cutover, which is the only way the apply route
 // can reach production state.
 func applyStore(t *testing.T) *store.Control {
 	t.Helper()
 	control, err := store.OpenControl(store.OpenOptions{
-		Path:             t.TempDir(),
-		Owner:            "apply-route-owner",
-		Now:              func() int64 { return 1000 },
-		AuthorizeCutover: true,
+		Path:                     t.TempDir(),
+		Owner:                    "apply-route-owner",
+		Now:                      func() int64 { return 1000 },
+		AuthorizeCutover:         true,
+		PromotionSignerPublicKey: promotionRoutePublic,
+		FleetID:                  mutationFleetID, Environment: mutationEnvironment,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -45,20 +88,30 @@ func applyStore(t *testing.T) *store.Control {
 	if _, advanced, err := control.ClaimControlAuthority(authority); err != nil || !advanced {
 		t.Fatalf("claim authority: advanced=%v %v", advanced, err)
 	}
+	var imported *store.PythonInventoryImportResult
 	for _, to := range []store.CutoverState{store.CutoverDualEvaluate, store.CutoverGoAuthoritative} {
+		if to == store.CutoverGoAuthoritative {
+			result := attestedEmptyPolicyImport(t, control)
+			imported = &result
+		}
 		current, err := control.GetCutover("policy")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := control.TransitionCutover(store.CutoverTransition{
+		transferID := "policy-" + string(to)
+		if imported != nil {
+			transferID = imported.TransferID
+		}
+		req := signedPromotionRoute(t, store.CutoverTransition{
 			Domain:           "policy",
 			To:               to,
 			ExpectedRevision: current.Revision,
 			ExpectedEpoch:    current.Epoch,
 			FencingToken:     current.FencingToken,
-			TransferID:       "policy-" + string(to),
+			TransferID:       transferID,
 			Authority:        authority,
-		}); err != nil {
+		}, current, 1000, imported)
+		if _, err := control.TransitionCutover(req); err != nil {
 			t.Fatalf("promote to %s: %v", to, err)
 		}
 	}
@@ -67,29 +120,15 @@ func applyStore(t *testing.T) *store.Control {
 
 func authorityCheckpointFixture(t *testing.T) *store.AuthorityCheckpoint {
 	t.Helper()
-	authority := &store.AuthorityCheckpoint{
-		Schema:                     store.ControlAuthoritySchema,
-		AuthorityGeneration:        1,
-		CreatedAt:                  "2026-09-05T00:00:00Z",
-		ControlSchemaVersion:       9,
-		Policies:                   []any{},
-		Targets:                    []any{},
-		ReceiptMutationGenerations: map[string]int64{},
-		PromotionEpochs:            map[string]int64{},
-		DrainGenerations:           map[string]int64{},
-		PlacementGenerations:       map[string]int64{},
-	}
-	payloadDigest, err := store.ComputePayloadDigest(authority)
+	raw, err := os.ReadFile(filepath.Join("..", "store", "testdata", "python_empty_inventory_checkpoint_v1.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	authority.PayloadDigest = payloadDigest
-	digest, err := store.ComputeCheckpointDigest(authority)
-	if err != nil {
+	var authority store.AuthorityCheckpoint
+	if err := json.Unmarshal(raw, &authority); err != nil {
 		t.Fatal(err)
 	}
-	authority.Digest = digest
-	return authority
+	return &authority
 }
 
 func applySigner(t *testing.T) (ed25519.PrivateKey, string) {
@@ -105,6 +144,13 @@ func applySigner(t *testing.T) (ed25519.PrivateKey, string) {
 // promoted policy domain at the given record revision.
 func signedApplyRequest(t *testing.T, control *store.Control, private ed25519.PrivateKey, public, operationID, recordID, state string, recordRevision int64, body map[string]any) []byte {
 	t.Helper()
+	copied := make(map[string]any, len(body)+2)
+	for key, value := range body {
+		copied[key] = value
+	}
+	copied["policyId"] = recordID
+	copied["policyRevision"] = json.Number(itoa(recordRevision))
+	body = copied
 	cutover, err := control.GetCutover("policy")
 	if err != nil {
 		t.Fatal(err)

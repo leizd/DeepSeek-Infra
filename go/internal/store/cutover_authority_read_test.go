@@ -23,15 +23,11 @@ func TestIsGoAuthoritativeReadsTheDurableCutoverRecord(t *testing.T) {
 	t.Run("promoted domain", func(t *testing.T) {
 		control := openAuthority(t)
 		defer control.Close()
-		authority := frozenCheckpoint(t, 0)
-		if _, advanced, err := control.ClaimControlAuthority(authority); err != nil || !advanced {
-			t.Fatalf("claim: advanced=%v %v", advanced, err)
-		}
-		dual := dualEvaluate(t, control, "policy")
-		if _, err := control.TransitionCutover(CutoverTransition{
+		authority, dual, imported := importEmptyPythonSource(t, control, "policy")
+		if _, err := signedTransition(t, control, CutoverTransition{
 			Domain: "policy", To: CutoverGoAuthoritative,
 			ExpectedRevision: dual.Revision, ExpectedEpoch: dual.Epoch, FencingToken: dual.FencingToken,
-			TransferID: "policy-promote", Authority: authority,
+			TransferID: imported.TransferID, Authority: authority,
 		}); err != nil {
 			t.Fatal(err)
 		}

@@ -30,7 +30,24 @@ message ShadowEvaluateResponse {
   bool mutation_denied = 2;
 }
 
+// Read-only snapshot of the Go-authoritative policy recipient sets. An empty
+// group is significant: Rust must refuse sealing instead of dropping that policy.
+message BackupPolicyRecipientsRequest {}
+
+message BackupRecipientGroup {
+  repeated string recipients = 1;
+}
+
+message BackupPolicyRecipientsResponse {
+  bool authoritative = 1;
+  repeated string recipients = 2;
+  repeated BackupRecipientGroup enabled_recipient_groups = 3;
+  uint64 policy_count = 4;
+  uint64 enabled_policy_count = 5;
+}
+
 service ControlPlane {
   rpc Health(HealthRequest) returns (HealthResponse);
   rpc ShadowEvaluate(ShadowEvaluateRequest) returns (ShadowEvaluateResponse);
+  rpc GetBackupPolicyRecipients(BackupPolicyRecipientsRequest) returns (BackupPolicyRecipientsResponse);
 }

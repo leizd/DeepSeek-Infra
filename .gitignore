@@ -31,6 +31,17 @@
 .backup-component-cache/
 .backup-policies/
 .backup-mirror/
+.backup-mirror.native-handoff.json
+..backup-mirror.native-handoff.json.*.tmp
+.backup-mirror.native-import.json
+.backup-mirror.native-import.lock
+.backup-mirror.native-handback.json
+.backup-mirror.native-handback-*.json
+.backup-mirror.native-handoff-*.revoked.json
+..backup-mirror.native-handback*.json.*.tmp
+..backup-mirror.native-handoff-*.revoked.json.*.tmp
+.backup-mirror.native-staging-*/
+..backup-mirror.native-import.json.*.tmp
 .backup-scheduler/
 .backup-targets/
 .backup-catalog/

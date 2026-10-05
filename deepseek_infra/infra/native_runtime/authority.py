@@ -80,6 +80,13 @@ RUST_DATA_DOMAINS = frozenset(
         # rather than per call site. The run log, the catalog and the eval-case file sit
         # in the same directory as child stores and keep their own ownership.
         "skills_store",
+        # The sealed frontend replica mirror under `.backup-mirror/`: immutable generation
+        # directories plus the `HEAD.json` pointer. `backup_mirror.put_frontend_mirror` is the
+        # only Python path that creates a generation, moves HEAD, drops the legacy 4.4.4
+        # files or prunes an old generation, so gating the store there covers every writer.
+        # The scheduler only *reads* it (`backup_scheduled` → `mirror_files`), which stays
+        # allowed: this gate denies mutations, not reads.
+        "frontend_mirror_store",
     }
 )
 

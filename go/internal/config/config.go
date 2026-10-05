@@ -11,8 +11,10 @@ import (
 var ErrInvalidConfig = errors.New("INVALID_CONFIG")
 
 const (
-	ModeShadow        = "shadow"
-	MutationAuthority = "python"
+	ModeShadow          = "shadow"
+	ModeAuthoritative   = "authoritative"
+	MutationAuthority   = "python"
+	MutationAuthorityGo = "go"
 	// MinInternalAPIBearerLength refuses a control-plane credential short enough
 	// to be guessed or brute-forced.
 	MinInternalAPIBearerLength = 32
@@ -36,6 +38,9 @@ type Config struct {
 	// it is never read from the request, so a caller cannot nominate its own
 	// signer. When empty, the apply route refuses every request.
 	MutationSignerPublicKey string
+	// PromotionSignerPublicKey is a separate deployment trust root for signed
+	// domain ownership transitions. An absent key disables promotions.
+	PromotionSignerPublicKey string
 	// FleetID and Environment are the identity the signer must have bound into
 	// the request.
 	FleetID     string
@@ -53,17 +58,31 @@ func Load() (Config, error) {
 		ControlAuthority:   boolOr("DEEPSEEKD_CONTROL_AUTHORITY"),
 		// The signer key is the one setting whose *absence* is meaningful, so it is
 		// taken verbatim rather than defaulted.
-		MutationSignerPublicKey: strings.TrimSpace(os.Getenv("DEEPSEEKD_MUTATION_SIGNER_KEY")),
-		FleetID:                 valueOr("DEEPSEEKD_FLEET_ID", "fleet-a"),
-		Environment:             valueOr("DEEPSEEKD_ENVIRONMENT", "production"),
+		MutationSignerPublicKey:  strings.TrimSpace(os.Getenv("DEEPSEEKD_MUTATION_SIGNER_KEY")),
+		PromotionSignerPublicKey: strings.TrimSpace(os.Getenv("DEEPSEEKD_PROMOTION_SIGNER_KEY")),
+		FleetID:                  valueOr("DEEPSEEKD_FLEET_ID", "fleet-a"),
+		Environment:              valueOr("DEEPSEEKD_ENVIRONMENT", "production"),
 	}
-	if cfg.Mode != ModeShadow {
-		return Config{}, ErrInvalidConfig
-	}
-	if cfg.ProductionStoreDir != "" {
-		return Config{}, ErrInvalidConfig
-	}
-	if cfg.ShadowStoreDir != "" && store.RejectPythonPath(cfg.ShadowStoreDir) != nil {
+	switch cfg.Mode {
+	case ModeShadow:
+		// Shadow keeps the production store empty so this process cannot become
+		// a second writer beside an authoritative control plane.
+		if cfg.ProductionStoreDir != "" {
+			return Config{}, ErrInvalidConfig
+		}
+		if cfg.ShadowStoreDir != "" && store.RejectPythonPath(cfg.ShadowStoreDir) != nil {
+			return Config{}, ErrInvalidConfig
+		}
+	case ModeAuthoritative:
+		// Authoritative mode is the production control plane: one Go store,
+		// no shadow directory, and no path a Python runtime owns.
+		if cfg.ProductionStoreDir == "" || cfg.ShadowStoreDir != "" {
+			return Config{}, ErrInvalidConfig
+		}
+		if store.RejectPythonPath(cfg.ProductionStoreDir) != nil {
+			return Config{}, ErrInvalidConfig
+		}
+	default:
 		return Config{}, ErrInvalidConfig
 	}
 	if cfg.InternalAPIBearer != "" && len(cfg.InternalAPIBearer) < MinInternalAPIBearerLength {
@@ -80,6 +99,21 @@ func valueOr(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// ReportedMutationAuthority is the owner this process admits. Shadow still
+// reports the historical Python authority. Authoritative production reports Go.
+func (cfg Config) ReportedMutationAuthority() string {
+	if cfg.Mode == ModeAuthoritative {
+		return MutationAuthorityGo
+	}
+	return MutationAuthority
+}
+
+// ProductionMutationsEnabled is true only for the authoritative control plane.
+// Shadow evaluation never gains a production write.
+func (cfg Config) ProductionMutationsEnabled() bool {
+	return cfg.Mode == ModeAuthoritative
 }
 
 func boolOr(key string) bool {

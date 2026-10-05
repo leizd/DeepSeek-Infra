@@ -28,6 +28,8 @@ export default function AutomaticBackupsTab({ onError, onMessage }: Props) {
   const [targets, setTargets] = useState<BackupTargetRecord[]>([]);
   const [health, setHealth] = useState<BackupTargetHealth[]>([]);
   const [mirrors, setMirrors] = useState<BackupMirrorMetadataV1[]>([]);
+  const [targetUnavailable, setTargetUnavailable] = useState(false);
+  const [mirrorUnavailable, setMirrorUnavailable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
@@ -47,13 +49,35 @@ export default function AutomaticBackupsTab({ onError, onMessage }: Props) {
   const [s3Profile, setS3Profile] = useState("");
 
   const refresh = useCallback(async () => {
-    const [policyView, targetView, mirrorView] = await Promise.all([listBackupPolicies(), listBackupTargets(), listBackupMirrors()]);
-    setPolicies(policyView.policies);
-    setNextRuns(policyView.nextRuns);
-    setTargets(targetView.targets);
-    setHealth(targetView.health);
-    setMirrors(mirrorView.mirrors);
-  }, []);
+    const [policyView, targetView, mirrorView] = await Promise.allSettled([listBackupPolicies(), listBackupTargets(), listBackupMirrors()]);
+    if (policyView.status === "rejected") {
+      setPolicies([]);
+      setNextRuns({});
+      throw policyView.reason;
+    }
+    setPolicies(policyView.value.policies);
+    setNextRuns(policyView.value.nextRuns);
+    const warnings: string[] = [];
+    if (targetView.status === "fulfilled") {
+      setTargets(targetView.value.targets);
+      setHealth(targetView.value.health);
+      setTargetUnavailable(false);
+    } else {
+      setTargets([]);
+      setHealth([]);
+      setTargetUnavailable(true);
+      warnings.push(`备份目标：${targetView.reason instanceof Error ? targetView.reason.message : "读取失败"}`);
+    }
+    if (mirrorView.status === "fulfilled") {
+      setMirrors(mirrorView.value.mirrors);
+      setMirrorUnavailable(false);
+    } else {
+      setMirrors([]);
+      setMirrorUnavailable(true);
+      warnings.push(`会话镜像：${mirrorView.reason instanceof Error ? mirrorView.reason.message : "读取失败"}`);
+    }
+    onError(warnings.join("；"));
+  }, [onError]);
 
   useEffect(() => {
     void refresh().catch((reason: unknown) => onError(reason instanceof Error ? reason.message : "加载自动备份配置失败"));
@@ -212,7 +236,7 @@ export default function AutomaticBackupsTab({ onError, onMessage }: Props) {
                 <div><dt>下一次运行</dt><dd>{nextRuns[policy.policyId]?.localDateTime ?? "—"}</dd></div>
                 <div><dt>目标</dt><dd>{policy.targetId === "managed-local" ? "本地托管" : policy.targetId}（{healthFor(policy.targetId)}）</dd></div>
                 <div><dt>Recipient</dt><dd>{policy.protection.recipients.length} 个公开 Recipient</dd></div>
-                <div><dt>会话镜像</dt><dd>{policy.frontendMirror.mode} · {mirrors.length ? `最新镜像 ${mirrors[0].acknowledgedAt}` : "尚未上传"}</dd></div>
+                <div><dt>会话镜像</dt><dd>{policy.frontendMirror.mode} · {mirrorUnavailable ? "状态不可用" : mirrors.length ? `最新镜像 ${mirrors[0].acknowledgedAt}` : "尚未上传"}</dd></div>
                 <div><dt>覆盖</dt><dd>{policy.scope.coveragePolicy === "strict" ? "严格" : "尽力"}</dd></div>
               </dl>
             </div>
@@ -259,6 +283,7 @@ export default function AutomaticBackupsTab({ onError, onMessage }: Props) {
 
       <section className="backup-card">
         <h3>备份目标</h3>
+        {targetUnavailable && <p role="status">备份目标列表暂不可用。</p>}
         <p>
           本地目录以 Marker 识别；S3-compatible 目标使用条件写（If-None-Match / If-Match）与 multipart。
           Access Key 不会写入 Target 配置——请使用 AWS profile、默认凭证链或 workload role。

@@ -14,7 +14,7 @@ func dualEvaluate(t *testing.T, control *Control, domain string) CutoverRecord {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dual, err := control.TransitionCutover(CutoverTransition{
+	dual, err := signedTransition(t, control, CutoverTransition{
 		Domain:           domain,
 		To:               CutoverDualEvaluate,
 		ExpectedRevision: current.Revision,
@@ -34,7 +34,7 @@ func TestCutoverPromotionRequiresAnAuthorizedDeployment(t *testing.T) {
 	control := openShadow(t)
 	defer control.Close()
 	dual := dualEvaluate(t, control, "policy")
-	if _, err := control.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, control, CutoverTransition{
 		Domain:           "policy",
 		To:               CutoverGoAuthoritative,
 		ExpectedRevision: dual.Revision,
@@ -62,7 +62,7 @@ func TestCutoverPromotionRequiresAPresentedAndInstalledAuthority(t *testing.T) {
 			t.Fatalf("claim: advanced=%v %v", advanced, err)
 		}
 		dual := dualEvaluate(t, control, "policy")
-		if _, err := control.TransitionCutover(CutoverTransition{
+		if _, err := signedTransition(t, control, CutoverTransition{
 			Domain:           "policy",
 			To:               CutoverGoAuthoritative,
 			ExpectedRevision: dual.Revision,
@@ -77,7 +77,7 @@ func TestCutoverPromotionRequiresAPresentedAndInstalledAuthority(t *testing.T) {
 		control := openAuthority(t)
 		defer control.Close()
 		dual := dualEvaluate(t, control, "policy")
-		if _, err := control.TransitionCutover(CutoverTransition{
+		if _, err := signedTransition(t, control, CutoverTransition{
 			Domain:           "policy",
 			To:               CutoverGoAuthoritative,
 			ExpectedRevision: dual.Revision,
@@ -103,18 +103,14 @@ func TestCutoverPromotionRequiresAPresentedAndInstalledAuthority(t *testing.T) {
 func TestCutoverPromotionSucceedsThroughEveryAuthoritativeState(t *testing.T) {
 	control := openAuthority(t)
 	defer control.Close()
-	authority := frozenCheckpoint(t, 0)
-	if _, advanced, err := control.ClaimControlAuthority(authority); err != nil || !advanced {
-		t.Fatalf("claim: advanced=%v %v", advanced, err)
-	}
-	dual := dualEvaluate(t, control, "policy")
-	promoted, err := control.TransitionCutover(CutoverTransition{
+	authority, dual, imported := importEmptyPythonSource(t, control, "policy")
+	promoted, err := signedTransition(t, control, CutoverTransition{
 		Domain:           "policy",
 		To:               CutoverGoAuthoritative,
 		ExpectedRevision: dual.Revision,
 		ExpectedEpoch:    dual.Epoch,
 		FencingToken:     dual.FencingToken,
-		TransferID:       "policy-promote",
+		TransferID:       imported.TransferID,
 		Authority:        authority,
 	})
 	if err != nil {
@@ -122,14 +118,14 @@ func TestCutoverPromotionSucceedsThroughEveryAuthoritativeState(t *testing.T) {
 	}
 	if promoted.State != CutoverGoAuthoritative || promoted.Owner != RuntimeGo || promoted.PreviousOwner != OwnerPython ||
 		promoted.Revision != dual.Revision+1 || promoted.Epoch != dual.Epoch+1 ||
-		promoted.FencingToken != dual.FencingToken+1 || promoted.TransferID != "policy-promote" {
+		promoted.FencingToken != dual.FencingToken+1 || promoted.TransferID != imported.TransferID {
 		t.Fatalf("promotion record: %+v", promoted)
 	}
 	var generation int64
 	var digest, fromState, toState string
 	if err := control.db.QueryRow(
 		`SELECT authority_generation, authority_digest, from_state, to_state
-		 FROM control_cutover_authorizations WHERE domain='policy' AND transfer_id='policy-promote'`,
+		 FROM control_cutover_authorizations WHERE domain='policy' AND transfer_id='fixture-empty-policy'`,
 	).Scan(&generation, &digest, &fromState, &toState); err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +133,7 @@ func TestCutoverPromotionSucceedsThroughEveryAuthoritativeState(t *testing.T) {
 		t.Fatalf("authorization journal: gen=%d digest=%s %s->%s", generation, digest, fromState, toState)
 	}
 
-	shadowed, err := control.TransitionCutover(CutoverTransition{
+	shadowed, err := signedTransition(t, control, CutoverTransition{
 		Domain:           "policy",
 		To:               CutoverPythonShadow,
 		ExpectedRevision: promoted.Revision,
@@ -149,7 +145,7 @@ func TestCutoverPromotionSucceedsThroughEveryAuthoritativeState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("python_shadow promotion: %v", err)
 	}
-	disabled, err := control.TransitionCutover(CutoverTransition{
+	disabled, err := signedTransition(t, control, CutoverTransition{
 		Domain:           "policy",
 		To:               CutoverPythonDisabled,
 		ExpectedRevision: shadowed.Revision,
@@ -203,7 +199,7 @@ func TestCutoverPromotionRefusesAStaleOrForeignAuthority(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := control.TransitionCutover(CutoverTransition{
+			if _, err := signedTransition(t, control, CutoverTransition{
 				Domain:           "policy",
 				To:               CutoverGoAuthoritative,
 				ExpectedRevision: dual.Revision,
@@ -229,20 +225,16 @@ func TestCutoverPromotionRefusesAStaleOrForeignAuthority(t *testing.T) {
 func TestCutoverDePromotionNeedsNoAuthority(t *testing.T) {
 	control := openAuthority(t)
 	defer control.Close()
-	authority := frozenCheckpoint(t, 0)
-	if _, _, err := control.ClaimControlAuthority(authority); err != nil {
-		t.Fatal(err)
-	}
-	dual := dualEvaluate(t, control, "policy")
-	promoted, err := control.TransitionCutover(CutoverTransition{
+	authority, dual, imported := importEmptyPythonSource(t, control, "policy")
+	promoted, err := signedTransition(t, control, CutoverTransition{
 		Domain: "policy", To: CutoverGoAuthoritative,
 		ExpectedRevision: dual.Revision, ExpectedEpoch: dual.Epoch, FencingToken: dual.FencingToken,
-		TransferID: "policy-promote", Authority: authority,
+		TransferID: imported.TransferID, Authority: authority,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rolled, err := control.TransitionCutover(CutoverTransition{
+	rolled, err := signedTransition(t, control, CutoverTransition{
 		Domain: "policy", To: CutoverShadow,
 		ExpectedRevision: promoted.Revision, ExpectedEpoch: promoted.Epoch, FencingToken: promoted.FencingToken,
 		TransferID: "policy-rollback",
@@ -263,15 +255,11 @@ func TestCutoverDePromotionNeedsNoAuthority(t *testing.T) {
 func TestCutoverPromotionIsDurableAndDeploymentScoped(t *testing.T) {
 	control := openAuthority(t)
 	path := control.path
-	authority := frozenCheckpoint(t, 0)
-	if _, _, err := control.ClaimControlAuthority(authority); err != nil {
-		t.Fatal(err)
-	}
-	dual := dualEvaluate(t, control, "policy")
-	if _, err := control.TransitionCutover(CutoverTransition{
+	authority, dual, imported := importEmptyPythonSource(t, control, "policy")
+	if _, err := signedTransition(t, control, CutoverTransition{
 		Domain: "policy", To: CutoverGoAuthoritative,
 		ExpectedRevision: dual.Revision, ExpectedEpoch: dual.Epoch, FencingToken: dual.FencingToken,
-		TransferID: "policy-promote", Authority: authority,
+		TransferID: imported.TransferID, Authority: authority,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +280,7 @@ func TestCutoverPromotionIsDurableAndDeploymentScoped(t *testing.T) {
 	if head, exists, err := observer.ControlAuthorityHead(); err != nil || !exists || head.Generation != 1 {
 		t.Fatalf("authority did not survive restart: %+v exists=%v %v", head, exists, err)
 	}
-	if _, err := observer.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, observer, CutoverTransition{
 		Domain: "policy", To: CutoverPythonShadow,
 		ExpectedRevision: got.Revision, ExpectedEpoch: got.Epoch, FencingToken: got.FencingToken,
 		TransferID: "observer-promote", Authority: authority,
@@ -303,12 +291,13 @@ func TestCutoverPromotionIsDurableAndDeploymentScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	successor, err := OpenControl(OpenOptions{Path: path, Owner: "successor", AuthorizeCutover: true})
+	successor, err := OpenControl(OpenOptions{Path: path, Owner: "successor", AuthorizeCutover: true,
+		PromotionSignerPublicKey: promotionTestPublic, FleetID: "fleet-a", Environment: "production"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer successor.Close()
-	if _, err := successor.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, successor, CutoverTransition{
 		Domain: "policy", To: CutoverPythonShadow,
 		ExpectedRevision: got.Revision, ExpectedEpoch: got.Epoch, FencingToken: got.FencingToken,
 		TransferID: "successor-promote", Authority: authority,
@@ -329,7 +318,7 @@ func TestCutoverEpochCannotBeSelfPromoted(t *testing.T) {
 		t.Fatal(err)
 	}
 	dual := dualEvaluate(t, control, "policy")
-	if _, err := control.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, control, CutoverTransition{
 		Domain: "policy", To: CutoverGoAuthoritative,
 		ExpectedRevision: dual.Revision, ExpectedEpoch: dual.Epoch + 1, FencingToken: dual.FencingToken,
 		TransferID: "policy-promote", Authority: authority,
@@ -350,20 +339,16 @@ func TestCutoverEpochCannotBeSelfPromoted(t *testing.T) {
 func TestCutoverPromotionRollsBackWhenTheAuthorizationJournalRejects(t *testing.T) {
 	control := openAuthority(t)
 	defer control.Close()
-	authority := frozenCheckpoint(t, 0)
-	if _, _, err := control.ClaimControlAuthority(authority); err != nil {
-		t.Fatal(err)
-	}
-	dual := dualEvaluate(t, control, "policy")
+	authority, dual, imported := importEmptyPythonSource(t, control, "policy")
 	if _, err := control.db.Exec(`CREATE TRIGGER reject_cutover_authorization
 		BEFORE INSERT ON control_cutover_authorizations
 		BEGIN SELECT RAISE(ABORT, 'reject cutover authorization'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := control.TransitionCutover(CutoverTransition{
+	if _, err := signedTransition(t, control, CutoverTransition{
 		Domain: "policy", To: CutoverGoAuthoritative,
 		ExpectedRevision: dual.Revision, ExpectedEpoch: dual.Epoch, FencingToken: dual.FencingToken,
-		TransferID: "policy-promote", Authority: authority,
+		TransferID: imported.TransferID, Authority: authority,
 	}); err == nil || !strings.Contains(err.Error(), "reject cutover authorization") {
 		t.Fatalf("authorization journal failure: %v", err)
 	}
@@ -385,15 +370,11 @@ func TestCutoverPromotionRollsBackWhenTheAuthorizationJournalRejects(t *testing.
 func TestAcceptMutationRefusesAfterCutoverWithoutWriting(t *testing.T) {
 	control := openAuthority(t)
 	defer control.Close()
-	authority := frozenCheckpoint(t, 0)
-	if _, advanced, err := control.ClaimControlAuthority(authority); err != nil || !advanced {
-		t.Fatalf("claim: advanced=%v %v", advanced, err)
-	}
-	dual := dualEvaluate(t, control, "policy")
-	if _, err := control.TransitionCutover(CutoverTransition{
+	authority, dual, imported := importEmptyPythonSource(t, control, "policy")
+	if _, err := signedTransition(t, control, CutoverTransition{
 		Domain: "policy", To: CutoverGoAuthoritative,
 		ExpectedRevision: dual.Revision, ExpectedEpoch: dual.Epoch, FencingToken: dual.FencingToken,
-		TransferID: "policy-promote", Authority: authority,
+		TransferID: imported.TransferID, Authority: authority,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -418,15 +399,11 @@ func TestAcceptMutationRefusesAfterCutoverWithoutWriting(t *testing.T) {
 func TestCutoverAuthorizationsAreImmutable(t *testing.T) {
 	control := openAuthority(t)
 	defer control.Close()
-	authority := frozenCheckpoint(t, 0)
-	if _, _, err := control.ClaimControlAuthority(authority); err != nil {
-		t.Fatal(err)
-	}
-	dual := dualEvaluate(t, control, "policy")
-	if _, err := control.TransitionCutover(CutoverTransition{
+	authority, dual, imported := importEmptyPythonSource(t, control, "policy")
+	if _, err := signedTransition(t, control, CutoverTransition{
 		Domain: "policy", To: CutoverGoAuthoritative,
 		ExpectedRevision: dual.Revision, ExpectedEpoch: dual.Epoch, FencingToken: dual.FencingToken,
-		TransferID: "policy-promote", Authority: authority,
+		TransferID: imported.TransferID, Authority: authority,
 	}); err != nil {
 		t.Fatal(err)
 	}

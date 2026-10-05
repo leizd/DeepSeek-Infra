@@ -59,7 +59,7 @@ pub fn router() -> Router {
 /// process working directory, which is the oracle's `config.ROOT` in a normal
 /// launch. It is deliberately **not** an error here, because a read of a
 /// non-existent store is an empty store in the oracle, not a failure.
-fn workspace_root() -> PathBuf {
+pub(crate) fn workspace_root() -> PathBuf {
     match std::env::var_os("DEEPSEEK_INFRA_ROOT") {
         Some(root) => PathBuf::from(root),
         None => PathBuf::from("."),

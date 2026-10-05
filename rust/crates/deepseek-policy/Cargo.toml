@@ -8,6 +8,11 @@ rust-version.workspace = true
 
 [dependencies]
 deepseek-core = { path = "../deepseek-core" }
+# The sealed frontend mirror seals each generation with the same streaming age
+# implementation the production `backup-crypto` CLI runs, and proves the result with
+# the same decrypt round trip. Linking the library is what keeps the two from
+# drifting; a second copy of the crypto would be a second thing to get wrong.
+backup-crypto = { path = "../backup-crypto" }
 blake2 = { workspace = true }
 base64 = { workspace = true }
 chrono = "=0.4.45"

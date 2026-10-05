@@ -4,6 +4,7 @@ import json
 import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -307,6 +308,37 @@ def tmp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
     workspace_backup_transfer_budget.reset_global_transfer_budget_manager()
     browser_session.reset_sessions_for_tests()
     files._load_cached_file_cached.cache_clear()
+
+
+@pytest.fixture
+def healthy_filesystem_target_capacity(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give selected unit placement tests stable capacity on their isolated targets.
+
+    This is opt-in, retains real filesystem liveness/data operations and does
+    not replace S3/provider observations or probe paths outside tmp_settings.
+    """
+    original_probe = workspace_backup_targets.probe_target_capacity
+    isolated_root = tmp_settings.resolve()
+    total_bytes = 100 * 1024**3
+    used_bytes = 20 * 1024**3
+
+    def probe(target_id: str) -> dict[str, Any]:
+        observation = original_probe(target_id)
+        if observation.get("source") != "filesystem":
+            return observation
+        target = workspace_backup_targets.get_target(target_id)
+        if not Path(str(target.get("path") or "")).resolve().is_relative_to(isolated_root):
+            return observation
+        return {
+            **observation,
+            "totalBytes": total_bytes,
+            "usedBytes": used_bytes,
+            "freeBytes": total_bytes - used_bytes,
+            "freePercent": 80.0,
+            "source": "unit-filesystem-capacity",
+        }
+
+    monkeypatch.setattr(workspace_backup_targets, "probe_target_capacity", probe)
 
 
 @pytest.fixture

@@ -21,8 +21,14 @@ func prepareReconciliationV5Fixture(t *testing.T, control *Control) {
 		mode TEXT NOT NULL, schema_version INTEGER NOT NULL CHECK(schema_version BETWEEN 0 AND 5),
 		unique_writer TEXT NOT NULL) STRICT`
 	for _, statement := range []string{
+		"DROP TABLE IF EXISTS control_operator_mutations",
+		"DROP TABLE IF EXISTS backup_target_health",
+		"DROP TABLE IF EXISTS control_target_health_imports",
+		"DROP TABLE IF EXISTS control_inventory_handbacks",
+		"DROP TABLE IF EXISTS control_inventory_imports",
 		"DROP TABLE action_reconciliation_boundary", metadata,
 		"DROP TABLE action_verification_boundary",
+		"DROP TABLE IF EXISTS control_promotion_artifacts",
 		"DROP TABLE control_cutover_authorizations",
 		"DROP TABLE control_authority_checkpoints",
 		"DROP TABLE control_authority_head",

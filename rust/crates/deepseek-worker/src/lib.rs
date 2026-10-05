@@ -20,6 +20,7 @@ mod operation_grant;
 #[cfg(test)]
 mod operation_grant_replay_tests;
 mod service;
+mod storage_transport;
 mod transport;
 
 pub use authority_request::{
@@ -40,6 +41,9 @@ pub use service::{
     AuthError, CallerIdentity, ProductionFailClosedAuthenticator, ServiceBearerAuthenticator,
     StaticTokenAuthenticator, TransportAuthenticator, WorkerRpcService,
 };
+pub use storage_transport::WORKER_S3_ENV_NAMES;
+#[cfg(feature = "s3")]
+pub use storage_transport::load_worker_storage_transport;
 pub use transport::{
     LoadedWorkerTransport, WORKER_SERVICE_BEARER, WORKER_SERVICE_BEARER_EXPIRES_AT,
     WORKER_SERVICE_NAME, WORKER_SERVICE_ROLE, WORKER_TLS_CERT_FILE, WORKER_TLS_KEY_FILE,
@@ -51,6 +55,16 @@ const AUTH_FLEET_ID: &str = "DEEPSEEK_WORKER_AUTHORITY_FLEET_ID";
 const AUTH_ENVIRONMENT: &str = "DEEPSEEK_WORKER_AUTHORITY_ENVIRONMENT";
 const AUTH_FENCING_TOKEN: &str = "DEEPSEEK_WORKER_AUTHORITY_FENCING_TOKEN";
 const AUTH_NOW: &str = "DEEPSEEK_WORKER_AUTHORITY_NOW";
+
+#[cfg(feature = "s3")]
+fn storage_put_metadata(observation: &deepseek_storage::s3::PutObservation) -> String {
+    serde_json::json!({
+        "etag": observation.etag,
+        "size": observation.length,
+        "version": observation.version,
+    })
+    .to_string()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerAuthorityConfig {
@@ -784,9 +798,7 @@ impl Worker {
             .await
         {
             Ok(observation) => {
-                let metadata =
-                    serde_json::json!({"etag": observation.etag, "size": observation.length})
-                        .to_string();
+                let metadata = storage_put_metadata(&observation);
                 self.transition_storage_mutation_for_operation(
                     fence,
                     StorageEffectState::Confirmed,

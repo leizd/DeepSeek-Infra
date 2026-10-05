@@ -143,7 +143,7 @@ def test_worker_rpc_exposes_authenticated_epoch_install_without_control_mutation
     assert install["server_streaming"] is False
     control = next(item for item in current["files"] if item["package"] == "deepseek.control.v1")
     control_rpcs = {rpc["name"] for service in control["services"] for rpc in service["rpcs"]}
-    assert control_rpcs == {"Health", "ShadowEvaluate"}
+    assert control_rpcs == {"Health", "ShadowEvaluate", "GetBackupPolicyRecipients"}
 
 
 def test_v7_corpus_digest_is_pinned() -> None:

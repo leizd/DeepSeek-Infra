@@ -24,17 +24,22 @@ def _git_diff(rel: str) -> str:
     return result.stdout
 
 
-def test_accepted_ownership_contract_is_unique_and_python_authoritative() -> None:
+def test_accepted_ownership_contract_is_unique_and_tracks_cutover() -> None:
     data = load_ownership()
     validate_ownership(data)
     ids = [item["id"] for item in data["domains"]]
     assert len(ids) == len(set(ids))
-    assert data["current_production_authority"] == "python"
+    assert data["current_production_authority"] in {"python", "rust_go"}
     assert data["source_commit"] == "a37735c68398fc8f795babaa269e2de6a5acd567"
     production = [item for item in data["domains"] if item.get("production", True) is True]
     assert production
     assert {item["target_owner"] for item in production} <= {"rust", "go"}
-    assert {item["current_owner"] for item in production} == {"python"}
+    assert {item["current_owner"] for item in production} <= {"python", "rust", "go"}
+    for item in production:
+        if item["current_owner"] in {"rust", "go"}:
+            assert item["current_owner"] == item["target_owner"]
+    if data["current_production_authority"] == "rust_go":
+        assert all(item["current_owner"] != "python" for item in production)
 
 
 def test_duplicate_domain_is_rejected() -> None:

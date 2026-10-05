@@ -1,7 +1,7 @@
-# DeepSeek Infra - local-first Personal AI Runtime
-# Build: docker build -t deepseek-infra:4.8.0 .
-# Run: docker run --rm -p 127.0.0.1:8000:8000 --env-file .env -v deepseek-data:/data deepseek-infra:4.8.0
-# See docs/DEPLOYMENT.md for deployment notes.
+# Production image: Rust public listener, Go control plane, Rust worker.
+# The browser UI is the Vite build. This image does not install a Python
+# interpreter or the stateless MCP Node server.
+# Build locally: docker build -t deepseek-infra:4.8.0 .
 FROM node:24-bookworm-slim AS frontend-builder
 
 WORKDIR /build/frontend
@@ -11,51 +11,69 @@ COPY frontend ./
 RUN npm run build
 RUN test -f /build/static/ui/index.html
 
-FROM python:3.12-slim
+FROM rust:1.85-bookworm AS rust-builder
+
+WORKDIR /app
+COPY rust ./rust
+COPY proto ./proto
+COPY VERSION ./VERSION
+RUN cargo build \
+    --locked \
+    --manifest-path rust/Cargo.toml \
+    --release \
+    -p deepseek-gateway \
+    -p deepseek-worker
+
+FROM golang:1.27.1-bookworm AS go-builder
+
+WORKDIR /src
+COPY go/go.mod go/go.sum ./
+RUN go mod download
+COPY go/ ./
+RUN CGO_ENABLED=0 go build -ldflags="-w -s" -o /out/deepseekd ./cmd/deepseekd
+RUN CGO_ENABLED=0 go build -ldflags="-w -s" -o /out/deepseek-launch ./cmd/deepseek-launch
+
+FROM debian:bookworm-slim
+
+WORKDIR /app
 
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="DeepSeek Infra" \
       org.opencontainers.image.version="4.8.0" \
       org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.description="Python-first hybrid Personal AI Runtime"
+      org.opencontainers.image.description="Rust and Go production runtime"
 
-# Run as a non-root user.
-RUN useradd --create-home --uid 10001 appuser
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 deepseek
 
-WORKDIR /app
-
-# Install Python dependencies first so Docker can reuse the layer.
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY app.py ./
-COPY deepseek_infra ./deepseek_infra
-COPY static ./static
+COPY --from=rust-builder /app/rust/target/release/deepseek-gateway /usr/local/bin/deepseek-gateway
+COPY --from=rust-builder /app/rust/target/release/deepseek-worker /usr/local/bin/deepseek-worker
+COPY --from=go-builder /out/deepseekd /usr/local/bin/deepseekd
+COPY --from=go-builder /out/deepseek-launch /usr/local/bin/deepseek-launch
+COPY packaging/native/entrypoint.sh /usr/local/bin/deepseek-infra-entrypoint
+COPY static /app/static
 COPY --from=frontend-builder /build/static/ui ./static/ui
-RUN test -f /app/static/ui/index.html
-RUN find /app -type d -name __pycache__ -prune -exec rm -rf {} +
+RUN test -f /app/static/ui/index.html \
+    && chmod 755 /usr/local/bin/deepseek-infra-entrypoint \
+    && mkdir -p /data/go-control /data/worker \
+    && chown -R deepseek:deepseek /data
 
-# Store writable runtime data under /data: auth tokens, caches, indexes,
-# traces, memory, generated artifacts, media objects and task snapshots.
-# DEEPSEEK_INFRA_ROOT is the canonical runtime root; the mobile alias stays
-# pointed at the same location for Android/shared-runtime compatibility.
 ENV DEEPSEEK_INFRA_ROOT=/data \
-    DEEPSEEK_MOBILE_ROOT=/data \
     DEEPSEEK_INFRA_STATIC_DIR=/app/static \
-    DEEPSEEK_MOBILE_STATIC_DIR=/app/static \
-    HOST=0.0.0.0 \
-    PORT=8000 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    GATEWAY_BIND_ADDR=0.0.0.0:8000 \
+    GO_CONTROL_ADDR=http://127.0.0.1:8090 \
+    DEEPSEEKD_MODE=authoritative \
+    DEEPSEEKD_LISTEN=127.0.0.1:8090 \
+    DEEPSEEKD_PRODUCTION_STORE=/data/go-control \
+    DEEPSEEK_WORKER_LISTEN=127.0.0.1:50052
 
-RUN mkdir -p /data && chown -R appuser:appuser /data
 VOLUME ["/data"]
-
-USER appuser
+USER deepseek
 EXPOSE 8000
 
-# Health check uses Python stdlib so the slim image does not need curl.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD ["python", "-c", "import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('PORT','8000')+'/healthz', timeout=4)"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8000/healthz"]
 
-CMD ["python", "app.py"]
+ENTRYPOINT ["/usr/local/bin/deepseek-infra-entrypoint"]

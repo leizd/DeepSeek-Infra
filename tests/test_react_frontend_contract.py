@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -125,8 +124,11 @@ def test_build_packaging_and_ci_include_the_react_frontend() -> None:
     assert "validate_multipart_build_environment()" in exe
     assert "ignoreExitValue false" in android
     assert "ignoreExitValue true" not in android
-    assert "DEEPSEEK_BUILD_PYTHON" in android
-    assert re.search(r'''buildPython\s+["'][A-Za-z]:[/\\]''', android) is None
+    assert 'commandLine npmCmd, "run", "build", "--prefix", "frontend"' in android
+    assert "preBuild.dependsOn buildReactFrontend" in android
+    assert "DEEPSEEK_BUILD_PYTHON" not in android
+    assert "buildPython" not in android
+    assert "com.chaquo.python" not in android
     assert "build_frontend.py" in smoke_release
     assert "check_react_frontend_build" in preflight
     assert "React + TypeScript + Vite build" in agents

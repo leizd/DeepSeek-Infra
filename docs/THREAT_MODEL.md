@@ -44,6 +44,7 @@
 ### T4 · 路径越界（fileId / projectId 逃出缓存沙箱）
 
 - **缓解**：策略层 `evaluate_path_safety` 拒 `..`、路径分隔符与非法 id；执行层只接受固定格式十六进制 id，文件读取永远经缓存索引而不是拼路径。生成类工具只写 `.generated/`、下载经 32 位随机 id，模型无法指定磁盘路径。
+- **镜像目录**：Rust 与 Python 的 backup mirror profile 必须是存储根下的子目录标识；`.`、`..` 均拒绝为 `400 invalid_payload`。目录字符白名单本身不能阻止这两个别名。隔离回归证明拒绝时不创建生成目录或 HEAD，合法镜像上传仍可成功。
 - **测试**：[test_tool_policy.py](../tests/test_tool_policy.py) 路径用例、[test_files.py](../tests/test_files.py) id 校验、`run_tool_eval.py` traversal 用例。
 
 ### T5 · 密钥外泄（凭证被写进长期记忆，或随工具参数发往外部）

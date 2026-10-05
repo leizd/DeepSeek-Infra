@@ -106,8 +106,10 @@ func TestRustWorkerTLSRealBoundary(t *testing.T) {
 		t.Fatalf("authenticated request did not reach grant admission: %v", err)
 	}
 	response, err = client.QueryStorageEffect(ctx, mutationRequest().Fence, "tls-op-1", "")
-	if !errors.Is(err, internalprotocol.ErrUnknownEffect) || response == nil || response.State != commonv1.EffectState_EFFECT_STATE_UNKNOWN {
-		t.Fatalf("no-S3 unknown query was misclassified: %v", err)
+	if !errors.Is(err, internalprotocol.ErrStorageWorkerWithoutAuthority) || response == nil ||
+		response.Status != actionv1.StorageMutationStatus_STORAGE_MUTATION_STATUS_REJECTED ||
+		response.State != commonv1.EffectState_EFFECT_STATE_UNKNOWN || response.EffectId != "" {
+		t.Fatalf("authenticated storage query bypassed missing-authority refusal: %v", err)
 	}
 	if err := client.Admit(ctx, actionv1.CommandKind_COMMAND_KIND_EXECUTE_BACKUP, mutationRequest().Fence); !errors.Is(err, internalprotocol.ErrFenceMismatch) {
 		t.Fatalf("authenticated admit did not reach local authority: %v", err)

@@ -189,7 +189,7 @@ def test_the_domain_is_the_one_the_ownership_contract_declares() -> None:
     declared = {
         item["id"]
         for item in contract["domains"]
-        if item.get("current_owner") == "python" and item.get("target_owner") == "rust" and item.get("durable_store") == "rust_data"
+        if item.get("current_owner") in {"python", "rust"} and item.get("target_owner") == "rust" and item.get("durable_store") == "rust_data"
     }
     assert declared, "the contract declares no python -> rust data domain"
     assert RUST_DATA_DOMAINS <= declared, f"gate domains not declared by the contract: {sorted(RUST_DATA_DOMAINS - declared)}"

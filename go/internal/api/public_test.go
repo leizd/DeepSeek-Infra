@@ -33,6 +33,15 @@ func TestPublicConfigReadsEnvFlags(t *testing.T) {
 	if payload["version"] != "9.9.9" || payload["hasServerKey"] != true || payload["hasSearch"] != true || payload["defaultModel"] != "deepseek-chat" {
 		t.Fatalf("payload %+v", payload)
 	}
+	models, _ := payload["models"].([]any)
+	routes, _ := payload["modelRoutes"].(map[string]any)
+	limits, _ := payload["uploadLimits"].(map[string]any)
+	if len(models) != 2 || routes["fast"] != "deepseek-v4-flash" || routes["expert"] != "deepseek-v4-pro" {
+		t.Fatalf("model contract %+v", payload)
+	}
+	if limits["fileMaxBytes"] != float64(200_000_000) || limits["requestMaxBytes"] != float64(220_000_000) || limits["maxFiles"] != float64(20) {
+		t.Fatalf("upload contract %+v", limits)
+	}
 	if _, exists := payload["deepseekApiKey"]; exists {
 		t.Fatal("must not echo the key")
 	}

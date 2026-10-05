@@ -8,6 +8,3252 @@ This file is the session handoff. Historical plans, checkboxes, VERSION, and
 `release/native_runtime_5_0_evidence_v1.json` are not completion evidence.
 The capability matrix is [`migration-matrix.md`](migration-matrix.md).
 
+## Current verification checkpoint — 2026-10-05 push and CI repairs
+
+The first repair checkpoint was pushed as
+`181dbdf6c52158cd9a674f789e953e12e1bc06ea`. Its exact-head CI run
+[37279108498](https://github.com/leizd/DeepSeek-Infra/actions/runs/37279108498)
+passes 31 jobs, including native Go, MCP failover and hybrid reference tests.
+Three upstream jobs still fail: Rust and Rust coverage lack the generated Vite
+build required by `production_contract`; native S3 passes seven storage and ten
+worker tests, then Go tries to download modules through the deliberately refused
+proxy. Evidence Assembly and RC readiness fail downstream of those gates.
+
+The next repair builds the frontend in both Rust jobs and downloads/verifies Go
+modules before proxy isolation; the provider step sets `GOPROXY=off`. It retains
+the production contract, proxy refusal and all coverage thresholds. Locally, the
+Vite build, both actual Linux production-contract tests, ten workflow guards,
+Ruff/mypy and Go module verification pass. Exact-head CI/Evidence still needs a
+new complete run; these checks do not establish full native product readiness.
+The combined provider runner also passes seven storage tests, ten worker tests
+and three Go recovery subcases with `GOPROXY=off` and no container network.
+Log: `artifacts/native-20261005-ci-181dbdf6-s3-prefetched-offline.log`.
+
+Branch `codex/indexmap-std-feature`. The earlier shared checkpoint was committed
+and pushed as `7fe490d6e52d2317a2f5123cd45a57e167fa7a9b` (300 files); remote HEAD
+matched and the worktree was clean after that push. The current repair tree is
+based on that commit. Merge, release and production-data actions remain unauthorized.
+The whole project is **未完成**, readiness `NOT_READY`.
+
+- Exact-head CI run [37272874109](https://github.com/leizd/DeepSeek-Infra/actions/runs/37272874109)
+  passes 28 complete jobs, including all three whole-Python matrices, frontend
+  browser, security, eval and actual multi-MinIO gates. Native Go format/vet,
+  whole tests/race/95% coverage and plaintext boundary pass, but the later TLS
+  assertion fails. Six upstream jobs fail overall: Rust and Rust coverage lack
+  oracle XML dependencies; native S3 assumes unversioned overwrite semantics;
+  MCP failover has no task executor; hybrid checks use the new native production
+  image instead of the historical reference; Go TLS expects the old no-S3 code.
+  This failed run establishes no complete CI/Evidence qualification.
+- Repairs preserve the production native images. Rust CI installs the complete
+  offline oracle dependencies; hybrid uses `tests/fixtures/Dockerfile.python-oracle`;
+  MCP failover uses a Rust example in a named qualification image, absent from
+  the default production stage. The original Python fixture remains available
+  for offline reference. Generic test execution and full product ownership are
+  still open; this fixture proves only native child execution and task recovery.
+- The full provider runner passes **7 Rust storage tests, 10 worker tests and
+  three Go-promoted provider subcases** on actual isolated MinIO. It covers both
+  unversioned rejection and exact historical-version reads, real TLS worker
+  death/restart, signed Go admission, receipt replay and unchanged object versions.
+  Frozen source `59649ad85bb3d3a39ef543bc2a2f1d6384f81e4272681d71bfa966d8e4ca8f10`
+  plus the recorded runner overlay binds this local qualification. The runner
+  now emits actual default-binary SHA/size and Cargo/Go versions before testing.
+  Logs: `native-20261005-ci-repairs-s3-offline.log` and
+  `native-20261005-ci-repairs-s3-bound.log`; result metadata is recorded beside them.
+- The updated TLS boundary passes on the retained default Windows worker,
+  including missing-authority refusal and all four wrong-credential/identity cases.
+  Log `native-20261005-ci-repair-go-tls.log`. The native failover fixture also
+  compiles and executes on Windows. MCP has 23 passing tests; 108 source/runtime
+  guards pass. Source zero-Python checks say `scope=source_contract` and
+  `deployment_verified=false`; they do not establish deployment or full parity.
+- Next: push the prerequisite repair, collect current CI, resolve any upstream failure, refresh
+  whole Rust coverage, then continue production Rust key custody, full Go action/
+  epoch admission, remaining route/domain cutovers and desktop/Android qualification.
+
+## Previous local verification — 2026-10-05 resumed gates before push
+
+Branch `codex/indexmap-std-feature`, base HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`; shared source was uncommitted then.
+All existing concurrent slices below are preserved. The whole product is
+**未完成**, readiness `NOT_READY`. The user has authorized pushing the current
+checkpoint; merge, release and production-data actions remain unauthorized.
+
+- The overnight interruption stopped Docker and the in-flight validation
+  commands. Docker Desktop was restarted normally (engine 29.8.1); all prior
+  images/volumes and evidence remain intact. Store race log
+  `native-20261004-supervisor-store-race-30m.jsonl` ends after **363 passing tests**
+  without a package result, so it is incomplete evidence. The interrupted
+  `source-gates-final-20261004` directory has no byte manifest and is preserved,
+  not credited as a complete snapshot. A fresh `source-gates-final-20261005`
+  input bound the resumed whole Python validation. Current **47
+  source-contract/revision/inventory/Compose tests pass** in
+  `native-20261005-final-source-contracts.log`. Latest whole Ruff and **951-file
+  mypy** pass after the worker configuration changes. HEAD remains the
+  base above. New run identities and outcomes must be collected below.
+
+- The resumed whole Python input is the immutable
+  `D:/deepseek-native-validation/source-gates-final-20261005`, **3394 files /
+  57798539 bytes**, digest
+  `e8af0e0d903c119e6f6fabd6492abcc18da2b1d6f99a4c99a3675d9ceec569ae`.
+  `native-20261005-source-gates-final-snapshot.json` and
+  `native-20261005-gates-final-input.json` bind the source, 107 actual Vite assets
+  and two offline Rust helper binaries. The run completed with 5629 passes and
+  two failures, described below; session 89334 is collected. Preserve the input
+  and raw failed evidence.
+- The frozen `3c2db6f5...110329` Go store race rerun is complete: **1083 tests
+  pass**, package elapsed **1323.496 seconds**, zero failures. The log
+  `native-20261005-supervisor-store-race-30m.jsonl` SHA-256 is
+  `fcb3643aeaf895bbe750499dc281a23d4780e08363b1b2d22a6c0884f2f5dd3d`;
+  `native-20261005-supervisor-store-race-result.json` records the local scope.
+  Session 62746 is collected. Together with the other package results this
+  resolves the default ten-minute race timeout for that frozen input.
+- Go launch provider/A2A configuration now survives the supervisor. A source
+  audit corrected an earlier mistaken assumption: `DEEPSEEK_NATIVE_S3_*` and
+  ambient AWS values were test inputs, and the worker main had no S3 transport.
+  New dedicated `DEEPSEEK_WORKER_S3_*` loading and default compiled S3 support
+  are implemented; eight configuration tests and current Go launch tests pass.
+  Actual Linux worker TLS/process/three-MinIO recovery validation passes below.
+  It must not be described as Go-issued production authorization or release
+  evidence. Dedicated disposable providers are
+  `deepseek-native-worker-s3-20261005-{0,1,2}`; their input file is
+  `native-20261005-worker-s3-provider-input.json`.
+
+- Default worker transport/recovery qualification now passes all **10 real
+  provider tests**, including **three actual worker child processes** with
+  TLS/service authentication, current signed timestamps, forced death, exact
+  receipt replay and unchanged ETag/version after restart. Provider 2 uses an
+  actual versioned bucket. Native input
+  `source-worker-storage-replay-20261005` digest
+  `2ffcefd17bea84c462e224dd3e69f04e84ca9517987805d1299f8d73815ea547`
+  produces default Linux worker **49853328 bytes**, SHA-256
+  `399db5c1ea9cb47e70ed7bbce2098636bebd01ad030a2fe5181862dc35481a90`.
+  Evidence `native-20261005-worker-s3-replay-process-provider.json` binds the
+  source, provider inputs, binary and raw log SHA
+  `fa3fd34a7036008998a05d6bab0962bc56dc53eaf85f755f1a47592893bef5ae`.
+  Earlier failures are preserved: missing executable from an incorrectly
+  mounted Cargo cache; receipt version omitted from the journal; identical
+  completed operations rejected after restart. The last two are fixed through
+  shared receipt serialization and binding-checked committed receipt replay.
+  Unknown effects still cannot be redispatched. Current worker all-feature
+  Windows tests (**137**, providers absent) and clippy pass; no-S3 builds check
+  and reject configured S3 startup. This is a local native worker/provider test
+  with a test signer, not Go-issued cutover or whole-product zero-Python proof.
+- The whole Python `e8af0e0d...569ae` run is complete: **5629 pass / 2 fail**,
+  **95.57%** coverage, 3540.41 seconds. `native-20261005-gates-python.{log,xml}`
+  and coverage JSON are preserved; session 89334 is collected. One old test
+  expected Git-status timeouts to imply an empty/clean result; it now expects
+  the fail-closed error. The new status-failure test accidentally hard-coded
+  the release version; it now uses `APP_VERSION`. Focused verification is
+  `native-20261005-whole-python-failures-fixed.log` (**32 passes**). The final
+  whole gate runs on immutable `source-python-final-20261005`, **3397 files /
+  57834262 bytes**, source digest
+  `70b29cf978252f953242f6a186806562b3298cff1766c73d2fbd580f3e5af2fc`.
+  Source manifest `native-20261005-python-final-source-snapshot.json` and input
+  `native-20261005-python-final-input.json` bind 107 Vite assets and two actual
+  `bin/` Rust helpers. Unified session **27119**, output
+  `native-20261005-python-final-v2.log`, is complete: **5631 passes**, zero failures,
+  **95.58980112888268%** combined line/branch coverage, 4060.16 seconds. Session
+  27119 is collected; JSON coverage and XML results bind that frozen input.
+  An earlier launch used the wrong helper path; it was stopped before test
+  output and recorded as `native-20261005-python-final-aborted-preparation.json`,
+  never credited. The source-only zero-Python checker emits `scope=source_contract`
+  and `deployment_verified=false` and does not label source audits as deployment
+  or full route/provider parity evidence.
+
+- Windows default-worker provider startup initially failed with OS error 5
+  while creating its isolated authority directory. A minimal Rust program with
+  identical bytes fails from the repository `artifacts/` directory and succeeds
+  from the native build directory; the durable authority test also passes.
+  Temp/data root and environment inheritance changes did not resolve it. No
+  security setting or ACL was changed. `native-20261005-worker-directory-probe.json`
+  and `native-20261005-windows-durable-authority-probe.log` preserve that scope;
+  temporary production diagnostics are removed. The retained default binary
+  now lives in the native build tree, bound by
+  `native-20261005-worker-windows-clean-default-binary.json`; actual three-provider
+  validation passes **10 tests**, including three TLS child/restart observations.
+  Session 34289 is collected. Default Windows binary is **63660194 bytes**,
+  SHA-256 `fe74279f922f6d62b9c3df429c20aa7480709e54c0bcaa21f288fa7ef8c2e2d8`.
+  Raw log SHA-256 is
+  `11778695c506d79cedd357fd667f043bdf017383d37638fbcf5c50de8132adec`;
+  `native-20261005-worker-windows-default-provider-result.json` binds inputs.
+- Real Go control/provider qualification now passes all three providers with
+  live time and the actual Go writer fencing token: an unpromoted domain refuses
+  before RPC; signed durable action promotion enables Go-signed epoch/grant
+  installation and a default Rust TLS child writes the real object. Go settles
+  `SUCCEEDED` and preserves dispatch identity. Independent test-only SigV4 GET
+  validates bytes and unchanged ETag/version across forced Rust death, journal
+  reload and exact committed replay. This uses an **offline fixture key in Go**;
+  production Rust private-key custody and full-fleet admission remain open.
+  `native-20261005-go-control-real-provider.log` records the first local pass;
+  the updated lifecycle helper and integrated runner must be revalidated.
+- The immutable `f67263e3` Rust whole gate passes fmt, workspace check and
+  all-target/all-feature clippy, then fails one gateway packaging guard because
+  it rejected the exact `DEEPSEEK_RUNTIME_MODE: python_disabled` writer-denial
+  setting. The guard now requires that setting and exempts only the exact line;
+  all other interpreter mentions still fail. The next targeted run exposed the
+  same stale guard's assumption that the shell launches all children directly;
+  it now checks the exact Go supervisor exec and its three-child plan. Failed raw log
+  `native-20261005-rust-final-gates-v2.log` is retained; session 56637 is collected.
+  No current whole Rust coverage value is credited yet. The rerun uses writable
+  task-owned Git metadata and the source checkout's verified `core.autocrlf=true`,
+  without inferring cleanliness or changing repository settings.
+
+- The user explicitly requested pushing all current repository changes on
+  2026-10-05. Commit/push authorization now covers the current branch checkpoint;
+  ignored state, secrets, build outputs and local qualification artifacts remain
+  excluded. This checkpoint is **未完成 / NOT_READY**, not a release or production
+  cutover. The integrated provider runner and fresh Rust gate remain open.
+
+- Frozen Rust/Python quality input is
+  `D:/deepseek-native-validation/source-quality-final-20261004`: **3389 files /
+  57775166 bytes**, source digest
+  `33acecda9c7775f6fb76995ee82ebd36da2606ff274ece7c86f3bc2e6aab8c6c`.
+  `native-20261004-source-quality-final-snapshot.json` binds every source byte;
+  `native-20261004-quality-final-input.json` separately binds all 107 actual Vite
+  files and the two offline Windows helper binaries. Their data roots stay
+  disposable. **945-file mypy** and whole Ruff pass in
+  `native-20261004-quality-mypy.log` and `native-20261004-quality-ruff-fixed.log`.
+  Linux Rust coverage completes at **80.732473% (70452/87266)** across all fifteen
+  crates, with **1334 executed tests passing / one intentional Redis-provider
+  ignore** (1335 inventory). Summary/evidence SHA-256 is
+  `837149a93c5365e019738da1323e28dee3bc87b724c3370b259ef720ed4542cc`;
+  LCOV SHA-256 is `4b600d85e2751697fd16266a6bada619b1a66dc30d351b0d91c50a252d6bc664`.
+  Files are preserved in both roots as `native-20261004-quality-rust-coverage*`.
+  This is local source-digest qualification: the producer's Git metadata reports
+  clean despite the separate byte manifest reporting dirty. Git status failure
+  and timeout were being interpreted as clean; producer code now rejects them.
+  Six failure cases plus existing revision tests pass (14 tests). The frozen
+  producer bytes stay unchanged and do not qualify exact-head release Evidence.
+  `native-20261004-rust-local-coverage-binding.json` independently rehashes all
+  409 current Rust/Proto files: none changed since that numeric coverage run.
+  Whole Python finishes **5614 PASS / two FAIL / 61 subtests PASS at 95.580237%**,
+  in 3630.50 seconds, in `native-20261004-quality-python*`. One test assumed the
+  checkout folder name; one inventory read gitignored generated PyInstaller specs.
+  Root discovery now validates the actual module path; inventory records the
+  tracked legacy build recipe and separately identifies generated artifacts.
+  The legacy packaging gap stays in the inventory. **68 targeted cases pass** in
+  `native-20261004-final-python-failures-fixed.log`; fresh whole validation remains
+  necessary. Keep the copy immutable.
+
+- The actual production candidate image `sha256:7f6e628915509a1e2abecfc8cf0f8d689faa6b762b6cb04048cc32bbe38eab59`
+  builds and boots all three native processes with the real Vite UI. Inspection
+  finds 106 OS packages, no Python/Node files or packages. A real control-process
+  termination nevertheless leaves its gateway healthy and worker running;
+  `native-20261004-production-candidate-observation-red.json` preserves the failure.
+  The root image now installs and executes the Go native supervisor. Listener
+  binding and native trust configuration are preserved, legacy modes and offline
+  authority-clock overrides are excluded, and SIGTERM cancels the supervisor.
+  Targeted launch/daemon tests and 29 packaging/source-contract tests pass in
+  `native-20261004-container-supervisor-fixed.log` and
+  `native-20261004-production-supervisor-contracts.log`. The rebuilt pinned image
+  `sha256:1bf4b2288bd7bdd6259d47c07a8a32df03bfc28190b0f50ba13dc82a272dfc01`
+  binds source snapshot **3c2db6f5c09a75499d840c9ec8c9c1c8412bfe2c0884aca0f8f4edb32d110329**
+  (3391 files / 57785416 bytes). Actual persistent memory writes survive control
+  and worker termination and restart. Either child loss stops the whole tree;
+  a still-live Go writer lease refuses immediate restart; recorded expiry permits
+  recovery; normal SIGTERM exits zero. No Python/Node files or packages are found.
+  `native-20261004-production-supervisor-lease-recovery-fixed.json` preserves the
+  actual observations; the reproducible offline probe is
+  `artifacts/native_probe_production_supervisor_20261004.py`. Complete product
+  feature/ownership/provider qualification remains open.
+- Current Go coverage passes at **95.030835% (8013/8432)** on source `3c2db6f5`,
+  in `native-20261004-supervisor-go-coverage.{log,out}`. Go vet and whole Ruff pass;
+  mypy passes **949 files** after typing the offline image probe. Linux whole race
+  completes 29 package results: all except store pass; store hits the default
+  ten-minute total-package timeout, without assertion failures or race warnings.
+  The older passing store run took 1556.915 seconds. Current store is rerunning
+  with a bounded **30-minute timeout** in
+  `native-20261004-supervisor-store-race-30m.jsonl`, interrupted as recorded above.
+  CI's race command now uses the
+  same bound; no tests, race checks or coverage thresholds were removed. Do not
+  credit whole current race until the complete store rerun passes.
+- Native Compose now shares the edge's network namespace for private loopback
+  Go control and worker channels. The edge explicitly disables the legacy
+  runtime and owns its isolated Rust state volume. Actual v1 gRPC health works,
+  absent control credentials are unauthenticated, uncutover recipients return
+  FailedPrecondition, and an unfenced worker command is rejected. Native memory
+  persists in the real three-service topology. A sole edge restart was reproduced
+  disconnecting the channels; dependent restart now follows the namespace owner
+  and restores RPCs without changing the acknowledged memory. Source contracts
+  and real recovery pass in `native-20261004-compose-namespace-restart-fixed.log`
+  and `native-20261004-compose-namespace-recovery.json`; the test used pinned
+  candidate binaries, task-only volumes/random loopback port/credentials and
+  disabled automatic restart. All test services are now stopped. The offline Go
+  qualification client is under `D:/deepseek-native-validation/channel-probe-20261004`.
+
+- Current mirror candidate handback is implemented, without production promotion.
+  Native `mirror-inventory-import --revoke` reattests both inventories and persists
+  terminal `revoked`; reimport and native writes remain denied. Offline
+  `native_mirror_handoff.py --handback --manifest ...` verifies that exact receipt,
+  independently rehashes both roots, archives the original fence bytes and persists
+  native denial/history before releasing only the original Python source fence.
+  Restart and interrupted history publication recover. **12 native integration
+  tests** and **100 Python mirror/denial/oracle tests** pass in
+  `native-20261004-candidate-target-restore-fixed.log` and
+  `native-20261004-target-restore-python.{log,xml}`. Actual Python Age producer →
+  native CLI import/revocation → handback → original-writer sequence 1→2 → decrypt
+  also passes; the revoked candidate ciphertext remains unchanged. Evidence:
+  `native-20261004-python-rust-real-handback.json`; reproducible offline helper:
+  `artifacts/native_verify_mirror_handback_20261004.py`. This covers pre-admission
+  cancellation, not handback after native production effects or Go action admission.
+- New red cases showed import bypassing the target workspace restore lock and
+  treating a `null` restore fence as absent. Import/revocation now retain the target
+  workspace OS lock as well as the source gate and target store lock. Offline
+  handback shares those locks. Any restore-fence presence or uninspectable path
+  blocks, including null/array/corrupt documents. Python also denies any native
+  candidate receipt, independently of runtime mode; malformed/unknown receipts
+  cannot enable a second writer. No production data was used.
+- File-cache refresh failed under Linux instrumentation: same-length rewrites
+  retained the timestamp and reused stale parsed JSON. Native cache reuse now
+  checks content SHA-256. Fixed-timestamp rewrite and corruption cases were red;
+  all six file-store tests pass in `native-20261004-file-store-rewrite-fixed.log`.
+- Source `2a8387cd...b62d7d22` completed whole Linux Rust coverage: **80.682144%
+  (70304/87137 lines)**, **15 crates**, **1329 executed tests**, zero failures,
+  one provider test ignored by the workspace run. Inventory lists 1330 tests;
+  Redis provider acceptance is separately executed. Artifacts are in
+  `D:/deepseek-native-validation/source-cache-refresh-20261004/artifacts/`.
+  This precedes candidate revocation/handback, target restore guards and Lua
+  relocation. Refresh on the latest source before crediting a current full gate.
+  Whole Windows all-feature run before the cache/handback changes passed
+  **1327 tests / 118 suites**, one ignored provider case, in
+  `native-20261004-handoff-workspace-test.log`. Current whole clippy passes in
+  `native-20261004-native-lua-clippy.log`; earlier current mypy passed 944 files.
+- Whole Python run completed **5582 passed, 10 failed, 61 subtests passed**, with
+  **95.43%** coverage after 2901.35 seconds (`native-20261004-full-python.{log,xml}`
+  and `...-coverage.json`). This is a failed gate, not Python acceptance. Failures
+  exposed a Rust build dependency on TypeScript backend source, stale structural
+  mode/spacing/RPC/tombstone/frontend assertions, and a static scanner that rejected
+  the native Go supervisor's legitimate child processes. These were repaired with
+  **61 targeted tests** in `native-20261004-full-gate-failures-fixed.log`; frozen
+  protocol/oracle corpora were not rewritten. Refresh the complete gate on frozen
+  source after these changes.
+- Redis Lua is now owned under `rust/crates/deepseek-stateless-mcp/src/lua/v1/`:
+  **12 scripts / 5775 bytes** preserve the original template bytes. Production
+  no longer embeds/reads the TypeScript server to discover scripts. All twelve
+  are compared with the unchanged TypeScript oracle in native tests; actual Redis
+  dedup/claim/takeover/backup-fence release passes again in
+  `native-20261004-native-lua-real-redis.log`. Transfer hashes are in
+  `native-20261004-stateless-lua-transfer.json`. The zero-Python static source gate
+  now checks the native launcher's fixed three-binary set and interpreter denial,
+  while still refusing arbitrary exec. Its report explicitly says source contract;
+  observed process/package/workload qualification remains required.
+
+- Mirror parsing: the old empty body became `Mirror sourceEpoch is required`.
+  `artifacts/native-20261002-mirror-body-guards-red.log` preserves the red case.
+  The route now checks length/object shape, bounds actual buffering at 64,000,000
+  bytes, accepts JSON independently of Content-Type and reuses Python text
+  coercion for epoch/replica/head/acknowledgment. **7 mirror + 2 auth tests pass**
+  in `native-20261004-mirror-request-tests-restored.log`; five guard/four text
+  cases also pass on the unchanged Python public route (**12 tests**) in
+  `native-20261004-mirror-body-python-oracle.log`. Malformed-JSON diagnostic text,
+  unbounded/Unicode integers and production ownership admission remain open.
+- Launcher: relative native paths could move with caller cwd. The red case is
+  `native-20261004-launch-relative-roots-red.log`; binary/data/static paths now
+  become absolute. Native Go child listeners prove normal/nonzero child exit
+  cancels siblings; empty plans and missing binaries refuse. Launch package
+  tests pass at **96.5%** (`native-20261004-launch-boundaries.log`). RPC tests
+  verify configured process health, missing policy state, duplicate bearer
+  refusal and the 1 MiB request bound (`native-20261004-control-rpc-tests.log`).
+- Current whole Go coverage initially failed at **94.731835% (7966/8409)**.
+  The refreshed gate **passes at 95.020796% (7996/8415)** in
+  `native-20261004-go-coverage-fixed.log/out`; no floor or business-code exclusion
+  changed. Current Go format/vet pass. Launch/API/lifecycle race passes **155
+  tests, zero skips/failures/races** in `native-20261004-go-race-current.jsonl`
+  (6.236 / 344.692 / 102.986 seconds). Complete Linux race now also passes:
+  **1768 tests**, zero failures/races, one intentional frozen-vector generator
+  skip; twenty tested packages and nine packages without tests. Evidence is
+  `native-20261004-linux-go-race.jsonl`, source snapshot digest `cbb9c956...fb4d77`.
+  No Go source has changed since that snapshot.
+- Offline mirror handoff: `scripts/native_mirror_handoff.py` exports the versioned
+  `python-mirror-inventory-export-v1`, validates settled legacy/generation layout,
+  hashes every file and retains empty directories. Source fencing is persistent
+  at `<mirror-root>.native-handoff.json`; both Python and Rust writers refuse it
+  after restart, independent of mode flags. The exporter shares the workspace and
+  native store OS locks. **22 Python tests** pass, including damaged/unreadable
+  fences, disjoint path bindings, source drift and recovery after output failure,
+  in `native-20261004-mirror-source-{export,native-lock}.log`.
+- Rust `mirror_handoff` and the `mirror-inventory-import` CLI independently hash
+  the source and candidate, preserve all inventory bytes, and retain a durable
+  `copying`/`imported` receipt outside the data root. Reserved partial copies can
+  resume; unrelated target/staging data is refused and preserved. **Seven native
+  tests** pass in `native-20261004-mirror-import-kill-recovery.log`, including real
+  Age decrypt, source/target drift, restart denial and actual importer force-kill.
+  The strengthened kill case waits for a nonzero published HEAD before killing
+  and passes separately in `native-20261004-mirror-nonzero-copy-kill.log`.
+  Actual **Python-produced Age mirror → offline fence → native CLI import → Age
+  decrypt** also passes on isolated roots; binary and data hashes are in
+  `native-20261004-python-to-rust-real-age.json`. Imported candidates stay 423
+  pending ownership admission; this is not production promotion or full handback.
+- Real Redis 7.4 gate exposed an error-reply buffering bug: the client retained
+  `ERR BACKUP_FENCED`, so a subsequent legitimate fence release failed. Both sync
+  and async clients now consume the entire reply frame, including array errors.
+  Two TCP regressions were red; six parser/network tests pass, and the formerly
+  ignored real Lua/dedup/claim/takeover/fence-release test now passes in
+  `native-20261004-redis-real-lua-fixed.log`. Disposable Redis image is pinned at
+  `858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499`.
+  Its task-owned container is `deepseek-native-redis-20261004` (loopback only).
+- Current whole Rust check, fmt and all-target/all-feature clippy pass in
+  `native-20261004-rust-{check,fmt-final,clippy-final}.log`. Saved-item and run
+  inputs now carry named fields; snapshot joining and boxed task records remove
+  the diagnosed allocations without changing wire JSON. Full test initially
+  reached 381 passes and one UTF-8 Python-oracle failure; that fixture and the
+  task wrapper now use `PYTHONUTF8=1`. The complete rerun passes **1266 tests**
+  in **111 suites**, with one explicitly ignored Redis-provider test, in
+  `native-20261004-rust-workspace-test-fixed.log`. This precedes the later profile
+  alias guard; that guard's native regression passes separately. Refreshed
+  clippy/build after restore exclusion pass in
+  `native-20261004-rust-clippy-restored-mirror.log` and `native-20261004-gateway-build.log`.
+  These whole-workspace results predate the new handoff and Redis changes; the
+  handoff package clippy passes in `native-20261004-mirror-import-clippy.log`.
+- Restore exclusion: both real Rust and Python writers published a mirror while
+  restore held the workspace lock. Their red logs are
+  `native-20261004-{mirror,python-mirror}-restore-window-red.log`. Rust upload now
+  runs blocking sealing on a blocking thread, holds the workspace OS lock and
+  rechecks the restore fence through HEAD publication. Python's remaining source
+  writer takes that same lock. **8 Rust mirror tests** pass in
+  `native-20261004-mirror-restore-window-fixed.log`; **74 Python mirror/ownership/
+  coverage-evidence tests** pass in `native-20261004-mirror-and-evidence-oracles.log`.
+  Both concurrency cases prove fence refusal and successful upload after recovery.
+- Coverage inventory now comes from locked offline Cargo metadata: **15 actual
+  workspace crates**, replacing the stale static eleven. Missing members or
+  failed metadata cannot produce a partial PASS inventory. The existing 80%
+  line threshold and generated-protobuf-only omit remain unchanged. Inventory
+  and numeric coverage gate tests pass (**19**) in
+  `native-20261004-coverage-inventory-test.log`. Whole Ruff/mypy previously passed
+  938 source files in `native-20261004-mypy-verified.log`; whole Ruff passes in
+  `native-20261004-ruff-verified.log`.
+- Path scope: both stores accepted profiles `.`/`..`, allowing HEAD/generations
+  at the mirror root or parent. Red cases are
+  `native-20261004-{rust,python}-mirror-path-scope-red.log`. Both now refuse 400
+  before data writes. The native regression and **59 Python safety/oracle tests,
+  zero skips/failures**, pass in `native-20261004-rust-mirror-path-scope-fixed.log`
+  and `native-20261004-mirror-safety-oracles.{log,xml}`. The disabled Python
+  writer is also checked before lock creation and rechecked after waiting;
+  `native-20261004-mirror-lock-denial-fixed.log` passes **28 tests**.
+- Four freshly built Windows Rust/Go process tests pass in
+  `native-20261004-real-process-boundary.jsonl` (44.771 s); the mirror case includes
+  ciphertext hashes, replay, kills and successor lease fencing. This remains
+  local boundary evidence, not global ownership or provider acceptance.
+- October 2 recorded **four Windows real Rust/Go process tests**, **8 Rust
+  mirror/auth tests**, **67 Python mirror/contract/denial tests**, mypy 931 files,
+  Ruff, Go vet, API race (**121 tests, zero skips/failures/races**) and lifecycle
+  race. They are historical local results, not current whole-workspace/release
+  PASS. Policy browser create/disable/delete was verified using disposable
+  processes; screenshots/DOM/public-list evidence is under
+  `native-20261002-browser-policy-*`. The CRUD fixture had not enabled Rust data
+  mode, so its mirror 501 is gating evidence, not an unregistered-route finding.
+  Native browser mirror upload remains open.
+- After interruption, temporary compiler executables were absent. **5515 SDK
+  files / 487021277 bytes** match source SHA-256 in
+  `native-20261004-windows-sdk-manifest.json`. Task-owned tools now live under
+  `C:/Users/12393/.codex/native-validation/20261004/{compiler,rust-linker}`;
+  GNU driver is in `rust-linker/self-contained`. The wrapper
+  `artifacts/native_windows_rust_20261002.ps1` selects Rust 1.85 GNU, jobs=2 and
+  target `D:/deepseek-native-validation/windows-20261004/target`. Invoke it with
+  `-CargoArguments @('test','--locked','--offline','--manifest-path',
+  'rust/Cargo.toml',...)`. No global compiler, ACL or security setting changed.
+  The GNU linker copy (five files) and cargo-llvm-cov 0.6.21 are also hashed in
+  that manifest (SHA-256 `20cfae14da14369d6349f2153be5f3e4f833dc3a9c916a3a04464ba0bcce24ae`).
+  Windows coverage cannot run on this GNU toolchain: `E0463 profiler_builtins`
+  is preserved in `native-20261004-windows-coverage-probe.log`; no repeat or lower floor.
+- Docker normal start succeeded after available disk space recovered. The existing
+  development image remains `c33bc88e8d52443ed01d659e8a20b99bb08438bfd7c30ef6e32532da8edbd9ce`
+  and pinned MinIO image `a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2`
+  remains cached; no prune/reset/format command was issued. Engine 29.8.1 reports
+  about 16 GiB. Task containers/volumes carry label
+  `deepseek.codex-task=native-reconstruction-20261004`.
+- Fresh source copy `D:/deepseek-native-validation/source-mirror-20261004` has
+  **3368 files / 57652069 bytes**, verified twice against original source;
+  `native-20261004-source-snapshot.json` records digest
+  `cbb9c956ea23d0f55c4bcd4cc21f88a6b0a7439dd50cb002568375d2b9fb4d77`.
+  It precedes the profile alias guard. Linux coverage's first offline attempt
+  lacked `openssl-probe 0.2.1`; locked Linux-target fetch populated the task
+  registry volume. Later attempts exposed missing offline Python dependencies
+  and omitted generated Vite assets, both repaired without changing tests. New
+  development image ID is `5d9b700e50810914bffc6549562db7aaa675eec7056de480184b82b7ff2dc739`.
+  Vite build passes, all 245 frontend source files match the copy, and copied
+  static input digest is `292853a850047a66de2dd4704f8bc16cb01f3981b6e5044eda0f83d6e274458a`
+  (`native-20261004-linux-static-input.json`). The run with assets reached
+  `scheduler_routes` and found a Unix directory-open error mismatch (bundled
+  SQLite IOERR versus Python CANTOPEN); `open_readonly` now rejects directories
+  with the oracle error. `native-20261004-linux-rust-coverage-with-ui.log` is
+  failed evidence, not an 80% PASS. Refresh coverage on a new verified source
+  copy containing this fix, handoff, and Redis changes. Complete Go race has
+  finished successfully in `native-20261004-linux-go-race.jsonl` as qualified above.
+  The development image includes Python and is ineligible for zero-Python release evidence.
+- Latest byte-verified copy is `D:/deepseek-native-validation/source-handoff-20261004`:
+  **3375 files / 57730879 bytes**, digest
+  `989a9486bb7d3574bbe390a6dca27f96122d69347ff03ca4427f366835c0b4b6`
+  (`native-20261004-source-handoff-snapshot.json`). It includes the mirror handoff,
+  reply-buffer fix, directory-open guard and Unix-only lint repairs. All 107
+  generated UI files were rehashed/copied; the static digest is unchanged.
+  Linux attempt `native-20261004-handoff-rust-coverage.log` failed at the stale
+  equal-timestamp file-cache case; the repaired `2a8387cd...` copy passes as
+  qualified above. Whole clippy in `native-20261004-handoff-workspace-clippy.log`
+  and whole `fmt --all --check` passed; later checks are qualified above.
+
+Next: refresh current quality gates without reducing floors; close mirror public
+parity and pre-promotion rollback, native handback/restore and Go action admission.
+Continue every remaining product/platform/provider/zero-Python and exact-head
+CI/Evidence gate. The workspace-home and other concurrent work below remain in
+scope and must be preserved.
+
+## Concurrent checkpoint — 2026-10-04 workspace home
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. Shared source remains uncommitted.
+No push, merge, release, or production-data operation. The product migration is
+**未完成**. `release/native_runtime_5_0_evidence_v1.json` was not edited and stays
+`NOT_READY`. `current_production_authority` stays `python`. No ownership domain
+was flipped. This slice does not add a domain and does not change
+`RUST_DATA_DOMAINS`. Debug `cargo test` did not relink the 4.8.0 release gateway.
+
+### This slice
+
+`GET /api/workspace/home` is served by the Rust production router, ahead of the
+Go `/api/*` catch-all. It is `workspace_home.workspace_home`. The body is the
+aggregate itself: `ok`, `version` `4.8.0`, the ten fixed modules, `recent`,
+`counts`, and `status` (`doctor` `ok`, `runtime` `local`). It is a read. It is
+served while `DEEPSEEK_RUNTIME_MODE=python_authoritative`. It does not answer
+501, and it does not create `.projects`, `.automation`, `.media`, `.memory`,
+`.generated`, or `docs/evidence`.
+
+`limit` is `int(query or 8)` and then `int(limit or 8)` clamped to 1..50.
+Missing or empty is 8. The query `"0"` is 8, because `0` is falsy on the
+second conversion. `"-3"` is 1. `"100"` is 50. A non-integer is
+`500 {"error":"Server error","code":"internal"}` before any store read.
+Missing auth is the production nested
+`{"error":{"code":"UNAUTHORIZED","message":"Auth required"}}`. `HEAD` is 200
+with an empty body. Any other method is
+`405 {"detail":"Method Not Allowed"}` with `Allow: GET, HEAD`.
+
+`recent.automations` is `history.list_runs(limit=safe_limit)`, already
+truncated, so `counts.automationRuns` is that window. `counts.automations` is
+the full definition count. Other counts are the full collected lengths.
+Recent windows are the clamped prefix. Artifacts, saved items, and skill runs
+are re-sorted by `updatedAt` / `createdAt` / `finishedAt` / `startedAt`
+descending. A per-project saved-item, artifact, or skill-run failure is
+skipped. Missing or unreadable JSON is an empty collection.
+`status.evidence` is `{path, present, status}` for
+`<resolved DEEPSEEK_INFRA_ROOT>/docs/evidence/ga-v4.8.0.json` as a POSIX path.
+The file is not created.
+
+This is **集成通过**, not **完成切换**. Python still owns the stores the
+aggregate reads.
+
+### Verification
+
+`cargo fmt --manifest-path rust/Cargo.toml -p deepseek-gateway` then
+`cargo test --manifest-path rust/Cargo.toml -p deepseek-gateway --offline --test data_routes -- --test-threads=1`.
+31 passed in 6.10s, including `workspace_home_matches_python_and_leaves_missing_stores_absent`
+and the existing `project_` cases. The success body, including limit `""`,
+`"0"`, `"-3"`, and `"100"`, was compared with a live `workspace_home` call on
+the same root. The child removed `DEEPSEEK_RUNTIME_MODE`. The seeded history
+has 3 runs; `limit=1` reports `counts.automationRuns` 1 and
+`counts.automations` 2. An empty root stayed empty after 401, 500, 405, HEAD,
+and GET. Evidence:
+`C:\Users\12393\AppData\Local\Temp\grok-goal-e35ab403b353\implementer\workspace-home.log`.
+Linker: `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER` =
+`rust/target/tmp/linkwrap/x86_64-w64-mingw32-gcc.exe`, `TEMP`/`TMP` =
+`D:\deepseek\rust\target\tmp`. Toolchain was not switched. HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e` plus this uncommitted slice.
+
+`python scripts/production_runtime_inventory.py --write` then
+`pytest tests/test_production_runtime_inventory.py -p no:cacheprovider`
+passed (1 passed in 0.69s). Evidence:
+`C:\Users\12393\AppData\Local\Temp\grok-goal-e35ab403b353\implementer\workspace-home-inventory.log`.
+Scanner python-only routes 106 → 105. `workspace.py` 29 → 28.
+`/api/workspace/home` is absent from `http_routes_only_on_python`.
+`automation.py` stayed 2. `media.py` stayed 6. `backup_governance.py` stayed
+62. `rag.py` stayed 3. `edge.py` stayed 2. `mcp.py` stayed 1. `status.py`
+stayed 1. Authority `python`. Go-owned domains `[]`. Rust domains 12. Python
+domains 34.
+
+`docs/PROJECTS_STORE.md` and `docs/NATIVE_PUBLIC_ROUTES.md` still describe the
+old artifact 501. They were not rewritten in this slice. Local cargo and
+pytest are not remote CI or Evidence Assembly.
+
+### Not done, next executable task
+
+Do not treat this slice as a domain flip. The next public route is
+`GET /api/workspace/projects/{project_id}/provenance`. Do not register
+`GET /api/workspace/artifacts/{artifact_id}/download` until the bytes are the
+real artifact. Do not register `GET /api/automation` or `POST /api/automation`
+until every POST action is real. Do not port `GET /api/semantic-cache/status`
+while `status()` creates `.semantic-cache`. Do not port
+`GET /api/workspace/resilience/journal` while `_connect` creates the database.
+Do not stub readiness, SLO, catalog, capacity, or transfer-budget routes. Do
+not register drain GET. Do not answer with 501. `GET`/`POST /api/media` share
+one path. `GET`/`PATCH`/`DELETE /api/media/{media_id}` share one path.
+
+105 Python-only public routes remain, 62 of them in `backup_governance.py`,
+28 in `workspace.py`, 6 in `media.py`, and 2 in `automation.py`. Provider,
+desktop, Android, and zero-Python workload gates remain open. Do not redo the
+4.8.0 double launch unless the release gateway binary changes. The product
+remains **未完成**.
+
+## Previous continuation checkpoint — 2026-10-04 artifact writes
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. Shared source remains uncommitted.
+No push, merge, release, or production-data operation. The product migration is
+**未完成**. `release/native_runtime_5_0_evidence_v1.json` was not edited and stays
+`NOT_READY`. `current_production_authority` stays `python`. No ownership domain
+was flipped. `project_metadata_store` was already declared; this slice does not
+add a domain and does not change `RUST_DATA_DOMAINS`. Debug `cargo test` did
+not relink the 4.8.0 release gateway.
+
+### This slice
+
+`POST /api/workspace/projects/{project_id}/artifacts` no longer answers
+`501 NATIVE_PROJECTS_MUTATIONS_NOT_READY`. It is `artifacts.register_artifact`.
+`PATCH` and `DELETE /api/workspace/projects/{project_id}/artifacts/{artifact_id}`
+are served together on one path. A truthy `path` is `add_artifact_version`.
+Any other PATCH is `update_artifact`. Other methods on the item path are
+`405 {"detail":"Method Not Allowed"}` with `Allow: PATCH, DELETE`.
+
+The writer gate is `may_write_native_store("project_metadata_store")`, which is
+true only when `DEEPSEEK_RUNTIME_MODE=python_disabled`. Otherwise the answer is
+`409 NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED` before the body is parsed, and
+`.projects` is not created. With the mode set, a legal create appends an
+`art_` plus 16 lowercase hex record, touches project `updatedAt`, and
+`GET .../artifacts` lists it. An empty type with `notes/kept.md` is stored as
+`markdown`. Empty path is `400 Artifact path is required`. A `..` path is
+`400 Artifact path must not escape the workspace`. `notes/file.bin` is
+`400 Unsupported artifact type`. A missing project is `404 Project not found`
+and does not create a directory. An unknown artifact id on PATCH is `404` and
+does not rewrite, including when the path would also be illegal, because the
+path is checked only after the id is found. DELETE of an unknown id is
+`{"ok":true,"deleted":0}` and does not rewrite. `update_artifact` changes
+`title` and `source` only. The load keeps the last 500 normalised rows in file
+order; the list then sorts by `updatedAtMs`. A hidden prefix is not rewritten
+by a 413 `Too many artifacts` (`upload_too_large`, checked before the path) or
+by a 404 for an id outside that window. Deleting a visible id rewrites only
+the loaded window, so the hidden prefix disappears. `GET` list behaviour is
+unchanged. `GET /api/workspace/artifacts/{artifact_id}/download` stays Python.
+
+This is **集成通过**, not **完成切换**. Python can still write the same files
+while Python is authoritative.
+
+### Verification
+
+`cargo fmt --manifest-path rust/Cargo.toml -p deepseek-policy -p deepseek-gateway`
+then `cargo test --manifest-path rust/Cargo.toml -p deepseek-gateway --offline --test data_routes -- --test-threads=1 project_`.
+7 passed in 2.11s: the new artifact success and refusal test, the saved-item
+test, the closed mutation test, auth, the list oracle, and the project error
+cases. Create, title update, version append, and delete were compared with a
+live `register_artifact` / `update_artifact` / `add_artifact_version` /
+`delete_artifact` oracle. The child removed `DEEPSEEK_RUNTIME_MODE`. Fresh
+`artifactId`, clocks, and `downloadUrl` were stripped on the body compare.
+Evidence:
+`C:\Users\12393\AppData\Local\Temp\grok-goal-e6274bd2ca41\implementer\artifact-routes-2.log`.
+`artifact-routes.log` is the earlier `python_truthy` type error (`Option<&Value>`
+passed where `&Value` was required), not a linker failure. Linker:
+`CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER` =
+`rust/target/tmp/linkwrap/x86_64-w64-mingw32-gcc.exe`, `TEMP`/`TMP` =
+`D:\deepseek\rust\target\tmp`. Toolchain: `rustc 1.97.1` stable
+`x86_64-pc-windows-gnu`. HEAD `0e340dc3695890e8d85d59c8263192f0593fb79e` plus
+this uncommitted slice.
+
+`python scripts/production_runtime_inventory.py --write` then
+`pytest tests/test_production_runtime_inventory.py -p no:cacheprovider`
+passed (1 passed in 0.62s). Evidence:
+`C:\Users\12393\AppData\Local\Temp\grok-goal-e6274bd2ca41\implementer\artifact-inventory.log`
+and `artifact-inventory-pytest.log`. Scanner python-only routes 108 → 106.
+`workspace.py` 31 → 29. The drop is the artifact item PATCH and DELETE. POST
+was already registered, so it was already absent from the Python-only list.
+No artifact create, update, or delete path remains on that list.
+`GET .../download` remains. `automation.py` stayed 2. `media.py` stayed 6.
+`backup_governance.py` stayed 62. `status.py` stayed 1. Authority `python`.
+Go-owned domains `[]`. Rust domains 12. Python domains 34.
+
+`docs/PROJECTS_STORE.md` and `docs/NATIVE_PUBLIC_ROUTES.md` still describe the
+old artifact 501. They were not rewritten in this slice.
+
+### Not done, next executable task
+
+Do not treat this slice as a domain flip. The next slice is
+`GET /api/workspace/home`. It is `workspace_home.workspace_home`. `limit`
+uses `int(limit or 8)` then clamps to 1..50. The response is the home
+aggregate. Missing stores must stay missing: the Python loaders use
+`read_json_file` or an `exists()` check and do not create `.projects`,
+`.automation`, `.media`, `.memory`, or export directories. Match that. Do not
+register `GET /api/workspace/artifacts/{artifact_id}/download`. Do not register
+`GET /api/automation` or `POST /api/automation` until every POST action is
+real. Do not port `GET /api/semantic-cache/status` while `status()` creates
+`.semantic-cache`. Do not port `GET /api/workspace/resilience/journal` while
+`_connect` creates the database. Do not stub readiness, SLO, catalog,
+capacity, or transfer-budget routes. Do not register drain GET. Do not answer
+with 501. `GET`/`POST /api/media` share one path. `GET`/`PATCH`/`DELETE
+/api/media/{media_id}` share one path.
+
+106 Python-only public routes remain, 62 of them in `backup_governance.py`,
+29 in `workspace.py`, 6 in `media.py`, and 2 in `automation.py`. Provider,
+desktop, Android, and zero-Python workload gates remain open. Do not redo the
+4.8.0 double launch unless the release gateway binary changes. The product
+remains **未完成**.
+
+## Previous continuation checkpoint — 2026-10-04 saved-item writes
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. Shared source remains uncommitted.
+No push, merge, release, or production-data operation. The product migration is
+**未完成**. `release/native_runtime_5_0_evidence_v1.json` was not edited and stays
+`NOT_READY`. `current_production_authority` stays `python`. No ownership domain
+was flipped. `project_metadata_store` was already declared; this slice does not
+add a domain and does not change `RUST_DATA_DOMAINS`. Debug `cargo test` did
+not relink the 4.8.0 release gateway.
+
+### This slice
+
+`POST /api/workspace/projects/{project_id}/saved-items` no longer answers
+`501 NATIVE_PROJECTS_MUTATIONS_NOT_READY`. It is `saved_items.create_saved_item`.
+`PATCH` and `DELETE /api/workspace/projects/{project_id}/saved-items/{saved_id}`
+are `update_saved_item` and `delete_saved_item` on the same path. Both methods
+moved together. Other methods on the item path are `405
+{"detail":"Method Not Allowed"}` with `Allow: PATCH, DELETE`.
+
+The writer gate is `may_write_native_store("project_metadata_store")`, which is
+true only when `DEEPSEEK_RUNTIME_MODE=python_disabled`. Otherwise the answer is
+`409 NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED` before the body is parsed, and
+`.projects` is not created. With the mode set, a legal create appends a
+`save_` plus 16 lowercase hex item, touches project `updatedAt`, and
+`GET .../saved-items` lists it. Tags de-duplicate case-insensitively. An
+unknown purpose becomes `reference`. Empty type is `400 Unsupported saved item
+type` and does not rewrite. A missing project is `404 Project not found` and
+does not create a directory. An unknown saved id on PATCH is `404` and does
+not rewrite; DELETE of an unknown id is `{"ok":true,"deleted":0}` and does not
+rewrite. The load keeps the last 1000 normalised rows. A hidden prefix is not
+rewritten by a 413 `Too many saved items` or by a 404 for an id outside that
+window. Deleting a visible id rewrites only the loaded window, so the hidden
+prefix disappears. `GET` list behaviour is unchanged.
+
+This is **集成通过**, not **完成切换**. Python can still write the same files
+while Python is authoritative.
+
+### Verification
+
+`cargo fmt --manifest-path rust/Cargo.toml -p deepseek-gateway` then
+`cargo test --manifest-path rust/Cargo.toml -p deepseek-gateway --offline --test data_routes -- --test-threads=1 project_`.
+6 passed in 1.10s: the new saved-item success and refusal test, the closed
+mutation test, auth, the list oracle, and the project error cases. The create
+and update bodies were compared with a live `create_saved_item` /
+`update_saved_item` / `delete_saved_item` oracle. The child removed
+`DEEPSEEK_RUNTIME_MODE`. Fresh `savedId` and clocks were stripped on the
+create compare. Evidence:
+`C:\Users\12393\AppData\Local\Temp\grok-goal-e6274bd2ca41\implementer\saved-item-routes-2.log`.
+`saved-item-routes.log` is the earlier `Vec<String>` compile error, not a
+linker failure. Linker:
+`CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER` =
+`rust/target/tmp/linkwrap/x86_64-w64-mingw32-gcc.exe`, `TEMP`/`TMP` =
+`D:\deepseek\rust\target\tmp`. Toolchain: `rustc 1.97.1` stable
+`x86_64-pc-windows-gnu`. HEAD `0e340dc3695890e8d85d59c8263192f0593fb79e` plus
+this uncommitted slice.
+
+`python scripts/production_runtime_inventory.py --write` then
+`pytest tests/test_production_runtime_inventory.py -p no:cacheprovider`
+passed. Evidence:
+`C:\Users\12393\AppData\Local\Temp\grok-goal-e6274bd2ca41\implementer\saved-item-inventory.log`
+and `saved-item-inventory-pytest.log`. Scanner python-only routes 110 → 108.
+`workspace.py` 33 → 31. No saved-item path remains on the Python-only list.
+`automation.py` stayed 2. `media.py` stayed 6. `backup_governance.py` stayed
+62. `status.py` stayed 1. Authority `python`. Go-owned domains `[]`.
+
+### Not done, next executable task
+
+Do not treat this slice as a domain flip. `POST
+/api/workspace/projects/{project_id}/artifacts` is still registered and still
+answers `501 NATIVE_PROJECTS_MUTATIONS_NOT_READY`. `PATCH` and `DELETE
+/api/workspace/projects/{project_id}/artifacts/{artifact_id}` share one path
+and are still Python-only. The next slice replaces that 501 with a real
+artifact register and serves PATCH and DELETE together, gated on
+`project_metadata_store` / `python_disabled`. Do not register only one of
+those two methods. Do not treat
+`GET /api/workspace/artifacts/{artifact_id}/download` as migrated. Do not
+register `GET /api/automation` or `POST /api/automation` until every POST
+action is real. Do not port `GET /api/semantic-cache/status` while `status()`
+creates `.semantic-cache`. Do not port
+`GET /api/workspace/resilience/journal` while `_connect` creates the database.
+Do not stub readiness, SLO, catalog, capacity, or transfer-budget routes. Do
+not register drain GET. Do not answer with 501. `GET`/`POST /api/media` share
+one path. `GET`/`PATCH`/`DELETE /api/media/{media_id}` share one path.
+
+108 Python-only public routes remain, 62 of them in `backup_governance.py`,
+31 in `workspace.py`, 6 in `media.py`, and 2 in `automation.py`. Provider,
+desktop, Android, and zero-Python workload gates remain open. Do not redo the
+4.8.0 double launch unless the release gateway binary changes. The product
+remains **未完成**.
+
+## Previous continuation checkpoint — 2026-10-04 automation run
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. Shared source remains uncommitted.
+No push, merge, release, or production-data operation. The product migration is
+**未完成**. `release/native_runtime_5_0_evidence_v1.json` was not edited and stays
+`NOT_READY`. `current_production_authority` stays `python`. No ownership domain
+was flipped. `.automation` was not added to `DECLARED_NATIVE_DATA_DOMAINS` or
+`RUST_DATA_DOMAINS`. Debug `cargo test` did not relink the 4.8.0 release gateway.
+
+### This slice
+
+`POST /api/automation/{automation_id}/run` is served by the Rust production
+router as `runner.run_once`. The handler is `automation_run_routes`. A missing,
+empty, zero, or negative `Content-Length` is `{}`. A header that is not a
+Python `int` (`nope`) is `500 {"error":"Server error","code":"internal"}`,
+not the definition route's `400 Invalid Content-Length`. A declared length
+above 2000000 is `413` before the body is trusted. `now` is parsed before the
+automation lookup: an invalid timestamp is `400 now must be an ISO timestamp
+or epoch milliseconds` and does not create `.automation`. A missing automation
+is `404 Automation not found` and does not create `history.json`, including
+while Python owns the store. An existing automation while Python is
+authoritative is `409 NATIVE_AUTOMATION_WRITE_NOT_OWNED` before any history,
+saved-item, project, or memory write.
+
+With `DEEPSEEK_RUNTIME_MODE=python_disabled`, a legal `save_item` run returns
+`{"ok": true, "run": ...}` and writes `.automation/history.json`,
+`.projects/{id}/saved-items.json`, the project `updatedAt`, and one memory
+summary. The same success sentence updates that memory row
+(`memory_fingerprint`) instead of inserting a second row; `source.runId`
+moves to the later run. An exact cron `34 12 4 10 *` at
+`2026-10-04T12:34:00+00:00` succeeds on both sides (`startedAtMs` equal before
+stripping). `0 0 * * *` at `2026-10-04T15:00:00+00:00` skips
+`schedule_not_due` and does not save. A disabled automation skips
+`automation_disabled` and writes that history row. `save_item` without a
+project id is HTTP 200 with `status: failed` and
+`save_item action requires projectId`. `automations.json` is not rewritten.
+`GET /api/automation/{id}/runs` lists the new run. Other methods on `.../run`
+are `405 {"detail":"Method Not Allowed"}` with `Allow: POST`.
+
+`traceId` stays empty. There is no trace store. An action other than
+`save_item` that passes policy is HTTP 200 `status: failed` with
+`{type} is not executed by the native gateway yet`. Browser actions are
+usually `policy_denied` because `allowBrowser` defaults to false. This is
+**集成通过** for the manual and scheduled `save_item` path, the
+disabled/trigger/condition/policy decisions, and the pre-write refusals. It
+is not **完成切换** and not full action-matrix parity.
+
+### Verification
+
+`cargo fmt --manifest-path rust/Cargo.toml -p deepseek-gateway` then
+`cargo test --manifest-path rust/Cargo.toml -p deepseek-gateway --offline --test automation_run_routes --test automation_definition_routes --test automation_template_routes -- --test-threads=1`.
+Definition tests: 2 passed in 5.86s. Run tests: 3 passed in 2.10s. Template
+tests: 2 passed in 1.81s. The five ordered cases were compared with a live
+`run_once` oracle on a copy taken before the Rust posts. The child removed
+`DEEPSEEK_RUNTIME_MODE`. Clocks, `runId`, `traceId`,
+`timeoutCheckedAtMs`, and `evidence.action.savedItem` identity were stripped.
+Evidence:
+`C:\Users\12393\AppData\Local\Temp\grok-goal-e6274bd2ca41\implementer\automation-run-routes-4.log`.
+Earlier logs `automation-run-routes.log`, `-2.log`, and `-3.log` are failed
+attempts (civil-date compile, memory fingerprint count, saved-item strip
+path) and are not the green result. Linker:
+`CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER` =
+`rust/target/tmp/linkwrap/x86_64-w64-mingw32-gcc.exe`, `TEMP`/`TMP` =
+`D:\deepseek\rust\target\tmp`. Toolchain: `rustc 1.97.1` stable
+`x86_64-pc-windows-gnu`. HEAD `0e340dc3695890e8d85d59c8263192f0593fb79e` plus
+this uncommitted slice.
+
+`python scripts/production_runtime_inventory.py --write` then
+`pytest tests/test_production_runtime_inventory.py -p no:cacheprovider`
+passed. Evidence:
+`C:\Users\12393\AppData\Local\Temp\grok-goal-e6274bd2ca41\implementer\automation-run-inventory.log`
+and `automation-run-inventory-pytest.log`. Scanner python-only routes
+111 → 110. `automation.py` 3 → 2. The remaining automation paths are only
+`GET /api/automation` and `POST /api/automation`. `status.py` is 1
+(`semantic-cache`). `workspace.py` stayed 33. `backup_governance.py` stayed
+62. `media.py` stayed 6. Authority `python`. Go-owned domains `[]`. Python
+production domains 34, rust 12.
+
+### Not done, next executable task
+
+Do not treat this slice as a domain flip. Do not register `GET /api/automation`
+or `POST /api/automation` until every POST action is real (`create`, `run`,
+`rerun`, `simulate`, `run_due`). Registering list or create alone would turn
+the other actions into 405. Do not port `GET /api/semantic-cache/status`
+while `status()` creates `.semantic-cache`. Do not treat artifact download
+as migrated. Do not port `GET /api/workspace/resilience/journal` while
+`_connect` creates the database. Do not stub `readiness_status`,
+`calculate_dr_slo_metrics`, catalog chain health, target capabilities,
+capacity summary, or transfer budget. Do not register drain GET. Do not
+answer with 501. Do not treat the scheduler admission controller as migrated.
+`GET`, `PATCH`, and `DELETE /api/media/{media_id}` share one path and must
+move together. `GET` and `POST /api/media` share one path and must move
+together.
+
+`POST /api/workspace/projects/{project_id}/saved-items` is already registered
+and still answers `501 NATIVE_PROJECTS_MUTATIONS_NOT_READY`. The path scanner
+therefore omits it. `PATCH` and `DELETE` on
+`/api/workspace/projects/{project_id}/saved-items/{saved_id}` are still
+Python-only and share one path. The next slice replaces that 501 with
+`create_saved_item` and serves PATCH and DELETE together, gated on
+`project_metadata_store` / `python_disabled`, with a legal write and a
+refusal. Do not register only one of those two methods. Do not add another
+501.
+
+110 Python-only public routes remain, 62 of them in `backup_governance.py`,
+33 in `workspace.py`, 6 in `media.py`, and 2 in `automation.py`. Provider,
+desktop, Android, and zero-Python workload gates remain open. Do not redo the
+4.8.0 double launch unless the release gateway binary changes. The product
+remains **未完成**.
+
+## Previous continuation checkpoint — 2026-10-04 template create
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. Shared source remains uncommitted.
+No push, merge, release, or production-data operation. The product migration is
+**未完成**. `release/native_runtime_5_0_evidence_v1.json` was not edited and stays
+`NOT_READY`. `current_production_authority` stays `python`. No ownership domain
+was flipped. `.automation` was not added to `DECLARED_NATIVE_DATA_DOMAINS` or
+`RUST_DATA_DOMAINS`. Debug `cargo test` did not relink the 4.8.0 release gateway.
+
+### This slice
+
+`POST /api/automation/templates/{template_id}` is served by the Rust production
+router. It is `registry.create_from_template`: copy the builtin automation,
+set `projectId` with Python's `or ""`, then apply a shallow object `overrides`
+(`overrides.projectId` wins). The write reuses `create_automation` in
+`automation_definition_routes.rs` (same `write_json_atomic` file, mutation
+gate, indent 2, trailing newline). Ownership is checked after the template
+lookup and before normalize. An unknown template is `404 Automation template
+not found` and does not create `.automation`, even while Python owns the
+store. A known template while Python is authoritative is `409
+NATIVE_AUTOMATION_WRITE_NOT_OWNED` and does not create or change the file,
+including when overrides would later be invalid.
+
+With `DEEPSEEK_RUNTIME_MODE=python_disabled`, a legal create returns
+`{"ok": true, "automation": ...}`. The id is `auto_` plus 16 lowercase hex.
+`GET /api/automation/{id}` returns the same body. A non-empty `projectId`
+calls `require_project` before the write. `_touch_project` then updates
+`updatedAt`. `.automation/history.json` is not created. A duplicate id is
+`409 Automation already exists` and does not rewrite. At 500 visible rows the
+answer is `413 Too many automations` and does not rewrite. A file of 501 valid
+rows still presents 500, so the hidden prefix stays. Empty body, non-object,
+bad JSON, bad Content-Length, a length above 2000000, and invalid UTF-8 follow
+the same status codes as PATCH. Missing token is `401`. Any other method on
+this path is `405 {"detail":"Method Not Allowed"}` with `Allow: POST`.
+`POST /api/automation/templates` stays 405. `GET /api/automation/templates`
+still does not create the store.
+
+This is **集成通过**, not **完成切换**. Python `_write_automations` remains the
+writer while Python is authoritative.
+
+### Verification
+
+`cargo fmt --manifest-path rust/Cargo.toml -p deepseek-gateway` then
+`cargo test --manifest-path rust/Cargo.toml -p deepseek-gateway --offline --test automation_template_routes --test automation_definition_routes -- --test-threads=1`.
+Template tests: 2 passed in 2.73s. Definition tests: 2 passed in 7.56s.
+The legal create, project touch, duplicate 409, and 501-record 413 were
+compared with a live `create_from_template` oracle. The child removed
+`DEEPSEEK_RUNTIME_MODE` so the project touch did not trip
+`PythonWriterMechanicallyDeniedError`. Clocks and minted ids were stripped
+before the body compare. Evidence:
+`C:\Users\12393\AppData\Local\Temp\grok-goal-e6274bd2ca41\implementer\automation-template-routes.log`.
+Linker: `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER` =
+`rust/target/tmp/linkwrap/x86_64-w64-mingw32-gcc.exe`, `TEMP`/`TMP` =
+`D:\deepseek\rust\target\tmp`. Toolchain: `rustc 1.97.1` stable
+`x86_64-pc-windows-gnu`. HEAD `0e340dc3695890e8d85d59c8263192f0593fb79e` plus
+this uncommitted slice.
+
+`python scripts/production_runtime_inventory.py --write` then
+`pytest tests/test_production_runtime_inventory.py -p no:cacheprovider`
+passed (1 passed). Scanner python-only routes 112 → 111.
+`automation.py` 4 → 3. The remaining automation paths are `GET /api/automation`,
+`POST /api/automation`, and `POST /api/automation/{automation_id}/run`.
+`status.py` is 1 (`semantic-cache`). `workspace.py` stayed 33.
+`backup_governance.py` stayed 62. `media.py` stayed 6. Authority `python`.
+Go-owned domains `[]`. Python production domains 34, rust 12.
+
+### Not done, next executable task
+
+Do not treat this slice as a domain flip. Do not register `GET /api/automation`
+or `POST /api/automation` until every POST action is real. That POST is not
+only `create`: it also dispatches `run`, `rerun`, `simulate`, and `run_due`.
+Registering the path for list/create alone would turn those actions into 405.
+`POST /api/automation/{automation_id}/run` is its own path. The next slice is
+a real `runner.run_once`: one legal run that persists the history record and
+the action output, plus a real refusal, compared with the Python oracle. Do
+not ship a skip-only handler or a 501. Do not port
+`GET /api/semantic-cache/status` while `status()` creates `.semantic-cache`.
+Do not treat artifact download as migrated. Do not port
+`GET /api/workspace/resilience/journal` while `_connect` creates the database.
+Do not stub `readiness_status`, `calculate_dr_slo_metrics`, catalog chain
+health, target capabilities, capacity summary, or transfer budget. Do not
+register drain GET. Do not answer with 501. Do not treat the scheduler
+admission controller as migrated. `GET`, `PATCH`, and `DELETE /api/media/{media_id}`
+share one path and must move together.
+
+111 Python-only public routes remain, 62 of them in `backup_governance.py`,
+33 in `workspace.py`, 6 in `media.py`, and 3 in `automation.py`. Provider,
+desktop, Android, and zero-Python workload gates remain open. Do not redo the
+4.8.0 double launch unless the release gateway binary changes. The product
+remains **未完成**.
+
+## Previous continuation checkpoint — 2026-10-04 automation definition writes
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. Shared source remains uncommitted.
+No push, merge, release, or production-data operation. The product migration is
+**未完成**. `release/native_runtime_5_0_evidence_v1.json` was not edited and stays
+`NOT_READY`. `current_production_authority` stays `python`. No ownership domain
+was flipped. Debug `cargo test` did not relink the 4.8.0 release gateway.
+
+### This slice
+
+`PATCH` and `DELETE /api/automation/{automation_id}` are served by the Rust
+production router. `PATCH` is `registry.update_automation`. `DELETE` is
+`registry.delete_automation`. The file is `.automation/automations.json`,
+written with `write_json_atomic` (mutation gate, indent 2, trailing newline).
+A missing id on delete returns `{"ok": true, "deleted": 0}` and does not
+rewrite the file. A visible match returns `deleted: 1` and drops every visible
+row with that id. Update merges the object shallowly, forces the URL id,
+normalises with `touch=True`, and replaces only the first visible row. A
+successful write keeps only the last 500 accepted records, so a hidden prefix
+disappears. Patching an id outside that window is `404` and does not rewrite.
+A non-empty `projectId` calls `require_project` before the write (`404 Project
+not found`, file unchanged, `.projects` not created). After a successful
+write, `_touch_project` updates that project's `updatedAt` and swallows a
+missing project. `.automation/history.json` is not created.
+
+Writes require `DEEPSEEK_RUNTIME_MODE=python_disabled`. Otherwise the answer
+is `409 {"error":"The automation store is still written by the Python runtime, so this gateway refuses to mutate it.","code":"NATIVE_AUTOMATION_WRITE_NOT_OWNED"}`.
+That refusal does not create `.automation` and does not change an existing
+file. Body checks still run first: an empty body is `400 Request body is empty`,
+a non-object is `400 Request body must be a JSON object`, invalid JSON is
+`400`, a bad `Content-Length` is `400`, a length above 2000000 is `413`, and
+invalid UTF-8 is `500 Server error`. An invalid id is `400 Invalid automation id`
+before the ownership check. An unsupported trigger matches the oracle's 400.
+Missing token is `401`. `HEAD` follows GET. `POST` on this path is
+`405 {"detail":"Method Not Allowed"}`. `POST /api/automation/{id}/run` is still
+the Go proxy.
+
+The store is not in `DECLARED_NATIVE_DATA_DOMAINS` or `RUST_DATA_DOMAINS`.
+Python's `_write_automations` remains the writer while Python is authoritative.
+This is **集成通过**, not **完成切换**.
+
+### Verification
+
+`cargo test --manifest-path rust/Cargo.toml -p deepseek-gateway --offline --test automation_definition_routes -- --test-threads=1`
+passed 2 production-router tests in 6.44s. The legal rename, project move,
+hidden-prefix 404, and 500-record rewrite were compared with a live
+`update_automation` / `delete_automation` oracle. Clocks were compared as
+fresh `updatedAtMs` values rendered with `timestamp_ms_to_iso`. Refusals leave
+the store bytes unchanged. Evidence:
+`C:\Users\12393\AppData\Local\Temp\grok-goal-e6274bd2ca41\implementer\automation-definition-routes.log`.
+Linker: `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER` =
+`rust/target/tmp/linkwrap/x86_64-w64-mingw32-gcc.exe`, `TEMP`/`TMP` =
+`D:\deepseek\rust\target\tmp`. Toolchain: `rustc 1.97.1` stable
+`x86_64-pc-windows-gnu`. HEAD `0e340dc3695890e8d85d59c8263192f0593fb79e` plus
+this uncommitted slice.
+
+`python scripts/production_runtime_inventory.py --check` passed. The scanner
+matches paths, and `/api/automation/:automation_id` was already registered for
+GET, so python-only routes stay 112. `status.py` is 1 (`semantic-cache`).
+`workspace.py` stayed 33. `backup_governance.py` stayed 62. `media.py` stayed
+6. `automation.py` stayed 4. Authority `python`. Go-owned domains `[]`.
+Python production domains 34, rust 12.
+
+### Not done, next executable task
+
+Do not treat this slice as a domain flip. Do not port
+`GET /api/semantic-cache/status` while `status()` creates `.semantic-cache`.
+Do not register `GET /api/automation` or `POST /api/automation`: those share
+one path, and `list` / `create` / `run` are not this writer. The next closed
+mutation is `POST /api/automation/templates/{template_id}`
+(`create_from_template`), which has no sibling method on that path and can
+reuse this writer gate. Do not treat
+`GET /api/workspace/artifacts/{artifact_id}/download` as migrated. Do not port
+`GET /api/workspace/resilience/journal` while `_connect` creates the database.
+Do not stub `readiness_status`, `calculate_dr_slo_metrics`, catalog chain
+health, target capabilities, capacity summary, or transfer budget. Do not
+register drain GET. Do not answer with 501. Do not treat the scheduler
+admission controller as migrated.
+
+112 Python-only public routes remain in the scanner output, 62 of them in
+`backup_governance.py`, 33 in `workspace.py`, 6 in `media.py`, and 4 in
+`automation.py`. Provider, desktop, Android, and zero-Python workload gates
+remain open. Do not redo the 4.8.0 double launch unless the release gateway
+binary changes. The product remains **未完成**.
+
+## Previous continuation checkpoint — 2026-10-03 rust status read
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. Shared source remains uncommitted.
+No push, merge, release, or production-data operation. The product migration is
+**未完成**. `release/native_runtime_5_0_evidence_v1.json` was not edited and stays
+`NOT_READY`. `current_production_authority` stays `python`. No ownership domain
+was flipped. Debug `cargo test` did not relink the 4.8.0 release gateway.
+
+### This slice
+
+`GET /api/rust/status` is served by the Rust production router. The body is
+`rust_status()`: `{"ok": true, "rust": {"enabled", "components"}}`. Gateway,
+mcp, policy, and rag flags use `rust_core.config._env_bool`: a missing or
+empty value uses the default, and a whitespace-only value is false. A disabled
+gateway reports `url: ""` and `healthy: false` without opening a socket. An
+enabled gateway checks `GET /healthz` on the URL host and port, ignores the
+URL path, refuses a non-http scheme, does not use a proxy, and does not follow
+redirects. HTTP 200 is healthy. Any other status or a connection failure is
+not. A blank `DEEPSEEK_RUST_GATEWAY_URL` falls back to
+`http://127.0.0.1:8787` without this test dialing that port. Nothing is written.
+
+`HEAD` returns 200 with an empty body. An authenticated other method is
+`405 {"detail": "Method Not Allowed"}`. The query string is ignored.
+
+The production-router test
+`rust_status_matches_the_oracle_without_creating_a_store` passed against a live
+Python `rust_status` oracle. Evidence: `native-route-tests.log`.
+
+### Inventory
+
+`python scripts/production_runtime_inventory.py --write` then
+`pytest tests/test_production_runtime_inventory.py`. Scanner python-only
+routes 113 → 112. `status.py` is 1 (`semantic-cache`). `workspace.py` stayed
+33. `backup_governance.py` stayed 62. `media.py` stayed 6. `automation.py`
+stayed 4. Authority `python`. Go-owned domains `[]`. Python production domains
+34, rust 12. Artifact download is still Python-only. Evidence:
+`inventory-check.log`.
+
+Package inspection still fails (`package-inspect.log`): desktop, server, and
+Android launch inputs still reference Python. MinIO was not provisioned
+(`provider-recovery.log`). `launch-unchanged.txt` records that the release
+listener was not rebuilt.
+
+### Not done, next executable task
+
+Do not port `GET /api/semantic-cache/status` while `status()` creates
+`.semantic-cache`. Do not treat
+`GET /api/workspace/artifacts/{artifact_id}/download` as migrated. Do not treat
+the rest of `/api/workspace/resilience` as migrated. Do not port
+`GET /api/workspace/resilience/journal` while `_connect` creates the database.
+Do not stub `readiness_status`, `calculate_dr_slo_metrics`, catalog chain
+health, target capabilities, capacity summary, or transfer budget. Do not
+register drain GET. Do not register `GET /api/automation` or a single method
+of `/api/media` that shares its path with an unimplemented method. Do not
+treat PATCH or DELETE `/api/automation/{automation_id}` as migrated. Do not
+answer with 501. Do not treat the scheduler admission controller as migrated.
+Do not declare an edge or rust-status domain. A blank gateway URL's health
+check against port 8787 was not executed here.
+
+112 Python-only public routes remain in the scanner output, 62 of them in
+`backup_governance.py`, 33 in `workspace.py`, 6 in `media.py`, and 4 in
+`automation.py`. Provider, desktop, Android, and zero-Python workload gates
+remain open. Do not redo the 4.8.0 double launch unless the release gateway
+binary changes. The product remains **未完成**.
+
+## Previous continuation checkpoint — 2026-10-03 edge status read
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. Shared source remains uncommitted.
+No push, merge, release, or production-data operation. The product migration is
+**未完成**. `release/native_runtime_5_0_evidence_v1.json` was not edited and stays
+`NOT_READY`. `current_production_authority` stays `python`. No ownership domain
+was flipped. Debug `cargo test` did not relink the 4.8.0 release gateway.
+
+### This slice
+
+`GET /api/edge/status` is served by the Rust production router. The body is
+`edge_inference_status()` with an empty payload: `{"ok": true, "edgeInference"}`.
+The query string is ignored. Settings coerce the provider before
+`normalize_provider`, so `dry_run` stays `llama_cpp` and `FAKE` is `fake`.
+`EDGE_INFERENCE_PROVIDER` wins when it is non-empty. A `llama_cpp` model path
+is resolved; `mlc` and `fake` keep the stripped string. `dependencyAvailable`
+follows `importlib.util.find_spec` for `llama_cpp` and `mlc_llm` by searching
+the working directory, `PYTHONPATH`, and `site-packages` beside `python` on
+`PATH`. This route does not start an interpreter and does not load a model, so
+`loaded` stays false. Nothing is written.
+
+`HEAD` returns 200 with an empty body. An authenticated other method is
+`405 {"detail": "Method Not Allowed"}`.
+
+The production-router test
+`edge_status_matches_the_oracle_without_creating_a_store` passed against a live
+Python `edge_inference_status` oracle. Evidence: `native-route-tests.log`.
+
+### Inventory
+
+`python scripts/production_runtime_inventory.py --write` then
+`pytest tests/test_production_runtime_inventory.py`. Scanner python-only
+routes 114 → 113. `status.py` is 2 (`semantic-cache`, `rust`). `workspace.py`
+stayed 33. `backup_governance.py` stayed 62. `media.py` stayed 6.
+`automation.py` stayed 4. Authority `python`. Go-owned domains `[]`.
+Python production domains 34, rust 12. Artifact download is still Python-only.
+Evidence: `inventory-check.log`.
+
+Package inspection still fails (`package-inspect.log`): desktop, server, and
+Android launch inputs still reference Python. MinIO was not provisioned
+(`provider-recovery.log`). `launch-unchanged.txt` records that the release
+listener was not rebuilt.
+
+### Not done, next executable task
+
+Do not port `GET /api/semantic-cache/status` while `status()` creates
+`.semantic-cache`. The next method-closed read that does not create a store is
+`GET /api/rust/status`. Do not treat
+`GET /api/workspace/artifacts/{artifact_id}/download` as migrated. Do not treat
+the rest of `/api/workspace/resilience` as migrated. Do not port
+`GET /api/workspace/resilience/journal` while `_connect` creates the database.
+Do not stub `readiness_status`, `calculate_dr_slo_metrics`, catalog chain
+health, target capabilities, capacity summary, or transfer budget. Do not
+register drain GET. Do not register `GET /api/automation` or a single method
+of `/api/media` that shares its path with an unimplemented method. Do not
+treat PATCH or DELETE `/api/automation/{automation_id}` as migrated. Do not
+answer with 501. Do not treat the scheduler admission controller as migrated.
+Do not declare an edge domain.
+
+113 Python-only public routes remain in the scanner output, 62 of them in
+`backup_governance.py`, 33 in `workspace.py`, 6 in `media.py`, and 4 in
+`automation.py`. Provider, desktop, Android, and zero-Python workload gates
+remain open. Do not redo the 4.8.0 double launch unless the release gateway
+binary changes. The product remains **未完成**.
+
+## Previous continuation checkpoint — 2026-10-03 scheduler read
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. Shared source remains uncommitted.
+No push, merge, release, or production-data operation. The product migration is
+**未完成**. `release/native_runtime_5_0_evidence_v1.json` was not edited and stays
+`NOT_READY`. `current_production_authority` stays `python`. No ownership domain
+was flipped. Debug `cargo test` did not relink the 4.8.0 release gateway.
+
+### This slice
+
+`GET /api/scheduler` is served by the Rust production router. The body is
+`scheduler_status()` plus `dead_letters(limit)`: `{"ok": true, "scheduler",
+"deadLetters"}`. Admission counters are this process's fresh snapshot (all
+zero) because the edge does not take a lease. `rate_per_second <= 0` reports
+`float(capacity)` with no clock. Burst `0` uses `max_concurrency`. Settings
+come from the same `SCHEDULER_*` clamps as `config.py`. A missing
+`.scheduler/scheduler.sqlite3` stays missing and the dead-letter block has no
+`recent` key. An existing file is opened read-only: rows match, a missing
+table and a non-database file put `error` on the block and return
+`deadLetters: []`, and a directory path is `unable to open database file`.
+`limit` follows `int` with `ValueError` → 50, then
+`max(1, min(int(limit or 50), 1000))`. `HEAD` returns 200 with an empty body.
+An authenticated other method is `405 {"detail": "Method Not Allowed"}`.
+
+The production-router test
+`scheduler_matches_the_oracle_without_creating_a_store` passed against a live
+Python `scheduler_status` / `dead_letters` oracle. Evidence:
+`native-route-tests.log`.
+
+### Inventory
+
+`python scripts/production_runtime_inventory.py --write` then
+`pytest tests/test_production_runtime_inventory.py`. Scanner python-only
+routes 115 → 114. `status.py` is 3 (`semantic-cache`, `edge`, `rust`).
+`workspace.py` stayed 33. `backup_governance.py` stayed 62. `media.py` stayed
+6. `automation.py` stayed 4. Authority `python`. Go-owned domains `[]`.
+Python production domains 34, rust 12. Artifact download is still Python-only.
+Evidence: `inventory-check.log`.
+
+Package inspection still fails (`package-inspect.log`): desktop, server, and
+Android launch inputs still reference Python. MinIO was not provisioned
+(`provider-recovery.log`). `launch-unchanged.txt` records that the release
+listener was not rebuilt.
+
+### Not done, next executable task
+
+Do not treat `GET /api/workspace/artifacts/{artifact_id}/download` as migrated.
+Do not treat the rest of `/api/workspace/resilience` as migrated. Do not port
+`GET /api/workspace/resilience/journal` while `_connect` creates the database.
+Do not stub `readiness_status`, `calculate_dr_slo_metrics`, catalog chain
+health, target capabilities, capacity summary, or transfer budget. Do not
+register drain GET. Do not register `GET /api/automation` or a single method
+of `/api/media` that shares its path with an unimplemented method. Do not
+treat PATCH or DELETE `/api/automation/{automation_id}` as migrated. Do not
+answer with 501. Do not treat the scheduler admission controller as migrated:
+this slice only reads the fresh snapshot and an existing DLQ file.
+
+114 Python-only public routes remain in the scanner output, 62 of them in
+`backup_governance.py`, 33 in `workspace.py`, 6 in `media.py`, and 4 in
+`automation.py`. Provider, desktop, Android, and zero-Python workload gates
+remain open. Do not redo the 4.8.0 double launch unless the release gateway
+binary changes. The product remains **未完成**.
+
+## Previous continuation checkpoint — 2026-10-03 artifact preview read
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. Shared source remains uncommitted.
+No push, merge, release, or production-data operation. The product migration is
+**未完成**. `release/native_runtime_5_0_evidence_v1.json` was not edited and stays
+`NOT_READY`. `current_production_authority` stays `python`. No ownership domain
+was flipped. Debug `cargo test` did not relink the 4.8.0 release gateway.
+
+### This slice
+
+`GET /api/workspace/artifacts/{artifact_id}/preview` is served by the Rust
+production router. The body is `preview_artifact`: `{"ok": true, "artifact",
+"previewAvailable", "content", "bytes"}`. A missing `artifacts.json`, bad JSON,
+and a directory of that name are `404 Artifact not found` and do not create
+`.projects`. Invalid UTF-8 in that file is `500 Server error` and the bytes are
+left unchanged. An explicit `projectId` searches only that project, including
+when `project.json` is absent. An empty or missing `projectId` scans projects
+that already have `project.json`, newest `updatedAt` first. Text types are
+redacted and capped at 100000 characters. Other types return an empty content
+and `previewAvailable: false`. The last 500 normalised records are kept.
+
+`HEAD` returns the same status with an empty body. An authenticated method
+other than GET or HEAD is `405 {"detail": "Method Not Allowed"}`.
+`GET /api/workspace/artifacts/{artifact_id}/download` stays on the Go proxy.
+
+The production-router test
+`artifact_preview_matches_the_oracle_without_creating_a_store` passed against
+a live Python `preview_artifact` oracle. Evidence: `native-route-tests.log`.
+
+### Inventory
+
+`python scripts/production_runtime_inventory.py --write` then
+`pytest tests/test_production_runtime_inventory.py`. Scanner python-only
+routes 116 → 115. `workspace.py` is 33. `backup_governance.py` stayed 62.
+`media.py` stayed 6. `automation.py` stayed 4. Authority `python`. Go-owned
+domains `[]`. Python production domains 34, rust 12. The download path is
+still Python-only. Evidence: `inventory-check.log`.
+
+Package inspection still fails (`package-inspect.log`): desktop, server, and
+Android launch inputs still reference Python. MinIO was not provisioned
+(`provider-recovery.log`). `launch-unchanged.txt` records that the release
+listener was not rebuilt.
+
+### Not done, next executable task
+
+Do not treat `GET /api/workspace/artifacts/{artifact_id}/download` as migrated.
+Do not treat the rest of `/api/workspace/resilience` as migrated. Do not port
+`GET /api/workspace/resilience/journal` while `_connect` creates the database.
+Do not stub `readiness_status`, `calculate_dr_slo_metrics`, catalog chain
+health, target capabilities, capacity summary, or transfer budget. Do not
+register drain GET. Do not register `GET /api/automation` or a single method
+of `/api/media` that shares its path with an unimplemented method. Do not
+treat PATCH or DELETE `/api/automation/{automation_id}` as migrated. Do not
+answer with 501.
+
+115 Python-only public routes remain in the scanner output, 62 of them in
+`backup_governance.py`, 33 in `workspace.py`, 6 in `media.py`, and 4 in
+`automation.py`. Scheduler, provider, desktop, Android, and zero-Python
+workload gates remain open. Do not redo the 4.8.0 double launch unless the
+release gateway binary changes. The product remains **未完成**.
+
+## Previous continuation checkpoint — 2026-10-03 federation readiness read
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. Shared source remains uncommitted.
+No push, merge, release, or production-data operation. The product migration is
+**未完成**. `release/native_runtime_5_0_evidence_v1.json` was not edited and stays
+`NOT_READY`. `current_production_authority` stays `python`. No ownership domain
+was flipped. Debug `cargo test` did not relink the 4.8.0 release gateway.
+
+### This slice
+
+`GET /api/workspace/resilience/federation` is served by the Rust production
+router. The body is `build_federation_snapshot` with the route's fixed wire
+list `object-set-v1`, `receipt-v4`, `commit-v4`, `fastcdc-v3`, empty failure
+domains, `forecastHeadroom: null`, `costClass: unknown`, and
+`readiness: UNKNOWN`. A missing `fleetId` or an empty value becomes `local`.
+Whitespace that trims to empty is `500 Server error`. The digest is SHA-256
+over the compact sorted JSON of every field except `snapshotDigest`. The
+function does not read or create a store.
+
+`HEAD` returns the same status with an empty body. An authenticated method
+other than GET or HEAD is `405 {"detail": "Method Not Allowed"}`.
+`GET /api/workspace/resilience/journal` stays on the Go proxy and still does
+not create `.resilience-journal`.
+
+The production-router test
+`federation_snapshot_matches_the_pure_builder_without_creating_a_store`
+passed against a live Python `build_federation_snapshot` oracle, including a
+Python check that each success body's `snapshotDigest` matches
+`_snapshot_digest`. Evidence: `native-route-tests.log`.
+
+### Inventory
+
+`python scripts/production_runtime_inventory.py --write` then
+`pytest tests/test_production_runtime_inventory.py`. Scanner python-only
+routes 117 → 116. `backup_governance.py` 63 → 62. `media.py` stayed 6.
+`automation.py` stayed 4. Authority `python`. Go-owned domains `[]`.
+Python production domains 34, rust 12. Evidence: `inventory-check.log`.
+
+Package inspection still fails (`package-inspect.log`): desktop, server, and
+Android launch inputs still reference Python. MinIO was not provisioned
+(`provider-recovery.log`). `launch-unchanged.txt` records that the release
+listener was not rebuilt.
+
+### Not done, next executable task
+
+Do not treat the rest of `/api/workspace/resilience` as migrated. Do not port
+`GET /api/workspace/resilience/journal` while `_connect` creates the database.
+Do not stub `readiness_status`, `calculate_dr_slo_metrics`, catalog chain
+health, target capabilities, capacity summary, or transfer budget. Do not
+register drain GET. Do not register `GET /api/automation` or a single method
+of `/api/media` that shares its path with an unimplemented method. Do not
+treat PATCH or DELETE `/api/automation/{automation_id}` as migrated. Do not
+answer with 501.
+
+116 Python-only public routes remain in the scanner output, 62 of them in
+`backup_governance.py`, 6 in `media.py`, and 4 in `automation.py`. Scheduler,
+provider, desktop, Android, and zero-Python workload gates remain open. Do
+not redo the 4.8.0 double launch unless the release gateway binary changes.
+The product remains **未完成**.
+
+## Previous continuation checkpoint — 2026-10-03 media segment read
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. Shared source remains uncommitted.
+No push, merge, release, or production-data operation. The product migration is
+**未完成**. `release/native_runtime_5_0_evidence_v1.json` was not edited and stays
+`NOT_READY`. `current_production_authority` stays `python`. No ownership domain
+was flipped. Debug `cargo test` did not relink the 4.8.0 release gateway.
+
+### This slice
+
+`GET /api/media/{media_id}/segments` is served by the Rust production router.
+`library.get_media` runs first, then `library.list_segments`. Both read
+`.media` and neither creates it. A missing `library.json`, invalid JSON, or a
+directory at that path is an empty library, so a well-formed id is
+`404 Media not found`. Invalid media records are skipped. The first accepted
+id wins. A missing segments file is `{"ok": true, "segments": []}`. Invalid
+segment records are skipped. `int()` failures on `index` or `page` are
+`500 Server error` and do not rewrite the file. Invalid UTF-8 is 500. An
+invalid media id is `400 Invalid media id` before the file is read.
+
+`HEAD` returns the same status with an empty body. An authenticated method
+other than GET or HEAD is `405 {"detail": "Method Not Allowed"}` and does not
+create `.media`. The gateway auth layer still answers an unauthenticated
+request with the nested `401 UNAUTHORIZED` before that 405. `GET /api/media`
+and `GET /api/media/{media_id}` stay on the Go proxy.
+
+The production-router test
+`media_segments_match_the_library_without_creating_a_missing_store` passed
+against a live Python `get_media` / `list_segments` oracle. Evidence:
+`native-route-tests.log`.
+
+### Inventory
+
+`python scripts/production_runtime_inventory.py --write` then
+`pytest tests/test_production_runtime_inventory.py`. Scanner python-only
+routes 118 → 117. `media.py` 7 → 6. `automation.py` stayed 4.
+`backup_governance.py` stayed 63. Authority `python`. Go-owned domains `[]`.
+Python production domains 34, rust 12. `GET /api/media/{media_id}/segments`
+is no longer Python-only. The other six media methods remain Python-only.
+PATCH and DELETE `/api/automation/{automation_id}` are still the Go proxy;
+the path scanner dropped them earlier and they are not implemented.
+Evidence: `inventory-check.log`.
+
+Package inspection still fails (`package-inspect.log`): desktop, server, and
+Android launch inputs still reference Python. MinIO was not provisioned
+(`provider-recovery.log`). `launch-unchanged.txt` records that the release
+listener was not rebuilt.
+
+### Not done, next executable task
+
+Do not treat the rest of `/api/media` as migrated. Collection GET shares its
+path with POST, and the item path shares GET with PATCH and DELETE. Do not
+register one of those methods alone. Do not treat PATCH or DELETE
+`/api/automation/{automation_id}` as migrated. Do not register
+`GET /api/automation`. Do not port `GET /api/workspace/resilience/journal`
+while `_connect` creates the database. Do not stub `readiness_status`,
+`calculate_dr_slo_metrics`, catalog chain health, target capabilities,
+capacity summary, or transfer budget. Do not register drain GET. Do not
+answer with 501.
+
+117 Python-only public routes remain in the scanner output, 63 of them in
+`backup_governance.py`, 6 in `media.py`, and 4 in `automation.py`. `.media`
+is not a declared native domain. Scheduler, provider, desktop, Android, and
+zero-Python workload gates remain open. Do not redo the 4.8.0 double launch
+unless the release gateway binary changes. The product remains **未完成**.
+
+## Previous continuation checkpoint — 2026-10-03 automation definition read
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. Shared source remains uncommitted.
+No push, merge, release, or production-data operation. The product migration is
+**未完成**. `release/native_runtime_5_0_evidence_v1.json` was not edited and stays
+`NOT_READY`. `current_production_authority` stays `python`. No ownership domain
+was flipped. Debug `cargo test` did not relink the 4.8.0 release gateway
+(`rust/target/release` is absent; `rust/target/tmp/native-bin/deepseek-gateway.exe`
+is still the 15:02 copy). Launch-1/launch-2 were not repeated.
+
+### This slice
+
+`GET /api/workspace/disaster-recovery/replication` is served by
+`rust/crates/deepseek-gateway/src/backup_replication_routes.rs` on
+`create_production_app`, ahead of the Go `/api/*` catch-all. It is
+`backup_replication.list_jobs(policy_id, backup_id, limit=100)` over
+`.backup-replication/*.json`. A missing directory returns `{"jobs":[]}` and is
+not created. The handler never writes a job, cursor, or schema. There is no
+mutation on this path to gate. Invalid UTF-8 fails the whole request with
+`500 {"error":"Server error","code":"internal"}`. Invalid JSON, a non-object,
+a directory named `*.json`, and a missing or empty `jobId` are skipped.
+`jobId: null` stays null and is kept (`str(None)` is `"None"`). `policyId` and
+`backupId` use `str(value or "")`, so JSON `0` / `false` / `null` do not match
+the query strings `"0"` / `"False"` / `"None"`. Empty query values do not
+filter. `phase` is ignored. Windows name order is casefolded, matching
+pathlib. The list stops at 100 after filters, highest name first.
+
+`GET /api/workspace/disaster-recovery/drills/{restore_id}` is served by
+`rust/crates/deepseek-gateway/src/backup_drill_routes.rs`. The registered
+string is `/api/workspace/disaster-recovery/drills/:restore_id`. It reads
+`.restore-staging/{id}/drill-result.json`, else `drill-running.json`, and
+returns that object. The id must start with `restore_` and the remainder must
+be Unicode alphanumeric, or the response is
+`400 {"error":"Invalid restore id","code":"invalid_payload"}`. A missing
+session is `404 {"error":"Remote restore session not found","code":"not_found"}`.
+No result and no claim is
+`404 {"error":"Recovery Drill result not found","code":"not_found"}`.
+Bad JSON or a non-object is
+`400 {"error":"Recovery Drill metadata is unavailable","code":"invalid_payload"}`.
+Invalid UTF-8 is `500 {"error":"Server error","code":"internal"}`. The
+directory is not created. Other methods on that one-segment pattern, including
+`POST /api/workspace/disaster-recovery/drills/run`, are forwarded to the
+existing Go proxy so a GET-only route does not answer them with 405.
+`POST /drills/run` stays in the Python-only inventory.
+
+`GET /api/workspace/resilience/journal` was inspected and not ported.
+`resilience_action_journal.list_actions` calls `_connect`, which creates
+`.resilience-journal`, sets `journal_mode=WAL`, runs `SCHEMA_INIT`, and
+`ALTER`s missing columns. A reader that did that would be a second writer.
+Returning an empty list without the directory would not match that function.
+
+`GET /api/automation/templates` is served by
+`rust/crates/deepseek-gateway/src/automation_template_routes.rs`. It returns
+`{"ok": true, "templates": registry.list_templates()}`. That catalog is the
+in-memory `BUILTIN_TEMPLATES` list and does not read or create `.automation`.
+`POST /api/automation/templates/{template_id}` is a different path and still
+falls through to the Go proxy. `POST /api/automation/templates` is 405, the
+same as a GET-only registration of a path Python does not write.
+
+`GET /api/automation/{automation_id}/runs` is served by
+`rust/crates/deepseek-gateway/src/automation_run_routes.rs`. The registered
+string is `/api/automation/:automation_id/runs`. It calls `history.list_runs`
+with only `automation_id` and `limit`. `projectId` and `status` on the query
+string are ignored. The file is `.automation/history.json` via the
+non-creating `read_json_file` path: a missing file, invalid JSON, a
+non-object, a non-list `runs`, or a directory named `history.json` returns
+`{"ok": true, "runs": []}` and does not create the store. Invalid UTF-8 is
+`500 {"error":"Server error","code":"internal"}`. Records are normalised.
+A record `normalize_run_record` rejects is skipped. The last 2000 accepted
+records are kept, then filtered, then sorted by `startedAtMs` descending.
+`limit` is `int(query or 100)` before `list_runs`. Missing and `""` are 100.
+The string `"0"` parses as 0 and `list_runs` then treats 0 as 100; it is not
+unlimited. A negative value returns every loaded run. Values above 2000
+clamp to 2000. A non-integer is 500 and does not validate the id or read the
+file. An invalid id is
+`400 {"error":"Invalid automation id","code":"invalid_payload"}` and does
+not create `.automation`. The handler never writes `history.json`.
+`POST /api/automation/{automation_id}/run` is a different path and still
+falls through to the Go proxy. `GET /api/automation` was not registered
+because that path also has POST.
+
+`GET /api/automation/{automation_id}` is served by
+`rust/crates/deepseek-gateway/src/automation_definition_routes.rs`. The
+registered string is `/api/automation/:automation_id`. It calls
+`registry.get_automation`. The file is `.automation/automations.json` via
+the non-creating `read_json_file` path. A missing file, invalid JSON, a
+non-object, a non-list `automations`, or a directory named `automations.json`
+is `404 {"error":"Automation not found","code":"not_found"}` and does not
+create `.automation`. Invalid UTF-8 is
+`500 {"error":"Server error","code":"internal"}`. An invalid id is
+`400 {"error":"Invalid automation id","code":"invalid_payload"}` and does
+not read the file. Records are `normalize_automation(..., touch=False)`.
+Rejected records are skipped. Only the last 500 accepted records are
+visible, then the first matching id wins. The handler never writes the
+file. PATCH and DELETE on that same path are forwarded to the existing Go
+proxy, so they stay `503 GO_CONTROL_PROXY_NOT_READY` when the control URL
+is empty instead of becoming 405. They are not implemented.
+`GET /api/automation/templates` remains the static catalog route.
+`POST /api/automation/templates` remains 405.
+
+### Verification
+
+`cargo test --manifest-path rust/Cargo.toml -p deepseek-gateway --offline --test backup_drill_routes --test backup_replication_routes -- --test-threads=1`
+passed: 1 drill test and 2 replication tests. The template route was tested
+after that merge:
+`cargo test -p deepseek-gateway --offline --test automation_template_routes -- --test-threads=1`
+passed 1 production-router test. The body was compared with a live
+`registry.list_templates()` call, not a second copy of the catalog.
+
+`cargo test -p deepseek-gateway --offline --test automation_run_routes -- --test-threads=1`
+passed 1 production-router test. Success bodies were compared with a live
+`history.list_runs` call that uses the same `int(limit or 100)` expression,
+including normalisation, the 2000-record truncation before filtering, and
+`limit=0` returning 100 of 150 runs while `limit=-5` returns all 150.
+
+`cargo test -p deepseek-gateway --offline --test automation_definition_routes -- --test-threads=1`
+passed 1 production-router test. Success and error bodies were compared with
+a live `registry.get_automation` call, including normalisation, the 500-record
+window, a missing file, invalid UTF-8, and a directory named `automations.json`.
+PATCH and DELETE returned `503 GO_CONTROL_PROXY_NOT_READY` and did not create
+or modify the store. Evidence: `native-route-tests.log` in the session
+scratch. Linker shim remains `rust/target/tmp/linkwrap` with `TEMP`/`TMP` on
+`D:\deepseek\rust\target\tmp`.
+
+`python scripts/production_runtime_inventory.py --write` then
+`pytest tests/test_production_runtime_inventory.py -p no:cacheprovider` passed.
+Python-only public routes: 125 → 118. `backup_governance.py`: 65 → 63.
+`automation.py`: 9 → 4. The scanner matches paths, not methods, so registering
+`/api/automation/:automation_id` also removed PATCH and DELETE from
+`http_routes_only_on_python`. Those two methods are still the Go proxy, not a
+native implementation. `POST /drills/run`,
+`POST /api/automation/templates/{template_id}`,
+`POST /api/automation/{automation_id}/run`, `GET/POST /api/automation`, and
+`GET /api/workspace/resilience/journal` still are Python-only. Authority
+`python`. Go-owned domains `[]`. Python production domains 34, rust 12.
+Evidence: `inventory-check.log`.
+
+Package inspection fails: desktop/server launch inputs and the Android
+`stopPythonServer` path still reference Python. `package-inspect.log`.
+MinIO was not provisioned (no `minio` binary, Docker engine pipe absent).
+`provider-recovery.log`. `launch-unchanged.txt` records that the release
+listener was not rebuilt.
+
+### Not done, next executable task
+
+Do not treat PATCH or DELETE `/api/automation/{automation_id}` as migrated.
+They are forwarded to the Go proxy. The next real read that does not share
+its path with an unimplemented method should be chosen from the remaining
+Python-only list. Do not register `GET /api/automation`: that path also has
+POST, and `registry.list_automations` is a different call from `get_automation`.
+Do not port `GET /api/workspace/resilience/journal` while `_connect` creates
+the database. Do not stub `readiness_status`, `calculate_dr_slo_metrics`,
+catalog chain health, target capabilities, capacity summary, or transfer
+budget. Do not register drain GET. Do not answer with 501.
+
+118 Python-only public routes remain in the scanner output, 63 of them in
+`backup_governance.py` and 4 in `automation.py`. PATCH and DELETE
+`/api/automation/{automation_id}` are among the routes the scanner no longer
+lists and are still unimplemented.
+Package inspection still fails (`package-inspect.log`): desktop, server, and
+Android launch inputs still reference Python. MinIO was not provisioned
+(`provider-recovery.log`). Scheduler, provider, desktop, Android, and
+zero-Python workload gates remain open. Do not redo the 4.8.0 double launch
+unless the release gateway binary changes. The product remains **未完成**.
+
+## Previous continuation checkpoint — 2026-10-03 backup retirement HTTP
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. Shared source remains uncommitted.
+No push, merge, release, or production-data operation. The product migration is
+**未完成**. `release/native_runtime_5_0_evidence_v1.json` was not edited and stays
+`NOT_READY`. `current_production_authority` stays `python`. No ownership domain
+was flipped. Debug `cargo test` did not relink the 4.8.0 release gateway, so
+launch-1/launch-2 remain the earlier double-launch proof.
+
+### This slice
+
+`POST /api/workspace/backup-retirements`, `GET /api/workspace/backup-retirements`,
+and `GET /api/workspace/backup-retirements/{job_id}` are served by
+`rust/crates/deepseek-gateway/src/backup_retirement_routes.rs` on
+`create_production_app`, ahead of the Go `/api/*` catch-all. The row is the
+Python `requested` job only: `retire_` + 16 lowercase hex, UTC seconds with `Z`,
+default reason `api-retirement-request`, `simMetadata` `{}`, `bytesReclaimed` 0,
+`error` null. Physical GC, receipt/commit markers, and
+`execute_copy_retirement_job` are not claimed and are not faked.
+
+Writes run only when `DEEPSEEK_RUNTIME_MODE=python_disabled`. Otherwise POST is
+`409 NATIVE_BACKUP_RETIREMENT_WRITE_NOT_OWNED` and does not create
+`.backup-retirements`. The domain is not in `DECLARED_NATIVE_DATA_DOMAINS` or
+`RUST_DATA_DOMAINS`: the Python GC worker still updates the same table, so
+declaring sole native ownership would be false. Reads of a missing database
+return `{"jobs":[]}` or 404 and do not mkdir. A database Python already wrote is
+opened read-only, including a pre-`reason` schema, and is not migrated. Once
+Python is de-authorised, opening an existing file applies the same `reason`
+column migration as `backup_retirement._connect`. Invalid `sim_metadata` is
+`500 {"error":"Server error","code":"internal"}`.
+
+### Verification
+
+`cargo test --manifest-path rust/Cargo.toml -p deepseek-gateway --offline --lib --test backup_retirement_routes retirement -- --test-threads=1`
+passed: 2 lib tests and 4 production-router tests. Linker shim remains
+`rust/target/tmp/linkwrap` with `TEMP`/`TMP` on `D:\deepseek\rust\target\tmp`.
+`GET /api/workspace/backup-runs` is the same edge, read-only. It lists
+`.backup-scheduler/scheduler.db` `backup_runs` with the route's limit of 50.
+Blocked phases (`blocked`, `blocked-retryable`, `blocked-terminal`) copy
+`leaseUntil` to `nextRetryAt` and `reason` to `blockedReason`. A missing
+database returns `{"runs":[]}` and does not create `.backup-scheduler`. An
+existing file is opened read-only: no WAL change and no schema write.
+`cargo test -p deepseek-gateway --offline --test backup_run_routes` passed
+1 production-router test. Retirement tests were rerun after the merge and
+passed again.
+
+`python scripts/production_runtime_inventory.py --write` then
+`pytest tests/test_production_runtime_inventory.py -p no:cacheprovider` passed.
+Python-only public routes: 129 → 125. `backup_governance.py`: 69 → 65.
+Authority `python`. Go-owned domains `[]`. Retirement and backup-runs paths
+are no longer in `http_routes_only_on_python`.
+
+### Not done, next executable task
+
+Port the next method-closed backup-governance surface. 125 Python-only
+public routes remain, 65 of them in `backup_governance.py`. Do not register
+`/api/workspace/backup-targets/{target_id}/drain` until POST initiate is real:
+the inventory key is the path, and initiate commits control authority before the
+sqlite projection. Do not answer remaining routes with 501. Do not redo the
+4.8.0 double launch unless the release gateway binary changes. Scheduler,
+provider, desktop, Android, and zero-Python workload gates remain open.
+
+## Previous continuation checkpoint — 2026-10-02 typed recipients and mirror recovery
+
+Branch `codex/indexmap-std-feature`, base HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`; shared source remains uncommitted.
+No push, merge, release or production-data operation occurred. Whole migration is
+**未完成**; readiness remains `NOT_READY`.
+
+- Rust mirror recipients now use generated `control/v1.GetBackupPolicyRecipients`,
+  not the newly added HTTP/JSON bridge. Unary gRPC and public HTTP/1 share the existing
+  Go listener. RPCs enforce loopback, exactly one internal bearer, 1 MiB messages,
+  and authoritative policy records; empty enabled groups remain visible to the
+  sealer. Rust has no HTTP/JSON or Python fallback for this read.
+- Frozen descriptor JSON is unchanged; the contract permits only the exact typed
+  read shape and rejects tampering. Pinned codegen write/check and contract check
+  pass. `native-20261002-protocol-denial-check.log` records 30 contract/denial cases.
+- Fixed a fail-open recovery-fence read: corrupt/unreadable errors were discarded
+  and could publish a new generation. The red regression is preserved in
+  `native-20261002-mirror-fence-red-corrected.log`; the route now returns the original
+  423. Its test requires unchanged HEAD/generation count; rerun is still pending.
+- Linux Rust 1.85.0 workspace check/build/clippy, all targets/features and
+  `-D warnings`, pass. Initial gateway route/auth tests pass 4+2 (before the new
+  fence regression). Host checks now include mirror collection/item routes.
+- `native-20261002-real-process-boundary-recovered.log`: **four real separately
+  built Rust/Go process tests pass**, covering policy reads/full CRUD, transferred
+  target health, and typed mirror recipients. The mirror case verifies actual age
+  ciphertext/hash, immutable idempotent replay, Host/token refusal, strong process
+  kill, waiting for the actual recorded writer lease, greater successor fencing
+  token, recovered generation and RPC-loss GET/PUT refusal with unchanged disk.
+  Immediate restart was correctly refused `WRITER_FENCE_HELD`; no clock, SQL fence
+  or production lease default was weakened.
+- Mypy 929 files passes after fixing a new `tmp_settings` annotation to `Path`.
+  The duplicate-module source copy was safely relocated to
+  `D:/deepseek-native-validation/source-v14-20260930T075002Z`.
+- Frontend typecheck, **609 tests/73 files** (`--maxWorkers=2`), build and bundle
+  pass (`native-20261002-frontend-*.log`). Initial unbounded tests exhausted Node
+  memory and are not a PASS. Current built UI is available under `static/ui`.
+
+### Verification environment and next executable work
+
+Isolated source `D:/deepseek-native-validation/source-current-20261002` is tracked by
+`artifacts/native-20261002-linux-source-manifest.json` (base HEAD plus dirty file
+hashes). SDK image `deepseek-local-native-verification:20261002`, ID
+`sha256:c33bc88e8d52443ed01d659e8a20b99bb08438bfd7c30ef6e32532da8edbd9ce`, contains
+Rust 1.85.0, Go 1.27.1, cargo-llvm-cov 0.6.21 and development/oracle Python/OCR.
+It is **not a zero-Python product image**. Task-owned Rust cache volume is
+`deepseek-native-rust-target-20261002`; Go volumes are
+`deepseek-native-v14-go-modules-20260930` and `deepseek-native-v14-go-build-20260930`.
+Only `artifacts/native-20261002-linux-run` is bound as writable output.
+
+1. Restore verification after Rust coverage links were killed (signal 9), followed
+   by Docker API 500 and WSL block-device I/O errors. Docker restart is pending;
+   no cache prune, factory reset or global security change was made. Linux Go
+   coverage/race and Rust coverage have no PASS. Windows Go coverage is running
+   as an independent path. Retain Rust 80% and Go 95% floors; bound compile jobs.
+2. Re-run the added fence regression and whole native gates; observe policy
+   create/update/delete in a real browser with current UI and binaries. Prior
+   browser proof covers September's target-health read only.
+3. Extend mirror body coercion parity: malformed sequence strings currently become
+   zero and bool/fractional handling may diverge from the Python route.
+4. Implement durable mirror source fencing, attested export/import into separate
+   Rust storage, crash recovery/handback and complete action/epoch write admission.
+   Mode flags and an ownership declaration alone do not qualify transfer. Restore
+   consumer integration is also open.
+5. Continue the full matrix: scheduler/provider probes, remaining native APIs,
+   stateless MCP, desktop/Android packaging/device proof, provider/fault workloads,
+   measured successful zero-Python workload and exact-head CI/Evidence Assembly.
+
+## Historical checkpoint — 2026-10-01 policy CRUD across the Rust→Go process boundary
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. The shared uncommitted checkout below was
+preserved and extended; nothing was committed, pushed, merged or released. The full product
+migration is **未完成**; readiness remains `NOT_READY`.
+
+### Locally completed and verified
+
+- **The tombstone slice recorded below as the next task was already on disk and is now
+  verified.** `DELETE /api/workspace/backup-policies/{id}` tombstones the record
+  (`TombstoneState = "DELETED"`), `Get` and `ListAuthoritativeRecords` read it as absent,
+  the state is terminal, and the response is the oracle's `{"deleted": true, "policyId": …}`;
+  a second delete and a patch after the delete are the oracle's
+  `404 Backup policy not found`. `501 GO_POLICY_DELETE_UNSUPPORTED` and its constant are
+  gone. Evidence: `go test ./internal/store -run 'Tombstone|OperatorMutation|AuthoritativeList'`
+  and `go test ./internal/api -run 'Policy|Backup'` both pass.
+- **New `TestBackupPolicyRustGatewayToGoPolicyCrud`** (`native_integration`,
+  `go/internal/api/backup_policy_process_integration_test.go`) drives the whole public CRUD
+  through a real Rust gateway in front of a real `deepseekd` over one isolated,
+  Go-authoritative store: create → projected read with its next run → merge-and-advance
+  update (revision 2, `createdAt` preserved, a key outside the oracle's 18-field patch list
+  dropped) → tombstoning delete → terminal 404 on both write verbs → a create refused by name
+  for a foreign revision → Host/token refusals on POST/PATCH/DELETE.
+- **The shared harness was generalised** to `startNativeProcesses`, which now serves the
+  policy read, policy CRUD and target-health process tests, reports both child process logs
+  on any transport failure, and takes the deployment write opt-in explicitly. An operator
+  write needs **both** conditions, and the daemon defaults to neither:
+  `DEEPSEEKD_CONTROL_AUTHORITY=true` plus `DEEPSEEKD_INTERNAL_BEARER` (≥32 chars, refused
+  without it) *and* a durably Go-authoritative domain.
+
+### Two real defects found and fixed
+
+- **The refactor cancelled its own children.** `defer cancel()` / `defer goCancel()` inside
+  the old single-function helper fired the moment the new split `startNativeProcesses`
+  returned, so the gateway died before the caller's first request (connection refused) or
+  reset mid-request. The cancels are now owned solely by `t.Cleanup`.
+- **The Rust edge checked the original `Host` only on the collection paths.**
+  `require_production_auth` matched `/api/workspace/backup-policies` and
+  `/api/workspace/backup-targets` exactly, so `PATCH`/`DELETE .../{id}` fell through to the
+  token-only branch. The Go-side check cannot compensate: the proxy rewrites `Host` to the Go
+  listener, so `allowedPublicHost` always sees an allowed value. That is a divergence from
+  the oracle, whose `require_api_auth` checks the host on every route it serves.
+  `backup_inventory_route` now matches the item paths too, preserving the exact
+  `403 {"error": "Host not allowed", "code": "forbidden"}` body, and
+  `rust/crates/deepseek-gateway/tests/backup_policy_auth.rs` gained
+  `backup_public_item_routes_check_original_host_and_auth_before_go` (foreign host, missing
+  token, and the legal request still proxied, for both verbs).
+
+### Blocker: the Rust half is written but not locally linked
+
+- `cargo test -p deepseek-gateway` fails at the link stage — `collect2.exe: error: ld
+  returned 5` after `multiple definition of '__imp_atan'` between the local mingw's
+  `libntdll.a` and `libmsvcrt.a` — and `cargo build -p deepseek-gateway` cannot re-run the
+  `deepseek-protocol` build script (`OS Error 5` opening `proto/action/v1/action.proto`,
+  reproducible with and without the sandbox flag, while Python reads the same file and the
+  file has normal attributes).
+- Measured root cause of the second one: **executables whose image lives under `D:\deepseek`
+  are restricted on this machine.** One Go binary that binds `127.0.0.1` fails with
+  `winapi error #10106` from `D:\deepseek\artifacts`, and succeeds from `%TEMP%` and from
+  `D:\wb-probe-tmp` (same volume, outside the tree). Build-script executables live under
+  `rust/target/...`, so they are the blocked part, not the source. Moving
+  `CARGO_TARGET_DIR` outside the tree gets the build killed. `cargo fmt -p deepseek-gateway
+  -- --check` is clean.
+- Consequently: `TestBackupPolicyRustGatewayToGoProcess` and
+  `TestBackupTargetRustGatewayToGoProcess` pass; `TestBackupPolicyRustGatewayToGoPolicyCrud`
+  passes create/read/update/delete/404/bad-revision and fails **only** its final
+  write-admission assertion (`update foreign host must be 403` → got 404), because
+  `rust/target/debug/deepseek-gateway.exe` still predates the `auth.rs` fix. Rebuild the
+  gateway in an unrestricted shell and re-run; do not treat the Rust half as verified before
+  that. Log: `artifacts/native-process-backup-tests.log`.
+
+### Next executable task
+
+Rebuild the gateway and re-run the three `native_integration` process tests plus
+`--test backup_policy_auth` in an unrestricted shell. Then hold both processes with
+`DEEPSEEK_NATIVE_BROWSER_HOLD_SECONDS` and observe the create/update/delete flow in a real
+browser against the built UI. After that, the mirror slice's remaining gaps (source fence,
+export/handback document, browser observation) stay open as recorded below.
+
+## Previous continuation checkpoint — 2026-10-01 operator write channel and policy CRUD
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. The shared uncommitted checkout below was
+preserved; nothing was committed, pushed, merged or released. The full product migration
+is **未完成**; readiness remains `NOT_READY`.
+
+### Locally completed implementation
+
+- **Go schema v15 + `control_operator_mutations`** (`go/internal/store/operator_mutation_schema.go`).
+  The append-only operator journal is a **separate table**, not a widened
+  `control_operations.result_status`: that column is `CHECK(result_status IN
+  ('PROPOSED','APPLIED'))` where `APPLIED` means a verified signed v2 document, and
+  widening it would make the two channels indistinguishable in the audit trail. The
+  v14→v15 migration recreates the metadata ceiling, creates the table and its two
+  immutability triggers, journals `schema_migrations`, and the rollback path refuses to
+  drop a non-empty journal. Every historical-schema fixture in `internal/store` was
+  updated to remove the new objects before claiming an older version — the object catalog
+  is fail-closed, so a fixture that forgot one was refused (three fixtures also needed
+  `DELETE FROM schema_migrations WHERE version>=14`).
+- **`Control.ApplyOperatorMutation`** (`go/internal/store/operator_mutation.go`): gated on
+  the deployment capability *and* a durably Go-authoritative domain, with the live cutover
+  read **inside** the write transaction — the journal row carries the operator, the
+  server-generated `actionId`, the live `executionEpoch`, the cutover revision and fencing
+  token, and the writer fence. Record, control event and journal row are one transaction;
+  a replay returns `ALREADY_APPLIED` and a reused key with a different body is
+  `MUTATION_REQUEST_REPLAY_CONFLICT`. The signed channel is untouched, and a test proves
+  the two journals stay separate.
+- **`POST` and `PATCH /api/workspace/backup-policies`** (`go/internal/api/backup_policy_writes.go`)
+  now serve real writes: create normalises through `internal/policy` and stores; update
+  merges only the oracle's 18 patch fields, advances the revision the store owns and
+  preserves `createdAt`. Body limit 64 000 bytes, the read route's Host/token admission,
+  the oracle's own refusal messages, and the uncaught `ValueError` as a 500.
+- **Target bindings are read lazily** from the authoritative target inventory, exactly as
+  the oracle does: only an id that is neither `managed-local` nor `unbound` needs the
+  registry, so a policy with no registered target does not depend on the target cutover. A
+  registry read that fails refuses with `GO_CONTROL_TARGET_REGISTRY_UNAVAILABLE`.
+
+### Four real design findings, each resolved explicitly
+
+- **A row delete cannot exist in this store.** Removing a record while its append-only
+  events remain makes every later read of that id fail closed with `CORRUPT_RECORD`
+  ("orphaned control events"), and the events table is immutable. `DELETE` is therefore
+  refused with **501 `GO_POLICY_DELETE_UNSUPPORTED`** and its reason, and the tombstone
+  state that would make it correct is the next slice. The frontend's delete button is the
+  one flow that stays unavailable.
+- **The mutation-transport rules are incompatible with a policy document.**
+  `validateMutationRecordPayload` refuses floats (every policy carries float placement
+  percentages) and `rejectMutationBodySecretKeys` flags the bare fragment `credential`
+  (every policy carries `recoveryDrill.credentialRef`). The operator channel therefore
+  applies the engine's **shared record rule** (`rejectControlSecretMaterial`, which
+  exempts reference forms) and not the transport rules, which stay on the signed channel
+  where the oracle applies them too. Neither decision loosens the signed channel.
+- **A create must start at revision 1.** This store only adopts a higher baseline through
+  the attested inventory import; a create asking for a later revision is refused by name
+  rather than silently rewritten, and the narrowing is recorded in the catalog.
+- **The policy transition table had to change.** It allowed `"" → ACTIVE` and toggling
+  only, so a *disabled* create and any update that did not change `enabled` were illegal
+  transitions. Policy now allows creation in either state and a rewrite in place, with the
+  reason written into the table. The frozen state corpus covers peer-trust and effect
+  states, not these, so no frozen contract moved.
+
+### Verified commands and artifacts
+
+- `go test ./... -count=1` passes for every package; `go vet ./...` and `gofmt` clean.
+- The unchanged **95.0%** statement floor passes at **95.037888% (7776/8182)**,
+  `artifacts/go-coverage-policy-writes.out`.
+- `python -m pytest tests/test_native_runtime_go_control_store.py` passes with the new
+  assertions (migration 15, the operator contract, the transport-rule decision, the route
+  catalog and the policy transition shape); `scripts/native_runtime_contract.py --check`
+  reports 49 domains; doc links pass.
+
+### Next executable task
+
+Add the **terminal tombstone state** so `DELETE /api/workspace/backup-policies/{id}` can
+remove a policy the way the oracle does: a state that `Get` and `ListAuthoritativeRecords`
+honour as absent while keeping the record row and its immutable events consistent, plus
+the route's translation of a tombstoned record to the oracle's 404. Only then observe the
+create/update/delete flow in a real browser against built Rust/Go processes. The mirror
+slice's remaining gaps (source fence, export/handback document, browser observation) stay
+open as recorded below.
+
+## Previous continuation checkpoint — 2026-10-01 policy write semantics ported to Go
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. The shared uncommitted checkout below was
+preserved; nothing was committed, pushed, merged or released. The full product migration
+is **未完成**; readiness remains `NOT_READY`.
+
+### Locally completed implementation
+
+- **`go/internal/policy` ports `normalize_policy`** — the whole of a backup policy's write
+  semantics — with the oracle's validation order, its strict `_require_int` (a JSON float
+  is not a Python `int`), its `str(value or "")`/`re`-fullmatch/`min(4, cpu_count)`
+  details, the `policyRevision` coercion, and the **non-`AppError`** failures
+  (`policyRevision: "many"`, `minFreePercent: true`, `recoveryPlacement: {"soon"}`) kept
+  as `UncaughtError` so the HTTP layer can answer 500 exactly as the oracle's unhandled
+  `ValueError` does. Cron parsing carries CPython's `int()` message into the oracle's
+  `Invalid cron expression: …` wrapper, and `loadTimezone` refuses `""`/`Local`, which Go
+  would otherwise accept.
+- **`scripts/generate_policy_normalization_fixture.py` freezes the oracle** into
+  `go/internal/policy/testdata/policy_normalization_v1.json`: **81 cases** (14 accepted,
+  63 `AppError` refusals, 4 uncaught), regenerable and `--check`-able. The fixture masks
+  `updatedAt`, which is the write clock.
+- Two real divergences were found by that fixture and fixed rather than papered over:
+  Python's `a or b` returns the **last** operand when all are falsy, so
+  `costObjectives: {"maxMonthlyStorageCostUsd": 0}` keeps a zero objective (my first port
+  dropped it); and `parse_cron` **wraps** the `ValueError` from a non-numeric cron field
+  into an `AppError`, while the `int()` sites in `policyRevision`/`recoveryPlacement` do
+  not.
+- Delivery order is pinned separately, because a single-fault corpus cannot see it:
+  `enabled → schedule → scope → frontendMirror → protection → policyRevision →
+  replication → federatedDurability → placement → recoveryPlacement →
+  retentionPolicyId → retry → incremental → recoveryObjectives → costObjectives →
+  recoveryDrill`, one test per boundary.
+
+### Verified commands and artifacts
+
+- `go test ./internal/policy` passes: 81 fixture cases, the ordering table, every
+  sub-validator propagation site, the Python value-semantics helpers, and the cron
+  variants. `internal/policy` statement coverage **98.7%**.
+- The module-wide unchanged **95.0%** floor passes at **95.399049% (7423/7781)**,
+  `artifacts/go-coverage-policy.out` — a wider margin than the 95.015755% this work
+  started from.
+- `python scripts/generate_policy_normalization_fixture.py --check` is stable, doc links
+  pass, and `go vet`/`gofmt` are clean.
+
+### What this is not, and the blocker it exposes
+
+This is **write semantics without a write channel**: nothing serves a policy create,
+update or delete yet, so no matrix row moves. The channel is blocked on a concrete
+finding from this round:
+
+- `control_operations.result_status` has `CHECK(result_status IN ('PROPOSED','APPLIED'))`
+  (`go/internal/store/operation_status_schema.go`), so an operator mutation cannot be
+  journalled under its own status without a **schema migration** — the same shape as the
+  v8→v9 migration that added `APPLIED`. Two candidate designs, to be settled first:
+  (a) a v15 migration widening the CHECK plus an `authority` column, or (b) a separate
+  append-only `control_operator_mutations` table (new table, also a migration) so the
+  signed journal stays untouched and an auditor can always tell the two channels apart.
+  (b) is preferred: the signed channel is the audited one and must not become ambiguous.
+- The operator path itself: an authenticated public CRUD route whose authorization is the
+  operator session, gated on `store.authorizeCutover` **and** a durably Go-authoritative
+  domain, with the record revision CAS, `prepareControlRecordWrite`'s secret/float
+  admission, and an atomic record + event + journal row carrying a server-generated
+  `actionId` and the live cutover `executionEpoch`. It must not touch `ApplyMutation`.
+
+### Next executable task
+
+Settle the journal shape above, then land the operator mutation channel in the store with
+its migration, crash/fault tests and coverage, and only then the `POST`/`PATCH`/`DELETE`
+public routes on top of `internal/policy`. The mirror slice's remaining gaps (source
+fence, export/handback document, browser observation) stay open as recorded below.
+
+## Previous continuation checkpoint — 2026-10-01 sealed frontend mirror ownership inversion
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. The shared uncommitted checkout described
+below was preserved; nothing was committed, pushed, merged or released, and no
+production data was touched. The full product migration is **未完成**; machine readiness
+remains `NOT_READY` with no exact head.
+
+### Locally completed implementation
+
+- **New ownership domain `frontend_mirror_store`** (`data`, `python -> rust`, cutover
+  `4.9.4`, `rust_data`) in `release/native_runtime_ownership_v1.json`. The contract gate
+  now validates **49** domains (was 48). Python's `RUST_DATA_DOMAINS` gained it, and
+  `backup_mirror.put_frontend_mirror` — the only Python path that creates a generation,
+  moves `HEAD.json`, drops the legacy 4.4.4 files or prunes a generation — now denies the
+  write mechanically once Python is de-authorised. Reads stay allowed on purpose: the
+  scheduler and restore paths must keep working against a Rust-written mirror.
+- **`deepseek_policy::backup_mirror`** is a port of `backup_mirror.py`: immutable
+  generation directories, the `HEAD.json` CAS, epoch-index bookkeeping, idempotent
+  replay, `mirror-stale-epoch` / `-sequence` / `-head-conflict`, recipient-variant
+  selection, `mirror-generation-corrupt` on a hash mismatch, legacy 4.4.4 reads, and the
+  `list_mirrors` skip-unreadable-legacy behaviour. Sealing links `backup_crypto` — the
+  same age implementation the production CLI runs, now a lib+bin crate — instead of a
+  second copy, and the round trip (`creationVerified`) is a measurement, not an
+  assertion.
+- **The three public routes are served by the Rust edge** (`GET /api/workspace/backup-mirrors`,
+  `GET .../{profile}`, `PUT .../{profile}/frontend`) and are mounted **only** once both
+  ownership conditions hold, so before the cutover the request still falls through to the
+  Go proxy and Python is never shadowed by a read of a directory it is writing.
+- **The recipient sets stay Go control state.** `go/internal/api/backup_policy_recipients.go`
+  adds the authenticated loopback route `GET /internal/control/backup-policy-recipients`,
+  which derives the two sets the oracle uses: the union over **all** policies
+  (`active_recipients`, with Python's `protection or encryption` fallback, so an empty
+  `protection` object falls through) and one group per **enabled** policy (no `encryption`
+  fallback, empty group preserved so normalisation refuses it). An unavailable or
+  non-authoritative source is a refusal, never an empty set — an empty set would skip the
+  recipient check that stops a restore being told a generation is current when its key
+  cannot open it.
+
+### Verified commands and artifacts
+
+- **Two-way byte-level oracle parity**, `tasks/native-runtime/backup_mirror_parity_probe.py
+  --rust-example rust/target/debug/examples/backup_mirror_parity_probe.exe`: **8/8 checks
+  pass**. `metadata.json` and `HEAD.json` are byte-identical to the oracle after masking
+  the random generation id, the write clock and the ciphertext hashes (randomized age is
+  a frozen contract, so a ciphertext hash *cannot* agree); each side reads the other's
+  directory identically through `list_mirrors` / `mirror_status` / `mirror_files`; the
+  **Rust-written ciphertext decrypts with the recipient identity to the exact envelope
+  bytes**; an identical replay is idempotent on both sides; and a flipped ciphertext byte
+  is refused by both with the same 409. Report:
+  `artifacts/backup-mirror-parity-probe.json`, SHA-256
+  `272F286DF21A267A9A28EAB3F817066956E5693B9A95EDFC9AEC2B9E7B1AA555`.
+  The probe writes into `artifacts/` rather than `tempfile.mkdtemp()`: CPython 3.13
+  creates that directory with a DACL (`OWNER RIGHTS` + SYSTEM/Administrators) that refuses
+  a **second** process, so the Rust side could not create its generation there.
+- Pinned Rust 1.85.0 GNU: `deepseek-policy` mirror unit tests **18/18**;
+  `deepseek-gateway` mirror route unit tests **2/2**;
+  `cargo test -p deepseek-gateway --test backup_mirror_routes` **4/4** (a legal upload
+  seals, lists and reports `current` and an idempotent replay creates no second
+  generation; a missing internal bearer refuses with `RECIPIENT_SOURCE_UNAVAILABLE` and
+  writes nothing; stale sequence / bad envelope digest / head conflict / invalid profile
+  id return the oracle's codes; and before the cutover the route is absent so the Go proxy
+  answers). `cargo fmt --all --check` clean, and
+  `cargo clippy -p backup-crypto -p deepseek-policy -p deepseek-gateway --all-targets`
+  clean after fixing three `useless_vec` warnings in the new tests.
+- Python: `tests/test_native_runtime_mechanical_denial.py` **10/10**, including the new
+  real-writer denial (the refused upload leaves no directory behind) and the permitted
+  mode publishing a verified generation; the four existing mirror suites
+  (`test_backup_mirror.py`, `test_backup_mirror_generation.py`,
+  `test_backup_mirror_variants.py`, `test_web_backup_mirror_routes.py`) are **37/37**
+  with the fence in place.
+- Go: full `go test ./... -count=1` passes for every package; `go vet ./...` clean;
+  `gofmt` clean on the changed files; the unchanged **95.0%** statement floor passes at
+  **95.015755% (6634/6982)**, `artifacts/go-coverage-mirror.out`. The new route has its
+  own tests for the pre-cutover refusal, the missing-store and method refusals, a read
+  failure, the union/group derivation (including the empty enabled group) and Python
+  truthiness.
+- `python scripts/native_runtime_contract.py --check` passes: 43 corpora, 32 versions,
+  **49** domains.
+
+### Known gaps in this slice
+
+- **No source fence or transfer document yet.** Rust reads the same `.backup-mirror/`
+  directory Python wrote, so the cutover is "stop the Python service, then set the mode" —
+  there is no fence row, export/import attestation or handback receipt as there is for the
+  policy and target inventories. The mechanical Python denial is in place; the fenced
+  transfer is not.
+- No browser observation of the native mirror route, and no qualification of the restore
+  consumer (`backup_scheduled` → `mirror_files`) under Rust ownership.
+- The Go coverage margin is **thin**: 6634 covered of the 6633 needed. Two statements in
+  `backupPolicyRecipients` (a record payload that is not a JSON object) are unreachable
+  through any legal write path and stay uncovered by construction.
+- `deepseek_gateway` test binaries link only with the self-contained GCC/binutils on PATH
+  plus `LIBRARY_PATH` pointing at rustc's `lib/self-contained` and the host GCC 8.1
+  `crtbegin.o`; the default host MinGW 8.1 `ld` cannot link them. This is the same local
+  toolchain limitation the earlier checkpoints recorded, not a test failure.
+
+### Next executable task
+
+Qualify this slice end to end before widening it: add the mirror **source fence** and a
+canonical export/handback document (the policy/target pattern), then observe the native
+`GET`/`PUT` mirror routes in a real browser against built Rust/Go processes, and prove the
+scheduler's `mirror_files` consumer reads a Rust-written generation. After that, return to
+the largest open blocker: the policy **write** channel (create/update/delete/run) has no
+authorised operator path — the signed v2 apply channel needs an external signer, so a
+browser CRUD request currently has nowhere to go. That design decision (an authenticated
+operator mutation channel gated by the durable cutover, journalled with `actionId +
+executionEpoch`, leaving the signed channel unchanged) is the next thing to settle.
+
+## Previous continuation checkpoint — 2026-09-30 target-health transfer and real native MinIO
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. Preserve the shared uncommitted
+checkout. The initial 89 changed/nonignored files were saved in ignored
+`artifacts/native-resume-20260930-baseline.zip`, SHA-256
+`9d0c95e516ddad5b01f984a383258375314a1057827969715094f733871a1276`.
+No commit, push, merge, release or production-data transfer. The full product
+migration is **未完成**; machine readiness remains `NOT_READY`, with no exact head.
+
+### Locally completed implementation
+
+- Go schema v14 imports the real `backup_target_health` history from Python's
+  separate scheduler database. The new `python-control-inventory-export-v2`
+  preserves the v1 corpus and binds health rows, target inventory, authority,
+  transfer identity, source fence and signed promotion. Strict original SQLite
+  column/value types are checked; BLOB-as-text, forged empty state, missing
+  fences, altered manifests and source drift fail closed.
+- Python's old scheduler table is mechanically fenced, including a fresh real
+  Python writer process. Go imports target records, health and immutable
+  provenance in one transaction. First promotion reattests both stopped source
+  databases; later reads/restarts use Go state only. The native target GET reads
+  inventory and health together and refuses v1/missing health evidence.
+- Go handback removes the health snapshot/provenance with the target import in
+  its existing transaction. The CLI can reexport an already committed immutable
+  handback after publication failure. Python records durable revocation and
+  recovers interruption between scheduler/control commits and receipt publication.
+  **Three databases plus legacy projection are not one atomic source:** keep
+  source processes stopped; these tests used isolated copies only.
+- Rust preserves Python's Host-before-token backup inventory admission. Fresh
+  CGO-free Go and Rust binaries pass nonempty policy/target HTTP reads, foreign
+  Host refusals with/without token, and missing-token refusal. The actual built
+  React frontend displays target `t-1` with imported `blocked` health. Mirror
+  status remains explicitly unavailable. Browser-only auth bypass was confined
+  to isolated loopback fixtures; it is not production auth qualification.
+- The real S3 suite exposed a client-OS assumption: Windows test code expected
+  key rejection even when MinIO ran on Linux in Docker. The test now observes
+  the actual unchanged signed PUT/server response, checks the exact escaped
+  wire key, verifies real payload/hash on success and refuses silent key rewrite.
+  Native S3 production logic and frozen protocols were not weakened.
+
+### Verified commands and artifacts
+
+- Exact Go statement gate: **95.009403% (6568/6913)**, unchanged 95.0% floor;
+  `artifacts/go-target-health-coverage-v14.{out,log}`. Go vet and command-package
+  tests pass. Raw gofmt reports 58 CRLF-only files; normalized comparison found
+  **zero formatting changes**, recorded in `target-health-go-fmt-normalized.json`.
+- Pinned Rust 1.85.0 GNU workspace tests: **1186 passed**, 89 suites, no failures
+  or ignored tests; workspace fmt/clippy and updated S3 observer clippy pass.
+- Python selected oracle/handoff/catalog checks: **45 passed**; Ruff and mypy
+  pass (924 files). Frontend check passes: 73 files/**609 tests**, typecheck,
+  production bundle and bundle budget. Proto 36.1 generation drift, native
+  contract, shadow parity (8/8), release version (4.8.0) and doc links pass.
+- `python scripts/run_native_s3_e2e.py --toolchain 1.85.0-x86_64-pc-windows-gnu`
+  passes **6 transport + 9 worker** cases on real isolated MinIO instances:
+  `artifacts/target-health-native-s3-e2e-observed.log`. The pinned OCI image is
+  Linux, digest `a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2`.
+  Includes nonempty bytes, lost ACK/unknown effects and RPC operation identity;
+  it does not qualify the full Go control cutover or two-Fleet takeover.
+- Fresh process/bundle/browser evidence:
+  `artifacts/go-native-backup-process-v14.log`,
+  `artifacts/native-target-browser-process-final-v14.log`,
+  `artifacts/native-target-health-browser-v14.txt` and
+  `artifacts/native-target-health-browser-detail-v14.jpg`.
+- Offline RAG, tool, injection, security and Agent eval runners pass;
+  logs use `artifacts/target-health-*-eval.log`.
+- A fresh unified offline suite and strict baseline comparison pass on 4.8.0,
+  with the current base HEAD and `sourceTreeDirty: true`:
+  `artifacts/target-health-offline-eval-current.json` and
+  `artifacts/target-health-eval-baseline-current.json`. The earlier comparison
+  of committed `evals/reports/latest.json` described an older 4.7.6 report;
+  only the fresh artifact supports this worktree's baseline claim.
+- Original full Python gate: **5533 passed, nine failures, 95.56% coverage**.
+  Exact admission observations identified all nine failures as unit targets
+  hitting the real host disk's 90% hard watermark (91.2% actual usage).
+  Eight explicit filesystem unit scenarios now use capacity observations
+  scoped to their isolated target paths; real S3/provider probes are untouched.
+  The first failover unit also proves refusal at 95% usage. All **109** relevant
+  placement/capacity/recovery regressions pass. Original and diagnostic logs
+  remain in `artifacts/target-health-python-{full-gate,other-capacity-diagnosis}.log`;
+  fixed regressions: `target-health-python-placement-regression.log`.
+
+### Checks in progress; do not infer PASS
+
+- Windows LLVM MinGW fixes race startup. The full command passes 17 packages,
+  but the store package exceeds 15 minutes. A timed store run completes 249
+  top-level tests before its 45-minute package deadline. Do not repeat those
+  commands unchanged or call them PASS. The exact compiled race binary lists
+  398 cases; the remaining 149 completed in three disjoint groups, preserving
+  every case. Aggregate: **396 passed + two explicit skips; no missing cases or
+  race warnings**, `artifacts/target-health-store-race-completion.json`.
+  The Windows symlink privilege check could not run; the opt-in frozen-vector
+  generator intentionally stays disabled. Original timeout remains explicit;
+  `fullSingleCommandPass` is false. Pinned Go 1.27.1 Linux race is running on a
+  read-only, hash-matched source copy. Its initial module-cache extraction on a
+  Windows bind mount was cancelled before any tests; the replacement uses
+  task-owned Linux cache volumes. Logs/context: `target-health-linux-go-run/`.
+- GNU 1.85.0 lacks `profiler_builtins`; installed MSVC 1.85.0 has it but the
+  Windows SDK registry points to missing libraries. No global settings or SDK
+  installation was changed. A checksum-recorded, 3292-file Linux source copy
+  excludes gitignored runtime state/secrets/build output and uses a new pinned
+  1.85.0 coverage container. Build/coverage is still pending; do not claim it.
+  Source manifest: `artifacts/native-v14-linux-source-manifest.json`.
+- Repaired full Python coverage/provider suite is running with Rust 1.85.0,
+  GNU GCC14 linker, production Go CGO=0 and `PYTHONHASHSEED=0`:
+  `artifacts/target-health-python-full-gate-fixed.log`. It has no final result;
+  do not call the original failed run or this pending rerun PASS.
+
+### Remaining scope and next executable work
+
+Finish the pending checks and repair actual failures first. Then transfer
+backup-mirror generations/HEAD, metadata and ciphertext with fencing, integrity,
+crash recovery and handback; the real oracle is
+`deepseek_infra/infra/workspace/backup_mirror.py`. Target provider probing/refresh,
+CRUD, native scheduler writes, full automatic backup, all other capability
+cutovers, desktop/Android packages, two-Fleet/provider takeover, performance,
+nonempty measured zero-Python workloads and exact-head CI/Evidence remain open.
+Android SDK tools exist, but no connected device or installed AVD was listed.
+The earlier Docker engine-unavailable note is superseded: Docker is now running
+and real native MinIO tests passed. Production zero-Python counters remain
+**NOT_MEASURED**, never constant zero or inferred from these test processes.
+
+## Current continuation checkpoint — 2026-09-30 browser policy read and signed binding
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. The shared checkout has
+prior and current uncommitted changes; preserve them. No commit, push, merge,
+release or production-data access. Full Rust/Go migration is **未完成**;
+`release/native_runtime_5_0_evidence_v1.json` remains `NOT_READY` with no
+`exact_head`.
+
+### Completed local slices
+
+- An opt-in `native_integration` browser observation window serves the actual
+  built React bundle from an isolated loopback Rust gateway + Go daemon over a
+  temporary signed Go policy store. The normal process test still enables auth
+  and proves foreign Host / missing token refusals. The browser initially
+  showed no policy because `AutomaticBackupsTab` used one `Promise.all` for
+  policy, target and mirror lists; the latter two return 501. The frontend now
+  settles each read independently, displays the signed nonempty policy and
+  next run, and explicitly marks target/mirror status unavailable. `HttpClient`
+  reads Go's nested error envelope instead of displaying `[object Object]`.
+  The test's signed policy payload now meets the complete browser contract.
+- Go current-schema reads check that every currently authoritative cutover has
+  its matching persisted authorization and signed artifact row with the same
+  revision, epoch and fence, and that the artifact SHA-256 still matches its
+  stored bytes. Deletion and digest-tamper regression tests fail closed on
+  cutover, authority and public inventory reads. An old test that wrote a
+  forged `go_authoritative` row directly now expects store-integrity denial.
+  This check does not replace signature verification at admission.
+
+### Verification and evidence
+
+- `npm run check --prefix frontend` passed: typecheck, **609/609** tests,
+  production bundle and bundle budget check. After the final unavailable-state
+  wording change, both focused files passed **4/4** and `npm run build
+  --prefix frontend` passed. Ignored `static/ui/index.html` SHA-256
+  `d68ad2ea46468ab2931dce7a15a345c8490ce49e734abfb1398942f1e6b9caab`.
+- Two interactive browser observations used the built Rust/Go binaries and a
+  temporary signed store. The final browser showed `native process boundary`,
+  its cron/next run and `状态不可用` for mirrors plus the target-list warning.
+  `GET /api/workspace/backup-policies` was 200 with the nonempty record;
+  targets and mirrors were 501. The `native_integration` observation test
+  passed after its bounded hold; ignored log `artifacts/go-native-browser-policy-final.log`
+  SHA-256 `8429524a101ecba12f47227f83ae4c303587860a0754ea5003bac224bae6bec2`.
+  This observation used browser-only `AUTH_DISABLED=true` on isolated loopback
+  listeners; it is not a production auth or installer qualification.
+- Focused Go store integrity and normal Rust→Go process tests passed;
+  `go vet ./...` passed. The current `CGO_ENABLED=0` daemon build has SHA-256
+  `33bf49f11d15e190537907cce22f97066a0e71b995161623b8da88ac0cdbaf1`.
+  Re-run the process case with this build after the coverage gate; the browser
+  observation log used the prior daemon build. Go full coverage is being
+  rechecked after updating the forged-authority test. The first run found that
+  test's obsolete expectation; no coverage PASS is claimed yet.
+
+### Open gates and next executable task
+
+Finish the full Go coverage gate and new-daemon process test, then migrate
+target health from Python's separate `.backup-scheduler/scheduler.db` and
+backup-mirror immutable generations/HEAD under `.backup-mirror/` with a
+mechanical single-writer transfer. Their current native public endpoints return
+501; do not turn unavailable data into a fake empty list. Continue policy
+CRUD/run/continuity and scheduler claims. The v13 external projection directory
+still has a final-read race and no cross-store atomicity; production source
+must remain stopped for any isolated cutover exercise. Desktop, Android,
+other domains, provider-backed recovery, zero-Python success workload, exact-head
+CI and Evidence Assembly remain open.
+
+## Previous continuation checkpoint — 2026-09-30 v13 live source binding
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. The shared checkout still
+contains earlier and current uncommitted work. No commit, push, merge, release
+or production-data access. Full Rust/Go migration is **未完成**; readiness remains
+`NOT_READY` and `exact_head` is null.
+
+### Completed local slice
+
+- Go schema v13 stores the exact export manifest bytes, Python source path and
+  chosen legacy projection directory in the immutable import row. The first
+  signed `policy`/`target` promotion reopens and reattests both the fenced
+  source SQLite and projection directory before Go commits. It compares the
+  fresh domain, transfer, digests, authority generation/digest and boot epoch
+  against the durable import; subsequent signed states can use legitimate Go
+  writes without rereading the retired Python source. The Go writer lease is
+  rechecked immediately before both new and replay cutover commits.
+- An unpromoted v11/v12 import migrates without invented source binding. It
+  cannot promote and can be handed back for a fresh export. A v12 import with
+  promotion history refuses upgrade and retains the old store for explicit
+  recovery. The old migration fixture was corrected to recreate its actual
+  historical table and metadata; a fixture that failed with an open single
+  connection transaction previously hung `internal/store` for ten minutes.
+- Policy and target projection drift after import, source disappearance after
+  Go restart, replaced source identity, lease expiry, historical upgrade and
+  handback, duplicate/missing migration objects and logs, and signed replay
+  without its artifact row have local success/refusal tests. The machine
+  contract, runbook, public API note, matrix and active todo reflect v13.
+- An explicit `native_integration` test applies a signed Go mutation to an
+  isolated SQLite store, closes its seeding process, then starts built
+  `deepseekd` and Rust gateway executables. The nonempty policy survives the
+  Go process restart and is visible through Rust over TCP; a foreign Host and
+  missing token are refused. This exercises the real binaries, not an
+  installer or browser.
+
+### Verification and evidence
+
+- Go 1.27.1, Windows/amd64: focused new tests and the complete
+  `go test ./internal/store -count=1 -timeout 3m` pass; `go vet ./...` passes.
+  The first full Go coverage run timed out in a malformed historical migration
+  test; after repairing that test, the next run completed at **94.936515%
+  (6206/6537)** and a further run at **94.982408% (6209/6537)**, both below
+  the unchanged 95.0% floor. After additional refusal tests,
+  `python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile
+  ../artifacts/go-coverage-source-binding-v13.out` passed at **95.028300%
+  (6212/6537)**. Ignored profile SHA-256
+  `c4e53e1533381a2ec30db78946b7a7f8b2486cede3ab56cf36af66be3feec5c7`;
+  log SHA-256
+  `2aeaebeb2d6f82338a265329c27e9dbaaad189480c9eba0c48f16b4378a0cde0`.
+  `go test ./... -count=1 -timeout 10m` also passed; ignored log SHA-256
+  `85efb1758626e319de9ef9b83fe85cfe313e5dfd4bf333b2eccdfc9c5de1f553`.
+- `pytest tests/test_native_runtime_go_control_store.py
+  tests/test_native_control_handoff.py tests/test_native_control_handback.py
+  -q -p no:cacheprovider --tb=short` passed **35/35**. `ruff check .`, `mypy .`
+  (923 sources), `python scripts/native_runtime_contract.py --check`, and
+  `python scripts/check_doc_links.py` passed. Changed Go files are gofmt-clean;
+  targeted tracked diff check passed. These are local checks, not exact-head CI.
+- Rust 1.85.0, Windows GNU: the default MinGW 8.1 linker failed on `.drectve`.
+  Selecting GCC 14 alone still used the old `ld.exe` from PATH. With the Rust
+  1.85 `self-contained` directory first in PATH and its GCC 14 set as Cargo's
+  target linker, `cargo +1.85.0-x86_64-pc-windows-gnu build -p
+  deepseek-gateway --manifest-path rust/Cargo.toml` passed. Ignored build log
+  SHA-256 `246a2b43129968daf17d2c3a6ad559d4ecae9a63db7575c8952dcd0b9fe4947c`;
+  built executable SHA-256
+  `9ca192ca81a0255c27aa771954d662440ba0cc759e6fd39979dd8a677dcb90a4`.
+  The same toolchain passed `cargo ... test -p deepseek-gateway --test
+  backup_policy_auth` (1/1; log SHA-256
+  `3d9b20e024d4751ac3c52be6ee2ef525c0e65288c28895b85d968dda05723c99`).
+  `CGO_ENABLED=0 go build -o ../artifacts/deepseekd-policy-process.exe
+  ./cmd/deepseekd` passed; binary SHA-256
+  `84d1729fb3af7cfd77fb12d3456c0873adec364e786530471e2e4c7cc2b39e40`.
+  With both `DEEPSEEK_GATEWAY_TEST_BINARY` and `DEEPSEEKD_TEST_BINARY` set to
+  those local executables, `go test -tags native_integration ./internal/api -run
+  '^TestBackupPolicyRustGatewayToGoProcess$' -count=1 -timeout 3m -v`
+  passed; ignored log SHA-256
+  `89fd498834adecd4bed30d49911e9443ce210447888d8dce499cf3f7163a26ae`.
+  `go vet -tags native_integration ./internal/api` passed.
+
+### Open gates and next executable task
+
+The external projection directory is bound and reattested but not mechanically
+frozen: a concurrent external write after its final read can still race Go commit. The two SQLite
+stores have no atomic cross-store transfer; existing Go shadow history and
+Python control state outside the fence remain untransferred. Keep the Python
+source stopped and do not qualify production ownership transfer. Next, verify
+the public backup-policy flow in a real browser, then port policy
+CRUD/run/continuity and scheduler claims. Installer qualification is still open.
+Desktop, Android, other product domains, provider-backed
+recovery, zero-Python successful workload and exact-head CI/Evidence Assembly
+remain open.
+
+## Previous continuation checkpoint — 2026-09-29 explicit projection custody
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. This shared checkout has
+earlier and current uncommitted work; no commit, push, merge, release or
+production-data access. Full Rust/Go migration is **未完成** and readiness remains
+`NOT_READY`.
+
+### Completed local slice
+
+- The offline Python CLI already required `--projection-dir` when its source
+  path was nonstandard, but the callable exporter did not. Its core binding
+  now refuses a nonstandard source with no explicit directory and rejects a
+  relative explicit directory before installing a SQLite fence. The standard
+  `.backup-control` layout continues to infer its sibling policy/target
+  directory; an explicitly named empty directory produces a real digest.
+- The Go source attester now refuses a nonstandard path without an explicit
+  absolute projection directory, even when a caller reseals a manifest to
+  claim `legacyProjection.digest: null`. This is checked in the attester used
+  by the importer and its refresh. The handback test fixture now copies the
+  actual projection files and uses the standard layout before re-fencing.
+  The initial missing-directory refusal tests were red before these core
+  changes; those and the later resealed-manifest/success tests pass afterward.
+
+### Verification and evidence
+
+- Go 1.27.1, Windows/amd64: focused store/import/API tests passed; `go vet
+  ./...` passed. The unchanged full statement gate passed at **95.008473%
+  (6167/6491)** using `python ../scripts/check_go_coverage.py --dir . --min
+  95.0 --profile ../artifacts/go-coverage-explicit-projection-v12.out`.
+  Ignored profile SHA-256
+  `3a529c3608f5eaab9f91ec0334ace7e8a3d499d91a0727db93f0236394fecdd1`;
+  log SHA-256
+  `f1022cfb7ea99fb3d1038fd426a9d5ef6254e84d5f0804a17d19a087af796f29`.
+- `pytest tests/test_native_control_handoff.py
+  tests/test_native_control_handback.py tests/test_native_runtime_go_control_store.py
+  -q -p no:cacheprovider --tb=short` passed **35/35** after the handback
+  fixture was restored to the checked-in source's actual layout. `ruff check
+  .`, `mypy .` (923 sources) and `python scripts/native_runtime_contract.py
+  --check` passed. These are local checks, not exact-head CI.
+
+### Open gates and next executable task
+
+The import refresh checks the source and sibling directory before writing Go
+state, but first signed promotion currently checks recorded import digests
+without rereading that source. Implement durable source identity/manifest
+custody and a fresh reattestation at the first promotion, with restart,
+tamper, handback and older-store migration cases. Then finish public policy
+CRUD/run/continuity, scheduler claims and real Rust→Go/browser success.
+Directory files are not mechanically frozen, so keep the Python source service
+stopped and do not qualify production ownership transfer yet. Desktop,
+Android, all other product domains, provider-backed recovery, zero-Python
+successful workload and exact-head CI/Evidence Assembly remain open.
+
+## Previous continuation checkpoint — 2026-09-29 projection semantics and Go coverage
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. The shared checkout still
+contains earlier and current uncommitted work; no push, merge, release or
+production-data access. The full Rust/Go migration remains **未完成** and release
+readiness remains `NOT_READY`.
+
+### Completed local slice
+
+- Python's actual `Path.glob("*.json")` and policy/target list routes include
+  hidden JSON and JSON-named directories. Go source attestation now scans the
+  same candidates, includes hidden JSON in the binding and rejects a JSON-named
+  directory instead of silently skipping either. Python export regression
+  tests cover both; the glob candidate set was checked locally with Python
+  3.12.12 and 3.13.
+- A manifest digest can be recomputed by a caller. Go therefore now parses
+  each bound legacy projection with duplicate-key detection and checks its
+  filename stem and `policyId`/`targetId` against the fenced SQLite rows in the
+  same file scan used for its digest. Resealed unadopted, mismatched, duplicate
+  and malformed projections are refused; a reconciled stale projection still
+  attests, as the SQLite row is authoritative. The rejection tests failed
+  before the Go change and pass afterward.
+
+### Verification and evidence
+
+- Go 1.27.1, Windows/amd64: `go test` focused projection source and JSON corpus
+  cases passed; `go vet ./...` passed. The unchanged full statement gate,
+  `python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile
+  ../artifacts/go-coverage-projection-final-v12.out`, passed at **95.008473%
+  (6167/6491)**. Ignored profile SHA-256
+  `12bf333dd2c67f65b6674f910b48efc888e087b8dee9f75b1a4789839e2c0df23`;
+  ignored log SHA-256
+  `f2873a38464c3d8740e65fb09be64fa9228f23ceb957acbaf28631e3da44e480`.
+  Before the parser corpus, the exact gate failed at **94.900632%
+  (6160/6491)**; its threshold was not lowered.
+- `pytest tests/test_native_control_handoff.py
+  tests/test_native_control_handback.py tests/test_native_runtime_go_control_store.py
+  -q -p no:cacheprovider --tb=short` passed **34/34**. `ruff check .`, `mypy .`
+  (923 sources), `python scripts/native_runtime_contract.py --check` and
+  `python scripts/check_doc_links.py` passed. Changed Go files are gofmt-clean;
+  targeted tracked Markdown diff check passed.
+- Windows `go test -race` still exits `0xc0000139` before tests execute; this
+  checkout's prior record reports the same toolchain failure. Linux race and
+  exact-head CI evidence remain open. The mistyped
+  `generate_native_control_inventory_fixture.py --check` invocation was a CLI
+  usage error (that generator requires `--output-dir` and has no `--check`);
+  the fixture comparison test in the 34 passing Python cases is the current
+  check.
+
+### Open gates and next executable task
+
+The Go importer reattests the source and projection directory immediately
+before its own write, but the signed promotion later checks recorded digests
+without rereading that directory. The SQLite fence does not freeze sibling
+JSON files. A nonstandard source path also currently permits omitting the
+explicit projection directory and binding `digest: null`; do not qualify such
+a transfer. Close the import-to-promotion drift window with a verifiable
+source/projection reattestation or a mechanical offline freeze, then implement
+policy CRUD/run/continuity and scheduler claims through real Rust→Go success.
+All remaining product domains, desktop/Android, provider-backed failure and
+takeover evidence, successful zero-Python workloads, exact-head CI and Evidence
+Assembly remain open. Keep `NOT_READY`.
+
+## Previous continuation checkpoint — 2026-09-29 legacy projection directory binding
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. This shared checkout has
+existing and new uncommitted work; no commit, push, merge, release or production
+data access. The complete Rust/Go migration is **未完成**; readiness is
+`NOT_READY`, and Python still owns production. No exact-head CI or Evidence
+Assembly exists for the local changes.
+
+### Completed local slice
+
+- The offline Python exporter now **binds** the legacy projection directory it
+  previously only preflighted. `export_and_fence` writes a new
+  `legacyProjection` manifest field: the file count plus a canonical digest over
+  each checked file's name, size and SHA-256, ordered by UTF-8 bytes of the base
+  name. An absent directory binds `{fileCount: 0, digest: null}`; an **empty**
+  directory binds its own digest. The manifest keeps its existing schema string,
+  so an export without the field is refused rather than silently imported.
+- The Go source attester re-derives that digest before accepting an import, so a
+  directory the SQLite fence cannot reach fails closed when it appeared, vanished
+  or changed. The directory is inferred from the standard `.backup-control`
+  layout, or named through the new `go/cmd/control-inventory-import
+  --projection-dir` flag; the attestation retains the caller's choice so the
+  import refresh rechecks the same location.
+  `AttestPythonInventorySourceWithProjection` is the explicit entry point and
+  `AttestPythonInventorySource` is its standard-layout form.
+- The checked-in Python fixtures now use the standard `.backup-control` layout
+  and carry a real projection file per domain
+  (`python_projection_policies/p-1.json`, `python_projection_targets/t-1.json`),
+  so both runtimes' digest computation is pinned by the same bytes. The empty
+  fixture binds an empty directory instead. That case exposed a wrong invariant
+  during development — a nil digest means "no directory bound", but a zero file
+  count does **not** imply a nil digest — which is now refused in the other
+  direction only.
+
+### Verification and evidence
+
+- Go 1.27.1 on Windows/amd64: `go test -count=1 -timeout 1800s ./internal/store/
+  ./internal/api/ ./cmd/control-inventory-import/ ./cmd/control-inventory-handback/`
+  passed at 1799.062s / 99.037s / 29.405s / 26.520s. The store package lands
+  within seconds of the default 600s per-package timeout on this machine, which
+  is what tripped the earlier run; the inventory-focused subset passes in
+  421.932s. `go vet` on the changed packages and `gofmt` on every changed file
+  are clean. The full Go 95.0% coverage gate was **not** run locally.
+- `tests/test_native_control_handoff.py` is **21/21** locally; the combined
+  handoff/handback/control-store/foundation/ownership run is **47/47**.
+  `ruff check .` and `mypy .` (923 sources) passed. The documentation navigation
+  check, `scripts/check_doc_links.py` and the language-navigation tests passed.
+- These are local results only. No browser, device, provider, Rust→real-Go
+  process or exact-head CI evidence exists for this slice.
+
+### Open gates and next executable task
+
+The directory is bound and rechecked, not frozen: the SQLite fence cannot reach
+a sibling JSON directory, so the source service must stay stopped, and a
+directory that changes between export and import is refused rather than
+repaired. Port policy CRUD/run/continuity and scheduler claims with real
+Rust→Go success, then continue target inventory, storage/worker, federation, all
+public APIs, desktop/Android, zero-Python successful workloads, exact-head CI
+and Evidence Assembly. The two-store transfer is still not atomic and existing
+Go shadow history still cannot be imported. Keep `NOT_READY`.
+
+## Previous continuation checkpoint — 2026-09-29 native backup-policy list read
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. This shared checkout has
+existing and new uncommitted work; no commit, push, merge, release or production
+data access. The complete Rust/Go migration is **未完成**; readiness is
+`NOT_READY`, and Python still owns production. No exact-head CI or Evidence
+Assembly exists for the local changes.
+
+### Completed local slice
+
+- Go now serves `GET /api/workspace/backup-policies` with the frontend's
+  existing `{policies,nextRuns}` response shape. Direct Go access requires
+  an allowed Host plus `AUTH_TOKEN` bearer or `auth_token` cookie unless
+  authentication is disabled by deployment configuration. The `403` Host and
+  `401` auth errors retain Python's flat error body and lowercase codes.
+  A transactionally checked Go-authoritative
+  `policy` cutover, current-record digest and control-event history are required;
+  shadow, missing store, corrupt rows/events and orphan history cannot report a
+  successful empty list. Only a **read** is implemented.
+- `NextBackupRun` ports five-field cron, day/week OR, IANA timezone, DST skip or
+  `run-once`, first fall fold, and SHA-256 deterministic jitter. Eleven frozen
+  cases come from the actual Python `backup_scheduler.next_run_for_policy`
+  oracle in `scripts/generate_backup_next_run_fixture.py`; Go tests compare the
+  resulting values exactly. The `time/tzdata` import embeds IANA data for a
+  clean native package.
+- Go HTTP tests read a nonempty, fenced Python-exported policy source after
+  attested import and signed promotion; a second path reads an attested empty
+  source, applies a signed Go policy mutation, and checks the public result and
+  next run. Auth, shadow, schema, damaged data and storage refusal paths were
+  checked on isolated stores. The Rust production auth middleware now checks
+  the original Host **before** token on this route, with Python's flat 403/401
+  error envelope; a mock-Go edge test proves legal forwarding. A real
+  Rust→Go process success for this route remains unverified.
+- The offline Python source exporter now checks sibling legacy projection
+  directories in the standard `.backup-control` layout, or an explicitly
+  supplied directory for nonstandard CLI paths, before it installs a SQLite
+  fence. An unadopted/malformed policy or target JSON is refused; target
+  `.checkpoint.json` sidecars are skipped. A matching but stale projection is
+  allowed because the control SQLite row is already authoritative. This is a
+  preflight only: neither the directory nor its digest is included in the Go
+  source attestation, and files can change after the check.
+
+### Verification and evidence
+
+- Go 1.27.1 on Windows/amd64: full
+  `python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile
+  ../artifacts/go-coverage-policy-list-v12.out` passed at **95.023548%
+  (6053/6370)** statements, without lowering the threshold. Ignored profile
+  SHA-256 `49f2b77eacb4f8f343ac915e40bc41993f5820ea8dfe82c35e4dc89438005122`;
+  compact log `artifacts/go-coverage-policy-list-v12.log` SHA-256
+  `c18bcceb5ba4268c2df463a66274ad3a4253b543fc9bd93bde6d75e8bdc4a`.
+  Earlier runs failed the unchanged gate at 94.751773%, 94.940898% and
+  94.994508%; focused safety and legitimate-success cases plus removal of an
+  unreachable Host parser branch closed the gap. `go vet ./...`
+  and gofmt passed.
+- The Python oracle `--check`, `ruff check .` and `mypy .` (923 sources) passed.
+  The source-handoff suite grew from 15 to **18/18** passing cases, including
+  explicit and inferred projection directories, an unadopted policy/target,
+  malformed JSON, missing explicit directory and target checkpoint sidecar.
+  The combined handoff/handback/control-store command
+  `pytest tests/test_native_control_handoff.py
+  tests/test_native_control_handback.py tests/test_native_runtime_go_control_store.py
+  -q -p no:cacheprovider --tb=short` passed **30/30**. Ignored log
+  `artifacts/python-control-projection-preflight.log` SHA-256
+  `19932ebea0a183b7da572b238fb5973469697826509e41c17ad341f8d17bc318`.
+  `python scripts/native_runtime_contract.py --check`,
+  `python scripts/check_doc_links.py` and `git diff --check` passed. Those checks
+  do not establish a browser, device, provider or release-gate result.
+- Existing Rust proxy integration test `go_control_proxy` passed **1/1** under
+  explicit `1.85.0-x86_64-pc-windows-gnu` and that toolchain's bundled GNU
+  linker. The default system MinGW driver fails on `.drectve`; a shorthand
+  `+1.85.0` run selected MSVC and failed without `link.exe`. These are local
+  linker/toolchain findings, not gateway regressions. The test uses a mock Go
+  endpoint, so it does **not** establish the backup-policy route's real
+  Rust→Go process success. Ignored log
+  `artifacts/rust-go-control-proxy-policy-list.log` SHA-256
+  `f368c167a8782fdd02b8222f126db07162bb5a72872a75a7ecba72f77be27625`.
+- New Rust `backup_policy_auth` production-edge test passed **1/1** with the
+  original Host denied before auth, local Host with missing token denied, and
+  a legal Host/token forwarded to a mock Go endpoint; `AUTH_DISABLED` permits
+  the legacy bypass. The pinned 1.85 GNU
+  `cargo fmt -p deepseek-gateway --check` and targeted clippy `-D warnings`
+  passed. Ignored test log SHA-256
+  `38e29b0c30849a8e01f180ffb86b64764484c194393ee86c82574dafa5ae1fb6`;
+  clippy log SHA-256
+  `24174e97bebc8cb7313cd55fd51b272cdb18237121e9a9e18933c1c63fb9d4cd`.
+
+### Open gates and next executable task
+
+The Python policy list adopts `.backup-policies/*.json` files into its SQLite
+control table before reading. The exporter now checks for unadopted projections
+before installing the SQLite fence, but the existing attested Go import still
+covers only `.backup-control` SQLite; it cannot prove the projection directory
+stayed unchanged after preflight. Bind and recheck that directory in the
+source/Go transfer before any policy production cutover. Then port policy
+CRUD/run/continuity and scheduler claims
+with real Rust→Go success, and continue target inventory, storage/worker,
+federation, all public APIs, desktop/Android, zero-Python successful workloads,
+exact-head CI and Evidence Assembly. The two-store transfer is not atomic and
+existing Go shadow history still cannot be imported. Rust's shared Host helper
+does not yet auto-add Python's detected LAN IP; configure LAN hosts explicitly
+while exact Host parity remains open. Keep `NOT_READY`.
+
+## Previous continuation checkpoint — 2026-09-29 empty-source promotion proof
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. All prior uncommitted
+source-fence, v12 handback and other work remains in this shared checkout; no
+commit, push, merge, release or production-data access. The full Rust/Go
+migration is **未完成**, readiness is still `NOT_READY`, and Python remains the
+configured production runtime. No exact-head CI or Evidence Assembly exists
+for these local changes.
+
+### Completed local slice
+
+- `assertInventoryPromotionTx` now refuses a missing `control_inventory_imports`
+  entry for policy and target even when both Go record and event counts are
+  zero. First signed promotion requires the attested Python source fence,
+  matching transfer, authority tip and boot epoch, exact manifest/source
+  digests, and unchanged Go shadow rows/events. Later signed authoritative
+  states retain those digests while permitting legitimate Go writes after the
+  first promotion.
+- `scripts/generate_native_control_inventory_fixture.py --empty` creates a
+  genuine empty Python control SQLite source, checkpoint and fenced exports
+  for both domains. Go tests copy this real Python source, attest it read-only,
+  prove refusal without an import, then prove legal signed promotion for both
+  empty domains. A policy test makes a signed Go record write and advances
+  through `python_shadow` and `python_disabled` while retaining the record.
+  The current checked-in empty source is 266240 bytes, SHA-256
+  `6ee7a325b9e05cacf3cb3dff1441f5acb4399b0a1bea5a8fda8ffd9dfe00b731`,
+  and includes the 18 linked triggers from the previous slice.
+- Go HTTP claim → cutover → signed policy apply tests now use the attested
+  empty source; the started runtime's general authority/cutover transport test
+  uses the action domain. A separate Python interpreter invoking the real
+  `backup_control.create_policy` after export is denied by the SQLite fence,
+  and the source row count and transfer digest remain unchanged. This is a
+  fresh writer-process check on isolated data, not a full service restart or
+  production cutover.
+
+### Verification and evidence
+
+- Current v12/shared-tree Go coverage command from `go/`:
+  `python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile
+  ../artifacts/go-coverage-empty-source-v12.out`. All packages passed on Go
+  1.27.1 `windows/amd64`: **95.084385% (5803/6103)** statements, unchanged
+  95.0% floor. Ignored profile SHA-256
+  `8ee50d7f022479211ffc50a98eb5f1a4e9134409debb24e02501cab5b37db4c4`;
+  compact log `artifacts/go-coverage-empty-source-v12.log` SHA-256
+  `e7585fe4ce4a502c442df2ecb5006af1b442e45d031c19915c3e5b94e5aa260c`.
+  `go vet ./...` passed; gofmt reports no changed-file output.
+- The six related Python files ran **87/87** tests, including the handoff and
+  v12 handback suites, on isolated data. `ruff check .` passed and `mypy .`
+  passed for 922 source files. The native contract, documentation link and
+  `git diff --check` checks passed after the documentation edits.
+
+### Open gates and next executable task
+
+The two SQLite stores still have no atomic cross-store promotion or handback;
+the source service-stop precondition is procedural. Existing Go shadow
+history cannot be imported, and native policy/target business and public API
+parity remain unfinished. Continue with the native policy/target operation
+path behind the Rust edge, then the remaining public Rust routes, Go-owned
+workspace backup/DR, provider-backed worker reconciliation, desktop/Android
+packages, nonzero successful zero-Python workloads and exact-head CI/Evidence.
+Do not infer release readiness from the local fixture or coverage checks.
+
+## Previous continuation checkpoint — 2026-09-29 linked control-state fence
+
+Branch `codex/indexmap-std-feature`, base HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`; the handback slice below is
+included and extended. No commit, push, merge, release or production-data
+access. The full Rust/Go migration is **未完成**;
+`release/native_runtime_5_0_evidence_v1.json` remains `NOT_READY`, and Python
+remains the configured production runtime.
+
+### Completed local slice
+
+The transfer no longer binds only the exported inventory rows. While a fence is
+held the Python writer is mechanically denied on the control state the transfer
+proof depends on:
+
+- **Global** (frozen by *any* held fence): `control_authority_head`,
+  `control_authority_outbox`, `control_authority_mutations`,
+  `control_boot_state`. These carry the installed authority tip and the source
+  boot epoch the Go attestation compares, so moving them after an export would
+  silently invalidate the binding.
+- **Linked** (frozen only for rows naming a fenced domain):
+  `lifecycle_intents`, `target_receipt_mutations`.
+
+That is 18 `native_control_fence_<table>_no_<operation>` triggers, generated by
+`scripts/native_control_handoff.py` (`_LINKED_FENCE_TABLES`,
+`linked_fence_objects()`) and required **byte for byte** by
+`go/internal/store/inventory_source.go` (`linkedFenceTables`,
+`linkedFenceObjects()`) before the attester will read a single row. A Python
+service restarted after the export now fails closed with
+`PythonWriterMechanicallyDeniedError` on its own production connection instead
+of resuming ownership of the bound state.
+
+The release rule is explicit: the linked objects survive a **partial**
+revocation (one domain handed back while another transfer is still held) and are
+dropped only when the **last** fence is lifted, so one domain's rollback can
+never unfreeze state another held transfer depends on. The append-only
+`native_control_handoff_revocations` journal remains afterwards as the audit
+record.
+
+### Verification and evidence
+
+- `go test ./... -count=1` passed for every Go package; `go vet ./...` clean;
+  `gofmt` clean on every changed Go file.
+- Exact Go statement coverage **95.084385% (5803/6103)** on Go 1.27.1
+  `windows/amd64` with the unchanged 95.0% floor
+  (`scripts/check_go_coverage.py --dir . --min 95.0`). Ignored local profile
+  `artifacts/go-coverage-linked-fence.out` SHA-256
+  `8FB00254B70B8BE041DE02BBF779DD0C61AE9C10317F9AD90E241446F0B3630A`,
+  compact log `artifacts/go-coverage-linked-fence.log` SHA-256
+  `E7585FE4CE4A502C442DF2ECB5006AF1B442E45D031C19915C3E5B94E5AA260C`.
+- **A real cross-language failure was caught and is now a permanent gate.** The
+  regenerated Python fixtures change the source the Go tests consume, and the
+  extended fence immediately refused four Go tests that used to tamper with
+  `control_authority_head`, `control_boot_state`, `control_authority_outbox` and
+  `lifecycle_intents` through raw SQL — which is exactly the guarantee that was
+  missing. Those tests now lift one named fence object, mutate, and restore it
+  (`tamperWithFencedSource`), so they still prove the *attestation* refuses a
+  tampered source in addition to the fence refusing the write.
+- New Go test `TestLinkedControlStateIsMechanicallyFenced` proves eight linked
+  writes are denied by the fence in the real Python-produced fixture, and the
+  ingestion path still attests it unchanged.
+- `tests/test_native_control_handoff.py` (14 cases) now asserts the linked
+  denial through the **production control connection**
+  (`backup_control._connect()`), that the boot epoch did not move, and that the
+  generated fixtures carry all 18 objects.
+  `tests/test_native_control_handback.py` (8 cases) adds
+  `test_two_step_revocation_lifts_the_linked_fence_only_at_the_end`: the first
+  revocation keeps all 18 objects and the authority denial, the last one removes
+  every fence object, leaves the revocation journal, allows the production
+  connection to write again, and a fresh export re-fences from scratch. It
+  consumes a second real Go document,
+  `go/internal/store/testdata/python_target_inventory_handback_v1.json`,
+  produced by the same `DEEPSEEK_UPDATE_HANDBACK_FIXTURE=1` generator test as the
+  policy one.
+- Refreshed cross-language fixtures: `python_control_source_v1.sqlite3` and
+  `python_empty_control_source_v1.sqlite3`, 266240 bytes each, nonempty source
+  SHA-256 `f11de32e6465c2e3c16b5c9f43a70e8f28da4b74916bfdce393f4bf5e5899a32`,
+  each carrying 18 linked fence triggers. The export manifests and checkpoints
+  are unchanged (the fence is not part of the manifest), so the previous
+  evidence for them still holds.
+- `ruff check .` and `mypy .` passed; the whole fast Python suite
+  (`pytest -m "not integration and not slow"`) passed with exit code 0.
+- No Rust, frontend, provider or platform code changed, so those gates were not
+  rerun. Windows local results only: no Go race, no Linux exact-head CI, no
+  Evidence Assembly.
+
+### Open gates and next executable task
+
+The checkpoint **documents** live in authority anchor files outside the fenced
+SQLite database, so they cannot be fenced there; the Go attestation does not
+read them, so a checkpoint-file change cannot invalidate an import — but it also
+means the fence is not the whole authority story. The Python control state
+outside the bound set (`target_objects`, `recovery_object_refs`, QoS,
+maintenance, retention, GC intents) deliberately stays Python's and is **not**
+transferred, so those tables have a single authoritative writer only because no
+ownership change covers them yet. The two stores are still not one transaction,
+existing Go shadow history is still not transferable, nonzero policy
+`topology_generation` is still refused, and no production handback, promotion or
+ownership transfer has been performed.
+
+Next dependency-satisfied work: the native policy/target business and public API
+parity behind the Rust edge, then the public Rust data routes still missing
+(`/api/projects`, `/api/project-files`, the remaining `/api/file-*` shapes,
+`/api/media`, `/api/skills`, traces), the Go-owned workspace backup/DR block,
+provider-backed worker reconciliation on real MinIO, desktop/Android packages, a
+successful nonempty zero-Python workload, and the exact-head CI/Evidence gates
+that this local work cannot substitute for.
+
+## Previous continuation checkpoint — 2026-09-29 attested handback (reverse transfer)
+
+Branch `codex/indexmap-std-feature`, base HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`; all prior uncommitted work
+remains intact and extended. No commit, push, merge, release or production-data
+access. The full Rust/Go migration is **未完成**. `release/native_runtime_5_0_evidence_v1.json`
+remains `NOT_READY` with no exact-head CI evidence, and Python remains the
+configured production runtime.
+
+### Completed local slice
+
+The offline import gained its **reverse**: a transferred `policy`/`target`
+inventory can be handed back to Python before any authoritative Go use, with
+both sides journaling the transfer rather than silently dropping it.
+
+- `go/cmd/control-inventory-handback` (new) plus
+  `store.RollbackPythonInventory` and the canonical
+  `control-inventory-handback-v1` renderer. Go refuses unless the domain is
+  still `dual_evaluate`, has **no** promotion artifact or cutover authorization,
+  still holds exactly the imported record and event counts (one event per row),
+  carries the exact transfer ID the import journal records, and no other writer
+  or time touched any row. It then removes the records, their `control_events`
+  and the import provenance row and appends the v12
+  `control_inventory_handbacks` row **in one transaction**; the append-only
+  triggers it lifts are restored inside that same transaction, so a failure at
+  any point leaves the store byte-identical.
+- `go/internal/store/inventory_handback_schema.go` raises the store to
+  **schema v12** with that append-only journal (its own update/delete/replace
+  triggers, `UNIQUE(domain, transfer_id)`); a v11 store migrates, a schema-0
+  rollback refuses to discard retained handback history, and the v12 objects are
+  part of the verified object set.
+- `scripts/native_control_handoff.py --rollback` verifies the **exact Go
+  bytes**: canonical JSON, the document's own digest, the exact 14-field key
+  set, and binding to the fenced export's manifest, source, authority tip and
+  transfer. It then records an append-only
+  `native_control_handoff_revocations` row, drops the source fence row and its
+  guard triggers in one transaction, and publishes
+  `python-control-inventory-handback-receipt-v1`.
+- The reverse transfer is **reversible and re-transferable**: after a handback
+  the source writes again, can be fenced and exported for a **new** transfer,
+  and the Go domain can import that new transfer. A promoted (or even
+  de-promoted) domain, a Go-mutated domain and an unjournaled transfer are all
+  refused, so the command can never be used to overturn a real ownership change.
+
+### The defect the cross-language fixture caught
+
+The first version of `handbackDigest` hashed a document that still carried
+`"handbackDigest": ""`, while Python removes that key before hashing. Go's own
+tests passed — both sides were self-consistent — and only the checked-in
+Go-produced fixture consumed by `tests/test_native_control_handback.py` exposed
+it. The digest is now computed over an explicitly built field map, and the
+fixture (`go/internal/store/testdata/python_policy_inventory_handback_v1.json`)
+is regenerated by `DEEPSEEK_UPDATE_HANDBACK_FIXTURE=1` and asserted byte-equal
+on every normal run, so the two languages cannot drift apart silently again.
+
+### Verification and evidence
+
+- `go test ./... -count=1` passed for every Go package (including the new
+  `cmd/control-inventory-handback`); `go vet ./...` clean; `gofmt` clean on
+  every changed Go file. Windows checked-out files that predate this work carry
+  CRLF and are reported by `gofmt -l` for that reason alone — unchanged here.
+- Exact Go statement coverage **95.069844% (5785/6085)** on Go 1.27.1
+  `windows/amd64`, with the unchanged 95.0% floor and
+  `scripts/check_go_coverage.py --dir . --min 95.0`. Two consecutive runs
+  reported the same statement totals. Ignored local profile
+  `artifacts/go-coverage-inventory-handback.out` SHA-256
+  `ABC9A64D5189E64B53AC25A60D3A7FF3B3B5C0CBA304830116E961F8FC099634`,
+  compact log `artifacts/go-coverage-inventory-handback.log` SHA-256
+  `08FF83551C7455934310C32E1363B908A2508064F9F7B892C6A6B8CE3E0FE3C6`
+  (same run). The first run exposed a real gate failure at **94.414414%
+  (5764/6105)**; the refusal, fault-injection, lease-expiry, corrupt-history and
+  deployment-key tests that closed it are real behavior tests, not exclusions,
+  and no threshold was lowered.
+- `tests/test_native_control_handback.py` (new, 7 cases) consumes the real
+  Go-produced document: canonical form and binding, a **real Python process
+  restart** that is denied before the handback and writes for real after it,
+  re-fencing for a new transfer, the `--rollback` CLI path (including its
+  argument refusals), and refusals for a forged/unsigned/extra-field handback, a
+  changed source, and a mismatched manifest. `pytest
+  tests/test_native_control_handoff.py tests/test_native_control_handback.py
+  tests/test_native_runtime_go_control_store.py -q -p no:cacheprovider` passed
+  25 cases; `ruff check .` and `mypy .` (922 sources) passed;
+  the whole fast Python suite (`pytest -m "not integration and not slow"`,
+  **5503** selected tests) passed with exit code 0;
+  `python scripts/native_runtime_contract.py --check` passed (43 corpora, 32
+  versions, 48 domains); doc links and the Markdown language navigation (219
+  files) passed; `python scripts/check_release_version.py` passed.
+- The catalog `release/native_runtime_go_control_store_v1.json` now declares
+  migration 12 and an `inventory_handback` section (schema, table, mutation,
+  preconditions, Python receipt, open gaps), and
+  `tests/test_native_runtime_go_control_store.py` asserts both the declaration
+  and the Go/Python sources it names.
+- No Rust, frontend, provider or platform code changed this slice, so those
+  gates were not rerun. Windows local results only: no Go race, no Linux
+  exact-head CI, no Evidence Assembly, no provider or platform artifact.
+
+### Open gates and next executable task
+
+The two SQLite databases are **not** one atomic store: the handback is
+attested on both sides but a crash between the two steps leaves the source
+fenced, which is the safe direction (Python cannot write until it verifies a Go
+handback). The joined cycle (export → import → handback → revoke → re-export →
+re-import) has **not** been driven end to end across both languages: each half
+is verified against the other side's real artifact (Go consumes the real
+Python-fenced source and manifest; Python consumes the real Go handback
+document) and both halves prove re-fencing/re-import locally, but no single
+fixture carries the whole chain. Existing Go shadow history and linked Python
+control tables (receipt mutation generations, key custody, lifecycle intents,
+the authority outbox) are still **not** transferable, nonzero policy
+`topology_generation` is still refused, and no production handback, promotion
+or ownership transfer has been performed. The Python service-stop precondition
+remains procedural.
+
+Next dependency-satisfied work: extend the transfer to the linked control
+state (or mechanically prove it stays stopped across the transfer), then the
+native policy/target business and public API parity behind the Rust edge, the
+public Rust data routes still missing (`/api/projects`, `/api/project-files`,
+`/api/file-*` shapes beyond the wired family, `/api/media`, `/api/skills`,
+traces), the Go-owned workspace backup/DR block, provider-backed worker
+reconciliation on real MinIO, desktop/Android packages, a successful nonempty
+zero-Python workload, and the exact-head CI/Evidence gates that this local work
+cannot substitute for.
+
+## Previous continuation checkpoint — 2026-09-29 v11 import provenance and CAS baseline
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`; all prior uncommitted work
+remains intact. No commit, push, merge, release or production-data access. The
+full Rust/Go migration is **未完成**. The release evidence remains `NOT_READY`,
+has no exact-head CI, and Python remains the configured production runtime.
+
+### Completed local slice
+
+- Go schema v11 adds append-only `control_inventory_imports`. The import
+  commits transfer ID, manifest/source and authority digests, source boot epoch,
+  row count, source-attestation flag and writer fence in the **same Go SQLite
+  transaction** as the imported records and `control_events`. Schema migration,
+  restart, immutable journal, failed insert rollback and retained-history
+  refusal were tested on isolated stores. A v10 store with old shadow records
+  migrates without inventing source attestation; its nonempty unproven domain
+  cannot promote.
+- The offline command obtains a private Go attestation token from a read-only
+  check of the actual fenced Python SQLite file **before** opening Go, then
+  rechecks the source immediately before its Go write transaction. Import
+  compares the live source boot epoch to the installed checkpoint. A changed
+  marker, trigger, row, boot epoch or linked pending effect is refused. The
+  complete Python-created source fixture remains 258048 bytes, SHA-256
+  `9fa7897d1b73125f90667d855235ec8d15dbaee38496f831224ff484d4e7d837`.
+- Imported policy/target Go record and first event revisions now retain the
+  Python CAS revision or topology generation. The event baseline is accepted
+  only with matching import provenance; later Go writes in that domain must
+  keep the payload CAS field aligned. A separately signed promotion of an
+  imported domain must match the transfer, authority tip and boot epoch,
+  manifest/source digests and unchanged record/event counts. Real Python
+  policy revision 2 and target generation 1 passed legal signed promotion in
+  isolated Go tests; missing or forged provenance, malformed CAS, shadow
+  mutation after import and tampered history were refused. This tests the
+  state-machine slice, not native policy/target business or public API parity.
+
+### Verification and evidence
+
+- Exact Go statement coverage **95.023697% (5614/5908)** on Go 1.27.1
+  `windows/amd64`; `scripts/check_go_coverage.py` ran all packages with
+  `-count=1` and the unchanged 95.0% floor. Ignored profile
+  `artifacts/go-coverage-inventory-provenance.out` SHA-256
+  `6da168b6da24ec5cba9439d52c664e777b0287abdb6b711806f125ee4e6c94a7`,
+  compact log `artifacts/go-coverage-inventory-provenance.log` SHA-256
+  `a350fcdc7df98fe5ce03a3db5750e5450e4a0e69e3ae65cf59066d38c270dfb8`.
+  Command from `go/`: `python ../scripts/check_go_coverage.py --dir .
+  --min 95.0 --profile ../artifacts/go-coverage-inventory-provenance.out`.
+  `go vet ./...` and gofmt checks passed.
+- `python -m pytest tests/test_backup_463_control_authority.py
+  tests/test_backup_467_authority_fail_closed.py
+  tests/test_native_runtime_mechanical_denial.py
+  tests/test_native_control_handoff.py
+  tests/test_native_runtime_go_control_store.py -q -p no:cacheprovider`
+  passed **77** cases. `ruff check .`, `mypy .` (921 sources),
+  `python scripts/check_doc_links.py`, and
+  `python scripts/native_runtime_contract.py --check` passed (43 corpora,
+  32 versions, 48 domains). Rust/frontend/platform/provider gates were not
+  rerun because this slice changed no such implementation.
+
+### Open gates and next executable task
+
+The signed Go transition still allows an **empty** policy/target Go domain
+without a verified source import. The Python service-stop precondition is
+procedural, the source and Go transactions are not atomic, and linked Python
+tables are not fully fenced. Enforce source proof even for empty inventories,
+bind a durable cross-store transfer/rollback protocol to the signed promotion,
+and prove Python restart cannot renew the old writer. Existing Go shadow
+history cannot be replaced yet; nonzero policy `topology_generation` and target
+receipt mutation state remain refused. Native policy/target business/API
+behavior, public Rust edge and all other capability rows, real provider/two-Fleet
+recovery, desktop/Android packages, successful zero-Python workload and
+exact-head Evidence Assembly remain open. Current local results do **not**
+authorize production cutover or readiness status change.
+
+## Previous continuation checkpoint — 2026-09-29 direct source-fence attestation
+
+Branch `codex/indexmap-std-feature`, HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`; the prior uncommitted
+signed-promotion and source/import work remains intact. No commit, push,
+merge, release or production-data access. The full Rust/Go migration is
+**未完成**. `release/native_runtime_5_0_evidence_v1.json` remains `NOT_READY`
+with no exact-head CI evidence, and Python remains the configured production
+runtime.
+
+### Completed local slice
+
+- `go/internal/store/inventory_source.go` opens an explicitly named Python
+  control SQLite source with `mode=ro` and query-only settings. It validates
+  schema v8 and `quick_check`, the live authority head, an active recovery
+  state, the exact source-table and append-only marker triggers, matching
+  transfer/checkpoint/source digests, settled linked effects, and the actual
+  ordered source rows against the export. Missing or altered source state is
+  refused before the Go store is opened. The offline Go import command now
+  requires `--source-db` as well as the manifest and Go store directory.
+- The fixture generator uses the real Python writer/exporter, then SQLite's
+  backup API to produce a complete, self-contained **fenced** source database
+  in DELETE journal mode for Go tests. The JSON checkpoint and manifests
+  regenerate byte-identically. The source DB fixture is 258048 bytes, SHA-256
+  `9fa7897d1b73125f90667d855235ec8d15dbaee38496f831224ff484d4e7d837`.
+- Go tests verify policy and target read-only attestation without changing DB
+  bytes or creating WAL sidecars, source write denial, missing/altered triggers
+  and markers, stale head, unsettled outbox/lifecycle/receipt state, source
+  row addition/removal, malformed generations and schema drift. The CLI test
+  now imports a nonempty policy from that Python-created source and reads it
+  after Go restart. This still does not promote production ownership.
+
+### Verification and evidence
+
+- Exact Go statement coverage passed **95.015576% (5490/5778)** on Windows
+  Go 1.27.1. `scripts/check_go_coverage.py` runs each Go package with
+  `-count=1`; ignored profile `artifacts/go-coverage-source-attestation.out`
+  SHA-256 `621b8b0dac4df67ea13ee8bf3bb23cf5a2571bbf410f6421e039fe53bfc74e09`,
+  compact log `artifacts/go-coverage-source-attestation.log` SHA-256
+  `e6923d51256e0116566d624f9700b1b9ffe3350ab4552fbc990cd3840b0d57cc`.
+  Command from `go/`: `python ../scripts/check_go_coverage.py --dir .
+  --min 95.0 --profile ../artifacts/go-coverage-source-attestation.out`.
+  `go vet ./...` passed.
+- `python -m pytest tests/test_backup_463_control_authority.py
+  tests/test_backup_467_authority_fail_closed.py
+  tests/test_native_runtime_mechanical_denial.py
+  tests/test_native_control_handoff.py
+  tests/test_native_runtime_go_control_store.py -q -p no:cacheprovider`
+  passed 76 cases; the isolated source handoff file passed 12. `ruff check .`,
+  `mypy .` (921 sources), `python scripts/check_doc_links.py`, and
+  `python scripts/native_runtime_contract.py --check` passed.
+- These results use local isolated SQLite copies. No Rust/frontend/platform
+  code changed this slice, so their broader gates were not rerun. This is not
+  provider, production, Linux race, exact-head CI or Evidence Assembly proof.
+
+### Open gates and next executable task
+
+Implement a durable Go import-provenance journal that atomically records the
+verified source and manifest hashes with the imported events, then bind that
+journal to the separately signed promotion artifact. Mechanically fence
+linked Python control state or prove it remains stopped across the transfer;
+the current read-only attestation does not make the two SQLite databases one
+atomic transaction. Preserve Python-visible CAS revisions, handle existing
+Go shadow history, migrate target receipt/key custody and other linked state,
+and prove an isolated reversible handback before production promotion.
+The public Rust edge, remaining native APIs, real provider and two-Fleet
+recovery, desktop/Android packages, successful nonzero zero-Python workload,
+full capability matrix, and exact-head release gates are still open.
+
+## Previous continuation checkpoint — 2026-09-29 isolated Python inventory to Go import
+
+Branch `codex/indexmap-std-feature`, starting HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. This worktree already held
+the preceding signed promotion slice as uncommitted changes and they were
+preserved. No commit, push, merge, release or production-data operation. The
+full Rust/Go migration is **未完成**; release readiness stays `NOT_READY` and
+Python remains the configured production owner.
+
+### Completed local slice
+
+- `scripts/native_control_handoff.py` exports a nonempty policy/target inventory
+  from an explicit isolated Python schema-v8 SQLite source. In one
+  `BEGIN IMMEDIATE` it checks the live authority head, full checkpoint
+  projection and policy generation maps, pending authority/outbox/lifecycle
+  effects, then writes an append-only transfer marker and source-table denial
+  triggers. It refuses hidden target fields, raw credentials and nonempty
+  receipt mutation generations. A failed file publish leaves the source
+  fenced, and an exact replay republishes. Actual `backup_control` create,
+  mutate and delete operations report mechanical denial after the fence.
+- `go/internal/store/inventory_import.go` checks the Python-canonical manifest
+  and source digests, installed live `control-authority-v1` checkpoint and
+  payload/generation equality, writer lease, `dual_evaluate` cutover and empty
+  target history. It writes the imported records and Go events atomically to a
+  fresh Go-owned store. `go/cmd/control-inventory-import` is an explicit
+  offline command with no Python process dependency. Imported source
+  `policyRevision`/`topologyGeneration` remain in each payload; the new Go
+  event history begins at revision 1, so CAS translation is still a gap. A
+  nonzero policy `topology_generation` sidecar is refused because the frozen
+  checkpoint does not retain it; promotion/drain/placement generations remain
+  in the checkpoint but their native business consumers are unwired.
+- The Go tests consume policy and target fixture manifests produced by the
+  actual Python SQLite writer/exporter, not manually rewritten authority
+  corpus. The offline fixture generator now uses a fixed clock and requires an
+  empty output directory; a repeat run produced identical bytes. Manifest
+  SHA-256: policy
+  `f73e12a8d5ef823ee35b51c85ebca231e4b10cba71f3a96729fde1db019da065`,
+  target
+  `478ffa7e143f7b20b949be41e67fe25289c9925d7549fd19e4f65a5920073420`.
+
+### Verification and evidence
+
+- `python -m pytest tests/test_backup_463_control_authority.py
+  tests/test_backup_467_authority_fail_closed.py
+  tests/test_native_runtime_mechanical_denial.py
+  tests/test_native_control_handoff.py -q -p no:cacheprovider`: 71 passed.
+  Isolated Python export test file alone: 11 passed. `ruff check .` and
+  `mypy .` passed (921 sources).
+- Focused Go importer/command tests passed, including real Python export bytes,
+  rehashed tampering, stale writer, transaction timeout, checkpoint corruption,
+  duplicate JSON keys, existing Go history and restart. `go test ./... -count=1`
+  and `go vet ./...` passed before the last added refusal tests; the exact Go
+  coverage command reran all packages after them and passed at
+  **95.005295% (5383/5666)** on Windows/amd64 Go 1.27.1. Its ignored profile
+  and compact log are `artifacts/go-coverage-inventory.out` and `.log`;
+  SHA-256 `521dcb2cfa149a062620896e59a3da914d02c8f989a7b90678f79a5b6b8bfdb5`
+  and `283aca802d07e4ba92b4ca35450c08098b31b89c58749951152d7e0ad97acc3e`.
+  Command (from `go/`): `python ../scripts/check_go_coverage.py --dir .
+  --min 95.0 --profile ../artifacts/go-coverage-inventory.out`.
+- The source fixture generator was rerun twice with byte-identical results;
+  it used a temporary Python SQLite source and never read repo runtime data.
+  These are local unit/integration and offline migration results, not
+  provider, production, platform or exact-head CI evidence.
+
+### Open gates and next executable task
+
+Complete a **durable, signed source-to-target transfer proof** that binds the
+source fence, manifest hash, import journal and promotion artifact. Handle
+preexisting Go shadow history, preserve Python-visible CAS revisions, migrate
+linked policy/target state (including receipt mutation generations and key
+custody), and prove an isolated reversible handback before any domain
+promotion. The current importer does not independently inspect the source DB
+fence and does not journal import provenance in Go. The Python service-stop
+precondition is procedural, and a Windows file ACL has not been verified.
+Go race, Linux exact-head CI and Evidence Assembly remain open. Public Rust
+edge parity, real provider-backed worker recovery, Three-MinIO/two-Fleet,
+complete APIs, browser, desktop and Android packages, nonzero successful
+zero-Python workloads, and the full per-capability matrix remain open.
+
+## Previous continuation checkpoint — 2026-09-29 signed per-domain promotion
+
+Branch `codex/indexmap-std-feature`, starting HEAD
+`0e340dc3695890e8d85d59c8263192f0593fb79e`. The worktree was clean at
+the start of this slice. No push, merge, release or production-data operation.
+The full Rust/Go migration is **未完成**; readiness remains `NOT_READY` and the
+ownership contract still says Python is current production authority.
+
+### Completed local slice
+
+- The existing authenticated `POST /internal/cutover/transition` now carries a
+  canonical `control-domain-promotion-v1` artifact for an authoritative
+  transition. A deployment-pinned Ed25519 public key verifies its signature;
+  the document binds the domain, transfer/action ID, execution epoch, source
+  and target states, revision/fence CAS, installed checkpoint tip, Fleet,
+  environment and expiry. Missing key or unsigned/expired/tampered document
+  refuses without changing the cutover row.
+- Go schema v10 stores the exact signed artifact and hash in an append-only
+  table in the same transaction as the cutover and its authorization journal.
+  An existing v9 store with unsigned promotion history cannot silently upgrade
+  to the signed schema. Schema-0 rollback refuses to discard retained promotion
+  history. Existing v17 authority and v32 mutation contracts were not changed.
+- Isolated HTTP tests drive claim → signed promotion → signed apply → persisted
+  policy; store tests exercise valid promotion and signature/domain/expiry
+  refusals. A started Go process exercises the signed HTTP transition and
+  refuses unsigned or altered replays; only the exact original signed artifact
+  can replay idempotently. The promoted worker action and shadow writer tests
+  use the signed path, so they still measure real reachable authority.
+
+### Verification and evidence
+
+- `go test ./... -count=1` passed for all Go packages; `go vet ./...` passed.
+- `python -m pytest tests/test_native_runtime_go_control_store.py -q
+  -p no:cacheprovider` passed (4 cases). `python
+  scripts/native_runtime_contract.py --check` passed (43 corpora, 32 versions,
+  48 domains). Focused promotion tests passed.
+- The first exact Go coverage run exposed a real gate failure:
+  **94.822888% (5220/5505)**, below 95.0. Targeted refusal, migration-fault
+  and started-process tests raised it to **95.046271% (5238/5511)** after the
+  replay hardening. An isolated restart test then confirmed the signed journal
+  survives reopening and the writer token increases after lease release. The
+  final same-command rerun passed at **95.046271% (5238/5511)**. The ignored local
+  profile and compact log are `artifacts/go-coverage-promotion.out` and `.log`.
+  Command (from `go/`): `python ../scripts/check_go_coverage.py --dir .
+  --min 95.0 --profile ../artifacts/go-coverage-promotion.out`. On Go 1.27.1
+  Windows/amd64, the final profile SHA-256 is
+  `0ED51CA8CA2BD6D5620BCFA73BDEC8B77E303C419BD70F7D878B9DD2ED1536A6`;
+  the log SHA-256 is
+  `C0258E5AF97AD567BFB07C5AC06EE5F4CECFF91B99A8CAD1CA17B3D0C9B9734D`.
+- `go vet ./...`, `gofmt -l` on the changed Go production/test paths,
+  `python -m pytest tests/test_native_runtime_go_control_store.py -q
+  -p no:cacheprovider` (4), `python scripts/native_runtime_contract.py --check`
+  (43 corpora, 32 versions, 48 domains), doc links and release-version checks
+  passed. This is local Windows evidence on Go 1.27.1, not exact-head CI.
+- Android early-risk inventory: `MainActivity` starts Chaquopy Python 3.13 and
+  calls `deepseek_infra.android_entry.start_json`; Gradle packages Python
+  sources and pip dependencies for `arm64-v8a`/`x86_64`. The configured SDK has
+  `adb` and emulator binaries, but `adb devices -l` and `emulator -list-avds`
+  returned no device or AVD; only the Windows GNU Rust target is installed.
+  Android native build/behavior has not been verified.
+- Go race, Linux exact-head CI and Evidence Assembly have not been claimed.
+
+### Open gates and next executable task
+
+Prove Python→Go export/import,
+cross-store ownership fencing and rollback on an isolated copy. The Go-only
+lease/restart test does not prove a Python ownership transfer. A local signed
+artifact is not an independently authorized production promotion. Python
+`authority.py` still gates control writes by global runtime mode, not
+the Go per-domain cutover row; source-writer denial across that boundary needs
+a race-proof mechanism before production promotion. The public
+Rust edge, provider-backed worker reconciliation, Three-MinIO/two-Fleet
+evidence, complete native APIs, desktop/Android packages, successful zero-Python
+workloads and exact-head release evidence remain open. Matrix sections 2-4
+still contain aggregate rows; expand them from routes, frontend calls, tasks,
+stores and packaging before claiming capability completeness.
+
 ## Current continuation checkpoint — 2026-09-28 control authority reaches the running Go API
 
 Branch `codex/indexmap-std-feature`, HEAD

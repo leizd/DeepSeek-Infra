@@ -67,7 +67,8 @@ COPY --from=frontend-builder /build/static/ui ./static/ui
 RUN test -f /app/static/ui/index.html
 
 ENV GATEWAY_BIND_ADDR=0.0.0.0:8787 \
-    DEEPSEEK_INFRA_STATIC_DIR=/app/static
+    DEEPSEEK_INFRA_STATIC_DIR=/app/static \
+    DEEPSEEK_RUNTIME_MODE=python_disabled
 
 USER deepseek
 

@@ -35,7 +35,7 @@ def _isolate_target_roots(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(fake_temp))
 
 
-def test_scheduler_target_ranking_diversity(tmp_settings: Path) -> None:
+def test_scheduler_target_ranking_diversity(tmp_settings: Path, healthy_filesystem_target_capacity: None) -> None:
     t1 = "target_rank_1"
     t2 = "target_rank_2"
     t3 = "target_rank_3"

@@ -23,6 +23,10 @@ pub struct ProductionAuth {
     pub token: String,
 }
 
+pub(crate) fn production_auth_enabled() -> bool {
+    ProductionAuth::from_env().enabled
+}
+
 impl ProductionAuth {
     pub fn from_env() -> Self {
         Self {
@@ -84,6 +88,41 @@ fn tokens_match(provided: &str, expected: &str) -> bool {
     !expected.is_empty() && diff == 0
 }
 
+fn backup_inventory_host_allowed(headers: &HeaderMap) -> bool {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .trim();
+    !host.is_empty()
+        && !host.contains('/')
+        && !host.contains('\\')
+        && crate::openai_facade::allowed_auth_hosts()
+            .contains(&crate::openai_facade::host_without_port(host))
+}
+
+/// The oracle's `require_api_auth` checks the original `Host` on every inventory route it
+/// serves — the collection **and** the item paths — so a foreign host is refused there for
+/// `PATCH`, `DELETE` and the per-policy sub-routes too, not only for the collection.
+///
+/// The edge has to make that decision itself. The proxy rewrites `Host` to the Go listener
+/// when it forwards, so a check made only by the Go side would inspect the wrong value and
+/// never refuse a foreign host.
+fn backup_inventory_route(path: &str) -> bool {
+    const PREFIXES: [&str; 3] = [
+        "/api/workspace/backup-policies",
+        "/api/workspace/backup-targets",
+        "/api/workspace/backup-mirrors",
+    ];
+    PREFIXES
+        .iter()
+        .any(|prefix| match path.strip_prefix(prefix) {
+            Some("") => true,
+            Some(rest) => rest.starts_with('/'),
+            None => false,
+        })
+}
+
 pub async fn require_production_auth(
     axum::extract::State(auth): axum::extract::State<ProductionAuth>,
     request: Request,
@@ -97,6 +136,23 @@ pub async fn require_production_auth(
     }
     let expected = auth.token.as_str();
     let provided = token_from_headers(request.headers());
+    if backup_inventory_route(request.uri().path()) {
+        if !backup_inventory_host_allowed(request.headers()) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "Host not allowed", "code": "forbidden"})),
+            )
+                .into_response();
+        }
+        if !tokens_match(&provided, expected) {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "Auth required", "code": "unauthorized"})),
+            )
+                .into_response();
+        }
+        return next.run(request).await;
+    }
     if !tokens_match(&provided, expected) {
         return (
             StatusCode::UNAUTHORIZED,

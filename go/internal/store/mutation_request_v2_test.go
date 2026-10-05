@@ -300,29 +300,27 @@ func TestMutationRequestRevisionsAreSignatureDisjoint(t *testing.T) {
 // Go-authoritative, then reports the cutover record a request must be bound to.
 func promoteForApply(t *testing.T, control *Control, domain string) CutoverRecord {
 	t.Helper()
-	authority := frozenCheckpoint(t, 0)
-	if _, advanced, err := control.ClaimControlAuthority(authority); err != nil || !advanced {
-		t.Fatalf("claim: advanced=%v %v", advanced, err)
+	if domain != "policy" && domain != "target" {
+		authority := frozenCheckpoint(t, 0)
+		if _, advanced, err := control.ClaimControlAuthority(authority); err != nil || !advanced {
+			t.Fatalf("claim: advanced=%v %v", advanced, err)
+		}
+		current := dualEvaluate(t, control, domain)
+		promoted, err := signedTransition(t, control, CutoverTransition{
+			Domain: domain, To: CutoverGoAuthoritative,
+			ExpectedRevision: current.Revision, ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken,
+			TransferID: domain + "-authoritative", Authority: authority,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return promoted
 	}
-	current, err := control.GetCutover(domain)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := control.TransitionCutover(CutoverTransition{
-		Domain: domain, To: CutoverDualEvaluate,
-		ExpectedRevision: current.Revision, ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken,
-		TransferID: domain + "-dual", Authority: authority,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	current, err = control.GetCutover(domain)
-	if err != nil {
-		t.Fatal(err)
-	}
-	promoted, err := control.TransitionCutover(CutoverTransition{
+	authority, current, result := importEmptyPythonSource(t, control, domain)
+	promoted, err := signedTransition(t, control, CutoverTransition{
 		Domain: domain, To: CutoverGoAuthoritative,
 		ExpectedRevision: current.Revision, ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken,
-		TransferID: domain + "-authoritative", Authority: authority,
+		TransferID: result.TransferID, Authority: authority,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -336,6 +334,20 @@ func promoteForApply(t *testing.T, control *Control, domain string) CutoverRecor
 func signedApply(t *testing.T, cutover CutoverRecord, public string, operationID, recordID, state string, recordRevision int64, body map[string]any) []byte {
 	t.Helper()
 	private, _ := rfc8032PrivateKeys(t, public)
+	if cutover.Domain == "policy" || cutover.Domain == "target" {
+		copied := make(map[string]any, len(body)+2)
+		for key, value := range body {
+			copied[key] = value
+		}
+		if cutover.Domain == "policy" {
+			copied["policyId"] = recordID
+			copied["policyRevision"] = json.Number(fmt.Sprint(recordRevision))
+		} else {
+			copied["targetId"] = recordID
+			copied["topologyGeneration"] = json.Number(fmt.Sprint(recordRevision))
+		}
+		body = copied
+	}
 	unsigned := map[string]any{
 		"schema":         MutationRequestV2Schema,
 		"schemaVersion":  json.Number(fmt.Sprint(MutationRequestV2SchemaVersion)),
@@ -479,20 +491,15 @@ func TestApplyMutationCannotReportAnotherDomainAsApplied(t *testing.T) {
 	control := openAuthority(t)
 	defer control.Close()
 	policy := promoteForApply(t, control, "policy")
-	authority := frozenCheckpoint(t, 0)
-	current, err := control.GetCutover("target")
+	authority := emptyPythonInventoryCheckpoint(t)
+	dual, imported := importEmptyPythonSourceForClaimed(t, control, "target")
+	current, err := signedTransition(t, control, CutoverTransition{
+		Domain: "target", To: CutoverGoAuthoritative,
+		ExpectedRevision: dual.Revision, ExpectedEpoch: dual.Epoch, FencingToken: dual.FencingToken,
+		TransferID: imported.TransferID, Authority: authority,
+	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	for _, next := range []CutoverState{CutoverDualEvaluate, CutoverGoAuthoritative} {
-		current, err = control.TransitionCutover(CutoverTransition{
-			Domain: "target", To: next,
-			ExpectedRevision: current.Revision, ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken,
-			TransferID: "target-" + string(next), Authority: authority,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
 	}
 	_, public := rfc8032MutationKeys(t)
 	operationID := repeatHex("c")

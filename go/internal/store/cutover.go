@@ -1,7 +1,9 @@
 package store
 
 import (
+	"bytes"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -61,6 +63,9 @@ type CutoverTransition struct {
 	// authority tip. De-promotion never requires it, so ownership can always be
 	// rolled back.
 	Authority *AuthorityCheckpoint
+	// Promotion is an externally signed control-domain-promotion-v1 document.
+	// It is required for every transition into an authoritative state.
+	Promotion json.RawMessage `json:"promotion"`
 }
 
 // IsGoAuthoritative reports whether the durable cutover record of a domain is in
@@ -232,6 +237,22 @@ func (store *Control) TransitionCutover(req CutoverTransition) (CutoverRecord, e
 			applied.previousFencingToken != req.FencingToken {
 			return CutoverRecord{}, ErrCutoverReplayConflict
 		}
+		if cutoverRequiresAuthorization(req.To) {
+			var original []byte
+			if err := tx.QueryRow(
+				`SELECT canonical_artifact FROM control_promotion_artifacts WHERE domain=? AND transfer_id=?`,
+				req.Domain, req.TransferID,
+			).Scan(&original); err != nil {
+				return CutoverRecord{}, err
+			}
+			if !bytes.Equal(req.Promotion, original) {
+				return CutoverRecord{}, ErrCutoverReplayConflict
+			}
+		}
+		commitNow := store.now()
+		if commitNow < now || commitNow >= leaseUntil {
+			return CutoverRecord{}, ErrWriterFenceHeld
+		}
 		if err := tx.Commit(); err != nil {
 			return CutoverRecord{}, err
 		}
@@ -252,6 +273,20 @@ func (store *Control) TransitionCutover(req CutoverTransition) (CutoverRecord, e
 	}
 	if cutoverRequiresAuthorization(req.To) {
 		if err := store.assertCutoverAuthorityTx(tx, req.Authority); err != nil {
+			return CutoverRecord{}, err
+		}
+	}
+	var promotion PromotionArtifact
+	var promotionDigest string
+	if cutoverRequiresAuthorization(req.To) {
+		promotion, promotionDigest, err = verifyPromotionArtifact(
+			req.Promotion, store.promotionSignerKey, store.fleetID, store.environment,
+			now, req, current,
+		)
+		if err != nil {
+			return CutoverRecord{}, err
+		}
+		if err := assertInventoryPromotionTx(tx, req, promotion); err != nil {
 			return CutoverRecord{}, err
 		}
 	}
@@ -345,6 +380,20 @@ func (store *Control) TransitionCutover(req CutoverTransition) (CutoverRecord, e
 		); err != nil {
 			return CutoverRecord{}, err
 		}
+		if _, err := tx.Exec(
+			`INSERT INTO control_promotion_artifacts(
+				domain, transfer_id, signer_key_id, artifact_digest, canonical_artifact,
+				writer_fencing_token, recorded_at
+			) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+			next.Domain, next.TransferID, promotion.SignerKeyID, promotionDigest,
+			string(req.Promotion), store.token, now,
+		); err != nil {
+			return CutoverRecord{}, err
+		}
+	}
+	commitNow := store.now()
+	if commitNow < now || commitNow >= leaseUntil {
+		return CutoverRecord{}, ErrWriterFenceHeld
 	}
 	if err := tx.Commit(); err != nil {
 		return CutoverRecord{}, err

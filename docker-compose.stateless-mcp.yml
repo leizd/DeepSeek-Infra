@@ -39,8 +39,9 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8011:8010"
+    command: ["deepseek-stateless-mcp"]
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8010/readyz').then(r=>{if(!r.ok)process.exit(1)})"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8010/readyz"]
       interval: 3s
       timeout: 2s
       retries: 20
@@ -57,8 +58,9 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8012:8010"
+    command: ["deepseek-stateless-mcp"]
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8010/readyz').then(r=>{if(!r.ok)process.exit(1)})"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8010/readyz"]
       interval: 3s
       timeout: 2s
       retries: 20

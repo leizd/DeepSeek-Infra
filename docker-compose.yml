@@ -1,14 +1,22 @@
-# DeepSeek Infra — docker compose up -d
-# 配置来自 .env（复制 .env.example 改名后填写），数据持久化在命名卷 deepseek-data。
+# Production compose. One container runs the Go control process, the Rust
+# worker, and the Rust public listener. Build context is the repository root.
 services:
   deepseek-infra:
     build: .
-    image: deepseek-infra:4.0.3
+    image: deepseek-infra:5.0.0
     env_file:
       - .env
+    environment:
+      GATEWAY_BIND_ADDR: 0.0.0.0:8000
+      GO_CONTROL_ADDR: http://127.0.0.1:8090
+      DEEPSEEKD_MODE: authoritative
+      DEEPSEEKD_LISTEN: 127.0.0.1:8090
+      DEEPSEEKD_PRODUCTION_STORE: /data/go-control
+      DEEPSEEKD_OWNER: deepseekd
+      DEEPSEEK_WORKER_LISTEN: 127.0.0.1:50052
+      DEEPSEEK_INFRA_ROOT: /data
+      DEEPSEEK_INFRA_STATIC_DIR: /app/static
     ports:
-      # /metrics、/healthz、/readyz 不鉴权：默认只发布到本机回环。
-      # 需要局域网访问时改成 "8000:8000"，并配合反向代理 / 防火墙（见 docs/DEPLOYMENT.md）。
       - "127.0.0.1:8000:8000"
     volumes:
       - deepseek-data:/data

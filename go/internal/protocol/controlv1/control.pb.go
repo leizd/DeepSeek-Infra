@@ -271,6 +271,164 @@ func (x *ShadowEvaluateResponse) GetMutationDenied() bool {
 	return false
 }
 
+// Read-only snapshot of the Go-authoritative policy recipient sets. An empty
+// group is significant: Rust must refuse sealing instead of dropping that policy.
+type BackupPolicyRecipientsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BackupPolicyRecipientsRequest) Reset() {
+	*x = BackupPolicyRecipientsRequest{}
+	mi := &file_control_v1_control_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BackupPolicyRecipientsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BackupPolicyRecipientsRequest) ProtoMessage() {}
+
+func (x *BackupPolicyRecipientsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BackupPolicyRecipientsRequest.ProtoReflect.Descriptor instead.
+func (*BackupPolicyRecipientsRequest) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{4}
+}
+
+type BackupRecipientGroup struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Recipients    []string               `protobuf:"bytes,1,rep,name=recipients,proto3" json:"recipients,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BackupRecipientGroup) Reset() {
+	*x = BackupRecipientGroup{}
+	mi := &file_control_v1_control_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BackupRecipientGroup) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BackupRecipientGroup) ProtoMessage() {}
+
+func (x *BackupRecipientGroup) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BackupRecipientGroup.ProtoReflect.Descriptor instead.
+func (*BackupRecipientGroup) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *BackupRecipientGroup) GetRecipients() []string {
+	if x != nil {
+		return x.Recipients
+	}
+	return nil
+}
+
+type BackupPolicyRecipientsResponse struct {
+	state                  protoimpl.MessageState  `protogen:"open.v1"`
+	Authoritative          bool                    `protobuf:"varint,1,opt,name=authoritative,proto3" json:"authoritative,omitempty"`
+	Recipients             []string                `protobuf:"bytes,2,rep,name=recipients,proto3" json:"recipients,omitempty"`
+	EnabledRecipientGroups []*BackupRecipientGroup `protobuf:"bytes,3,rep,name=enabled_recipient_groups,json=enabledRecipientGroups,proto3" json:"enabled_recipient_groups,omitempty"`
+	PolicyCount            uint64                  `protobuf:"varint,4,opt,name=policy_count,json=policyCount,proto3" json:"policy_count,omitempty"`
+	EnabledPolicyCount     uint64                  `protobuf:"varint,5,opt,name=enabled_policy_count,json=enabledPolicyCount,proto3" json:"enabled_policy_count,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *BackupPolicyRecipientsResponse) Reset() {
+	*x = BackupPolicyRecipientsResponse{}
+	mi := &file_control_v1_control_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BackupPolicyRecipientsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BackupPolicyRecipientsResponse) ProtoMessage() {}
+
+func (x *BackupPolicyRecipientsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BackupPolicyRecipientsResponse.ProtoReflect.Descriptor instead.
+func (*BackupPolicyRecipientsResponse) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *BackupPolicyRecipientsResponse) GetAuthoritative() bool {
+	if x != nil {
+		return x.Authoritative
+	}
+	return false
+}
+
+func (x *BackupPolicyRecipientsResponse) GetRecipients() []string {
+	if x != nil {
+		return x.Recipients
+	}
+	return nil
+}
+
+func (x *BackupPolicyRecipientsResponse) GetEnabledRecipientGroups() []*BackupRecipientGroup {
+	if x != nil {
+		return x.EnabledRecipientGroups
+	}
+	return nil
+}
+
+func (x *BackupPolicyRecipientsResponse) GetPolicyCount() uint64 {
+	if x != nil {
+		return x.PolicyCount
+	}
+	return 0
+}
+
+func (x *BackupPolicyRecipientsResponse) GetEnabledPolicyCount() uint64 {
+	if x != nil {
+		return x.EnabledPolicyCount
+	}
+	return 0
+}
+
 var File_control_v1_control_proto protoreflect.FileDescriptor
 
 const file_control_v1_control_proto_rawDesc = "" +
@@ -286,14 +444,28 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x0fcanonical_input\x18\x02 \x01(\fR\x0ecanonicalInput\"j\n" +
 	"\x16ShadowEvaluateResponse\x12'\n" +
 	"\x0fdecision_digest\x18\x01 \x01(\tR\x0edecisionDigest\x12'\n" +
-	"\x0fmutation_denied\x18\x02 \x01(\bR\x0emutationDenied*m\n" +
+	"\x0fmutation_denied\x18\x02 \x01(\bR\x0emutationDenied\"\x1f\n" +
+	"\x1dBackupPolicyRecipientsRequest\"6\n" +
+	"\x14BackupRecipientGroup\x12\x1e\n" +
+	"\n" +
+	"recipients\x18\x01 \x03(\tR\n" +
+	"recipients\"\xa0\x02\n" +
+	"\x1eBackupPolicyRecipientsResponse\x12$\n" +
+	"\rauthoritative\x18\x01 \x01(\bR\rauthoritative\x12\x1e\n" +
+	"\n" +
+	"recipients\x18\x02 \x03(\tR\n" +
+	"recipients\x12c\n" +
+	"\x18enabled_recipient_groups\x18\x03 \x03(\v2).deepseek.control.v1.BackupRecipientGroupR\x16enabledRecipientGroups\x12!\n" +
+	"\fpolicy_count\x18\x04 \x01(\x04R\vpolicyCount\x120\n" +
+	"\x14enabled_policy_count\x18\x05 \x01(\x04R\x12enabledPolicyCount*m\n" +
 	"\vRuntimeMode\x12\x1c\n" +
 	"\x18RUNTIME_MODE_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cRUNTIME_MODE_SHADOW_READONLY\x10\x01\x12\x1e\n" +
-	"\x1aRUNTIME_MODE_AUTHORITATIVE\x10\x022\xcc\x01\n" +
+	"\x1aRUNTIME_MODE_AUTHORITATIVE\x10\x022\xd3\x02\n" +
 	"\fControlPlane\x12Q\n" +
 	"\x06Health\x12\".deepseek.control.v1.HealthRequest\x1a#.deepseek.control.v1.HealthResponse\x12i\n" +
-	"\x0eShadowEvaluate\x12*.deepseek.control.v1.ShadowEvaluateRequest\x1a+.deepseek.control.v1.ShadowEvaluateResponseBJZHgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/controlv1;controlv1b\x06proto3"
+	"\x0eShadowEvaluate\x12*.deepseek.control.v1.ShadowEvaluateRequest\x1a+.deepseek.control.v1.ShadowEvaluateResponse\x12\x84\x01\n" +
+	"\x19GetBackupPolicyRecipients\x122.deepseek.control.v1.BackupPolicyRecipientsRequest\x1a3.deepseek.control.v1.BackupPolicyRecipientsResponseBJZHgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/controlv1;controlv1b\x06proto3"
 
 var (
 	file_control_v1_control_proto_rawDescOnce sync.Once
@@ -308,25 +480,31 @@ func file_control_v1_control_proto_rawDescGZIP() []byte {
 }
 
 var file_control_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_control_v1_control_proto_goTypes = []any{
-	(RuntimeMode)(0),               // 0: deepseek.control.v1.RuntimeMode
-	(*HealthRequest)(nil),          // 1: deepseek.control.v1.HealthRequest
-	(*HealthResponse)(nil),         // 2: deepseek.control.v1.HealthResponse
-	(*ShadowEvaluateRequest)(nil),  // 3: deepseek.control.v1.ShadowEvaluateRequest
-	(*ShadowEvaluateResponse)(nil), // 4: deepseek.control.v1.ShadowEvaluateResponse
+	(RuntimeMode)(0),                       // 0: deepseek.control.v1.RuntimeMode
+	(*HealthRequest)(nil),                  // 1: deepseek.control.v1.HealthRequest
+	(*HealthResponse)(nil),                 // 2: deepseek.control.v1.HealthResponse
+	(*ShadowEvaluateRequest)(nil),          // 3: deepseek.control.v1.ShadowEvaluateRequest
+	(*ShadowEvaluateResponse)(nil),         // 4: deepseek.control.v1.ShadowEvaluateResponse
+	(*BackupPolicyRecipientsRequest)(nil),  // 5: deepseek.control.v1.BackupPolicyRecipientsRequest
+	(*BackupRecipientGroup)(nil),           // 6: deepseek.control.v1.BackupRecipientGroup
+	(*BackupPolicyRecipientsResponse)(nil), // 7: deepseek.control.v1.BackupPolicyRecipientsResponse
 }
 var file_control_v1_control_proto_depIdxs = []int32{
 	0, // 0: deepseek.control.v1.HealthResponse.mode:type_name -> deepseek.control.v1.RuntimeMode
-	1, // 1: deepseek.control.v1.ControlPlane.Health:input_type -> deepseek.control.v1.HealthRequest
-	3, // 2: deepseek.control.v1.ControlPlane.ShadowEvaluate:input_type -> deepseek.control.v1.ShadowEvaluateRequest
-	2, // 3: deepseek.control.v1.ControlPlane.Health:output_type -> deepseek.control.v1.HealthResponse
-	4, // 4: deepseek.control.v1.ControlPlane.ShadowEvaluate:output_type -> deepseek.control.v1.ShadowEvaluateResponse
-	3, // [3:5] is the sub-list for method output_type
-	1, // [1:3] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	6, // 1: deepseek.control.v1.BackupPolicyRecipientsResponse.enabled_recipient_groups:type_name -> deepseek.control.v1.BackupRecipientGroup
+	1, // 2: deepseek.control.v1.ControlPlane.Health:input_type -> deepseek.control.v1.HealthRequest
+	3, // 3: deepseek.control.v1.ControlPlane.ShadowEvaluate:input_type -> deepseek.control.v1.ShadowEvaluateRequest
+	5, // 4: deepseek.control.v1.ControlPlane.GetBackupPolicyRecipients:input_type -> deepseek.control.v1.BackupPolicyRecipientsRequest
+	2, // 5: deepseek.control.v1.ControlPlane.Health:output_type -> deepseek.control.v1.HealthResponse
+	4, // 6: deepseek.control.v1.ControlPlane.ShadowEvaluate:output_type -> deepseek.control.v1.ShadowEvaluateResponse
+	7, // 7: deepseek.control.v1.ControlPlane.GetBackupPolicyRecipients:output_type -> deepseek.control.v1.BackupPolicyRecipientsResponse
+	5, // [5:8] is the sub-list for method output_type
+	2, // [2:5] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_control_v1_control_proto_init() }
@@ -340,7 +518,7 @@ func file_control_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_v1_control_proto_rawDesc), len(file_control_v1_control_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
