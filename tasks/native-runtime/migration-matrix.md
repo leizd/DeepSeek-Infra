@@ -8,6 +8,19 @@ Generated from ownership JSON, route modules, launchers, Compose files, Go/Rust
 packages, and CI jobs — not from README claims. Completeness is **wired native
 behavior with evidence**, not file/crate counts.
 
+**2026-10-05 pushed checkpoint and CI repairs:** `7fe490d6` is pushed; its exact-head
+CI passes 28 jobs and the Go format/vet/whole-test/race/coverage stages, but six
+upstream jobs fail before complete Evidence qualification. Current repairs isolate
+Python compatibility images to offline hybrid reference tests, supply a real Rust
+MCP failover fixture, install complete Rust oracle dependencies and keep authority
+refusal explicit in the Go TLS boundary. The combined actual-MinIO runner passes
+seven storage tests, ten worker tests and three Go-promoted provider subcases;
+its emitted production-worker hash is `399db5c1...481a90` on pinned Rust 1.85.0 /
+Go 1.27.1. The local Windows TLS boundary and native fixture execution pass.
+These are local integration/source qualifications; production Rust key custody,
+all remaining route/domain ownership, desktop/Android and repaired exact-head
+CI/Evidence remain open. Status remains **未完成 / NOT_READY**.
+
 **2026-10-05 verification slice:** the frozen Go store race completes with 1083
 passes at its measured thirty-minute bound. Dedicated production S3 configuration
 now reaches the default Rust worker through the supervisor; ten actual Linux

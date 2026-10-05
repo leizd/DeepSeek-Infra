@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import json
@@ -48,6 +49,22 @@ def main() -> int:
         try:
             binary = Path(binary_directory.name) / f"deepseek-worker{suffix}"
             shutil.copy2(build_directory / f"deepseek-worker{suffix}", binary)
+            binary_digest = hashlib.sha256()
+            with binary.open("rb") as binary_file:
+                for chunk in iter(lambda: binary_file.read(1024 * 1024), b""):
+                    binary_digest.update(chunk)
+            print(json.dumps({
+                "schema": "native-s3-default-worker-input-v1",
+                "production_binary_sha256": binary_digest.hexdigest(),
+                "production_binary_bytes": binary.stat().st_size,
+                "cargo_version": subprocess.run(
+                    [*cargo, "--version"], check=True, capture_output=True, text=True, timeout=60,
+                ).stdout.strip(),
+                "go_version": subprocess.run(
+                    ["go", "version"], check=True, capture_output=True, text=True, timeout=60,
+                ).stdout.strip(),
+                "scope": "isolated provider qualification; default binary built without test features",
+            }), flush=True)
             subprocess.run([*command1, "--no-run"], cwd=ROOT / "rust", check=True, timeout=1200)
             subprocess.run([*command2, "--no-run"], cwd=ROOT / "rust", check=True, timeout=1200)
             harness = RealStorageEnvironment.acquire(ROOT, Path(directory))

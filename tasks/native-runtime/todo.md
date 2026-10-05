@@ -64,8 +64,16 @@ record; the active section below records current slices without rewriting that h
   exact completed receipt replay and a versioned bucket on three providers.
 - [x] Complete Windows default-binary three-provider verification: ten real tests
   pass after isolating executable-location-dependent access denial; no ACL/security changes.
-- [ ] Rerun the combined Rust-byte/Go-promoted-control provider runner and its
-  checksum-pinned Go CI setup; the initial actual Go control pass uses a test signer.
+- [x] Rerun the combined Rust-byte/Go-promoted-control provider runner: seven
+  storage cases, ten worker cases and three Go provider subcases pass on actual
+  MinIO with the emitted default-binary hash and pinned Cargo/Go versions.
+  Signing is still an isolated test fixture; production Rust custody is open.
+- [x] Push checkpoint `7fe490d6`; run exact-head CI and preserve the six upstream
+  failures. Repair oracle setup, versioned-read expectations, isolated MCP/native
+  fixture and hybrid reference images, and default-worker TLS authority refusal.
+  Local MCP/source/runtime guards and the Windows TLS process pass.
+- [ ] Obtain complete exact-head CI/Evidence for the repaired source; the first
+  pushed run is failed evidence despite its passing Python, Go and provider gates.
 - [ ] Refresh complete Rust coverage after repairing the exact `python_disabled`
   packaging false positive; frozen `f67263e3` failed that test after fmt/check/clippy passed.
 - [ ] Close mirror malformed-JSON/integer parity, browser upload, native handback,

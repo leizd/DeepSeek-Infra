@@ -17,6 +17,8 @@ interface StartResult {
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..", "..");
 const composeFile = path.join(repoRoot, "docker-compose.stateless-mcp.yml");
+const composeOverride = path.join(repoRoot, "stateless-mcp", "compose.failover.yml");
+const probeTarget = "rust/crates/deepseek-stateless-mcp/examples/failover_probe.rs";
 const token = process.env.MCP_AUTH_TOKEN || "dev-change-me";
 const loadBalancer = "http://127.0.0.1:8010";
 const directEndpoints = [
@@ -25,7 +27,7 @@ const directEndpoints = [
 ];
 
 function compose(...arguments_: string[]): void {
-  const result = spawnSync("docker", ["compose", "-f", composeFile, ...arguments_], {
+  const result = spawnSync("docker", ["compose", "-f", composeFile, "-f", composeOverride, ...arguments_], {
     cwd: repoRoot,
     encoding: "utf8",
     stdio: "pipe",
@@ -70,15 +72,17 @@ async function waitForTask(
   timeoutMs: number,
 ): Promise<TaskRecord> {
   const deadline = Date.now() + timeoutMs;
+  let lastTask: TaskRecord | undefined;
   while (Date.now() < deadline) {
     const call = await client.callTool("get_task", { taskId });
     const task = parseToolText<TaskRecord>(call.result);
+    lastTask = task;
     if (predicate(task)) {
       return task;
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error(`task ${taskId} did not reach the expected state`);
+  throw new Error(`task ${taskId} did not reach the expected state: ${lastTask?.status}; ${lastTask?.error}`);
 }
 
 async function main(): Promise<void> {
@@ -89,7 +93,7 @@ async function main(): Promise<void> {
   const idempotencyKey = `failover-${randomUUID()}`;
   const startedCall = await loadBalancedClient.callTool("start_test_run", {
     idempotencyKey,
-    target: "stateless-mcp/fixtures/test_failover_probe.py",
+    target: probeTarget,
     timeoutSeconds: 60,
   });
   const started = parseToolText<StartResult>(startedCall.result);
@@ -121,10 +125,12 @@ async function main(): Promise<void> {
     );
     assert.ok(recovered.attempts >= 2, "task was not reclaimed after lease expiry");
     assert.notEqual(recovered.ownerInstance, crashedInstance);
+    assert.equal(recovered.exitCode, 0);
+    assert.match(recovered.stdout, /native failover probe completed; sha256=a2e09bf88bd1d291e9208a8a81180d48205ef223c62bfaaecb279861ab45056a/);
 
     const deduplicatedCall = await retryingClient.callTool("start_test_run", {
       idempotencyKey,
-      target: "stateless-mcp/fixtures/test_failover_probe.py",
+      target: probeTarget,
       timeoutSeconds: 60,
     });
     const deduplicated = parseToolText<StartResult>(deduplicatedCall.result);

@@ -720,10 +720,10 @@ jobs:
         run: npm run smoke:failover --prefix stateless-mcp
       - name: Show stateless MCP logs
         if: failure()
-        run: docker compose -f docker-compose.stateless-mcp.yml logs --no-color
+        run: docker compose -f docker-compose.stateless-mcp.yml -f stateless-mcp/compose.failover.yml logs --no-color
       - name: Stop stateless MCP stack
         if: always()
-        run: docker compose -f docker-compose.stateless-mcp.yml down --volumes --remove-orphans
+        run: docker compose -f docker-compose.stateless-mcp.yml -f stateless-mcp/compose.failover.yml down --volumes --remove-orphans
 
   native-browser-engine:
     needs:
@@ -1284,7 +1284,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -r requirements-ocr.txt
+      - name: Install offline compatibility oracle dependencies
+        run: python -m pip install -r requirements.txt -r requirements-ocr.txt
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: rustfmt, clippy
@@ -1572,7 +1573,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -r requirements-ocr.txt
+      - name: Install offline compatibility oracle dependencies
+        run: python -m pip install -r requirements.txt -r requirements-ocr.txt
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: llvm-tools-preview

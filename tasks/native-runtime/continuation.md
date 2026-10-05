@@ -8,10 +8,52 @@ This file is the session handoff. Historical plans, checkboxes, VERSION, and
 `release/native_runtime_5_0_evidence_v1.json` are not completion evidence.
 The capability matrix is [`migration-matrix.md`](migration-matrix.md).
 
-## Current verification checkpoint — 2026-10-05 resumed local gates
+## Current verification checkpoint — 2026-10-05 push and CI repairs
+
+Branch `codex/indexmap-std-feature`. The earlier shared checkpoint was committed
+and pushed as `7fe490d6e52d2317a2f5123cd45a57e167fa7a9b` (300 files); remote HEAD
+matched and the worktree was clean after that push. The current repair tree is
+based on that commit. Merge, release and production-data actions remain unauthorized.
+The whole project is **未完成**, readiness `NOT_READY`.
+
+- Exact-head CI run [37272874109](https://github.com/leizd/DeepSeek-Infra/actions/runs/37272874109)
+  passes 28 complete jobs, including all three whole-Python matrices, frontend
+  browser, security, eval and actual multi-MinIO gates. Native Go format/vet,
+  whole tests/race/95% coverage and plaintext boundary pass, but the later TLS
+  assertion fails. Six upstream jobs fail overall: Rust and Rust coverage lack
+  oracle XML dependencies; native S3 assumes unversioned overwrite semantics;
+  MCP failover has no task executor; hybrid checks use the new native production
+  image instead of the historical reference; Go TLS expects the old no-S3 code.
+  This failed run establishes no complete CI/Evidence qualification.
+- Repairs preserve the production native images. Rust CI installs the complete
+  offline oracle dependencies; hybrid uses `tests/fixtures/Dockerfile.python-oracle`;
+  MCP failover uses a Rust example in a named qualification image, absent from
+  the default production stage. The original Python fixture remains available
+  for offline reference. Generic test execution and full product ownership are
+  still open; this fixture proves only native child execution and task recovery.
+- The full provider runner passes **7 Rust storage tests, 10 worker tests and
+  three Go-promoted provider subcases** on actual isolated MinIO. It covers both
+  unversioned rejection and exact historical-version reads, real TLS worker
+  death/restart, signed Go admission, receipt replay and unchanged object versions.
+  Frozen source `59649ad85bb3d3a39ef543bc2a2f1d6384f81e4272681d71bfa966d8e4ca8f10`
+  plus the recorded runner overlay binds this local qualification. The runner
+  now emits actual default-binary SHA/size and Cargo/Go versions before testing.
+  Logs: `native-20261005-ci-repairs-s3-offline.log` and
+  `native-20261005-ci-repairs-s3-bound.log`; result metadata is recorded beside them.
+- The updated TLS boundary passes on the retained default Windows worker,
+  including missing-authority refusal and all four wrong-credential/identity cases.
+  Log `native-20261005-ci-repair-go-tls.log`. The native failover fixture also
+  compiles and executes on Windows. MCP has 23 passing tests; 108 source/runtime
+  guards pass. Source zero-Python checks say `scope=source_contract` and
+  `deployment_verified=false`; they do not establish deployment or full parity.
+- Next: collect current repair CI, resolve the first upstream failure, refresh
+  whole Rust coverage, then continue production Rust key custody, full Go action/
+  epoch admission, remaining route/domain cutovers and desktop/Android qualification.
+
+## Previous local verification — 2026-10-05 resumed gates before push
 
 Branch `codex/indexmap-std-feature`, base HEAD
-`0e340dc3695890e8d85d59c8263192f0593fb79e`; shared source is uncommitted.
+`0e340dc3695890e8d85d59c8263192f0593fb79e`; shared source was uncommitted then.
 All existing concurrent slices below are preserved. The whole product is
 **未完成**, readiness `NOT_READY`. The user has authorized pushing the current
 checkpoint; merge, release and production-data actions remain unauthorized.

@@ -542,7 +542,8 @@ async fn conditional_verified_read_binds_bytes_and_metadata_to_the_observed_obje
     if !minio_configured() {
         return;
     }
-    let transport = store(&endpoints()[2]);
+    // An unversioned overwrite invalidates the previously observed metadata.
+    let transport = store(&endpoints()[0]);
     let key = "conditional-observation";
     let payload = Bytes::from_static(b"same bytes but different operation metadata");
     let digest = Sha256::digest(&payload).into();
@@ -618,6 +619,72 @@ async fn conditional_verified_read_binds_bytes_and_metadata_to_the_observed_obje
             .await,
         Err(S3Error::IntegrityMismatch)
     );
+    transport
+        .download_observation_verified(key, &current, replacement_digest, &mut HashSink::default())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn versioned_verified_read_keeps_the_exact_observed_bytes_after_overwrite() {
+    if !minio_configured() {
+        return;
+    }
+    let Some(index) = std::env::var("DEEPSEEK_TEST_VERSIONED_PROVIDER_INDEX")
+        .ok()
+        .map(|value| value.parse::<usize>().unwrap())
+    else {
+        return;
+    };
+    let transport = store(&endpoints()[index]);
+    let key = "versioned-conditional-observation";
+    let payload = Bytes::from_static(b"immutable observed provider bytes");
+    let digest = Sha256::digest(&payload).into();
+    transport
+        .put_chunk(
+            key,
+            payload.clone(),
+            digest,
+            &fence(31),
+            ConditionalWrite::Create,
+        )
+        .await
+        .unwrap();
+    let first = transport.stat(key).await.unwrap().unwrap();
+    assert!(
+        first
+            .version
+            .as_deref()
+            .is_some_and(|value| value != "null")
+    );
+    assert_eq!(first.claimed_execution_epoch.as_deref(), Some("31"));
+
+    let replacement = Bytes::from_static(b"different latest bytes and authority metadata");
+    let replacement_digest = Sha256::digest(&replacement).into();
+    transport
+        .put_chunk(
+            key,
+            replacement.clone(),
+            replacement_digest,
+            &fence(32),
+            ConditionalWrite::Match(first.etag.clone()),
+        )
+        .await
+        .unwrap();
+    let current = transport.stat(key).await.unwrap().unwrap();
+    assert_ne!(first.version, current.version);
+    assert_ne!(first.etag, current.etag);
+    assert_eq!(current.claimed_execution_epoch.as_deref(), Some("32"));
+
+    // The version-bound GET must retrieve the earlier bytes and metadata, even
+    // though HEAD now observes a different object. Check the received bytes too.
+    let mut sink = HashSink::default();
+    transport
+        .download_observation_verified(key, &first, digest, &mut sink)
+        .await
+        .unwrap();
+    assert_eq!(sink.bytes, payload.len() as u64);
+    assert_eq!(<[u8; 32]>::from(sink.hash.finalize()), digest);
     transport
         .download_observation_verified(key, &current, replacement_digest, &mut HashSink::default())
         .await

@@ -6,7 +6,7 @@ COPY rust/crates rust/crates
 WORKDIR /src/rust
 RUN cargo build --release --locked -p deepseek-stateless-mcp
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl ripgrep \
@@ -24,3 +24,11 @@ USER deepseek
 EXPOSE 8010
 
 CMD ["deepseek-stateless-mcp"]
+
+FROM build AS failover-build
+RUN cargo build --release --locked -p deepseek-stateless-mcp --example failover_probe
+
+FROM runtime AS failover-qualification
+COPY --from=failover-build /src/rust/target/release/examples/failover_probe /usr/local/bin/native-failover-probe
+
+FROM runtime AS production
