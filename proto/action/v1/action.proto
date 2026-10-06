@@ -121,3 +121,37 @@ service Worker {
   rpc ExecuteStorageMutation(StorageMutationRequest) returns (StorageMutationResponse);
   rpc QueryStorageEffect(QueryStorageEffectRequest) returns (StorageMutationResponse);
 }
+
+// Typed, bounded issuance. The signer never accepts an arbitrary message/digest,
+// private key, or caller-selected signature domain.
+enum ControlSigningPurpose {
+  CONTROL_SIGNING_PURPOSE_UNSPECIFIED = 0;
+  CONTROL_SIGNING_PURPOSE_INSTALL_EPOCH = 1;
+  CONTROL_SIGNING_PURPOSE_STORAGE_PUT = 2;
+}
+
+message SignControlRequest {
+  ControlSigningPurpose purpose = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string request_id = 3;
+  string nonce = 4;
+  int64 revision = 5;
+  uint64 fencing_token = 6;
+  string fleet_id = 7;
+  string environment = 8;
+  string issued_at = 9;
+  string expires_at = 10;
+  // For STORAGE_PUT only. Payload and canonical_authorization must be empty.
+  StorageMutationRequest storage_intent = 11;
+}
+
+message SignControlResponse {
+  deepseek.common.v1.ActionFence fence = 1;
+  bytes canonical_document = 2;
+  string signer_public_key = 3;
+  string signer_key_id = 4;
+}
+
+service ControlSigner {
+  rpc SignControl(SignControlRequest) returns (SignControlResponse);
+}
