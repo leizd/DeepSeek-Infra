@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -45,22 +47,18 @@ func TestRustWorkerPromotedControlWritesAndRecoversRealProviders(t *testing.T) {
 	}
 	for index, endpoint := range endpoints {
 		t.Run(strconv.Itoa(index), func(t *testing.T) {
-			control, promotionKey, checkpoint := isolatedLiveControl(t)
+			var clock atomic.Int64
+			clock.Store(time.Now().Unix())
+			control, promotionKey, checkpoint := isolatedLiveControl(t, clock.Load)
 			defer control.Close()
 			writerFence := control.Writer().FencingToken
 			prefix := "go-control-" + randomHex64(t)[:16]
 			payload := []byte("Go durable admission reaches the default Rust worker and real S3")
 			digest := sha256.Sum256(payload)
-			identity := sha256.New()
-			_, _ = identity.Write([]byte("deepseek-infra:s3-target-v1\x00"))
-			for _, field := range []string{strings.TrimRight(endpoint, "/"), "us-east-1", bucket, prefix} {
-				_ = binary.Write(identity, binary.BigEndian, uint64(len(field)))
-				_, _ = identity.Write([]byte(field))
-			}
 			request := &actionv1.StorageMutationRequest{
 				Fence:       &commonv1.ActionFence{ActionId: "go-provider-action", ExecutionEpoch: 1},
 				OperationId: randomHex64(t), RequestId: randomHex64(t), Nonce: randomHex64(t),
-				MutationType: "PUT_CHUNK", Provider: "s3", TargetIdentity: hex.EncodeToString(identity.Sum(nil)),
+				MutationType: "PUT_CHUNK", Provider: "s3", TargetIdentity: isolatedS3TargetIdentity(endpoint, bucket, prefix),
 				Bucket: bucket, Prefix: prefix, ObjectKey: "native-object", PayloadDigest: hex.EncodeToString(digest[:]),
 				ExpectedLength: uint64(len(payload)), Payload: payload, SchemaVersion: 1,
 				Precondition: &actionv1.StoragePrecondition{ConditionType: actionv1.StorageConditionType_STORAGE_CONDITION_TYPE_CREATE_ONLY},
@@ -81,6 +79,7 @@ func TestRustWorkerPromotedControlWritesAndRecoversRealProviders(t *testing.T) {
 			}
 			expires := time.Now().UTC().Add(10 * time.Minute).Truncate(time.Second)
 			cfg := TLSDialConfig{Target: target, TrustRootFile: material.caFile, ServerName: "deepseek-worker.test", BearerToken: tlsTestSecret, ExpiresAt: expires}
+			workerEndpoint := endpoint
 			start := func() func() {
 				cmd := exec.Command(binaryPath)
 				hideTestWorker(cmd)
@@ -99,7 +98,7 @@ func TestRustWorkerPromotedControlWritesAndRecoversRealProviders(t *testing.T) {
 					EnvWorkerTLSCertFile+"="+material.certFile, EnvWorkerTLSKeyFile+"="+material.keyFile,
 					EnvWorkerServiceBearer+"="+tlsTestSecret, EnvWorkerServiceBearerExpires+"="+expires.Format("2006-01-02T15:04:05Z"),
 					EnvWorkerServiceName+"=go-control-plane", EnvWorkerServiceRole+"=controller",
-					"DEEPSEEK_WORKER_S3_ENDPOINT="+endpoint, "DEEPSEEK_WORKER_S3_BUCKET="+bucket,
+					"DEEPSEEK_WORKER_S3_ENDPOINT="+workerEndpoint, "DEEPSEEK_WORKER_S3_BUCKET="+bucket,
 					"DEEPSEEK_WORKER_S3_PREFIX="+prefix, "DEEPSEEK_WORKER_S3_REGION=us-east-1",
 					"DEEPSEEK_WORKER_S3_ACCESS_KEY="+os.Getenv("AWS_ACCESS_KEY_ID"),
 					"DEEPSEEK_WORKER_S3_SECRET_KEY="+os.Getenv("AWS_SECRET_ACCESS_KEY"),
@@ -148,7 +147,7 @@ func TestRustWorkerPromotedControlWritesAndRecoversRealProviders(t *testing.T) {
 			defer client.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			coordinator := action.NewCoordinator(control, client, action.WithAuthoritative(true))
+			coordinator := action.NewCoordinator(control, client, action.WithAuthoritative(true), action.WithNow(clock.Load))
 			if _, err := coordinator.ExecuteStorageAction(ctx, request.Fence.ActionId, request); !errors.Is(err, store.ErrCutoverNotAuthorized) {
 				t.Fatalf("unpromoted control reached dispatch: %v", err)
 			}
@@ -204,7 +203,7 @@ func TestRustWorkerPromotedControlWritesAndRecoversRealProviders(t *testing.T) {
 			}
 			stop()
 			_ = client.Close()
-			start()
+			stop = start()
 			client, err = DialTLS(cfg)
 			if err != nil {
 				t.Fatal(err)
@@ -225,6 +224,22 @@ func TestRustWorkerPromotedControlWritesAndRecoversRealProviders(t *testing.T) {
 			status, body, replayETag, replayVersion := readIsolatedS3(t, endpoint, bucket, prefix, request.ObjectKey)
 			if status != http.StatusOK || !bytes.Equal(body, payload) || replayETag != etag || replayVersion != version {
 				t.Fatal("completed replay changed the actual provider object")
+			}
+			stop()
+			_ = client.Close()
+			for _, committed := range []bool{true, false} {
+				t.Run(fmt.Sprintf("lost-response-committed-%t", committed), func(t *testing.T) {
+					gate := newIsolatedProviderFault(t, endpoint, committed)
+					gate.versioned = strconv.Itoa(index) == os.Getenv("DEEPSEEK_TEST_VERSIONED_PROVIDER_INDEX")
+					workerEndpoint = gate.server.URL
+					stop = start()
+					faultClient, dialErr := DialTLS(cfg)
+					if dialErr != nil {
+						t.Fatal(dialErr)
+					}
+					defer faultClient.Close()
+					qualifyLostProviderResponse(t, control, faultClient, cfg, request, gate, clock.Load, clock.Store, stop, start, public, writerFence)
+				})
 			}
 			t.Logf("real Go control/provider %d: durable promotion, Rust key custody and signed epoch/grant, TLS, SUCCEEDED, forced restart, unchanged object version", index)
 		})
@@ -261,13 +276,17 @@ func provisionNativeControlSigner(t *testing.T, workerBinary, root string) (stri
 	return binding["signerPublicKey"], bundleFile, passwordFile
 }
 
-func isolatedLiveControl(t *testing.T) (*store.Control, ed25519.PrivateKey, *store.AuthorityCheckpoint) {
+func isolatedLiveControl(t *testing.T, clocks ...func() int64) (*store.Control, ed25519.PrivateKey, *store.AuthorityCheckpoint) {
 	t.Helper()
 	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "native-provider-qualification", AuthorizeCutover: true,
+	var now func() int64
+	if len(clocks) != 0 {
+		now = clocks[0]
+	}
+	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "native-provider-qualification", AuthorizeCutover: true, Now: now, LeaseSeconds: 600,
 		PromotionSignerPublicKey: base64.RawURLEncoding.EncodeToString(public), FleetID: "fleet-a", Environment: "test"})
 	if err != nil {
 		t.Fatal(err)
@@ -287,6 +306,16 @@ func isolatedLiveControl(t *testing.T) (*store.Control, ed25519.PrivateKey, *sto
 		t.Fatalf("claim authority: advanced=%v err=%v", advanced, err)
 	}
 	return control, private, checkpoint
+}
+
+func isolatedS3TargetIdentity(endpoint, bucket, prefix string) string {
+	identity := sha256.New()
+	_, _ = identity.Write([]byte("deepseek-infra:s3-target-v1\x00"))
+	for _, field := range []string{strings.TrimRight(endpoint, "/"), "us-east-1", bucket, prefix} {
+		_ = binary.Write(identity, binary.BigEndian, uint64(len(field)))
+		_, _ = identity.Write([]byte(field))
+	}
+	return hex.EncodeToString(identity.Sum(nil))
 }
 
 func promoteLiveAction(t *testing.T, control *store.Control, private ed25519.PrivateKey, authority *store.AuthorityCheckpoint) {

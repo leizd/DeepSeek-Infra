@@ -91,7 +91,14 @@ migration; replacing a bundle or deleting a journal is not a supported rollback.
 worker plus initializer, and uses Rust-generated custody for actual Go-promoted
 storage writes. It verifies independent provider bytes, TLS, refused unpromoted
 dispatch, renewable-claim writes, Unicode object names, forced worker death,
-receipt replay and unchanged object versions on three MinIO instances. Promotion
+receipt replay and unchanged object versions on three MinIO instances. Six
+additional response-loss scenarios kill the actual worker, expire its Go action
+lease and admit a successor at epoch 2. Recovery queries the original epoch 1
+operation and conditionally downloads provider bytes. A real 404 retains
+`EFFECT_UNKNOWN`; a delayed original PUT can then be verified without another
+write. A second process death preserves the recovered receipt, bytes and version.
+Only the isolated Go store clock advances; providers and workers keep real time.
+The race detector also qualifies these scenarios locally. Promotion
 itself still uses an isolated offline administrative fixture. The leased action
 reaches `VERIFYING`; complete production proof settlement, Fleet custody,
 rotation, all-platform deployment and full ownership qualification remain open.

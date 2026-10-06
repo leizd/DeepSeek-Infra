@@ -27,6 +27,12 @@ record; the active section below records current slices without rewriting that h
   The administrative promotion fixture and leased `VERIFYING` limit stay explicit.
 - [x] Fix Go/Python/Rust canonical signing bytes for HTML/Unicode separators;
   retain all frozen fixtures and the unchanged full verification contracts.
+- [x] Qualify custody checkpoint `005e5bb6` on exact-head CI: all 37 jobs,
+  including Evidence Assembly, release-package and RC checks, pass.
+- [x] Qualify six actual provider response-loss/lease-takeover scenarios under
+  Go race. Retain original dispatch epoch 1 under successor epoch 2; a real 404
+  stays unknown until a delayed original PUT is byte-verified. No repeated PUT;
+  another worker death preserves receipt/object version. Proof settlement stays open.
 - [ ] Complete production Fleet signer custody/rotation and leased proof settlement.
 - [ ] Finish remaining product/platform/domain transfers and release qualification;
   the full migration remains **未完成 / NOT_READY**.

@@ -20,6 +20,16 @@ the leased action reaches `VERIFYING`. Full Fleet custody/rotation, proof settle
 all-domain/platform migration and release Evidence remain required. Status remains
 **未完成 / NOT_READY**. Exact logs and current coverage scope are in `continuation.md`.
 
+The custody checkpoint `005e5bb6` now passes all **37/37** exact-head CI jobs,
+including Evidence Assembly, release-package and RC checks. The next qualification
+adds six actual response-loss scenarios across three providers, including a
+versioned bucket, with Go race enabled. After worker death and action lease expiry,
+epoch 2 reconciles the original epoch 1 dispatch; real absence stays unknown until
+the delayed original PUT is verified. The recovered receipt survives another
+worker death. Neither recovery path repeats a PUT or creates an epoch 2 dispatch.
+These outcomes stop at `VERIFYING`; they do not certify Receipt/Commit outcome,
+risk assessment, live production promotion or whole-product readiness.
+
 **2026-10-05 CI prerequisite repair:** pushed `181dbdf6` passes 31 complete jobs,
 including native Go, MCP failover and hybrid. Rust tests/coverage need the actual
 Vite build, and the Go provider stage needs module downloads before proxy refusal.
