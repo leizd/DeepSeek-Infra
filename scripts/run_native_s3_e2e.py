@@ -114,11 +114,11 @@ def main() -> int:
             # why the workflow keeps `CGO_ENABLED: "0"` at the job level.
             environment["CGO_ENABLED"] = "1"
             environment["GOTOOLCHAIN"] = "local"
-            # The race detector costs several times the plain run's 63s across the
-            # three providers, and it also has to build the instrumented binary first
-            # (measured at 1m55s on Windows). The subprocess bound sits above
-            # `-timeout=15m` so a slow instrumented build is not charged to the
-            # suite's own timeout, which only covers the run itself.
+            # Measured in exact-head CI 37447970451: the instrumented build adds ~44s
+            # before the suite starts, and the suite itself goes 63.01s -> 86.15s (1.37x,
+            # not the several-fold cost worth budgeting for in theory). The bounds below
+            # stay deliberately loose so a slower instrumented build is never charged to
+            # `-timeout`, which covers only the run.
             return subprocess.run(command3, cwd=ROOT / "go", env=environment, check=False, timeout=1500).returncode
         finally:
             try:

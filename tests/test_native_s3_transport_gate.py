@@ -59,15 +59,14 @@ def test_go_recovery_suite_runs_under_the_race_detector_with_cgo_enabled() -> No
     job = workflow["jobs"]["native-s3-transport"]
     # The production image and the other Go steps stay statically linked.
     assert job["env"]["CGO_ENABLED"] == "0"
-    # A 20-minute job cannot hold the race build plus the plain suite's 63s multiplied
-    # by the detector across three providers.
+    # A 20-minute job cannot hold the race build (~44s measured) plus the suite.
     assert job["timeout-minutes"] >= 40
 
     runner = (ROOT / "scripts/run_native_s3_e2e.py").read_text(encoding="utf-8")
     command3 = runner.split("command3 = [", 1)[1].split("]", 1)[0]
     assert '"-race"' in command3
-    # `-timeout` bounds the suite run itself; the detector costs several times the
-    # plain 63s across three providers, so it needs far more than the original 3m.
+    # Measured 63.01s -> 86.15s under the detector, so 3m is too tight and 15m is
+    # deliberately loose rather than fitted to the observation.
     assert '-timeout=15m' in command3
     # cgo is re-enabled for the Go race command only. The subprocess bound sits above
     # `-timeout` so the instrumented build is not charged to the suite's own timeout.

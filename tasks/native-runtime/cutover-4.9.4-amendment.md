@@ -119,19 +119,29 @@ detector. That is fixed in this slice: `command3` now carries `-race`, and becau
 `-race requires cgo` the runner re-enables `CGO_ENABLED` for that one command only. The
 workflow keeps `CGO_ENABLED: "0"` at the job level, so the production image and every
 other step stay statically linked. `-timeout` went `3m -> 15m` and the job's
-`timeout-minutes` `20 -> 40`, because the detector costs several times the plain run's
-63s across three providers. `tests/test_native_s3_transport_gate.py` now asserts all of
-it, and both halves were mutation-checked: dropping `-race` or reverting the cgo setting
-each fail the gate.
+`timeout-minutes` `20 -> 40`, because the detector adds an instrumented build before the
+suite starts. `tests/test_native_s3_transport_gate.py` now asserts all of it, and every
+assertion was mutation-checked: dropping `-race`, reverting the cgo setting and restoring
+the 300s bound each fail the gate.
 
-**This gap cannot be closed on this machine.** `CGO_ENABLED=1 go test -race` compiles
+**It cannot be closed on this machine.** `CGO_ENABLED=1 go test -race` compiles
 (1m55s, 42 MB binary, only `msvcrt.dll` + `kernel32.dll` imported), but running it on this
 Windows host fails as `0xc0000139` / a silent exit-0 with empty output, and from the
 workspace tree it is refused outright (exit 127). `wsl.exe` is on the program blacklist, so
-there is no local route to a real detector run. The Ubuntu runner can: `native-go` already
-runs `go test -race -timeout=30m ./...` with **no** `CGO_ENABLED` override and that job is
-green, so the toolchain requirement is proven there. Treat the race-enabled provider run
-as **CI-qualified only** until a run proves otherwise.
+there is no local route to a real detector run. That part is a property of this host, not
+of the change.
+
+**Exact-head CI has now closed it.** Run
+[37447970451](https://github.com/leizd/DeepSeek-Infra/actions/runs/37447970451) at
+`headSha` `f331ede8` passes **37/37** jobs, `native-s3-transport` included. Two independent
+measurements show the detector actually ran rather than being silently dropped: the gap
+between the last Rust suite finishing (`10:13:26.7`) and the Go suite starting
+(`10:14:10.4`) is the ~44s instrumented build, and the suite went **63.01s -> 86.15s**
+(1.37x). `DATA RACE` is absent because the detector found nothing, which is the intended
+outcome and is **not** evidence the flag was set — the build gap and the slowdown are.
+The six scenarios still pass: three providers x `lost-response-committed-true` /
+`-false`. Go statement coverage stays **95.084647% (8,144/8,565)**, Rust line coverage
+**80.43%**, Python **95.23%** — unchanged by the race build.
 
 ## What a rollback would be
 
