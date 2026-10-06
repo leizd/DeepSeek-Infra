@@ -8,7 +8,48 @@ This file is the session handoff. Historical plans, checkboxes, VERSION, and
 `release/native_runtime_5_0_evidence_v1.json` are not completion evidence.
 The capability matrix is [`migration-matrix.md`](migration-matrix.md).
 
-## Current implementation checkpoint — 2026-10-06 native control signer custody
+## Current qualification checkpoint — 2026-10-06 real response loss and takeover
+
+Custody checkpoint `005e5bb6901cfaad7b14f9a0b525dfbf68ad778c` passes
+**37/37** exact-head CI jobs in
+[37401774721](https://github.com/leizd/DeepSeek-Infra/actions/runs/37401774721),
+including native Go race, coverage, provider integration, Evidence Assembly,
+release-package and RC checks. CI Go handwritten coverage is **95.084647%**
+(8,144/8,565 statements), and Rust line coverage is **80.822104%**
+(71,315/88,237). The downloaded manifest's SHA-256 is
+`6a04b0406ca16a8842b0c0c93f249fe3b316cfcce3ea5dd7ba4098c1a8ece243`;
+its source context names that clean exact revision. No full native readiness flip.
+
+The provider runner now additionally qualifies **six actual response-loss and
+action lease-takeover scenarios** across the same three MinIO providers. A test
+gate either withholds the completed provider response or delays the one original
+PUT until after takeover. The real worker is force-killed at that boundary.
+The production Go store clock expires its action lease, and admission moves the
+successor to epoch 2/`RECONCILING`; provider and Rust clocks remain real.
+
+Recovery binds the persisted original operation/epoch 1, conditionally reads and
+hash-verifies actual provider bytes, and reaches `VERIFYING`. For the delayed
+request, the first real provider 404 retains `EFFECT_UNKNOWN`, holds resource
+reservations and denies a new dispatch. The old remote request then completes
+once and is reconciled without another PUT. Both paths force-kill/restart the
+worker again and compare unchanged recovered receipt, object bytes and version.
+The original Go dispatch is immutable and no epoch 2 write identity is created.
+
+The full combined provider runner passes with **Go race enabled**: seven Rust
+storage cases, ten Rust worker cases and three Go provider groups with the six
+new faults. Go vet with integration tags, format and tagged compilation pass.
+Log: `artifacts/native-20261006-control-recovery-provider-race.log`.
+The default worker hash remains
+`686c87627a1d5abceb8b80cd5cad9ac1a16b74f9e5364538e1abafd804ebe22f`.
+This additional test source needs its own exact-head CI; the preceding pass is
+qualified evidence only for `005e5bb6`.
+
+The full migration remains **未完成 / NOT_READY**. Leased proof/risk settlement,
+Fleet production custody/rotation, live ownership transfer, remaining native
+routes and desktop/Android zero-Python deployment remain open. Real provider
+recovery qualification does not complete those gates.
+
+## Previous implementation checkpoint — 2026-10-06 native control signer custody
 
 The clean starting HEAD `3406f7adbf1184e1a6d67b7f954ded155ab6d862` passes
 **37/37** jobs in exact-head CI
