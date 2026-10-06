@@ -11,7 +11,27 @@ Evidence Assembly, qualification) remain open and no 4.8.1 release has been cut 
 is [`migration-matrix.md`](migration-matrix.md). This file is the 4.8.1 contract-freeze
 record; the active section below records current slices without rewriting that history.
 
-## 5.0 active execution — 2026-10-04
+## 5.0 active execution — 2026-10-06
+
+- [x] Close the preceding CI repairs on exact HEAD `3406f7ad`: all 37 jobs pass,
+  including Rust/Go coverage, race and Evidence Assembly. No native readiness flip.
+- [x] Generate and retain an independent control signer inside Rust, encrypted
+  with the frozen custody envelope; add a native initializer and typed scoped RPC.
+- [x] Integrate default authoritative Go storage execution and renewable claims
+  with Rust epoch/grant issuance after durable claim, with TLS, public binding,
+  exact intent and post-signing ownership/lease checks.
+- [x] Persist immutable Rust signature request/nonce receipts; deny changed replay,
+  missing custody, wrong caller/scope, stale epochs and foreign/symlink journals.
+- [x] Qualify native custody against three real MinIO providers, including a
+  versioned provider, Unicode object bytes, force-kill/restart and stable receipts.
+  The administrative promotion fixture and leased `VERIFYING` limit stay explicit.
+- [x] Fix Go/Python/Rust canonical signing bytes for HTML/Unicode separators;
+  retain all frozen fixtures and the unchanged full verification contracts.
+- [ ] Complete production Fleet signer custody/rotation and leased proof settlement.
+- [ ] Finish remaining product/platform/domain transfers and release qualification;
+  the full migration remains **未完成 / NOT_READY**.
+
+## Previous active execution — 2026-10-04
 
 - [x] Fix public mirror body guards and Python text coercion: native 7 mirror +
   2 auth tests and Python HTTP oracle 12 tests pass; retain the red empty-body case.
@@ -76,10 +96,10 @@ record; the active section below records current slices without rewriting that h
   MCP failover and hybrid. Repair missing Vite preparation in both Rust jobs and
   Go dependency downloads before S3 proxy isolation. The actual Linux production
   contract and ten workflow guards pass; coverage floors remain unchanged.
-- [ ] Obtain complete exact-head CI/Evidence for the repaired source; both pushed
-  runs are failed evidence despite their passing Python, Go and provider stages.
-- [ ] Refresh complete Rust coverage after repairing the exact `python_disabled`
-  packaging false positive; frozen `f67263e3` failed that test after fmt/check/clippy passed.
+- [x] Obtain complete exact-head CI/Evidence for the prerequisite repairs on
+  `3406f7ad`: all 37 jobs pass; earlier failed runs remain historical evidence.
+- [x] Refresh complete Rust coverage after the `python_disabled` packaging and
+  inventory assertion repairs: the unchanged 80% gate passes in that exact-head CI.
 - [ ] Close mirror malformed-JSON/integer parity, browser upload, native handback,
   full restore consumer and Go action/epoch ownership and write admission.
 - [ ] Finish all outstanding product/platform/provider/zero-Python and exact-head

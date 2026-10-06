@@ -214,8 +214,9 @@ impl TransportAuthenticator for ServiceBearerAuthenticator {
 
 #[derive(Clone)]
 pub struct WorkerRpcService {
-    worker: Arc<Mutex<Worker>>,
-    authenticator: Arc<dyn TransportAuthenticator>,
+    pub(crate) worker: Arc<Mutex<Worker>>,
+    pub(crate) authenticator: Arc<dyn TransportAuthenticator>,
+    pub(crate) control_signer: Option<Arc<Mutex<crate::ControlSigner>>>,
     #[cfg(feature = "s3")]
     transport: Option<Arc<deepseek_storage::s3::S3Transport>>,
 }
@@ -233,6 +234,7 @@ impl WorkerRpcService {
         Self {
             worker: Arc::new(Mutex::new(worker)),
             authenticator: Arc::new(ProductionFailClosedAuthenticator),
+            control_signer: None,
             #[cfg(feature = "s3")]
             transport: None,
         }
@@ -245,6 +247,7 @@ impl WorkerRpcService {
         Self {
             worker: Arc::new(Mutex::new(worker)),
             authenticator,
+            control_signer: None,
             #[cfg(feature = "s3")]
             transport: None,
         }
@@ -253,6 +256,11 @@ impl WorkerRpcService {
     #[cfg(feature = "s3")]
     pub fn with_transport(mut self, transport: Arc<deepseek_storage::s3::S3Transport>) -> Self {
         self.transport = Some(transport);
+        self
+    }
+
+    pub fn with_control_signer(mut self, signer: crate::ControlSigner) -> Self {
+        self.control_signer = Some(Arc::new(Mutex::new(signer)));
         self
     }
 

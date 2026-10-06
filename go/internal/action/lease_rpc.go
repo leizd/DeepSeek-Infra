@@ -15,8 +15,15 @@ import (
 func (c *Coordinator) callWithActionLease(ctx context.Context, owner leasedControlStore, claim store.ActionLease,
 	renewal store.ActionLeaseRenewal, call func(context.Context) (*actionv1.StorageMutationResponse, error),
 ) (*actionv1.StorageMutationResponse, error, error) {
+	return callWithActionLease(c, ctx, owner, claim, renewal, call)
+}
+
+func callWithActionLease[T any](c *Coordinator, ctx context.Context, owner leasedControlStore, claim store.ActionLease,
+	renewal store.ActionLeaseRenewal, call func(context.Context) (T, error),
+) (T, error, error) {
+	var zero T
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return zero, nil, err
 	}
 	leaseNow := time.Now().Unix()
 	if c.now != nil {
@@ -24,7 +31,7 @@ func (c *Coordinator) callWithActionLease(ctx context.Context, owner leasedContr
 	}
 	leaseLimit := min(claim.LeaseUntil, owner.Writer().LeaseUntil)
 	if leaseNow < claim.UpdatedAt || leaseNow >= leaseLimit {
-		return nil, nil, store.ErrActionLeaseExpired
+		return zero, nil, store.ErrActionLeaseExpired
 	}
 	rpcCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -62,7 +69,7 @@ func (c *Coordinator) callWithActionLease(ctx context.Context, owner leasedContr
 			return
 		}
 	}()
-	resp, rpcErr := func() (*actionv1.StorageMutationResponse, error) {
+	resp, rpcErr := func() (T, error) {
 		defer func() { close(stop); <-stopped }()
 		return call(rpcCtx)
 	}()

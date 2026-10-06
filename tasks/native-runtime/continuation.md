@@ -8,7 +8,88 @@ This file is the session handoff. Historical plans, checkboxes, VERSION, and
 `release/native_runtime_5_0_evidence_v1.json` are not completion evidence.
 The capability matrix is [`migration-matrix.md`](migration-matrix.md).
 
-## Current verification checkpoint — 2026-10-05 coverage inventory assertion repair
+## Current implementation checkpoint — 2026-10-06 native control signer custody
+
+The clean starting HEAD `3406f7adbf1184e1a6d67b7f954ded155ab6d862` passes
+**37/37** jobs in exact-head CI
+[37305887781](https://github.com/leizd/DeepSeek-Infra/actions/runs/37305887781),
+closing the older inventory assertion and CI prerequisite repairs. That source
+qualification does not establish full native ownership or qualify new source.
+
+The current slice replaces operational Go test-key signing with an independent
+Rust-generated encrypted control key. The default Rust worker exposes an
+additive typed `ControlSigner` RPC for only epoch installation documents and
+placement-bound storage PUT grants. Full frozen verifiers run before issuance;
+private key, passphrase and decrypted PKCS#8 bytes stay inside Rust. TLS,
+service caller identity, deployment public binding and exact fencing token are
+required. A separate immutable Rust-owned signature journal makes retries
+stable across process death without silently extending expiry.
+
+Authoritative Go direct and renewable-claim storage paths now request those
+signatures after durable claim, verify the response, preserve the payload and
+intent, and recheck ownership/writer authority before dispatch. The renewable
+claim retains its heartbeat through signing. Key provisioning is an actual
+native initializer, included with the worker image; the supervisor forwards
+only credential/bundle paths. Deployment and recovery instructions are in
+[`NATIVE_CONTROL_SIGNER.md`](../../docs/runbooks/NATIVE_CONTROL_SIGNER.md).
+
+The real provider runner passes **7 storage tests, 10 worker tests and 3 Go
+provider subcases**, including Rust custody, Go promotion/admission, unsigned
+native dispatch, renewable claims, Chinese/HTML/Unicode-separator object names,
+independent byte reads and forced worker restart with unchanged receipts and
+object versions. The default binary SHA-256 is
+`686c87627a1d5abceb8b80cd5cad9ac1a16b74f9e5364538e1abafd804ebe22f`
+(32,918,480 bytes), built with Rust 1.85.0; Go is 1.27.1. Python provisions
+isolated MinIO only and never moves the tested payload. Promotion remains an
+offline administrative fixture. The leased path reaches `VERIFYING`, not
+complete production proof settlement. Log:
+`artifacts/native-20261006-control-custody-provider-fixed.log`.
+
+A real frozen-wire incompatibility was reproduced: Go JSON HTML/U+2028/U+2029
+escaping changed signed bytes compared with Python/Rust. Canonical authority
+encoding now removes only those escapes while preserving literal backslashes,
+number/depth/secret validation and every frozen corpus. The independent test
+SigV4 GET also now uses S3's exact byte escaping for reserved object-key bytes.
+Neither correction weakens a verifier or changes a frozen signature schema.
+
+Whole Go tests pass; the handwritten `internal/...` + `pkg/...` coverage scope
+is **95.084647% (8,144/8,565 statements)**. The main debt remains `internal/store`
+at **93.429158%**, 320 missing statements; `config` has two and `a2a` has 26.
+Profiles and weighted package totals are under
+`artifacts/native-20261006-control-signer-go-{full,gate}.out` and
+`artifacts/native-20261006-go-coverage-debt.json`. Rust whole-workspace locked
+check, format and all-target/all-feature clippy with denied warnings pass.
+All artifacts here are local working-source qualification; exact-head CI is
+an independent gate and no older coverage result qualifies these new files.
+
+The full locked, all-feature Rust instrumented run has **1,351 passing tests,
+one explicit ignore, and 1,352 inventoried tests**. Whole workspace line coverage
+passes the unchanged 80% floor at **80.826637% (71,319/88,237 lines)**. Inventory
+reuses the same instrumented build without a second ordinary test tree. Logs,
+LCOV and raw totals are `artifacts/native-20261006-control-signer-rust-coverage*`.
+
+On the pinned Windows GNU 1.85.0 toolchain, all four applicable custody tests
+also pass, including the actual initializer process, overwrite refusal and
+durable journal replay. Log:
+`artifacts/native-20261006-control-signer-windows-custody.log`. This is a worker
+custody test, not desktop UI or Android deployment qualification.
+
+The first pushed custody checkpoint `f3ac7598` starts CI
+[37400430167](https://github.com/leizd/DeepSeek-Infra/actions/runs/37400430167).
+It exposes the missing generated language navigation in the new runbook and
+the newly reviewed `source-map-js` advisory
+[GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q).
+The repair regenerates that one document header and updates only the transitive
+lock entry from 1.2.1 to the official 1.2.2 fix. No security exception or threshold
+is added; frontend checks and exact-head CI remain the qualification gates.
+
+Full readiness stays **未完成 / NOT_READY**. Still required: Fleet online signer
+provisioning/rotation and production custody isolation, complete action proof
+settlement, all route/domain transfers, actual desktop/Android deployment,
+full zero-Python workloads, multi-Fleet recovery and complete release Evidence.
+Do not change default ownership or clear any production replay history.
+
+## Previous verification checkpoint — 2026-10-05 coverage inventory assertion repair
 
 Both exact-head CI runs for `529e40deba31f71d004c63e03e24675e06da819e`
 ([37299410760](https://github.com/leizd/DeepSeek-Infra/actions/runs/37299410760)

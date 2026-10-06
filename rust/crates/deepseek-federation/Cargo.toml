@@ -16,3 +16,5 @@ argon2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+getrandom = "=0.2.17"
+zeroize = "=1.9.0"

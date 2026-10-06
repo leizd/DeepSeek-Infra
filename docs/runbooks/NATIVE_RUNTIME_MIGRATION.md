@@ -7,6 +7,11 @@
 Applies to 4.8.1 contract freeze through 5.0.0. Production mutation authority
 in 4.8.1 remains Python.
 
+The native worker's control-key provisioning, scoped gRPC issuance and durable
+signature replay are described in [Native control signer custody](NATIVE_CONTROL_SIGNER.md).
+The authoritative Go storage paths use that signer after durable claim; the
+full ownership and platform qualification gates below remain required.
+
 ## Ownership at a glance
 
 | Plane | 4.8.1 authority | 5.0 authority |

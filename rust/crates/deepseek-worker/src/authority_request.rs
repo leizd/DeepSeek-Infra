@@ -164,7 +164,7 @@ pub(crate) fn valid_fleet_id_str(value: &str) -> bool {
     valid_fleet_id(value)
 }
 
-fn format_utc_z(seconds: i64) -> Result<String, AuthorityRequestError> {
+pub(crate) fn format_utc_z(seconds: i64) -> Result<String, AuthorityRequestError> {
     if seconds < 0 {
         return Err(AuthorityRequestError::new("AUTHORITY_REQUEST_INVALID"));
     }

@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -19,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -31,9 +33,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// This is an offline qualification signer, never a production key. The test
-// exercises real Go control ownership, Rust TLS and provider bytes; production
-// Rust key custody and whole-fleet admission are separate unfinished gates.
+// Rust provisions and holds the worker signing key; Go receives public metadata
+// and signatures only. Promotion uses an isolated offline administrative fixture.
+// This remains provider qualification, not a production or whole-fleet cutover.
 func TestRustWorkerPromotedControlWritesAndRecoversRealProviders(t *testing.T) {
 	binaryPath := os.Getenv("DEEPSEEK_TEST_RUST_WORKER_BINARY")
 	endpoints := strings.Split(os.Getenv("DEEPSEEK_NATIVE_S3_ENDPOINTS"), ",")
@@ -45,9 +47,6 @@ func TestRustWorkerPromotedControlWritesAndRecoversRealProviders(t *testing.T) {
 		t.Run(strconv.Itoa(index), func(t *testing.T) {
 			control, promotionKey, checkpoint := isolatedLiveControl(t)
 			defer control.Close()
-			seed := bytes.Repeat([]byte{42}, ed25519.SeedSize)
-			signer := ed25519.NewKeyFromSeed(seed)
-			public := base64.RawURLEncoding.EncodeToString(signer.Public().(ed25519.PublicKey))
 			writerFence := control.Writer().FencingToken
 			prefix := "go-control-" + randomHex64(t)[:16]
 			payload := []byte("Go durable admission reaches the default Rust worker and real S3")
@@ -67,6 +66,10 @@ func TestRustWorkerPromotedControlWritesAndRecoversRealProviders(t *testing.T) {
 				Precondition: &actionv1.StoragePrecondition{ConditionType: actionv1.StorageConditionType_STORAGE_CONDITION_TYPE_CREATE_ONLY},
 			}
 			root := t.TempDir()
+			public, bundleFile, passwordFile := provisionNativeControlSigner(t, binaryPath, root)
+			t.Setenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY", public)
+			t.Setenv("DEEPSEEK_WORKER_AUTHORITY_FLEET_ID", "fleet-a")
+			t.Setenv("DEEPSEEK_WORKER_AUTHORITY_ENVIRONMENT", "test")
 			material := generateTLSMaterial(t, root, "deepseek-worker.test")
 			reservation, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {
@@ -91,6 +94,8 @@ func TestRustWorkerPromotedControlWritesAndRecoversRealProviders(t *testing.T) {
 					"DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY="+public,
 					"DEEPSEEK_WORKER_AUTHORITY_FLEET_ID=fleet-a", "DEEPSEEK_WORKER_AUTHORITY_ENVIRONMENT=test",
 					"DEEPSEEK_WORKER_AUTHORITY_FENCING_TOKEN="+strconv.FormatInt(writerFence, 10),
+					"DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE="+bundleFile,
+					"DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE="+passwordFile,
 					EnvWorkerTLSCertFile+"="+material.certFile, EnvWorkerTLSKeyFile+"="+material.keyFile,
 					EnvWorkerServiceBearer+"="+tlsTestSecret, EnvWorkerServiceBearerExpires+"="+expires.Format("2006-01-02T15:04:05Z"),
 					EnvWorkerServiceName+"=go-control-plane", EnvWorkerServiceRole+"=controller",
@@ -154,25 +159,6 @@ func TestRustWorkerPromotedControlWritesAndRecoversRealProviders(t *testing.T) {
 			if err := control.Put(store.Record{Domain: "action", ID: request.Fence.ActionId, Revision: 1, ExecutionEpoch: 1, State: "PENDING"}); err != nil {
 				t.Fatal(err)
 			}
-			unsigned := liveUnsigned(t, request.Fence, writerFence)
-			unsigned["schema"], unsigned["operation"], unsigned["payload"] = store.AuthorityRequestSchema, "install-epoch", map[string]any{}
-			_, raw, err := store.SignAuthorityRequest(unsigned, signer, public)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := client.InstallAuthoritativeEpoch(ctx, request.Fence, raw); err != nil {
-				t.Fatalf("Go signed epoch installation: %v", err)
-			}
-			unsigned = liveUnsigned(t, request.Fence, writerFence)
-			unsigned["schema"], unsigned["operation"] = store.StorageOperationGrantSchema, store.StorageOperationGrantPut
-			unsigned["operationId"], unsigned["requestId"], unsigned["nonce"] = request.OperationId, request.RequestId, request.Nonce
-			unsigned["payload"] = map[string]any{"mutationType": request.MutationType, "provider": request.Provider, "targetIdentity": request.TargetIdentity,
-				"bucket": bucket, "prefix": prefix, "objectKey": request.ObjectKey, "objectDigest": request.PayloadDigest, "expectedLength": int64(len(payload)),
-				"conditionType": "CREATE_ONLY", "expectedEtag": "", "claimRevision": int64(2)}
-			_, request.CanonicalAuthorization, err = store.SignStorageOperationGrant(unsigned, signer, public)
-			if err != nil {
-				t.Fatal(err)
-			}
 			response, err := coordinator.ExecuteStorageAction(ctx, request.Fence.ActionId, request)
 			if err != nil {
 				t.Fatalf("promoted Go control to real Rust/provider: %v", err)
@@ -192,6 +178,30 @@ func TestRustWorkerPromotedControlWritesAndRecoversRealProviders(t *testing.T) {
 			if strconv.Itoa(index) == os.Getenv("DEEPSEEK_TEST_VERSIONED_PROVIDER_INDEX") && version == "" {
 				t.Fatal("versioned provider returned no version")
 			}
+			// Exercise the renewable action/resource claim through the same Rust
+			// custody path, without a caller-supplied grant or Go private key.
+			leased := proto.Clone(request).(*actionv1.StorageMutationRequest)
+			leased.Fence = &commonv1.ActionFence{ActionId: "go-provider-leased-action", ExecutionEpoch: 1}
+			leased.OperationId, leased.RequestId, leased.Nonce = randomHex64(t), randomHex64(t), randomHex64(t)
+			leased.ObjectKey = "native-leased-对象<>&\u2028"
+			if err = control.Put(store.Record{Domain: "action", ID: leased.Fence.ActionId, Revision: 1, ExecutionEpoch: 1, State: "PENDING"}); err != nil {
+				t.Fatal(err)
+			}
+			claim, err := control.AdmitAndClaimAction(store.AdmissionRequest{ActionID: leased.Fence.ActionId, LeaseSeconds: 60, ResourceKeys: []string{"native-provider-target"}})
+			if err != nil {
+				t.Fatalf("native action admission: %v", err)
+			}
+			if _, err = coordinator.ExecuteClaimedStorageAction(ctx, claim.Lease, leased); err != nil {
+				t.Fatalf("leased native custody dispatch: %v", err)
+			}
+			leasedRecord, found, err := control.Get("action", leased.Fence.ActionId)
+			if err != nil || !found || leasedRecord.State != "VERIFYING" {
+				t.Fatalf("leased action verification state: %v", err)
+			}
+			leasedStatus, leasedBody, _, _ := readIsolatedS3(t, endpoint, bucket, prefix, leased.ObjectKey)
+			if leasedStatus != http.StatusOK || !bytes.Equal(leasedBody, payload) {
+				t.Fatalf("leased custody provider read mismatch: status=%d body=%q", leasedStatus, leasedBody)
+			}
 			stop()
 			_ = client.Close()
 			start()
@@ -200,6 +210,10 @@ func TestRustWorkerPromotedControlWritesAndRecoversRealProviders(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer client.Close()
+			request, err = client.AuthorizeStorage(ctx, request, 2, writerFence)
+			if err != nil {
+				t.Fatalf("Rust custody replay after forced restart: %v", err)
+			}
 			queried, err := client.QueryStorageEffect(ctx, request.Fence, request.OperationId, "")
 			if err != nil || !proto.Equal(response, queried) {
 				t.Fatalf("receipt changed after forced restart: %v", err)
@@ -212,18 +226,39 @@ func TestRustWorkerPromotedControlWritesAndRecoversRealProviders(t *testing.T) {
 			if status != http.StatusOK || !bytes.Equal(body, payload) || replayETag != etag || replayVersion != version {
 				t.Fatal("completed replay changed the actual provider object")
 			}
-			t.Logf("real Go control/provider %d: durable promotion, signed epoch/grant, TLS, SUCCEEDED, forced restart, unchanged object version", index)
+			t.Logf("real Go control/provider %d: durable promotion, Rust key custody and signed epoch/grant, TLS, SUCCEEDED, forced restart, unchanged object version", index)
 		})
 	}
 }
 
-func liveUnsigned(t *testing.T, fence *commonv1.ActionFence, fencing int64) map[string]any {
+func provisionNativeControlSigner(t *testing.T, workerBinary, root string) (string, string, string) {
 	t.Helper()
-	now := time.Now().UTC().Truncate(time.Second)
-	return map[string]any{"schemaVersion": 1, "domain": "action", "actionId": fence.ActionId, "executionEpoch": fence.ExecutionEpoch,
-		"fencingToken": fencing, "revision": int64(1), "requestId": randomHex64(t), "nonce": randomHex64(t),
-		"issuedAt": now.Format("2006-01-02T15:04:05Z"), "expiresAt": now.Add(5 * time.Minute).Format("2006-01-02T15:04:05Z"),
-		"runtime": store.RuntimeGo, "mode": store.ModeShadow, "fleetId": "fleet-a", "environment": "test", "role": "control-plane"}
+	bundleFile := filepath.Join(root, "control-key.encrypted.json")
+	passwordFile := filepath.Join(root, "control-key.credential")
+	if err := os.WriteFile(passwordFile, []byte("isolated-native-control-passphrase-32bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	name := "deepseek-control-signer-init"
+	if strings.HasSuffix(workerBinary, ".exe") {
+		name += ".exe"
+	}
+	cmd := exec.Command(filepath.Join(filepath.Dir(workerBinary), name))
+	hideTestWorker(cmd)
+	for _, key := range []string{"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP"} {
+		if value, ok := os.LookupEnv(key); ok {
+			cmd.Env = append(cmd.Env, key+"="+value)
+		}
+	}
+	cmd.Env = append(cmd.Env, "DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE="+bundleFile, "DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE="+passwordFile, "DEEPSEEK_WORKER_AUTHORITY_FLEET_ID=fleet-a", "DEEPSEEK_WORKER_AUTHORITY_ENVIRONMENT=test")
+	raw, err := cmd.Output()
+	if err != nil {
+		t.Fatal("native custody provisioning failed")
+	}
+	var binding map[string]string
+	if err = json.Unmarshal(raw, &binding); err != nil || binding["signerPublicKey"] == "" || binding["fleetId"] != "fleet-a" || binding["environment"] != "test" {
+		t.Fatal("native custody public metadata invalid")
+	}
+	return binding["signerPublicKey"], bundleFile, passwordFile
 }
 
 func isolatedLiveControl(t *testing.T) (*store.Control, ed25519.PrivateKey, *store.AuthorityCheckpoint) {
@@ -284,6 +319,7 @@ func readIsolatedS3(t *testing.T, endpoint, bucket, prefix, key string) (int, []
 		t.Fatal("only explicit isolated loopback providers are allowed")
 	}
 	u.Path = "/" + bucket + "/" + prefix + "/" + key
+	u.RawPath = isolatedS3CanonicalPath(u.Path)
 	now := time.Now().UTC()
 	date := now.Format("20060102")
 	stamp := now.Format("20060102T150405Z")
@@ -319,4 +355,35 @@ func readIsolatedS3(t *testing.T, endpoint, bucket, prefix, key string) (int, []
 		t.Fatal(err)
 	}
 	return response.StatusCode, body, response.Header.Get("ETag"), response.Header.Get("x-amz-version-id")
+}
+
+// S3 SigV4 permits only unreserved bytes and object-key slashes; URL.EscapedPath
+// alone also leaves reserved '&' and '+' bytes unescaped.
+// https://docs.aws.amazon.com/AmazonS3/latest/developerguide/sig-v4-header-based-auth.html
+func isolatedS3CanonicalPath(path string) string {
+	const hexDigits = "0123456789ABCDEF"
+	var result strings.Builder
+	for i := 0; i < len(path); i++ {
+		b := path[i]
+		if b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || strings.ContainsRune("-._~/", rune(b)) {
+			result.WriteByte(b)
+		} else {
+			result.WriteByte('%')
+			result.WriteByte(hexDigits[b>>4])
+			result.WriteByte(hexDigits[b&15])
+		}
+	}
+	return result.String()
+}
+
+func TestIsolatedS3CanonicalPath(t *testing.T) {
+	path := "/bucket/prefix/对象<>&\u2028 +%?#/A-Z_a.~"
+	want := "/bucket/prefix/%E5%AF%B9%E8%B1%A1%3C%3E%26%E2%80%A8%20%2B%25%3F%23/A-Z_a.~"
+	if got := isolatedS3CanonicalPath(path); got != want {
+		t.Fatalf("S3 canonical path: %q", got)
+	}
+	u := &url.URL{Scheme: "http", Host: "127.0.0.1", Path: path, RawPath: want}
+	if u.EscapedPath() != want {
+		t.Fatal("canonical path did not survive URL encoding")
+	}
 }

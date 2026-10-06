@@ -131,14 +131,16 @@ func TestProductionPlanRetainsNativeProviderAndTaskConfiguration(t *testing.T) {
 
 func TestProductionPlanPreservesExactS3Configuration(t *testing.T) {
 	values := map[string]string{
-		"DEEPSEEK_WORKER_S3_ENDPOINT":            " https://storage.example",
-		"DEEPSEEK_WORKER_S3_BUCKET":              "native-fixture",
-		"DEEPSEEK_WORKER_S3_PREFIX":              "",
-		"DEEPSEEK_WORKER_S3_REGION":              "us-east-1",
-		"DEEPSEEK_WORKER_S3_ACCESS_KEY":          "offline-access-fixture",
-		"DEEPSEEK_WORKER_S3_SECRET_KEY":          " exact secret ",
-		"DEEPSEEK_WORKER_S3_SESSION_TOKEN":       "",
-		"DEEPSEEK_WORKER_S3_ALLOW_HTTP_LOOPBACK": "false",
+		"DEEPSEEK_WORKER_S3_ENDPOINT":                    " https://storage.example",
+		"DEEPSEEK_WORKER_S3_BUCKET":                      "native-fixture",
+		"DEEPSEEK_WORKER_S3_PREFIX":                      "",
+		"DEEPSEEK_WORKER_S3_REGION":                      "us-east-1",
+		"DEEPSEEK_WORKER_S3_ACCESS_KEY":                  "offline-access-fixture",
+		"DEEPSEEK_WORKER_S3_SECRET_KEY":                  " exact secret ",
+		"DEEPSEEK_WORKER_S3_SESSION_TOKEN":               "",
+		"DEEPSEEK_WORKER_S3_ALLOW_HTTP_LOOPBACK":         "false",
+		"DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE":     "/isolated/control-key.encrypted.json",
+		"DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE": "",
 	}
 	for key, value := range values {
 		t.Setenv(key, value)

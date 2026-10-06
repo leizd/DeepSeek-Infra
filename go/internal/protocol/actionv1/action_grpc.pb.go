@@ -271,3 +271,105 @@ var Worker_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "action/v1/action.proto",
 }
+
+const (
+	ControlSigner_SignControl_FullMethodName = "/deepseek.action.v1.ControlSigner/SignControl"
+)
+
+// ControlSignerClient is the client API for ControlSigner service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type ControlSignerClient interface {
+	SignControl(ctx context.Context, in *SignControlRequest, opts ...grpc.CallOption) (*SignControlResponse, error)
+}
+
+type controlSignerClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewControlSignerClient(cc grpc.ClientConnInterface) ControlSignerClient {
+	return &controlSignerClient{cc}
+}
+
+func (c *controlSignerClient) SignControl(ctx context.Context, in *SignControlRequest, opts ...grpc.CallOption) (*SignControlResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SignControlResponse)
+	err := c.cc.Invoke(ctx, ControlSigner_SignControl_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ControlSignerServer is the server API for ControlSigner service.
+// All implementations must embed UnimplementedControlSignerServer
+// for forward compatibility.
+type ControlSignerServer interface {
+	SignControl(context.Context, *SignControlRequest) (*SignControlResponse, error)
+	mustEmbedUnimplementedControlSignerServer()
+}
+
+// UnimplementedControlSignerServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedControlSignerServer struct{}
+
+func (UnimplementedControlSignerServer) SignControl(context.Context, *SignControlRequest) (*SignControlResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SignControl not implemented")
+}
+func (UnimplementedControlSignerServer) mustEmbedUnimplementedControlSignerServer() {}
+func (UnimplementedControlSignerServer) testEmbeddedByValue()                       {}
+
+// UnsafeControlSignerServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ControlSignerServer will
+// result in compilation errors.
+type UnsafeControlSignerServer interface {
+	mustEmbedUnimplementedControlSignerServer()
+}
+
+func RegisterControlSignerServer(s grpc.ServiceRegistrar, srv ControlSignerServer) {
+	// If the following call panics, it indicates UnimplementedControlSignerServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ControlSigner_ServiceDesc, srv)
+}
+
+func _ControlSigner_SignControl_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignControlRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlSignerServer).SignControl(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlSigner_SignControl_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlSignerServer).SignControl(ctx, req.(*SignControlRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// ControlSigner_ServiceDesc is the grpc.ServiceDesc for ControlSigner service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ControlSigner_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "deepseek.action.v1.ControlSigner",
+	HandlerType: (*ControlSignerServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "SignControl",
+			Handler:    _ControlSigner_SignControl_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "action/v1/action.proto",
+}

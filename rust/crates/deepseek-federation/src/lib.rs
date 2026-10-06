@@ -4,7 +4,9 @@ use deepseek_protocol::{
 
 pub mod attestation;
 mod canonical;
+mod control_custody;
 mod custody;
+pub use control_custody::{ControlSigningKey, create_control_signer_bundle, load_control_signer};
 mod identity;
 pub use attestation::{
     AttestationError, CurrentSignerAuthorization, FailureDomainMetadata, MAX_REMOTE_COMMIT_BYTES,
