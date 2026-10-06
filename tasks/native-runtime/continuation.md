@@ -68,6 +68,21 @@ passes the unchanged 80% floor at **80.826637% (71,319/88,237 lines)**. Inventor
 reuses the same instrumented build without a second ordinary test tree. Logs,
 LCOV and raw totals are `artifacts/native-20261006-control-signer-rust-coverage*`.
 
+On the pinned Windows GNU 1.85.0 toolchain, all four applicable custody tests
+also pass, including the actual initializer process, overwrite refusal and
+durable journal replay. Log:
+`artifacts/native-20261006-control-signer-windows-custody.log`. This is a worker
+custody test, not desktop UI or Android deployment qualification.
+
+The first pushed custody checkpoint `f3ac7598` starts CI
+[37400430167](https://github.com/leizd/DeepSeek-Infra/actions/runs/37400430167).
+It exposes the missing generated language navigation in the new runbook and
+the newly reviewed `source-map-js` advisory
+[GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q).
+The repair regenerates that one document header and updates only the transitive
+lock entry from 1.2.1 to the official 1.2.2 fix. No security exception or threshold
+is added; frontend checks and exact-head CI remain the qualification gates.
+
 Full readiness stays **未完成 / NOT_READY**. Still required: Fleet online signer
 provisioning/rotation and production custody isolation, complete action proof
 settlement, all route/domain transfers, actual desktop/Android deployment,

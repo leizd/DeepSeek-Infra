@@ -1,5 +1,10 @@
 # Native control signer custody
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 The authority-configured Rust worker now owns an independent Ed25519 control
 signer. Authoritative Go storage execution obtains an epoch document and a
 placement-bound PUT grant through the typed `action.v1.ControlSigner` gRPC
