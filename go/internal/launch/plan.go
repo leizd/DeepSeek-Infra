@@ -147,7 +147,7 @@ func productionEnv(dataRoot, staticDir, controlListen, gatewayBind string) []str
 	// public listener can authenticate and reach the model provider. Interpreter
 	// paths stay out: PATH was already filtered above.
 	for _, key := range operatorConfigKeys {
-		if strings.HasPrefix(key, "DEEPSEEK_WORKER_S3_") {
+		if strings.HasPrefix(key, "DEEPSEEK_WORKER_S3_") || strings.HasPrefix(key, "DEEPSEEK_WORKER_CONTROL_SIGNER_") {
 			// Preserve even blank or whitespace-containing values: the worker
 			// validates the complete configuration, and credentials are exact.
 			if value, exists := os.LookupEnv(key); exists {
@@ -209,6 +209,8 @@ var operatorConfigKeys = []string{
 	"DEEPSEEK_WORKER_AUTHORITY_FLEET_ID",
 	"DEEPSEEK_WORKER_AUTHORITY_ENVIRONMENT",
 	"DEEPSEEK_WORKER_AUTHORITY_FENCING_TOKEN",
+	"DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE",
+	"DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE",
 	"DEEPSEEK_WORKER_TLS_CERT_FILE",
 	"DEEPSEEK_WORKER_TLS_KEY_FILE",
 	"DEEPSEEK_WORKER_SERVICE_BEARER",

@@ -26,6 +26,7 @@ type Client struct {
 	connection     *grpc.ClientConn
 	tlsSecured     bool
 	bearerAttached bool
+	signer         actionv1.ControlSignerClient
 }
 
 func New(rpc actionv1.WorkerClient) *Client {
@@ -43,7 +44,7 @@ func DialPlaintextLoopback(target string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create worker client: %w", err)
 	}
-	return &Client{rpc: actionv1.NewWorkerClient(connection), connection: connection}, nil
+	return &Client{rpc: actionv1.NewWorkerClient(connection), connection: connection, signer: actionv1.NewControlSignerClient(connection)}, nil
 }
 
 func (client *Client) Close() error {

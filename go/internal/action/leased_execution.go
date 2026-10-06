@@ -77,6 +77,22 @@ func (c *Coordinator) ExecuteClaimedStorageAction(ctx context.Context, claim sto
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if c.authoritative && len(req.CanonicalAuthorization) == 0 {
+		var signingErr, leaseErr error
+		req, signingErr, leaseErr = callWithActionLease(c, ctx, owner, activeClaim, renewal, func(rpcCtx context.Context) (*actionv1.StorageMutationRequest, error) {
+			return c.authorizeNativeStorage(rpcCtx, req, record.Revision, activeClaim.WriterFencingToken)
+		})
+		if signingErr != nil || leaseErr != nil {
+			return nil, errors.Join(signingErr, leaseErr)
+		}
+		if err = c.assertProductionAuthority(); err != nil {
+			return nil, err
+		}
+		intent, err = storageDispatchIntent(req, record)
+		if err != nil {
+			return nil, err
+		}
+	}
 	record.Revision++
 	record.State = "EXECUTING"
 	if err := owner.ClaimLeasedStorageDispatch(record, intent, claim.ClaimToken); err != nil {

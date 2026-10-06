@@ -172,6 +172,25 @@ func (c *Coordinator) ExecuteStorageAction(ctx context.Context, actionID string,
 		}
 	}
 
+	// In native authority mode, obtain scoped signatures from Rust after the
+	// durable Go claim. Missing custody/TLS fails closed; Go never loads a key.
+	if c.authoritative && len(req.CanonicalAuthorization) == 0 {
+		req, err = c.authorizeNativeStorage(ctx, req, record.Revision, lease.FencingToken)
+		if err != nil {
+			return nil, err
+		}
+		intent, err = storageDispatchIntent(req, record)
+		if err != nil {
+			return nil, err
+		}
+		if err = c.assertProductionAuthority(); err != nil {
+			return nil, err
+		}
+		if current := c.store.Writer(); current.FencingToken != lease.FencingToken || c.now() >= current.LeaseUntil {
+			return nil, ErrWriterLeaseLost
+		}
+	}
+
 	// 7. Transition CLAIMED -> EXECUTING
 	if record.State == "CLAIMED" {
 		record.Revision++

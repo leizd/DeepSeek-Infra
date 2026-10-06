@@ -49,6 +49,7 @@ def main() -> int:
         try:
             binary = Path(binary_directory.name) / f"deepseek-worker{suffix}"
             shutil.copy2(build_directory / f"deepseek-worker{suffix}", binary)
+            shutil.copy2(build_directory / f"deepseek-control-signer-init{suffix}", Path(binary_directory.name) / f"deepseek-control-signer-init{suffix}")
             binary_digest = hashlib.sha256()
             with binary.open("rb") as binary_file:
                 for chunk in iter(lambda: binary_file.read(1024 * 1024), b""):
