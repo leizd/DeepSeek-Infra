@@ -332,11 +332,50 @@ func authorityRequestDigest(document map[string]any) (string, error) {
 }
 
 func canonicalAuthorityJSON(value any) ([]byte, error) {
+	// Match the frozen Python/Rust UTF-8 form, including HTML characters and
+	// U+2028/U+2029. The HTML-safe json.Marshal form changes signed bytes.
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return nil, ErrAuthorityRequestInvalid
 	}
-	return raw, nil
+	return unescapeSigningJSON(raw), nil
+}
+
+// Decode only the five HTML/script escapes emitted by encoding/json. Skipping
+// every other complete escape preserves literal backslashes ("\\\\u2028") and
+// JSON's control-character spelling. Numeric and other frozen encodings stay
+// unchanged; signature verifiers continue to enforce integer/secret/depth rules.
+func unescapeSigningJSON(raw []byte) []byte {
+	result := make([]byte, 0, len(raw))
+	for index := 0; index < len(raw); index++ {
+		if raw[index] != '\\' || index+1 >= len(raw) {
+			result = append(result, raw[index])
+			continue
+		}
+		if raw[index+1] == 'u' && index+5 < len(raw) {
+			replacement := ""
+			switch string(raw[index+2 : index+6]) {
+			case "003c":
+				replacement = "<"
+			case "003e":
+				replacement = ">"
+			case "0026":
+				replacement = "&"
+			case "2028":
+				replacement = "\u2028"
+			case "2029":
+				replacement = "\u2029"
+			}
+			if replacement != "" {
+				result = append(result, replacement...)
+				index += 5
+				continue
+			}
+		}
+		result = append(result, raw[index], raw[index+1])
+		index++
+	}
+	return result
 }
 
 func typedDigest(value any) (string, error) {
