@@ -8,6 +8,18 @@ Generated from ownership JSON, route modules, launchers, Compose files, Go/Rust
 packages, and CI jobs — not from README claims. Completeness is **wired native
 behavior with evidence**, not file/crate counts.
 
+**2026-10-06 native control custody:** clean base `3406f7ad` passes all 37 CI jobs,
+closing the prerequisite failures below. The new default Rust worker generates
+and loads its independent encrypted control key, exposes typed epoch/PUT signing,
+and persists immutable issuance receipts. Authoritative Go storage execution,
+including renewable claims, calls this path after durable claim and rechecks
+ownership/lease before sending unchanged payloads. Three actual MinIO providers
+pass native custody, Unicode byte reads, TLS, process-kill/restart and stable
+object-version checks. Administrative promotion is still an offline fixture;
+the leased action reaches `VERIFYING`. Full Fleet custody/rotation, proof settlement,
+all-domain/platform migration and release Evidence remain required. Status remains
+**未完成 / NOT_READY**. Exact logs and current coverage scope are in `continuation.md`.
+
 **2026-10-05 CI prerequisite repair:** pushed `181dbdf6` passes 31 complete jobs,
 including native Go, MCP failover and hybrid. Rust tests/coverage need the actual
 Vite build, and the Go provider stage needs module downloads before proxy refusal.
