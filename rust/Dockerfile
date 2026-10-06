@@ -48,6 +48,9 @@ LABEL org.opencontainers.image.title="DeepSeek Infra Rust Worker"
 COPY --from=builder \
     /app/rust/target/release/deepseek-worker \
     /usr/local/bin/deepseek-worker
+COPY --from=builder \
+    /app/rust/target/release/deepseek-control-signer-init \
+    /usr/local/bin/deepseek-control-signer-init
 
 ENV DEEPSEEK_WORKER_LISTEN=127.0.0.1:50052
 

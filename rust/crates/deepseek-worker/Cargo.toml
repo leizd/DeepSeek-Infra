@@ -1,5 +1,6 @@
 [package]
 name = "deepseek-worker"
+default-run = "deepseek-worker"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -27,6 +28,15 @@ rusqlite.workspace = true
 tokio.workspace = true
 tonic = { workspace = true, features = ["tls"] }
 rustls-pemfile = "2"
+zeroize = "=1.9.0"
+
+[[bin]]
+name = "deepseek-worker"
+path = "src/main.rs"
+
+[[bin]]
+name = "deepseek-control-signer-init"
+path = "src/bin/control_signer_init.rs"
 
 [[test]]
 name = "authorized_storage"

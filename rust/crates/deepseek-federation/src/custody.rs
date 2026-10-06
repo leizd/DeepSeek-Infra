@@ -15,6 +15,7 @@ use ed25519_dalek::pkcs8::DecodePrivateKey;
 use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{Map, Value};
 use std::fmt;
+use zeroize::Zeroizing;
 
 const ONLINE_SIGNER_PRIVATE_BUNDLE_SCHEMA: &str = "fleet-federation-online-signer-private-v1";
 const PRIVATE_KEY_ENVELOPE_SCHEMA: &str = "federation-private-key-envelope-v1";
@@ -250,29 +251,31 @@ fn document_message(
     Ok(message)
 }
 
-fn load_private_key(
+pub(super) fn load_private_key(
     envelope: Option<&Value>,
     passphrase: &[u8],
     binding: &Value,
 ) -> Result<SigningKey, FederationIdentityError> {
-    let password = passphrase_bytes(passphrase)?;
+    let password = Zeroizing::new(passphrase_bytes(passphrase)?);
     let Some(envelope) = envelope else {
         return Err(error("FEDERATION_PRIVATE_KEY_UNAVAILABLE"));
     };
     let parts = envelope_parts(envelope, binding)?;
-    let key = derive_key(&password, &parts.salt)?;
+    let key = Zeroizing::new(derive_key(&password, &parts.salt)?);
     let aad = envelope_aad(&parts.metadata)?;
-    let cipher =
-        Aes256Gcm::new_from_slice(&key).map_err(|_| error("FEDERATION_PRIVATE_KEY_UNAVAILABLE"))?;
-    let private_der = cipher
-        .decrypt(
-            Nonce::from_slice(&parts.nonce),
-            Payload {
-                msg: &parts.ciphertext,
-                aad: &aad,
-            },
-        )
+    let cipher = Aes256Gcm::new_from_slice(key.as_ref())
         .map_err(|_| error("FEDERATION_PRIVATE_KEY_UNAVAILABLE"))?;
+    let private_der = Zeroizing::new(
+        cipher
+            .decrypt(
+                Nonce::from_slice(&parts.nonce),
+                Payload {
+                    msg: &parts.ciphertext,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| error("FEDERATION_PRIVATE_KEY_UNAVAILABLE"))?,
+    );
     SigningKey::from_pkcs8_der(&private_der)
         .map_err(|_| error("FEDERATION_PRIVATE_KEY_UNAVAILABLE"))
 }
@@ -363,7 +366,10 @@ fn envelope_aad(metadata: &Map<String, Value>) -> Result<Vec<u8>, FederationIden
     Ok(aad)
 }
 
-fn derive_key(password: &[u8], salt: &[u8]) -> Result<[u8; 32], FederationIdentityError> {
+pub(super) fn derive_key(
+    password: &[u8],
+    salt: &[u8],
+) -> Result<[u8; 32], FederationIdentityError> {
     let params = Params::new(
         ARGON2_MEMORY_KIB,
         ARGON2_ITERATIONS,
@@ -388,7 +394,7 @@ fn passphrase_bytes(passphrase: &[u8]) -> Result<Vec<u8>, FederationIdentityErro
     Ok(passphrase.to_vec())
 }
 
-fn error(code: &'static str) -> FederationIdentityError {
+pub(super) fn error(code: &'static str) -> FederationIdentityError {
     FederationIdentityError::new(code)
 }
 

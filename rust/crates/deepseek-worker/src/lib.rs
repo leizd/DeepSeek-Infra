@@ -15,13 +15,16 @@ use sha2::Digest;
 
 mod authority_request;
 mod authority_store;
+mod control_signer;
 mod mutation_request;
 mod operation_grant;
 #[cfg(test)]
 mod operation_grant_replay_tests;
 mod service;
+mod signature_journal;
 mod storage_transport;
 mod transport;
+pub use control_signer::{ControlSigner, load_control_signer_from_env};
 
 pub use authority_request::{
     AUTHORITY_REQUEST_SCHEMA, AuthorityRequestContext, AuthorityRequestError,

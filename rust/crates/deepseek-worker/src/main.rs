@@ -1,6 +1,7 @@
 use std::io;
 use std::net::SocketAddr;
 
+use deepseek_protocol::generated::deepseek::action::v1::control_signer_server::ControlSignerServer;
 use deepseek_protocol::generated::deepseek::action::v1::worker_server::WorkerServer;
 use deepseek_worker::{Worker, WorkerRpcService, authority_config_from_env, load_worker_transport};
 use tonic::transport::Server;
@@ -98,6 +99,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
     let worker = configured_worker(|name| std::env::var(name))?;
+    let signer_config = authority_config_from_env(|name| std::env::var(name)).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "worker control signer authority rejected",
+        )
+    })?;
+    let signer_root = std::env::var("DEEPSEEK_WORKER_STATE_ROOT").ok();
+    let signer = deepseek_worker::load_control_signer_from_env(
+        |name| std::env::var(name),
+        signer_config.as_ref(),
+        signer_root.as_deref().map(std::path::Path::new),
+        transport.tls_identity.is_some(),
+    )?;
     let authority = if worker.authority_configured() {
         "configured"
     } else {
@@ -109,6 +123,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "plaintext-loopback"
     };
     let service = WorkerRpcService::new_with_authenticator(worker, transport.authenticator);
+    let service = match signer {
+        Some(signer) => service.with_control_signer(signer),
+        None => service,
+    };
     #[cfg(feature = "s3")]
     let service = match storage {
         Some(storage) => service.with_transport(storage),
@@ -122,6 +140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         builder = builder.tls_config(identity.server_tls_config())?;
     }
     builder
+        .add_service(ControlSignerServer::new(service.clone()))
         .add_service(WorkerServer::new(service))
         .serve_with_shutdown(address, async {
             let _ = tokio::signal::ctrl_c().await;
