@@ -30,8 +30,9 @@ def main() -> int:
     command1 = [*cargo, "test", "--locked", "-p", "deepseek-storage", "--features", "s3-e2e", "--test", "s3_provider"]
     command2 = [*cargo, "test", "--locked", "-p", "deepseek-worker", "--features", "s3-e2e", "--test", "authorized_storage_provider"]
     command3 = [
-        "go", "test", "-tags=integration", "-run", "^TestRustWorkerPromotedControlWritesAndRecoversRealProviders$",
-        "-count=1", "-v", "-timeout=3m", "./internal/worker",
+        "go", "test", "-tags=integration", "-race",
+        "-run", "^TestRustWorkerPromotedControlWritesAndRecoversRealProviders$",
+        "-count=1", "-v", "-timeout=15m", "./internal/worker",
     ]
     with tempfile.TemporaryDirectory(prefix="deepseek-native-s3-") as directory:
         # Keep the actual default production binary separate from test features.
@@ -107,9 +108,18 @@ def main() -> int:
             ).returncode
             if code2 != 0:
                 return code2
-            environment["CGO_ENABLED"] = "0"
+            # The race detector requires cgo ("go: -race requires cgo; enable cgo by
+            # setting CGO_ENABLED=1"), so only this Go command re-enables it. The
+            # production image and every other step stay statically linked, which is
+            # why the workflow keeps `CGO_ENABLED: "0"` at the job level.
+            environment["CGO_ENABLED"] = "1"
             environment["GOTOOLCHAIN"] = "local"
-            return subprocess.run(command3, cwd=ROOT / "go", env=environment, check=False, timeout=300).returncode
+            # The race detector costs several times the plain run's 63s across the
+            # three providers, and it also has to build the instrumented binary first
+            # (measured at 1m55s on Windows). The subprocess bound sits above
+            # `-timeout=15m` so a slow instrumented build is not charged to the
+            # suite's own timeout, which only covers the run itself.
+            return subprocess.run(command3, cwd=ROOT / "go", env=environment, check=False, timeout=1500).returncode
         finally:
             try:
                 harness.close()
