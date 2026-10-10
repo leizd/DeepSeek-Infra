@@ -94,6 +94,31 @@ jobs:
         if: matrix.mode == 'checks'
         run: |
           python scripts/rust_build.py --toolchain 1.85.0 -- test --locked --workspace --all-features 2>&1 | tee artifacts/rust-cloud/tests.log
+      - name: Install the repository's checksum-pinned Go for the real signing producer
+        if: matrix.mode == 'checks'
+        run: |
+          archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+          install_dir="$RUNNER_TEMP/agent-signing-go-1.27.1"
+          curl --fail --location --silent --show-error --output "$archive" https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+          echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir"
+          echo "$install_dir/go/bin" >> "$GITHUB_PATH"
+      - name: Verify Go modules before the isolated process probe
+        if: matrix.mode == 'checks'
+        working-directory: go
+        run: |
+          test "$(go env GOVERSION)" = "go1.27.1"
+          go mod download
+          go mod verify
+      - name: Build the production Rust worker and custody provisioner on the cloud runner
+        if: matrix.mode == 'checks'
+        run: |
+          python scripts/rust_build.py --toolchain 1.85.0 -- build --locked -p deepseek-worker --bins --all-features 2>&1 | tee artifacts/rust-cloud/agent-worker-build.log
+      - name: Verify real UTC Go authority and Rust custody signing over TLS and process restart
+        if: matrix.mode == 'checks'
+        run: |
+          python scripts/verify_agent_signing_process.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-signing-process 2>&1 | tee artifacts/rust-cloud/agent-signing-process.log
       - name: Install pinned coverage tooling on the cloud runner
         if: matrix.mode == 'coverage'
         run: |

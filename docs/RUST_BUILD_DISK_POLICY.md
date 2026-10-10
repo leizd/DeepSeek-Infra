@@ -39,12 +39,30 @@ GitHub 官方说明：标准托管机器在公开仓库中免费使用，
 [云端依赖缓存及淘汰规则](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)；
 [专用分支 push 触发](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#push)。
 
+## 2026-10-10 授权清理后的状态
+
+用户要求先清理 Rust 缓存后，已删除 7 处编译及 Cargo 依赖缓存目录，
+共 116,843 个文件。两盘实际可用空间合计增加约 40.2 GiB；清理后的
+C 盘约 32.9 GiB、D 盘约 14.5 GiB。该数字来自清理前后整卷可用空间，
+不是文件逻辑长度。源码、Git 索引、Rust 工具链、Android SDK/NDK、
+运行数据、Docker 数据和验证报告保留；源码及关键文件校验一致。
+完整清单与结果：`artifacts/native-20261010-rust-cache-cleanup-result.json`。
+
+后续 Rust 编译继续使用云端工作流。本机仅运行不编译 Rust 的签名
+生产者预检；Go 缓存与完整 Go 检查的有界内存目录单独管理。
+`scripts/verify_agent_signing_process.py` 不编译 Rust；完整验证必须显式
+提供已构建的生产 Worker 和密钥托管初始化程序。云端 checks 任务
+准备对实际 Go ControlRPC、真实 UTC 租约、TLS、Rust 密钥托管及强杀
+重启后的不可变签名进行验证，只上传小型证据。新增验证尚未在远端
+执行时，不把本机预检记作签名进程 PASS。
+
 ## 固定缓存位置
 
 当前 Windows 主机将构建缓存固定到
 `D:/CodexNativeVerification/shared-cargo-cache`，依赖缓存固定到
 `D:/CodexNativeVerification/shared-cargo-home`。原 C 盘依赖缓存、工具
-可执行文件和旧构建缓存保留；只复制 `registry/index/`、
+可执行文件和旧构建缓存在迁移设置时保留；随后编译及依赖缓存已按
+上节授权清理，安装的工具可执行文件继续保留。迁移时只复制 `registry/index/`、
 `registry/cache/` 和存在时的 `git/db/`，逐文件验证原件与副本的长度
 和 SHA-256，未复制凭据或全局配置。Cargo 按需解压 `.crate` 文件，
 避免同时复制整份压缩包和已解压源码。依据
@@ -71,7 +89,7 @@ python scripts/rust_build.py --configure-cache-root D:/CodexNativeVerification/s
 缓存目录和环境变量优先级依据
 [Cargo 官方配置文档](https://doc.rust-lang.org/cargo/reference/config.html)。
 
-本次当前源码实测：完整工作区检查通过；两轮真实 HTTP 测试各 30 项
+授权清理前的历史实测：完整工作区检查通过；两轮真实 HTTP 测试各 30 项
 通过。第二轮复用全部 420 个产物，零重新编译，5,154 个缓存文件和
 1,417,268,021 字节逻辑长度保持不变。全部文件启用了 NTFS 压缩，
 去除硬链接重复后，`GetCompressedFileSizeW` 合计 679,048,650 字节
@@ -79,7 +97,8 @@ python scripts/rust_build.py --configure-cache-root D:/CodexNativeVerification/s
 测试程序的 COFF 符号表已裁剪，调试断言和溢出检查保持开启。
 按需解压后的依赖缓存另有 343,069,627 字节逻辑长度，压缩文件存储量
 为 211,999,723 字节。本次构建与依赖文件合计约 0.83 GiB 压缩存储量；
-原 C 盘缓存与历史任务缓存继续保留，此数字不包含它们。
+此数字不包含当时保留的原 C 盘缓存与历史任务缓存；这些缓存随后已
+经授权清理，不能再把本段历史测量当作当前缓存库存。
 
 66 项相关回归、Ruff 和 Mypy 通过。新版入口仍会拒绝不足 2 GiB 的
 显式 C 盘缓存位置，旧缓存文件数和长度不变。当前缓存设置与原依赖

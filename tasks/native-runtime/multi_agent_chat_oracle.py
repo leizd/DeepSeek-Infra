@@ -22,7 +22,7 @@ functions = {"agent_model_for", "model_supports_thinking", "agent_tools_for", "_
              "cache_usage_summary", "agent_cache_for_diagnostics"}
 source = REFERENCE.read_text(encoding="utf-8")
 tree = ast.parse(source)
-nodes = [ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)]
+nodes: list[ast.stmt] = [ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)]
 for node in tree.body:
     names = {target.id for target in node.targets if isinstance(target, ast.Name)} if isinstance(node, ast.Assign) else (
         {node.target.id} if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) else set())
@@ -31,15 +31,22 @@ for node in tree.body:
 tool_tree = ast.parse(TOOLS.read_text(encoding="utf-8"))
 profiles = next(node.value for node in tool_tree.body if isinstance(node, ast.AnnAssign)
                 and isinstance(node.target, ast.Name) and node.target.id == "CAPABILITY_PROFILES")
-capabilities = {ast.literal_eval(key): ast.literal_eval(value) for key, value in zip(profiles.keys, profiles.values)
-                if ast.literal_eval(key) != "full"}
+if not isinstance(profiles, ast.Dict):
+    raise ValueError("CAPABILITY_PROFILES must be a literal dictionary for offline capture")
+capabilities: dict[Any, Any] = {}
+for key, value in zip(profiles.keys, profiles.values):
+    if key is None:
+        raise ValueError("CAPABILITY_PROFILES cannot contain dictionary expansion in offline capture")
+    name = ast.literal_eval(key)
+    if name != "full":
+        capabilities[name] = ast.literal_eval(value)
 tool_function = next(node for node in tool_tree.body if isinstance(node, ast.FunctionDef) and node.name == "capability_tools")
 client_source = (ROOT / "deepseek_infra/infra/gateway/deepseek_client.py").read_text(encoding="utf-8")
 usage_function = next(node for node in ast.parse(client_source).body if isinstance(node, ast.FunctionDef) and node.name == "usage_int")
 namespace: dict[str, Any] = {"json": json, "re": re, "Any": Any, "CAPABILITY_PROFILES": capabilities,
                              "AGENT_MODELS": {}, "DEFAULT_MODEL": "deepseek-v4-pro"}
 exec(compile(ast.fix_missing_locations(ast.Module(body=[*nodes, tool_function, usage_function], type_ignores=[])), str(REFERENCE), "exec"), namespace)
-rows = []
+rows: list[dict[str, Any]] = []
 def add(op: str, expected: Any, **inputs: Any) -> None:
     rows.append({"op": op, **inputs, "expected": expected})
 

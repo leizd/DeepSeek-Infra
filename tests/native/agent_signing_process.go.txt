@@ -1,0 +1,341 @@
+// Offline integration fixture compiled as an overlay in the real API package.
+// Administrative promotions use existing test keys; the Rust custody key is
+// created separately by the production Rust provisioning executable.
+package api
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/leizd/DeepSeek-Infra/go/internal/config"
+	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+	"github.com/leizd/DeepSeek-Infra/go/internal/worker"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+)
+
+func nativeSigningControl(t *testing.T, writerSeconds int64) *store.Control {
+	t.Helper()
+	control, err := store.OpenControl(store.OpenOptions{
+		Path: t.TempDir(), Owner: "native-agent-signing-probe", LeaseSeconds: writerSeconds,
+		AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic,
+		FleetID: mutationFleetID, Environment: mutationEnvironment,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = control.Close() })
+	checkpoint := authorityCheckpointFixture(t)
+	if _, _, err := control.ClaimControlAuthority(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	for _, domain := range []string{"agent_run", "action"} {
+		for _, next := range []store.CutoverState{store.CutoverDualEvaluate, store.CutoverGoAuthoritative} {
+			current, err := control.GetCutover(domain)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := signedPromotionRoute(t, store.CutoverTransition{
+				Domain: domain, To: next, ExpectedRevision: current.Revision,
+				ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken,
+				TransferID: "native-signing-" + domain + "-" + string(next), Authority: checkpoint,
+			}, current, time.Now().UTC().Unix(), nil)
+			if _, err := control.TransitionCutover(request); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return control
+}
+
+func nativeSigningWrite(t *testing.T, path string, value any) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err == nil {
+		err = os.WriteFile(path+".tmp", raw, 0600)
+	}
+	if err == nil {
+		err = os.Rename(path+".tmp", path)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func nativeSigningRead(t *testing.T, path string, value any) {
+	t.Helper()
+	deadline := time.Now().Add(120 * time.Second)
+	for time.Now().Before(deadline) {
+		raw, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		if err != nil || json.Unmarshal(raw, value) != nil {
+			t.Fatalf("invalid process handshake: %s", filepath.Base(path))
+		}
+		return
+	}
+	t.Fatalf("process handshake timed out: %s", filepath.Base(path))
+}
+
+type nativeSigningWorkerReady struct {
+	Target, TrustRootFile, PublicKey, ExpiresAt string
+}
+
+func nativeSigningWorker(t *testing.T, ready nativeSigningWorkerReady, bearer, hostname string) *worker.Client {
+	t.Helper()
+	host, _, err := net.SplitHostPort(ready.Target)
+	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
+		t.Fatal("worker probe must stay on numeric loopback")
+	}
+	expiry, err := time.Parse("2006-01-02T15:04:05Z", ready.ExpiresAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := worker.DialTLS(worker.TLSDialConfig{Target: ready.Target, TrustRootFile: ready.TrustRootFile,
+		ServerName: hostname, BearerToken: bearer, ExpiresAt: expiry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+func nativeSigningID(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func TestNativeAgentSigningProcess(t *testing.T) {
+	directory, scenario := os.Getenv("DEEPSEEK_AGENT_SIGNING_PROBE_DIR"), os.Getenv("DEEPSEEK_AGENT_SIGNING_PROBE_CASE")
+	if directory == "" || (scenario != "plan" && scenario != "tasks" && scenario != "writer-expiry") {
+		t.Fatal("explicit isolated process configuration is required")
+	}
+	for _, name := range []string{"DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE", "DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE",
+		"DEEPSEEK_WORKER_TLS_KEY_FILE", "DEEPSEEK_WORKER_TLS_CERT_FILE", "DEEPSEEK_WORKER_AUTHORITY_NOW"} {
+		if _, exists := os.LookupEnv(name); exists {
+			t.Fatal("private custody or controlled clock configuration entered the Go environment")
+		}
+	}
+	writerSeconds := int64(600)
+	if scenario == "writer-expiry" {
+		writerSeconds = 60
+	}
+	control := nativeSigningControl(t, writerSeconds)
+	client, origin := nativeSigningRPC(t, control)
+	phase := scenario
+	if phase == "writer-expiry" {
+		phase = "plan"
+	}
+	claim := nativeSigningClaim(t, client, phase)
+	nativeSigningWrite(t, filepath.Join(directory, "go-ready.json"), map[string]any{
+		"origin": origin, "internalBearer": testInternalBearer, "fencingToken": control.Writer().FencingToken,
+		"fleetId": mutationFleetID, "environment": mutationEnvironment,
+	})
+	var ready nativeSigningWorkerReady
+	nativeSigningRead(t, filepath.Join(directory, "worker-ready.json"), &ready)
+	bearer := os.Getenv("DEEPSEEK_AGENT_SIGNING_WORKER_BEARER")
+	rust := nativeSigningWorker(t, ready, bearer, "localhost")
+	binding := worker.ControlSignerBinding{PublicKey: ready.PublicKey, FleetID: mutationFleetID, Environment: mutationEnvironment}
+	input := &actionv1.SignControlRequest{Purpose: actionv1.ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_AGENT_EXECUTION,
+		Fence: claim.Fence, Revision: claim.ClaimRevision, FencingToken: uint64(claim.WriterFencingToken),
+		FleetId: mutationFleetID, Environment: mutationEnvironment, AgentIntent: claim,
+		RequestId: nativeSigningID(scenario + "-grant"), Nonce: nativeSigningID(scenario + "-nonce")}
+	call := func(operation func(context.Context) error) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		return operation(ctx)
+	}
+	if err := call(func(ctx context.Context) error { _, err := rust.SignControl(ctx, input, binding); return err }); status.Code(err) != codes.FailedPrecondition {
+		t.Fatal("an uninstalled execution epoch received a Rust grant")
+	}
+	for _, credentials := range []struct {
+		token, hostname string
+		code            codes.Code
+	}{{bearer + "-wrong", "localhost", codes.Unauthenticated}, {bearer, "wrong-hostname.invalid", codes.Unavailable}} {
+		unauthorized := nativeSigningWorker(t, ready, credentials.token, credentials.hostname)
+		if err := call(func(ctx context.Context) error {
+			_, err := unauthorized.AuthorizeAgentExecution(ctx, claim, input.RequestId, input.Nonce, binding)
+			return err
+		}); status.Code(err) != credentials.code {
+			t.Fatal("Rust signing accepted an invalid bearer or TLS hostname")
+		}
+	}
+	var grant []byte
+	if err := call(func(ctx context.Context) error {
+		var err error
+		grant, err = rust.AuthorizeAgentExecution(ctx, claim, input.RequestId, input.Nonce, binding)
+		return err
+	}); err != nil {
+		t.Fatalf("actual Rust custody signing failed: %v", err)
+	}
+	var document struct {
+		ActionID       string `json:"actionId"`
+		ExecutionEpoch uint64 `json:"executionEpoch"`
+		ExpiresAt      string `json:"expiresAt"`
+		Payload        struct {
+			LeaseUntil       int64 `json:"leaseUntil"`
+			WriterLeaseUntil int64 `json:"writerLeaseUntil"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal(grant, &document) != nil || document.ActionID != claim.Fence.ActionId || document.ExecutionEpoch != claim.Fence.ExecutionEpoch {
+		t.Fatal("signed grant does not bind the actual Go execution")
+	}
+	expires, err := time.Parse("2006-01-02T15:04:05Z", document.ExpiresAt)
+	if err != nil || !expires.After(time.Now()) || expires.Unix() > document.Payload.LeaseUntil || expires.Unix() > document.Payload.WriterLeaseUntil {
+		t.Fatal("Rust grant outlives its actual Go action or writer lease")
+	}
+	rebindingDenied := 0
+	for _, mutate := range []func(*agentv1.AgentRunExecutionClaim){
+		func(c *agentv1.AgentRunExecutionClaim) { c.Owner += "-foreign" },
+		func(c *agentv1.AgentRunExecutionClaim) { c.ClaimToken += "-foreign" },
+		func(c *agentv1.AgentRunExecutionClaim) { c.Request.Sha256 = nativeSigningID("foreign-request") },
+		func(c *agentv1.AgentRunExecutionClaim) { c.PlanDigest = nativeSigningID("foreign-plan") },
+		func(c *agentv1.AgentRunExecutionClaim) { c.MetadataEpoch++ },
+		func(c *agentv1.AgentRunExecutionClaim) { c.Fence.ExecutionEpoch++ },
+	} {
+		changed := proto.Clone(claim).(*agentv1.AgentRunExecutionClaim)
+		mutate(changed)
+		if err := call(func(ctx context.Context) error {
+			_, err := rust.AuthorizeAgentExecution(ctx, changed, input.RequestId, input.Nonce, binding)
+			return err
+		}); status.Code(err) != codes.FailedPrecondition {
+			t.Fatal("Rust issued a grant for a rebound live execution identity")
+		}
+		rebindingDenied++
+	}
+	generic := proto.Clone(input).(*actionv1.SignControlRequest)
+	generic.Purpose, generic.AgentIntent = actionv1.ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_INSTALL_EPOCH, nil
+	generic.RequestId, generic.Nonce = nativeSigningID(scenario+"-generic"), nativeSigningID(scenario+"-generic-nonce")
+	if err := call(func(ctx context.Context) error { _, err := rust.SignControl(ctx, generic, binding); return err }); status.Code(err) != codes.FailedPrecondition {
+		t.Fatal("generic epoch signing bypassed live Agent authority")
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "restart-request.json"), map[string]bool{"restart": true})
+	var restarted nativeSigningWorkerReady
+	nativeSigningRead(t, filepath.Join(directory, "worker-restarted.json"), &restarted)
+	if restarted.PublicKey != ready.PublicKey {
+		t.Fatal("Rust restart changed its custody identity")
+	}
+	resumed := nativeSigningWorker(t, restarted, bearer, "localhost")
+	if err := call(func(ctx context.Context) error {
+		replayed, err := resumed.AuthorizeAgentExecution(ctx, claim, input.RequestId, input.Nonce, binding)
+		if err == nil && !bytes.Equal(grant, replayed) {
+			return errors.New("Rust restart changed or extended the original grant")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if scenario == "writer-expiry" {
+		if document.Payload.LeaseUntil <= document.Payload.WriterLeaseUntil {
+			t.Fatal("writer must expire while the action remains live")
+		}
+		time.Sleep(time.Until(time.Unix(document.Payload.WriterLeaseUntil, 0).Add(100 * time.Millisecond)))
+		if time.Now().Unix() >= document.Payload.LeaseUntil {
+			t.Fatal("action expired before writer-expiry check")
+		}
+	} else {
+		cancel := agentRPCAppend(claim.MetadataIndex, claim.MetadataEpoch)
+		cancel.Event.Status = "cancelled"
+		if _, err := client.AppendEvent(controlRPCContext(t, testInternalBearer), cancel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	forgedLiveDates := proto.Clone(claim).(*agentv1.AgentRunExecutionClaim)
+	forgedLiveDates.LeaseUntil, forgedLiveDates.WriterLeaseUntil = time.Now().Unix()+300, time.Now().Unix()+300
+	if err := call(func(ctx context.Context) error {
+		_, err := resumed.AuthorizeAgentExecution(ctx, forgedLiveDates, input.RequestId, input.Nonce, binding)
+		return err
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatal("cancelled or writer-expired scope received Rust signing authority")
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "process-result.json"), map[string]any{
+		"scenario": scenario, "status": "PASS", "realUTC": true, "grantSha256": nativeSigningID(string(grant)),
+		"expiresAt": document.ExpiresAt, "actionLeaseUntil": document.Payload.LeaseUntil, "writerLeaseUntil": document.Payload.WriterLeaseUntil,
+		"executionEpoch": claim.Fence.ExecutionEpoch, "metadataEpoch": claim.MetadataEpoch, "restartPreservedCanonicalGrant": true,
+		"rebindingDenied": rebindingDenied, "tlsHostnameAndBearerDenied": true, "uninstalledEpochDenied": true, "genericEpochBypassDenied": true,
+		"terminalScopeSigningDenied": true, "providerEffectsQualified": false,
+	})
+}
+
+func nativeSigningRPC(t *testing.T, control *store.Control) (agentv1.AgentRunControlClient, string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewControlRPC(control, testInternalBearer, HealthFor(config.Config{Mode: config.ModeAuthoritative}))
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	connection, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		server.Stop()
+		<-done
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close(); server.Stop(); <-done })
+	return agentv1.NewAgentRunControlClient(connection), "http://" + listener.Addr().String()
+}
+
+func nativeSigningClaim(t *testing.T, client agentv1.AgentRunControlClient, phase string) *agentv1.AgentRunExecutionClaim {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(controlRPCContext(t, testInternalBearer), 10*time.Second)
+	defer cancel()
+	authority, err := client.GetAuthority(ctx, &agentv1.AgentRunAuthorityInput{})
+	if err != nil || !authority.GetAuthoritative() {
+		t.Fatalf("actual metadata authority unavailable: %v", err)
+	}
+	input := executionRPCInput(authority.MetadataEpoch)
+	input.ExpectedIndex, input.LeaseSeconds = 2, 300
+	input.Phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN
+	if phase == "tasks" {
+		input.MetadataFence.ExecutionEpoch = seedAgentExecutionRPC(t, client)
+		input.Phase, input.ExpectedIndex = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS, 4
+	} else {
+		for index := int64(0); index < 2; index++ {
+			if _, err := client.AppendEvent(ctx, agentRPCAppend(index, authority.MetadataEpoch)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	result, err := client.ClaimExecution(ctx, input)
+	if err != nil || result.GetClaim() == nil {
+		t.Fatalf("actual execution claim unavailable: %v", err)
+	}
+	replay, err := client.ClaimExecution(ctx, input)
+	if err != nil || !replay.AlreadyApplied || !proto.Equal(replay.Claim, result.Claim) {
+		t.Fatalf("actual claim replay changed identity: %v", err)
+	}
+	return result.Claim
+}
+
+func TestNativeAgentSigningProducer(t *testing.T) {
+	for _, phase := range []string{"plan", "tasks"} {
+		t.Run(phase, func(t *testing.T) {
+			control := nativeSigningControl(t, 600)
+			client, _ := nativeSigningRPC(t, control)
+			claim := nativeSigningClaim(t, client, phase)
+			if claim.Fence == nil || claim.Fence.ExecutionEpoch == 0 ||
+				claim.LeaseUntil <= time.Now().UTC().Unix() || claim.WriterLeaseUntil != control.Writer().LeaseUntil ||
+				claim.WriterFencingToken != control.Writer().FencingToken {
+				t.Fatal("producer returned an expired or unbound claim")
+			}
+			t.Logf("realUTC=true phase=%s executionEpoch=%d metadataEpoch=%d", phase, claim.Fence.ExecutionEpoch, claim.MetadataEpoch)
+		})
+	}
+}

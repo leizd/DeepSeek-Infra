@@ -4,13 +4,37 @@
 [中文](../../README.md) / [English](../../README.en.md)
 <!-- docs-language-switcher:end -->
 
+**2026-10-10 process signing preparation:** the repository process producer
+compiles against the actual Go API/store and passes real-UTC planning/tasks.
+The cloud checks job is prepared to run the production Rust custody provisioner
+and Worker over pinned TLS, exercise real Go lease callbacks, refuse rebinding
+and expired/cancelled scope, and prove immutable journal replay across a forced
+Worker restart. The complete process cases have not run in the cloud yet;
+producer preflight and environment/public-metadata tests are not their proof.
+Current Go batch `agent-grant-current-v2` passes all 10 default/Android gates,
+including both races and exact **95.000931% / 95.062547%** coverage against the
+unchanged 95% floor; the final receipt confirms unchanged Go inputs. Rust caches
+were explicitly cleared with source/index integrity checks; no new host Rust
+build was started. Agent provider/node effects, handoff, full daemon topology,
+platforms and release acceptance remain open. **NOT_READY**.
+
 **2026-10-10 Agent signing checkpoint:** an additive typed signing purpose
 now invokes Go lease renewal before Rust issuance, with exact durable epoch,
 request/plan/claim binding, bounded expiry and immutable retry bytes. Rust Worker
 format/strict Clippy/all 145 tests and focused Go signature regressions pass.
 The lease producer in this new test is controlled; actual Go/Rust signing and
 provider effects remain unqualified. Complete prior PASS receipts belong to the
-preceding input. Current complete Go/Rust gates remain pending. **NOT_READY**.
+preceding input. Current Rust qualification now passes in the user-authorized
+cloud snapshot `291092e9210570416036d4a7292f53498a8572d8`, actual run
+`38034954077`: formatting, strict all-target/all-feature Clippy, 1414 passing
+tests/one existing Redis ignore, all 15 crates and **81.797900%** line coverage
+at the original 80% floor. The clean cloud revision and local source/index match
+are recorded in `artifacts/native-20261010-rust-cloud-preview/cloud-evidence.json`.
+Only small reports were downloaded; compiler caches stayed in the cloud.
+Current complete Go gates and actual Go/Rust signing remain pending. **NOT_READY**.
+The isolated real-UTC Go store/RPC producer probe passes planning/tasks,
+replay/rebinding/cancellation and independent writer expiry (`agent-real-utc-probe-green-v4`);
+it does not qualify the Rust signer, TLS or provider/artifact effects.
 
 **2026-10-10 execution admission checkpoint:** the actual Go store and registered
 AgentRunControl RPC now support native execution claim/renewal. The metadata and

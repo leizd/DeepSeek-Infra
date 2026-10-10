@@ -6,14 +6,38 @@
 
 ## Active work — 2026-10-10
 
+- [x] Clear the seven user-authorized Rust compilation/dependency cache roots,
+  record actual free-space growth and verify source/index/report preservation.
+  Continue Rust compilation in the cloud; retain toolchains/SDK/runtime data.
+- [x] Prepare a repository Go producer/process probe against actual real-UTC
+  ControlRPC and lease stores; planning/tasks preflight passes with full process
+  case code compiled. Private environment/public binding/TLS fixture tests pass.
+- [ ] Obtain authorization for the concrete follow-up cloud source upload and
+  run actual production Rust custody/TLS/restart/expiry signing cases. Current
+  producer tests do not qualify those cases or provider effects.
+- [x] Complete Go `agent-grant-current-v2`: all 10 gates pass, including default
+  and Android race. Exact coverage is 10205/10742 = 95.000931% and
+  10031/10552 = 95.062547%; the 95% floor and frozen/current Go hashes are
+  unchanged. Keep the final receipt; the owned container and tmpfs are released.
 - [x] Add typed Rust Agent execution signing with an independently renewed Go
   claim, exact local epoch admission, deadline bounds and immutable retry bytes.
   Go verifies the distinct signature and immutable scope; 145 Worker tests,
   strict Worker Clippy and current signing regressions pass. Lease RPC fixtures
   do not qualify the actual Go producer or provider effects.
-- [ ] Qualify these changed inputs with complete default/Android Go 95% gates,
-  full Rust workspace/80% coverage and a real-time production Go/Rust signer probe.
-  Preserve prior complete receipts as proof of their original inputs only.
+- [x] Qualify the current signing/disk-guard Rust inputs in the user-authorized
+  cloud snapshot `291092e9210570416036d4a7292f53498a8572d8`: strict Clippy,
+  1414 passing tests/one existing Redis ignore, all 15 crates, 1415 inventory
+  entries and **81.797900%** line coverage at the unchanged 80% floor.
+  Run `38034954077` passes; `rust-cloud-preview/cloud-evidence.json` records
+  source bindings and small reports without downloading compiler caches.
+- [ ] Complete the real-time production Go/Rust signer probe over TLS. Current
+  default/Android Go 95% gates already pass; the new cloud process cases remain
+  pending. Preserve each complete receipt as proof of its exact original inputs.
+- [x] Exercise actual Go Agent claim/renewal with default real UTC time and
+  authenticated loopback RPC in an isolated fresh store. Planning/tasks,
+  replay, rebinding, cancellation and expiry of the writer while its action
+  remains live pass (`agent-real-utc-probe-green-v4`). This is producer proof;
+  Rust signing, TLS, artifact custody and provider effects remain unqualified.
 - [x] Admit native Agent execution with a separate action fence, both live Go
   domain authorities, immutable request/plan binding and mandatory run reservation.
   Register typed ClaimExecution/RenewExecution on the actual authenticated service.
