@@ -1,0 +1,127 @@
+plugins {
+    id "com.android.application"
+}
+
+def nativeBundleDir = layout.buildDirectory.dir("generated/native")
+def configuredBuildPython = (findProperty("DEEPSEEK_BUILD_PYTHON") ?: System.getenv("DEEPSEEK_BUILD_PYTHON"))?.toString()?.trim()
+def configuredCargoTarget = (findProperty("DEEPSEEK_ANDROID_CARGO_TARGET") ?: System.getenv("DEEPSEEK_ANDROID_CARGO_TARGET"))?.toString()?.trim()
+def releaseStoreFilePath = findProperty("DEEPSEEK_RELEASE_STORE_FILE") ?: System.getenv("DEEPSEEK_RELEASE_STORE_FILE")
+def releaseStorePassword = findProperty("DEEPSEEK_RELEASE_STORE_PASSWORD") ?: System.getenv("DEEPSEEK_RELEASE_STORE_PASSWORD")
+def releaseKeyAlias = findProperty("DEEPSEEK_RELEASE_KEY_ALIAS") ?: System.getenv("DEEPSEEK_RELEASE_KEY_ALIAS")
+def releaseKeyPassword = findProperty("DEEPSEEK_RELEASE_KEY_PASSWORD") ?: System.getenv("DEEPSEEK_RELEASE_KEY_PASSWORD")
+def hasReleaseSigning = releaseStoreFilePath && file(releaseStoreFilePath).exists() && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
+
+if (!hasReleaseSigning && releaseStoreFilePath) {
+    logger.warn("DEEPSEEK_RELEASE_STORE_FILE is set but the file does not exist; release signing disabled.")
+}
+
+tasks.register("buildReactFrontend", Exec) {
+    // static/ui is a required, gitignored build artifact.
+    workingDir rootProject.projectDir.parentFile
+    def pythonCmd = configuredBuildPython ?: (org.gradle.internal.os.OperatingSystem.current().isWindows() ? "python" : "python3")
+    commandLine pythonCmd, "scripts/build_frontend.py"
+    ignoreExitValue false
+    doLast {
+        if (!file("${rootProject.projectDir}/../static/ui/index.html").exists()) {
+            throw new GradleException("React frontend build is missing. Run scripts/build_frontend.py.")
+        }
+    }
+}
+
+tasks.register("buildNativeRuntime", Exec) {
+    dependsOn("buildReactFrontend")
+    workingDir rootProject.projectDir.parentFile
+    inputs.files(fileTree("${rootProject.projectDir}/../rust") { exclude "target/**" })
+    inputs.files(fileTree("${rootProject.projectDir}/../go") { exclude "bin/**", "**/*.exe" })
+    inputs.files(fileTree("${rootProject.projectDir}/../skills"), fileTree("${rootProject.projectDir}/../static"))
+    inputs.files(fileTree("${rootProject.projectDir}/../release"), fileTree("${rootProject.projectDir}/../compat"),
+        fileTree("${rootProject.projectDir}/../evals/golden/skills"), fileTree("${rootProject.projectDir}/../proto"),
+        fileTree("${rootProject.projectDir}/../frontend") { exclude "node_modules/**", "dist/**" })
+    inputs.files(fileTree(rootProject.projectDir) { exclude ".gradle/**", "app/build/**", "build/**", "local.properties" })
+    inputs.files("${rootProject.projectDir}/../scripts/build_android_native.py", "${rootProject.projectDir}/../VERSION")
+    inputs.files("${rootProject.projectDir}/../scripts/native_android_codegen.py")
+    outputs.dir nativeBundleDir
+    doFirst {
+        def pythonCmd = configuredBuildPython ?: (org.gradle.internal.os.OperatingSystem.current().isWindows() ? "python" : "python3")
+        def arguments = [pythonCmd, "scripts/build_android_native.py", "--sdk", android.sdkDirectory.absolutePath.replace('\\', '/'),
+            "--output", nativeBundleDir.get().asFile.absolutePath.replace('\\', '/')]
+        if (configuredCargoTarget) {
+            arguments += ["--cargo-target-dir", configuredCargoTarget.replace('\\', '/')]
+        }
+        commandLine arguments
+    }
+}
+
+android {
+    namespace "com.deepseek.mobile"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.deepseek.mobile"
+        minSdk 24
+        targetSdk 34
+        versionCode 400064
+        versionName "4.8.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            abiFilters "arm64-v8a", "x86_64"
+        }
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(releaseStoreFilePath)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            // Local verification does not overwrite an installed user build.
+            applicationIdSuffix ".nativeverify"
+        }
+        release {
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    sourceSets {
+        main {
+            assets.srcDir nativeBundleDir.map { it.dir("assets") }
+            jniLibs.srcDir nativeBundleDir.map { it.dir("jniLibs") }
+        }
+    }
+    packaging {
+        jniLibs {
+            useLegacyPackaging true
+            keepDebugSymbols += ["**/libdeepseek_gateway.so", "**/libdeepseek_control.so"]
+        }
+    }
+    androidResources {
+        // Vite's .vite/manifest.json is part of the hashed native asset set.
+        // All staged paths are explicit product resources, including dot paths.
+        ignoreAssetsPattern ""
+    }
+}
+
+dependencies {
+    implementation "com.google.mlkit:text-recognition-chinese:16.0.1"
+    implementation "io.grpc:grpc-okhttp:1.84.0"
+    implementation "io.grpc:grpc-protobuf-lite:1.84.0"
+    implementation "io.grpc:grpc-stub:1.84.0"
+    implementation("com.google.protobuf:protobuf-javalite:4.36.1") {
+        version { strictly "4.36.1" }
+    }
+    compileOnly "javax.annotation:javax.annotation-api:1.3.2"
+    androidTestImplementation "androidx.test:runner:1.6.2"
+    androidTestImplementation "androidx.test.ext:junit:1.2.1"
+}
+
+preBuild.dependsOn buildNativeRuntime

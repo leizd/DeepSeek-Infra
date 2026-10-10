@@ -1,0 +1,9 @@
+.activity-panel { position: fixed; z-index: 45; top: 0; right: 0; display: flex; flex-direction: column; width: min(430px, 92vw); height: 100vh; border-left: 1px solid var(--hair); background: var(--paper); }
+.activity-panel-header { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; padding: 20px 18px 14px; border-bottom: 1px solid var(--hair); }
+.activity-panel-header h2 { margin: 6px 0 0; font-family: var(--serif); font-size: 1.05rem; letter-spacing: -0.02em; }
+.activity-panel-tools { display: flex; gap: 6px; align-items: center; }
+.activity-panel-tools > button:last-child { width: 30px; height: 30px; border: 1px solid var(--hairw); color: var(--ink); background: var(--paper); font-size: 1rem; }
+.activity-panel-tools > button:last-child:hover { border-color: var(--ink); }
+.activity-panel-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 18px 26px; }
+.activity-reasoning h3 { margin: 14px 0 8px; color: var(--weak); font-size: 0.74rem; font-weight: 700; }
+.activity-empty { padding: 18px; color: var(--weak); font-size: 0.8rem; }

@@ -1,0 +1,280 @@
+pageType: final
+background:
+  type: solid
+  color: "$bg"
+notes: 结尾页：回到决策与下一步——三分钟起服务、跑四个 Demo、逐模块核验；数据不出端。
+elements:
+  # ---- 40px 细网格肌理（同封面） ----
+  - elementId: grid-v-01
+    elementType: shape
+    bounds: [40, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-02
+    elementType: shape
+    bounds: [80, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-03
+    elementType: shape
+    bounds: [120, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-04
+    elementType: shape
+    bounds: [160, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-05
+    elementType: shape
+    bounds: [200, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-06
+    elementType: shape
+    bounds: [240, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-07
+    elementType: shape
+    bounds: [280, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-08
+    elementType: shape
+    bounds: [320, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-09
+    elementType: shape
+    bounds: [360, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-10
+    elementType: shape
+    bounds: [400, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-11
+    elementType: shape
+    bounds: [440, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-12
+    elementType: shape
+    bounds: [480, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-13
+    elementType: shape
+    bounds: [520, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-14
+    elementType: shape
+    bounds: [560, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-15
+    elementType: shape
+    bounds: [600, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-16
+    elementType: shape
+    bounds: [640, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-17
+    elementType: shape
+    bounds: [680, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-18
+    elementType: shape
+    bounds: [720, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-19
+    elementType: shape
+    bounds: [760, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-20
+    elementType: shape
+    bounds: [800, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-21
+    elementType: shape
+    bounds: [840, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-22
+    elementType: shape
+    bounds: [880, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-v-23
+    elementType: shape
+    bounds: [920, 0, 1, 540]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-h-01
+    elementType: shape
+    bounds: [0, 40, 960, 1]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-h-02
+    elementType: shape
+    bounds: [0, 80, 960, 1]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-h-03
+    elementType: shape
+    bounds: [0, 120, 960, 1]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-h-04
+    elementType: shape
+    bounds: [0, 160, 960, 1]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-h-05
+    elementType: shape
+    bounds: [0, 200, 960, 1]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-h-06
+    elementType: shape
+    bounds: [0, 240, 960, 1]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-h-07
+    elementType: shape
+    bounds: [0, 280, 960, 1]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-h-08
+    elementType: shape
+    bounds: [0, 320, 960, 1]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-h-09
+    elementType: shape
+    bounds: [0, 360, 960, 1]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-h-10
+    elementType: shape
+    bounds: [0, 400, 960, 1]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-h-11
+    elementType: shape
+    bounds: [0, 440, 960, 1]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-h-12
+    elementType: shape
+    bounds: [0, 480, 960, 1]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+  - elementId: grid-h-13
+    elementType: shape
+    bounds: [0, 520, 960, 1]
+    shapeName: rect
+    fill: {type: solid, color: "#082D4F0D"}
+
+  # ---- 右下角陶土小斜切，呼应封面 ----
+  - elementId: slash
+    elementType: shape
+    bounds: [816, 380, 96, 160]
+    shapeName: parallelogram
+    fill: {type: solid, color: "$accent"}
+
+  # ---- 思源宋体结语 ----
+  - elementId: closing-line
+    elementType: text
+    bounds: [72, 166, 780, 46]
+    content:
+      style: "$display"
+      fontSize: 30
+      align: [left, middle]
+      wrap: false
+      text: 把 Agentic AI 的基础设施，放回你自己的机器上。
+
+  # ---- 三步下一步 ----
+  - elementId: step-num-1
+    elementType: text
+    bounds: [72, 268, 36, 24]
+    content:
+      fontFamily: 思源宋体
+      fontSize: 20
+      color: "$accent"
+      lineHeight: 1
+      align: [left, middle]
+      wrap: false
+      text: "01"
+  - elementId: step-text-1
+    elementType: text
+    bounds: [116, 272, 680, 18]
+    content:
+      fontSize: 12
+      color: "$ink"
+      fontFamily: MiSans
+      align: [left, middle]
+      wrap: false
+      text: 三分钟起服务——cp .env.example .env，docker compose up -d
+  - elementId: step-num-2
+    elementType: text
+    bounds: [72, 308, 36, 24]
+    content:
+      fontFamily: 思源宋体
+      fontSize: 20
+      color: "$accent"
+      lineHeight: 1
+      align: [left, middle]
+      wrap: false
+      text: "02"
+  - elementId: step-text-2
+    elementType: text
+    bounds: [116, 312, 680, 18]
+    content:
+      fontSize: 12
+      color: "$ink"
+      fontFamily: MiSans
+      align: [left, middle]
+      wrap: false
+      text: 跑四个 Demo——examples/ 离线 RAG · MCP 回环 · OpenAI 网关 · 多 Agent DAG
+  - elementId: step-num-3
+    elementType: text
+    bounds: [72, 348, 36, 24]
+    content:
+      fontFamily: 思源宋体
+      fontSize: 20
+      color: "$accent"
+      lineHeight: 1
+      align: [left, middle]
+      wrap: false
+      text: "03"
+  - elementId: step-text-3
+    elementType: text
+    bounds: [116, 352, 680, 18]
+    content:
+      fontSize: 12
+      color: "$ink"
+      fontFamily: MiSans
+      align: [left, middle]
+      wrap: false
+      text: 逐模块核验——docs/IMPLEMENTATION_STATUS.md，先验证，再相信
+
+  # ---- 底部 meta 行 ----
+  - elementId: meta-line
+    elementType: text
+    bounds: [72, 486, 600, 14]
+    content:
+      style: "$note"
+      align: [left, middle]
+      wrap: false
+      text: DeepSeek Infra v4.0.3 · MIT License · 文档见 docs/ · 数据不出端

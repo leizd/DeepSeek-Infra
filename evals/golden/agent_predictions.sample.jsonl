@@ -1,0 +1,9 @@
+# Sample recorded agent predictions, scored offline against agent_tasks.jsonl.
+# Capture your own by recording real runs; schema:
+# {id, answer, tools:[names], usage:{prompt_tokens,completion_tokens}, model, latencyMs, failed?}
+{"id": "agent_001", "answer": "OnePlus 旗舰主要参数如下……来源见引用 [^W1]。", "tools": ["web_search"], "usage": {"prompt_tokens": 4200, "completion_tokens": 600}, "model": "deepseek-v4-pro", "latencyMs": 3100}
+{"id": "agent_002", "answer": "定位到一个空指针 bug，并用 python_eval 验证了边界值。", "tools": ["search_files", "python_eval"], "usage": {"prompt_tokens": 5100, "completion_tokens": 720}, "model": "deepseek-v4-pro", "latencyMs": 4800}
+{"id": "agent_003", "answer": "已生成对比 PPT，[下载 PPT](/api/download?id=...)。", "tools": ["create_pptx"], "usage": {"prompt_tokens": 3800, "completion_tokens": 540}, "model": "deepseek-v4-pro", "latencyMs": 5200}
+{"id": "agent_004", "answer": "网页要点总结如下……", "tools": ["web_search"], "usage": {"prompt_tokens": 2600, "completion_tokens": 480}, "model": "deepseek-v4-flash", "latencyMs": 2100}
+{"id": "agent_005", "answer": "已综合搜索与抓取结果，结论如下……", "tools": ["web_search", "fetch_url"], "usage": {"prompt_tokens": 6400, "completion_tokens": 900}, "model": "deepseek-v4-pro", "latencyMs": 7300}
+{"id": "agent_006", "answer": "抱歉，本轮没有完成检索。", "tools": ["search_files"], "usage": {"prompt_tokens": 2200, "completion_tokens": 120}, "model": "deepseek-v4-flash", "latencyMs": 1800, "failed": true}

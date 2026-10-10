@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze the cryptographic and semantic replica-attestation rules omitted by the v1 field-only inventory.",
+  "normalization": "LF-normalized SHA-256 of public inventory/fixture bytes",
+  "corpora": [
+    {
+      "id": "federated-replica-attestation-semantics-v3",
+      "path": "compat/native-runtime/v3/federation/replica_attestation_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen Fleet Ed25519 replica-attestation verification vector",
+      "sha256": "e40000bc7039a98c29dd057a6ba5ae8317f8bfd8f91cb19d34e2ffb168950024"
+    }
+  ]
+}

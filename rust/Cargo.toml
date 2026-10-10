@@ -1,0 +1,115 @@
+[workspace]
+members = [
+    "crates/backup-crypto",
+    "crates/deepseek-core",
+    "crates/deepseek-backup",
+    "crates/deepseek-browser",
+    "crates/deepseek-gateway",
+    "crates/deepseek-mcp",
+    "crates/deepseek-policy",
+    "crates/deepseek-rag",
+    "crates/deepseek-protocol",
+    "crates/deepseek-worker",
+    "crates/deepseek-stateless-mcp",
+    "crates/deepseek-storage",
+    "crates/deepseek-transfer",
+    "crates/deepseek-federation",
+    "crates/deepseek-proof",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/leizd/DeepSeek-Infra"
+rust-version = "1.85"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+# HTTP input dictionaries retain insertion order, as in the reference runtime.
+# Signed and hashed documents explicitly sort keys in their canonical encoders.
+serde_json = { version = "1.0", features = ["preserve_order"] }
+# Pinned to the version already present in Cargo.lock (pulled in transitively),
+# so promoting it to a direct dependency adds no new crate to the graph.
+regex = "=1.13.0"
+# tower 0.4.13 depends on indexmap 1.x and does not enable its `std` feature, so indexmap
+# decides whether it has std by probing the sysroot in its build script. Where that probe
+# reports nothing, indexmap compiles as no_std, `IndexMap<K, V>` loses the default hasher
+# parameter (`#[cfg(not(has_std))]` in its `map.rs`), and tower's ready_cache stops compiling —
+# which is what happens on this project's Windows host, while Linux is fine. Naming the feature
+# takes the probe out of the decision, and adds no crate to the graph.
+indexmap = { version = "=1.9.3", features = ["std"] }
+# The one genuinely new dependency family in the tree: CDP speaks WebSocket, and
+# nothing in Cargo.lock can (`hyper`, `reqwest` and `tonic` all stop at HTTP). Hand
+# rolling the frame layer — masking, fragmentation, oversized frames, close and ping
+# handling — is exactly where a mistake is a security bug rather than a bug, so it is
+# a dependency on purpose. Plaintext only: the engine binds loopback, like the worker.
+tokio-tungstenite = "=0.30.0"
+# Already in the graph via tonic; promoted for `SinkExt`/`StreamExt` over the socket.
+futures-util = "=0.3.31"
+tokio = { version = "1", features = [
+    "fs",
+    "io-util",
+    "macros",
+    "net",
+    "process",
+    "rt-multi-thread",
+    "signal",
+    "time",
+] }
+axum = "0.7"
+base64 = "=0.22.1"
+blake2 = "0.10"
+ed25519-dalek = "=2.2.0"
+aes-gcm = "=0.10.3"
+argon2 = "=0.5.3"
+md-5 = "=0.10.6"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+age = { version = "0.12.1", default-features = false }
+sha2 = "0.10"
+sha1 = "0.10"
+percent-encoding = "2.3"
+prost = "=0.13.5"
+tonic = "=0.12.3"
+protox = "=0.8.0"
+tonic-build = "=0.12.3"
+rusqlite = { version = "=0.37.0", features = ["bundled"] }
+
+[profile.release]
+lto = true
+strip = "symbols"
+
+# Independently linked test binaries repeat very large COFF/ELF symbol tables.
+# Keep normal dev/test builds small. Assertions, overflow checks, optimization,
+# and unwinding retain Cargo's dev defaults; test inherits this profile.
+[profile.dev]
+debug = false
+strip = "symbols"
+incremental = false
+
+[profile.dev.package."*"]
+debug = false
+
+# Deliberate source-level debugging is separate from routine verification.
+[profile.diagnostic]
+inherits = "dev"
+debug = true
+strip = "none"
+
+[profile.diagnostic.package."*"]
+debug = true
+
+# LLVM embeds coverage mappings independently of debugger DWARF information.
+# Keep mappings and symbols without repeating DWARF in every test binary.
+# Never change the complete test inventory or coverage threshold.
+[profile.coverage]
+inherits = "dev"
+debug = false
+strip = "none"
+
+[profile.coverage.package."*"]
+debug = false

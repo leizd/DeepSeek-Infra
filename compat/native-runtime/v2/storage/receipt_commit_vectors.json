@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "cases": [
+    {
+      "name": "two_objects_unsorted_input",
+      "objects": [
+        {
+          "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "size": 2
+        },
+        {
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size": 11
+        }
+      ],
+      "commitment": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:11\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb:2\n",
+      "object_set_digest": "f614451c79d5e86fe321ce7dc562fe1a7622d693315edf43fd7f6c6659528564",
+      "receipt": {
+        "backupId": "backup-1",
+        "baseBackupId": null,
+        "chainDepth": 0,
+        "chunkProtocol": "fastcdc-v3",
+        "controlObjectDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "createdAt": "2026-09-03T00:00:00Z",
+        "creationVerified": true,
+        "lineageId": null,
+        "objectSetDigest": "f614451c79d5e86fe321ce7dc562fe1a7622d693315edf43fd7f6c6659528564",
+        "objects": [
+          {
+            "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 11
+          },
+          {
+            "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 2
+          }
+        ],
+        "parentBackupId": null,
+        "pinned": false,
+        "policyId": "policy-1",
+        "runId": "run-1",
+        "scheduleSlot": "slot-1",
+        "schemaVersion": 4,
+        "size": 13,
+        "snapshotKind": "full",
+        "storageProtocol": "object-set-v1",
+        "targetId": "target-1"
+      },
+      "receipt_digest": "2ef901c8d650ec60749709040218eccf72c65ac0a2c41e557da50fa10b7bb387",
+      "commit": {
+        "backupId": "backup-1",
+        "commitHash": "b92b94140213f7da04f94fd90715092edd8f964c8e149a260693c4a7dea53087",
+        "controlObjectDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "fencingToken": 1,
+        "objectSetDigest": "f614451c79d5e86fe321ce7dc562fe1a7622d693315edf43fd7f6c6659528564",
+        "policyId": "policy-1",
+        "previousCommitHash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "receiptDigest": "2ef901c8d650ec60749709040218eccf72c65ac0a2c41e557da50fa10b7bb387",
+        "runId": "run-1",
+        "scheduleSlot": "slot-1",
+        "schemaVersion": 4,
+        "slotDigest": "7a15a3648f4f2aae6c9156eed7d1577b1493d38597cf681f9787cd709c5443e2",
+        "storageProtocol": "object-set-v1",
+        "targetGeneration": 1
+      }
+    }
+  ]
+}

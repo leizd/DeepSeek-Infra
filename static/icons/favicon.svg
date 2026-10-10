@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="DeepSeek Infra">
+  <defs>
+    <linearGradient id="bg" x1="74" y1="32" x2="438" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#315cff"/>
+      <stop offset="1" stop-color="#4d6bfe"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="108" fill="url(#bg)"/>
+  <path d="M356 0h156v252L252 512H106z" fill="#5c88ff" opacity=".35"/>
+  <path d="M176 140h160a58 58 0 0 1 58 58v90a58 58 0 0 1-58 58h-76l-42 42 10-42h-52a58 58 0 0 1-58-58v-90a58 58 0 0 1 58-58z" fill="#fff" opacity=".97"/>
+  <text x="256" y="311" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="172" font-weight="700" fill="#315cff">D</text>
+  <circle cx="351" cy="327" r="26" fill="none" stroke="#1f328a" stroke-width="15"/>
+  <path d="m368 346 40 40" stroke="#1f328a" stroke-width="15" stroke-linecap="round"/>
+  <path d="M382 86 390 114 418 122 390 130 382 158 374 130 346 122 374 114z" fill="#5de6ff"/>
+</svg>

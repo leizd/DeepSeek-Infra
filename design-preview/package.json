@@ -1,0 +1,9 @@
+{
+  "name": "design-preview",
+  "private": true,
+  "version": "0.1.0",
+  "description": "DeepSeek Infra frontend redesign - static scheme previews",
+  "scripts": {
+    "dev": "node server.js"
+  }
+}

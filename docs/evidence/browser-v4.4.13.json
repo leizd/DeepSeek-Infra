@@ -1,0 +1,76 @@
+{
+  "version": "4.4.13",
+  "commit": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "testedRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "sourceRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "sourceTreeDirty": false,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "sourceContext": {
+    "schemaVersion": 2,
+    "version": "4.4.13",
+    "testedRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+    "sourceTreeDirty": false,
+    "capturedAt": "2026-08-10T10:41:18Z",
+    "generator": "scripts/generate_release_evidence.py",
+    "repository": "local",
+    "workflowRunId": "local",
+    "workflowAttempt": 1,
+    "eventName": "local",
+    "ref": "refs/heads/codex/4.4.13-projected-recovery"
+  },
+  "generatedAt": "2026-08-10T10:41:26Z",
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "browserSessionCreate": "PASS",
+    "readPage": "PASS",
+    "screenshot": "PASS",
+    "extractLinks": "PASS",
+    "unsafeActionBlocked": "PASS",
+    "confirmationRequired": "PASS",
+    "snapshotToMedia": "PASS",
+    "snapshotToRag": "PASS",
+    "auditLog": "PASS",
+    "redactSecrets": "PASS",
+    "repeatedClose": "PASS",
+    "sessionExpired": "PASS",
+    "downloadLimit": "PASS"
+  },
+  "details": {
+    "runtimeRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-browser-smoke-vajf248o",
+    "fixtures": "D:\\deepseek\\tests\\fixtures\\browser",
+    "projectId": "proj-1863f7d71dc5",
+    "browserSessionId": "browser_40631230962c8993",
+    "mediaIds": [
+      "media_06bfcb0697cbd496",
+      "media_706f0b1ba70e2ee4"
+    ],
+    "localRag": {
+      "enabled": true,
+      "backend": "sqlite_vec",
+      "databasePath": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-browser-smoke-vajf248o\\.local-rag\\rag.sqlite3",
+      "sqliteVecAvailable": false,
+      "embeddingProvider": "hash",
+      "embeddingProviderRequested": "hash",
+      "embeddingDimensions": 64,
+      "embeddingModelPathConfigured": false,
+      "tokenizerPathConfigured": false,
+      "hybridSearch": "bm25+vector",
+      "bm25K1": 1.5,
+      "bm25B": 0.75,
+      "incremental": true,
+      "lastError": "sqlite-vec unavailable: No module named 'sqlite_vec'",
+      "indexedItems": 2,
+      "indexedFiles": 0,
+      "indexedMedia": 2,
+      "indexedMemories": 0,
+      "vectorTableAvailable": false
+    },
+    "auditLog": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-browser-smoke-vajf248o\\.browser-audit\\audit.jsonl"
+  }
+}

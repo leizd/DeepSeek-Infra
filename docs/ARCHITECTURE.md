@@ -1,0 +1,781 @@
+# 架构说明
+
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
+适用版本：v4.8.0。
+
+DeepSeek Infra 是一个本地优先的 **Agentic AI Infra 平台**：桌面端可通过内嵌 WebView 的本地应用窗口运行，手机端可通过 APK WebView 运行；本机 FastAPI 后端把 LLM 网关（含 OpenAI 兼容 `/v1`）、多 Agent DAG 运行时、本地向量 RAG、工具调用运行时、链路可观测性（`/metrics`、`/healthz`）和端云模型路由组装成一个可私有化、多端运行、可观测、可扩展的 Agentic AI 系统，并以标准协议互操作：默认 Python **MCP Tool Hub**（`POST /mcp`）提供完整兼容工具面；可选的 TypeScript **无状态 MCP 执行平面**为代码检索和测试任务提供双实例恢复能力；本地 Agent 经 **A2A** 风格的 Agent Card 与任务生命周期（`/.well-known/agent-card.json`、`/a2a`）与外部 Agent 互通。
+
+## 4.8.0 签名联邦与跨 Fleet 灾难恢复（候选实现完成）
+
+4.8.0 在两个完全独立的 Fleet 之间建立 operator-pinned cryptographic trust、
+Receiver-controlled ciphertext custody 与可验证的 offsite recovery，不引入 shared
+Authority、multi-primary、Raft 或 global consensus。Gate A 已先锁定不可变 Wave
+Schedule identity、可续租 schedule/wave runner lease 和真实进程死亡后的单 effect
+接管；Git history 保持 Federation write path 位于该 barrier 之后。
+
+```mermaid
+flowchart LR
+    subgraph A["Fleet A — sovereign source"]
+        AA["Authority A"]
+        IA["Pinned root + online signer A"]
+        SA["MinIO A1 + A2"]
+        JA[("Transfer journal A")]
+    end
+    subgraph B["Fleet B — sovereign receiver"]
+        AB["Authority B"]
+        IB["Pinned root + online signer B"]
+        SB["MinIO B1 + B2"]
+        JB[("Transfer journal B")]
+    end
+    IA <-->|"signed challenge + readiness"| IB
+    JA -->|"custody request"| JB
+    JB -->|"signed scoped ingress grant"| JA
+    SA -->|"existing randomized-Age object-set-v1"| SB
+    SB -->|"Receipt v4 + Commit v4 + signed attestation"| JA
+```
+
+Dedicated Ed25519 federation roots、短期 online signers、Peer Trust Registry 与
+challenge/readiness 建立 mutual trust。Receiver 签发 scope-bound ingress grant；
+immutable transfer journal 在分区、Sender/Receiver crash 或未知结果后按同一
+`transferId` reconcile。Receiver 只用自己的 storage principal，通过 production
+storage path 生成 Receipt v4/Commit v4。Sender 验证签名、trust chain、transfer、
+object-set、Receipt/Commit 和 pinned failure-domain metadata 后，才记录
+`FEDERATED_COMMITTED`。
+
+Federated durability 与 local durability 使用独立目标。`COLD_CUSTODY` 不能声称
+plaintext recovery；`RECOVERY_CAPABLE` 只使用 federation 外预配置的 Age identity
+执行 isolated production restore。Age private identity 永不进入 Federation wire。
+
+Federation readiness、ingress、replica 与 DR attestation 都属于 control/evidence
+documents。`object-set-v1`、Receipt v4、Commit v4、FastCDC v3、Projection
+semantics、randomized Age、Control Authority 与既有 Evidence envelope 继续冻结。
+架构决策见 [ADR-0048](adr/ADR-0048-signed-federation-cross-fleet-dr.md)，操作流程见
+[Signed Federation 与跨 Fleet DR 运维手册](runbooks/SIGNED_FEDERATION_DR.md)。候选
+实现的本地真实 MinIO 验证已通过；正式 release qualification 仍依赖最终 PR-head/
+merge CI exact artifacts 与 Evidence Assembly。
+
+## 4.7.6 生产级预测控制与可验证仿真
+
+4.7.6 不改变备份数据线格式，而是把 4.7.5 的预测原语接入生产执行链。统一
+fresh-state bundle 从 Authority、完整 RiskSnapshot、真实容量、running effects、
+预算、维护窗口与 blast simulation 取当前真相；缺任一来源即 fail closed。耐久
+Wave runner 通过 Action Journal claim/execute/reconcile 真实 effect，并从 terminal
+effect telemetry exactly-once 结算公平服务。
+
+```mermaid
+flowchart LR
+    S["Production sources<br/>Authority · Risk · Capacity · Budgets"] --> F["Fresh-state bundle<br/>digest-bound · fail closed"]
+    F --> W["Fenced Wave runner<br/>schedule · wave · action epoch"]
+    W --> J["Action Journal<br/>Repair · Rebalance · Drill"]
+    J --> T["Observed effect telemetry<br/>exactly-once settlement"]
+    P["Real target probe"] --> O[("Capacity observations<br/>incarnation-isolated")]
+    O --> R[("Forecast Registry<br/>30/90d · due backtest")]
+    F --> I["Authoritative optimizer input"]
+    R --> I
+    I --> X["Write-deny What-If<br/>attempt audit · pre/post digests"]
+    X --> E["predictive-planning-proof-v1<br/>exact predictive artifact"]
+```
+
+Optimizer 客户端只能提交 hypothetical candidate。Storage、Authority、Action
+Journal、Policy 与 Target mutation 均被 capability 拒绝；attempted write 本身即
+证明失败。MinIO/S3 capacity 由 provider 分页对象清单实测，Forecast 到期后由稍后
+真实 observation 自动回测。Federation 仍只读，仅增加 digest/freshness/fleet ID/
+wire compatibility 校验；签名与跨 Fleet 写入留给 4.8.0。架构决策见
+[ADR-0047](adr/ADR-0047-production-predictive-control-verifiable-simulation.md)。
+
+## 4.7.4 持久化自治运维闭环
+
+4.7.4 不改变备份数据线格式，而是在真实 Storage effect 上增加可恢复的全局
+调度和可复验 Evidence 边界。每次 control loop 先把 exact RiskSubject 写入
+Observation Ledger，再以持久化公平历史构建完整 DAG waves；admission、资源锁、
+execution epoch/token 和安全抢占在 SQLite 事务中围栏，远端 effect 则必须先
+reconcile 后才能继续。Fleet SLO 与 proof verification 独立持久化，Readiness API
+只投影这些 source-backed 状态。
+
+```mermaid
+flowchart LR
+    R["RiskSnapshot<br/>exact RiskSubject"] --> O[("Risk Observation Ledger<br/>first seen · clear · reopen")]
+    O --> F[("Scheduler Service<br/>virtual runtime · bytes served")]
+    F --> W["Complete DAG waves"]
+    W --> A["Atomic admission<br/>transfer reserve · safe preemption"]
+    A --> B["Monotonic blast simulation<br/>running + proposed effects"]
+    B --> J[("Action Journal<br/>epoch · token · lease · effect handle")]
+    J --> X["Repair / Rebalance / Drill"]
+    X --> S[("Fleet SLO Ledger<br/>latency · freshness · burn")]
+    X --> P["Exact Receipt + Commit bytes"]
+    P --> E["Report + proof + SHA-256<br/>Evidence Assembly"]
+```
+
+这一层始终维持以下 fail-closed 边界：未知远端 effect 不得重建第二个 job；已经
+degraded 的 copy/domain baseline 不得继续下降；Rebalance 不得消费 Repair 保留
+token；`EXECUTING/VERIFYING/RECONCILING` action 不得被抢占；缺失或篡改 exact
+proof 时 Assembly 必须失败。详细运维步骤见
+[COORDINATED_AUTONOMOUS_REMEDIATION.md](runbooks/COORDINATED_AUTONOMOUS_REMEDIATION.md)，
+架构决策见 [ADR-0045](adr/ADR-0045-durable-fleet-slo-evidence-closed-operations.md)。
+
+冻结边界保持 `object-set-v1`、Receipt v4、Commit v4、FastCDC v3、randomized
+Age、Projection semantics、`control-authority-v1`、AuthorityCheckpoint v1 与
+`dr-readiness-proof-v1` 不变。
+
+## Hybrid Runtime 总览（v4.8.0）
+
+> 运维细节、feature flags 与回滚命令见 [RUST_HYBRID_RUNTIME_RUNBOOK.md](RUST_HYBRID_RUNTIME_RUNBOOK.md)。
+
+```mermaid
+flowchart TB
+    subgraph Clients["客户端与标准协议接入 (Clients & Standard Interop)"]
+        C1["React 应用 (/) · React 别名 (/ui/)"]
+        C2["Desktop 本地窗口 (pywebview)"]
+        C3["Android 移动端 (Chaquopy + ML Kit)"]
+        C4["OpenAI SDK → /v1"]
+        C5["MCP 客户端 → /mcp (JSON-RPC 2.0)"]
+        C6["A2A 节点 → /a2a (Agent Card 互联)"]
+    end
+
+    subgraph Python["Python 默认运行时 — FastAPI / ASGI (权威运行时)"]
+        subgraph P_Gateway["网关、路由与安全隔离"]
+            PG1["身份认证 & Mutation Gate 写保护围栏"]
+            PG2["HTTP / SSE 流式传输 & 请求级追踪"]
+            PG3["策略驱动模型路由 (Model Router) & 端云级联"]
+            PG4["Context Engine (前缀缓存优化) & Taint 注入防火墙"]
+            PG5["请求调度队列 (Request Queue) · DLQ · Token 预算限额"]
+        end
+
+        subgraph P_Agent["多 Agent 协同与工作流编排"]
+            PA1["Agent DAG 编排 (Planner → Worker [同层并行] → Critic → Synthesizer)"]
+            PA2["Agent Runs 事件溯源持久化 (.agent-runs 断线重放 / 单节点重算)"]
+            PA3["A2A Agent 网格 & 任务生命周期"]
+            PA4["Automation 自动化引擎 (定时/轮询/事件触发器)"]
+            PA5["受控浏览器沙箱 (Browser Runtime · 截图转 RAG)"]
+        end
+
+        subgraph P_Tools["受控工具沙箱与技能体系"]
+            PT1["受控工具执行 (17+ 本地沙箱工具：Python Eval、文件检索、URL 精读等)"]
+            PT2["真实产物生成引擎 (排版 Word、演示 PPTX、PDF、SVG 思维导图)"]
+            PT3["Tool Policy 策略引擎 (路径越界/SSRF/高危写拦截/人工确认)"]
+            PT4["Skills 动态沙箱、版本化与评估"]
+        end
+
+        subgraph P_RAG["多模态与混合检索 RAG 数据层"]
+            PR1["本地 RAG (BM25 + sqlite-vec 稠密向量混合检索)"]
+            PR2["多格式文档解析切块 · PDF 逐页渲染 · 端云自适应 OCR"]
+            PR3["多模态 Media 生命周期 (图片/音频/视频/网页快照)"]
+            PR4["双写语义缓存 (JSON + SQLite f64le BLOB)"]
+        end
+
+        subgraph P_Work["工作区与认知记忆"]
+            PW1["Workspace Core (Project 2.0 · Saved Items · Artifact Hub · 多格式导出)"]
+            PW2["长期认知记忆 (.memory 作用域隔离 · 冲突仲裁 · 确认机制)"]
+        end
+
+        subgraph P_Resilience["可观测性与自治容灾韧性"]
+            PO1["可观测性 (OpenTelemetry Span 树 / 瀑布图 / Prometheus /metrics / 探针)"]
+            PO2["自动化评测闭环 (RAG / Tool / Security / Agent Eval Harness)"]
+            PO3["RiskSnapshot 风险账本 · Fenced Wave Runner (多波次租约与接管)"]
+            PO4["Action Journal (Repair/Rebalance/Drill) · Fleet SLO Ledger"]
+            PO5["Object Set v1 加密备份与投影式容灾恢复 (DR Readiness)"]
+        end
+    end
+
+    subgraph Native["Native 协同执行与辅助平面 (Native Runtime)"]
+        subgraph Rust["可选 Rust Sidecar — 默认禁用 · Python 兜底"]
+            R1["生产助手: backup-crypto (流式 Age 密码学) · deepseek-backup (FastCDC 扫描)"]
+            R2["网关请求准备: POST /gateway/request/prepare"]
+            R3["MCP 协议准备: POST /mcp/request/prepare"]
+            R4["工具策略评估: POST /policy/{url,path,capability}"]
+            R5["RAG 向量排序 · JSON / compact binary: POST /rag/vectors/rank{-binary}"]
+            R6["RAG 文档准备: POST /rag/documents/prepare"]
+            R7["执行 Worker: deepseek-worker (:50052 gRPC) · actionId+epoch 强纪元围栏 · Effect Journal"]
+            R8["存储与传输: deepseek-storage & -transfer · S3 直连 · Receipt/Commit v4 · 零拷贝通道"]
+            R9["联邦与取证: deepseek-federation (Ed25519 根私钥托管) · deepseek-proof (DR/Predictive 证明)"]
+            R10["扩展引擎: deepseek-browser (受控 CDP 引擎) · deepseek-gateway (:8787 Axum 网关)"]
+        end
+
+        subgraph Go["Go 控制面 Shadow (cmd/deepseekd · 影子审计)"]
+            G1["版本化 Protobuf v1 RPC 跨进程契约 (proto/*/v1)"]
+            G2["Shadow 模式实时核对 (pythonDecisionDigest == goDecisionDigest)"]
+            G3["GO_CONTROL_DOMAINS 机器硬隔离 (Python 越权写物理拦截 · /internal/action/execute 403)"]
+            G4["控制面状态机 (cmd/deepseekd :8090 · Scheduler / Action Lease / Resilience / Agent DAG)"]
+            G5["控制面隔离存储 (go-control/ · 仅 Go 独占写 · 无跨进程共享)"]
+        end
+
+        subgraph StatelessMCP["可选 无状态 MCP 平面 — TS + Redis"]
+            SM1["NGINX (:8010) → 双 MCP 实例"]
+            SM2["Redis AOF (任务租约 / Fencing 令牌 / 幂等)"]
+            SM3["代码检索 · pytest 运行 · 逻辑备份 Contributor"]
+        end
+    end
+
+    subgraph Data["本地私有数据 (零出端隔离 · 单表单一权威写入者原则)"]
+        D1["SQLite 向量 RAG (.local-rag)"]
+        D2["长期记忆 (.memory)"]
+        D3["语义缓存 (.semantic-cache)"]
+        D4["工作区与产物 (.projects)"]
+        D5["Agent 运行日志 (.agent-runs / .a2a)"]
+        D6["加密容灾备份 (.backups)"]
+        D7["链路追踪 & 审计 (.traces / .tool-audit)"]
+        D8["请求队列 & 预算 (.request-queue / .budget)"]
+        D9["Go 控制面数据 (go-control/ 独占写)"]
+        D10["Rust 数据面记录 (Effect Journal · Checkpoint)"]
+    end
+
+    subgraph Federation["签名联邦与跨 Fleet 容灾面 (v4.8.0 Signed Federation & Multi-Fleet DR)"]
+        subgraph FleetA["Fleet A (Sovereign Source)"]
+            FA1["Authority A · Pinned Root + Online Signer"]
+            FA2["MinIO A1 + A2 真实存储 · Transfer Journal A"]
+        end
+        subgraph FleetB["Fleet B (Sovereign Receiver)"]
+            FB1["Authority B · Pinned Root + Online Signer"]
+            FB2["MinIO B1 + B2 真实存储 · Transfer Journal B"]
+        end
+        FA1 <-->|"Ed25519 签名挑战与握手"| FB1
+        FA2 -->|"范围受限 Ingress 申请 & 密文 Object-Set 异地同步"| FB2
+        FB2 -->|"Receipt v4 + Commit v4 + Attestation 签名取证"| FA2
+    end
+
+    subgraph External["显式外部调用 (数据默认不出端)"]
+        E1["DeepSeek API (Pro / Flash)"]
+        E2["Tavily Search"]
+        E3["Ollama / 端侧边缘推理"]
+    end
+
+    Clients -->|"HTTP · SSE · JSON-RPC 2.0"| Python
+    Python -->|"本地事务读写"| Data
+    Python -. "可选确定性委托 / 生产助手" .-> Rust
+    Rust -. "已验证结果 / 回退" .-> Python
+    Python <-.->|"Protobuf 契约核对 & 决策镜像"| Go
+    Go -.->|"gRPC 派发 (actionId + epoch)"| Rust
+    Rust -.->|"准入判定 / 执行状态"| Go
+    Clients -. "独立横向扩展" .-> StatelessMCP
+    StatelessMCP -. "状态与租约" .-> Data
+    Python -->|"容灾快照 / 调度波次 / 证据组装"| Federation
+    Python -->|"显式受控出站"| External
+```
+
+### 一句话职责边界
+
+- **Python 是默认且权威运行时。** 默认部署为纯 Python；普通 `docker compose up -d` 只启动 Python FastAPI / ASGI 服务。
+- **Rust 委托是可选、确定性且带 fallback 保护的。** 每个 Rust 委托都默认禁用，可通过 `DEEPSEEK_RUST_*` 标志单独启用。
+- **持久化与工具执行仍由 Python 拥有：** Rust sidecar 不读文件、不写索引、不持有凭据、不执行工具、不拥有传输/会话，也不发起上游 HTTP 调用。
+- 当 sidecar 故障、超时、返回畸形响应或出现契约分歧时，系统会回退到等价的 Python 路径。
+
+### Rust Sidecar 做什么（以及不做什么）
+
+Sidecar 在单一 HTTP 监听器（默认 `127.0.0.1:8787`）上暴露以下 Python 调用的**确定性、无凭据委托**：
+
+| 委托 | 端点 | 启用开关 | Python 仍保留 |
+| --- | --- | --- | --- |
+| Gateway 请求准备 | `POST /gateway/request/prepare` | `DEEPSEEK_RUST_GATEWAY=1` | 流式、上游 HTTP、凭据、重试/退避、模型列表 |
+| MCP 协议准备 | `POST /mcp/request/prepare` | `DEEPSEEK_RUST_MCP=1` | 传输、会话、工具执行、resources/prompts |
+| 工具策略评估 | `POST /policy/url`, `/policy/path`, `/policy/capability` | `DEEPSEEK_RUST_POLICY=1` | 策略审计日志、最终执行闸门 |
+| RAG 向量排序 · JSON / compact binary | `POST /rag/vectors/rank`, `/rag/vectors/rank-binary` | `DEEPSEEK_RUST_RAG=1`; binary additionally requires `DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT=binary` | 完整 Python authoritative ranking/parity、查询执行、检索、索引持久化 |
+| RAG 文档准备 | `POST /rag/documents/prepare` | `DEEPSEEK_RUST_RAG_DOCUMENT_PREP=1` | 文件解析、OCR、embeddings、持久化、索引 |
+
+Version 3.9.0 added the compact binary route beside the compatible JSON vector endpoint. Version 3.10.0 keeps `DSVRNK01` unchanged and extends only the Python-owned semantic-cache boundary: new rows retain JSON and dual-write the same six-decimal values as `f64le-v1` SQLite BLOBs, and valid BLOB candidates can be copied directly into one binary request. Mixed/legacy/corrupt rows fall back per row to JSON, while the complete Python ranking remains authoritative. Startup adds columns only; optional backfill is explicit and batched. JSON remains the transport default, invalid configuration fails closed to JSON, and binary failures return directly to Python without a second JSON sidecar request. Rust never reads SQLite. Neither diagnostics, metrics, logs, nor evidence contain vector values.
+
+Sidecar **不实现**：网关流式、上游 HTTP、MCP 传输、真实工具执行、文件读取、OCR、embeddings、SQLite 或索引持久化。这些能力都留在 Python 路径。
+
+### Fallback 行为
+
+每个 Rust 组件都有对应的 Python 等价实现：
+
+- **Gateway 准备**回退到 Python 请求准备。
+- **MCP 准备**总是先计算 Python 结果，任何 Rust 分歧都使用 Python 结果继续执行。
+- **Policy**默认 `fallback`；后端失败时用 Python Tool Policy 重新评估。
+- **RAG 热路径**回退到 Python RAG 实现。
+- **RAG 文档准备**先计算 Python chunks，丢弃畸形或分歧的 Rust 输出后再持久化。
+
+### 版本说明
+
+- **Current candidate version:** `4.8.0`（本地实现与真实双 Fleet/四逻辑 MinIO Evidence 已完成；只有最终 PR-head/merge SHA 的 exact artifacts、Evidence Assembly 与全部 release gates 通过后才 release-ready）。默认运行时仍由 Python 拥有；`backup-crypto` 负责 age 流式密码边界，`deepseek-backup` 负责可验证的持久批量 Chunk 扫描。Python 拥有 Persistent Snapshot Index、Pack/Delta Manifest、Projection Planner、Bloom/Exact Lookup、备份事务、持久化 Risk/Scheduler/SLO/Federation Ledgers、租约围栏提交、Contributor 编排和恢复状态机；可选无状态 MCP 是独立部署面。Federation 在冻结的 `object-set-v1`、Receipt v4、Commit v4 与投影语义之上增加签名 trust、Receiver-controlled ingress、异地 custody 与 DR Evidence，不迁移或重写 storage wire。
+- **Historical qualification:** `v4.0.0-rc.1` 已被 rc.2 supersede，只保留为历史架构预览；stable `4.0.0` 从已验证的 rc.2 提升。
+- **Patch boundary:** Python-first 所有权、默认关闭的 Rust delegates 和冻结协议均不改变。
+
+## 无状态 MCP 横向扩展平面（v4.4.2）
+
+```mermaid
+flowchart LR
+    C["MCP Client"] --> LB["NGINX :8010<br/>round robin"]
+    LB --> M1["MCP instance 1"]
+    LB --> M2["MCP instance 2"]
+    M1 --> R[("Redis AOF<br/>tasks · leases · idempotency · logs")]
+    M2 --> R
+    M1 --> O["OpenTelemetry Collector"]
+    M2 --> O
+    O --> P["Prometheus exporter :9464"]
+```
+
+该平面独立于默认 FastAPI 应用和可选 Rust sidecar。HTTP handler 通过官方 TypeScript SDK 的 server factory 为每个请求创建新的 `McpServer`；MCP 连接身份、握手和客户端会话不写入进程内 Map，也不要求负载均衡器提供粘性会话。真正需要跨请求恢复的任务状态、输出、租约、尝试次数和幂等索引只写入 Redis。
+
+长任务由实例持有短租约并定期续租。实例退出后租约到期，另一个实例可原子认领；完成写入同时校验 owner 与 fencing token，旧实例即使迟到也不能覆盖接管后的结果。非幂等的 `start_test_run` 要求幂等键，相同键与相同参数收敛到同一任务，不同参数则拒绝。
+
+这一服务只暴露 `server_info`、`code_search`、`start_test_run`、`get_task` 与 `query_logs`。现有 Python `/mcp` 的 17 工具、resources、prompts、Tool Policy 和第三方客户端兼容性继续保留；两者是并行部署边界，不应把专用服务描述为完整 Hub 的无缝替代。
+
+## 加密备份与外部状态边界（v4.4.2）
+
+```mermaid
+flowchart LR
+    UI["Backup UI<br/>component-local secret"] -->|"anonymous pipe / handle"| AGE["Rust backup-crypto<br/>standard age v1 stream"]
+    PY["Python restore transaction<br/>journal · fence · contributors"] --> AGE
+    PY --> LOCAL["Local + browser contributors"]
+    PY --> EXT["External contributor protocol"]
+    EXT --> MCP["Stateless MCP<br/>generation-fenced JSONL"]
+    AGE --> PKG[".dsibackup.age<br/>manifest inside ciphertext"]
+```
+
+Secret 不进入 API Session JSON、durable Journal、命令行或环境变量。前端只在 Backup/Restore 组件内短期持有，Python 的 Ephemeral Secret Slot 限时、限长、限尝试次数并在消费后清零；Rust helper 从单独继承的匿名 pipe/handle 读取 Secret，同时通过 stdin/stdout 或文件句柄流式处理包。
+
+External Contributor 与本地目录 Contributor 共享 coverage manifest，但不复制部署存储。Stateless MCP 先用 Redis generation fence 固定逻辑边界，再输出版本化 JSONL；恢复使用确定性 ID remap，清除 lease/owner，并把任何未终结工作冻结为 `interrupted`，因此不会在新环境自动重放任务。
+
+## Effective Snapshot Dedup 与跨文件恢复（v4.4.11）
+
+```mermaid
+flowchart LR
+    T["BackupTargetStore<br/>Full + Delta ciphertext"] --> F["durable fetch session<br/>range resume + SHA"]
+    F --> A["backup-crypto<br/>age authentication"]
+    A --> M["immutable-parent materializer<br/>v2/v3 ordinal + v4 range"]
+    M --> V["verified workspace tree"]
+    V --> R["Federated Restore<br/>prepare · commit · complete"]
+    P["Python Chunk Engine"] --> B["BackupChunkEngine contract"]
+    N["Rust deepseek-backup<br/>scan-batch"] --> B
+    B --> D["v3 CDC + effective dedup builder"]
+    I[("local immutable Chunk Maps<br/>Snapshot Refs · Bloom · Exact SQL")] --> D
+    D --> S["strict multipart publish<br/>digest + size convergence"]
+```
+
+Remote Restore Session 只保存 Target、Lineage、Object 摘要、进度和状态，不保存 Secret。`incremental-v4` 的 Parent Range 只存在于 Age 加密 Manifest；Materializer 对每层先从未修改 Parent Tree 准备全部 PUT，验证 Chunk/File SHA 后再执行 Delete/Replace 和 Merkle 转移，并把最终完整 Tree 交回 4.4.1 的 Federated Restore；它不拥有正式 Workspace Commit。
+
+`BackupChunkEngine` 把文件 SHA、FastCDC v3 边界和 Chunk SHA 合并为一次遍历；Rust helper 用 JSONL Batch 避免逐文件启动进程，失败文件由 Python 权威实现接管并按实际结果计数。Builder 只查询 Immediate Parent Effective View：Bloom 排除确定 Miss，SQLite 批量精确匹配决定 Range 复用，Chunk Map/Ref 单事务提交。所有 Hash/Bloom 都留在本地。S3 上传的 Part Journal 继续受 Writer Fence 约束，Complete 冲突只有摘要与长度同时匹配才可收敛。
+
+## Packed Delta 与持久化快照状态（v4.4.12）
+
+```mermaid
+flowchart LR
+    W["Workspace scan"] --> V["immutable file_versions"]
+    V --> O["snapshot_file_ops: checkpoint or delta"]
+    O --> C["current_effective_files"]
+    C --> H["atomic current_effective_heads"]
+    W --> P["PackWriter: 64 MiB target"]
+    P --> Z["incremental-v5 inside age ZIP"]
+    Z --> R["Pack Range reader: 4-handle LRU"]
+    R --> M["File SHA + Merkle verify"]
+```
+
+Index v3 只为 Full 保存完整 PUT Checkpoint，Incremental 只保存发生变化的 PUT/DELETE；最新 Parent 的 Path→File Version 仅物化一份，并由单行 Head 绑定 committed backup 与 root。File Version 由 Size、File SHA 与可选 Chunk Map 内容寻址，Rename/Copy 可以共享；历史读取最多重放一个 Full 与受策略限制的 Delta 深度。提交使用同一个 `BEGIN IMMEDIATE`，Head/Root 无法证明一致时写 stale 标记并 Force Full。
+
+`incremental-v5` 只改变当前 Child 新 Payload 的物理布局：CDC Payload 与不超过 16 MiB 的 Whole Payload 直接流入 Snapshot-local Pack，较大的 Whole Payload 保持 standalone；Parent File/Range 依赖仍严格限于 Immediate Parent。Pack Index 留在 Age 认证密文内。恢复依次验证 Pack、Blob Range、File 与 Snapshot Merkle，并以最多四个只读句柄复用同一 Pack；v2～v4 解码路径保留。
+
+Rust Scanner 使用一个长生命周期 JSONL 子进程和有界 Worker Pool，结果完成即回传。Python 用预计工作集而非逻辑文件长度计算并发预算；任一 Native 结果缺失、畸形或失败只回退对应文件。Index Maintenance 只在数据库超过 256 MiB 且空闲页超过 30% 时执行有界 `incremental_vacuum`，从不在 Scheduler Commit 路径执行完整 `VACUUM`。
+
+## 投影式恢复与生产级远端恢复（v4.4.13）
+
+```mermaid
+flowchart LR
+    S["frozen selection + selectionDigest"] --> P["Projection Planner"]
+    P --> M["Metadata plane: full Merkle chain"]
+    P --> O["restoreOutputSet"]
+    P --> D["restoreDependencySet (support-only)"]
+    O --> X["selective extraction"]
+    D --> X
+    X --> C["Projected materializer"]
+    C --> F["Federated prepare/commit/rollback"]
+```
+
+远端恢复在创建 Session 时冻结 `selection`（Contributors + ProjectIds）并持久化 `selectionDigest`；Retry 改选直接返回 `409 restore-selection-mismatch`。Planner 先在 Metadata 平面完整应用 F0→I1→…→In 逻辑链并逐层校验 Merkle Root，再从最终状态计算 Output 集合与向后依赖闭包：跨文件 `parent-range` / `parent-file` / CDC Parent 依赖进入只读 Support 集合，只参与 Scratch 物化与校验，绝不写入最终树。API/UI 始终上报 `networkSelective: false` 与 `whole-age-object` 理由，不把选择性物化宣传成网络级 Selective Fetch。Federated 交易的 `serverTransactionDigest` 纳入 `selectionDigest`，`requiresFrontendApply` / `requiresExternalMcp` 由 selection 推导；Safety Backup 仍保持 Full。远端 Hold 在 complete/abort/失败时释放，`recovery-required` 时保留。Adaptive Full 使用 Pack 容器的真实物理字节，Index Maintenance 增加重建 + 原子换库迁移路径。
+
+## 独立加密对象集与真正的选择性拉取（v4.4.14）
+
+`object-set-v1` 将每个 Snapshot 提交为一个独立随机 Age 加密 Control 与若干约 64 MiB Payload Components。Full 按 Contributor/Project 恢复边界分组；Incremental 的 Pack/Standalone 由加密 Control 映射到组件。Receipt/Commit v4 只暴露 role-blind ciphertext digest/size 集合。Restore 的耐久状态机先获取整条 Lineage 的 Controls，完整应用并 Merkle 校验 Metadata，再把 Output/Support File Closure 映射为 Required Component Set；只有该集合允许触发对象 GET。Spool、Multipart、Fetch、Federated Prepare/Commit 与 Hold 均可跨真实进程退出恢复。旧 Whole-Age Lineage 走永久兼容路径，升级边界强制 Full。
+
+## 生产恢复编排与 DR Readiness（v4.5.0 development）
+
+```mermaid
+flowchart LR
+    J["durable Recovery Job"] --> C["Control fetch + verified cache"]
+    C --> P["frozen Projection Plan"]
+    P --> T["bounded Payload transfer"]
+    T --> A["Age authenticate + materialize"]
+    A --> F["federated prepare + commit"]
+    J --> H["renewable holds + cache pins"]
+    J --> R["redacted telemetry + readiness"]
+    P --> D["isolated drill root"]
+    D --> X["verify + scrub; never live commit"]
+```
+
+Recovery Job 是生产恢复的耐久编排层，而不是第二套恢复实现。它持久化 Component 状态、阶段、重试和有界计数；Scheduler 同时限制 Worker、FD 与 in-flight bytes，并让 Control/交互恢复优先于后台 Payload。Control 完整验证后才冻结绑定 Target、Lineage、Selection 与 Control 摘要的 Projection Plan，只有 Required Payload Set 可以被发现和并行 GET。密文缓存以 ciphertext digest/size 为身份，每次命中重新校验，活跃与 `recovery-required` Job 通过 pin 阻止 LRU 淘汰；任何损坏都会逐项驱逐并从权威 Target 重新获取。
+
+网络、Age 认证与物化可以有界重叠，但明文 Component ZIP 在消费后立即 scrub；Federated prepare/commit、selection/Merkle 校验与 Hold 保护仍是不可跨越的屏障。Hold 通过 generation CAS 续租；冲突会停止破坏性进展。Readiness 只读聚合实际 RPO、估算 RTO、最近 Drill 与保护状态。Manual Drill 复用相同的 fetch/decrypt/verify/materialize 路径，但在独立 Root 结束并清理，类型与运行时守卫都禁止进入 live federated commit。
+
+发布证据被拆成两个独立 exact-merge CI producer：真实 MinIO + 真实 Rust Age 的冷/热/缓存损坏路径，以及真实子进程重启与 disk/lease/cache/remote-mutation/partial-commit 故障矩阵。架构实现或本地模拟通过都不能替代这些 producer 的 PASS。
+
+## 多维核心架构时序与数据流向（v4.5.0）
+
+### 1. 端到端请求与上下文数据流向 (Request Lifecycle & Context Pipeline)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as 客户端 / SDK / Web SPA
+    participant Server as FastAPI Server & Mutation Gate
+    participant Taint as Context Taint 防火墙
+    participant Cache as Semantic Cache 语义缓存
+    participant Router as Model Router & Scheduler
+    participant Engine as Context Engine (Prompt Cache)
+    participant LLM as DeepSeek / Ollama
+    participant Tools as Tool Policy & 沙箱工具
+    participant Obs as OpenTelemetry Trace & SQLite
+
+    Client->>Server: POST /api/chat 或 /v1/chat/completions
+    Server->>Server: Token 鉴权 + 检查写保护栅栏 (Mutation Gate)
+    Server->>Taint: 信任源标注 (System/User=可信, Web/File=不可信)
+    Taint-->>Server: 生成 Taint 诊断报告，加固不可信前缀
+    Server->>Cache: 向量相似度命中查询 (exact & cosine)
+    alt 语义缓存命中
+        Cache-->>Client: 直接返回缓存响应 (无云端调用)
+    else 缓存未命中
+        Server->>Router: 模型路由判定 (Pro / Flash / 端侧) + 调度入队
+        Router->>Engine: 构造 Prompt-cache-aware 上下文 (稳定前缀+滑动窗口)
+        Engine->>LLM: 发送流式推理请求
+        LLM-->>Server: 流式返回 (思考过程 reasoning + text delta)
+        opt 模型发起 Function Calling
+            LLM-->>Server: tool_calls (含参数)
+            Server->>Tools: Tool Policy 检查 (SSRF/路径/敏感凭据拦截)
+            Tools->>Tools: 受控沙箱执行 (本地计算/RAG/文档/PPT)
+            Tools-->>Engine: 清洗结果 (Prompt Injection Sanitization)
+            Engine->>LLM: 追加工具输出，继续下一轮推理
+            LLM-->>Server: 最终综合输出
+        end
+        Server->>Cache: 写入语义缓存 (JSON + f64le BLOB)
+        Server->>Obs: 记录完整 Trace Span 树、Token Usage 与耗时
+        Server-->>Client: 结束流 (done 事件 + 诊断指标)
+    end
+```
+
+### 2. 多 Agent DAG 协作与 A2A 网格交互 (Agent DAG & A2A Mesh)
+
+```mermaid
+flowchart TD
+    UserReq["用户复合任务请求"] --> A2AGate["A2A 网格 / API 入口"]
+    A2AGate --> Leader["Leader / Orchestrator (任务分析与分解)"]
+    
+    subgraph DAGPlanning["DAG 计划与依赖拓扑"]
+        Leader --> Plan["Planner 生成执行图 (DAG Nodes & depends_on)"]
+        Plan --> StorePlan[".agent-runs/ 持久化计划与状态机"]
+    end
+
+    subgraph ParallelExecution["同层并行 Worker 执行"]
+        StorePlan --> Researcher["Researcher (联网搜索 / RAG 检索 / 论文精读)"]
+        StorePlan --> Coder["Coder (代码检索 / 脚本生成 / 沙箱运行)"]
+        StorePlan --> Reasoner["Reasoner (逻辑推理 / 数学分析 / 约束验证)"]
+    end
+
+    subgraph EvaluationLoop["质量评审与修订回环"]
+        Researcher --> Critic["Critic (质量审核 / 事实核验 / 引用检查)"]
+        Coder --> Critic
+        Reasoner --> Critic
+        Critic -- "未通过 (带反馈打回)" --> Researcher
+        Critic -- "通过" --> Synthesizer["Synthesizer (全量成果综合归纳)"]
+    end
+
+    Synthesizer --> FinalOutput["结构化最终产物 & Markdown 回复"]
+    FinalOutput --> EventLog[".agent-runs/ 事件溯源日志持久化"]
+    EventLog --> A2AStream["A2A message/stream SSE Artifact 推送"]
+```
+
+### 3. Object Set v1 加密备份与投影式容灾恢复链路 (Object Set v1 DR & Projected Recovery)
+
+```mermaid
+flowchart LR
+    subgraph BackupPipeline["1. 备份流水线 (Backup Pipeline)"]
+        Scan["工作区文件扫描"] --> CDC["FastCDC 差分分块 (v3 CDC)"]
+        CDC --> Hash["文件 SHA + Chunk SHA 计算"]
+        Hash --> AgeEnc["Age 流式加密 (backup-crypto)"]
+        AgeEnc --> ObjSet["Object Set v1 (独立 Control + Payload Components)"]
+        ObjSet --> S3Store["S3 / 本地备份目标 (Digest + Size 一致性)"]
+    end
+
+    subgraph ProjectionDR["2. 投影式容灾恢复 (Projected DR Readiness)"]
+        S3Store --> ReadCtrl["读取加密 Control 文件 (Metadata Plane)"]
+        ReadCtrl --> MerkleCheck["Merkle Root 链式逐层校验"]
+        MerkleCheck --> Planner["Projection Planner (计算 Output 闭包与 Support 依赖)"]
+        Planner --> SelFetch["Selective Fetch (仅 GET 必需密文 Components)"]
+        SelFetch --> Decrypt["Age 密文解密与 Chunk 拼接"]
+        Decrypt --> MatTree["Projected Materializer (物化有效工作区树)"]
+        MatTree --> FmtCommit["Federated 事务原子提交 & Mutation Gate 解锁"]
+    end
+```
+
+## 分层架构
+
+![DeepSeek Infra 架构总览](assets/architecture.svg)
+
+```
+Client Layer    Web UI/PWA · Desktop WebView · Android APK · OpenAI SDK /v1 · MCP /mcp · A2A /a2a
+      │  HTTP · NDJSON · SSE · JSON-RPC 2.0
+      │
+Python Default Runtime   FastAPI / ASGI: Auth · Streaming · /v1/chat · /healthz · /metrics
+      │                                    ▲
+      │     optional deterministic         │ validated result / Python fallback
+      │     delegation (disabled by default)
+      │                                    │
+      ▼                                    │
+  ┌───┴───────────────┬───────────────────┐      ┌─────────────────────────────┐
+  │ LLM Gateway       │ Agent DAG Runtime │      │ Optional Rust Sidecar       │
+  │ + Model Router    │ + A2A Mesh        │      │ · Gateway request prepare   │
+  │ + Context Manager │                   │      │ · MCP protocol prepare      │
+  │ + Scheduler       │                   │      │ · Tool policy evaluation    │
+  │ + Budget          │                   │      │ · RAG vector ranking        │
+  └───────┬───────────┴─────────┬─────────┘      │ · RAG document preparation  │
+          │                     │                └─────────────────────────────┘
+          │                     │
+          └───────────┬─────────┘
+                      │
+      ┌───────────────┴───────────────────────┐
+      │ Local Data & Observability (Python-owned)
+      │ Vector RAG · Memory · Trace · Semantic Cache · Request Queue · Budget
+      └───────────────────────────────────────┘
+```
+
+后端代码按基础设施分层组织在 `deepseek_infra/` 下：
+
+- `infra/gateway/` — **LLM Gateway**：策略驱动的模型路由器与级联推理（`model_router`：能力/成本/延迟/回退/cascade，质量门控 + 可选 Judge 评分）、成本与 token 预算治理（`budget_manager`：按模型定价的 USD 费用估算、统一 BudgetPolicy、ToolBudget、每项目每日账本与超预算降级）、Prompt Cache 上下文管理（`context_manager`）、Prompt-cache-aware 上下文工程引擎（`context_engine`：token 预算预估、按模型上下文窗口适配、token 感知裁剪、Context Diff）、网关韧性请求队列（`resiliency`）、端云路由（`edge_inference`）、语义缓存（`semantic_cache`）、OpenAI 兼容门面（`openai_api`，`/v1/chat/completions` + `/v1/models`）、多 Provider 抽象（`providers/`：`BaseLLMProvider` + `DeepSeekProvider` / `OllamaProvider` + `registry` 路由）。
+  - 检索锚点：成本与 token 预算治理在 `budget_manager` 模块里实现。`budget_manager.py` 负责按模型定价估算 USD 成本、累计每日 token / cost / model call / search call / tool call 账本，并通过 `BudgetPolicy`、`ToolBudget` 与 per-agent `TokenBudget` 判断是否超过预算、是否降级。
+- `infra/agent_runtime/` — **Durable Agent DAG Runtime + A2A Mesh**：`multi_agent` 编排 + `agent_runs` 事件源持久化 / 断线重放 + `agent_state` 节点级状态机与断点续跑 + `a2a`（Agent Card、A2A 任务生命周期、`.a2a/` 持久化与外部委派 client）。
+- `infra/rag/` — **Local RAG Data Plane**：`local_rag`（sqlite-vec 向量库 + BM25 词法的 hybrid 检索、增量索引、文档版本、chunk lineage、引用真实性校验、Recall@K 评估）、`files` 解析分块、`context_compressor`。
+- `infra/tool_runtime/` — **Tool Calling Runtime**：`tools` 注册执行 + `search` / `ocr` / `documents` / `presentations` / `mindmaps` / `generated_files` / `slides_skill`。
+- `infra/mcp/` — **MCP-native Tool Hub**：`server`（JSON-RPC 2.0 分发）+ `registry`（tools / resources / prompts 目录）+ `adapters`（执行桥，复用 Tool Policy 闸门）+ `permissions`（能力切片与预批）+ `client`（出方向 MCP client）。
+- `stateless-mcp/` — **无状态 MCP 执行平面**：Rust `deepseek-stateless-mcp` 执行 Redis Lua 任务面、lease/fencing、幂等工具和 generation-fenced 逻辑备份；`docker-compose.stateless-mcp.yml` 部署 Redis AOF、两个实例和 NGINX。TypeScript 源码保留为行为对照和演练客户端。
+- `infra/workspace/backup_crypto.py` + `rust/crates/backup-crypto/` — **加密备份边界**：Python 持有事务和短期 Secret Slot，Rust helper 只执行标准 age v1 加解密、Identity/Recipient 转换和 header inspect。
+- `infra/workspace/backup_chunk_engine.py` + `rust/crates/deepseek-backup/` — **差分扫描边界**：单次流式计算 File SHA、FastCDC v2/v3 Boundary 与 Chunk SHA；Python/Rust 精确 Parity，Native 不可用时安全回退。
+- `infra/observability/` — **Observability**：`observability`（OpenTelemetry 风格的 trace/span 层级链路，run 为根，`agent.<id>` 包裹其 `context.build`/`memory.retrieve`/`rag.retrieve`/`tool.web_search`/`deepseek` 子 span）+ `trace_api`（`/api/traces`、`/trace/{id}`）+ `export`（trace JSON 脱敏导出）+ `metrics`（Prometheus `/metrics`）+ `health`（`/healthz`·`/readyz`）。
+- `infra/data/` — **本地存储**：`memory` / `projects` / `reminders`。
+- `core/`、`web/`、`launcher/`、`android_entry.py`、`desktop_app.py` — 配置 / 错误 / 工具、HTTP 运行时、跨端打包入口。
+
+下表按文件列出各模块职责（路径以 `deepseek_infra/infra/` 为前缀，核心/入口层在 `deepseek_infra/` 下）。
+
+## 模块划分
+
+| 模块 | 职责 |
+| --- | --- |
+| `app.py` | 兼容启动入口，保留 `python app.py` 的使用方式。 |
+| `deepseek_infra/app.py` | 进程启动、日志、MIME 注册、缓存清理和 HTTP 服务绑定。 |
+| `deepseek_infra/web/server.py` | HTTP 路由、本地 token 鉴权、流式 multipart 解析、JSON/NDJSON 响应和静态文件服务。 |
+| `deepseek_infra/infra/gateway/deepseek_client.py` | 请求校验、记忆/搜索编排、Prompt 组装、DeepSeek 同步和流式调用。 |
+| `deepseek_infra/infra/gateway/edge_inference.py` | 端侧推理基础设施：可选加载 llama.cpp / MLC-LLM 后端，管理 GGUF / MLC 模型路径、上下文窗口、量化诊断、懒加载卸载和简单任务端云路由判定。 |
+| `deepseek_infra/infra/agent_runtime/multi_agent.py` | Leader + 多 Agent 编排：任务拆解、worker 并行调用、搜索预算共享和最终综合。 |
+| `deepseek_infra/infra/agent_runtime/agent_runs.py` | 持久化 Agent Run、indexed event log、派生快照（含 `nodes` 节点状态机）、断线重连游标、后台 run registry、计划确认、重跑与断点续跑（`resume_run` / `resume_orphaned_runs`）。 |
+| `deepseek_infra/infra/agent_runtime/agent_state.py` | Durable Agent Runtime 的事件源节点状态机：纯函数 `reduce_node_states(plan, events)` 从计划 + 事件日志重放每个 worker 节点的生命周期（created→queued→running→succeeded/failed→retrying→cancelled）与指标（latency / token），并给出 `incomplete_plan_nodes` / `completed_node_ids` 供断点续跑跳过已成功节点。零 I/O，不引入新的实时事件类型。 |
+| `deepseek_infra/infra/observability/observability.py` | 本地可观测性存储：SQLite trace run/span、`parent_span_id` 层级链路（OpenTelemetry 风格调用树）、输入/输出摘要脱敏、耗时、usage、prompt cache 命中率和查询函数。span 由 `deepseek_client`（`context.build`/`memory.retrieve`/`rag.retrieve`/`tool.web_search`/`deepseek`）与 `multi_agent`（`agent.planner`/`agent.<id>`/`agent.synthesizer`）通过 `parent_span_id` 串成树。 |
+| `deepseek_infra/infra/observability/trace_api.py` | Trace HTTP API：注册 `GET /api/traces`、`GET /api/traces/{trace_id}`、`GET /api/traces/{trace_id}/export.json` 与 `GET /trace/{trace_id}`；路由页走本地 token 鉴权并返回统一 React SPA。 |
+| `deepseek_infra/infra/observability/export.py` | Trace 导出层：递归脱敏 API Key、Authorization、auth token、cookie、password、secret、敏感 URL query，并截断大段 `content` / `text` / `prompt` / `rawContent` 等私有文本，同时保留 token usage、cache hit、span 层级和错误摘要。 |
+| `deepseek_infra/infra/gateway/semantic_cache.py` | 本地语义缓存：复用 Local RAG embedding 管线，把可缓存 prompt/response 写入 `.semantic-cache/cache.sqlite3`，在 DeepSeek API 前做相似度命中。v2.0.7 加入缓存版本命名空间、scope、质量门控和附件 exact-only。v3.10.0 保留六位小数 JSON 并从同一规范向量 dual-write `f64le-v1` BLOB；exact match 在向量加载前返回，mixed/legacy/corrupt BLOB 按行回退 JSON，SQLite 所有权始终在 Python。 |
+| `deepseek_infra/infra/gateway/budget_manager.py` | 成本与 Token 预算治理（v2.0.10）：按模型定价的 USD 费用估算（`estimate_cost`/`cost_from_usage`）、统一 `BudgetPolicy`（max total/agent tokens、search/tool calls、cost）、`ToolBudget`、每 scope **每日**账本（`.budget/budget.sqlite3`：tokens/cost/model/search/tool calls）、超预算判定与降级（`over_daily_budget`/`should_downgrade`）。`TokenBudget` 扩展为 per-agent 跟踪。 |
+| `deepseek_infra/infra/gateway/model_router.py` | 策略驱动 Model Router（v2.0.9）：`route_request` 按能力（图片→vision/pro）、复杂度、成本预算、延迟在 flash/pro 间路由（仅 `autoRoute`/`model="auto"` 时接管，显式选模不变）；`cascade_plan` + `quality_gate`（长度/拒答/不确定/引用不足）驱动级联推理；纯决策与打分，实际调用与 Judge 评分在 `deepseek_client`（`call_deepseek_cascade` / `judge_draft`）。 |
+| `deepseek_infra/infra/gateway/context_manager.py` | API 网关 Context Manager：稳定 JSON 序列化、固定工具定义顺序、在已有摘要时执行滑动窗口裁剪，并输出 prompt cache 友好的请求诊断。 |
+| `deepseek_infra/infra/gateway/context_engine.py` | Prompt-cache-aware Context Engine：无 tokenizer 的 token 预算预估（按 system/tools/history/dynamic 分项）、按模型上下文窗口适配（`context_window_for_model`，端侧/Ollama/未知模型回落默认窗口）、叠加在条数窗口之上的 token 感知裁剪（`token_trim`，仅在压缩摘要+溢出预算时多丢最旧历史，保留首尾 system 锚点）、以及 Context Diff（稳定 `baseContextId` + 本轮 `delta`）。纯函数、零 I/O，只观测与决策，不改写缓存锚定的 prompt 前缀。 |
+| `deepseek_infra/infra/gateway/resiliency.py` | API 网关韧性层：用 `.request-queue/queue.sqlite3` 记录上游请求队列项，对断网、超时、429 和网关类 5xx 做退避重试，并汇总 `gatewayResiliency` 诊断（含 scheduler 快照）。 |
+| `deepseek_infra/infra/gateway/scheduler.py` | 本地请求调度层（v2.1.2）：进程内准入控制——优先级队列（交互>Agent>后台，`priority_for_payload`）、并发上限、令牌桶限流（`TokenBucket`）、backpressure（越过 `max_queue_depth` 即 503 卸载）、请求取消与准入超时；`RequestScheduler.lease` 在两处上游调用各包一层。耗尽重试/被卸载的请求落入 `.scheduler/scheduler.sqlite3` 的 Dead Letter Queue（`record_dead_letter`/`dead_letters`/`dlq_status`），`recover_orphans` 在启动时对账既有请求队列的陈旧行（背景恢复）。准入路径纯内存、无每请求 SQLite 写入；`SchedulerOverloaded`/`SchedulerTimeout` 为 503 `AppError`。 |
+| `deepseek_infra/infra/gateway/chat_payload.py` | 前端消息展开和附件计数。 |
+| `deepseek_infra/infra/rag/context_compressor.py` | 长对话的增量上下文摘要生成。 |
+| `deepseek_infra/infra/data/memory.py` | 本地长期记忆 CRUD、作用域过滤、检索排序、显式“记住/忘记”命令解析、记忆建议和冲突检测。 |
+| `deepseek_infra/infra/rag/local_rag.py` | 本地 RAG 数据层：SQLite / 可选 sqlite-vec 索引、哈希或 ONNX embedding、文件 chunk 与长期记忆同步、状态诊断和重建索引。v2.0.8 升级为 Data Plane：BM25+向量 hybrid（`bm25_scores`）、内容哈希增量索引与文档版本（`chunk_hash`/`doc_version`/`existing_doc_chunks`）、chunk lineage（`chunk_lineage`：doc/page/offset/hash）、引用真实性校验（`verify_citation`）、RAG Recall@K 评估（`evaluate_recall`）。 |
+| `deepseek_infra/infra/data/reminders.py` | 本地提醒队列、到期查询和轻量中文提醒解析。 |
+| `deepseek_infra/infra/data/projects.py` | 持久项目空间、项目元数据、项目文档库写入和删除。 |
+| `deepseek_infra/infra/tool_runtime/search.py` | 搜索触发、多轮 Tavily 查询、结果聚合、缓存和 Prompt 格式化。 |
+| `deepseek_infra/infra/tool_runtime/tools.py` | DeepSeek function calling 本地工具：受限数学计算、缓存文件搜索、公共网页二次精读、提醒、记忆、项目文件、数据转换、图表规格、PPT 生成、Word/PDF 文档生成、SVG 思维导图生成、多查询搜索对比和长期记忆建议。`execute_tool_call` / `execute_tool_calls` 接受可选 `policy`，在分发前过 Tool Policy Engine、成功后清洗结果。 |
+| `deepseek_infra/infra/tool_runtime/tool_policy.py` | Capability-based Tool Policy Engine（v2.1.0）：工具元数据 risk card（`ToolMetadata` / `TOOL_METADATA`）、按角色切片的能力画像（`CAPABILITY_PROFILES` / `capability_tools`，`multi_agent.agent_tools_for` 的单一事实源）、轻量 schema 校验（`validate_arguments`）、静态 SSRF 防护（`evaluate_url_safety`）、路径越界检测（`evaluate_path_safety`）、敏感写入拦截、人工确认、`PolicyDecision` / `ToolPolicy` 闸门、工具结果 prompt injection 清洗（`sanitize_tool_result`）、`.tool-audit/audit.jsonl` 审计日志与 `tool_policy_status`。v2.1.5 接入 Context Taint 防火墙：`arguments_contain_secret` 把运行时自身凭证出现在工具参数里的调用一律硬拒绝（`secret_exfiltration_blocked`），污染轮（上下文或中途工具结果检出注入指令）的高风险 / 敏感写入工具升级为待人工确认（`taint_escalated_confirmation`）。纯函数 + 唯一 best-effort 审计 I/O，不 import `tools`，无循环依赖。 |
+| `deepseek_infra/infra/evaluation/harness.py` | AI Runtime Evaluation Harness（v2.2.5）：把预测 + golden 标注打成回归指标族——`keyword_coverage`、`recall_at_k`（Recall@K + MRR）、`citation_case`（Citation Accuracy）、`tool_call_score` / `tool_call_accuracy`（工具调用 P/R/F1）、`agent_success`（Agent Success Rate）、`latency_benchmark`、`cost_benchmark`（复用 `budget_manager` 定价）、`keyword_regression`，以及自描述的 `EvalReport`（机器 dict + 人读报告文本）。纯函数、零 I/O、不 import sqlite RAG 层。CLI 编排在 `evals/runners/`，golden 数据在 `evals/golden/`。 |
+| `deepseek_infra/infra/tool_runtime/presentations.py` | 本地 `.pptx` 生成：`create_pptx` 工具用 `python-pptx` 生成真实 PowerPoint 文件，普通模型漏调工具时可从文本大纲兜底生成；渲染器会自动加入目录页并选择卡片、流程、对比、观点、总结等版式。 |
+| `deepseek_infra/infra/tool_runtime/documents.py` | 本地 `.docx` / `.pdf` 生成：`create_document` 工具用 `python-docx` / `reportlab`（内置中文 CID 字体，无需附带字体文件）把结构化章节渲染成排版精美的 Word 或 PDF，支持标题块、分章节编号、正文段落、要点、表格、页码与按标题哈希确定的配色主题。 |
+| `deepseek_infra/infra/tool_runtime/mindmaps.py` | 本地 `.svg` 思维导图生成：`create_mindmap` 工具把模型给出的树状节点渲染成「分组流程图」式 SVG——顶层节点作为带标题的彩色容器（类似 Mermaid subgraph），容器内后代自上而下、用实心箭头连接的圆角卡片，并复用统一下载链路。 |
+| `deepseek_infra/infra/tool_runtime/generated_files.py` | 跨格式生成文件的统一生命周期：随机 id 落盘、按后缀解析下载路径（防目录遍历）、MIME 映射、过期清理与“另存到下载目录”，被 `presentations`、`documents` 与 `mindmaps` 共用。 |
+| `deepseek_infra/infra/tool_runtime/slides_skill.py` | 用户提供的 `slides` skill 参考文本与运行时路由提示，只在 PPT/幻灯片意图命中时注入本轮上下文。 |
+| `deepseek_infra/infra/mcp/server.py` | MCP-native Tool Hub（v2.1.3）的 JSON-RPC 2.0 协议层：`initialize` / `ping` / `tools/list` / `tools/call` / `resources/list`·`read` / `prompts/list`·`get` 分发、标准 JSON-RPC 错误码、通知处理与 `mcp_status()`；经 `POST /mcp` 暴露（本地 token 鉴权，协议版本 `2025-06-18`）。 |
+| `deepseek_infra/infra/mcp/registry.py` | MCP 目录：把 `available_tool_definitions()` 映射成带 `inputSchema` 与风险注解（read-only / destructive / open-world，来自 Tool Policy risk card）的 MCP tools；生成产物（`generated://<fileId>`，svg 文本 / 其余 base64 blob）与 `runtime://capabilities` 映射成 resources；`slides-outline` / `research-brief` 两个参数化 prompts。 |
+| `deepseek_infra/infra/mcp/adapters.py` | MCP `tools/call` → `execute_tool_call` 执行桥：每次调用构造能力切片的 `ToolPolicy`（schema / SSRF / 路径 / 敏感写入防护与结果清洗全部生效），结果转成 MCP `content`（稳定 JSON text part）+ `structuredContent`，策略拒绝与失败是 `isError` 工具级错误；配置了 Tavily Key 时提供真实 `web_search` 回调。 |
+| `deepseek_infra/infra/mcp/permissions.py` | MCP 连接的能力域：`MCP_CAPABILITY` → Tool Policy capability profile（未知回落 `full`）、按连接的工具白名单、`params._meta.approvedTools` 预批解析。 |
+| `deepseek_infra/infra/mcp/client.py` / `bridge.py` / `executor.py` | 出方向 MCP client 与 External MCP Tool Bridge（v2.2.1）：`initialize`（含 `notifications/initialized`）/ `tools/list` / `tools/call`、`Mcp-Session-Id` 会话头管理、per-server timeout、retry stats、health snapshot、短期 circuit breaker、policy-gated external call、audit 与 `mcp_external` trace span。默认关闭，只连 `MCP_CLIENT_SERVERS` 显式配置的外部 server。 |
+| `stateless-mcp/` | 独立 TypeScript MCP 服务：请求级 `McpServer` factory、Redis Lua 原子状态转换、租约与 fencing、幂等请求哈希、受限代码搜索/pytest 执行/日志查询、重试客户端和 OpenTelemetry。 |
+| `docker-compose.stateless-mcp.yml` | Redis AOF、OpenTelemetry Collector、两个无状态 MCP 实例和 NGINX round-robin 的可复现部署；failover smoke 会终止租约 owner 并验证接管、客户端重试与幂等收敛。 |
+| `deepseek_infra/infra/agent_runtime/a2a.py` | A2A Agent Mesh（v2.2.5）：每个本地 Agent 角色（orchestrator / researcher / coder / reasoner / critic）的 Agent Card（`/.well-known/agent-card.json` 发现 + `GET /a2a/agents` 列表）、JSON-RPC 任务生命周期（`message/send`、`message/stream` SSE artifact chunks / 状态推送、`tasks/resubscribe`、`tasks/get`、`tasks/cancel`、`tasks/list`）、任务状态机（submitted→working→completed/failed/canceling→canceled）、`.a2a/` 任务快照持久化与重启对账（磁盘上残留的非终态任务标记 failed）、外部委派 `A2AClient`（`A2A_PEERS`）。任务在角色 capability 切片内经 `call_deepseek` 执行，绝不超出该角色的工具面；v2.2.5 增加 `scripts/smoke_a2a_compat.py` 与 contract tests 作为外部互操作前置验收。 |
+| `deepseek_infra/infra/gateway/context_taint.py` | Context Taint Tracking + Prompt Injection Firewall（v2.1.5）：把组装后的请求按来源分段打信任标签（trusted_system / trusted_user / trusted_memory / trusted_tool 可信；untrusted_web / untrusted_file / untrusted_tool_result 不可信），对不可信段扫描注入、密钥外泄与工具调用指令三类 pattern，产出 `diagnostics.contextTaint` 报告；`harden_search_context`（隔离声明 + 注入红action）与 `file_context_guard_line`（文件上下文确定性 guard 行）做主动加固，字节确定性保证 prompt cache 前缀跨轮稳定。污染判定回流 `ToolPolicy`（taint 升级确认 + 凭证外泄硬拒绝），形成检测→隔离→拦截的闭环。 |
+| `deepseek_infra/infra/rag/files.py` | 文件文本抽取、分块、缓存和附件上下文检索；并为豆包式文档阅读工作台提供原文件原样返回、PDF 逐页 PNG 渲染（PyMuPDF，回退 pdf2image）、按页文字坐标层、分页文本和跨页关键字搜索。 |
+| `deepseek_infra/infra/tool_runtime/ocr.py` | 可选 OCR：优先用 DeepSeek API 直接转写图片；API 不可用时再回退到 Android ML Kit、Windows OCR、Tesseract 或本地公式 OCR；支持扫描 PDF 转图识别和图片文字识别。 |
+| `deepseek_infra/core/config.py` | 不可变设置、环境变量解析、兼容常量和 JSON 日志。 |
+| `deepseek_infra/core/errors.py` | `AppError` 和稳定 API 错误码。 |
+| `deepseek_infra/core/utils.py` | 模型名、评分、文件名、时间戳、token URL 和局域网 IP 工具函数。 |
+| `deepseek_infra/desktop_app.py` | Windows 本地桌面应用壳：启动本机 HTTP 后端，用 `desktop=1` token 入口完成 WebView Cookie 握手，并用 pywebview 打开内嵌应用窗口。 |
+| `deepseek_infra/android_entry.py` | Android APK 的 Chaquopy 桥接层：设置应用私有数据目录，启动/停止本机 Python HTTP 服务，并把带 token 的 WebView URL 返回给原生 Activity。 |
+| `android/` | Android Studio / Gradle 工程：原生 WebView 壳、Chaquopy 打包配置、Android 权限和 APK 资源。 |
+
+4.0.8 完成 Legacy Frontend Retirement；4.0.9 将最后一个独立原生界面 Trace Viewer 迁入 `frontend/src/features/trace/`，并用 React Router 提供 `/trace/:traceId`。4.1.0 将 Workspace Provider 限定在聊天路由并懒加载 Trace；4.2.2 补齐 Trace 原地重试与陈旧响应保护。Diagnostics 与独立 Trace 页共享摘要、span tree、waterfall、分类、错误和加载恢复逻辑。`/`、`/ui/` 与 Trace 深层路由都由同一 `static/ui/` 构建拥有；服务启动、Android、PyInstaller、Docker、release ZIP、release smoke 与 preflight 继续把 `static/ui/index.html` 作为硬门禁。
+
+当前 UI/UX 能力按 React feature、context 与 domain 分层：聊天编排位于 `frontend/src/features/chat/`，Markdown 位于 `frontend/src/shared/markdown/`，会话持久化位于 `frontend/src/domain/conversation/`，全局样式和响应式状态由 `frontend/src/shared/styles/app.css` 管理。离线壳在 API 不可用时仍允许查看本地历史，事件行为由对应 React 组件拥有。
+手机输入能力保持前端优先：语音输入使用浏览器 `SpeechRecognition` / `webkitSpeechRecognition`，回复朗读使用 `speechSynthesis`，清洗和分句逻辑位于 `frontend/src/features/speech/`。PWA Share Target 的 `POST /share-target` 只做 Host 白名单校验并把分享内容写入内存缓存，随后通过 `303 /?share=<id>` 回到 SPA；`GET /api/share-target` 仍走本地 token 鉴权。React 的 `frontend/public/manifest-root.webmanifest` 与 `frontend/public/sw-root.js` 拥有根路径 PWA，图标继续复用 `static/icons/` 的公共资源。
+
+动效层由 `frontend/src/shared/styles/app.css` 的 motion token、面板/遮罩过渡和 `prefers-reduced-motion` 分支管理；流式消息状态通过 reducer 和 React 渲染批处理更新。
+
+v0.8.5 继续保持前端本地状态边界：思考摘要只根据当前消息对象的 `streaming`、`content` 和完成时间渲染，不新增协议字段；“引用所选”在按钮按下阶段缓存最近有效的消息选区，避免浏览器焦点切换清空 selection 后丢失片段。v1.6.6 通过 `scheduleSelectionRefresh()` 在 `mouseup`、`keyup` 和 `touchend` 后延迟刷新选区，并让触屏 `touchstart` 不再阻断后续 click。
+
+v0.8.6 为前端消息对象增加可选 `reasoningEndedAt` 字段：首个正文 `content` 流事件到达时记录，用于把“思考用时”固定在思考阶段结束时；旧消息没有该字段时回退到 `completedAt`。v1.7.7 在诊断面板基础上新增 Trace 入口：响应的 `diagnostics.traceId` 会让助手消息更多菜单显示 `Trace`，点击后读取 `/api/traces/{traceId}` 并在同一侧栏渲染 DAG waterfall。`loadConfig()` 同时读取 `tracing` 与 `semanticCache` 状态，但前端请求协议不需要为了 trace 额外传字段。v1.7.5 在 v1.7.0 的 `streamPhase` 基础上新增端侧推理状态读取：`/api/config` 的 `edgeInference` 决定普通聊天是否能在无云端 API Key 时发送，本轮响应的 `diagnostics.edgeInference` 进入诊断面板。运行中的消息继续用 `streamPhase` 区分思考、工具调用、搜索、Agent 工作和正文输出，并在请求启动时开启 Activity 标题刷新；流式期间标题显示整轮活跃耗时，完成后再回到固定的思考耗时。`state.busy` 只表示有模型请求在途，发送、重生成、分叉和编辑仍会被拦截，但输入框、附件准备、语音输入、朗读和引用所选保持可用。
+
+v0.9.0 的侧边栏重构仍保持零 JS 迁移：所有按钮 id 不变，只在 `index.html` 中移动入口位置，并通过 `styles.css` 把历史面板改为 header / list / footer 三段式 flex 布局。历史列表独立滚动，底栏固定在面板底部，历史项隐藏时间 meta 行以接近单行标题列表。
+
+v0.9.1 强化 DeepSeek function calling 链路：工具调用回合会把 assistant 的 `content` 和 `reasoning_content` 一起追加回下一轮请求，满足 V4-Pro thinking 模式对完整推理内容回传的要求（缺失 `reasoning_content` 时上游会直接报错）。内置工具定义启用 strict schema，工具描述包含使用边界；系统提示会鼓励模型在多个独立 URL 或文件检索时并行发起工具调用。前端设置面板新增思考强度，发送请求时通过 `reasoningEffort` 传给后端。
+v0.9.2 扩展上传与前端交互层：`core.config.FileSettings` 新增 200MB 单文件上限和 220MB multipart 请求体上限，`web.server.read_multipart_form()` 在 `/api/file-text`、`/api/project-files` 和 PWA Share Target 入口统一校验，`/api/config` 下发 `uploadLimits` 供前端预检。v0.9.3 将自动联网搜索从后端关键词预判改为模型驱动的 `web_search` 工具循环：auto 模式只暴露工具，force/on 模式保留 round 1 预取，后续搜索由模型继续决定。v0.9.4 在搜索结果中分配 `[^Wn]` 引用、增加 `/api/title` 标题生成端点，并在前端以本地 timeline 保留 reasoning/search 事件顺序。v0.9.6 修复搜索 timeline 的 SVG 图标、卡住状态和引用候选去重，并扩展本地工具集；安全的相邻工具可并行执行，提醒、记忆删除和记忆建议等副作用工具保持串行。v1.0.0 的原生前端曾以 `data-theme` × `data-mode` 主题系统管理附件、lightbox、快捷键、焦点陷阱和引用提问；这些能力在 4.0.8 前已迁入 React feature/context 边界。v1.1.5 在同一 `/api/chat` 流式入口上增加 `agentMode` 分支，由 `multi_agent.py` 运行 Leader/worker/Synthesizer 编排。v1.2.5 起，worker 的 `content`、`reasoning`、`search` 分别转成 `agent_delta`、`agent_reasoning`、`agent_search`，前端按 `phase` 写入对应 Activity Agent 卡片。v1.2.7 的 timeline 规范化能力现位于 `frontend/src/domain/chat/agentTimeline.ts`；稳定 step id、旧 history 去重与折叠策略保持兼容。后端 `execute_tool_calls` 在 cancel 后跳过或吞掉后续工具/worker 输出，前端 timeline 不会在用户点“停止生成”之后继续更新。v1.2.8 起 done/error 事件携带 `durationMs`，失败 Agent 带 `failed: True`，Synthesizer 会明确处理缺席角色。v1.3.0 的 Agent 执行报告与后端 `done.diagnostics.agentDurations` 保持性能诊断契约。
+
+v1.3.4 保持多 Agent DAG 不变，重点修 Activity 面板的前端状态边界：用户手动关闭某条流式消息的 Activity 侧栏后，控制器会记录该 message id，后续 token 不再触发自动打开；用户手动点击“思考与活动”会清掉该标记。Activity 渲染会在 timeline 缺少 reasoning step 时把 `message.reasoning` 作为 fallback 补回。Agent 模式会固化到 assistant message，用于稳定请求超时和面板打开条件。
+
+v1.3.5 保持 DAG 和事件协议不变，调整 worker 请求前缀结构：`systemPrompt` 只保留原系统提示、Agent 角色提示、安全/搜索权限约束和四段输出模板；`build_prior_context()` 生成的前序 Agent 摘要与当前子任务由 `agent_messages()` 追加到历史对话之后。这样动态内容不会插在稳定 system prompt 与长历史之间，DeepSeek prefix cache 更容易命中可复用的历史前缀。
+
+v1.3.6 进一步统一 worker `systemPrompt`：不同 Agent 的 `profile["system"]`、搜索权限说明、前序摘要和当前子任务全部由 `agent_messages()` 追加到历史之后。请求前缀因此变为“统一 system prompt → 同一份历史对话 → 动态 Agent 指令”，让同一轮多个 worker 也能尽量共享 DeepSeek prefix cache。
+
+v1.3.7 不再改 prompt 结构，只补多 Agent cache 观测链路：`_run_agent_once()` 保留每个 worker 的 `usage`，`synthesize_answer()` 捕获 Synthesizer 的 `done.usage`，最终由 `agent_cache_for_diagnostics()` 汇总为 `done.diagnostics.agentCache`。这让性能诊断能区分 prefix cache 实际未命中和 UI 未展示聚合数据。
+
+v1.3.8 继续只打磨 cache diagnostics：`cache_usage_summary()` 以 `totalTokens > 0` 判断 `hasData`，无数据时 `hitRate=null`，真实全部 miss 时保留 `0.0%`。前端诊断面板据此显示“无数据”或具体 hit/miss，避免把失败、取消或上游未返回 usage 误判成缓存完全未命中。
+
+v1.3.9 只做诊断面板显示层 polish：Agent cache label 中文化，`formatAgentCacheByAgent()` 输出多行文本，`.diagnostics-row.is-multiline` 负责排版；后端多 Agent 编排、prompt 前缀结构和 cache 统计口径均不变。
+
+v1.4.0 把多 Agent 从一次长 `/api/chat` 请求升级为可恢复 Agent Run。浏览器先 `POST /api/agent-runs` 创建 run，后端在 `.agent-runs/run_*.json` 中保存状态、计划、事件日志和派生快照，再由 `AgentRunRegistry` 启动后台线程执行。前端随后 attach `GET /api/agent-runs/{runId}/stream?after=N`；如果刷新、断网或手机息屏，重新读取 run detail/events 后从最后 `index` 继续接收。服务进程重启不会恢复旧线程，启动时会把遗留 `created` / `planning` / `running` run 标记为 `orphaned`。
+
+Agent Run 的事件日志是恢复 UI 的唯一事实源。`agent_runs.append_event()` 原子追加带 `runId`、`index`、`createdAt` 的事件，然后从事件更新 `finalAnswer`、`agentOutputs`、`diagnostics` 等快照。快照只服务快速读取；如果二者冲突，应优先按 events 重放。写入 run JSON 时使用唯一临时文件并对 Windows 短暂锁文件做替换重试，避免高频事件持久化时出现 `.json.tmp -> .json` 的拒绝访问。重跑 worker 时先发 `agent_reset` 清掉对应 Agent 卡片，再运行该 worker；需要重新综合时发 `final_reset` 清空最终答案。1.4.0 不做依赖级联重跑，重跑 Researcher 不会自动重跑 Coder / Reasoner / Critic。
+
+1.4.0 的 Agent 搜索预算仍只开放给 Researcher，但上限提高到单次 Agent Run 总计 12 次、单 Researcher 5 次，并允许 worker 工具循环最多 4 轮，方便“搜索 → 精读/比较 → 再补搜”的长资料任务；普通 `/api/chat` 搜索预算不随之放大。
+
+## 聊天流程
+
+```mermaid
+flowchart TD
+    A["浏览器 POST /api/chat"] --> B["web.server.handle_chat"]
+    B --> C["services.deepseek_client.prepare_deepseek_call"]
+    C --> R{"edge_inference.select_edge_route"}
+    R -- "本地" --> L["llama.cpp / MLC-LLM 本地模型"]
+    L --> H["JSON 响应或 NDJSON 流"]
+    R -- "云端" --> D["services.memory.prepare_memory_state"]
+    R -- "云端" --> E["services.search.search_if_needed"]
+    D --> F["build_deepseek_request"]
+    E --> F
+    F --> CM["Gateway Context Manager"]
+    CM --> Q["SQLite Request Queue / Resiliency"]
+    Q --> G["DeepSeek API"]
+    G --> I{"tool_calls?"}
+    I -- "是" --> J["services.tools.execute_tool_calls"]
+    J --> CM
+    I -- "否" --> H["JSON 响应或 NDJSON 流"]
+```
+
+v1.7.7 的观测和缓存位于 `deepseek_client` 请求编排层。每轮请求先通过 `observability.ensure_trace()` 拿到 `traceId`；多 Agent 模式会在 `stream_multi_agent()` 创建共享 trace，再由 Planner、worker、Critic 修订和 Synthesizer 透传同一个 `traceId`。云端调用前会先执行 `semantic_cache.lookup()`，只有无工具、无搜索、无附件且相似度达到阈值时才直接返回缓存；否则继续请求 DeepSeek，并在成功后把可缓存结果写入 `.semantic-cache/cache.sqlite3`。所有上游请求、端侧请求和缓存检查都会写入 trace span。
+
+v1.8.0 在 `deepseek_client` 与真实 `urlopen` 之间加入 API 网关层。`context_manager.manage_request_body()` 会在请求发出前稳定工具定义顺序和 JSON 序列化，并在已有 `contextSummary` 时裁剪为“稳定前缀 + 最近消息 + 尾部 dynamic context”的滑动窗口。`resiliency.open_with_resiliency()` 会为每次上游请求写入 `.request-queue/queue.sqlite3`，遇到断网、超时、HTTP 408/425/429/502/503/504 时把队列项标为 `queued` 并退避重试；成功或耗尽后写回 `succeeded` / `failed`。普通聊天和 Agent worker 共用这层，因此手机网络短暂切换时，后台 Agent Run 可以继续等待网络恢复，而不是立即把 worker 置空。
+
+稳定 Prompt 前缀会尽量保持小而固定。首个 system message 只放角色提示和通用工具提示；`contextSummary`、长期记忆、当前本地/UTC 时间、搜索工具提示、搜索结果和继续生成上下文都会作为本轮尾部 dynamic system message 追加。这样打开/关闭搜索、刷新搜索结果或时间变化时，只会影响尾部动态块，不会让前面的长历史从 system message 后就全部 cache miss。
+
+v1.6.3 将 Windows exe 的默认路径改为 `deepseek_infra/desktop_app.py`：入口先在当前进程启动 `127.0.0.1` 本机 HTTP 后端，再用 pywebview 打开内嵌应用窗口。v1.6.6 的 `webview_entry_url()` 会给 token URL 追加 `desktop=1`，服务端验证后直接返回首页并写入 Cookie，避免 WebView 在 302 跳转中丢认证；旧图形启动器仍通过 `--gui` 保留，纯后端模式仍通过 `--server` 保留给打包验证和内部启动。v1.6.0 新增手机本机启动路径：`deepseek_infra/launcher/mobile.py` 在导入后端配置前先解析手机控制台参数和环境变量，随后调用 `prepare_and_start(host, port, serve=False)` 复用同一个 HTTP 服务；`launch.py` 在检测到 Android/Termux/Pydroid 环境时自动走该控制台启动器。手机模式不导入 `gui.py`，因此不依赖 Tk 或 `customtkinter`。v1.5.1 继续收紧前端交互底座：Activity 面板复制 Agent 过程只走事件委托，避免重复触发；Escape 会统一关闭当前可见的工作台面板；焦点陷阱改为栈式管理，确认框叠在设置、项目、搜索或 Activity 面板上时，关闭后仍能恢复到底层面板的键盘焦点循环。
+
+## 对话与生产力
+
+v0.7.0 在前端会话层增加轻量生产力能力。对话仍以兼容旧数据的 `messages` 数组展示，但创建分支时会生成带 `branchParentId`、`branchFromMessageId` 和 `branchLabel` 的新 conversation，旧走向不会被覆盖。历史列表会展示分支来源、收藏状态和标签；标签、收藏、Seek 快照和消息内容共同参与历史全文搜索。
+
+输入框草稿每约 2 秒写入浏览器 `localStorage`，包括文本、未发送附件元数据和引用消息快照。页面恢复时会提示用户恢复或丢弃草稿。消息引用回复不会改变原消息，只是在下一条 user 消息前自动加入 Markdown 引用块。
+
+本地提醒由前端识别“提醒我”类输入并调用 `/api/reminders` 创建任务；后端把任务写入 `.reminders/reminders.json`。前端定时调用 `/api/reminders/due` 获取到期任务，再通过 Service Worker 的 `showNotification` 显示系统通知。提醒只在本地保存，不进入模型请求。
+
+## 项目空间与文档库
+
+v0.7.1 增加持久项目空间。项目元数据写入 `.projects/{projectId}/project.json`，项目文档索引写入 `.projects/{projectId}/files/{fileId}.json`。这条路径和临时附件 `.file-cache` 分离，因此不受 14 天 / 500 MB 临时缓存清理影响；用户删除项目时才会删除对应项目目录。
+
+前端通过项目侧栏创建、切换和上传文档。发送消息时，当前项目会生成 `projectId`、`projectName` 和 `projectAttachments` 快照，并与普通附件、Seek 参考文件一起合并到 user 消息的 `attachments`。后端的 `build_attachment_context()` 根据每个附件的 `projectId` 决定从项目文档库或临时缓存读取索引。
+
+文件 chunk 在写入时会同步进入 `.local-rag/rag.sqlite3`。默认路径是无额外依赖的 SQLite 元数据表 + 本地哈希 embedding；安装 `requirements-rag.txt` 后，`sqlite-vec` 会加载 `vec0` 虚表，查询时优先用本地 KNN 结果，再叠加关键词分数和相邻 chunk 扩展。配置 `LOCAL_RAG_EMBEDDING_PROVIDER=onnx`、`LOCAL_RAG_ONNX_MODEL_PATH`、`LOCAL_RAG_TOKENIZER_PATH` 后，embedding 会改由 ONNX Runtime 在本机生成。没有 native 依赖或 ONNX 模型时，系统自动回退到哈希 embedding，不改变前端附件协议。
+
+模型看到的附件上下文会包含稳定引用 ID，例如 `F1-2`。前端 Markdown 渲染器会把 `[^F1-2]` 转成引用 pin，点击后调用 `/api/file-chunk` 读取对应文件片段并打开预览面板。
+
+## 联网搜索
+
+联网搜索由 `services.search` 编排。前端的搜索模式包括关闭、自动和强制；自动模式会由后端根据用户问题判断是否需要搜索。`/api/config` 中的 `hasSearch` 只表示服务端是否配置了 `TAVILY_API_KEY`，前端还会结合设置面板里填写的 Tavily Key 计算搜索按钮是否可用。多轮搜索会并行执行各个 query，聚合结果仍按 round 编号排序，进度事件按实际完成顺序更新。
+
+发起 `/api/chat` 时，前端会在本轮请求中携带可选的 `tavilyApiKey`。后端优先使用请求级 Key；如果没有提供，则回退到服务端环境变量 `TAVILY_API_KEY`。这样电脑端没有预设 Tavily 环境变量时，手机浏览器仍可在设置里临时填写 Key 后启用联网搜索。
+
+## 本地工具调用
+
+v0.7.2 在 DeepSeek 请求层接入 function calling；v0.7.3 增加 `suggest_memory`。`build_deepseek_request()` 默认把 `python_eval`、`search_files`、`fetch_url`、`web_search`、`suggest_memory` 以及 v0.9.6 的提醒、记忆、项目文件、数据转换、图表、PPT 生成、Word/PDF 文档生成、SVG 思维导图生成和多查询搜索对比工具定义加入请求体；如果前端传入 `toolsEnabled: false`，则不发送工具定义。用户请求“做 PPT / 幻灯片 / 演示文稿”时，普通聊天会把本轮动态上下文标记为 `slides` skill（PowerPoint-style presentations，可参考 pptxgenjs / artifact tool 路线），并把 `tool_choice` 强制为 `create_pptx`；若上游最终仍未返回工具调用，`ensure_pptx_response()` 会把模型文本大纲交给 `presentations.create_presentation_from_text()` 兜底生成文件。`create_pptx` 的每页可带 `layout`，本地渲染器会生成目录页并根据标题/要点选择卡片、流程、对比、观点或总结页，避免纯 bullet deck。`create_document` 工具则用 `python-docx` / `reportlab` 把 `format`（docx/pdf）+ 结构化 `sections`（标题、正文段落、要点、可选表格）渲染成排版精美的 Word 或 PDF，并复用同一套 `/api/download` 下载链路；与 PPT 不同，文档链路只依赖模型主动调用工具，没有从文本兜底生成的步骤。用户请求“画思维导图 / 脑图 / mind map”时，后端会把 `tool_choice` 强制为 `create_mindmap`，DeepSeek 输出 `title`、可选 `subtitle` 和树状 `nodes`，本地渲染器生成 `.svg` 文件；最终回复使用 Markdown 图片语法，React 的 `frontend/src/shared/markdown/MarkdownContent.tsx` 只把本地 `/api/download?id=...` 生成文件图片块渲染为正文预览，并保留下载链接。`web.server.handle_chat()` 会注入 `localBaseUrl`，最终回复里的 `/api/download` 会重写成当前本地服务地址，避免 WebView 把相对链接解析到外部站点。
+
+同步调用由 `call_deepseek()` 驱动工具循环：当 DeepSeek 返回 `tool_calls` 时，后端调用 `services.tools.execute_tool_calls()`，把结果作为 `role=tool` 消息追加到请求，再向 DeepSeek 发起下一轮请求。流式调用会在 SSE delta 中拼接 `tool_calls` 参数，执行工具后通过 `system_note` 告知前端，然后继续下一轮流式请求。v1.6.1 起，后端会在追加工具交换时保留上游原始 `tool_call_id` 和参数 JSON，使第二轮请求可以匹配上一轮模型输出末尾的 DeepSeek prompt cache；模型侧工具结果仍用稳定 JSON 序列化，`web_search` 单轮工具查询也会复用 `.search-cache`，减少工具结果后的 DeepSeek prompt cache 提前分叉。`create_pptx`、`create_document` 和 `create_mindmap` 是终态产物工具：执行成功后后端会直接返回本地下载链接并结束本轮，不再把大段工具参数和结果追加后再请求一次 DeepSeek；它们的工具结果也会压缩为下载元数据与简短结构摘要，避免完整大纲/正文重复进入 prompt。`append_tool_exchange()` 只在末尾追加 assistant 工具调用消息（含 V4-Pro thinking 模式必需回填的 `reasoning_content`）和工具结果，使每一轮请求都是上一轮 messages 的严格前缀延伸、不改写已有消息——这是工具循环 prompt cache 能命中的前提；达到轮次上限改直接作答时，`force_final_answer_without_tools()` 也保留 `tools` 数组、仅用 `tool_choice="none"` 禁用工具，避免体量最大的收尾请求因删掉 `tools` 前缀而整段 miss。v1.6.0 起普通工具循环会把每次上游请求返回的 usage 累加后再生成最终 `usage` 与 cache diagnostics，避免最后一次强制最终回答请求覆盖前面工具回合的 cache hit 数据。`web_search` 工具会把 Tavily 单轮搜索结果压缩后返回给模型，并把搜索 rounds 作为前端进度事件持续更新。同一回合重复 query 会复用缓存结果。v0.9.6 起，安全的相邻工具调用会并行执行并按原顺序回填结果；`create_reminder`、`forget_memory`、`suggest_memory` 和共享搜索 timeline 的工具保持串行。两种模式都最多允许 5 轮工具调用，避免模型陷入无限循环。
+
+`python_eval` 通过隔离的 Python 子进程执行表达式，只允许小型数学 AST、受控函数和 2 秒超时；`data_transform` 只支持 `extract_regex`、`json_path`、`csv_summary`、`number_summary`，不执行用户代码；`search_files` 只读取本地 `.local-rag`、`.file-cache` 与 `.projects/{id}/files` 索引，优先走 SQLite / sqlite-vec 本地向量命中，失败时回退到 JSON 分块扫描；`list_project_files` / `read_file_chunk` 只走项目文档库和缓存 chunk；`fetch_url` 会先做 URL 和解析后 IP 校验，拒绝本地/私有/保留地址，再读取最多 2 MB 页面并写入 `.search-cache`；`suggest_memory` 只生成待确认建议，由前端弹窗让用户决定是否保存。
+
+## 长期记忆
+
+长期记忆保存在 `.memory/memories.json`，写入时使用进程内 `RLock` 和 `.memory/memories.lock` 跨进程锁保护读改写流程。每条记忆包含 `content`、`category`、`scope`、时间戳和稳定 id；`scope` 支持 `global`、`project:<id>` 和 `seek:<id>`。
+
+`prepare_memory_state()` 会根据请求的 `memoryScope`、最新 user 消息的 `projectId` 或 `seekId` 推断当前作用域。检索时只读取全局记忆和当前项目 / Seek 相关记忆，避免 A 项目里的背景被 B 项目对话误用。显式“记住：...”会写入当前作用域；“忘记 ...”只在全局和当前作用域内删除。
+
+模型可通过 `suggest_memory` 工具提出记忆建议。后端会先做敏感内容拦截和轻量冲突检测，然后通过 `memory_suggestion` 流事件或非流式响应的 `memorySuggestions` 返回给前端。只有用户确认后，前端才会调用 `/api/memory` 写入；如果存在冲突，保存接口返回 `memory_conflict`，用户确认替换后再带 `replaceIds` 重试。
+
+## Seek 助手
+
+Seek 助手是前端本地能力；推荐配置、自定义配置与参考文件元数据保存在浏览器本地状态，并由 React 设置和会话请求边界注入稳定系统提示。
+
+发送消息时，前端会把当前 Seek 写入 user/assistant 消息快照，包括 `seekId`、`seekName`、`seekDescription`、`seekInstructions` 和 `seekReferenceAttachments`。后续继续生成、重新生成、编辑后重发、上下文压缩和 Markdown 导出都会读取消息快照，而不是读取当前全局 active Seek。这样即使用户中途切换或删除自定义 Seek，旧历史仍能显示当时的助手名称，并保持原来的系统提示词和参考文件语义。
+
+Seek 参考文件复用普通附件上传链路：编辑自定义 Seek 时，前端调用 `/api/file-text` 解析文件并保存返回的 `fileId`、文件名、分块数量和预览文本。实际请求 `/api/chat` 时，普通聊天附件仍只显示在用户消息上；Seek 参考文件会在构建 API 消息时合并到 user 消息的附件列表，交给 `services.files.build_attachment_context()` 按当前问题检索相关片段。assistant 消息只保存 Seek 快照，不把参考文件作为 assistant 附件展开。
+
+输入区会持续渲染当前激活的 Seek 助手提示条，并提供停用按钮。卡片上的“停用”按钮走同一条 `setActiveSeek("")` 路径。点开场提示会创建新对话，避免把不同 Seek 助手混在同一段历史里。
+
+自定义 Seek 支持 JSON 导入/导出。导出的结构由 `seek_core.seekExportPayload()` 生成，包含类型标记、版本号、导出时间和规范化后的自定义 Seek 列表；v2 格式会保留参考文件元数据和本地 `fileId`。导入由 `seek_core.mergeImportedSeeks()` 统一处理，负责校验字段、跳过无效项、处理重名和 id 冲突，并继续遵守最多 40 个自定义 Seek、每个 Seek 最多 6 个参考文件的本地上限。推荐 Seek 不会直接被修改，用户可以把推荐卡片复制为自定义 Seek 后再编辑。
+
+历史列表会用 `conversation.seekId` 查找当前仍存在的 Seek；如果 Seek 已删除，则回退到消息快照中的 Seek 名称。这让旧对话在数据清理后仍然可读，也方便按历史标题快速辨认当时使用的助手。
+
+## 公式渲染
+
+公式生成和展示由 React 前端处理。请求构造层在稳定系统提示词中追加公式输出约束，引导模型使用行内或独立公式分隔符；后端仍只接收普通 `systemPrompt`，不需要新增 API 字段。
+
+公式边界识别和 Markdown 渲染位于 `frontend/src/shared/markdown/`，并保留货币符号误判保护；真正的 LaTeX 排版继续使用本地自托管的 KaTeX 资源。
+
+KaTeX 的 JS、CSS、woff2 字体和许可证都放在 `static/vendor/katex/`，不依赖外部 CDN。Markdown 渲染器会先保护行内代码和代码块，再识别公式，避免把示例源码里的 `$` 或反斜杠误渲染。若 KaTeX 尚未加载，前端会先输出 `.math-pending` 占位并在 `load` 后补渲染；解析失败时使用 `.math-error` 展示原始公式文本。KaTeX 以 `trust: false`、`throwOnError: false`、`strict: "ignore"` 运行，矩阵、分段函数、对齐公式等环境由 KaTeX 负责支持。流式生成期间，如果块级公式的闭合 fence 还没到达，前端会暂时按普通文本展示原始公式，等 `$$` 或 `\]` 闭合后再交给 KaTeX，避免半截公式反复显示红色错误。
+
+## 上下文压缩
+
+当前端发现历史过长时，会先调用 `/api/compress-context` 生成或更新摘要。后端在未提供 `contextSummary` 且有效 user/assistant 消息超过 40 条时返回 `context_compression_required`，避免静默滑窗导致历史丢失和 prefix cache 失效。
+
+## 附件流程
+
+上传走 `POST /api/file-text`。后端使用 `multipart>=1.3,<2` 的流式 parser 读取表单，抽取文件文本、分块并写入 `.file-cache/{fileId}.json`。项目文档上传走 `POST /api/project-files`，复用同一解析链路，但写入 `.projects/{projectId}/files/`。如果运行环境里的 `multipart` 命名空间被不兼容包覆盖，服务端会在解析前做能力校验并返回明确错误。聊天消息只保存附件元数据；发送消息时，`services.chat_payload.expanded_message_content()` 会调用 `services.files.build_attachment_context()`，按当前问题检索最相关的文件片段。
+
+扫描版 PDF 会先尝试原生文本抽取；没有可复制文字时才进入 OCR。PNG、JPG、WebP、BMP、TIFF、GIF 等图片会被识别为 `kind=image`，并在 OCR 开启时通过 `services.ocr.extract_image_ocr()` 提取文字。OCR 候选链优先使用 `DeepSeekApiOcrEngine`，把图片或 PDF 页面 data URL 发给 `deepseek-v4-pro` 直接转写；API Key 缺失、API 失败或返回空文本时，再回退到本机引擎。扫描 PDF OCR 仍需要 Poppler / `pdftoppm` 把页面转图；渲染 DPI 来自 `OCR_PDF_DPI`（默认 300，限制 150..450），超大图片会按 `OCR_MAX_IMAGE_PIXELS` 等比缩小。
+
+Tesseract 路线的 `OCR_MODE=fast|balanced|quality` 控制本地轻量增强档位：`fast` 少重试，`balanced` 默认使用 Otsu/自适应阈值/弱光增强候选和多个 `psm`，`quality` 额外尝试轻量倾斜校正。为提高公式截图可读性，Tesseract 参数会保留词间距并补跑单行/原始行模式；若本机安装了 `equ` 公式语言包，也会自动加入语言组合。
+
+公式 OCR 可以通过 `OCR_FORMULA_CMD` 接入本地命令行引擎，命令模板中的 `{image}` 会替换成临时图片路径；未显式配置时会自动尝试 PATH 中的 `pix2tex` 或 `latexocr`。命令输出可以是纯文本、Markdown 代码围栏或带 `latex`/`text`/`result` 字段的 JSON。DeepSeek API 返回非空结果时会直接采用；本地公式 OCR、Tesseract、Windows OCR、Android ML Kit 用于 API 不可用或空结果时的降级。OCR 仅在全局开启或上传请求携带 `ocrEnabled=1` 时运行。
+
+### 文档阅读工作台（豆包式原样阅读）
+
+上传 PDF、图片或纯文本附件后，文档阅读工作台由 `frontend/src/features/file-reader/` 和 `FilePreviewContext` 管理。桌面分栏、原文阅读器、图片 lightbox 与关闭后的历史栏恢复都由 React 状态和共享响应式样式协调。
+
+PDF 原样阅读用 `/api/file-page-image` 把每页渲染成 PNG 逐页堆叠，`/api/file-page-layout` 的归一化文字坐标在页面图片上叠加透明可选文字层，从而支持选中文字后的「解释 / 翻译 / 复制 / 问问豆包」浮动工具条；`/api/file-page-search` 支持栏内搜索与命中跳转高亮，`/api/file-page-text` 提供按页文本。截图提问在页面上框选一块区域，前端用 `canvas` 把对应原始像素裁成图片附件加入本轮提问；翻译全文与各类总结/追问只是把模板化提问写进输入框，再走普通 `/api/chat`。附件归一化必须保留 `pageCount` 与 `sourceAvailable`：前者决定逐页渲染的页数（`normalizeAttachment` 与 `normalizeStoredAttachment` 都要带上，否则多页 PDF 只会渲染 1 页），后者决定是否进入原样预览。不支持原样预览的格式回退到 `/api/file-reader` 的分段文本阅读。
+
+## 缓存与本地状态
+
+- 文件缓存：`.file-cache`，按年龄和总大小清理。
+- 搜索缓存：`.search-cache`，按过期时间清理。
+- 本地 RAG 索引：`.local-rag/rag.sqlite3`，由文件、项目文档和长期记忆同步重建。
+- 本地 Trace：`.traces/traces.sqlite3`，保存 trace run/span、耗时、usage、输入/输出摘要和错误摘要。
+- 语义缓存：`.semantic-cache/cache.sqlite3`，保存可缓存 prompt、保留的 JSON embedding、可选 `f64le-v1` BLOB、模型回答、usage 和命中计数；只有 Python 读写该数据库。
+- 长期记忆：`.memory/memories.json`，写入时使用进程内锁和 `.memory/memories.lock` 跨进程锁保护读改写流程，并按全局 / 项目 / Seek 作用域过滤检索。
+- 前端对话：浏览器 `localStorage`。
+- 自定义 Seek：浏览器 `localStorage`，最多 40 个；可导入/导出 JSON；消息中保存 Seek 快照用于历史兼容，`conversation.seekId` 只保留仍存在的 Seek id。
+- 可选保存的 DeepSeek / Tavily API Key：浏览器 `localStorage`；也可以只在本轮页面会话中临时填写。
+
+服务启动时会立即清理文件缓存和搜索缓存，并启动一个 daemon 后台循环，约每 6 小时再次清理。后台清理失败只写日志，不影响聊天请求。
+
+## HTTP 服务策略
+
+- `/api/*` 默认要求本地 token 鉴权，并返回 `Cache-Control: no-store`。
+- `/share-target` 不属于 `/api/*`，用于 PWA 系统分享 POST，只做 Host 白名单校验并把内容写入 30 分钟内存缓存；读取缓存的 `/api/share-target` 仍受 token 鉴权保护。
+- 静态资源返回 `Cache-Control: no-cache`，目录列表被禁用。
+- 访问带 `?token=...` 的根路径会设置持久认证 Cookie 并重定向到 `/`；桌面 WebView 使用 `?token=...&desktop=1` 时，服务端会在校验 token 后直接返回首页并同时写入 Cookie，避免内嵌 WebView 跟随跳转时丢失 Cookie。
+- PWA 缓存版本和旧缓存淘汰只由 `frontend/public/sw-root.js` 的 activate 阶段维护；它还会清理退役前端的旧缓存前缀，并拒绝为退役路由提供离线 SPA 回退。

@@ -1,0 +1,1450 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "scope": "validator-parity-only-not-provider-execution-evidence",
+  "check_names": [
+    "crashRecoveryObservedExistingEffect",
+    "leaseTakeoverUsedNewExecutionEpoch",
+    "realWorkerCrashOccursDuringRemoteRepair",
+    "freshWorkerTakesOverExpiredAction",
+    "takeoverExecutionEpochStrictlyIncreases",
+    "takeoverEntersReconcilingBeforeMutation",
+    "takeoverFindsExistingRemoteEffect",
+    "takeoverDoesNotCreateSecondRepairJob"
+  ],
+  "base_evidence": {
+    "actionId": "action-live",
+    "workerAPid": 101,
+    "workerBPid": 202,
+    "processAReturnCode": -9,
+    "epochA": 1,
+    "epochB": 2,
+    "repairId": "repair-live",
+    "repairPhaseAtCrash": "transferring-components",
+    "reconciliationDirective": "RESUME_EXECUTION",
+    "workerALeaseUntil": "2026-08-28T12:00:10Z",
+    "remoteRepairJobCountBefore": 1,
+    "remoteRepairJobCountAfter": 1,
+    "remoteRepairJobIdsBefore": [
+      "repair-live"
+    ],
+    "remoteRepairJobIdsAfter": [
+      "repair-live"
+    ],
+    "journalEvents": [
+      {
+        "actionId": "action-live",
+        "eventType": "STATE_TRANSITION",
+        "state": "EXECUTING",
+        "executionEpoch": 1,
+        "ownerInstanceId": "crash-worker-a-101",
+        "effectHandle": {
+          "kind": "repair",
+          "repairId": "repair-live"
+        },
+        "createdAt": "2026-08-28T12:00:01Z"
+      },
+      {
+        "actionId": "action-live",
+        "eventType": "ACTION_TAKEOVER",
+        "state": "RECONCILING",
+        "executionEpoch": 2,
+        "ownerInstanceId": "takeover-worker-b-202",
+        "effectHandle": {
+          "kind": "repair",
+          "repairId": "repair-live"
+        },
+        "createdAt": "2026-08-28T12:00:11Z"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "valid-live-repair-observations",
+      "operations": [],
+      "expected_errors": []
+    },
+    {
+      "name": "non-object",
+      "operations": [],
+      "expected_errors": [
+        "evidence-must-be-object"
+      ],
+      "evidence": []
+    },
+    {
+      "name": "empty",
+      "operations": [],
+      "expected_errors": [
+        "missing-field:actionId",
+        "missing-field:workerAPid",
+        "missing-field:workerBPid",
+        "missing-field:processAReturnCode",
+        "missing-field:epochA",
+        "missing-field:epochB",
+        "missing-field:repairId",
+        "missing-field:repairPhaseAtCrash",
+        "missing-field:reconciliationDirective",
+        "missing-field:workerALeaseUntil",
+        "missing-field:remoteRepairJobCountBefore",
+        "missing-field:remoteRepairJobCountAfter",
+        "missing-field:remoteRepairJobIdsBefore",
+        "missing-field:remoteRepairJobIdsAfter",
+        "missing-field:journalEvents",
+        "invalid-crash-takeover-numeric-fields"
+      ],
+      "evidence": {}
+    },
+    {
+      "name": "missing-actionId",
+      "operations": [
+        {
+          "op": "remove",
+          "pointer": "/actionId",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:actionId"
+      ]
+    },
+    {
+      "name": "missing-workerAPid",
+      "operations": [
+        {
+          "op": "remove",
+          "pointer": "/workerAPid",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:workerAPid",
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "missing-workerBPid",
+      "operations": [
+        {
+          "op": "remove",
+          "pointer": "/workerBPid",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:workerBPid",
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "missing-processAReturnCode",
+      "operations": [
+        {
+          "op": "remove",
+          "pointer": "/processAReturnCode",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:processAReturnCode",
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "missing-epochA",
+      "operations": [
+        {
+          "op": "remove",
+          "pointer": "/epochA",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:epochA",
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "missing-epochB",
+      "operations": [
+        {
+          "op": "remove",
+          "pointer": "/epochB",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:epochB",
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "missing-repairId",
+      "operations": [
+        {
+          "op": "remove",
+          "pointer": "/repairId",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:repairId",
+        "underlying-repair-job-identity-not-stable",
+        "missing-worker-a-executing-effect-event",
+        "missing-worker-b-reconciling-event"
+      ]
+    },
+    {
+      "name": "missing-repairPhaseAtCrash",
+      "operations": [
+        {
+          "op": "remove",
+          "pointer": "/repairPhaseAtCrash",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:repairPhaseAtCrash",
+        "worker-a-not-killed-during-active-repair"
+      ]
+    },
+    {
+      "name": "missing-reconciliationDirective",
+      "operations": [
+        {
+          "op": "remove",
+          "pointer": "/reconciliationDirective",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:reconciliationDirective",
+        "invalid-reconciliation-directive"
+      ]
+    },
+    {
+      "name": "missing-workerALeaseUntil",
+      "operations": [
+        {
+          "op": "remove",
+          "pointer": "/workerALeaseUntil",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:workerALeaseUntil",
+        "invalid-worker-a-lease-expiry"
+      ]
+    },
+    {
+      "name": "missing-remoteRepairJobCountBefore",
+      "operations": [
+        {
+          "op": "remove",
+          "pointer": "/remoteRepairJobCountBefore",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:remoteRepairJobCountBefore",
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "missing-remoteRepairJobCountAfter",
+      "operations": [
+        {
+          "op": "remove",
+          "pointer": "/remoteRepairJobCountAfter",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:remoteRepairJobCountAfter",
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "missing-remoteRepairJobIdsBefore",
+      "operations": [
+        {
+          "op": "remove",
+          "pointer": "/remoteRepairJobIdsBefore",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:remoteRepairJobIdsBefore",
+        "underlying-repair-job-identity-not-stable"
+      ]
+    },
+    {
+      "name": "missing-remoteRepairJobIdsAfter",
+      "operations": [
+        {
+          "op": "remove",
+          "pointer": "/remoteRepairJobIdsAfter",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:remoteRepairJobIdsAfter",
+        "underlying-repair-job-identity-not-stable"
+      ]
+    },
+    {
+      "name": "missing-journalEvents",
+      "operations": [
+        {
+          "op": "remove",
+          "pointer": "/journalEvents",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:journalEvents",
+        "journal-events-must-be-list"
+      ]
+    },
+    {
+      "name": "workerAPid-invalid-True",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerAPid",
+          "value": true
+        }
+      ],
+      "expected_errors": [
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "workerAPid-invalid-'1.0'",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerAPid",
+          "value": "1.0"
+        }
+      ],
+      "expected_errors": [
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "workerAPid-invalid-None",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerAPid",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:workerAPid",
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "workerBPid-invalid-True",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerBPid",
+          "value": true
+        }
+      ],
+      "expected_errors": [
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "workerBPid-invalid-'1.0'",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerBPid",
+          "value": "1.0"
+        }
+      ],
+      "expected_errors": [
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "workerBPid-invalid-None",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerBPid",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:workerBPid",
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "epochA-invalid-True",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/epochA",
+          "value": true
+        }
+      ],
+      "expected_errors": [
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "epochA-invalid-'1.0'",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/epochA",
+          "value": "1.0"
+        }
+      ],
+      "expected_errors": [
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "epochA-invalid-None",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/epochA",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:epochA",
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "epochB-invalid-True",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/epochB",
+          "value": true
+        }
+      ],
+      "expected_errors": [
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "epochB-invalid-'1.0'",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/epochB",
+          "value": "1.0"
+        }
+      ],
+      "expected_errors": [
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "epochB-invalid-None",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/epochB",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:epochB",
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "processAReturnCode-invalid-True",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/processAReturnCode",
+          "value": true
+        }
+      ],
+      "expected_errors": [
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "processAReturnCode-invalid-'1.0'",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/processAReturnCode",
+          "value": "1.0"
+        }
+      ],
+      "expected_errors": [
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "processAReturnCode-invalid-None",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/processAReturnCode",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:processAReturnCode",
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "remoteRepairJobCountBefore-invalid-True",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/remoteRepairJobCountBefore",
+          "value": true
+        }
+      ],
+      "expected_errors": [
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "remoteRepairJobCountBefore-invalid-'1.0'",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/remoteRepairJobCountBefore",
+          "value": "1.0"
+        }
+      ],
+      "expected_errors": [
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "remoteRepairJobCountBefore-invalid-None",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/remoteRepairJobCountBefore",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:remoteRepairJobCountBefore",
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "remoteRepairJobCountAfter-invalid-True",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/remoteRepairJobCountAfter",
+          "value": true
+        }
+      ],
+      "expected_errors": [
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "remoteRepairJobCountAfter-invalid-'1.0'",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/remoteRepairJobCountAfter",
+          "value": "1.0"
+        }
+      ],
+      "expected_errors": [
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "remoteRepairJobCountAfter-invalid-None",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/remoteRepairJobCountAfter",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-field:remoteRepairJobCountAfter",
+        "invalid-crash-takeover-numeric-fields"
+      ]
+    },
+    {
+      "name": "same-pids",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerBPid",
+          "value": 101
+        }
+      ],
+      "expected_errors": [
+        "worker-pids-not-distinct-positive",
+        "missing-worker-b-reconciling-event"
+      ]
+    },
+    {
+      "name": "non-positive-pid",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerAPid",
+          "value": 0
+        }
+      ],
+      "expected_errors": [
+        "worker-pids-not-distinct-positive"
+      ]
+    },
+    {
+      "name": "clean-exit",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/processAReturnCode",
+          "value": 0
+        }
+      ],
+      "expected_errors": [
+        "worker-a-not-hard-terminated"
+      ]
+    },
+    {
+      "name": "windows-exit",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/processAReturnCode",
+          "value": 1
+        }
+      ],
+      "expected_errors": []
+    },
+    {
+      "name": "equal-epochs",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/epochB",
+          "value": 1
+        }
+      ],
+      "expected_errors": [
+        "takeover-execution-epoch-not-increased",
+        "missing-worker-b-reconciling-event"
+      ]
+    },
+    {
+      "name": "decreasing-epochs",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/epochB",
+          "value": 0
+        }
+      ],
+      "expected_errors": [
+        "takeover-execution-epoch-not-increased",
+        "missing-worker-b-reconciling-event"
+      ]
+    },
+    {
+      "name": "duplicate-remote-jobs",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/remoteRepairJobCountAfter",
+          "value": 2
+        }
+      ],
+      "expected_errors": [
+        "underlying-repair-job-count-not-exactly-one",
+        "underlying-repair-job-identity-not-stable"
+      ]
+    },
+    {
+      "name": "no-remote-job",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/remoteRepairJobCountBefore",
+          "value": 0
+        }
+      ],
+      "expected_errors": [
+        "underlying-repair-job-count-not-exactly-one",
+        "underlying-repair-job-identity-not-stable"
+      ]
+    },
+    {
+      "name": "missing-before-id",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/remoteRepairJobIdsBefore",
+          "value": []
+        }
+      ],
+      "expected_errors": [
+        "underlying-repair-job-identity-not-stable"
+      ]
+    },
+    {
+      "name": "wrong-after-id",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/remoteRepairJobIdsAfter",
+          "value": [
+            "other-repair"
+          ]
+        }
+      ],
+      "expected_errors": [
+        "underlying-repair-job-identity-not-stable"
+      ]
+    },
+    {
+      "name": "non-list-before-ids",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/remoteRepairJobIdsBefore",
+          "value": "repair-live"
+        }
+      ],
+      "expected_errors": [
+        "underlying-repair-job-identity-not-stable"
+      ]
+    },
+    {
+      "name": "idle-at-crash",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/repairPhaseAtCrash",
+          "value": "complete"
+        }
+      ],
+      "expected_errors": [
+        "worker-a-not-killed-during-active-repair"
+      ]
+    },
+    {
+      "name": "wrong-directive",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/reconciliationDirective",
+          "value": "CREATE_NEW_EFFECT"
+        }
+      ],
+      "expected_errors": [
+        "invalid-reconciliation-directive"
+      ]
+    },
+    {
+      "name": "advance-to-verifying",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/reconciliationDirective",
+          "value": "ADVANCE_TO_VERIFYING"
+        }
+      ],
+      "expected_errors": []
+    },
+    {
+      "name": "journal-not-list",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/journalEvents",
+          "value": "reported"
+        }
+      ],
+      "expected_errors": [
+        "journal-events-must-be-list"
+      ]
+    },
+    {
+      "name": "journal-empty",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/journalEvents",
+          "value": []
+        }
+      ],
+      "expected_errors": [
+        "missing-worker-a-executing-effect-event",
+        "missing-worker-b-reconciling-event"
+      ]
+    },
+    {
+      "name": "reversed-events",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/journalEvents",
+          "value": [
+            {
+              "actionId": "action-live",
+              "eventType": "ACTION_TAKEOVER",
+              "state": "RECONCILING",
+              "executionEpoch": 2,
+              "ownerInstanceId": "takeover-worker-b-202",
+              "effectHandle": {
+                "kind": "repair",
+                "repairId": "repair-live"
+              },
+              "createdAt": "2026-08-28T12:00:11Z"
+            },
+            {
+              "actionId": "action-live",
+              "eventType": "STATE_TRANSITION",
+              "state": "EXECUTING",
+              "executionEpoch": 1,
+              "ownerInstanceId": "crash-worker-a-101",
+              "effectHandle": {
+                "kind": "repair",
+                "repairId": "repair-live"
+              },
+              "createdAt": "2026-08-28T12:00:01Z"
+            }
+          ]
+        }
+      ],
+      "expected_errors": [
+        "reconciling-event-not-after-executing-event"
+      ]
+    },
+    {
+      "name": "non-object-event",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/0",
+          "value": null
+        }
+      ],
+      "expected_errors": [
+        "missing-worker-a-executing-effect-event"
+      ]
+    },
+    {
+      "name": "bad-event-epoch",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/executionEpoch",
+          "value": "invalid"
+        }
+      ],
+      "expected_errors": [
+        "missing-worker-b-reconciling-event"
+      ]
+    },
+    {
+      "name": "wrong-effect-kind",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/effectHandle/kind",
+          "value": "drill"
+        }
+      ],
+      "expected_errors": [
+        "missing-worker-b-reconciling-event"
+      ]
+    },
+    {
+      "name": "wrong-effect-id",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/0/effectHandle/repairId",
+          "value": "other"
+        }
+      ],
+      "expected_errors": [
+        "missing-worker-a-executing-effect-event"
+      ]
+    },
+    {
+      "name": "bad-effect-object",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/effectHandle",
+          "value": []
+        }
+      ],
+      "expected_errors": [
+        "missing-worker-b-reconciling-event"
+      ]
+    },
+    {
+      "name": "wrong-owner",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/ownerInstanceId",
+          "value": "worker-b-303"
+        }
+      ],
+      "expected_errors": [
+        "missing-worker-b-reconciling-event"
+      ]
+    },
+    {
+      "name": "wrong-state",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/state",
+          "value": "EXECUTING"
+        }
+      ],
+      "expected_errors": [
+        "missing-worker-b-reconciling-event"
+      ]
+    },
+    {
+      "name": "wrong-event-type",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/eventType",
+          "value": "STATE_TRANSITION"
+        }
+      ],
+      "expected_errors": [
+        "missing-worker-b-reconciling-event"
+      ]
+    },
+    {
+      "name": "coerced-epochs",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/epochA",
+          "value": " +0_1 "
+        },
+        {
+          "op": "replace",
+          "pointer": "/epochB",
+          "value": "２"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/0/executionEpoch",
+          "value": "01"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/executionEpoch",
+          "value": "٢"
+        }
+      ],
+      "expected_errors": []
+    },
+    {
+      "name": "multiple-process-and-journal-errors",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerBPid",
+          "value": 101
+        },
+        {
+          "op": "replace",
+          "pointer": "/processAReturnCode",
+          "value": 0
+        },
+        {
+          "op": "replace",
+          "pointer": "/epochB",
+          "value": 1
+        },
+        {
+          "op": "replace",
+          "pointer": "/remoteRepairJobCountAfter",
+          "value": 2
+        },
+        {
+          "op": "replace",
+          "pointer": "/repairPhaseAtCrash",
+          "value": "idle"
+        },
+        {
+          "op": "replace",
+          "pointer": "/reconciliationDirective",
+          "value": "bad"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents",
+          "value": false
+        }
+      ],
+      "expected_errors": [
+        "worker-pids-not-distinct-positive",
+        "worker-a-not-hard-terminated",
+        "takeover-execution-epoch-not-increased",
+        "underlying-repair-job-count-not-exactly-one",
+        "underlying-repair-job-identity-not-stable",
+        "worker-a-not-killed-during-active-repair",
+        "invalid-reconciliation-directive",
+        "journal-events-must-be-list"
+      ]
+    },
+    {
+      "name": "equal-lease-expiry",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerALeaseUntil",
+          "value": "2026-08-28T12:00:10Z"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/createdAt",
+          "value": "2026-08-28T12:00:10Z"
+        }
+      ],
+      "expected_errors": [
+        "takeover-occurred-before-worker-a-lease-expiry"
+      ]
+    },
+    {
+      "name": "takeover-before-expiry",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerALeaseUntil",
+          "value": "2026-08-28T12:00:10Z"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/createdAt",
+          "value": "2026-08-28T12:00:09Z"
+        }
+      ],
+      "expected_errors": [
+        "takeover-occurred-before-worker-a-lease-expiry"
+      ]
+    },
+    {
+      "name": "microsecond-order",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerALeaseUntil",
+          "value": "2026-08-28T12:00:10.123456Z"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/createdAt",
+          "value": "2026-08-28T12:00:10.123457Z"
+        }
+      ],
+      "expected_errors": []
+    },
+    {
+      "name": "microsecond-equality",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerALeaseUntil",
+          "value": "2026-08-28T12:00:10.123456Z"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/createdAt",
+          "value": "2026-08-28T12:00:10.123456Z"
+        }
+      ],
+      "expected_errors": [
+        "takeover-occurred-before-worker-a-lease-expiry"
+      ]
+    },
+    {
+      "name": "timezone-equivalent",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerALeaseUntil",
+          "value": "2026-08-28T20:00:10+08:00"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/createdAt",
+          "value": "2026-08-28T12:00:10+00:00"
+        }
+      ],
+      "expected_errors": [
+        "takeover-occurred-before-worker-a-lease-expiry"
+      ]
+    },
+    {
+      "name": "timezone-order",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerALeaseUntil",
+          "value": "2026-08-28T20:00:10+08:00"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/createdAt",
+          "value": "2026-08-28T07:00:11-05:00"
+        }
+      ],
+      "expected_errors": []
+    },
+    {
+      "name": "space-separator",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerALeaseUntil",
+          "value": "2026-08-28 12:00:10+00:00"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/createdAt",
+          "value": "2026-08-28 12:00:11+00:00"
+        }
+      ],
+      "expected_errors": []
+    },
+    {
+      "name": "offset-seconds",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerALeaseUntil",
+          "value": "2026-08-28T12:00:10+00:00:30"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/createdAt",
+          "value": "2026-08-28T11:59:40+00:00"
+        }
+      ],
+      "expected_errors": [
+        "takeover-occurred-before-worker-a-lease-expiry"
+      ]
+    },
+    {
+      "name": "leap-day",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerALeaseUntil",
+          "value": "2024-02-29T23:59:59Z"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/createdAt",
+          "value": "2024-03-01T00:00:00Z"
+        }
+      ],
+      "expected_errors": []
+    },
+    {
+      "name": "invalid-leap-day",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerALeaseUntil",
+          "value": "2026-02-29T12:00:10Z"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/createdAt",
+          "value": "2026-03-01T12:00:11Z"
+        }
+      ],
+      "expected_errors": [
+        "invalid-worker-a-lease-expiry"
+      ]
+    },
+    {
+      "name": "invalid-hour",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerALeaseUntil",
+          "value": "2026-08-28T24:00:10Z"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/createdAt",
+          "value": "2026-08-28T12:00:11Z"
+        }
+      ],
+      "expected_errors": [
+        "invalid-worker-a-lease-expiry"
+      ]
+    },
+    {
+      "name": "invalid-offset",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerALeaseUntil",
+          "value": "2026-08-28T12:00:10+24:00"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/createdAt",
+          "value": "2026-08-28T12:00:11Z"
+        }
+      ],
+      "expected_errors": [
+        "invalid-worker-a-lease-expiry"
+      ]
+    },
+    {
+      "name": "naive-lease",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerALeaseUntil",
+          "value": "2026-08-28T12:00:10"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/createdAt",
+          "value": "2026-08-28T12:00:11Z"
+        }
+      ],
+      "oracle_exception": "TypeError",
+      "expected_errors": [
+        "invalid-worker-a-lease-expiry"
+      ]
+    },
+    {
+      "name": "naive-takeover",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerALeaseUntil",
+          "value": "2026-08-28T12:00:10Z"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/createdAt",
+          "value": "2026-08-28T12:00:11"
+        }
+      ],
+      "expected_errors": [
+        "missing-worker-b-takeover-timestamp"
+      ]
+    },
+    {
+      "name": "invalid-lease",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerALeaseUntil",
+          "value": "bad"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/createdAt",
+          "value": "2026-08-28T12:00:11Z"
+        }
+      ],
+      "expected_errors": [
+        "invalid-worker-a-lease-expiry"
+      ]
+    },
+    {
+      "name": "invalid-takeover",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/workerALeaseUntil",
+          "value": "2026-08-28T12:00:10Z"
+        },
+        {
+          "op": "replace",
+          "pointer": "/journalEvents/1/createdAt",
+          "value": "bad"
+        }
+      ],
+      "expected_errors": [
+        "missing-worker-b-takeover-timestamp"
+      ]
+    },
+    {
+      "name": "later-execution",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/journalEvents",
+          "value": [
+            {
+              "actionId": "action-live",
+              "eventType": "STATE_TRANSITION",
+              "state": "EXECUTING",
+              "executionEpoch": 1,
+              "ownerInstanceId": "crash-worker-a-101",
+              "effectHandle": {
+                "kind": "repair",
+                "repairId": "repair-live"
+              },
+              "createdAt": "2026-08-28T12:00:01Z"
+            },
+            {
+              "actionId": "action-live",
+              "eventType": "ACTION_TAKEOVER",
+              "state": "RECONCILING",
+              "executionEpoch": 2,
+              "ownerInstanceId": "takeover-worker-b-202",
+              "effectHandle": {
+                "kind": "repair",
+                "repairId": "repair-live"
+              },
+              "createdAt": "2026-08-28T12:00:11Z"
+            },
+            {
+              "actionId": "action-live",
+              "eventType": "STATE_TRANSITION",
+              "state": "EXECUTING",
+              "executionEpoch": 1,
+              "ownerInstanceId": "crash-worker-a-101",
+              "effectHandle": {
+                "kind": "repair",
+                "repairId": "repair-live"
+              },
+              "createdAt": "2026-08-28T12:00:01Z"
+            }
+          ]
+        }
+      ],
+      "expected_errors": [
+        "reconciling-event-not-after-executing-event"
+      ]
+    },
+    {
+      "name": "later-takeover-bad-time",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/journalEvents",
+          "value": [
+            {
+              "actionId": "action-live",
+              "eventType": "STATE_TRANSITION",
+              "state": "EXECUTING",
+              "executionEpoch": 1,
+              "ownerInstanceId": "crash-worker-a-101",
+              "effectHandle": {
+                "kind": "repair",
+                "repairId": "repair-live"
+              },
+              "createdAt": "2026-08-28T12:00:01Z"
+            },
+            {
+              "actionId": "action-live",
+              "eventType": "ACTION_TAKEOVER",
+              "state": "RECONCILING",
+              "executionEpoch": 2,
+              "ownerInstanceId": "takeover-worker-b-202",
+              "effectHandle": {
+                "kind": "repair",
+                "repairId": "repair-live"
+              },
+              "createdAt": "2026-08-28T12:00:11Z"
+            },
+            {
+              "actionId": "action-live",
+              "eventType": "ACTION_TAKEOVER",
+              "state": "RECONCILING",
+              "executionEpoch": 2,
+              "ownerInstanceId": "takeover-worker-b-202",
+              "effectHandle": {
+                "kind": "repair",
+                "repairId": "repair-live"
+              },
+              "createdAt": "bad"
+            }
+          ]
+        }
+      ],
+      "expected_errors": [
+        "missing-worker-b-takeover-timestamp"
+      ]
+    },
+    {
+      "name": "later-takeover-naive-time",
+      "operations": [
+        {
+          "op": "replace",
+          "pointer": "/journalEvents",
+          "value": [
+            {
+              "actionId": "action-live",
+              "eventType": "STATE_TRANSITION",
+              "state": "EXECUTING",
+              "executionEpoch": 1,
+              "ownerInstanceId": "crash-worker-a-101",
+              "effectHandle": {
+                "kind": "repair",
+                "repairId": "repair-live"
+              },
+              "createdAt": "2026-08-28T12:00:01Z"
+            },
+            {
+              "actionId": "action-live",
+              "eventType": "ACTION_TAKEOVER",
+              "state": "RECONCILING",
+              "executionEpoch": 2,
+              "ownerInstanceId": "takeover-worker-b-202",
+              "effectHandle": {
+                "kind": "repair",
+                "repairId": "repair-live"
+              },
+              "createdAt": "2026-08-28T12:00:11Z"
+            },
+            {
+              "actionId": "action-live",
+              "eventType": "ACTION_TAKEOVER",
+              "state": "RECONCILING",
+              "executionEpoch": 2,
+              "ownerInstanceId": "takeover-worker-b-202",
+              "effectHandle": {
+                "kind": "repair",
+                "repairId": "repair-live"
+              },
+              "createdAt": "2026-08-28T12:00:12"
+            }
+          ]
+        }
+      ],
+      "expected_errors": []
+    }
+  ]
+}

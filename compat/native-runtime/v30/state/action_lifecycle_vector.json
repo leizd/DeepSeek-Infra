@@ -1,0 +1,1108 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "execution": "isolated-source-snapshot-real-sqlite",
+  "current_worktree_imported": false,
+  "source_sha256": {
+    "deepseek_infra/infra/workspace/resilience_action_journal.py": "2d04d383c8a089a4c1cc6a59767d0550c098c08d432b0b7342992c4e8030fbac",
+    "deepseek_infra/infra/workspace/resilience_resource_locks.py": "4c3ee606d7b853d6ae604ed111870d22d3ebfed7865511c974d0c2fdd3630e8f",
+    "deepseek_infra/infra/workspace/autonomous_action_policy.py": "20ca440e1462849e2930c9c1173398b847e878d2f8d977037c6aa0ed3feee935",
+    "deepseek_infra/infra/workspace/resilience_slo_ledger.py": "c9bc3f6558984d7d32e93d2f59ee619ce1ab1abb17dba7e4b7871c7cb6075216"
+  },
+  "now": "2026-09-09T00:00:00+00:00",
+  "cases": [
+    {
+      "id": "fresh-claim",
+      "action": {
+        "actionId": "oracle-action",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {
+          "destTargetId": "target-a"
+        }
+      },
+      "steps": [
+        {
+          "op": "admit",
+          "owner": "original",
+          "lease_seconds": 10,
+          "at_seconds": 0
+        }
+      ],
+      "observations": [
+        {
+          "state": "PENDING",
+          "epoch": 0,
+          "owner": null,
+          "lease_until": null,
+          "effect_class": "NO_EFFECT",
+          "locks": [],
+          "events": []
+        },
+        {
+          "state": "CLAIMED",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed"
+        }
+      ]
+    },
+    {
+      "id": "takeover-CLAIMED",
+      "action": {
+        "actionId": "oracle-action",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {
+          "destTargetId": "target-a"
+        }
+      },
+      "steps": [
+        {
+          "op": "admit",
+          "owner": "original",
+          "lease_seconds": 10,
+          "at_seconds": 0
+        },
+        {
+          "op": "update-state",
+          "state": "CLAIMED",
+          "epoch": 1,
+          "token": "original",
+          "at_seconds": 0
+        },
+        {
+          "op": "admit",
+          "owner": "successor",
+          "lease_seconds": 10,
+          "at_seconds": 11
+        }
+      ],
+      "observations": [
+        {
+          "state": "CLAIMED",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed"
+        },
+        {
+          "state": "CLAIMED",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            },
+            {
+              "type": "STATE_TRANSITION",
+              "state": "CLAIMED",
+              "epoch": 1
+            }
+          ]
+        },
+        {
+          "state": "RECONCILING",
+          "epoch": 2,
+          "owner": "successor",
+          "lease_until": "2026-09-09T00:00:21Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "successor",
+              "lease_until": "2026-09-09T00:00:21Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            },
+            {
+              "type": "STATE_TRANSITION",
+              "state": "CLAIMED",
+              "epoch": 1
+            },
+            {
+              "type": "ACTION_TAKEOVER",
+              "state": "RECONCILING",
+              "epoch": 2
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed",
+          "token_replaced": true
+        }
+      ]
+    },
+    {
+      "id": "takeover-EXECUTING",
+      "action": {
+        "actionId": "oracle-action",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {
+          "destTargetId": "target-a"
+        }
+      },
+      "steps": [
+        {
+          "op": "admit",
+          "owner": "original",
+          "lease_seconds": 10,
+          "at_seconds": 0
+        },
+        {
+          "op": "update-state",
+          "state": "EXECUTING",
+          "epoch": 1,
+          "token": "original",
+          "at_seconds": 0
+        },
+        {
+          "op": "admit",
+          "owner": "successor",
+          "lease_seconds": 10,
+          "at_seconds": 11
+        }
+      ],
+      "observations": [
+        {
+          "state": "CLAIMED",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed"
+        },
+        {
+          "state": "EXECUTING",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            },
+            {
+              "type": "STATE_TRANSITION",
+              "state": "EXECUTING",
+              "epoch": 1
+            }
+          ]
+        },
+        {
+          "state": "RECONCILING",
+          "epoch": 2,
+          "owner": "successor",
+          "lease_until": "2026-09-09T00:00:21Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "successor",
+              "lease_until": "2026-09-09T00:00:21Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            },
+            {
+              "type": "STATE_TRANSITION",
+              "state": "EXECUTING",
+              "epoch": 1
+            },
+            {
+              "type": "ACTION_TAKEOVER",
+              "state": "RECONCILING",
+              "epoch": 2
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed",
+          "token_replaced": true
+        }
+      ]
+    },
+    {
+      "id": "takeover-RECONCILING",
+      "action": {
+        "actionId": "oracle-action",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {
+          "destTargetId": "target-a"
+        }
+      },
+      "steps": [
+        {
+          "op": "admit",
+          "owner": "original",
+          "lease_seconds": 10,
+          "at_seconds": 0
+        },
+        {
+          "op": "update-state",
+          "state": "RECONCILING",
+          "epoch": 1,
+          "token": "original",
+          "at_seconds": 0
+        },
+        {
+          "op": "admit",
+          "owner": "successor",
+          "lease_seconds": 10,
+          "at_seconds": 11
+        }
+      ],
+      "observations": [
+        {
+          "state": "CLAIMED",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed"
+        },
+        {
+          "state": "RECONCILING",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            },
+            {
+              "type": "STATE_TRANSITION",
+              "state": "RECONCILING",
+              "epoch": 1
+            }
+          ]
+        },
+        {
+          "state": "RECONCILING",
+          "epoch": 2,
+          "owner": "successor",
+          "lease_until": "2026-09-09T00:00:21Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "successor",
+              "lease_until": "2026-09-09T00:00:21Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            },
+            {
+              "type": "STATE_TRANSITION",
+              "state": "RECONCILING",
+              "epoch": 1
+            },
+            {
+              "type": "ACTION_TAKEOVER",
+              "state": "RECONCILING",
+              "epoch": 2
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed",
+          "token_replaced": true
+        }
+      ]
+    },
+    {
+      "id": "takeover-VERIFYING",
+      "action": {
+        "actionId": "oracle-action",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {
+          "destTargetId": "target-a"
+        }
+      },
+      "steps": [
+        {
+          "op": "admit",
+          "owner": "original",
+          "lease_seconds": 10,
+          "at_seconds": 0
+        },
+        {
+          "op": "update-state",
+          "state": "VERIFYING",
+          "epoch": 1,
+          "token": "original",
+          "at_seconds": 0
+        },
+        {
+          "op": "admit",
+          "owner": "successor",
+          "lease_seconds": 10,
+          "at_seconds": 11
+        }
+      ],
+      "observations": [
+        {
+          "state": "CLAIMED",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed"
+        },
+        {
+          "state": "VERIFYING",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            },
+            {
+              "type": "STATE_TRANSITION",
+              "state": "VERIFYING",
+              "epoch": 1
+            }
+          ]
+        },
+        {
+          "state": "RECONCILING",
+          "epoch": 2,
+          "owner": "successor",
+          "lease_until": "2026-09-09T00:00:21Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "successor",
+              "lease_until": "2026-09-09T00:00:21Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            },
+            {
+              "type": "STATE_TRANSITION",
+              "state": "VERIFYING",
+              "epoch": 1
+            },
+            {
+              "type": "ACTION_TAKEOVER",
+              "state": "RECONCILING",
+              "epoch": 2
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed",
+          "token_replaced": true
+        }
+      ]
+    },
+    {
+      "id": "takeover-ASSESSING_EFFECT",
+      "action": {
+        "actionId": "oracle-action",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {
+          "destTargetId": "target-a"
+        }
+      },
+      "steps": [
+        {
+          "op": "admit",
+          "owner": "original",
+          "lease_seconds": 10,
+          "at_seconds": 0
+        },
+        {
+          "op": "update-state",
+          "state": "ASSESSING_EFFECT",
+          "epoch": 1,
+          "token": "original",
+          "at_seconds": 0
+        },
+        {
+          "op": "admit",
+          "owner": "successor",
+          "lease_seconds": 10,
+          "at_seconds": 11
+        }
+      ],
+      "observations": [
+        {
+          "state": "CLAIMED",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed"
+        },
+        {
+          "state": "ASSESSING_EFFECT",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            },
+            {
+              "type": "STATE_TRANSITION",
+              "state": "ASSESSING_EFFECT",
+              "epoch": 1
+            }
+          ]
+        },
+        {
+          "state": "RECONCILING",
+          "epoch": 2,
+          "owner": "successor",
+          "lease_until": "2026-09-09T00:00:21Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "successor",
+              "lease_until": "2026-09-09T00:00:21Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            },
+            {
+              "type": "STATE_TRANSITION",
+              "state": "ASSESSING_EFFECT",
+              "epoch": 1
+            },
+            {
+              "type": "ACTION_TAKEOVER",
+              "state": "RECONCILING",
+              "epoch": 2
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed",
+          "token_replaced": true
+        }
+      ]
+    },
+    {
+      "id": "takeover-at-deadline",
+      "action": {
+        "actionId": "oracle-action",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {
+          "destTargetId": "target-a"
+        }
+      },
+      "steps": [
+        {
+          "op": "admit",
+          "owner": "original",
+          "lease_seconds": 10,
+          "at_seconds": 0
+        },
+        {
+          "op": "admit",
+          "owner": "successor",
+          "lease_seconds": 60,
+          "at_seconds": 10
+        }
+      ],
+      "observations": [
+        {
+          "state": "CLAIMED",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed"
+        },
+        {
+          "state": "CLAIMED",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            }
+          ],
+          "admitted": false,
+          "reason": "claim-rejected-not-pending-or-active-lease"
+        }
+      ]
+    },
+    {
+      "id": "renew-expired-current-token",
+      "action": {
+        "actionId": "oracle-action",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {
+          "destTargetId": "target-a"
+        }
+      },
+      "steps": [
+        {
+          "op": "admit",
+          "owner": "original",
+          "lease_seconds": 10,
+          "at_seconds": 0
+        },
+        {
+          "op": "renew",
+          "epoch": 1,
+          "token": "original",
+          "lease_seconds": 10,
+          "at_seconds": 11
+        }
+      ],
+      "observations": [
+        {
+          "state": "CLAIMED",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed"
+        },
+        {
+          "state": "CLAIMED",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:21Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:21Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            }
+          ],
+          "renewed": true
+        }
+      ]
+    },
+    {
+      "id": "unknown-is-terminal",
+      "action": {
+        "actionId": "oracle-action",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {
+          "destTargetId": "target-a"
+        }
+      },
+      "steps": [
+        {
+          "op": "admit",
+          "owner": "original",
+          "lease_seconds": 10,
+          "at_seconds": 0
+        },
+        {
+          "op": "update-state",
+          "state": "EFFECT_UNKNOWN",
+          "epoch": 1,
+          "token": "original",
+          "at_seconds": 0
+        },
+        {
+          "op": "admit",
+          "owner": "resilience-worker",
+          "lease_seconds": 60,
+          "at_seconds": 11
+        },
+        {
+          "op": "renew",
+          "epoch": 1,
+          "token": "original",
+          "lease_seconds": 120,
+          "at_seconds": 11
+        }
+      ],
+      "observations": [
+        {
+          "state": "CLAIMED",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed"
+        },
+        {
+          "state": "EFFECT_UNKNOWN",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            },
+            {
+              "type": "STATE_TRANSITION",
+              "state": "EFFECT_UNKNOWN",
+              "epoch": 1
+            }
+          ],
+          "admitted": false,
+          "renewed": false,
+          "reason": "claim-rejected-not-pending-or-active-lease"
+        }
+      ]
+    },
+    {
+      "id": "repeated-takeover",
+      "action": {
+        "actionId": "oracle-action",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {
+          "destTargetId": "target-a"
+        }
+      },
+      "steps": [
+        {
+          "op": "admit",
+          "owner": "original",
+          "lease_seconds": 10,
+          "at_seconds": 0
+        },
+        {
+          "op": "admit",
+          "owner": "successor",
+          "lease_seconds": 10,
+          "at_seconds": 11
+        },
+        {
+          "op": "admit",
+          "owner": "successor",
+          "lease_seconds": 10,
+          "at_seconds": 22
+        }
+      ],
+      "observations": [
+        {
+          "state": "CLAIMED",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed"
+        },
+        {
+          "state": "RECONCILING",
+          "epoch": 2,
+          "owner": "successor",
+          "lease_until": "2026-09-09T00:00:21Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "successor",
+              "lease_until": "2026-09-09T00:00:21Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            },
+            {
+              "type": "ACTION_TAKEOVER",
+              "state": "RECONCILING",
+              "epoch": 2
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed",
+          "token_replaced": true
+        },
+        {
+          "state": "RECONCILING",
+          "epoch": 3,
+          "owner": "successor",
+          "lease_until": "2026-09-09T00:00:32Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "successor",
+              "lease_until": "2026-09-09T00:00:32Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            },
+            {
+              "type": "ACTION_TAKEOVER",
+              "state": "RECONCILING",
+              "epoch": 2
+            },
+            {
+              "type": "ACTION_TAKEOVER",
+              "state": "RECONCILING",
+              "epoch": 3
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed",
+          "token_replaced": true
+        }
+      ]
+    },
+    {
+      "id": "stale-token-after-takeover",
+      "action": {
+        "actionId": "oracle-action",
+        "type": "CREATE_REPAIR_JOB",
+        "parameters": {
+          "destTargetId": "target-a"
+        }
+      },
+      "steps": [
+        {
+          "op": "admit",
+          "owner": "original",
+          "lease_seconds": 10,
+          "at_seconds": 0
+        },
+        {
+          "op": "admit",
+          "owner": "successor",
+          "lease_seconds": 10,
+          "at_seconds": 11
+        },
+        {
+          "op": "renew",
+          "epoch": 1,
+          "token": "original",
+          "lease_seconds": 120,
+          "at_seconds": 12
+        }
+      ],
+      "observations": [
+        {
+          "state": "CLAIMED",
+          "epoch": 1,
+          "owner": "original",
+          "lease_until": "2026-09-09T00:00:10Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "original",
+              "lease_until": "2026-09-09T00:00:10Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed"
+        },
+        {
+          "state": "RECONCILING",
+          "epoch": 2,
+          "owner": "successor",
+          "lease_until": "2026-09-09T00:00:21Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "successor",
+              "lease_until": "2026-09-09T00:00:21Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            },
+            {
+              "type": "ACTION_TAKEOVER",
+              "state": "RECONCILING",
+              "epoch": 2
+            }
+          ],
+          "admitted": true,
+          "reason": "admitted-and-claimed",
+          "token_replaced": true
+        },
+        {
+          "state": "RECONCILING",
+          "epoch": 2,
+          "owner": "successor",
+          "lease_until": "2026-09-09T00:00:21Z",
+          "effect_class": "NO_EFFECT",
+          "locks": [
+            {
+              "key": "target:target-a",
+              "owner": "successor",
+              "lease_until": "2026-09-09T00:00:21Z"
+            }
+          ],
+          "events": [
+            {
+              "type": "ACTION_CLAIMED",
+              "state": "CLAIMED",
+              "epoch": 1
+            },
+            {
+              "type": "ACTION_TAKEOVER",
+              "state": "RECONCILING",
+              "epoch": 2
+            }
+          ],
+          "renewed": false
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "canonical_request": "{\"actionId\":\"act-1\",\"digest\":\"sha256:d2c5c675866f7a0c4e1f90ba7427a00da6eea5491ec3626288395cadada33a45\",\"domain\":\"action\",\"environment\":\"test\",\"executionEpoch\":4,\"expiresAt\":\"2026-09-13T00:05:30Z\",\"fencingToken\":4,\"fleetId\":\"fleet-a\",\"issuedAt\":\"2026-09-13T00:00:30Z\",\"mode\":\"shadow\",\"nonce\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"operation\":\"execute-storage-put\",\"operationId\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"payload\":{\"bucket\":\"backup-a\",\"claimRevision\":2,\"conditionType\":\"CREATE_ONLY\",\"expectedEtag\":\"\",\"expectedLength\":3,\"mutationType\":\"PUT_CHUNK\",\"objectDigest\":\"039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81\",\"objectKey\":\"objects/chunk-1\",\"prefix\":\"native/\",\"provider\":\"s3\",\"targetIdentity\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"sha256:a50a0c00dec3441ef6ff30382f2f0993befbd1ec7e2ad586dec4ab6cfea64c19\",\"requestId\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"revision\":1,\"role\":\"control-plane\",\"runtime\":\"go\",\"schema\":\"control-storage-operation-grant-v1\",\"schemaVersion\":1,\"signature\":\"OHclfNQPRDgiDe0zbnLP_hFU8wbBvwFzsQEWLdG-dHSA6yc0tUWigQaN4Yd1W8i0H_e0yiVlBazn8blfgdNTDw\",\"signatureAlgorithm\":\"Ed25519\",\"signerKeyId\":\"ctrl-signer-21fe31dfa154a261\"}",
+  "request_digest": "sha256:d2c5c675866f7a0c4e1f90ba7427a00da6eea5491ec3626288395cadada33a45",
+  "signer_public_key": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+  "signer_key_id": "ctrl-signer-21fe31dfa154a261",
+  "now": "2026-09-13T00:00:40Z",
+  "max_future_skew_seconds": 30,
+  "compatibility_reason": "Freeze authenticated control-storage-operation-grant-v1 canonical JSON, domain-separated Ed25519, exact command binding, and fail-closed replay without treating Protobuf encoding as a signing input or granting production mutation.",
+  "context": {
+    "current_fencing_token": 4,
+    "expected_domain": "action",
+    "expected_environment": "test",
+    "expected_fleet_id": "fleet-a",
+    "expected_mode": "shadow",
+    "expected_operation": "execute-storage-put",
+    "expected_role": "control-plane",
+    "expected_runtime": "go",
+    "live_epoch": 4
+  },
+  "cases": [
+    {
+      "name": "unknown-field",
+      "error": "STORAGE_OPERATION_GRANT_FIELDS_INVALID",
+      "add": {
+        "extra": true
+      }
+    },
+    {
+      "name": "missing-field",
+      "error": "STORAGE_OPERATION_GRANT_FIELDS_INVALID",
+      "drop": "digest"
+    },
+    {
+      "name": "noncanonical-json",
+      "error": "STORAGE_OPERATION_GRANT_CANONICAL_MISMATCH",
+      "noncanonical": true
+    },
+    {
+      "name": "malformed-json",
+      "error": "STORAGE_OPERATION_GRANT_INVALID",
+      "raw": "{"
+    },
+    {
+      "name": "trailing-json",
+      "error": "STORAGE_OPERATION_GRANT_INVALID",
+      "raw": "{\"actionId\":\"act-1\",\"digest\":\"sha256:d2c5c675866f7a0c4e1f90ba7427a00da6eea5491ec3626288395cadada33a45\",\"domain\":\"action\",\"environment\":\"test\",\"executionEpoch\":4,\"expiresAt\":\"2026-09-13T00:05:30Z\",\"fencingToken\":4,\"fleetId\":\"fleet-a\",\"issuedAt\":\"2026-09-13T00:00:30Z\",\"mode\":\"shadow\",\"nonce\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"operation\":\"execute-storage-put\",\"operationId\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"payload\":{\"bucket\":\"backup-a\",\"claimRevision\":2,\"conditionType\":\"CREATE_ONLY\",\"expectedEtag\":\"\",\"expectedLength\":3,\"mutationType\":\"PUT_CHUNK\",\"objectDigest\":\"039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81\",\"objectKey\":\"objects/chunk-1\",\"prefix\":\"native/\",\"provider\":\"s3\",\"targetIdentity\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\"},\"payloadDigest\":\"sha256:a50a0c00dec3441ef6ff30382f2f0993befbd1ec7e2ad586dec4ab6cfea64c19\",\"requestId\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"revision\":1,\"role\":\"control-plane\",\"runtime\":\"go\",\"schema\":\"control-storage-operation-grant-v1\",\"schemaVersion\":1,\"signature\":\"OHclfNQPRDgiDe0zbnLP_hFU8wbBvwFzsQEWLdG-dHSA6yc0tUWigQaN4Yd1W8i0H_e0yiVlBazn8blfgdNTDw\",\"signatureAlgorithm\":\"Ed25519\",\"signerKeyId\":\"ctrl-signer-21fe31dfa154a261\"}0"
+    },
+    {
+      "name": "schema",
+      "error": "STORAGE_OPERATION_GRANT_SCHEMA_INVALID",
+      "replace": {
+        "schema": "control-storage-operation-grant-v2"
+      }
+    },
+    {
+      "name": "digest-mismatch",
+      "error": "STORAGE_OPERATION_GRANT_DIGEST_MISMATCH",
+      "replace": {
+        "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "payload-tamper-recompute-digest",
+      "error": "STORAGE_OPERATION_GRANT_SIGNATURE_INVALID",
+      "recompute_digest": true,
+      "replace": {
+        "requestId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    },
+    {
+      "name": "signature-tamper",
+      "error": "STORAGE_OPERATION_GRANT_SIGNATURE_INVALID",
+      "replace": {
+        "signature": "OHclfNQPRDgiDe0zbnLP_hFU8wbBvwFzsQEWLdG-dHSA6yc0tUWigQaN4Yd1W8i0H_e0yiVlBazn8blfgdNTDA"
+      }
+    },
+    {
+      "name": "secret-value",
+      "error": "STORAGE_OPERATION_GRANT_SECRET_DETECTED",
+      "replace": {
+        "environment": "-----BEGIN PRIVATE KEY-----"
+      }
+    },
+    {
+      "name": "empty-action",
+      "error": "EMPTY_ACTION_ID",
+      "replace": {
+        "actionId": ""
+      }
+    },
+    {
+      "name": "zero-epoch",
+      "error": "ZERO_EXECUTION_EPOCH",
+      "replace": {
+        "executionEpoch": 0
+      }
+    },
+    {
+      "name": "expired",
+      "error": "STORAGE_OPERATION_GRANT_EXPIRED",
+      "context": {
+        "now": "2026-09-13T00:06:00Z"
+      }
+    },
+    {
+      "name": "future-skew",
+      "error": "STORAGE_OPERATION_GRANT_FUTURE_SKEW",
+      "context": {
+        "now": "2026-09-12T23:59:50Z"
+      }
+    },
+    {
+      "name": "replay",
+      "error": "STORAGE_OPERATION_GRANT_REPLAY",
+      "context": {
+        "seen_request_ids": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ]
+      }
+    },
+    {
+      "name": "nonce-reuse",
+      "error": "STORAGE_OPERATION_GRANT_NONCE_REUSE",
+      "context": {
+        "seen_nonces": [
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        ]
+      }
+    },
+    {
+      "name": "operation-conflict",
+      "error": "STORAGE_OPERATION_GRANT_REPLAY_CONFLICT",
+      "context": {
+        "seen_operation_digests": {
+          "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "name": "wrong-domain",
+      "error": "STORAGE_OPERATION_GRANT_DOMAIN_MISMATCH",
+      "context": {
+        "expected_domain": "policy"
+      }
+    },
+    {
+      "name": "wrong-fleet",
+      "error": "STORAGE_OPERATION_GRANT_FLEET_MISMATCH",
+      "context": {
+        "expected_fleet_id": "fleet-b"
+      }
+    },
+    {
+      "name": "wrong-environment",
+      "error": "STORAGE_OPERATION_GRANT_ENVIRONMENT_MISMATCH",
+      "context": {
+        "expected_environment": "prod"
+      }
+    },
+    {
+      "name": "wrong-role",
+      "error": "STORAGE_OPERATION_GRANT_ROLE_MISMATCH",
+      "context": {
+        "expected_role": "worker"
+      }
+    },
+    {
+      "name": "wrong-runtime",
+      "error": "STORAGE_OPERATION_GRANT_RUNTIME_MISMATCH",
+      "context": {
+        "expected_runtime": "rust"
+      }
+    },
+    {
+      "name": "wrong-mode",
+      "error": "STORAGE_OPERATION_GRANT_MODE_MISMATCH",
+      "context": {
+        "expected_mode": "production"
+      }
+    },
+    {
+      "name": "wrong-operation",
+      "error": "STORAGE_OPERATION_GRANT_OPERATION_INVALID",
+      "context": {
+        "expected_operation": "propose-mutation"
+      }
+    },
+    {
+      "name": "stale-token",
+      "error": "STORAGE_OPERATION_GRANT_STALE_FENCING_TOKEN",
+      "context": {
+        "current_fencing_token": 5
+      }
+    },
+    {
+      "name": "live-epoch-mismatch",
+      "error": "FENCE_MISMATCH",
+      "context": {
+        "live_epoch": 5
+      }
+    },
+    {
+      "name": "authority-missing",
+      "error": "STORAGE_OPERATION_GRANT_AUTHORITY_MISSING",
+      "context": {
+        "live_epoch": 0
+      }
+    },
+    {
+      "name": "signer-mismatch",
+      "error": "STORAGE_OPERATION_GRANT_SIGNER_MISMATCH",
+      "context": {
+        "signer_key_id": "ctrl-signer-0000000000000000"
+      }
+    }
+  ]
+}

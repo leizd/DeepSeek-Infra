@@ -1,0 +1,124 @@
+{
+  "go_module": "github.com/leizd/DeepSeek-Infra/go",
+  "outputs": [
+    {
+      "path": "go/internal/protocol/actionv1/action.pb.go",
+      "sha256": "385b9ae59d5b06e6cfc29b2e3197e2fc9eccfdc9d91e068c60bc2b4a6e50a3a4"
+    },
+    {
+      "path": "go/internal/protocol/actionv1/action_grpc.pb.go",
+      "sha256": "3fa496c1e52dc3b72f8a539c8ffb86e792e637d570f081573fcff9b407cbb329"
+    },
+    {
+      "path": "go/internal/protocol/agentv1/a2a.pb.go",
+      "sha256": "cc2982b71e9f9543566dadccb9cceeea030811765a44497125e753fa35e93e42"
+    },
+    {
+      "path": "go/internal/protocol/agentv1/a2a_grpc.pb.go",
+      "sha256": "a498b34663445ac28e3d756fa13bc335928e797a8d98635817eddcbd1f4cfacb"
+    },
+    {
+      "path": "go/internal/protocol/agentv1/agent.pb.go",
+      "sha256": "397ecb9402293d8cda7b98b4a60ead38a5f3900622d6a462df22515aa1199ed2"
+    },
+    {
+      "path": "go/internal/protocol/agentv1/agent_grpc.pb.go",
+      "sha256": "7dbdf992be9edde1a69dfba1f7752d678ac27544788d80d23605e3380205adf5"
+    },
+    {
+      "path": "go/internal/protocol/browserv1/browser.pb.go",
+      "sha256": "f37b497104e28ad19b2e9d86b715ed5957ff6693b9d0258fe2c81f958484c247"
+    },
+    {
+      "path": "go/internal/protocol/browserv1/browser_grpc.pb.go",
+      "sha256": "1953e267d484d27abd7b50552157d2c9d24028447c4585602a5e73714c960c43"
+    },
+    {
+      "path": "go/internal/protocol/commonv1/common.pb.go",
+      "sha256": "de8437f1584a7ff3cafe041c032082b717d82e187be88d95a3c5536062b0df43"
+    },
+    {
+      "path": "go/internal/protocol/controlv1/control.pb.go",
+      "sha256": "19fa2e219cfa0ff10a12c55fa7a98e9b01186627ace29e09f29f58a763b4ac28"
+    },
+    {
+      "path": "go/internal/protocol/controlv1/control_grpc.pb.go",
+      "sha256": "f3e95d3bdb411f65367f9ac1719fd9a88e4515d39b2757406367c842facec4db"
+    },
+    {
+      "path": "go/internal/protocol/evidencev1/evidence.pb.go",
+      "sha256": "341f4b2b587792525525639963bb5c0313304e8613ad56b3c0b0d3c68f8115d0"
+    },
+    {
+      "path": "go/internal/protocol/federationv1/federation.pb.go",
+      "sha256": "9f3b9c013e328bf0804cbcda9e2b95c434b9dbcab6d172d783720f59ac692a0a"
+    },
+    {
+      "path": "go/internal/protocol/platform/v1/ocr.pb.go",
+      "sha256": "924910e3e3aeba25398628b6b4475f88ddf7775a6556b53b8df4ab11f7ab24cc"
+    },
+    {
+      "path": "go/internal/protocol/platform/v1/ocr_grpc.pb.go",
+      "sha256": "bde0d5e8c73c135819aba73ab98497b121e2f8dda22d8dfa2fd74537120588ec"
+    },
+    {
+      "path": "go/internal/protocol/storagev1/storage.pb.go",
+      "sha256": "d5c08e206c3c0d1856f9a7295ac12fa4cfeed24fd959e78cf133811a42139d8e"
+    },
+    {
+      "path": "proto/generated/descriptor.pb",
+      "sha256": "935f10917f9673048f5fbe2ea2226c51f9ad21151270e97ad90ef0222f9ea9a2"
+    }
+  ],
+  "schema_version": 1,
+  "sources": [
+    {
+      "path": "proto/action/v1/action.proto",
+      "sha256": "4c629c039a02ee674bd458399228e4c5d75e7352980bcc767b316c02ca54460d"
+    },
+    {
+      "path": "proto/agent/v1/a2a.proto",
+      "sha256": "fe99ccbdd05515bb1deda4b110414de468678b060e39dceaa857b57fe0649fb7"
+    },
+    {
+      "path": "proto/agent/v1/agent.proto",
+      "sha256": "5b82ce4819b1ee6b7e2b3291bff5ca2e4593756d10555cf08099c848a6b1b219"
+    },
+    {
+      "path": "proto/browser/v1/browser.proto",
+      "sha256": "293040f1df9bbc2861b3427ba78681d969468fc143fed507281394e8dfb4df76"
+    },
+    {
+      "path": "proto/common/v1/common.proto",
+      "sha256": "c441a8e6f3e4559a7e30723be920a7521ef921985a02311de3b6f7edc9912164"
+    },
+    {
+      "path": "proto/control/v1/control.proto",
+      "sha256": "e8199876b31ac1cf85626f047ef1e344ac9b6808f193f36774c8a5045c1165b5"
+    },
+    {
+      "path": "proto/evidence/v1/evidence.proto",
+      "sha256": "f7c7fe4100754571961fd610bb3799e28821e3bf5d4eb816c5842c322fd57f22"
+    },
+    {
+      "path": "proto/federation/v1/federation.proto",
+      "sha256": "24c52e6132a5b186cb27312deedabf348e31b6a652c1baa50c3ea68ef507f32d"
+    },
+    {
+      "path": "proto/platform/v1/ocr.proto",
+      "sha256": "dccefc91b4d10e0d574852716e0c880c79dda561970a0cb0f127b9c2d6bb96a0"
+    },
+    {
+      "path": "proto/storage/v1/storage.proto",
+      "sha256": "d13e073da078fa3947ce430dec6b7a71a7710879500c5fbe0c22d2a121fd3fb9"
+    }
+  ],
+  "toolchain": {
+    "prost": "0.13.5",
+    "protoc": "36.1",
+    "protoc_gen_go": "1.36.11",
+    "protoc_gen_go_grpc": "1.6.2",
+    "protox": "0.8.0",
+    "tonic_build": "0.12.3"
+  }
+}

@@ -1,0 +1,903 @@
+"""Scheduled backup run executor (4.4.12).
+
+Drives a claimed run through its phase state machine. The first attempt freezes
+a :class:`backup_run_plan` for the schedule slot; later retries reuse that plan
+and any verified spool ciphertext instead of re-snapshotting and re-encrypting.
+A :class:`backup_scheduler.RunLeaseGuard` renews the lease on a heartbeat for
+the whole run.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.infra.workspace import (
+    backup_catalog,
+    backup_incremental,
+    backup_object_set,
+    backup_policies,
+    backup_publish,
+    backup_run_plan,
+    backup_retention,
+    backup_scheduled,
+    backup_scheduler,
+    backup_spool,
+    backup_write_continuity,
+    backup_writer_lease,
+    backups,
+    mutation_gate,
+)
+from deepseek_infra.infra.workspace.backup_target_store import commit_slot_digest
+
+
+def _gate_root() -> Path:
+    return backups.BACKUP_DIR.parent
+
+
+def _index_available() -> bool:
+    try:
+        return backup_incremental.INDEX_DB.exists() and backup_incremental.INDEX_DB.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _utc_iso_now() -> str:
+    return datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _record_committed_index(
+    *,
+    target_id: str,
+    policy_id: str,
+    backup_id: str,
+    package: Any,
+    run_plan: dict[str, Any],
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Persist a committed snapshot into the rebuildable index (best effort)."""
+    try:
+        manifest = getattr(package, "manifest", None) or {}
+        files = manifest.get("files")
+        if not isinstance(files, list):
+            raise AppError("Verified spool has no plaintext index material; rebuild is required")
+        records = [
+            backup_incremental.FileRecord(
+                contributor_id=str(item.get("contributorId") or ""),
+                logical_path=str(item["path"]),
+                size=int(item["size"]),
+                sha256=str(item["sha256"]),
+            )
+            for item in files
+        ]
+        snapshot = manifest.get("snapshot") if isinstance(manifest, dict) else {}
+        snapshot = snapshot if isinstance(snapshot, dict) else {}
+        snapshot_kind = str(run_plan.get("snapshotKind") or "full")
+        policy_dict = policy if isinstance(policy, dict) else {}
+        contributor_schemas = {
+            str(item.get("id") or ""): int(item.get("schemaVersion") or 0)
+            for item in (manifest.get("contributors") or [])
+            if isinstance(item, dict)
+        }
+        common = {
+            "scope_digest": backup_incremental.scope_digest(policy_dict),
+            "recipient_set_digest": backup_incremental.recipient_set_digest(policy_dict),
+            "schema_digest": backup_incremental.schema_digest(contributor_schemas),
+            "chunk_protocol": backup_incremental.CURRENT_CDC_PROTOCOL,
+            "storage_protocol": str(getattr(package, "storage_protocol", backup_object_set.WHOLE_AGE_V1)),
+        }
+        parent: str | None = None
+        base = backup_id
+        depth = 0
+        full_committed_at: str | None = _utc_iso_now()
+        if snapshot_kind == "incremental":
+            parent_value = str(run_plan.get("parentBackupId") or "")
+            parent = parent_value or None
+            base = str(run_plan.get("baseBackupId") or parent_value)
+            depth = int(run_plan.get("chainDepth") or 1)
+            root = str(snapshot.get("rootDigest") or backup_incremental.snapshot_root(records))
+            packaged_effective = getattr(package, "effective_files", None)
+            if packaged_effective is not None:
+                effective = list(packaged_effective)
+            else:
+                # Compatibility for packages constructed by older callers.
+                previous = []
+                if parent_value:
+                    previous = backup_incremental.load_snapshot_files(target_id, policy_id, parent_value)
+                effective = backup_incremental.effective_current(
+                    previous,
+                    records,
+                    successful_contributors={item.contributor_id for item in records},
+                )
+            parent_latest = backup_incremental.latest_committed_snapshot(target_id, policy_id)
+            full_committed_at = str(parent_latest.get("full_committed_at") or "") if parent_latest else None
+        else:
+            root = backup_incremental.snapshot_root(records)
+            effective = records
+        chunk_records = getattr(package, "chunk_records", None) or []
+        backup_incremental.commit_snapshot_index(
+            target_id=target_id,
+            policy_id=policy_id,
+            backup_id=backup_id,
+            parent_backup_id=parent,
+            base_backup_id=base or None,
+            chain_depth=depth,
+            root_digest=root,
+            files=effective,
+            chunks=list(chunk_records),
+            full_committed_at=full_committed_at,
+            logical_bytes=sum(int(item.size) for item in effective),
+            **common,
+        )
+        return backup_incremental.index_metrics(target_id, policy_id)
+    except Exception:
+        # Index is a performance cache; never fail the run on index errors.
+        backup_incremental.mark_index_stale(target_id, policy_id, "snapshot-index-commit-failed")
+        return {"status": "stale"}
+
+
+def _retry_section(policy: dict[str, Any]) -> dict[str, Any]:
+    value = policy.get("retry")
+    return value if isinstance(value, dict) else {}
+
+
+def _retry_delay_seconds(policy: dict[str, Any], attempt: int) -> int:
+    retry = _retry_section(policy)
+    initial = int(retry.get("initialBackoffSeconds") or 60)
+    maximum = int(retry.get("maxBackoffSeconds") or 900)
+    return min(maximum, initial * (2 ** max(0, attempt - 1)))
+
+
+def _max_attempts(policy: dict[str, Any]) -> int:
+    return max(1, int(_retry_section(policy).get("maxAttempts") or 3))
+
+
+def _blocked_target_outcome(
+    run: backup_scheduler.ClaimedRun,
+    policy: dict[str, Any],
+    current: datetime,
+    guard: backup_scheduler.RunLeaseGuard,
+    message: str,
+    outcome: dict[str, Any],
+) -> dict[str, Any]:
+    schedule_cfg = policy.get("schedule") or {}
+    catchup = int(schedule_cfg.get("catchupWindowSeconds") or 86400)
+    try:
+        slot_time = datetime.fromisoformat(run.scheduled_for.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        slot_time = current
+    terminal = run.attempt >= _max_attempts(policy) or slot_time < current - timedelta(seconds=catchup)
+    delay = _retry_delay_seconds(policy, run.attempt)
+    backup_scheduler.block_run(
+        run.run_id,
+        instance_id=guard.instance_id,
+        fencing_token=run.fencing_token,
+        error=message,
+        reason="blocked-target-unavailable",
+        retry_at=None if terminal else current + timedelta(seconds=delay),
+        terminal=terminal,
+        now=guard.now(),
+    )
+    result = {**outcome, "phase": "blocked-terminal" if terminal else "blocked-retryable", "reason": "blocked-target-unavailable"}
+    if not terminal:
+        result["retryInSeconds"] = delay
+    return result
+
+
+def _anchored_clock(anchor: datetime, started_at: datetime) -> Callable[[], datetime]:
+    return lambda: anchor + (datetime.now(tz=timezone.utc) - started_at)
+
+
+def _target_head_hash(target: backup_publish.ResolvedTarget) -> str:
+    if target.root is not None:
+        latest = backup_publish.latest_commit(target.root)
+        return str(latest.get("commitHash") or ("0" * 64)) if latest else ("0" * 64)
+    try:  # pragma: no cover - remote full-executor path
+        latest = backup_publish.latest_commit_store(target.require_store())
+    except Exception:
+        return "0" * 64
+    return str(latest.get("commitHash") or ("0" * 64)) if latest else ("0" * 64)
+
+
+def execute_run(
+    run: backup_scheduler.ClaimedRun,
+    *,
+    instance_id: str,
+    now: datetime | None = None,
+    lease_seconds: int = backup_scheduler.DEFAULT_LEASE_SECONDS,
+    clock: Callable[[], datetime] | None = None,
+) -> dict[str, Any]:
+    current = now or datetime.now(tz=timezone.utc)
+    if clock is None:
+        clock = (lambda: datetime.now(tz=timezone.utc)) if now is None else _anchored_clock(current, datetime.now(tz=timezone.utc))
+    outcome: dict[str, Any] = {"runId": run.run_id, "policyId": run.policy_id}
+    try:
+        policy = backup_policies.get_policy(run.policy_id)
+    except AppError:
+        backup_scheduler.fail_run(run.run_id, error="policy-missing", reason="policy-missing")
+        return {**outcome, "phase": "failed", "reason": "policy-missing"}
+    guard = backup_scheduler.RunLeaseGuard(run.run_id, instance_id, run.fencing_token, lease_seconds=lease_seconds, clock=clock)
+    guard.start_heartbeat()
+    setattr(guard.cancel_event, "backup_checkpoint", guard.checkpoint)
+    writer: backup_writer_lease.TargetWriterLease | None = None
+    policy_id = str(policy.get("policyId") or "")
+    slot_digest = commit_slot_digest(run.schedule_slot)
+    try:
+        if mutation_gate.read_fence(root=_gate_root()) is not None:
+            backup_scheduler.fail_run(
+                run.run_id,
+                error="workspace-restore-active",
+                instance_id=instance_id,
+                fencing_token=run.fencing_token,
+                phase="deferred",
+                reason="workspace-restore-active",
+                now=guard.now(),
+            )
+            return {**outcome, "phase": "deferred", "reason": "workspace-restore-active"}
+        guard.checkpoint()
+        existing_plan = backup_run_plan.read_run_plan(policy_id, slot_digest)
+        if existing_plan is not None:
+            write_target_id = str(existing_plan.get("selectedWriteTargetId") or existing_plan.get("targetId") or "managed-local")
+            is_failover = bool(existing_plan.get("isFailover"))
+            failover_reason = existing_plan.get("failoverReason")
+            placement = {
+                "configuredPrimaryTargetId": str(existing_plan.get("configuredPrimaryTargetId") or policy.get("targetId") or "managed-local"),
+                "selectedWriteTargetId": write_target_id,
+                "isFailover": is_failover,
+                "forceFull": is_failover,
+                "reason": failover_reason or ("failover" if is_failover else "primary-healthy"),
+                "candidateTargetIds": list(existing_plan.get("candidateTargetIds") or [write_target_id]),
+            }
+        else:
+            placement = backup_scheduler.evaluate_write_placement(policy)
+            write_target_id = str(placement["selectedWriteTargetId"])
+            is_failover = bool(placement.get("isFailover"))
+            failover_reason = placement.get("reason")
+
+        try:
+            target = backup_publish.resolve_target(write_target_id)
+        except AppError as exc:
+            if "blocked-target-unavailable" in str(exc) or "unsupported-conditional-target" in str(exc):
+                backup_scheduler.record_target_health(write_target_id, "blocked", str(exc)[:200])
+                return _blocked_target_outcome(run, policy, current, guard, str(exc), outcome)
+            raise  # pragma: no cover - other resolve errors bubble to outer handler
+
+        target_id = write_target_id
+        outcome["isFailover"] = is_failover
+        outcome["targetId"] = target_id
+
+        # Select snapshot kind / lineage once, then freeze; retries reuse it.
+        context = backup_scheduled._context_from_policy(policy)
+        contributor_plan = backups._contributor_plan(context)
+        index_available = _index_available()
+        contributor_schemas: dict[str, int] = {}
+        for item in contributor_plan.get("contributors") or []:
+            # Only the selected contributors participate in the snapshot, so
+            # their schema digest must match what the builder attests in the
+            # manifest. Including excluded contributors would make every
+            # force-full schema comparison mismatched.
+            if isinstance(item, dict) and item.get("status") == "selected":
+                contributor_schemas[str(item.get("id") or "")] = int(item.get("schemaVersion") or 0)
+
+        snapshot_kind: str
+        lineage_id: str | None
+        parent_backup_id: str | None
+        chain_depth: int
+        parent_commit_hash: str | None
+        parent_receipt_digest: str | None
+        force_full_reason: str | None
+        if is_failover:
+            snapshot_kind = "full"
+            lineage_id = None
+            parent_backup_id = None
+            chain_depth = 0
+            parent_commit_hash = None
+            parent_receipt_digest = None
+            force_full_reason = "write-target-failover"
+        else:
+            selected = backup_incremental.select_snapshot_plan(
+                policy=policy,
+                target_id=target_id,
+                policy_id=policy_id,
+                index_available=index_available,
+                contributor_schemas=contributor_schemas,
+            )
+            snapshot_kind, lineage_id, parent_backup_id, chain_depth, parent_commit_hash, parent_receipt_digest, force_full_reason = selected
+
+        cand_ids_raw = placement.get("candidateTargetIds")
+        cand_ids = [str(x) for x in cand_ids_raw] if isinstance(cand_ids_raw, list) else [write_target_id]
+
+        run_plan = backup_run_plan.freeze_run_plan(
+            policy=policy,
+            schedule_slot=run.schedule_slot,
+            slot_digest=slot_digest,
+            contributor_plan=contributor_plan,
+            target_id=target_id,
+            configured_primary_target_id=str(placement.get("configuredPrimaryTargetId") or policy.get("targetId") or "managed-local"),
+            selected_write_target_id=write_target_id,
+            candidate_target_ids=cand_ids,
+            failover_reason=failover_reason if is_failover else None,
+            is_failover=is_failover,
+            target_head_hash=_target_head_hash(target),
+            snapshot_kind=str(snapshot_kind or "full"),
+            lineage_id=lineage_id,
+            parent_backup_id=parent_backup_id,
+            base_backup_id=(lineage_id if snapshot_kind == "incremental" else None),
+            chain_depth=int(chain_depth or 0),
+            parent_commit_hash=parent_commit_hash,
+            parent_receipt_digest=parent_receipt_digest,
+            force_full_reason=force_full_reason,
+        )
+        outcome["runPlanDigest"] = str(run_plan.get("runPlanDigest") or "")
+        outcome["backupId"] = str(run_plan.get("backupId") or "")
+        outcome["snapshotKind"] = str(run_plan.get("snapshotKind") or "full")
+        if run_plan.get("forceFullReason"):
+            outcome["forceFullReason"] = str(run_plan["forceFullReason"])
+
+        # A reclaimed run whose slot is already committed by a different worker
+        # must not reuse the frozen plan/spool: keep slot-commit-conflict
+        # semantics by rebuilding a distinct package identity.
+        conflicting_slot = False
+        if target.root is not None:
+            marker = backup_publish.find_commit_marker_path(target.root, policy_id, run.schedule_slot)
+            if marker is not None and marker.is_file():
+                import json as _json
+
+                try:
+                    existing_marker = _json.loads(marker.read_text(encoding="utf-8"))
+                except Exception:  # pragma: no cover
+                    existing_marker = {}
+                if existing_marker and str(existing_marker.get("runId") or "") != run.run_id:
+                    conflicting_slot = True
+        if conflicting_slot:
+            backup_run_plan.clear_run_plan(policy_id, slot_digest)
+            backup_spool.clear_slot(policy_id, slot_digest)
+
+        package: Any | None = None
+        spooled = None
+        if not conflicting_slot:
+            spooled = backup_spool.lookup_verified_package(
+                policy_id=policy_id,
+                slot_digest=slot_digest,
+                run_plan_digest=str(run_plan.get("runPlanDigest") or ""),
+            )
+        if spooled is not None:
+            backup_scheduler.record_run_phase(
+                run.run_id,
+                "publishing",
+                instance_id=instance_id,
+                fencing_token=run.fencing_token,
+                reason="verified-spool-reused",
+                now=guard.now(),
+            )
+            package = spooled
+            outcome["spoolReused"] = True
+        else:
+            backup_scheduler.record_run_phase(run.run_id, "snapshotting", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
+            max_delta_ratio = float((policy.get("incremental") or {}).get("maxDeltaRatio") or backup_incremental.DEFAULT_MAX_DELTA_RATIO)
+            adaptive_delta_ratio = (
+                max_delta_ratio
+                if run_plan.get("plannedSnapshotKind") == "adaptive"
+                and str(run_plan.get("resolvedSnapshotKind") or "incremental") == "incremental"
+                and not run_plan.get("resolutionReason")
+                else None
+            )
+            try:
+                package = backup_scheduled.build_scheduled_backup(
+                    policy,
+                    run_id=run.run_id,
+                    staging_root=backup_scheduler.staging_root(),
+                    schedule_slot=run.schedule_slot,
+                    cancel_event=guard.cancel_event,
+                    backup_id=None if conflicting_slot else str(run_plan.get("backupId") or ""),
+                    contributor_plan=contributor_plan,
+                    snapshot_kind=str(run_plan.get("snapshotKind") or "full"),
+                    parent_backup_id=run_plan.get("parentBackupId"),
+                    base_backup_id=run_plan.get("baseBackupId"),
+                    lineage_id=run_plan.get("lineageId"),
+                    chain_depth=int(run_plan.get("chainDepth") or 0),
+                    adaptive_max_delta_ratio=adaptive_delta_ratio,
+                    storage_protocol=backup_object_set.CURRENT_STORAGE_PROTOCOL,
+                )
+            except backup_scheduled.DeltaCostExceeded as exc:
+                run_plan = backup_run_plan.resolve_adaptive_plan(
+                    policy_id,
+                    slot_digest,
+                    resolved_snapshot_kind="full",
+                    reason="delta-ratio",
+                )
+                outcome["runPlanDigest"] = str(run_plan.get("runPlanDigest") or "")
+                outcome["snapshotKind"] = "full"
+                outcome["forceFullReason"] = "delta-ratio"
+                outcome["adaptiveCostBasis"] = "prepared-component-bytes"
+                outcome["adaptiveDeltaLimitBytes"] = exc.byte_limit
+                package = backup_scheduled.build_scheduled_backup(
+                    policy,
+                    run_id=run.run_id,
+                    staging_root=backup_scheduler.staging_root(),
+                    schedule_slot=run.schedule_slot,
+                    cancel_event=guard.cancel_event,
+                    backup_id=str(run_plan.get("backupId") or ""),
+                    contributor_plan=contributor_plan,
+                    snapshot_kind="full",
+                    parent_backup_id=None,
+                    base_backup_id=None,
+                    lineage_id=None,
+                    chain_depth=0,
+                    storage_protocol=backup_object_set.CURRENT_STORAGE_PROTOCOL,
+                )
+            savings = getattr(package, "savings", None) or {}
+            logical_bytes = int(savings.get("logicalBytes") or 0)
+            physical_bytes = int(
+                savings.get("preparedComponentBytes")
+                or savings.get("unencryptedArchiveBytes")
+                or savings.get("physicalDeltaBytes")
+                or savings.get("physicalPayloadBytes")
+                or 0
+            )
+            cost_basis = (
+                "prepared-component-bytes"
+                if savings.get("preparedComponentBytes")
+                else (
+                    "unencrypted-archive-bytes"
+                    if savings.get("unencryptedArchiveBytes")
+                    else ("packed-delta-bytes" if savings.get("physicalDeltaBytes") else "raw-payload-bytes")
+                )
+            )
+            if (
+                run_plan.get("plannedSnapshotKind") == "adaptive"
+                and str(run_plan.get("resolvedSnapshotKind") or "incremental") == "incremental"
+                and logical_bytes > 0
+                and physical_bytes / logical_bytes > max_delta_ratio
+            ):
+                Path(package.path).unlink(missing_ok=True)
+                run_plan = backup_run_plan.resolve_adaptive_plan(
+                    policy_id,
+                    slot_digest,
+                    resolved_snapshot_kind="full",
+                    reason="delta-ratio",
+                )
+                outcome["runPlanDigest"] = str(run_plan.get("runPlanDigest") or "")
+                outcome["snapshotKind"] = "full"
+                outcome["forceFullReason"] = "delta-ratio"
+                outcome["adaptiveCostBasis"] = cost_basis
+                package = backup_scheduled.build_scheduled_backup(
+                    policy,
+                    run_id=run.run_id,
+                    staging_root=backup_scheduler.staging_root(),
+                    schedule_slot=run.schedule_slot,
+                    cancel_event=guard.cancel_event,
+                    backup_id=str(run_plan.get("backupId") or ""),
+                    contributor_plan=contributor_plan,
+                    snapshot_kind="full",
+                    parent_backup_id=None,
+                    base_backup_id=None,
+                    lineage_id=None,
+                    chain_depth=0,
+                    storage_protocol=backup_object_set.CURRENT_STORAGE_PROTOCOL,
+                )
+            elif run_plan.get("plannedSnapshotKind") == "adaptive" and not run_plan.get("resolutionReason"):
+                run_plan = backup_run_plan.resolve_adaptive_plan(
+                    policy_id,
+                    slot_digest,
+                    resolved_snapshot_kind="incremental",
+                    reason="delta-ratio-within-limit",
+                )
+                outcome["runPlanDigest"] = str(run_plan.get("runPlanDigest") or "")
+            # Persist verified ciphertext before publish so retries can resume.
+            backup_spool.store_verified_package(
+                package,
+                policy_id=policy_id,
+                schedule_slot=run.schedule_slot,
+                run_id=run.run_id,
+                slot_digest=slot_digest,
+                run_plan_digest=str(run_plan.get("runPlanDigest") or ""),
+            )
+            outcome["spoolReused"] = False
+            guard.checkpoint()
+            backup_scheduler.record_run_phase(run.run_id, "verifying", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
+            backup_scheduler.record_run_phase(run.run_id, "publishing", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
+        savings = getattr(package, "savings", None)
+        outcome["storageProtocol"] = str(
+            getattr(package, "storage_protocol", backup_object_set.WHOLE_AGE_V1)
+        )
+        if savings:
+            outcome["incrementalSavings"] = savings
+
+        # Target Publishing with Formal Commit Reconcile and Transactional Failover
+        published = None
+        current_target_id = target_id
+        current_target = target
+
+        while True:
+            if current_target.root is not None:
+                incomplete = backup_publish.slot_has_incomplete_journal(current_target.root, policy_id=policy_id, schedule_slot=run.schedule_slot, exclude_run_id=run.run_id)
+            else:  # pragma: no cover - remote full-executor path
+                incomplete = backup_publish.slot_has_incomplete_journal_store(current_target.require_store(), policy_id=policy_id, schedule_slot=run.schedule_slot, exclude_run_id=run.run_id)
+            if incomplete:
+                backup_scheduler.record_run_phase(run.run_id, "reconciling", instance_id=instance_id, fencing_token=run.fencing_token, reason="interrupted-target-transaction", now=guard.now())
+
+            writer = backup_writer_lease.TargetWriterLease(
+                current_target.root,
+                store=current_target.store if current_target.root is None else None,
+                target_id=current_target_id,
+                owner_run_id=run.run_id,
+                owner_instance_id=instance_id,
+                fencing_token=run.fencing_token,
+                clock=clock,
+            )
+
+            publish_exc: Exception | None = None
+            try:
+                writer.acquire()
+                guard.attach_writer(writer)
+                published = backup_publish.publish_backup(
+                    current_target,
+                    package,
+                    run_id=run.run_id,
+                    policy_id=policy_id,
+                    schedule_slot=run.schedule_slot,
+                    fencing_token=run.fencing_token,
+                    checkpoint=guard.checkpoint,
+                    retain_spool=True,
+                )
+                target_id = current_target_id
+                target = current_target
+                break
+            except Exception as exc:
+                publish_exc = exc
+                if writer is not None:
+                    writer.release()
+                    writer = None
+
+            # Publish failed on current_target. Reconcile commit status before deciding to failover.
+            commit_status = "unknown"
+            from deepseek_infra.infra.workspace import backup_capacity, backup_replication
+            try:
+                commit_status, _, _ = backup_replication.authenticate_recovery_copy(
+                    current_target,
+                    policy_id,
+                    package.backup_id,
+                    expected_object_set_digest=getattr(package, "object_set_digest", None),
+                )
+            except Exception:
+                commit_status = "unreachable"
+
+            if commit_status == "authenticated":
+                # Target actually committed before connection drop; converge
+                target_id = current_target_id
+                target = current_target
+                writer = backup_writer_lease.TargetWriterLease(
+                    current_target.root,
+                    store=current_target.store if current_target.root is None else None,
+                    target_id=current_target_id,
+                    owner_run_id=run.run_id,
+                    owner_instance_id=instance_id,
+                    fencing_token=run.fencing_token,
+                    clock=clock,
+                )
+                writer.acquire()
+                guard.attach_writer(writer)
+                published = backup_publish.publish_backup(
+                    current_target,
+                    package,
+                    run_id=run.run_id,
+                    policy_id=policy_id,
+                    schedule_slot=run.schedule_slot,
+                    fencing_token=run.fencing_token,
+                    checkpoint=guard.checkpoint,
+                    retain_spool=True,
+                )
+                break
+            elif commit_status in {"missing", "absent"}:
+                # Definitively not committed on current_target. Look for candidate failover target.
+                candidate_ids = [
+                    tid for tid in list((run_plan or {}).get("candidateTargetIds") or [])
+                    if tid != current_target_id
+                ]
+                if not candidate_ids:
+                    repl = policy.get("replication") if isinstance(policy, dict) and isinstance(policy.get("replication"), dict) else {}
+                    if repl and repl.get("enabled"):
+                        for t in list(repl.get("targets") or []):
+                            if isinstance(t, dict) and t.get("mode") == "required":
+                                r_tid = str(t.get("targetId"))
+                                if r_tid != current_target_id and r_tid not in candidate_ids:
+                                    candidate_ids.append(r_tid)
+
+                failover_target_id: str | None = None
+                for cand_id in candidate_ids:
+                    is_incremental = str((run_plan or {}).get("snapshotKind") or getattr(package, "snapshot_kind", "full")) == "incremental"
+                    if is_incremental:
+                        parent_backup_id = str((run_plan or {}).get("parentBackupId") or "")
+                        if not parent_backup_id:
+                            continue
+                        cand_target = backup_publish.resolve_target(cand_id)
+                        p_ok, _ = backup_replication.authenticate_transition_parent(
+                            cand_target,
+                            policy_id,
+                            expected_parent_backup_id=parent_backup_id,
+                            expected_receipt_digest=(run_plan or {}).get("parentReceiptDigest"),
+                            expected_commit_hash=(run_plan or {}).get("parentCommitHash"),
+                            expected_lineage_id=(run_plan or {}).get("lineageId"),
+                            expected_object_set_digest=(run_plan or {}).get("parentObjectSetDigest"),
+                        )
+                        if not p_ok:
+                            continue
+
+                    # Capacity check for candidate
+                    # The verified encrypted spool already exists at this point,
+                    # so its ciphertext byte count is stronger admission evidence
+                    # than a historical prediction for the failover candidate.
+                    package_size = getattr(package, "size", None)
+                    pred_size = (
+                        int(package_size)
+                        if isinstance(package_size, int) and not isinstance(package_size, bool) and package_size > 0
+                        else backup_capacity.predict_next_backup_bytes(
+                            policy_id,
+                            snapshot_kind="full" if not is_incremental else "incremental",
+                        )
+                    )
+                    admitted, _ = backup_capacity.check_target_capacity_admission(
+                        cand_id,
+                        pred_size,
+                        policy=policy,
+                        force_full=not is_incremental,
+                    )
+                    if not admitted:
+                        continue
+
+                    try:
+                        cand_target = backup_publish.resolve_target(cand_id)
+                        live = backup_write_continuity.perform_liveness_preflight(cand_id, policy_id=policy_id, target=cand_target)
+                        if live.get("status") == "available":
+                            failover_target_id = cand_id
+                            break
+                    except Exception:
+                        continue
+
+                if failover_target_id is not None:
+                    run_plan = backup_run_plan.transition_run_plan_target(
+                        policy_id,
+                        slot_digest,
+                        new_target_id=failover_target_id,
+                        reason=f"failover-from-{current_target_id}:{publish_exc}",
+                    )
+                    backup_write_continuity.execute_failover_transition(
+                        policy_id,
+                        failover_target_id,
+                        reason=f"target-publish-failed:{publish_exc}",
+                    )
+                    current_target_id = failover_target_id
+                    current_target = backup_publish.resolve_target(failover_target_id)
+                    writer = backup_writer_lease.TargetWriterLease(
+                        current_target.root,
+                        store=current_target.store if current_target.root is None else None,
+                        target_id=current_target_id,
+                        owner_run_id=run.run_id,
+                        owner_instance_id=instance_id,
+                        fencing_token=run.fencing_token,
+                        clock=clock,
+                    )
+                    outcome["targetId"] = failover_target_id
+                    outcome["isFailover"] = True
+                    outcome["failoverTransitioned"] = True
+                    continue
+            elif commit_status in {"corrupt", "conflicting"}:
+                # Corrupt / conflicting control plane state on current target; fail closed, quarantine target
+                backup_scheduler.record_target_health(current_target_id, "quarantined", f"control-plane-{commit_status}:{publish_exc}")
+                backup_scheduler.fail_run(
+                    run.run_id,
+                    error=f"write-reconciliation-required: Target {current_target_id} has {commit_status} control plane state; auto-failover blocked",
+                    instance_id=instance_id,
+                    fencing_token=run.fencing_token,
+                    phase="failed",
+                    reason="write-reconciliation-required",
+                    now=guard.now(),
+                )
+                raise AppError(
+                    f"write-reconciliation-required: Target {current_target_id} control plane is {commit_status}; auto failover blocked",
+                    code=ErrorCode.INTERNAL,
+                    status=500,
+                )
+
+            if commit_status in {"unreachable", "unknown"}:
+                backup_scheduler.fail_run(
+                    run.run_id,
+                    error=f"ambiguous-target-commit:{publish_exc}",
+                    instance_id=instance_id,
+                    fencing_token=run.fencing_token,
+                    phase="failed",
+                    reason="ambiguous-target-commit",
+                    now=guard.now(),
+                )
+                raise AppError(
+                    f"ambiguous-target-commit: Target {current_target_id} commit status could not be proven; safely blocking: {publish_exc}",
+                    code=ErrorCode.INTERNAL,
+                    status=500,
+                )
+
+            raise publish_exc or AppError("Publish failed on target", code=ErrorCode.INTERNAL, status=500)
+        guard.checkpoint()
+        backup_scheduler.record_run_phase(run.run_id, "cataloging", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
+        if current_target.root is not None:
+            if not published.converged or str(published.receipt.get("backupId") or "") not in backup_catalog.catalog_state(current_target.root):
+                backup_catalog.append_receipt(current_target.root, published.receipt, writer=writer, precondition=backup_catalog.catalog_precondition(current_target.root))
+            guard.checkpoint()
+            backup_scheduler.record_run_phase(run.run_id, "pruning", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
+            retention = backup_retention.get_retention_policy(str(policy.get("retentionPolicyId") or "default"))
+            policy_timezone = str((policy.get("schedule") or {}).get("timezone") or "UTC")
+            backup_retention.apply_retention(retention, current_target.root, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
+            finalized = backup_retention.finalize_retention(
+                retention, current_target.root, target_id=current_target_id, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer
+            )
+            catalog_after_retention = backup_catalog.catalog_state(current_target.root)
+        else:  # pragma: no cover - remote full-executor path requires a live adapter
+            backup_catalog.append_receipt_store(current_target.require_store(), published.receipt, writer=writer)
+            guard.checkpoint()
+            backup_scheduler.record_run_phase(run.run_id, "pruning", instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
+            retention = backup_retention.get_retention_policy(str(policy.get("retentionPolicyId") or "default"))
+            policy_timezone = str((policy.get("schedule") or {}).get("timezone") or "UTC")
+            backup_retention.apply_retention_store(retention, current_target.require_store(), policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer)
+            finalized = backup_retention.finalize_retention_store(
+                retention, current_target.require_store(), target_id=current_target_id, policy_timezone=policy_timezone, now=current, checkpoint=guard.checkpoint, writer=writer
+            )
+            catalog_after_retention = backup_catalog.catalog_state_store(current_target.require_store())
+        deleted_snapshots = [
+            (
+                current_target_id,
+                str((catalog_after_retention.get(str(backup_id)) or {}).get("policyId") or policy_id),
+                str(backup_id),
+            )
+            for backup_id in finalized.get("deleted", [])
+            if str(backup_id)
+        ]
+        if deleted_snapshots:
+            try:
+                backup_incremental.garbage_collect_chunk_maps(deleted_snapshots)
+            except Exception:
+                # The index is rebuildable; retention has already completed and
+                # must not be reported as failed because its local GC lagged.
+                for _, deleted_policy_id, _ in deleted_snapshots:
+                    backup_incremental.mark_index_stale(current_target_id, deleted_policy_id, "chunk-map-gc-failed")
+        guard.checkpoint()
+        filename = str(published.receipt.get("filename") or (published.path.name if published.path is not None else package.filename))
+        backup_scheduler.complete_run(
+            run.run_id,
+            backup_id=str(published.receipt.get("backupId") or package.backup_id),
+            filename=filename,
+            instance_id=instance_id,
+            fencing_token=run.fencing_token,
+            now=guard.now(),
+        )
+        # Successful commit: persist index lineage (best effort), then clear plan.
+        committed_index = _record_committed_index(
+            target_id=current_target_id,
+            policy_id=policy_id,
+            backup_id=str(published.receipt.get("backupId") or package.backup_id),
+            package=package,
+            run_plan=run_plan,
+            policy=policy,
+        )
+        backup_run_plan.clear_run_plan(policy_id, slot_digest)
+        # 4.5.3: enqueue replica publication jobs (encrypt-once). Keep spool while
+        # required replica jobs are open or repair is needed; best-effort failures never roll back primary.
+        replication_jobs: list[dict[str, Any]] = []
+        replication_error: str | None = None
+        backup_id = str(published.receipt.get("backupId") or package.backup_id)
+        try:
+            from deepseek_infra.infra.workspace import backup_replication
+
+            replication_jobs = backup_replication.enqueue_replica_jobs(
+                policy=policy,
+                primary_target_id=current_target_id,
+                backup_id=backup_id,
+                package=package,
+                run_id=run.run_id,
+                schedule_slot=run.schedule_slot,
+                slot_digest=slot_digest,
+                primary_receipt=published.receipt,
+            )
+            if replication_jobs:
+                backup_replication.process_pending_jobs(instance_id=instance_id, limit=max(1, len(replication_jobs)))
+        except Exception as exc:
+            replication_error = str(exc)
+
+        # Clear spool only when no required replica jobs remain open for this slot.
+        try:
+            from deepseek_infra.infra.workspace import backup_replication as _repl
+
+            if not _repl.has_open_required_jobs(policy_id=policy_id, slot_digest=slot_digest, backup_id=backup_id):
+                backup_spool.clear_slot(policy_id, slot_digest)
+        except Exception:
+            pass
+
+        # Evaluate replication compliance
+        try:
+            from deepseek_infra.infra.workspace import backup_replication as _repl
+
+            compliance_info = _repl.replication_compliance(policy=policy, backup_id=backup_id)
+        except Exception:
+            compliance_info = {"enabled": False, "compliance": "unknown"}
+
+        if replication_error:
+            compliance_info["compliance"] = "degraded"
+            reasons = list(compliance_info.get("reasons") or [])
+            reasons.append(f"replica-enqueue-failed: {replication_error}")
+            compliance_info["reasons"] = reasons
+
+        return {
+            **outcome,
+            "targetId": current_target_id,
+            "phase": "complete",
+            "backupId": backup_id,
+            "filename": filename,
+            "packing": (getattr(package, "manifest", None) or {}).get("packing") or {},
+            "index": committed_index,
+            "replicationJobs": [str(j.get("jobId") or "") for j in replication_jobs],
+            "replicationCompliance": compliance_info.get("compliance", "healthy"),
+            "replicationDetails": compliance_info,
+        }
+    except AppError as exc:
+        message = str(exc)
+        if exc.status == 499 or (exc.status == 409 and "lease" in message.casefold()):
+            return {**outcome, "phase": "abandoned", "error": message}
+        if "ambiguous-target-commit" in message:
+            try:
+                backup_scheduler.fail_run(
+                    run.run_id,
+                    error=message,
+                    instance_id=instance_id,
+                    fencing_token=run.fencing_token,
+                    phase="failed",
+                    reason="ambiguous-target-commit",
+                    now=guard.now(),
+                )
+            except AppError:  # pragma: no cover
+                pass
+            return {**outcome, "phase": "failed", "reason": "ambiguous-target-commit", "error": message}
+        if exc.status == 409 and "slot-commit-conflict" in message:
+            try:
+                backup_scheduler.fail_run(run.run_id, error=message, instance_id=instance_id, fencing_token=run.fencing_token, phase="superseded", reason="slot-commit-conflict", now=guard.now())
+            except AppError:  # pragma: no cover
+                return {**outcome, "phase": "abandoned", "error": message}
+            backup_run_plan.clear_run_plan(policy_id, slot_digest)
+            backup_spool.clear_slot(policy_id, slot_digest)
+            return {**outcome, "phase": "superseded", "reason": "slot-commit-conflict", "error": message}
+        if "blocked-target-unavailable" in message:
+            try:
+                return _blocked_target_outcome(run, policy, current, guard, message, outcome)
+            except AppError:  # pragma: no cover
+                return {**outcome, "phase": "abandoned", "error": message}
+        if run.attempt < _max_attempts(policy) and exc.status in {409, 423, 500, 502, 503}:
+            delay = _retry_delay_seconds(policy, run.attempt)
+            try:
+                backup_scheduler.requeue_run(
+                    run.run_id,
+                    instance_id=instance_id,
+                    fencing_token=run.fencing_token,
+                    retry_at=current + timedelta(seconds=delay),
+                    error=message,
+                    now=guard.now(),
+                )
+            except AppError:  # pragma: no cover
+                return {**outcome, "phase": "abandoned", "error": message}
+            return {**outcome, "phase": "queued", "error": message, "retryInSeconds": delay}
+        try:
+            backup_scheduler.fail_run(run.run_id, error=message, instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
+        except AppError:  # pragma: no cover
+            return {**outcome, "phase": "abandoned", "error": message}
+        return {**outcome, "phase": "failed", "error": message}
+    except Exception as exc:  # defensive: unexpected errors must still close the run
+        try:
+            backup_scheduler.fail_run(run.run_id, error=str(exc), instance_id=instance_id, fencing_token=run.fencing_token, now=guard.now())
+        except AppError:  # pragma: no cover
+            return {**outcome, "phase": "abandoned", "error": str(exc)}
+        return {**outcome, "phase": "failed", "error": str(exc)}
+    finally:
+        if writer is not None:
+            writer.release()
+        guard.stop()
+        backup_scheduler.cleanup_run_staging(run.run_id)

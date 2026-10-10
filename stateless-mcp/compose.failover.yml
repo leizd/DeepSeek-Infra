@@ -1,0 +1,12 @@
+# Disposable CI qualification: the native fixture is absent from the production image.
+services:
+  mcp-instance-1:
+    build:
+      target: failover-qualification
+    environment:
+      MCP_TASK_PROGRAM: /usr/local/bin/native-failover-probe
+  mcp-instance-2:
+    build:
+      target: failover-qualification
+    environment:
+      MCP_TASK_PROGRAM: /usr/local/bin/native-failover-probe

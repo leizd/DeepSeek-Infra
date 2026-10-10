@@ -1,0 +1,5 @@
+.diagnostics-body { margin-top: 18px; }
+.diagnostics-list { display: grid; gap: 0; }
+.diagnostics-row { display: flex; gap: 14px; align-items: baseline; justify-content: space-between; padding: 8px 2px; border-bottom: 1px solid var(--hairw); font-size: 0.76rem; }
+.diagnostics-row span { color: var(--weak); }
+.diagnostics-row strong { color: var(--ink); font-weight: 650; text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }

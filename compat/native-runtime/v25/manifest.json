@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze TargetWriterLease acquire/preempt/expiry/ownership decisions: string-compare expiry vs datetime active-lease, same-run takeover, fencing-token fallbacks, and release-without-instance. This does not contact a filesystem or MinIO.",
+  "normalization": "LF-normalized SHA-256 of public validator fixture bytes",
+  "corpora": [
+    {
+      "id": "writer-lease-semantics-v25",
+      "path": "compat/native-runtime/v25/transfer/writer_lease_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen target writer-lease acquire, expiry, and ownership semantics",
+      "sha256": "eb528b629ce7a09c8f67d3891f50ab3fa261ac2920d6305763ed5b3890060502"
+    }
+  ]
+}

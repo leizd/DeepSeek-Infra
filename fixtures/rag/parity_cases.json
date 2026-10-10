@@ -1,0 +1,304 @@
+{
+  "normalization_cases": [
+    {
+      "id": "normalization-english-basic",
+      "input": "DeepSeek RAG parity",
+      "expected": "deepseek rag parity"
+    },
+    {
+      "id": "normalization-extra-whitespace",
+      "input": "  DeepSeek   RAG\n parity  ",
+      "expected": "deepseek rag parity"
+    },
+    {
+      "id": "normalization-cjk",
+      "input": "  上下文 缓存  ",
+      "expected": "上下文 缓存"
+    },
+    {
+      "id": "normalization-mixed-cjk",
+      "input": "  DeepSeek   上下文 缓存  ",
+      "expected": "deepseek 上下文 缓存"
+    },
+    {
+      "id": "normalization-fullwidth-punctuation",
+      "input": "DeepSeek，缓存。RAG！",
+      "expected": "deepseek，缓存。rag！"
+    },
+    {
+      "id": "normalization-ascii-case",
+      "input": "dEePsEeK RuSt RAG",
+      "expected": "deepseek rust rag"
+    },
+    {
+      "id": "normalization-version-number",
+      "input": "DeepSeek V3.2.4 Rust 1.85",
+      "expected": "deepseek v3.2.4 rust 1.85"
+    },
+    {
+      "id": "normalization-emoji",
+      "input": "  RAG 🔎 检索  ",
+      "expected": "rag 🔎 检索"
+    },
+    {
+      "id": "normalization-tabs-newlines",
+      "input": "DeepSeek\tRAG\r\nParity",
+      "expected": "deepseek rag parity"
+    },
+    {
+      "id": "normalization-symbols",
+      "input": "DeepSeek-V3.2 + RAG_2026",
+      "expected": "deepseek-v3.2 + rag_2026"
+    },
+    {
+      "id": "normalization-empty",
+      "input": "",
+      "expected_error": "empty_query"
+    },
+    {
+      "id": "normalization-whitespace-only",
+      "input": "  \t\n  ",
+      "expected_error": "empty_query"
+    }
+  ],
+  "ranking_cases": [
+    {
+      "id": "ranking-exact-english",
+      "query": "deepseek infra",
+      "top_k": 3,
+      "chunks": [
+        {"id": "irrelevant", "source": "docs/other.md", "text": "python runtime configuration"},
+        {"id": "exact", "source": "docs/infra.md", "text": "deepseek infra is a project"},
+        {"id": "partial", "source": "docs/runtime.md", "text": "deepseek runtime"}
+      ],
+      "expected_order": ["exact", "partial", "irrelevant"],
+      "expected_scores": [13.2, 1.1, 0.0]
+    },
+    {
+      "id": "ranking-token-overlap",
+      "query": "rust hot path",
+      "top_k": 4,
+      "chunks": [
+        {"id": "single", "source": "docs/path.md", "text": "path guide"},
+        {"id": "none", "source": "docs/python.md", "text": "python runtime"},
+        {"id": "all", "source": "docs/rust.md", "text": "rust hot path"},
+        {"id": "double", "source": "docs/hot.md", "text": "rust hot runtime"}
+      ],
+      "expected_order": ["all", "double", "single", "none"],
+      "expected_scores": [14.3, 2.2, 1.1, 0.0]
+    },
+    {
+      "id": "ranking-title-match",
+      "query": "cache policy",
+      "top_k": 2,
+      "chunks": [
+        {"id": "no-title", "source": "docs/a.md", "text": "unrelated body", "title": "Network guide"},
+        {"id": "title-hit", "source": "docs/b.md", "text": "unrelated body", "title": "Cache Policy"}
+      ],
+      "expected_order": ["title-hit", "no-title"],
+      "expected_scores": [2.2, 0.0]
+    },
+    {
+      "id": "ranking-source-match",
+      "query": "cache policy",
+      "top_k": 2,
+      "chunks": [
+        {"id": "source-hit", "source": "docs/cache policy.md", "text": "unrelated body"},
+        {"id": "source-miss", "source": "docs/network.md", "text": "unrelated body"}
+      ],
+      "expected_order": ["source-hit", "source-miss"],
+      "expected_scores": [2.2, 0.0]
+    },
+    {
+      "id": "ranking-short-chunk-weight",
+      "query": "cache",
+      "top_k": 2,
+      "chunks": [
+        {"id": "long", "source": "docs/long.md", "text": "cache one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty"},
+        {"id": "short", "source": "docs/short.md", "text": "cache guide"}
+      ],
+      "expected_order": ["short", "long"],
+      "expected_scores": [12.1, 11.0]
+    },
+    {
+      "id": "ranking-cjk-exact",
+      "query": "上下文缓存",
+      "top_k": 3,
+      "chunks": [
+        {"id": "cjk-unrelated", "source": "docs/network.md", "text": "TCP 提供可靠传输。"},
+        {"id": "cjk-exact", "source": "docs/cache.md", "text": "DeepSeek API 支持上下文缓存。"},
+        {"id": "cjk-partial", "source": "docs/context.md", "text": "上下文 缓存"}
+      ],
+      "expected_order": ["cjk-exact", "cjk-partial", "cjk-unrelated"],
+      "expected_scores": [11.0, 0.0, 0.0]
+    },
+    {
+      "id": "ranking-no-match-stable",
+      "query": "missing",
+      "top_k": 3,
+      "chunks": [
+        {"id": "zero-c", "source": "docs/c.md", "text": "alpha"},
+        {"id": "zero-a", "source": "docs/a.md", "text": "beta"},
+        {"id": "zero-b", "source": "docs/b.md", "text": "gamma"}
+      ],
+      "expected_order": ["zero-a", "zero-b", "zero-c"],
+      "expected_scores": [0.0, 0.0, 0.0]
+    },
+    {
+      "id": "ranking-tie-break-by-id",
+      "query": "same",
+      "top_k": 3,
+      "chunks": [
+        {"id": "tie-c", "source": "docs/c.md", "text": "same text"},
+        {"id": "tie-a", "source": "docs/a.md", "text": "same text"},
+        {"id": "tie-b", "source": "docs/b.md", "text": "same text"}
+      ],
+      "expected_order": ["tie-a", "tie-b", "tie-c"],
+      "expected_scores": [12.1, 12.1, 12.1]
+    },
+    {
+      "id": "ranking-duplicate-content-distinct-ids",
+      "query": "duplicate",
+      "top_k": 2,
+      "chunks": [
+        {"id": "duplicate-z", "source": "docs/z.md", "text": "duplicate content"},
+        {"id": "duplicate-a", "source": "docs/a.md", "text": "duplicate content"}
+      ],
+      "expected_order": ["duplicate-a", "duplicate-z"],
+      "expected_scores": [12.1, 12.1]
+    },
+    {
+      "id": "ranking-top-k-truncation",
+      "query": "deepseek cache",
+      "top_k": 3,
+      "chunks": [
+        {"id": "zero-e", "source": "docs/other.md", "text": "network runtime"},
+        {"id": "partial-d", "source": "docs/runtime.md", "text": "deepseek runtime"},
+        {"id": "source-c", "source": "docs/deepseek cache.md", "text": "unrelated body"},
+        {"id": "title-b", "source": "docs/title.md", "text": "unrelated body", "title": "DeepSeek Cache"},
+        {"id": "exact-a", "source": "docs/exact.md", "text": "deepseek cache guide"}
+      ],
+      "expected_order": ["exact-a", "source-c", "title-b"],
+      "expected_scores": [13.2, 2.2, 2.2]
+    }
+  ],
+  "citation_cases": [
+    {
+      "id": "citation-line-range",
+      "source": "docs/cache.md",
+      "start_line": 12,
+      "end_line": 18,
+      "expected": "docs/cache.md:L12-L18"
+    },
+    {
+      "id": "citation-single-line",
+      "source": "docs/cache.md",
+      "start_line": 12,
+      "end_line": null,
+      "expected": "docs/cache.md:L12"
+    },
+    {
+      "id": "citation-no-lines",
+      "source": "docs/cache.md",
+      "start_line": null,
+      "end_line": null,
+      "expected": "docs/cache.md"
+    },
+    {
+      "id": "citation-end-only",
+      "source": "docs/cache.md",
+      "start_line": null,
+      "end_line": 18,
+      "expected": "docs/cache.md"
+    },
+    {
+      "id": "citation-cjk-source",
+      "source": "文档/上下文缓存.md",
+      "start_line": 3,
+      "end_line": 9,
+      "expected": "文档/上下文缓存.md:L3-L9"
+    },
+    {
+      "id": "citation-source-with-spaces",
+      "source": "docs/Cache Guide.md",
+      "start_line": 1,
+      "end_line": 2,
+      "expected": "docs/Cache Guide.md:L1-L2"
+    },
+    {
+      "id": "citation-trims-source",
+      "source": "  docs/cache.md  ",
+      "start_line": 5,
+      "end_line": 5,
+      "expected": "docs/cache.md:L5-L5"
+    },
+    {
+      "id": "citation-invalid-range",
+      "source": "docs/cache.md",
+      "start_line": 20,
+      "end_line": 10,
+      "expected_error": "invalid_line_range"
+    }
+  ],
+  "index_validation_cases": [
+    {
+      "id": "index-valid-basic",
+      "chunks": [
+        {"id": "a", "source": "docs/a.md", "text": "alpha", "metadata": {"title": null, "extra": {}}},
+        {"id": "b", "source": "docs/b.md", "text": "beta", "metadata": {"title": "Beta", "extra": {}}}
+      ],
+      "expected": {"valid": true, "error": null}
+    },
+    {
+      "id": "index-valid-metadata",
+      "chunks": [
+        {"id": "meta", "source": "docs/meta.md", "text": "metadata", "start_line": 1, "end_line": 3, "metadata": {"title": "Metadata", "extra": {"lang": "en", "scope": "docs"}}}
+      ],
+      "expected": {"valid": true, "error": null}
+    },
+    {
+      "id": "index-duplicate-id",
+      "chunks": [
+        {"id": "dup", "source": "docs/a.md", "text": "alpha", "metadata": {"title": null, "extra": {}}},
+        {"id": "dup", "source": "docs/b.md", "text": "beta", "metadata": {"title": null, "extra": {}}}
+      ],
+      "expected": {"valid": false, "error": "duplicate_chunk_id"}
+    },
+    {
+      "id": "index-empty-id",
+      "chunks": [
+        {"id": "", "source": "docs/a.md", "text": "alpha", "metadata": {"title": null, "extra": {}}}
+      ],
+      "expected": {"valid": false, "error": "empty_chunk_id"}
+    },
+    {
+      "id": "index-empty-source",
+      "chunks": [
+        {"id": "a", "source": "", "text": "alpha", "metadata": {"title": null, "extra": {}}}
+      ],
+      "expected": {"valid": false, "error": "empty_chunk_source"}
+    },
+    {
+      "id": "index-invalid-line-range",
+      "chunks": [
+        {"id": "a", "source": "docs/a.md", "text": "alpha", "start_line": 20, "end_line": 10, "metadata": {"title": null, "extra": {}}}
+      ],
+      "expected": {"valid": false, "error": "invalid_line_range"}
+    },
+    {
+      "id": "index-invalid-metadata",
+      "chunks": [
+        {"id": "a", "source": "docs/a.md", "text": "alpha", "metadata": {"title": 123, "extra": {}}}
+      ],
+      "expected": {"valid": false, "error": "invalid_metadata"}
+    },
+    {
+      "id": "index-json-roundtrip",
+      "roundtrip": true,
+      "chunks": [
+        {"id": "roundtrip", "source": "文档/缓存.md", "text": "上下文缓存", "start_line": 8, "end_line": 12, "metadata": {"title": "缓存", "extra": {"version": "3.2.4"}}}
+      ],
+      "expected": {"valid": true, "error": null}
+    }
+  ]
+}

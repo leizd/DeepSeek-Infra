@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package deepseek.evidence.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/leizd/DeepSeek-Infra/go/internal/protocol/evidencev1;evidencev1";
+
+message EvidenceBinding {
+  deepseek.common.v1.ActionFence fence = 1;
+  string envelope_type = 2;
+  string proof_type = 3;
+  string digest = 4;
+}

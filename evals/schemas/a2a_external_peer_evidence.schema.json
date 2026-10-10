@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepseek-infra.local/schemas/a2a_external_peer_evidence.schema.json",
+  "title": "A2A External Peer Evidence",
+  "type": "object",
+  "required": ["schemaVersion", "version", "commit", "generatedAt", "environment", "gitSha", "gitDirty", "peer", "peerType", "checks", "status", "steps"],
+  "properties": {
+    "schemaVersion": {
+      "const": "a2a-external-peer-evidence.v1"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "generatedAt": {
+      "type": "string"
+    },
+    "commit": {
+      "type": "string"
+    },
+    "environment": {
+      "type": "object",
+      "required": ["os", "python", "ci"],
+      "properties": {
+        "os": {"type": "string"},
+        "python": {"type": "string"},
+        "ci": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    },
+    "gitSha": {
+      "type": "string"
+    },
+    "gitDirty": {
+      "type": "boolean"
+    },
+    "peer": {
+      "type": "object",
+      "required": ["name", "url", "endpoint", "type"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "type": {
+          "enum": ["independent-process", "third-party", "adapter"]
+        },
+        "protocolVersion": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "peerType": {
+      "enum": ["independent-process", "adapter"]
+    },
+    "checks": {
+      "type": "object",
+      "required": ["agentCard", "messageSend", "messageStream", "tasksGet", "tasksCancel", "tasksList", "artifactChunks", "sseFinalEvent"],
+      "properties": {
+        "agentCard": {
+          "enum": ["PASS", "FAIL"]
+        },
+        "messageSend": {
+          "enum": ["PASS", "FAIL"]
+        },
+        "messageStream": {
+          "enum": ["PASS", "FAIL"]
+        },
+        "tasksGet": {
+          "enum": ["PASS", "FAIL"]
+        },
+        "tasksCancel": {
+          "enum": ["PASS", "FAIL"]
+        },
+        "tasksList": {
+          "enum": ["PASS", "FAIL"]
+        },
+        "artifactChunks": {
+          "enum": ["PASS", "FAIL"]
+        },
+        "sseFinalEvent": {
+          "enum": ["PASS", "FAIL"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "status": {
+      "enum": ["PASS", "FAIL"]
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status", "detail"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "enum": ["pass", "fail", "warn"]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object"
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

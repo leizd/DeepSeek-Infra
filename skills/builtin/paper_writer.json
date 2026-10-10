@@ -1,0 +1,33 @@
+{
+  "skillId": "skill_paper_writer",
+  "name": "Paper Writer Skill",
+  "description": "Draft course papers with abstract, keywords, sections, and references.",
+  "version": "1.0.0",
+  "systemPrompt": "You are a paper writing Skill. Turn a topic and evidence into a well-structured academic draft with abstract, keywords, body, and references.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "topic": {"type": "string"},
+      "requirements": {"type": "string"},
+      "format": {"type": "string", "enum": ["md", "docx", "pdf"]}
+    },
+    "required": ["topic"],
+    "additionalProperties": true
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "content": {"type": "string"},
+      "mode": {"type": "string"}
+    },
+    "required": ["content"],
+    "additionalProperties": true
+  },
+  "allowedTools": ["search_files", "web_search", "fetch_url", "create_document"],
+  "memoryPolicy": {"scope": "project", "read": true, "write": false},
+  "artifactPolicy": {"autoSave": true, "types": ["md", "docx", "pdf"]},
+  "projectBinding": {"enabled": true},
+  "exampleInputs": [
+    {"topic": "The impact of local RAG on learning workflows", "requirements": "3000 words, include references", "format": "docx"}
+  ]
+}

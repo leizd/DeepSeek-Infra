@@ -1,0 +1,11 @@
+{
+  "packId": "pack_code",
+  "name": "Code Pack",
+  "description": "Review code and read supporting documents for engineering work.",
+  "version": "1.0.0",
+  "author": "builtin",
+  "skills": [
+    {"skillId": "skill_code_review"},
+    {"skillId": "skill_document_reader"}
+  ]
+}

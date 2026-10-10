@@ -1,0 +1,5 @@
+{
+  "event": "project.updated",
+  "projectId": "proj_fixture",
+  "changed": ["saved-items", "artifacts"]
+}

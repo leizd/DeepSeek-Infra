@@ -1,0 +1,56 @@
+{
+  "version": "4.5.3",
+  "commit": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "testedRevision": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "sourceRevision": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "sourceTreeDirty": true,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "generatedAt": "2026-08-17T00:38:07Z",
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "projectCreate": "PASS",
+    "projectRename": "PASS",
+    "savedItemCreate": "PASS",
+    "artifactList": "PASS",
+    "conversationExport": "PASS",
+    "projectExportZip": "PASS",
+    "secretRedaction": "PASS",
+    "projectDeleteScope": "PASS"
+  },
+  "details": {
+    "runtimeRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-workspace-smoke-4yiqy1s0",
+    "projectId": "proj-9aaad23dc310",
+    "projectExport": {
+      "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-workspace-smoke-4yiqy1s0\\.projects\\proj-9aaad23dc310\\exports\\export_3529691d03969e6b-Workspace-Smoke-Renamed-project-export.zip",
+      "entries": [
+        "artifacts/Workspace-Summary.md",
+        "conversations/conversation-conv-smoke.md",
+        "files/source-files/source.txt.txt",
+        "media/media.json",
+        "metadata.json",
+        "project.md",
+        "saved-items/saved-items.json"
+      ]
+    },
+    "conversationExport": {
+      "exportId": "export_989d624907d73f06",
+      "projectId": "proj-9aaad23dc310",
+      "kind": "conversation",
+      "format": "markdown",
+      "filename": "Workspace-smoke-conversation.md",
+      "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-workspace-smoke-4yiqy1s0\\.projects\\proj-9aaad23dc310\\exports\\export_989d624907d73f06-Workspace-smoke-conversation.md",
+      "size": 180,
+      "includes": {
+        "projectId": "proj-9aaad23dc310"
+      },
+      "createdAt": "2026-08-17T00:38:06Z",
+      "downloadUrl": "/api/workspace/exports/export_989d624907d73f06/downloadprojectId=proj-9aaad23dc310"
+    }
+  }
+}

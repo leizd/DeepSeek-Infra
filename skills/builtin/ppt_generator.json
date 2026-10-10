@@ -1,0 +1,33 @@
+{
+  "skillId": "skill_ppt_generator",
+  "name": "PPT Generator Skill",
+  "description": "Create polished editable presentation decks from a topic, outline, or project materials.",
+  "version": "1.0.0",
+  "systemPrompt": "You are a PPT generation Skill. Always use create_pptx for slide decks and keep slides structured, visual, and editable.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "topic": {"type": "string"},
+      "audience": {"type": "string"},
+      "slideCount": {"type": "integer"}
+    },
+    "required": ["topic"],
+    "additionalProperties": true
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "content": {"type": "string"},
+      "mode": {"type": "string"}
+    },
+    "required": ["content"],
+    "additionalProperties": true
+  },
+  "allowedTools": ["search_files", "read_file_chunk", "generate_chart", "create_pptx"],
+  "memoryPolicy": {"scope": "project", "read": true, "write": false},
+  "artifactPolicy": {"autoSave": true, "types": ["pptx", "md"]},
+  "projectBinding": {"enabled": true},
+  "exampleInputs": [
+    {"topic": "DeepSeek Infra architecture", "audience": "technical interview", "slideCount": 8}
+  ]
+}

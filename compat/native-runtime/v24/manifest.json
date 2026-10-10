@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze rebalance execute/drain prefix and prune-safety hold semantics: cancelled/complete short-circuit, failed-job reclaim, pending-only drain with max(1, limit), source-hold expiry/identity matching, and simulate_copy_removal topology. This does not move payload bytes or contact MinIO.",
+  "normalization": "LF-normalized SHA-256 of public validator fixture bytes",
+  "corpora": [
+    {
+      "id": "rebalance-hold-safety-semantics-v24",
+      "path": "compat/native-runtime/v24/transfer/rebalance_hold_safety_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen rebalance execute prefix and prune-safety hold semantics",
+      "sha256": "a06b177ee0b9a879aedceec4cd5aca0007758df7e08390514d682d2565608712"
+    }
+  ]
+}

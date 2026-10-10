@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package deepseek.common.v1;
+
+option go_package = "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1;commonv1";
+
+message SchemaMeta {
+  string schema_name = 1;
+  uint32 schema_version = 2;
+}
+
+message Digest {
+  string algorithm = 1;
+  string hex = 2;
+}
+
+message ActionFence {
+  string action_id = 1;
+  uint64 execution_epoch = 2;
+}
+
+enum EffectState {
+  EFFECT_STATE_UNSPECIFIED = 0;
+  EFFECT_STATE_NOT_APPLIED = 1;
+  EFFECT_STATE_APPLIED = 2;
+  EFFECT_STATE_UNKNOWN = 3;
+}
+
+message ErrorDetail {
+  string code = 1;
+  string category = 2;
+  string message = 3;
+}

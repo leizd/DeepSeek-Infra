@@ -1,0 +1,163 @@
+syntax = "proto3";
+
+package deepseek.action.v1;
+
+import "common/v1/common.proto";
+import "agent/v1/agent.proto";
+
+option go_package = "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1;actionv1";
+
+enum CommandKind {
+  COMMAND_KIND_UNSPECIFIED = 0;
+  COMMAND_KIND_EXECUTE_BACKUP = 1;
+  COMMAND_KIND_EXECUTE_RESTORE = 2;
+  COMMAND_KIND_EXECUTE_REPAIR = 3;
+  COMMAND_KIND_EXECUTE_REBALANCE = 4;
+  COMMAND_KIND_EXECUTE_FEDERATED_TRANSFER = 5;
+  COMMAND_KIND_SIGN_READINESS = 6;
+}
+
+enum AdmitStatus {
+  ADMIT_STATUS_UNSPECIFIED = 0;
+  ADMIT_STATUS_ADMITTED = 1;
+  ADMIT_STATUS_REJECTED = 2;
+}
+
+message AdmitCommandRequest {
+  CommandKind kind = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  uint64 live_epoch = 3;
+}
+
+message AdmitCommandResponse {
+  AdmitStatus status = 1;
+  deepseek.common.v1.EffectState state = 2;
+  deepseek.common.v1.ErrorDetail error = 3;
+}
+
+message QueryEffectRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+}
+
+message EffectResult {
+  deepseek.common.v1.ActionFence fence = 1;
+  deepseek.common.v1.EffectState state = 2;
+  string effect_id = 3;
+  string receipt_digest = 4;
+  string commit_digest = 5;
+  string proof_digest = 6;
+  deepseek.common.v1.ErrorDetail error = 7;
+}
+
+message InstallAuthoritativeEpochRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  bytes canonical_request = 2;
+}
+
+message InstallAuthoritativeEpochResponse {
+  AdmitStatus status = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  deepseek.common.v1.ErrorDetail error = 3;
+}
+
+enum StorageMutationStatus {
+  STORAGE_MUTATION_STATUS_UNSPECIFIED = 0;
+  STORAGE_MUTATION_STATUS_CONFIRMED = 1;
+  STORAGE_MUTATION_STATUS_EFFECT_UNKNOWN = 2;
+  STORAGE_MUTATION_STATUS_RECONCILING = 3;
+  STORAGE_MUTATION_STATUS_REJECTED = 4;
+  STORAGE_MUTATION_STATUS_FAILED = 5;
+}
+
+enum StorageConditionType {
+  STORAGE_CONDITION_TYPE_UNSPECIFIED = 0;
+  STORAGE_CONDITION_TYPE_CREATE_ONLY = 1;
+  STORAGE_CONDITION_TYPE_IF_MATCH = 2;
+}
+
+message StoragePrecondition {
+  StorageConditionType condition_type = 1;
+  string expected_etag = 2;
+}
+
+message StorageMutationRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string operation_id = 2;
+  string request_id = 3;
+  string nonce = 4;
+  string mutation_type = 5;
+  string provider = 6;
+  string target_identity = 7;
+  string bucket = 8;
+  string prefix = 9;
+  string object_key = 10;
+  string payload_digest = 11;
+  uint64 expected_length = 12;
+  StoragePrecondition precondition = 13;
+  bytes canonical_authorization = 14;
+  uint32 schema_version = 15;
+  bytes payload = 16;
+}
+
+message StorageMutationResponse {
+  StorageMutationStatus status = 1;
+  deepseek.common.v1.EffectState state = 2;
+  deepseek.common.v1.ActionFence fence = 3;
+  string operation_id = 4;
+  string effect_id = 5;
+  string etag = 6;
+  string provider_metadata = 7;
+  deepseek.common.v1.ErrorDetail error = 8;
+}
+
+message QueryStorageEffectRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string operation_id = 2;
+}
+
+service Worker {
+  rpc AdmitCommand(AdmitCommandRequest) returns (AdmitCommandResponse);
+  rpc QueryEffect(QueryEffectRequest) returns (EffectResult);
+  rpc InstallAuthoritativeEpoch(InstallAuthoritativeEpochRequest) returns (InstallAuthoritativeEpochResponse);
+  rpc ExecuteStorageMutation(StorageMutationRequest) returns (StorageMutationResponse);
+  rpc QueryStorageEffect(QueryStorageEffectRequest) returns (StorageMutationResponse);
+}
+
+// Typed, bounded issuance. The signer never accepts an arbitrary message/digest,
+// private key, or caller-selected signature domain.
+enum ControlSigningPurpose {
+  CONTROL_SIGNING_PURPOSE_UNSPECIFIED = 0;
+  CONTROL_SIGNING_PURPOSE_INSTALL_EPOCH = 1;
+  CONTROL_SIGNING_PURPOSE_STORAGE_PUT = 2;
+  CONTROL_SIGNING_PURPOSE_AGENT_EXECUTION = 3;
+  CONTROL_SIGNING_PURPOSE_AGENT_INSTALL_EPOCH = 4;
+}
+
+message SignControlRequest {
+  ControlSigningPurpose purpose = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string request_id = 3;
+  string nonce = 4;
+  int64 revision = 5;
+  uint64 fencing_token = 6;
+  string fleet_id = 7;
+  string environment = 8;
+  string issued_at = 9;
+  string expires_at = 10;
+  // For STORAGE_PUT only. Payload and canonical_authorization must be empty.
+  StorageMutationRequest storage_intent = 11;
+  // For AGENT_EXECUTION or AGENT_INSTALL_EPOCH. Rust renews the claim with Go;
+  // caller-provided lease dates are never treated as authority.
+  deepseek.agent.v1.AgentRunExecutionClaim agent_intent = 12;
+}
+
+message SignControlResponse {
+  deepseek.common.v1.ActionFence fence = 1;
+  bytes canonical_document = 2;
+  string signer_public_key = 3;
+  string signer_key_id = 4;
+}
+
+service ControlSigner {
+  rpc SignControl(SignControlRequest) returns (SignControlResponse);
+}

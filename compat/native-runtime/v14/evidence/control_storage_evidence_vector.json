@@ -1,0 +1,1584 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "scope": "validator-parity-only-not-provider-execution-evidence",
+  "groups": [
+    {
+      "validator": "retention_safety",
+      "check_names": [
+        "retentionSafetyProof",
+        "authorityRetentionSafety"
+      ],
+      "base_evidence": {
+        "retentionSafety": {
+          "checkpointVerified": true,
+          "ancestorCoverage": true,
+          "replicaAgreement": true,
+          "dependencyClosure": true
+        }
+      },
+      "cases": [
+        {
+          "name": "valid-nested",
+          "operations": [],
+          "expected_errors": []
+        },
+        {
+          "name": "valid-flat",
+          "operations": [],
+          "expected_errors": [],
+          "evidence": {
+            "checkpointVerified": true,
+            "ancestorCoverage": true,
+            "replicaAgreement": true,
+            "dependencyClosure": true
+          }
+        },
+        {
+          "name": "non-object",
+          "operations": [],
+          "expected_errors": [
+            "evidence-must-be-object"
+          ],
+          "evidence": []
+        },
+        {
+          "name": "empty",
+          "operations": [],
+          "expected_errors": [
+            "missing-field:checkpointVerified",
+            "missing-field:ancestorCoverage",
+            "missing-field:replicaAgreement",
+            "missing-field:dependencyClosure",
+            "retention-safety-checkpointVerified-not-true",
+            "retention-safety-ancestorCoverage-not-true",
+            "retention-safety-replicaAgreement-not-true",
+            "retention-safety-dependencyClosure-not-true"
+          ],
+          "evidence": {}
+        },
+        {
+          "name": "nested-empty-overrides-valid-flat",
+          "operations": [],
+          "expected_errors": [
+            "missing-field:checkpointVerified",
+            "missing-field:ancestorCoverage",
+            "missing-field:replicaAgreement",
+            "missing-field:dependencyClosure",
+            "retention-safety-checkpointVerified-not-true",
+            "retention-safety-ancestorCoverage-not-true",
+            "retention-safety-replicaAgreement-not-true",
+            "retention-safety-dependencyClosure-not-true"
+          ],
+          "evidence": {
+            "checkpointVerified": true,
+            "ancestorCoverage": true,
+            "replicaAgreement": true,
+            "dependencyClosure": true,
+            "retentionSafety": {}
+          }
+        },
+        {
+          "name": "malformed-nested-falls-back-to-root",
+          "operations": [],
+          "expected_errors": [],
+          "evidence": {
+            "checkpointVerified": true,
+            "ancestorCoverage": true,
+            "replicaAgreement": true,
+            "dependencyClosure": true,
+            "retentionSafety": []
+          }
+        },
+        {
+          "name": "checkpointVerified-False",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/checkpointVerified",
+              "value": false
+            }
+          ],
+          "expected_errors": [
+            "retention-safety-checkpointVerified-not-true"
+          ]
+        },
+        {
+          "name": "checkpointVerified-1",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/checkpointVerified",
+              "value": 1
+            }
+          ],
+          "expected_errors": [
+            "retention-safety-checkpointVerified-not-true"
+          ]
+        },
+        {
+          "name": "checkpointVerified-None",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/checkpointVerified",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:checkpointVerified",
+            "retention-safety-checkpointVerified-not-true"
+          ]
+        },
+        {
+          "name": "checkpointVerified-'true'",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/checkpointVerified",
+              "value": "true"
+            }
+          ],
+          "expected_errors": [
+            "retention-safety-checkpointVerified-not-true"
+          ]
+        },
+        {
+          "name": "checkpointVerified-''",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/checkpointVerified",
+              "value": ""
+            }
+          ],
+          "expected_errors": [
+            "missing-field:checkpointVerified",
+            "retention-safety-checkpointVerified-not-true"
+          ]
+        },
+        {
+          "name": "missing-checkpointVerified",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/retentionSafety/checkpointVerified",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:checkpointVerified",
+            "retention-safety-checkpointVerified-not-true"
+          ]
+        },
+        {
+          "name": "ancestorCoverage-False",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/ancestorCoverage",
+              "value": false
+            }
+          ],
+          "expected_errors": [
+            "retention-safety-ancestorCoverage-not-true"
+          ]
+        },
+        {
+          "name": "ancestorCoverage-1",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/ancestorCoverage",
+              "value": 1
+            }
+          ],
+          "expected_errors": [
+            "retention-safety-ancestorCoverage-not-true"
+          ]
+        },
+        {
+          "name": "ancestorCoverage-None",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/ancestorCoverage",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:ancestorCoverage",
+            "retention-safety-ancestorCoverage-not-true"
+          ]
+        },
+        {
+          "name": "ancestorCoverage-'true'",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/ancestorCoverage",
+              "value": "true"
+            }
+          ],
+          "expected_errors": [
+            "retention-safety-ancestorCoverage-not-true"
+          ]
+        },
+        {
+          "name": "ancestorCoverage-''",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/ancestorCoverage",
+              "value": ""
+            }
+          ],
+          "expected_errors": [
+            "missing-field:ancestorCoverage",
+            "retention-safety-ancestorCoverage-not-true"
+          ]
+        },
+        {
+          "name": "missing-ancestorCoverage",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/retentionSafety/ancestorCoverage",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:ancestorCoverage",
+            "retention-safety-ancestorCoverage-not-true"
+          ]
+        },
+        {
+          "name": "replicaAgreement-False",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/replicaAgreement",
+              "value": false
+            }
+          ],
+          "expected_errors": [
+            "retention-safety-replicaAgreement-not-true"
+          ]
+        },
+        {
+          "name": "replicaAgreement-1",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/replicaAgreement",
+              "value": 1
+            }
+          ],
+          "expected_errors": [
+            "retention-safety-replicaAgreement-not-true"
+          ]
+        },
+        {
+          "name": "replicaAgreement-None",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/replicaAgreement",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:replicaAgreement",
+            "retention-safety-replicaAgreement-not-true"
+          ]
+        },
+        {
+          "name": "replicaAgreement-'true'",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/replicaAgreement",
+              "value": "true"
+            }
+          ],
+          "expected_errors": [
+            "retention-safety-replicaAgreement-not-true"
+          ]
+        },
+        {
+          "name": "replicaAgreement-''",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/replicaAgreement",
+              "value": ""
+            }
+          ],
+          "expected_errors": [
+            "missing-field:replicaAgreement",
+            "retention-safety-replicaAgreement-not-true"
+          ]
+        },
+        {
+          "name": "missing-replicaAgreement",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/retentionSafety/replicaAgreement",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:replicaAgreement",
+            "retention-safety-replicaAgreement-not-true"
+          ]
+        },
+        {
+          "name": "dependencyClosure-False",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/dependencyClosure",
+              "value": false
+            }
+          ],
+          "expected_errors": [
+            "retention-safety-dependencyClosure-not-true"
+          ]
+        },
+        {
+          "name": "dependencyClosure-1",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/dependencyClosure",
+              "value": 1
+            }
+          ],
+          "expected_errors": [
+            "retention-safety-dependencyClosure-not-true"
+          ]
+        },
+        {
+          "name": "dependencyClosure-None",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/dependencyClosure",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:dependencyClosure",
+            "retention-safety-dependencyClosure-not-true"
+          ]
+        },
+        {
+          "name": "dependencyClosure-'true'",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/dependencyClosure",
+              "value": "true"
+            }
+          ],
+          "expected_errors": [
+            "retention-safety-dependencyClosure-not-true"
+          ]
+        },
+        {
+          "name": "dependencyClosure-''",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/retentionSafety/dependencyClosure",
+              "value": ""
+            }
+          ],
+          "expected_errors": [
+            "missing-field:dependencyClosure",
+            "retention-safety-dependencyClosure-not-true"
+          ]
+        },
+        {
+          "name": "missing-dependencyClosure",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/retentionSafety/dependencyClosure",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:dependencyClosure",
+            "retention-safety-dependencyClosure-not-true"
+          ]
+        }
+      ]
+    },
+    {
+      "validator": "decision",
+      "check_names": [
+        "decisionProof",
+        "resilienceDecisionProof"
+      ],
+      "base_evidence": {
+        "decisionProof": {
+          "riskDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "policyVersion": "3",
+          "actionAllowed": true,
+          "simulationPassed": true,
+          "executionVerified": true,
+          "riskBeforeDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "riskAfterDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "effectObserved": true
+        }
+      },
+      "cases": [
+        {
+          "name": "valid-nested",
+          "operations": [],
+          "expected_errors": []
+        },
+        {
+          "name": "valid-flat",
+          "operations": [],
+          "expected_errors": [],
+          "evidence": {
+            "riskDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "policyVersion": "3",
+            "actionAllowed": true,
+            "simulationPassed": true,
+            "executionVerified": true,
+            "riskBeforeDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "riskAfterDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectObserved": true
+          }
+        },
+        {
+          "name": "non-object",
+          "operations": [],
+          "expected_errors": [
+            "evidence-must-be-object"
+          ],
+          "evidence": []
+        },
+        {
+          "name": "empty",
+          "operations": [],
+          "expected_errors": [
+            "missing-field:riskDigest",
+            "missing-field:policyVersion",
+            "missing-field:actionAllowed",
+            "missing-field:simulationPassed",
+            "missing-field:executionVerified",
+            "decision-actionAllowed-not-true",
+            "decision-simulationPassed-not-true",
+            "decision-executionVerified-not-true"
+          ],
+          "evidence": {}
+        },
+        {
+          "name": "nested-empty-overrides-valid-flat",
+          "operations": [],
+          "expected_errors": [
+            "missing-field:riskDigest",
+            "missing-field:policyVersion",
+            "missing-field:actionAllowed",
+            "missing-field:simulationPassed",
+            "missing-field:executionVerified",
+            "decision-actionAllowed-not-true",
+            "decision-simulationPassed-not-true",
+            "decision-executionVerified-not-true"
+          ],
+          "evidence": {
+            "riskDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "policyVersion": "3",
+            "actionAllowed": true,
+            "simulationPassed": true,
+            "executionVerified": true,
+            "riskBeforeDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "riskAfterDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectObserved": true,
+            "decisionProof": {}
+          }
+        },
+        {
+          "name": "malformed-nested-falls-back-to-root",
+          "operations": [],
+          "expected_errors": [],
+          "evidence": {
+            "riskDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "policyVersion": "3",
+            "actionAllowed": true,
+            "simulationPassed": true,
+            "executionVerified": true,
+            "riskBeforeDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "riskAfterDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "effectObserved": true,
+            "decisionProof": []
+          }
+        },
+        {
+          "name": "missing-riskDigest",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/decisionProof/riskDigest",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:riskDigest"
+          ]
+        },
+        {
+          "name": "missing-policyVersion",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/decisionProof/policyVersion",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:policyVersion"
+          ]
+        },
+        {
+          "name": "missing-actionAllowed",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/decisionProof/actionAllowed",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:actionAllowed",
+            "decision-actionAllowed-not-true"
+          ]
+        },
+        {
+          "name": "missing-simulationPassed",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/decisionProof/simulationPassed",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:simulationPassed",
+            "decision-simulationPassed-not-true"
+          ]
+        },
+        {
+          "name": "missing-executionVerified",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/decisionProof/executionVerified",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:executionVerified",
+            "decision-executionVerified-not-true"
+          ]
+        },
+        {
+          "name": "invalid-riskDigest",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/riskDigest",
+              "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            }
+          ],
+          "expected_errors": [
+            "invalid-sha256:riskDigest"
+          ]
+        },
+        {
+          "name": "numeric-riskDigest",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/riskDigest",
+              "value": 1111111111111111111111111111111111111111111111111111111111111111
+            }
+          ],
+          "expected_errors": []
+        },
+        {
+          "name": "invalid-riskBeforeDigest",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/riskBeforeDigest",
+              "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            }
+          ],
+          "expected_errors": [
+            "invalid-sha256:riskBeforeDigest"
+          ]
+        },
+        {
+          "name": "numeric-riskBeforeDigest",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/riskBeforeDigest",
+              "value": 1111111111111111111111111111111111111111111111111111111111111111
+            }
+          ],
+          "expected_errors": []
+        },
+        {
+          "name": "invalid-riskAfterDigest",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/riskAfterDigest",
+              "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            }
+          ],
+          "expected_errors": [
+            "invalid-sha256:riskAfterDigest"
+          ]
+        },
+        {
+          "name": "numeric-riskAfterDigest",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/riskAfterDigest",
+              "value": 1111111111111111111111111111111111111111111111111111111111111111
+            }
+          ],
+          "expected_errors": []
+        },
+        {
+          "name": "actionAllowed-False",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/actionAllowed",
+              "value": false
+            }
+          ],
+          "expected_errors": [
+            "decision-actionAllowed-not-true"
+          ]
+        },
+        {
+          "name": "actionAllowed-1",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/actionAllowed",
+              "value": 1
+            }
+          ],
+          "expected_errors": [
+            "decision-actionAllowed-not-true"
+          ]
+        },
+        {
+          "name": "actionAllowed-None",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/actionAllowed",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:actionAllowed",
+            "decision-actionAllowed-not-true"
+          ]
+        },
+        {
+          "name": "simulationPassed-False",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/simulationPassed",
+              "value": false
+            }
+          ],
+          "expected_errors": [
+            "decision-simulationPassed-not-true"
+          ]
+        },
+        {
+          "name": "simulationPassed-1",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/simulationPassed",
+              "value": 1
+            }
+          ],
+          "expected_errors": [
+            "decision-simulationPassed-not-true"
+          ]
+        },
+        {
+          "name": "simulationPassed-None",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/simulationPassed",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:simulationPassed",
+            "decision-simulationPassed-not-true"
+          ]
+        },
+        {
+          "name": "executionVerified-False",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/executionVerified",
+              "value": false
+            }
+          ],
+          "expected_errors": [
+            "decision-executionVerified-not-true"
+          ]
+        },
+        {
+          "name": "executionVerified-1",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/executionVerified",
+              "value": 1
+            }
+          ],
+          "expected_errors": [
+            "decision-executionVerified-not-true"
+          ]
+        },
+        {
+          "name": "executionVerified-None",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/executionVerified",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:executionVerified",
+            "decision-executionVerified-not-true"
+          ]
+        },
+        {
+          "name": "effectObserved-False",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/effectObserved",
+              "value": false
+            }
+          ],
+          "expected_errors": [
+            "decision-effectObserved-not-true"
+          ]
+        },
+        {
+          "name": "effectObserved-1",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/effectObserved",
+              "value": 1
+            }
+          ],
+          "expected_errors": [
+            "decision-effectObserved-not-true"
+          ]
+        },
+        {
+          "name": "effectObserved-None",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/effectObserved",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "decision-effectObserved-not-true"
+          ]
+        },
+        {
+          "name": "optional-fields-absent",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/decisionProof/riskBeforeDigest",
+              "value": null
+            },
+            {
+              "op": "remove",
+              "pointer": "/decisionProof/riskAfterDigest",
+              "value": null
+            },
+            {
+              "op": "remove",
+              "pointer": "/decisionProof/effectObserved",
+              "value": null
+            }
+          ],
+          "expected_errors": []
+        },
+        {
+          "name": "multiple-errors-are-ordered",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/riskDigest",
+              "value": "bad"
+            },
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/riskBeforeDigest",
+              "value": false
+            },
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/riskAfterDigest",
+              "value": []
+            },
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/simulationPassed",
+              "value": false
+            },
+            {
+              "op": "replace",
+              "pointer": "/decisionProof/effectObserved",
+              "value": 1
+            }
+          ],
+          "expected_errors": [
+            "invalid-sha256:riskDigest",
+            "invalid-sha256:riskBeforeDigest",
+            "invalid-sha256:riskAfterDigest",
+            "decision-simulationPassed-not-true",
+            "decision-effectObserved-not-true"
+          ]
+        }
+      ]
+    },
+    {
+      "validator": "resilience",
+      "check_names": [
+        "resilienceScoreProof",
+        "resilienceSnapshotProof"
+      ],
+      "base_evidence": {
+        "riskDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "score": 75,
+        "overallRisk": "LOW"
+      },
+      "cases": [
+        {
+          "name": "valid",
+          "operations": [],
+          "expected_errors": []
+        },
+        {
+          "name": "non-object",
+          "operations": [],
+          "expected_errors": [
+            "evidence-must-be-object"
+          ],
+          "evidence": []
+        },
+        {
+          "name": "empty",
+          "operations": [],
+          "expected_errors": [
+            "missing-field:riskDigest",
+            "missing-field:score",
+            "missing-field:overallRisk"
+          ],
+          "evidence": {}
+        },
+        {
+          "name": "score-0",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/score",
+              "value": 0
+            }
+          ],
+          "expected_errors": []
+        },
+        {
+          "name": "score-100",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/score",
+              "value": 100
+            }
+          ],
+          "expected_errors": []
+        },
+        {
+          "name": "score-0.25",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/score",
+              "value": 0.25
+            }
+          ],
+          "expected_errors": []
+        },
+        {
+          "name": "score--1",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/score",
+              "value": -1
+            }
+          ],
+          "expected_errors": [
+            "invalid-resilience-score"
+          ]
+        },
+        {
+          "name": "score-101",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/score",
+              "value": 101
+            }
+          ],
+          "expected_errors": [
+            "invalid-resilience-score"
+          ]
+        },
+        {
+          "name": "score-True",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/score",
+              "value": true
+            }
+          ],
+          "expected_errors": [
+            "invalid-resilience-score"
+          ]
+        },
+        {
+          "name": "score-'75'",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/score",
+              "value": "75"
+            }
+          ],
+          "expected_errors": [
+            "invalid-resilience-score"
+          ]
+        },
+        {
+          "name": "score-None",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/score",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:score"
+          ]
+        },
+        {
+          "name": "score-[]",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/score",
+              "value": []
+            }
+          ],
+          "expected_errors": [
+            "invalid-resilience-score"
+          ]
+        },
+        {
+          "name": "score-{}",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/score",
+              "value": {}
+            }
+          ],
+          "expected_errors": [
+            "invalid-resilience-score"
+          ]
+        },
+        {
+          "name": "score-''",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/score",
+              "value": ""
+            }
+          ],
+          "expected_errors": [
+            "missing-field:score",
+            "invalid-resilience-score"
+          ]
+        },
+        {
+          "name": "missing-riskDigest",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/riskDigest",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:riskDigest"
+          ]
+        },
+        {
+          "name": "missing-score",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/score",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:score"
+          ]
+        },
+        {
+          "name": "missing-overallRisk",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/overallRisk",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:overallRisk"
+          ]
+        },
+        {
+          "name": "invalid-digest",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/riskDigest",
+              "value": "bad"
+            }
+          ],
+          "expected_errors": [
+            "invalid-sha256:riskDigest"
+          ]
+        },
+        {
+          "name": "numeric-digest",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/riskDigest",
+              "value": 2222222222222222222222222222222222222222222222222222222222222222
+            }
+          ],
+          "expected_errors": []
+        },
+        {
+          "name": "score-overflow-json-integer",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/score",
+              "value": 1606938044258990275541962092341162602522202993782792835301376
+            }
+          ],
+          "expected_errors": [
+            "invalid-resilience-score"
+          ]
+        }
+      ]
+    },
+    {
+      "validator": "repair",
+      "check_names": [
+        "realReplicaTransferUsesEndpointAAndB"
+      ],
+      "base_evidence": {
+        "actionId": "act-proof-474",
+        "backupId": "bak-proof-474",
+        "bucket": "backup-b-proof",
+        "commitBytesBase64": "eyJiYWNrdXBJZCI6ImJhay1wcm9vZi00NzQiLCJvYmplY3RTZXREaWdlc3QiOiIwZjlkZDkwNGNkNjIxZTA1NjYxYWIzYzA1OWZlMjcyNDFhMzRmMjgyMjliMDY5MGRmY2FlMjc5YjczNTIxMGZhIiwicG9saWN5SWQiOiJwb2xpY3ktcHJvb2YtNDc0IiwicmVjZWlwdERpZ2VzdCI6ImNiMmM1MTY0MzE4ZWJkNmUyZGY2NTQ5NWM2OGEzNTlhOTU0YzA1ZmNlNGU1ZTI5ODlhNWZkMTc0ODA0MmUxMTMiLCJzY2hlbWFWZXJzaW9uIjo0fQ==",
+        "commitKey": "commits/policy-proof-474/bak-proof-474.json",
+        "commitReceiptDigest": "cb2c5164318ebd6e2df65495c68a359a954c05fce4e5e2989a5fd1748042e113",
+        "endpoint": "http://127.0.0.1:9001",
+        "objectSetDigest": "0f9dd904cd621e05661ab3c059fe27241a34f28229b0690dfcae279b735210fa",
+        "policyId": "policy-proof-474",
+        "prefix": "resilience-474-proof",
+        "providerCommitObject": {
+          "etag": "commit-etag",
+          "key": "commits/policy-proof-474/bak-proof-474.json",
+          "sha256": "e462fb1aa1c6962f53ba041a8f2ce3948b21eeb018028c92f8c52247e44c897b",
+          "size": 244
+        },
+        "providerReceiptObject": {
+          "etag": "receipt-etag",
+          "key": "receipts/bak-proof-474.json",
+          "sha256": "cb2c5164318ebd6e2df65495c68a359a954c05fce4e5e2989a5fd1748042e113",
+          "size": 131
+        },
+        "rawCommitSha256": "e462fb1aa1c6962f53ba041a8f2ce3948b21eeb018028c92f8c52247e44c897b",
+        "rawReceiptSha256": "cb2c5164318ebd6e2df65495c68a359a954c05fce4e5e2989a5fd1748042e113",
+        "receiptBytesBase64": "eyJiYWNrdXBJZCI6ImJhay1wcm9vZi00NzQiLCJvYmplY3RTZXREaWdlc3QiOiIwZjlkZDkwNGNkNjIxZTA1NjYxYWIzYzA1OWZlMjcyNDFhMzRmMjgyMjliMDY5MGRmY2FlMjc5YjczNTIxMGZhIiwic2NoZW1hVmVyc2lvbiI6NH0=",
+        "receiptKey": "receipts/bak-proof-474.json",
+        "targetId": "target_minio_b",
+        "endpointA": "http://127.0.0.1:29001",
+        "endpointB": "http://127.0.0.1:9001"
+      },
+      "cases": [
+        {
+          "name": "valid-provider-bytes",
+          "operations": [],
+          "expected_errors": []
+        },
+        {
+          "name": "non-object",
+          "operations": [],
+          "expected_errors": [
+            "evidence-must-be-object"
+          ],
+          "evidence": []
+        },
+        {
+          "name": "empty",
+          "operations": [],
+          "expected_errors": [
+            "missing-field:targetId",
+            "missing-field:endpoint",
+            "missing-field:bucket",
+            "missing-field:backupId",
+            "missing-field:policyId",
+            "missing-field:actionId",
+            "missing-field:receiptKey",
+            "missing-field:commitKey",
+            "missing-field:receiptBytesBase64",
+            "missing-field:commitBytesBase64",
+            "missing-field:rawReceiptSha256",
+            "missing-field:rawCommitSha256",
+            "missing-field:commitReceiptDigest",
+            "missing-field:objectSetDigest",
+            "missing-field:providerReceiptObject",
+            "missing-field:providerCommitObject",
+            "providerReceiptObject-must-be-object",
+            "providerCommitObject-must-be-object",
+            "missing-field:endpointA",
+            "missing-field:endpointB"
+          ],
+          "evidence": {}
+        },
+        {
+          "name": "missing-source-endpoint",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/endpointA",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:endpointA"
+          ]
+        },
+        {
+          "name": "missing-destination-endpoint",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/endpointB",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:endpointB"
+          ]
+        },
+        {
+          "name": "wrong-destination",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/endpointB",
+              "value": "http://127.0.0.1:29999"
+            }
+          ],
+          "expected_errors": [
+            "destination-endpoint-b-mismatch"
+          ]
+        },
+        {
+          "name": "trailing-slash-equivalence",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/endpointB",
+              "value": "http://127.0.0.1:9001///"
+            }
+          ],
+          "expected_errors": []
+        },
+        {
+          "name": "wrong-destination-despite-other-matching-field",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/endpointB",
+              "value": "http://127.0.0.1:29999"
+            },
+            {
+              "op": "replace",
+              "pointer": "/endpointC",
+              "value": "http://127.0.0.1:9001"
+            }
+          ],
+          "expected_errors": [
+            "destination-endpoint-b-mismatch"
+          ]
+        },
+        {
+          "name": "receipt-digest-tampered",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/rawReceiptSha256",
+              "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ],
+          "expected_errors": [
+            "raw-receipt-sha256-mismatch"
+          ]
+        },
+        {
+          "name": "receipt-bytes-tampered",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/receiptBytesBase64",
+              "value": "bm90LWpzb24="
+            }
+          ],
+          "expected_errors": [
+            "raw-receipt-sha256-mismatch",
+            "receipt-digest-binding-mismatch",
+            "invalid-receipt-json",
+            "providerReceiptObject-size-mismatch",
+            "providerReceiptObject-sha256-mismatch"
+          ]
+        },
+        {
+          "name": "commit-bytes-tampered",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/commitBytesBase64",
+              "value": "bm90LWpzb24="
+            }
+          ],
+          "expected_errors": [
+            "raw-commit-sha256-mismatch",
+            "invalid-commit-json",
+            "providerCommitObject-size-mismatch",
+            "providerCommitObject-sha256-mismatch"
+          ]
+        },
+        {
+          "name": "provider-key-mismatch",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/providerCommitObject/key",
+              "value": "commits/wrong.json"
+            }
+          ],
+          "expected_errors": [
+            "providerCommitObject-key-mismatch"
+          ]
+        },
+        {
+          "name": "endpoint-and-bytes-errors-are-ordered",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/rawReceiptSha256",
+              "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "op": "replace",
+              "pointer": "/endpointB",
+              "value": "http://wrong:29999"
+            }
+          ],
+          "expected_errors": [
+            "raw-receipt-sha256-mismatch",
+            "destination-endpoint-b-mismatch"
+          ]
+        }
+      ]
+    },
+    {
+      "validator": "rebalance",
+      "check_names": [
+        "realRebalanceUsesEndpointAAndC"
+      ],
+      "base_evidence": {
+        "actionId": "act-proof-474",
+        "backupId": "bak-proof-474",
+        "bucket": "backup-b-proof",
+        "commitBytesBase64": "eyJiYWNrdXBJZCI6ImJhay1wcm9vZi00NzQiLCJvYmplY3RTZXREaWdlc3QiOiIwZjlkZDkwNGNkNjIxZTA1NjYxYWIzYzA1OWZlMjcyNDFhMzRmMjgyMjliMDY5MGRmY2FlMjc5YjczNTIxMGZhIiwicG9saWN5SWQiOiJwb2xpY3ktcHJvb2YtNDc0IiwicmVjZWlwdERpZ2VzdCI6ImNiMmM1MTY0MzE4ZWJkNmUyZGY2NTQ5NWM2OGEzNTlhOTU0YzA1ZmNlNGU1ZTI5ODlhNWZkMTc0ODA0MmUxMTMiLCJzY2hlbWFWZXJzaW9uIjo0fQ==",
+        "commitKey": "commits/policy-proof-474/bak-proof-474.json",
+        "commitReceiptDigest": "cb2c5164318ebd6e2df65495c68a359a954c05fce4e5e2989a5fd1748042e113",
+        "endpoint": "http://127.0.0.1:9001",
+        "objectSetDigest": "0f9dd904cd621e05661ab3c059fe27241a34f28229b0690dfcae279b735210fa",
+        "policyId": "policy-proof-474",
+        "prefix": "resilience-474-proof",
+        "providerCommitObject": {
+          "etag": "commit-etag",
+          "key": "commits/policy-proof-474/bak-proof-474.json",
+          "sha256": "e462fb1aa1c6962f53ba041a8f2ce3948b21eeb018028c92f8c52247e44c897b",
+          "size": 244
+        },
+        "providerReceiptObject": {
+          "etag": "receipt-etag",
+          "key": "receipts/bak-proof-474.json",
+          "sha256": "cb2c5164318ebd6e2df65495c68a359a954c05fce4e5e2989a5fd1748042e113",
+          "size": 131
+        },
+        "rawCommitSha256": "e462fb1aa1c6962f53ba041a8f2ce3948b21eeb018028c92f8c52247e44c897b",
+        "rawReceiptSha256": "cb2c5164318ebd6e2df65495c68a359a954c05fce4e5e2989a5fd1748042e113",
+        "receiptBytesBase64": "eyJiYWNrdXBJZCI6ImJhay1wcm9vZi00NzQiLCJvYmplY3RTZXREaWdlc3QiOiIwZjlkZDkwNGNkNjIxZTA1NjYxYWIzYzA1OWZlMjcyNDFhMzRmMjgyMjliMDY5MGRmY2FlMjc5YjczNTIxMGZhIiwic2NoZW1hVmVyc2lvbiI6NH0=",
+        "receiptKey": "receipts/bak-proof-474.json",
+        "targetId": "target_minio_b",
+        "endpointA": "http://127.0.0.1:29001",
+        "endpointC": "http://127.0.0.1:9001"
+      },
+      "cases": [
+        {
+          "name": "valid-provider-bytes",
+          "operations": [],
+          "expected_errors": []
+        },
+        {
+          "name": "non-object",
+          "operations": [],
+          "expected_errors": [
+            "evidence-must-be-object"
+          ],
+          "evidence": []
+        },
+        {
+          "name": "empty",
+          "operations": [],
+          "expected_errors": [
+            "missing-field:targetId",
+            "missing-field:endpoint",
+            "missing-field:bucket",
+            "missing-field:backupId",
+            "missing-field:policyId",
+            "missing-field:actionId",
+            "missing-field:receiptKey",
+            "missing-field:commitKey",
+            "missing-field:receiptBytesBase64",
+            "missing-field:commitBytesBase64",
+            "missing-field:rawReceiptSha256",
+            "missing-field:rawCommitSha256",
+            "missing-field:commitReceiptDigest",
+            "missing-field:objectSetDigest",
+            "missing-field:providerReceiptObject",
+            "missing-field:providerCommitObject",
+            "providerReceiptObject-must-be-object",
+            "providerCommitObject-must-be-object",
+            "missing-field:endpointA",
+            "missing-field:endpointC"
+          ],
+          "evidence": {}
+        },
+        {
+          "name": "missing-source-endpoint",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/endpointA",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:endpointA"
+          ]
+        },
+        {
+          "name": "missing-destination-endpoint",
+          "operations": [
+            {
+              "op": "remove",
+              "pointer": "/endpointC",
+              "value": null
+            }
+          ],
+          "expected_errors": [
+            "missing-field:endpointC"
+          ]
+        },
+        {
+          "name": "wrong-destination",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/endpointC",
+              "value": "http://127.0.0.1:29999"
+            }
+          ],
+          "expected_errors": [
+            "destination-endpoint-c-mismatch"
+          ]
+        },
+        {
+          "name": "trailing-slash-equivalence",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/endpointC",
+              "value": "http://127.0.0.1:9001///"
+            }
+          ],
+          "expected_errors": []
+        },
+        {
+          "name": "wrong-destination-despite-other-matching-field",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/endpointC",
+              "value": "http://127.0.0.1:29999"
+            },
+            {
+              "op": "replace",
+              "pointer": "/endpointB",
+              "value": "http://127.0.0.1:9001"
+            }
+          ],
+          "expected_errors": [
+            "destination-endpoint-c-mismatch"
+          ]
+        },
+        {
+          "name": "receipt-digest-tampered",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/rawReceiptSha256",
+              "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ],
+          "expected_errors": [
+            "raw-receipt-sha256-mismatch"
+          ]
+        },
+        {
+          "name": "receipt-bytes-tampered",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/receiptBytesBase64",
+              "value": "bm90LWpzb24="
+            }
+          ],
+          "expected_errors": [
+            "raw-receipt-sha256-mismatch",
+            "receipt-digest-binding-mismatch",
+            "invalid-receipt-json",
+            "providerReceiptObject-size-mismatch",
+            "providerReceiptObject-sha256-mismatch"
+          ]
+        },
+        {
+          "name": "commit-bytes-tampered",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/commitBytesBase64",
+              "value": "bm90LWpzb24="
+            }
+          ],
+          "expected_errors": [
+            "raw-commit-sha256-mismatch",
+            "invalid-commit-json",
+            "providerCommitObject-size-mismatch",
+            "providerCommitObject-sha256-mismatch"
+          ]
+        },
+        {
+          "name": "provider-key-mismatch",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/providerCommitObject/key",
+              "value": "commits/wrong.json"
+            }
+          ],
+          "expected_errors": [
+            "providerCommitObject-key-mismatch"
+          ]
+        },
+        {
+          "name": "endpoint-and-bytes-errors-are-ordered",
+          "operations": [
+            {
+              "op": "replace",
+              "pointer": "/rawReceiptSha256",
+              "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "op": "replace",
+              "pointer": "/endpointC",
+              "value": "http://wrong:29999"
+            }
+          ],
+          "expected_errors": [
+            "raw-receipt-sha256-mismatch",
+            "destination-endpoint-c-mismatch"
+          ]
+        }
+      ]
+    }
+  ]
+}

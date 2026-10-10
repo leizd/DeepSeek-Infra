@@ -1,0 +1,86 @@
+{
+  "version": "4.4.13",
+  "commit": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "testedRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "sourceRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "sourceTreeDirty": false,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "sourceContext": {
+    "schemaVersion": 2,
+    "version": "4.4.13",
+    "testedRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+    "sourceTreeDirty": false,
+    "capturedAt": "2026-08-10T10:41:18Z",
+    "generator": "scripts/generate_release_evidence.py",
+    "repository": "local",
+    "workflowRunId": "local",
+    "workflowAttempt": 1,
+    "eventName": "local",
+    "ref": "refs/heads/codex/4.4.13-projected-recovery"
+  },
+  "generatedAt": "2026-08-10T10:41:42+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "packSchemaValidation": "PASS",
+    "builtinPacksLoad": "PASS",
+    "packImport": "PASS",
+    "packExport": "PASS",
+    "skillIdConflictHandling": "PASS",
+    "toolPermissionDiff": "PASS",
+    "projectPackBinding": "PASS",
+    "packInstallDryRun": "PASS",
+    "reactSkillSurface": "PASS",
+    "packApiActions": "PASS",
+    "frontendTypecheckGate": "PASS",
+    "packAssets": "PASS"
+  },
+  "details": {
+    "builtinPackIds": [
+      "pack_code",
+      "pack_office",
+      "pack_research",
+      "pack_study"
+    ],
+    "packImport": {
+      "installedSkills": [
+        "skill_pack_smoke_a",
+        "skill_pack_smoke_b"
+      ],
+      "conflicts": []
+    },
+    "packExport": {
+      "packId": "pack_study",
+      "skillIds": [
+        "skill_study_tutor",
+        "skill_paper_writer",
+        "skill_document_reader"
+      ]
+    },
+    "toolPermissionDiff": {
+      "fetchUrlRisk": "network"
+    },
+    "projectPackBinding": {
+      "enabledPacks": [
+        "pack_smoke_packs"
+      ],
+      "enabledSkills": [
+        "skill_pack_smoke_a",
+        "skill_pack_smoke_b"
+      ]
+    },
+    "reactSkillSources": [
+      "frontend/src/features/skills/SkillsDrawer.tsx",
+      "frontend/src/api/skillsApi.ts"
+    ],
+    "packAssets": [
+      "docs/assets/skill-packs.png",
+      "docs/assets/skill-pack-import.png"
+    ]
+  }
+}

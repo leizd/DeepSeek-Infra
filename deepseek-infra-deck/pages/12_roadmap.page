@@ -1,0 +1,270 @@
+pageType: content
+background:
+  type: solid
+  color: "$bg"
+notes: 路线图与诚实边界：左栏下一步五项，右栏当前边界四条；依据 IMPLEMENTATION_STATUS.md 与 ROADMAP.md，措辞克制。
+elements:
+  # ---- 顶部文档轴 ----
+  - elementId: header-left
+    elementType: text
+    bounds: [48, 16, 300, 14]
+    content:
+      style: "$headerMeta"
+      align: [left, middle]
+      wrap: false
+      text: DEEPSEEK INFRA
+  - elementId: header-right
+    elementType: text
+    bounds: [612, 16, 300, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      align: [right, middle]
+      wrap: false
+      text: 路线 · 12 / 13
+  - elementId: header-rule
+    elementType: shape
+    bounds: [48, 44, 864, 1]
+    shapeName: rect
+    fill: {type: solid, color: "$hairline"}
+
+  # ---- kicker + 页标题 ----
+  - elementId: kicker
+    elementType: text
+    bounds: [48, 60, 400, 16]
+    content:
+      style: "$kicker"
+      align: [left, middle]
+      wrap: false
+      text: 11 · 路线与边界
+  - elementId: page-title
+    elementType: text
+    bounds: [48, 82, 864, 36]
+    content:
+      style: "$pageTitle"
+      align: [left, middle]
+      wrap: false
+      text: 已验证的留下，未完成的写清楚
+
+  # ---- 分栏竖线 ----
+  - elementId: col-divider
+    elementType: shape
+    bounds: [490, 132, 1, 296]
+    shapeName: rect
+    fill: {type: solid, color: "$hairline"}
+
+  # ---- 左栏：下一步 ----
+  - elementId: left-subtitle
+    elementType: text
+    bounds: [48, 132, 200, 18]
+    content:
+      fontSize: 13
+      color: "$structure"
+      fontFamily: MiSans
+      bold: true
+      align: [left, middle]
+      wrap: false
+      text: 下一步
+  - elementId: l-marker-1
+    elementType: shape
+    bounds: [48, 169, 6, 6]
+    shapeName: rect
+    fill: {type: solid, color: "$structure"}
+  - elementId: l-item-1
+    elementType: text
+    bounds: [64, 164, 406, 40]
+    content:
+      fontSize: 12
+      color: "$ink"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        <p><strong>React 迁移后续切片</strong>——附件 / Projects / Skills / Memory / 语音 / PWA 迁往 /ui/</p>
+  - elementId: l-sep-1
+    elementType: shape
+    bounds: [48, 210, 422, 1]
+    shapeName: rect
+    fill: {type: solid, color: "$hairline"}
+  - elementId: l-marker-2
+    elementType: shape
+    bounds: [48, 221, 6, 6]
+    shapeName: rect
+    fill: {type: solid, color: "$structure"}
+  - elementId: l-item-2
+    elementType: text
+    bounds: [64, 216, 406, 20]
+    content:
+      fontSize: 12
+      color: "$ink"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        <p><strong>第三方 A2A 生态实机互验</strong>（LangGraph / CrewAI 等真实 peer）</p>
+  - elementId: l-sep-2
+    elementType: shape
+    bounds: [48, 262, 422, 1]
+    shapeName: rect
+    fill: {type: solid, color: "$hairline"}
+  - elementId: l-marker-3
+    elementType: shape
+    bounds: [48, 273, 6, 6]
+    shapeName: rect
+    fill: {type: solid, color: "$structure"}
+  - elementId: l-item-3
+    elementType: text
+    bounds: [64, 268, 406, 20]
+    content:
+      fontSize: 12
+      color: "$ink"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        <p><strong>Rust 委托渐进扩展</strong>——upstream proxy / MCP 处理 / Tool Policy</p>
+  - elementId: l-sep-3
+    elementType: shape
+    bounds: [48, 314, 422, 1]
+    shapeName: rect
+    fill: {type: solid, color: "$hairline"}
+  - elementId: l-marker-4
+    elementType: shape
+    bounds: [48, 325, 6, 6]
+    shapeName: rect
+    fill: {type: solid, color: "$structure"}
+  - elementId: l-item-4
+    elementType: text
+    bounds: [64, 320, 406, 20]
+    content:
+      fontSize: 12
+      color: "$ink"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        <p><strong>Edge Router 接入真实端侧推理</strong>（GGUF / MLC）</p>
+  - elementId: l-sep-4
+    elementType: shape
+    bounds: [48, 366, 422, 1]
+    shapeName: rect
+    fill: {type: solid, color: "$hairline"}
+  - elementId: l-marker-5
+    elementType: shape
+    bounds: [48, 377, 6, 6]
+    shapeName: rect
+    fill: {type: solid, color: "$structure"}
+  - elementId: l-item-5
+    elementType: text
+    bounds: [64, 372, 406, 20]
+    content:
+      fontSize: 12
+      color: "$ink"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        <p><strong>Workspace Core 深化</strong>——Memory Graph 与前端精装修</p>
+
+  # ---- 右栏：当前边界·诚实清单 ----
+  - elementId: right-subtitle
+    elementType: text
+    bounds: [510, 132, 300, 18]
+    content:
+      fontSize: 13
+      color: "$accent"
+      fontFamily: MiSans
+      bold: true
+      align: [left, middle]
+      wrap: false
+      text: 当前边界 · 诚实清单
+  - elementId: r-marker-1
+    elementType: shape
+    bounds: [510, 169, 6, 6]
+    shapeName: rect
+    fill: {type: solid, color: "$accent"}
+  - elementId: r-item-1
+    elementType: text
+    bounds: [526, 164, 386, 20]
+    content:
+      fontSize: 12
+      color: "$ink"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        <p>Edge-Cloud Router 为 MVP，dry-run gated</p>
+  - elementId: r-sep-1
+    elementType: shape
+    bounds: [510, 210, 402, 1]
+    shapeName: rect
+    fill: {type: solid, color: "$hairline"}
+  - elementId: r-marker-2
+    elementType: shape
+    bounds: [510, 221, 6, 6]
+    shapeName: rect
+    fill: {type: solid, color: "$accent"}
+  - elementId: r-item-2
+    elementType: text
+    bounds: [526, 216, 386, 40]
+    content:
+      fontSize: 12
+      color: "$ink"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        <p>Memory / Taint Firewall / Browser / Automation 为 MVP release-gated</p>
+  - elementId: r-sep-2
+    elementType: shape
+    bounds: [510, 262, 402, 1]
+    shapeName: rect
+    fill: {type: solid, color: "$hairline"}
+  - elementId: r-marker-3
+    elementType: shape
+    bounds: [510, 273, 6, 6]
+    shapeName: rect
+    fill: {type: solid, color: "$accent"}
+  - elementId: r-item-3
+    elementType: text
+    bounds: [526, 268, 386, 20]
+    content:
+      fontSize: 12
+      color: "$ink"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        <p>Rust Sidecar 默认禁用，Python 为唯一权威路径</p>
+  - elementId: r-sep-3
+    elementType: shape
+    bounds: [510, 314, 402, 1]
+    shapeName: rect
+    fill: {type: solid, color: "$hairline"}
+  - elementId: r-marker-4
+    elementType: shape
+    bounds: [510, 325, 6, 6]
+    shapeName: rect
+    fill: {type: solid, color: "$accent"}
+  - elementId: r-item-4
+    elementType: text
+    bounds: [526, 320, 386, 20]
+    content:
+      fontSize: 12
+      color: "$ink"
+      fontFamily: MiSans
+      lineHeight: 1.5
+      align: [left, top]
+      text: |
+        <p>前端双轨并存：/ 为稳定 vanilla-JS，/ui/ 逐步达到 parity 后切换</p>
+
+  # ---- 底部注记 ----
+  - elementId: bottom-note
+    elementType: text
+    bounds: [48, 470, 864, 14]
+    content:
+      style: "$note"
+      align: [left, middle]
+      wrap: false
+      text: 逐项落地状态见 docs/IMPLEMENTATION_STATUS.md；路线见 ROADMAP.md。

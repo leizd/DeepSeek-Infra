@@ -1,0 +1,152 @@
+{
+  "version": "4.0.9",
+  "commit": "617ac79caddb",
+  "generatedAt": "2026-07-19T04:58:59+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "skillVersionSnapshot": "PASS",
+    "skillDiff": "PASS",
+    "schemaMigrationPlan": "PASS",
+    "skillRollback": "PASS",
+    "projectBindingMigration": "PASS",
+    "packVersionInstall": "PASS",
+    "packRollback": "PASS",
+    "evalAwareUpgradeGate": "PASS",
+    "versioningApiActions": "PASS",
+    "reactSkillSurface": "PASS",
+    "versioningAssets": "PASS",
+    "frontendTypecheckGate": "PASS",
+    "ciReleaseGate": "PASS"
+  },
+  "details": {
+    "skill": {
+      "updatedVersion": "1.1.0",
+      "versions": [
+        {
+          "skillId": "skill_version_smoke",
+          "version": "1.0.0",
+          "revisionId": "rev_20260719045855_ba10434dfe",
+          "createdAt": "2026-07-19T04:58:55+00:00",
+          "changeSummary": "Created custom Skill",
+          "event": "create",
+          "schemaHash": "ae4add8bebdcdfbeb90cb5d0217da169f2771d46757edce545ce6536ab7d8aa2",
+          "promptHash": "0b487621000a01f59882cd97421e683de805078083e3c13e64079e275096d7ca",
+          "toolGrantHash": "d0d5ab39c517d3d0a4d8a7f5f1855604779d628f3c3e6c5710345288317a7027",
+          "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-skill-versioning-g3ji75ah\\.skills\\history\\skill_version_smoke\\1.0.0--rev_20260719045855_ba10434dfe.json"
+        },
+        {
+          "skillId": "skill_version_smoke",
+          "version": "1.1.0",
+          "revisionId": "rev_20260719045856_0996beb5bf",
+          "createdAt": "2026-07-19T04:58:56+00:00",
+          "changeSummary": "Smoke schema migration",
+          "event": "update",
+          "schemaHash": "8dddffd685923f242c38a541cabf9006badf6f61b97d84bd43a5a2ec69d451a3",
+          "promptHash": "0b487621000a01f59882cd97421e683de805078083e3c13e64079e275096d7ca",
+          "toolGrantHash": "6fddb82b10280c0dd4f368af67cfaf3e3947900a5e2a6b4504c4efca3e94a356",
+          "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-skill-versioning-g3ji75ah\\.skills\\history\\skill_version_smoke\\1.1.0--rev_20260719045856_0996beb5bf.json"
+        },
+        {
+          "skillId": "skill_version_smoke",
+          "version": "1.1.0",
+          "revisionId": "rev_20260719045856_6130127e63",
+          "createdAt": "2026-07-19T04:58:56+00:00",
+          "changeSummary": "Current registry state",
+          "event": "current",
+          "schemaHash": "8dddffd685923f242c38a541cabf9006badf6f61b97d84bd43a5a2ec69d451a3",
+          "promptHash": "0b487621000a01f59882cd97421e683de805078083e3c13e64079e275096d7ca",
+          "toolGrantHash": "6fddb82b10280c0dd4f368af67cfaf3e3947900a5e2a6b4504c4efca3e94a356",
+          "current": true
+        }
+      ],
+      "migrationPlan": {
+        "ok": true,
+        "skillId": "skill_version_smoke",
+        "fromVersion": "1.0.0",
+        "toVersion": "1.1.0",
+        "safe": true,
+        "changes": [
+          {
+            "type": "inputFieldRenamed",
+            "from": "topic",
+            "to": "level",
+            "safe": true
+          },
+          {
+            "type": "inputFieldAdded",
+            "field": "subject",
+            "required": true,
+            "safe": true,
+            "default": "lifecycle"
+          }
+        ],
+        "migrationTargets": {
+          "projectBindings": 1,
+          "skillRuns": 0,
+          "savedMetadata": 0
+        },
+        "summary": "2 schema changes, safe; targets: 1 project bindings, 0 skill runs, 0 saved metadata records."
+      }
+    },
+    "pack": {
+      "versions": [
+        {
+          "packId": "pack_version_smoke",
+          "version": "1.0.0",
+          "revisionId": "rev_20260719045857_37c4852def",
+          "createdAt": "2026-07-19T04:58:57+00:00",
+          "changeSummary": "Imported Skill Pack",
+          "event": "import",
+          "packHash": "43893950a45911a8e90971d204aa56215bbf564ec144993dd72b5d769a3c3565",
+          "skillIdsHash": "47c0cbbca510c74cb931615a471c64cb0a02a7eb7aef1d6e18773a74376457ba",
+          "toolGrantHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-skill-versioning-g3ji75ah\\.skills\\history\\packs\\pack_version_smoke\\1.0.0--rev_20260719045857_37c4852def.json"
+        },
+        {
+          "packId": "pack_version_smoke",
+          "version": "1.1.0",
+          "revisionId": "rev_20260719045857_f802eeca2e",
+          "createdAt": "2026-07-19T04:58:57+00:00",
+          "changeSummary": "Imported Skill Pack",
+          "event": "import",
+          "packHash": "29b4253dde59160699f8b3169f20524fbbb712346e11eb5b7581d93ee0278e7e",
+          "skillIdsHash": "47c0cbbca510c74cb931615a471c64cb0a02a7eb7aef1d6e18773a74376457ba",
+          "toolGrantHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "path": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-skill-versioning-g3ji75ah\\.skills\\history\\packs\\pack_version_smoke\\1.1.0--rev_20260719045857_f802eeca2e.json"
+        },
+        {
+          "packId": "pack_version_smoke",
+          "version": "1.1.0",
+          "revisionId": "rev_20260719045857_485ea93831",
+          "createdAt": "2026-07-19T04:58:57+00:00",
+          "changeSummary": "Current registry state",
+          "event": "current",
+          "packHash": "29b4253dde59160699f8b3169f20524fbbb712346e11eb5b7581d93ee0278e7e",
+          "skillIdsHash": "47c0cbbca510c74cb931615a471c64cb0a02a7eb7aef1d6e18773a74376457ba",
+          "toolGrantHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "current": true
+        }
+      ],
+      "diffChanged": true,
+      "upgradeGate": {
+        "status": "PASS",
+        "risk": "low",
+        "overallScore": 100.0,
+        "passRate": 1.0,
+        "regressionCount": 0,
+        "newFailures": [],
+        "scoreDrops": [],
+        "recommendation": "safe to upgrade"
+      }
+    },
+    "assets": [
+      "docs/assets/skill-version-history.png",
+      "docs/assets/skill-version-diff.png"
+    ]
+  }
+}

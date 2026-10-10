@@ -1,0 +1,33 @@
+{
+  "skillId": "skill_research_brief",
+  "name": "Research Brief Skill",
+  "description": "Produce a source-backed research brief from web and local project context.",
+  "version": "1.0.0",
+  "systemPrompt": "You are a research brief Skill. Prefer fresh source-backed facts, compare sources when useful, and produce a markdown brief with citations.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "topic": {"type": "string"},
+      "audience": {"type": "string"},
+      "depth": {"type": "string", "enum": ["quick", "standard", "deep"]}
+    },
+    "required": ["topic"],
+    "additionalProperties": true
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "content": {"type": "string"},
+      "mode": {"type": "string"}
+    },
+    "required": ["content"],
+    "additionalProperties": true
+  },
+  "allowedTools": ["web_search", "compare_search_results", "fetch_url", "search_files", "create_document"],
+  "memoryPolicy": {"scope": "project", "read": true, "write": false},
+  "artifactPolicy": {"autoSave": true, "types": ["md", "docx", "pdf"]},
+  "projectBinding": {"enabled": true},
+  "exampleInputs": [
+    {"topic": "Local-first AI workspaces", "audience": "engineering review", "depth": "standard"}
+  ]
+}

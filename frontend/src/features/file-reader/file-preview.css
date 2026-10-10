@@ -1,0 +1,22 @@
+.file-preview-drawer { position: fixed; z-index: 50; top: 0; right: 0; display: flex; flex-direction: column; width: min(560px, 100vw); height: 100vh; padding: 26px 26px 20px; border-left: 1px solid var(--hair); background: var(--paper); }
+.file-preview-drawer .drawer-heading h2 { overflow-wrap: anywhere; font-size: 1.3rem; }
+.file-preview-meta { margin: 8px 0 0; color: var(--weak); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+.file-reader-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 18px 0 12px; }
+.file-reader-toolbar button, .file-reader-download { height: 30px; padding: 0 11px; border: 1px solid var(--hairw); color: var(--ink); background: var(--paper); font-size: 0.72rem; line-height: 28px; text-decoration: none; }
+.file-reader-toolbar button:hover:not(:disabled), .file-reader-download:hover { border-color: var(--ink); }
+.file-reader-position { color: var(--weak); font-size: 0.7rem; font-variant-numeric: tabular-nums; }
+.file-preview-body { flex: 1; min-height: 0; overflow-y: auto; border: 1px solid var(--hairw); background: var(--paper); }
+.file-preview-loading { padding: 18px; color: var(--weak); font-size: 0.8rem; }
+.file-reader-text, .file-reader-legacy { margin: 0; padding: 16px; color: var(--ink); font-family: var(--mono); font-size: 0.78rem; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.file-original-page, .file-original-image { display: block; max-width: 100%; margin: 0 auto; padding: 12px; }
+.file-original-frame { display: block; width: 100%; height: 100%; min-height: 60vh; border: 0; background: white; }
+.image-lightbox { position: fixed; z-index: 70; inset: 0; display: grid; place-items: center; background: rgba(37, 37, 37, 0.28); }
+.image-lightbox figure { display: grid; gap: 12px; justify-items: center; max-width: 92vw; margin: 0; }
+.image-lightbox img { max-width: 92vw; max-height: 84vh; border: 1px solid var(--ink); background: var(--paper); object-fit: contain; }
+.image-lightbox figcaption { color: var(--ink); font-size: 0.78rem; }
+.lightbox-nav, .lightbox-close { position: absolute; display: grid; place-items: center; border: 1px solid var(--ink); color: var(--ink); background: var(--paper); }
+.lightbox-nav { top: 50%; width: 44px; height: 44px; font-size: 1.5rem; transform: translateY(-50%); }
+.lightbox-nav.prev { left: 22px; }
+.lightbox-nav.next { right: 22px; }
+.lightbox-close { top: 20px; right: 22px; width: 38px; height: 38px; font-size: 1.2rem; }
+.lightbox-nav:hover:not(:disabled), .lightbox-close:hover { background: var(--ink); color: var(--paper); }

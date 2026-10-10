@@ -1,0 +1,18 @@
+.project-create-form { display: flex; gap: 8px; margin-top: 18px; }
+.project-create-form input { flex: 1; padding: 10px 11px; border: 1px solid var(--hairw); outline: none; color: var(--ink); background: var(--paper); }
+.project-create-form input:focus { border-color: var(--ink); }
+.project-create-form button { padding: 0 14px; border: 0; color: var(--paper); background: var(--ink); font-size: 0.78rem; }
+.project-create-form button:hover { background: var(--green); }
+.project-documents-header { display: flex; align-items: center; justify-content: space-between; }
+.project-upload-button { position: relative; cursor: pointer; }
+.project-document-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.project-document { display: flex; width: 100%; gap: 9px; align-items: center; padding: 8px 10px; border: 1px solid var(--hairw); color: var(--ink); background: var(--paper); font-size: 0.76rem; text-align: left; }
+.project-document:hover { border-color: var(--ink); }
+.project-document .attachment-kind { width: 28px; height: 28px; font-size: 0.55rem; }
+.project-document .attachment-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-skill-binding { margin-top: 20px; }
+.project-skill-options { display: grid; gap: 6px; }
+.skill-option { display: flex; gap: 8px; align-items: center; color: var(--ink); font-size: 0.76rem; }
+.skill-option.disabled { opacity: 0.5; }
+.project-default-skill { display: flex; gap: 10px; align-items: center; margin-top: 12px; color: var(--ink); font-size: 0.76rem; }
+.project-default-skill select { padding: 7px 9px; border: 1px solid var(--hairw); color: var(--ink); background: var(--paper); }

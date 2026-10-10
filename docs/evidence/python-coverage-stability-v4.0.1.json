@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "python-coverage-stability.v1",
+  "version": "4.0.1",
+  "commit": "2c6b1d99926c28007cfd56cb7ee71165fb443374",
+  "generatedAt": "2026-07-16T07:38:36Z",
+  "status": "PASS",
+  "ciGatePercent": 95.0,
+  "releaseMinimumPercent": 95.2,
+  "completeRunCount": 2,
+  "runs": [
+    {
+      "path": "artifacts/coverage-401-run-1.json",
+      "percent": 95.2495329597011,
+      "coveredLines": 24767,
+      "numStatements": 25591,
+      "coveredBranches": 7354,
+      "numBranches": 8132
+    },
+    {
+      "path": "artifacts/coverage-401-run-2.json",
+      "percent": 95.2495329597011,
+      "coveredLines": 24767,
+      "numStatements": 25591,
+      "coveredBranches": 7354,
+      "numBranches": 8132
+    }
+  ],
+  "coverageOmitChanged": false,
+  "highRiskCoverageDebtIncreased": false
+}

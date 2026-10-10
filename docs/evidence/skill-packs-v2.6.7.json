@@ -1,0 +1,75 @@
+{
+  "version": "2.6.7",
+  "commit": "dd0031094ea7",
+  "generatedAt": "2026-07-01T01:51:30+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "packSchemaValidation": "PASS",
+    "builtinPacksLoad": "PASS",
+    "packImport": "PASS",
+    "packExport": "PASS",
+    "skillIdConflictHandling": "PASS",
+    "toolPermissionDiff": "PASS",
+    "projectPackBinding": "PASS",
+    "packInstallDryRun": "PASS",
+    "packUiTab": "PASS",
+    "packApiActions": "PASS",
+    "packJsSyntax": "PASS",
+    "ciSyntaxGate": "PASS",
+    "packAssets": "PASS"
+  },
+  "details": {
+    "builtinPackIds": [
+      "pack_code",
+      "pack_office",
+      "pack_research",
+      "pack_study"
+    ],
+    "packImport": {
+      "installedSkills": [
+        "skill_pack_smoke_a",
+        "skill_pack_smoke_b"
+      ],
+      "conflicts": []
+    },
+    "packExport": {
+      "packId": "pack_study",
+      "skillIds": [
+        "skill_study_tutor",
+        "skill_paper_writer",
+        "skill_document_reader"
+      ]
+    },
+    "toolPermissionDiff": {
+      "fetchUrlRisk": "network"
+    },
+    "projectPackBinding": {
+      "enabledPacks": [
+        "pack_smoke_packs"
+      ],
+      "enabledSkills": [
+        "skill_pack_smoke_a",
+        "skill_pack_smoke_b"
+      ]
+    },
+    "packUiEntrypoints": [
+      "#skillPacksButton",
+      "#skillPacksHost",
+      "#skillBuiltinPackList",
+      "#skillCustomPackList"
+    ],
+    "packJsSyntax": {
+      "returnCode": 0,
+      "stderr": ""
+    },
+    "packAssets": [
+      "docs/assets/skill-packs.png",
+      "docs/assets/skill-pack-import.png"
+    ]
+  }
+}

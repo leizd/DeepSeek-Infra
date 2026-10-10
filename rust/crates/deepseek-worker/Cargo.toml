@@ -1,0 +1,55 @@
+[package]
+name = "deepseek-worker"
+default-run = "deepseek-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["s3"]
+s3 = ["deepseek-storage/s3", "dep:bytes"]
+s3-e2e = ["s3", "deepseek-storage/s3-e2e"]
+
+[dependencies]
+deepseek-protocol = { path = "../deepseek-protocol" }
+deepseek-storage = { path = "../deepseek-storage" }
+deepseek-transfer = { path = "../deepseek-transfer" }
+deepseek-federation = { path = "../deepseek-federation" }
+deepseek-proof = { path = "../deepseek-proof" }
+base64.workspace = true
+bytes = { version = "1", optional = true }
+ed25519-dalek.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+rusqlite.workspace = true
+tokio.workspace = true
+tonic = { workspace = true, features = ["tls"] }
+rustls-pemfile = "2"
+zeroize = "=1.9.0"
+
+[[bin]]
+name = "deepseek-worker"
+path = "src/main.rs"
+
+[[bin]]
+name = "deepseek-control-signer-init"
+path = "src/bin/control_signer_init.rs"
+
+[[test]]
+name = "authorized_storage"
+required-features = ["s3"]
+
+[[test]]
+name = "authorized_storage_provider"
+required-features = ["s3-e2e"]
+
+[dev-dependencies]
+tempfile = "3.27.0"
+rcgen = "0.13"
+time = { version = "=0.3.45", features = ["formatting"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true

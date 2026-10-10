@@ -1,0 +1,17 @@
+.workspace-drawer h3 { margin: 18px 0 10px; color: var(--ink); font-family: var(--serif); font-size: 0.85rem; font-weight: 700; }
+.workspace-toolbar { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+.workspace-toolbar .history-search { flex: 1; margin: 0; }
+.workspace-section-title { margin: 20px 0 8px; color: var(--weak); font-size: 0.66rem; font-weight: 400; letter-spacing: 0.12em; text-transform: uppercase; }
+.workspace-list { display: grid; gap: 4px; margin-top: 12px; }
+.workspace-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px; align-items: center; border-bottom: 1px solid var(--hairw); }
+.workspace-item.active .workspace-open span { color: var(--green); text-decoration: underline; text-underline-offset: 4px; }
+.workspace-open { min-width: 0; padding: 10px 9px; border: 0; color: var(--ink); background: transparent; text-align: left; }
+.workspace-open:hover { background: rgba(37, 37, 37, 0.03); }
+.workspace-open span, .workspace-open small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-open span { color: var(--ink); font-family: var(--serif); font-size: 0.88rem; }
+.workspace-open small { margin-top: 4px; color: var(--weak); font-size: 0.68rem; }
+.history-empty-inline { color: var(--weak); font-size: 0.72rem; }
+.workspace-sync-status { margin-left: 8px; color: var(--green); font-size: 0.66rem; }
+.workspace-error { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin: 12px 0; padding: 10px 12px; border: 1px solid var(--red); color: var(--red); background: rgba(176, 58, 46, 0.05); font-size: 0.76rem; }
+.workspace-error button { height: 26px; padding: 0 10px; border: 1px solid var(--red); color: var(--red); background: transparent; font-size: 0.68rem; }
+.workspace-error button:hover { background: rgba(176, 58, 46, 0.08); }

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "protocVersion": "36.1",
+  "grpcJavaVersion": "1.84.0",
+  "protobufJavaLiteVersion": "4.36.1",
+  "protobufJavaLiteSha256": "91d3dba2521322103230c509d41a017da3a5e6766610adcb10c5bb127cbb26c5",
+  "generatorArtifacts": {
+    "windows_amd64": {
+      "filename": "protoc-gen-grpc-java-1.84.0-windows-x86_64.exe",
+      "sha256": "1d0b584f436c2521542a98914d8e6c42ba0aa5d86b459bc632e4c3884a3b5d4d"
+    },
+    "linux_amd64": {
+      "filename": "protoc-gen-grpc-java-1.84.0-linux-x86_64.exe",
+      "sha256": "907c2d4efc2bae9b21cada75c31b36f3821e15b7be96311e214a6be65bcd20aa"
+    }
+  },
+  "sources": [
+    "https://github.com/grpc/grpc-java/tree/v1.84.0",
+    "https://repo.maven.apache.org/maven2/io/grpc/protoc-gen-grpc-java/1.84.0/",
+    "https://repo.maven.apache.org/maven2/com/google/protobuf/protobuf-javalite/4.36.1/",
+    "https://protobuf.dev/support/cross-version-runtime-guarantee/"
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepseek-infra.local/schemas/agent_prediction.schema.json",
+  "title": "DeepSeek Infra Agent Eval Prediction",
+  "type": "object",
+  "required": ["id", "tools", "final", "status", "latencyMs", "usage"],
+  "additionalProperties": true,
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {"type": "string"},
+          {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": true
+          }
+        ]
+      }
+    },
+    "final": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["succeeded", "failed", "timeout", "canceled", "completed"]
+    },
+    "latencyMs": {
+      "type": "number",
+      "minimum": 0
+    },
+    "usage": {
+      "type": "object",
+      "required": ["inputTokens", "outputTokens"],
+      "properties": {
+        "inputTokens": {"type": "integer", "minimum": 0},
+        "outputTokens": {"type": "integer", "minimum": 0},
+        "estimatedCostUsd": {"type": "number", "minimum": 0}
+      },
+      "additionalProperties": true
+    },
+    "trace": {
+      "type": "object",
+      "properties": {
+        "agentCount": {"type": "integer", "minimum": 0},
+        "retryCount": {"type": "integer", "minimum": 0},
+        "toolErrorCount": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": true
+    }
+  }
+}

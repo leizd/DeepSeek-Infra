@@ -1,0 +1,43 @@
+[tool.ruff]
+line-length = 140
+target-version = "py310"
+extend-exclude = ["audit-cleanup-*", ".test-*", "pytest-cache-files-*"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers"
+markers = [
+    "integration: tests that spin up a real HTTP server",
+    "slow: tests that take more than one second",
+]
+
+[tool.coverage.run]
+source = ["deepseek_infra"]
+omit = [
+    "tests/*",
+    "static/*",
+    "*/__pycache__/*",
+    "deepseek_infra/infra/workspace/backup_dr_readiness_legacy.py",
+]
+branch = true
+
+[tool.coverage.report]
+fail_under = 95.0
+precision = 2
+exclude_lines = [
+    "pragma: no cover",
+    "pragma: no branch",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+exclude = '(^|[\\/])(audit-cleanup-[^\\/]*|\.test-[^\\/]*|pytest-cache-files-[^\\/]*|android[\\/]app[\\/]build)($|[\\/])'

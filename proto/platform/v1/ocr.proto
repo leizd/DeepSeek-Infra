@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package deepseek.platform.v1;
+
+option go_package = "github.com/leizd/DeepSeek-Infra/go/internal/protocol/platform/v1;platformv1";
+option java_package = "com.deepseek.mobile.platform.v1";
+option java_outer_classname = "PlatformOcr";
+
+// Read-only platform decoding and bundled ML Kit inference. No product paths,
+// credentials, business state, or authority private keys cross this boundary.
+// The Android launcher supplies a per-process random credential over authenticated
+// loopback gRPC. Uploads begin with exactly one header, followed by <=64 KiB data
+// frames. Half-close commits only an exact length and SHA-256 match. The service
+// uses private temporary files and deletes them on completion/cancellation.
+service PlatformOcrEngine {
+  rpc RecognizeImage(stream DocumentChunk) returns (RecognizedDocument);
+  rpc RecognizePdf(stream DocumentChunk) returns (RecognizedDocument);
+  rpc RenderPdfPage(stream DocumentChunk) returns (RenderedPdfPage);
+}
+
+message DocumentHeader {
+  uint64 source_bytes = 1;
+  bytes source_sha256 = 2;
+  // One-based PDF page number, already clamped by Rust. Zero for OCR.
+  uint32 page_index = 3;
+  // Render scale multiplied by 1000. Zero selects the platform OCR scale.
+  uint32 scale_milli = 4;
+}
+
+message DocumentChunk {
+  oneof part {
+    DocumentHeader header = 1;
+    bytes data = 2;
+  }
+}
+
+message OcrCandidate {
+  string engine = 1;
+  string text = 2;
+}
+
+message OcrPage {
+  uint32 page_index = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  bool blank = 4;
+  repeated OcrCandidate candidates = 5;
+}
+
+// Decoded read-only data. Recognition does not admit or execute an action and
+// cannot install an epoch, issue a receipt, or write any authoritative store.
+message RecognizedDocument {
+  bytes source_sha256 = 1;
+  uint32 total_pages = 2;
+  repeated OcrPage pages = 3;
+}
+
+message RenderedPdfPage {
+  bytes source_sha256 = 1;
+  bytes png = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+  uint32 page_index = 5;
+  uint32 total_pages = 6;
+}

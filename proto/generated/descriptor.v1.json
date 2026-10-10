@@ -1,0 +1,858 @@
+{
+  "files": [
+    {
+      "enums": [
+        {
+          "name": "CommandKind",
+          "values": [
+            {
+              "name": "COMMAND_KIND_UNSPECIFIED",
+              "number": 0
+            },
+            {
+              "name": "COMMAND_KIND_EXECUTE_BACKUP",
+              "number": 1
+            },
+            {
+              "name": "COMMAND_KIND_EXECUTE_RESTORE",
+              "number": 2
+            },
+            {
+              "name": "COMMAND_KIND_EXECUTE_REPAIR",
+              "number": 3
+            },
+            {
+              "name": "COMMAND_KIND_EXECUTE_REBALANCE",
+              "number": 4
+            },
+            {
+              "name": "COMMAND_KIND_EXECUTE_FEDERATED_TRANSFER",
+              "number": 5
+            },
+            {
+              "name": "COMMAND_KIND_SIGN_READINESS",
+              "number": 6
+            }
+          ]
+        },
+        {
+          "name": "AdmitStatus",
+          "values": [
+            {
+              "name": "ADMIT_STATUS_UNSPECIFIED",
+              "number": 0
+            },
+            {
+              "name": "ADMIT_STATUS_ADMITTED",
+              "number": 1
+            },
+            {
+              "name": "ADMIT_STATUS_REJECTED",
+              "number": 2
+            }
+          ]
+        }
+      ],
+      "imports": [
+        "common/v1/common.proto"
+      ],
+      "messages": [
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "kind",
+              "number": 1,
+              "type": "CommandKind"
+            },
+            {
+              "label": "singular",
+              "name": "fence",
+              "number": 2,
+              "type": "deepseek.common.v1.ActionFence"
+            },
+            {
+              "label": "singular",
+              "name": "live_epoch",
+              "number": 3,
+              "type": "uint64"
+            }
+          ],
+          "name": "AdmitCommandRequest"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "status",
+              "number": 1,
+              "type": "AdmitStatus"
+            },
+            {
+              "label": "singular",
+              "name": "state",
+              "number": 2,
+              "type": "deepseek.common.v1.EffectState"
+            },
+            {
+              "label": "singular",
+              "name": "error",
+              "number": 3,
+              "type": "deepseek.common.v1.ErrorDetail"
+            }
+          ],
+          "name": "AdmitCommandResponse"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "fence",
+              "number": 1,
+              "type": "deepseek.common.v1.ActionFence"
+            }
+          ],
+          "name": "QueryEffectRequest"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "fence",
+              "number": 1,
+              "type": "deepseek.common.v1.ActionFence"
+            },
+            {
+              "label": "singular",
+              "name": "state",
+              "number": 2,
+              "type": "deepseek.common.v1.EffectState"
+            },
+            {
+              "label": "singular",
+              "name": "effect_id",
+              "number": 3,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "receipt_digest",
+              "number": 4,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "commit_digest",
+              "number": 5,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "proof_digest",
+              "number": 6,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "error",
+              "number": 7,
+              "type": "deepseek.common.v1.ErrorDetail"
+            }
+          ],
+          "name": "EffectResult"
+        }
+      ],
+      "package": "deepseek.action.v1",
+      "path": "proto/action/v1/action.proto",
+      "services": [
+        {
+          "name": "Worker",
+          "rpcs": [
+            {
+              "name": "AdmitCommand",
+              "request": "AdmitCommandRequest",
+              "response": "AdmitCommandResponse"
+            },
+            {
+              "name": "QueryEffect",
+              "request": "QueryEffectRequest",
+              "response": "EffectResult"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "enums": [],
+      "imports": [
+        "common/v1/common.proto"
+      ],
+      "messages": [
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "fence",
+              "number": 1,
+              "type": "deepseek.common.v1.ActionFence"
+            },
+            {
+              "label": "singular",
+              "name": "task_id",
+              "number": 2,
+              "type": "string"
+            },
+            {
+              "label": "repeated",
+              "name": "depends_on",
+              "number": 3,
+              "type": "string"
+            }
+          ],
+          "name": "AgentTaskCommand"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "fence",
+              "number": 1,
+              "type": "deepseek.common.v1.ActionFence"
+            },
+            {
+              "label": "singular",
+              "name": "state",
+              "number": 2,
+              "type": "deepseek.common.v1.EffectState"
+            },
+            {
+              "label": "singular",
+              "name": "task_id",
+              "number": 3,
+              "type": "string"
+            }
+          ],
+          "name": "AgentTaskResult"
+        }
+      ],
+      "package": "deepseek.agent.v1",
+      "path": "proto/agent/v1/agent.proto",
+      "services": []
+    },
+    {
+      "enums": [
+        {
+          "name": "EffectState",
+          "values": [
+            {
+              "name": "EFFECT_STATE_UNSPECIFIED",
+              "number": 0
+            },
+            {
+              "name": "EFFECT_STATE_NOT_APPLIED",
+              "number": 1
+            },
+            {
+              "name": "EFFECT_STATE_APPLIED",
+              "number": 2
+            },
+            {
+              "name": "EFFECT_STATE_UNKNOWN",
+              "number": 3
+            }
+          ]
+        }
+      ],
+      "imports": [],
+      "messages": [
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "schema_name",
+              "number": 1,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "schema_version",
+              "number": 2,
+              "type": "uint32"
+            }
+          ],
+          "name": "SchemaMeta"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "algorithm",
+              "number": 1,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "hex",
+              "number": 2,
+              "type": "string"
+            }
+          ],
+          "name": "Digest"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "action_id",
+              "number": 1,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "execution_epoch",
+              "number": 2,
+              "type": "uint64"
+            }
+          ],
+          "name": "ActionFence"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "code",
+              "number": 1,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "category",
+              "number": 2,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "message",
+              "number": 3,
+              "type": "string"
+            }
+          ],
+          "name": "ErrorDetail"
+        }
+      ],
+      "package": "deepseek.common.v1",
+      "path": "proto/common/v1/common.proto",
+      "services": []
+    },
+    {
+      "enums": [
+        {
+          "name": "RuntimeMode",
+          "values": [
+            {
+              "name": "RUNTIME_MODE_UNSPECIFIED",
+              "number": 0
+            },
+            {
+              "name": "RUNTIME_MODE_SHADOW_READONLY",
+              "number": 1
+            },
+            {
+              "name": "RUNTIME_MODE_AUTHORITATIVE",
+              "number": 2
+            }
+          ]
+        }
+      ],
+      "imports": [
+        "common/v1/common.proto"
+      ],
+      "messages": [
+        {
+          "fields": [],
+          "name": "HealthRequest"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "ok",
+              "number": 1,
+              "type": "bool"
+            },
+            {
+              "label": "singular",
+              "name": "mode",
+              "number": 2,
+              "type": "RuntimeMode"
+            },
+            {
+              "label": "singular",
+              "name": "mutation_authority",
+              "number": 3,
+              "type": "string"
+            }
+          ],
+          "name": "HealthResponse"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "domain",
+              "number": 1,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "canonical_input",
+              "number": 2,
+              "type": "bytes"
+            }
+          ],
+          "name": "ShadowEvaluateRequest"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "decision_digest",
+              "number": 1,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "mutation_denied",
+              "number": 2,
+              "type": "bool"
+            }
+          ],
+          "name": "ShadowEvaluateResponse"
+        }
+      ],
+      "package": "deepseek.control.v1",
+      "path": "proto/control/v1/control.proto",
+      "services": [
+        {
+          "name": "ControlPlane",
+          "rpcs": [
+            {
+              "name": "Health",
+              "request": "HealthRequest",
+              "response": "HealthResponse"
+            },
+            {
+              "name": "ShadowEvaluate",
+              "request": "ShadowEvaluateRequest",
+              "response": "ShadowEvaluateResponse"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "enums": [],
+      "imports": [
+        "common/v1/common.proto"
+      ],
+      "messages": [
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "fence",
+              "number": 1,
+              "type": "deepseek.common.v1.ActionFence"
+            },
+            {
+              "label": "singular",
+              "name": "envelope_type",
+              "number": 2,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "proof_type",
+              "number": 3,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "digest",
+              "number": 4,
+              "type": "string"
+            }
+          ],
+          "name": "EvidenceBinding"
+        }
+      ],
+      "package": "deepseek.evidence.v1",
+      "path": "proto/evidence/v1/evidence.proto",
+      "services": []
+    },
+    {
+      "enums": [],
+      "imports": [
+        "common/v1/common.proto"
+      ],
+      "messages": [
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "fence",
+              "number": 1,
+              "type": "deepseek.common.v1.ActionFence"
+            },
+            {
+              "label": "singular",
+              "name": "transfer_id",
+              "number": 2,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "source_fleet_id",
+              "number": 3,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "destination_fleet_id",
+              "number": 4,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "backup_id",
+              "number": 5,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "object_set_digest",
+              "number": 6,
+              "type": "string"
+            }
+          ],
+          "name": "ExecuteFederatedTransferRequest"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "fence",
+              "number": 1,
+              "type": "deepseek.common.v1.ActionFence"
+            },
+            {
+              "label": "singular",
+              "name": "fleet_id",
+              "number": 2,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "payload_digest",
+              "number": 3,
+              "type": "string"
+            }
+          ],
+          "name": "SignReadinessRequest"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "fence",
+              "number": 1,
+              "type": "deepseek.common.v1.ActionFence"
+            },
+            {
+              "label": "singular",
+              "name": "signature",
+              "number": 2,
+              "type": "bytes"
+            },
+            {
+              "label": "singular",
+              "name": "public_key_fingerprint",
+              "number": 3,
+              "type": "string"
+            }
+          ],
+          "name": "SignReadinessResponse"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "fence",
+              "number": 1,
+              "type": "deepseek.common.v1.ActionFence"
+            },
+            {
+              "label": "singular",
+              "name": "state",
+              "number": 2,
+              "type": "deepseek.common.v1.EffectState"
+            },
+            {
+              "label": "singular",
+              "name": "transfer_id",
+              "number": 3,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "receipt_digest",
+              "number": 4,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "commit_digest",
+              "number": 5,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "proof_digest",
+              "number": 6,
+              "type": "string"
+            }
+          ],
+          "name": "FederationEffectResult"
+        }
+      ],
+      "package": "deepseek.federation.v1",
+      "path": "proto/federation/v1/federation.proto",
+      "services": []
+    },
+    {
+      "enums": [],
+      "imports": [
+        "common/v1/common.proto"
+      ],
+      "messages": [
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "fence",
+              "number": 1,
+              "type": "deepseek.common.v1.ActionFence"
+            },
+            {
+              "label": "singular",
+              "name": "policy_id",
+              "number": 2,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "backup_id",
+              "number": 3,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "source_target_id",
+              "number": 4,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "destination_target_id",
+              "number": 5,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "object_set_digest",
+              "number": 6,
+              "type": "string"
+            }
+          ],
+          "name": "ExecuteBackupRequest"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "fence",
+              "number": 1,
+              "type": "deepseek.common.v1.ActionFence"
+            },
+            {
+              "label": "singular",
+              "name": "policy_id",
+              "number": 2,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "backup_id",
+              "number": 3,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "source_target_id",
+              "number": 4,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "destination_target_id",
+              "number": 5,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "object_set_digest",
+              "number": 6,
+              "type": "string"
+            }
+          ],
+          "name": "ExecuteRestoreRequest"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "fence",
+              "number": 1,
+              "type": "deepseek.common.v1.ActionFence"
+            },
+            {
+              "label": "singular",
+              "name": "policy_id",
+              "number": 2,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "backup_id",
+              "number": 3,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "source_target_id",
+              "number": 4,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "destination_target_id",
+              "number": 5,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "object_set_digest",
+              "number": 6,
+              "type": "string"
+            }
+          ],
+          "name": "ExecuteRepairRequest"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "fence",
+              "number": 1,
+              "type": "deepseek.common.v1.ActionFence"
+            },
+            {
+              "label": "singular",
+              "name": "policy_id",
+              "number": 2,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "backup_id",
+              "number": 3,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "source_target_id",
+              "number": 4,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "destination_target_id",
+              "number": 5,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "object_set_digest",
+              "number": 6,
+              "type": "string"
+            }
+          ],
+          "name": "ExecuteRebalanceRequest"
+        },
+        {
+          "fields": [
+            {
+              "label": "singular",
+              "name": "fence",
+              "number": 1,
+              "type": "deepseek.common.v1.ActionFence"
+            },
+            {
+              "label": "singular",
+              "name": "state",
+              "number": 2,
+              "type": "deepseek.common.v1.EffectState"
+            },
+            {
+              "label": "singular",
+              "name": "effect_id",
+              "number": 3,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "receipt_digest",
+              "number": 4,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "commit_digest",
+              "number": 5,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "proof_digest",
+              "number": 6,
+              "type": "string"
+            },
+            {
+              "label": "singular",
+              "name": "object_set_digest",
+              "number": 7,
+              "type": "string"
+            }
+          ],
+          "name": "StorageEffectResult"
+        }
+      ],
+      "package": "deepseek.storage.v1",
+      "path": "proto/storage/v1/storage.proto",
+      "services": []
+    }
+  ],
+  "schema_version": 1,
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "syntax": "proto3"
+}

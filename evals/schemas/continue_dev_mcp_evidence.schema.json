@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepseek-infra.local/schemas/continue_dev_mcp_evidence.schema.json",
+  "title": "Continue.dev MCP Evidence",
+  "type": "object",
+  "required": ["schemaVersion", "version", "commit", "generatedAt", "environment", "gitSha", "gitDirty", "client", "clientVersion", "checks", "status", "steps"],
+  "properties": {
+    "schemaVersion": {
+      "const": "continue-dev-mcp-evidence.v1"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "commit": {
+      "type": "string"
+    },
+    "generatedAt": {
+      "type": "string"
+    },
+    "environment": {
+      "type": "object",
+      "required": ["os", "python", "ci"],
+      "properties": {
+        "os": {"type": "string"},
+        "python": {"type": "string"},
+        "ci": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    },
+    "gitSha": {
+      "type": "string"
+    },
+    "gitDirty": {
+      "type": "boolean"
+    },
+    "client": {
+      "type": "string"
+    },
+    "clientVersion": {
+      "type": "string"
+    },
+    "clientCommit": {
+      "type": "string"
+    },
+    "transport": {
+      "type": "object",
+      "properties": {
+        "type": {"type": "string"},
+        "mcpUrl": {"type": "string"},
+        "auth": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "checks": {
+      "type": "object",
+      "required": ["configLoaded", "mcpInitialize", "toolsList", "lowRiskToolCall", "policyDenial", "promptInjectionClean"],
+      "properties": {
+        "configLoaded": {"enum": ["PASS", "FAIL"]},
+        "mcpInitialize": {"enum": ["PASS", "FAIL"]},
+        "toolsList": {"enum": ["PASS", "FAIL"]},
+        "lowRiskToolCall": {"enum": ["PASS", "FAIL"]},
+        "policyDenial": {"enum": ["PASS", "FAIL"]},
+        "promptInjectionClean": {"enum": ["PASS", "FAIL"]}
+      },
+      "additionalProperties": false
+    },
+    "status": {
+      "enum": ["PASS", "FAIL"]
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status", "detail"],
+        "properties": {
+          "name": {"type": "string"},
+          "status": {"enum": ["pass", "fail", "warn"]},
+          "detail": {"type": "string"},
+          "data": {"type": "object"}
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

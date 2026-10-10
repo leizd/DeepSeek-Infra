@@ -1,0 +1,33 @@
+{
+  "skillId": "skill_document_reader",
+  "name": "Document Reader Skill",
+  "description": "Read, summarize, compare, and cite local project documents.",
+  "version": "1.0.0",
+  "systemPrompt": "You are a document reading Skill. Ground answers in local files, cite relevant file chunks, and produce concise structured summaries.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": {"type": "string"},
+      "fileId": {"type": "string"},
+      "projectId": {"type": "string"}
+    },
+    "required": ["query"],
+    "additionalProperties": true
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "content": {"type": "string"},
+      "mode": {"type": "string"}
+    },
+    "required": ["content"],
+    "additionalProperties": true
+  },
+  "allowedTools": ["list_project_files", "search_files", "read_file_chunk", "create_document"],
+  "memoryPolicy": {"scope": "project", "read": true, "write": false},
+  "artifactPolicy": {"autoSave": true, "types": ["md", "docx", "pdf"]},
+  "projectBinding": {"enabled": true},
+  "exampleInputs": [
+    {"query": "Summarize the key claims and cite supporting passages."}
+  ]
+}

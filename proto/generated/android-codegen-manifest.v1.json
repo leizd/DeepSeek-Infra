@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "path": "proto/platform/v1/ocr.proto",
+    "sha256": "dccefc91b4d10e0d574852716e0c880c79dda561970a0cb0f127b9c2d6bb96a0"
+  },
+  "toolchainSha256": "01910a3621f50aebd4120fb29044061758c4da078755738d437f67d68fc25b91",
+  "outputs": [
+    {
+      "path": "android/app/src/main/java/com/deepseek/mobile/platform/v1/PlatformOcr.java",
+      "sha256": "3069566cf01b3f0a40de0a162c85f1a1809c45e8fe40593e77c60498a579b334"
+    },
+    {
+      "path": "android/app/src/main/java/com/deepseek/mobile/platform/v1/PlatformOcrEngineGrpc.java",
+      "sha256": "7eb5fe3376fa4f78983d12223eae5795a250ca4c51cc3ca092533e27cd71d0ba"
+    }
+  ]
+}

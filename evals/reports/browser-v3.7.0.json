@@ -1,0 +1,55 @@
+{
+  "version": "3.7.0",
+  "commit": "664d0c09",
+  "generatedAt": "2026-07-14T01:01:36Z",
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "browserRecall": "PASS",
+    "privateHostBlocked": "PASS",
+    "confirmationGate": "PASS",
+    "mediaRagCollection": "PASS"
+  },
+  "details": {
+    "recall": {
+      "k": 3,
+      "cases": 2,
+      "recallAtK": 1.0,
+      "mrr": 1.0,
+      "details": [
+        {
+          "query": "Browser snapshots Local RAG chunks",
+          "hit": true,
+          "rank": 1,
+          "topSourceIds": [
+            "media_b7dfea9b9a878e3f",
+            "media_d27c5aedda1c17e1"
+          ]
+        },
+        {
+          "query": "untrusted browser content system prompt",
+          "hit": true,
+          "rank": 1,
+          "topSourceIds": [
+            "media_d27c5aedda1c17e1",
+            "media_b7dfea9b9a878e3f"
+          ]
+        }
+      ]
+    },
+    "projectId": "proj-5a04bd1ef160",
+    "mediaIds": [
+      "media_b7dfea9b9a878e3f",
+      "media_d27c5aedda1c17e1"
+    ]
+  },
+  "summary": {
+    "caseCount": 2,
+    "recallAtK": 1.0,
+    "mrr": 1.0
+  }
+}

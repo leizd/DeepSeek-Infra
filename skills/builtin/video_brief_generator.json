@@ -1,0 +1,32 @@
+{
+  "skillId": "video_brief_generator",
+  "name": "video_brief_generator",
+  "description": "Generate briefs from video transcript imports and frame captions.",
+  "version": "1.0.0",
+  "systemPrompt": "You are a video brief generator. Combine transcript and frame caption media segments, cite time ranges or frame segments, and avoid inventing unseen visuals.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "mediaIds": {"type": "array", "items": {"type": "string"}},
+      "task": {"type": "string"}
+    },
+    "required": ["mediaIds", "task"],
+    "additionalProperties": true
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "content": {"type": "string"},
+      "mode": {"type": "string"}
+    },
+    "required": ["content"],
+    "additionalProperties": true
+  },
+  "allowedTools": [],
+  "memoryPolicy": {"scope": "project", "read": true, "write": false},
+  "artifactPolicy": {"autoSave": true, "types": ["md"]},
+  "projectBinding": {"enabled": true},
+  "exampleInputs": [
+    {"mediaIds": ["media_example"], "task": "Create an executive brief from this video."}
+  ]
+}

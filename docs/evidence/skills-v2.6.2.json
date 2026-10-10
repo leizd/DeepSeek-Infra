@@ -1,0 +1,58 @@
+{
+  "version": "2.6.2",
+  "commit": "3e801e48a64a",
+  "generatedAt": "2026-06-30T01:36:53+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "skillApiRoutes": "PASS",
+    "builtinSkillsLoad": "PASS",
+    "customSkillCreate": "PASS",
+    "inputSchemaValidation": "PASS",
+    "toolPermissionGate": "PASS",
+    "artifactPolicy": "PASS",
+    "projectBinding": "PASS",
+    "skillExport": "PASS"
+  },
+  "details": {
+    "skillApiRoutes": [
+      "/api/skills",
+      "/api/skills/{skill_id}/run"
+    ],
+    "builtinSkillIds": [
+      "skill_code_review",
+      "skill_document_reader",
+      "skill_paper_writer",
+      "skill_ppt_generator",
+      "skill_research_brief",
+      "skill_study_tutor"
+    ],
+    "toolPermissionGate": {
+      "tool": "fetch_url",
+      "action": "deny",
+      "policyVerdict": "denied",
+      "risk": "high",
+      "reasons": [
+        "capability_denied:full"
+      ],
+      "violations": [],
+      "capability": "full",
+      "reason": "Tool is out of scope for the 'full' capability profile",
+      "suggestion": "Switch capability or add the tool to CAPABILITY_PROFILES['full']"
+    },
+    "skillRun": {
+      "skillRunId": "run-ecf0f00533e1e5ee",
+      "projectId": "proj-78e91ea27f6c",
+      "artifactIds": [
+        "art-20850e298366ec61"
+      ],
+      "savedItemIds": [
+        "saved-6ce95c093d76368c"
+      ]
+    }
+  }
+}

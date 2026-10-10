@@ -1,0 +1,523 @@
+pageType: content
+background:
+  type: solid
+  color: "$bg"
+notes: hub-spoke 模块全景：中心 FastAPI Core，左列 01-07、右列 08-14 共 15 个模块；实线 Working、虚线 MVP。状态来源 docs/IMPLEMENTATION_STATUS.md。
+elements:
+  # ===== 顶部文档轴 =====
+  - elementId: hdr-left
+    elementType: text
+    bounds: [48, 16, 220, 14]
+    content:
+      fontSize: 10
+      bold: true
+      letterSpacing: 3
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: DEEPSEEK INFRA
+  - elementId: hdr-right
+    elementType: text
+    bounds: [612, 16, 300, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [right, middle]
+      text: 模块 · 06 / 13
+  - elementId: hdr-rule
+    elementType: line
+    bounds: [48, 44, 864, 1]
+    viewBox: [864, 1]
+    points: "0,0.5 864,0.5"
+    border: {style: solid, width: 1, color: "$hairline"}
+  # ===== kicker + 页标题 =====
+  - elementId: kicker
+    elementType: text
+    bounds: [48, 60, 300, 16]
+    content:
+      style: "$kicker"
+      wrap: false
+      align: [left, middle]
+      text: 05 · 模块全景
+  - elementId: title
+    elementType: text
+    bounds: [48, 80, 700, 36]
+    content:
+      style: "$pageTitle"
+      wrap: false
+      align: [left, middle]
+      text: 13+2 个基础设施模块，一个 FastAPI 核心
+  # ===== 左列连线（262 → hub 左缘 310） =====
+  - elementId: l01
+    elementType: line
+    bounds: [262, 148, 48, 130]
+    viewBox: [48, 130]
+    points: "0,0 48,130"
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: l02
+    elementType: line
+    bounds: [262, 196, 48, 90]
+    viewBox: [48, 90]
+    points: "0,0 48,90"
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: l03
+    elementType: line
+    bounds: [262, 244, 48, 49]
+    viewBox: [48, 49]
+    points: "0,0 48,49"
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: l04
+    elementType: line
+    bounds: [262, 292, 48, 8]
+    viewBox: [48, 8]
+    points: "0,0 48,8"
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: l05
+    elementType: line
+    bounds: [262, 307, 48, 33]
+    viewBox: [48, 33]
+    points: "0,33 48,0"
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: l06
+    elementType: line
+    bounds: [262, 314, 48, 74]
+    viewBox: [48, 74]
+    points: "0,74 48,0"
+    border: {style: dash, width: 1, color: "$structure"}
+  - elementId: l07
+    elementType: line
+    bounds: [262, 322, 48, 114]
+    viewBox: [48, 114]
+    points: "0,114 48,0"
+    border: {style: dash, width: 1, color: "$structure"}
+  # ===== 右列连线（hub 右缘 490 → 644） =====
+  - elementId: l08
+    elementType: line
+    bounds: [490, 148, 154, 128]
+    viewBox: [154, 128]
+    points: "0,128 154,0"
+    border: {style: dash, width: 1, color: "$structure"}
+  - elementId: l09
+    elementType: line
+    bounds: [490, 189, 154, 94]
+    viewBox: [154, 94]
+    points: "0,94 154,0"
+    border: {style: dash, width: 1, color: "$structure"}
+  - elementId: l10
+    elementType: line
+    bounds: [490, 230, 154, 60]
+    viewBox: [154, 60]
+    points: "0,60 154,0"
+    border: {style: dash, width: 1, color: "$structure"}
+  - elementId: l11
+    elementType: line
+    bounds: [490, 271, 154, 26]
+    viewBox: [154, 26]
+    points: "0,26 154,0"
+    border: {style: dash, width: 1, color: "$structure"}
+  - elementId: l12
+    elementType: line
+    bounds: [490, 304, 154, 8]
+    viewBox: [154, 8]
+    points: "0,0 154,8"
+    border: {style: dash, width: 1, color: "$structure"}
+  - elementId: l13
+    elementType: line
+    bounds: [490, 311, 154, 42]
+    viewBox: [154, 42]
+    points: "0,0 154,42"
+    border: {style: dash, width: 1, color: "$structure"}
+  - elementId: l14
+    elementType: line
+    bounds: [490, 318, 154, 76]
+    viewBox: [154, 76]
+    points: "0,0 154,76"
+    border: {style: dash, width: 1, color: "$structure"}
+  - elementId: l15
+    elementType: line
+    bounds: [490, 324, 154, 111]
+    viewBox: [154, 111]
+    points: "0,0 154,111"
+    border: {style: dash, width: 1, color: "$structure"}
+  # ===== 中心 hub =====
+  - elementId: hub
+    elementType: shape
+    bounds: [310, 272, 180, 56]
+    shapeName: rect
+    fill: {type: solid, color: "$ink"}
+  - elementId: hub-t
+    elementType: text
+    bounds: [310, 272, 180, 56]
+    content:
+      fontSize: 13
+      bold: true
+      color: "$panel"
+      fontFamily: MiSans
+      lineHeight: 1.35
+      align: [center, middle]
+      text: |
+        <p>FastAPI Core</p>
+        <p>Python 权威运行时</p>
+  # ===== 左列模块（01-07） =====
+  - elementId: m01
+    elementType: text
+    bounds: [48, 140, 210, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 01 LLM Gateway
+  - elementId: d01
+    elementType: text
+    bounds: [48, 157, 210, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: OpenAI 兼容 /v1 门面 · 模型路由 · 流式转发
+  - elementId: m02
+    elementType: text
+    bounds: [48, 188, 210, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 02 Agent DAG Runtime
+  - elementId: d02
+    elementType: text
+    bounds: [48, 205, 210, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: Planner 执行图 · 分层并行 · Critic 修订
+  - elementId: m03
+    elementType: text
+    bounds: [48, 236, 210, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 03 Local RAG
+  - elementId: d03
+    elementType: text
+    bounds: [48, 253, 210, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 本地 embedding · SQLite 向量索引 · 引用回链
+  - elementId: m04
+    elementType: text
+    bounds: [48, 284, 210, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 04 Tool Runtime + Policy Engine
+  - elementId: d04
+    elementType: text
+    bounds: [48, 301, 210, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 17 个受控工具 · SSRF / 路径越界防护
+  - elementId: m05
+    elementType: text
+    bounds: [48, 332, 210, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 05 Observability & Trace
+  - elementId: d05
+    elementType: text
+    bounds: [48, 349, 210, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: trace 瀑布 · Prometheus 指标 · 探针
+  - elementId: m06
+    elementType: text
+    bounds: [48, 380, 210, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 06 Edge-Cloud Router
+  - elementId: d06
+    elementType: text
+    bounds: [48, 397, 210, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 简单走端侧 · 复杂走云端 · 失败可回退
+  - elementId: m07
+    elementType: text
+    bounds: [48, 428, 210, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 07 MCP Tool Hub
+  - elementId: d07
+    elementType: text
+    bounds: [48, 445, 210, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: JSON-RPC 2.0 · 桥接外部 MCP server
+  # ===== 右列模块（08-14） =====
+  - elementId: m08
+    elementType: text
+    bounds: [650, 140, 262, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 08 A2A Agent Mesh
+  - elementId: d08
+    elementType: text
+    bounds: [650, 157, 262, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: Agent Card · 任务生命周期 · 跨 Agent 委派
+  - elementId: m09
+    elementType: text
+    bounds: [650, 181, 262, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 09 Context Taint Firewall
+  - elementId: d09
+    elementType: text
+    bounds: [650, 198, 262, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 来源信任打标 · 注入 / 外泄 / 工具指令扫描
+  - elementId: m10
+    elementType: text
+    bounds: [650, 222, 262, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 10 Workspace Core
+  - elementId: d10
+    elementType: text
+    bounds: [650, 239, 262, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: Project 2.0 · Artifact Hub · 导出
+  - elementId: m105
+    elementType: text
+    bounds: [650, 263, 262, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 10.5 Memory
+  - elementId: d105
+    elementType: text
+    bounds: [650, 280, 262, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 作用域长期记忆 · 敏感记忆拦截
+  - elementId: m11
+    elementType: text
+    bounds: [650, 304, 262, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 11 Multimodal Media
+  - elementId: d11
+    elementType: text
+    bounds: [650, 321, 262, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 图片 / PDF / 音视频 · media-to-RAG
+  - elementId: m12
+    elementType: text
+    bounds: [650, 345, 262, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 12 Browser Control
+  - elementId: d12
+    elementType: text
+    bounds: [650, 362, 262, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 受控会话 · 私有地址拦截 · 网页 RAG
+  - elementId: m13
+    elementType: text
+    bounds: [650, 386, 262, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 13 Automation Runtime
+  - elementId: d13
+    elementType: text
+    bounds: [650, 403, 262, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: trigger / condition / action 自动化
+  - elementId: m14
+    elementType: text
+    bounds: [650, 427, 262, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 14 Rust Hybrid（默认禁用）
+  - elementId: d14
+    elementType: text
+    bounds: [650, 444, 262, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 5 个确定性委托 · 超时回退 Python
+  # ===== 底部图例 + 状态来源 =====
+  - elementId: legend-solid
+    elementType: line
+    bounds: [48, 499, 26, 2]
+    viewBox: [26, 2]
+    points: "0,1 26,1"
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: legend-t1
+    elementType: text
+    bounds: [80, 492, 56, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: Working
+  - elementId: legend-dash
+    elementType: line
+    bounds: [146, 499, 26, 2]
+    viewBox: [26, 2]
+    points: "0,1 26,1"
+    border: {style: dash, width: 1, color: "$structure"}
+  - elementId: legend-t2
+    elementType: text
+    bounds: [178, 492, 250, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: MVP（release-gated / 默认禁用）
+  - elementId: legend-src
+    elementType: text
+    bounds: [612, 492, 300, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [right, middle]
+      text: 状态来源：docs/IMPLEMENTATION_STATUS.md

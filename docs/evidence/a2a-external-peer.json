@@ -1,0 +1,127 @@
+{
+  "schemaVersion": "a2a-external-peer-evidence.v1",
+  "version": "4.5.3",
+  "commit": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "testedRevision": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "sourceRevision": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "sourceTreeDirty": true,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "generatedAt": "2026-08-17T00:39:21Z",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "gitSha": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "gitDirty": true,
+  "peer": {
+    "name": "A2A Interop Peer",
+    "url": "http://127.0.0.1:65225",
+    "endpoint": "http://127.0.0.1:65225/a2a/agents/interop-peer",
+    "type": "independent-process",
+    "protocolVersion": "0.3.0"
+  },
+  "peerType": "independent-process",
+  "checks": {
+    "agentCard": "PASS",
+    "messageSend": "PASS",
+    "messageStream": "PASS",
+    "tasksGet": "PASS",
+    "tasksCancel": "PASS",
+    "tasksList": "PASS",
+    "artifactChunks": "PASS",
+    "sseFinalEvent": "PASS"
+  },
+  "status": "PASS",
+  "steps": [
+    {
+      "name": "a2a.agent_card",
+      "status": "pass",
+      "detail": "name=A2A Interop Peer protocol=0.3.0",
+      "data": {
+        "skills": 1,
+        "endpoint": "http://127.0.0.1:65225/a2a/agents/interop-peer"
+      }
+    },
+    {
+      "name": "a2a.message_send",
+      "status": "pass",
+      "detail": "task=task_fc54cc0b7a8390620092ea0e state=working",
+      "data": {
+        "taskId": "task_fc54cc0b7a8390620092ea0e"
+      }
+    },
+    {
+      "name": "a2a.tasks_get",
+      "status": "pass",
+      "detail": "task=task_fc54cc0b7a8390620092ea0e",
+      "data": {
+        "taskId": "task_fc54cc0b7a8390620092ea0e"
+      }
+    },
+    {
+      "name": "a2a.message_stream",
+      "status": "pass",
+      "detail": "events=5 final=completed",
+      "data": {
+        "events": 5,
+        "artifactUpdates": 2,
+        "chunkIndices": [
+          0,
+          1
+        ],
+        "taskId": "task_a7a14d0884a91c9d77f369e9",
+        "finalState": "completed"
+      }
+    },
+    {
+      "name": "a2a.artifact_chunks",
+      "status": "pass",
+      "detail": "chunks=2 indices=[0, 1]",
+      "data": {
+        "events": 5,
+        "artifactUpdates": 2,
+        "chunkIndices": [
+          0,
+          1
+        ],
+        "taskId": "task_a7a14d0884a91c9d77f369e9",
+        "finalState": "completed"
+      }
+    },
+    {
+      "name": "a2a.sse_final_event",
+      "status": "pass",
+      "detail": "final=completed",
+      "data": {
+        "events": 5,
+        "artifactUpdates": 2,
+        "chunkIndices": [
+          0,
+          1
+        ],
+        "taskId": "task_a7a14d0884a91c9d77f369e9",
+        "finalState": "completed"
+      }
+    },
+    {
+      "name": "a2a.tasks_list",
+      "status": "pass",
+      "detail": "2 tasks listed",
+      "data": {
+        "taskCount": 2,
+        "taskId": "task_fc54cc0b7a8390620092ea0e"
+      }
+    },
+    {
+      "name": "a2a.tasks_cancel",
+      "status": "pass",
+      "detail": "task=task_e7d897a809df52dd3e6478e9 state=canceling",
+      "data": {
+        "taskId": "task_e7d897a809df52dd3e6478e9",
+        "state": "canceling"
+      }
+    }
+  ]
+}

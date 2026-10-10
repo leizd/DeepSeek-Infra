@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze BackupReplicationJob durable phase-machine semantics: enqueue idempotency and mode fallback, unguarded phase writes, execute claim/terminal prefix, required vs best-effort failure routing, exponential backoff, and pending drain classification. This does not move payload bytes or contact MinIO.",
+  "normalization": "LF-normalized SHA-256 of public validator fixture bytes",
+  "corpora": [
+    {
+      "id": "replication-job-phase-semantics-v23",
+      "path": "compat/native-runtime/v23/transfer/replication_job_phase_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen replica-provision durable phase and failure-routing semantics",
+      "sha256": "8483811d3120cf046aa69cae7d3f77edcd4a8d952519fd4ff751b3b52098fe90"
+    }
+  ]
+}

@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "valid_envelope": {
+    "checks": {
+      "drReadinessProofValid": {
+        "evidence": {
+          "ageVerified": true,
+          "backupId": "backup-native-1",
+          "cleanupCompleted": true,
+          "commitVerified": true,
+          "drillId": "drill-native-1",
+          "objectCount": 3,
+          "observedAt": "2026-09-04T00:00:00Z",
+          "receiptVerified": true,
+          "resilienceActionId": "action-native-1",
+          "restoreDurationMs": 1250,
+          "schema": "dr-readiness-proof-v1",
+          "testedBackupId": "backup-native-1",
+          "workspaceDigestAfter": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "workspaceDigestBefore": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "status": "PASS"
+      }
+    },
+    "meta": {
+      "evidenceClass": "provider-backed",
+      "providerCount": 3
+    },
+    "scenario": "native-evidence-proof-parity",
+    "schema": "evidence-proof-v2"
+  },
+  "invalid_checks": [
+    {
+      "check_name": "drReadinessProofValid",
+      "item": {
+        "evidence": {
+          "ageVerified": true,
+          "backupId": "backup-native-1",
+          "cleanupCompleted": true,
+          "commitVerified": true,
+          "drillId": "drill-native-1",
+          "objectCount": 3,
+          "receiptVerified": true,
+          "restoreDurationMs": 1250,
+          "schema": "dr-readiness-proof-v1",
+          "testedBackupId": "backup-native-1",
+          "workspaceDigestAfter": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "workspaceDigestBefore": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "status": "FAIL"
+      },
+      "expected_errors": [
+        "status-not-pass:FAIL"
+      ]
+    },
+    {
+      "check_name": "drReadinessProofValid",
+      "item": {
+        "evidence": {
+          "ageVerified": true,
+          "backupId": "backup-native-1",
+          "cleanupCompleted": true,
+          "commitVerified": false,
+          "drillId": "drill-native-1",
+          "objectCount": -1,
+          "receiptVerified": true,
+          "restoreDurationMs": -1,
+          "schema": "dr-readiness-proof-v1",
+          "testedBackupId": "backup-native-2",
+          "workspaceDigestAfter": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "workspaceDigestBefore": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "status": "PASS"
+      },
+      "expected_errors": [
+        "drill-backupId-mismatch",
+        "drill-workspace-digest-mismatch",
+        "commitVerified-not-true",
+        "invalid-restore-duration",
+        "invalid-object-count"
+      ]
+    }
+  ]
+}

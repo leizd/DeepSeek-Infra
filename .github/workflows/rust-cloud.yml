@@ -1,0 +1,159 @@
+name: Rust cloud verification
+
+on:
+  push:
+    branches: ["codex/rust-cloud/**"]
+  workflow_dispatch:
+
+# Compilation and caches stay on GitHub-hosted machines. No deployment job.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: rust-cloud-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rust-cloud:
+    name: Rust ${{ matrix.mode }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [checks, coverage]
+    env:
+      RUSTUP_TOOLCHAIN: "1.85.0"
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/rust-cloud/source-context.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Put build outputs and downloaded dependencies on the cloud runner
+        env:
+          CLOUD_MODE: ${{ matrix.mode }}
+        run: |
+          echo "CARGO_HOME=$RUNNER_TEMP/rust-cloud-cargo" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/rust-cloud-target-$CLOUD_MODE" >> "$GITHUB_ENV"
+      - name: Bind results to the checked-out cloud revision
+        run: |
+          mkdir -p artifacts/rust-cloud
+          python scripts/capture_evidence_context.py --version "$(cat VERSION)" --out "$DEEPSEEK_EVIDENCE_SOURCE_CONTEXT"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build the frontend used by gateway tests
+        run: |
+          npm ci --prefix frontend
+          npm run build --prefix frontend
+      - name: Install the same PDF, OCR and offline oracle dependencies as CI
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng
+          python -m pip install -r requirements.txt -r requirements-ocr.txt
+      - uses: dtolnay/rust-toolchain@69084b241933c14c2fa24234c4596f11a2655339 # 1.85.0
+        with:
+          toolchain: "1.85.0"
+          components: rustfmt, clippy, llvm-tools-preview
+      - name: Restore cloud dependency archives
+        id: registry
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry/index
+            ${{ env.CARGO_HOME }}/registry/cache
+            ${{ env.CARGO_HOME }}/git/db
+          key: rust-cloud-v1-registry-${{ runner.os }}-1.85.0-${{ hashFiles('rust/Cargo.lock') }}
+      - name: Restore compiled dependencies and test binaries in the cloud
+        id: target
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.CARGO_TARGET_DIR }}
+          key: rust-cloud-v1-target-${{ runner.os }}-1.85.0-${{ matrix.mode }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock', 'rust/.cargo/config.toml', 'scripts/rust_build.py', 'scripts/run_rust_coverage.py') }}-${{ github.sha }}
+          restore-keys: |
+            rust-cloud-v1-target-${{ runner.os }}-1.85.0-${{ matrix.mode }}-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock', 'rust/.cargo/config.toml', 'scripts/rust_build.py', 'scripts/run_rust_coverage.py') }}-
+      - name: Rust formatting
+        if: matrix.mode == 'checks'
+        run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+      - name: Rust workspace lint with all targets and features
+        if: matrix.mode == 'checks'
+        run: |
+          python scripts/rust_build.py --toolchain 1.85.0 -- clippy --locked --workspace --all-targets --all-features -- -D warnings 2>&1 | tee artifacts/rust-cloud/clippy.log
+      - name: Complete Rust workspace tests with all features
+        if: matrix.mode == 'checks'
+        run: |
+          python scripts/rust_build.py --toolchain 1.85.0 -- test --locked --workspace --all-features 2>&1 | tee artifacts/rust-cloud/tests.log
+      - name: Install pinned coverage tooling on the cloud runner
+        if: matrix.mode == 'coverage'
+        run: |
+          python scripts/rust_build.py --toolchain 1.85.0 -- install cargo-llvm-cov --locked --version 0.6.21 --root "$RUNNER_TEMP/rust-cloud-tools" 2>&1 | tee artifacts/rust-cloud/coverage-tool.log
+          echo "$RUNNER_TEMP/rust-cloud-tools/bin" >> "$GITHUB_PATH"
+      - name: Enforce the complete workspace's existing 80 percent coverage gate
+        if: matrix.mode == 'coverage'
+        run: |
+          python scripts/run_rust_coverage.py --threshold 80 --artifact-out artifacts/rust-cloud/coverage.json --lcov-out artifacts/rust-cloud/coverage.lcov --evidence-out artifacts/rust-cloud/coverage-evidence.json 2>&1 | tee artifacts/rust-cloud/coverage.log
+      - name: Record storage use and bound each saved cloud cache to 2 GiB
+        id: storage
+        if: always()
+        env:
+          CLOUD_MODE: ${{ matrix.mode }}
+        run: |
+          python - <<'PY'
+          import json, os, shutil, subprocess
+          from pathlib import Path
+          def size(paths):
+              return sum(p.stat().st_size for root in paths if root.exists()
+                         for p in root.rglob('*') if p.is_file() and not p.is_symlink())
+          target = Path(os.environ['CARGO_TARGET_DIR'])
+          cargo = Path(os.environ['CARGO_HOME'])
+          measured = {'target': size([target]), 'registry': size([
+              cargo / 'registry/index', cargo / 'registry/cache', cargo / 'git/db'])}
+          limit = 2 * 1024**3
+          report = {'revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+                    'mode': os.environ['CLOUD_MODE'], 'cacheBytes': measured,
+                    'maximumSavedCacheBytes': limit, 'freeBytes': shutil.disk_usage(target.parent).free,
+                    'cacheDirectory': str(target), 'dependenciesDirectory': str(cargo),
+                    'runner': os.environ.get('RUNNER_NAME'), 'downloadTargetCacheToHost': False}
+          out = Path('artifacts/rust-cloud')
+          out.mkdir(parents=True, exist_ok=True)
+          (out / 'storage.json').write_text(json.dumps(report, indent=2) + '\n')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              for name, value in measured.items():
+                  stream.write(f'{name}_eligible={str(0 < value <= limit).lower()}\n')
+          print(json.dumps(report))
+          PY
+      - name: Save cloud dependency archives
+        if: success() && steps.registry.outputs.cache-hit != 'true' && steps.storage.outputs.registry_eligible == 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry/index
+            ${{ env.CARGO_HOME }}/registry/cache
+            ${{ env.CARGO_HOME }}/git/db
+          key: ${{ steps.registry.outputs.cache-primary-key }}
+      - name: Save bounded compiled outputs in the cloud
+        if: success() && steps.target.outputs.cache-hit != 'true' && steps.storage.outputs.target_eligible == 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.CARGO_TARGET_DIR }}
+          key: ${{ steps.target.outputs.cache-primary-key }}
+      - name: Keep logs and coverage reports available without downloading caches
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-cloud-${{ matrix.mode }}-${{ github.sha }}
+          path: artifacts/rust-cloud/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 9

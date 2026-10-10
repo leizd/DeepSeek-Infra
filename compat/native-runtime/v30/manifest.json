@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Execute the exact 4.8.0 source snapshot with real isolated SQLite to capture initial claim, active-state takeover, repeated reconciliation takeover, exclusive takeover deadline, expired-token renewal, stale-token rejection, and terminal UNKNOWN lock release. These are reference observations, not Go parity or provider-effect proof. The user approved retaining Go's stricter expired-lease rejection and uncertain-resource retention as explicit compatibility exceptions.",
+  "normalization": "LF-normalized SHA-256. Fixed input clock; raw claim tokens and random token hashes omitted, token replacement retained as a measured boolean. Original action/step inputs accompany observations.",
+  "corpora": [
+    {
+      "id": "action-lifecycle-baseline-v30",
+      "path": "compat/native-runtime/v30/state/action_lifecycle_vector.json",
+      "eventual_owner": "go",
+      "sensitivity": "public",
+      "title": "Executed 4.8.0 action admission and lease observations",
+      "sha256": "7228e224eea42cbe9c6b5b81f6711c252233038e545f54dc445456223558709d"
+    }
+  ]
+}

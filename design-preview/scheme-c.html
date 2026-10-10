@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>方案 C · 稿纸 Paper Editorial</title>
+<style>
+:root{
+  --paper:#f8f7f2; --ink:#252525; --green:#1d6151; --hl:#fde460;
+  --quote:#e3ffcc; --pink:#ffd3f3; --weak:#8a8677;
+  --hair:#252525; --hairw:#d8d5c9;
+  --serif:"Noto Serif SC","Songti SC","SimSun",Georgia,serif;
+  --sans:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  --mono:"Cascadia Code",Consolas,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box;border-radius:0!important;scrollbar-width:none}
+*::-webkit-scrollbar{display:none}
+html,body{height:100%;overflow:hidden}
+body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.6}
+button{font-family:inherit}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.num{font-variant-numeric:tabular-nums}
+.app{display:flex;height:100vh}
+
+/* ── sidebar ───────────────────────────── */
+.sidebar{width:250px;flex-shrink:0;border-right:1px solid var(--hair);display:flex;flex-direction:column}
+.shead{padding:18px 20px 14px;border-bottom:1px solid var(--hairw)}
+.slabel{font-size:10px;letter-spacing:.14em;color:var(--weak);text-transform:uppercase}
+.newbtn{display:block;margin:14px 20px 12px;width:calc(100% - 40px);background:var(--ink);color:var(--paper);border:1px solid var(--ink);padding:10px 0;font-size:13px;cursor:pointer}
+.swap{position:relative;display:block;overflow:hidden;height:1.45em}
+.swap .a,.swap .b{display:block;text-align:center;transition:transform .3s ease}
+.swap .b{position:absolute;top:100%;left:0;width:100%}
+.newbtn:hover .a,.sendbtn:hover .a{transform:translateY(-100%)}
+.newbtn:hover .b,.sendbtn:hover .b{transform:translateY(-100%)}
+.srch{margin:0 20px 12px;border:1px solid var(--hairw);padding:7px 10px}
+.srch input{width:100%;border:none;background:none;outline:none;font-family:var(--sans);font-size:12.5px;color:var(--ink)}
+.srch input::placeholder{color:var(--weak)}
+.convs{flex:1;overflow-y:auto}
+.conv{padding:12px 20px;border-bottom:1px solid var(--hairw);font-family:var(--serif);font-size:14px;cursor:pointer}
+.conv:hover{background:rgba(37,37,37,.03)}
+.conv.active{color:var(--green);text-decoration:underline;text-underline-offset:4px}
+
+/* ── main ──────────────────────────────── */
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.topbar{height:52px;flex-shrink:0;display:flex;align-items:center;gap:16px;padding:0 20px;border-bottom:1px solid var(--hair)}
+.menubtn{background:none;border:none;cursor:pointer;display:flex;flex-direction:column;gap:3px;padding:6px 2px}
+.menubtn span{width:16px;height:1px;background:var(--ink)}
+.wordmark{font-family:var(--serif);font-size:clamp(17px,1.5vw,21px);font-weight:700;letter-spacing:-.03em;white-space:nowrap}
+.ttl{font-family:var(--serif);font-size:13.5px;color:var(--weak);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tagpink{flex-shrink:0;background:var(--pink);padding:1px 6px;font-size:10px;letter-spacing:.1em}
+.tright{margin-left:auto;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;white-space:nowrap}
+
+.stream{flex:1;overflow-y:auto}
+.col{max-width:820px;margin:0 auto;padding:30px 24px 24px}
+.msg{animation:fade .18s ease both}
+.hr{border:none;border-top:1px solid var(--hair);margin:26px 0}
+
+.umsg{text-align:right;font-family:var(--serif);font-size:15px}
+.umsg em{font-style:normal;border-bottom:1px solid var(--green);padding-bottom:2px}
+.alabel{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--weak);margin-bottom:10px}
+.serif{font-family:var(--serif);font-size:15px;line-height:1.8}
+
+details.foot{border-top:1px solid var(--hairw);border-bottom:1px solid var(--hairw);margin:0 0 18px;padding:8px 0}
+details.foot summary{cursor:pointer;list-style:none;font-family:var(--serif);font-size:12.5px;color:var(--weak)}
+details.foot summary::-webkit-details-marker{display:none}
+details.foot summary::after{content:"+";float:right;color:var(--green)}
+details.foot[open] summary::after{content:"–"}
+.fbody{font-family:var(--serif);font-size:12.5px;line-height:1.8;color:var(--weak);padding-top:6px}
+
+.quote{background:var(--quote);border-left:2px solid var(--green);padding:10px 14px;margin:0 0 18px}
+.quote .q{font-family:var(--serif);font-size:13.5px;line-height:1.8}
+.quote .src{font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;color:var(--green);margin-top:4px}
+
+.tl{list-style:none;margin:0 0 18px;font-family:var(--serif);font-size:14px;line-height:2}
+.tl .done{color:var(--green)}
+.tl .ing{border-bottom:1px solid var(--green)}
+
+mark.hl{background:var(--hl);padding:0 2px;color:inherit}
+table{width:100%;border-collapse:collapse;margin:0 0 18px;font-family:var(--serif);font-size:13.5px}
+th{font-family:var(--sans);font-weight:400;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--weak);text-align:left;border-top:1px solid var(--hair);border-bottom:1px solid var(--hair);padding:7px 8px}
+td{border-bottom:1px solid var(--hairw);padding:8px;font-variant-numeric:tabular-nums}
+td.r,th.r{text-align:right}
+.sugg{list-style:none;margin:0;font-family:var(--serif);font-size:14px;line-height:2}
+.sugg li::before{content:"· ";color:var(--green)}
+
+.composer{flex-shrink:0;border-top:1px solid var(--hair);padding:12px 20px 16px;background:var(--paper)}
+.cinner{max-width:820px;margin:0 auto}
+.tools{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px;font-size:12px}
+.tools a{color:var(--ink);text-decoration:none;cursor:pointer}
+.tools a:hover{text-decoration:underline;text-underline-offset:3px}
+.tools a.on{color:var(--green);text-decoration:underline;text-underline-offset:3px}
+.irow{display:flex;border:1px solid var(--hair)}
+.field{flex:1;min-width:0;border:none;background:none;outline:none;padding:11px 12px;font-family:var(--serif);font-size:14px;color:var(--ink)}
+.field::placeholder{color:var(--weak)}
+.sendbtn{flex-shrink:0;background:var(--ink);color:var(--paper);border:none;border-left:1px solid var(--hair);padding:0 26px;font-size:13px;cursor:pointer}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="shead"><span class="slabel">DeepSeek Infra · 会话记录</span></div>
+    <button class="newbtn">
+      <span class="swap"><span class="a">新对话</span><span class="b">↗</span></span>
+    </button>
+    <div class="srch"><input placeholder="搜索会话…"></div>
+    <nav class="convs">
+      <div class="conv active">网关超时排查</div>
+      <div class="conv">Prompt 回归基线</div>
+      <div class="conv">RAG 评测记录</div>
+      <div class="conv">工具调用准确率分析</div>
+      <div class="conv">注入对抗阈值复盘</div>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="menubtn" title="折叠侧栏" aria-label="折叠侧栏"><span></span><span></span><span></span></button>
+      <span class="wordmark">DeepSeek 工作台</span>
+      <span class="ttl">网关超时排查</span>
+      <span class="tagpink">演示</span>
+      <div class="tright num">会话 042 · 已连接</div>
+    </header>
+
+    <section class="stream">
+      <div class="col">
+        <div class="msg umsg">
+          <em>帮我看下 trace_7f3a2c 为什么超时</em>
+        </div>
+
+        <hr class="hr">
+
+        <div class="msg">
+          <div class="alabel num">助手 · 19:28:04</div>
+
+          <details class="foot">
+            <summary>注．思考过程 · 3.2s</summary>
+            <div class="fbody">先拉取 trace 瀑布数据 → 按 span 耗时降序 → 与 v2.2.6 基线对比 → 排除模型生成阶段</div>
+          </details>
+
+          <div class="quote">
+            <div class="q">本次结论参考以下两处来源:</div>
+            <div class="src">来源 01 · DeepSeek Infra 文档 · 请求队列与背压</div>
+            <div class="src">来源 02 · 评测基线 v2.2.6 · gateway p99 报告</div>
+          </div>
+
+          <ul class="tl">
+            <li><span class="done">① 解析 trace — 已完成</span></li>
+            <li><span class="done">② 定位慢 span — 已完成</span></li>
+            <li><span class="ing">③ 对比基线 — 进行中</span></li>
+          </ul>
+
+          <div class="serif">
+            <p style="margin:0 0 18px">超时发生在 gateway 的队列等待阶段,<mark class="hl">p99 延迟 4.2s</mark>,占整个请求的 <mark class="hl">87%</mark>。模型生成只花了 0.6s,可以排除。</p>
+            <table>
+              <tr><th>span 名称</th><th class="r">耗时</th><th class="r">占比</th></tr>
+              <tr><td>request-queue</td><td class="r">4.20s</td><td class="r">87%</td></tr>
+              <tr><td>llm-generate</td><td class="r">0.60s</td><td class="r">12%</td></tr>
+              <tr><td>rag-retrieve</td><td class="r">0.04s</td><td class="r">1%</td></tr>
+            </table>
+            <ul class="sugg">
+              <li>提高 worker 并发</li>
+              <li>开启请求合并</li>
+              <li>检查 .request-queue 目录积压</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="composer">
+      <div class="cinner">
+        <div class="tools">
+          <a>项目</a>
+          <a>附件</a>
+          <a>deepseek-v3.3 ▾</a>
+          <a class="on">思考</a>
+          <a class="on">联网</a>
+          <a>多 Agent</a>
+        </div>
+        <div class="irow">
+          <input class="field" placeholder="输入消息…">
+          <button class="sendbtn">
+            <span class="swap"><span class="a">发送</span><span class="b">↗</span></span>
+          </button>
+        </div>
+      </div>
+    </footer>
+  </main>
+</div>
+</body>
+</html>

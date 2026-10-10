@@ -1,0 +1,104 @@
+# DeepSeek Infra 5.0 Native Runtime Topology
+# Services: deepseek-edge (Rust), deepseekd (Go), deepseek-worker (Rust).
+services:
+  deepseek-edge:
+    build:
+      context: .
+      dockerfile: rust/Dockerfile
+      target: gateway
+    image: deepseek-edge:5.0.0
+    environment:
+      GATEWAY_BIND_ADDR: 0.0.0.0:8000
+      GO_CONTROL_ADDR: http://127.0.0.1:8090
+      DEEPSEEK_RUNTIME_MODE: python_disabled
+      DEEPSEEK_INFRA_ROOT: /data
+      AUTH_TOKEN: ${AUTH_TOKEN:-}
+      DEEPSEEK_INTERNAL_BEARER: ${DEEPSEEK_INTERNAL_BEARER:-}
+    volumes:
+      - deepseek-native-data:/data
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+
+  deepseekd:
+    build:
+      context: ./go
+      dockerfile: Dockerfile
+    image: deepseekd:5.0.0
+    network_mode: "service:deepseek-edge"
+    environment:
+      DEEPSEEKD_LISTEN: 127.0.0.1:8090
+      DEEPSEEKD_MODE: authoritative
+      DEEPSEEKD_OWNER: deepseekd
+      DEEPSEEKD_PRODUCTION_STORE: /data/go-control
+      DEEPSEEKD_INTERNAL_BEARER: ${DEEPSEEK_INTERNAL_BEARER:-}
+    volumes:
+      - deepseek-control:/data/go-control
+    depends_on:
+      deepseek-edge:
+        condition: service_started
+        restart: true
+    restart: unless-stopped
+
+  deepseek-worker:
+    build:
+      context: .
+      dockerfile: rust/Dockerfile
+      target: worker
+    image: deepseek-worker:5.0.0
+    network_mode: "service:deepseek-edge"
+    # Optional operator file: dedicated authority, TLS and S3 values are
+    # validated by the worker. An absent file grants no mutation authority.
+    env_file:
+      - path: ${DEEPSEEK_WORKER_ENV_FILE:-.env.native-worker}
+        required: false
+    environment:
+      # Plaintext gRPC remains loopback-only until an authenticated authority
+      # synchronization channel is selected and implemented.
+      DEEPSEEK_WORKER_LISTEN: 127.0.0.1:50052
+      DEEPSEEK_WORKER_STATE_ROOT: /data
+    volumes:
+      - deepseek-worker-state:/data
+    read_only: true
+    depends_on:
+      deepseek-edge:
+        condition: service_started
+        restart: true
+    restart: unless-stopped
+
+  browser-engine:
+    # Opt-in: `docker compose --profile browser up`. Without the profile the gateway
+    # finds no engine, reports `playwright_available() == false`, and the static
+    # controller answers — the engine is an addition, not a dependency (ADR-0050).
+    profiles: ["browser"]
+    build:
+      context: .
+      dockerfile: rust/Dockerfile
+      target: browser
+    image: deepseek-browser-engine:5.0.0
+    # The engine refuses to bind anything but loopback, so it shares the edge's
+    # network namespace instead of publishing a port. Nothing outside the edge can
+    # reach it, which is the point.
+    network_mode: "service:deepseek-edge"
+    environment:
+      DEEPSEEK_BROWSER_ENGINE_LISTEN: 127.0.0.1:50053
+      DEEPSEEK_BROWSER_CHROMIUM: /usr/bin/chromium
+      DEEPSEEK_BROWSER_PROFILE_ROOT: /data/browser-profiles
+      DEEPSEEK_BROWSER_DOWNLOAD_ROOT: /data/browser-downloads
+      # Chromium's sandbox needs user namespaces. A container without them has to opt
+      # out with DEEPSEEK_BROWSER_NO_SANDBOX=1 — deliberately set by the operator, and
+      # deliberately not set here, because it is a security decision and not a default
+      # this file should be making (ADR-0050 open review item).
+    volumes:
+      - deepseek-browser:/data
+    depends_on:
+      deepseek-edge:
+        condition: service_started
+        restart: true
+    restart: unless-stopped
+
+volumes:
+  deepseek-native-data:
+  deepseek-control:
+  deepseek-worker-state:
+  deepseek-browser:

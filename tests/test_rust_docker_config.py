@@ -1,0 +1,382 @@
+from __future__ import annotations
+
+import json
+import re
+import struct
+import threading
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from scripts import smoke_rust_sidecar as smoke
+
+
+ROOT = Path(__file__).resolve().parents[1]
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+INCLUDE_MACRO = re.compile(r'include_(?:str|bytes)!\("([^"]+)"\)')
+
+
+def _read(path: str) -> str:
+    return (ROOT / path).read_text(encoding="utf-8")
+
+
+def _builder_copies(dockerfile: str) -> list[str]:
+    """The source arguments of every `COPY` in the stage that runs `cargo build`."""
+    builder = dockerfile.split("AS builder", 1)[1].split("\nFROM ", 1)[0]
+    sources: list[str] = []
+    for line in builder.splitlines():
+        if not line.startswith("COPY "):
+            continue
+        arguments = [argument for argument in line.split()[1:] if not argument.startswith("--")]
+        if len(arguments) >= 2:
+            sources.extend(arguments[:-1])
+    return sources
+
+
+def _includes_outside_the_rust_workspace() -> list[tuple[str, str]]:
+    """Every `include_str!`/`include_bytes!` under `rust/` that reads above `rust/`.
+
+    Returns `(containing source, repo-relative path read)` pairs.
+    """
+    workspace = (ROOT / "rust").resolve()
+    escapes: list[tuple[str, str]] = []
+    for path in sorted((ROOT / "rust").rglob("*.rs")):
+        if "target" in path.parts:
+            continue
+        for literal in INCLUDE_MACRO.findall(path.read_text(encoding="utf-8")):
+            resolved = (path.parent / literal).resolve()
+            if workspace not in resolved.parents:
+                escapes.append((path.relative_to(ROOT).as_posix(), resolved.relative_to(ROOT.resolve()).as_posix()))
+    return escapes
+
+
+def test_every_rust_include_outside_the_workspace_is_copied_into_the_image() -> None:
+    """`include_str!` resolves against the *source file*, not the crate or the workspace root.
+
+    `rust/Dockerfile`'s builder stage copies `rust/` and `proto/` and nothing else, so a source that
+    reaches above `rust/` reads a path that exists on a developer's checkout — where the whole
+    repository is present — and does not exist in the image, where it is not. That asymmetry is
+    invisible to every job that builds in a full checkout (`rust`, `rust-coverage`, clippy,
+    `cargo test`): they all pass, and the image build fails at the last crate with
+
+        error: couldn't read `crates/deepseek-policy/src/skills/../../../../../VERSION`
+
+    which is how the image build, three parity lanes and the hybrid e2e lane all went red on a
+    commit whose Rust, clippy, coverage, protocol and three Python test jobs were green.
+    """
+    copied = _builder_copies(_read("rust/Dockerfile"))
+    for source, relative in _includes_outside_the_rust_workspace():
+        covered = any(
+            relative == entry or relative.startswith(entry.rstrip("/") + "/") for entry in copied
+        )
+        assert covered, (
+            f"{source} reads {relative}, which is outside rust/ and so outside the image's build "
+            f"context; add `COPY {relative} ./{relative}` to the builder stage of rust/Dockerfile "
+            f"(the builder copies: {copied})"
+        )
+
+
+def test_rust_dockerfile_is_multistage_locked_and_non_root() -> None:
+    dockerfile = _read("rust/Dockerfile")
+
+    assert "FROM node:24-bookworm-slim AS frontend-builder" in dockerfile
+    assert "COPY frontend/package.json frontend/package-lock.json ./" in dockerfile
+    assert "npm ci" in dockerfile
+    assert "npm run build" in dockerfile
+    assert "test -f /build/static/ui/index.html" in dockerfile
+    assert "FROM rust:1.85-bookworm AS builder" in dockerfile
+    assert "cargo build" in dockerfile
+    assert "--locked" in dockerfile
+    assert "-p deepseek-gateway" in dockerfile
+    assert "-p deepseek-worker" in dockerfile
+    assert "FROM debian:bookworm-slim" in dockerfile
+    assert "COPY rust ./rust" in dockerfile
+    assert "COPY proto ./proto" in dockerfile
+    assert "COPY static ./static" in dockerfile
+    assert "COPY --from=frontend-builder /build/static/ui ./static/ui" in dockerfile
+    assert "test -f /app/static/ui/index.html" in dockerfile
+    assert "DEEPSEEK_INFRA_STATIC_DIR=/app/static" in dockerfile
+    assert "GATEWAY_BIND_ADDR=0.0.0.0:8787" in dockerfile
+    assert "USER deepseek" in dockerfile
+    assert "10001" in dockerfile
+    assert "HEALTHCHECK" in dockerfile
+    assert "http://127.0.0.1:8787/healthz" in dockerfile
+    assert "requirements.txt" not in dockerfile
+    assert "COPY deepseek_infra" not in dockerfile
+    assert "DEEPSEEK_RUST_BIND" not in dockerfile
+
+
+def test_rust_dockerfile_has_distinct_gateway_and_worker_targets() -> None:
+    dockerfile = _read("rust/Dockerfile")
+
+    assert "AS worker" in dockerfile
+    assert "/app/rust/target/release/deepseek-worker" in dockerfile
+    assert "DEEPSEEK_WORKER_LISTEN=127.0.0.1:50052" in dockerfile
+    assert 'CMD ["deepseek-worker"]' in dockerfile
+    assert "AS gateway" in dockerfile
+    assert dockerfile.rfind("AS gateway") > dockerfile.rfind("AS worker")
+
+
+def test_optional_compose_does_not_change_default_python_deployment() -> None:
+    default_compose = _read("docker-compose.yml")
+    rust_compose = _read("docker-compose.rust.yml")
+
+    assert "deepseek-infra:" in default_compose
+    assert "rust-gateway" not in default_compose
+    assert "rust-gateway:" in rust_compose
+    assert "dockerfile: rust/Dockerfile" in rust_compose
+    assert '"127.0.0.1:8787:8787"' in rust_compose
+    assert "GATEWAY_BIND_ADDR: 0.0.0.0:8787" in rust_compose
+    assert "DEEPSEEK_RUST_GATEWAY=" not in rust_compose
+    assert "deepseek-infra:" not in rust_compose
+
+
+def test_example_environment_keeps_all_rust_components_disabled() -> None:
+    env_example = _read(".env.example")
+
+    for component in ("GATEWAY", "MCP", "POLICY", "RAG"):
+        assert f"DEEPSEEK_RUST_{component}=0" in env_example
+        assert f"DEEPSEEK_RUST_{component}=1" not in env_example
+    assert "DEEPSEEK_RUST_RAG_DOCUMENT_PREP=0" in env_example
+    assert "DEEPSEEK_RUST_RAG_DOCUMENT_PREP=1" not in env_example
+
+
+def test_ci_builds_and_smokes_rust_image_in_independent_job() -> None:
+    workflow = _read(".github/workflows/ci.yml")
+
+    assert "rust-docker:" in workflow
+    # Every build of the rust image names its target. The Dockerfile has more than one
+    # runtime stage, so a build without `--target` gets whichever stage is last — which
+    # is how appending the browser stage once turned five lanes' gateway images into
+    # browser images, and how their health checks timed out on a process that listens
+    # for gRPC instead of HTTP.
+    assert "docker build --target gateway -f rust/Dockerfile -t deepseek-rust-gateway:$RELEASE_VERSION ." in workflow
+    assert "docker build --target browser -f rust/Dockerfile -t deepseek-browser-engine:$RELEASE_VERSION ." in workflow
+    untargeted = [
+        line
+        for line in workflow.splitlines()
+        if "docker build" in line and "rust/Dockerfile" in line and "--target" not in line
+    ]
+    assert untargeted == [], f"rust image built without an explicit target: {untargeted}"
+    # Compose builds the same Dockerfile, and its builds are easy to miss: the hybrid
+    # e2e lane's gateway container was unhealthy for exactly this reason.
+    for compose in ("docker-compose.hybrid-test.yml", "docker-compose.rust.yml", "docker-compose.native.yml"):
+        lines = _read(compose).splitlines()
+        for index, line in enumerate(lines):
+            if line.strip() != "dockerfile: rust/Dockerfile":
+                continue
+            block = "\n".join(lines[index : index + 5])
+            assert "target:" in block, f"{compose} builds rust/Dockerfile without a target"
+    assert "record_rust_sidecar_image.py" in workflow
+    assert "python scripts/smoke_rust_sidecar.py" in workflow
+    assert "docker rm --force deepseek-rust-gateway || true" in workflow
+    assert "--cov-report=json:artifacts/coverage.json" in workflow
+    assert "--cov-fail-under=95.0" in workflow
+
+
+def test_rag_parity_retries_transient_docker_registry_failures() -> None:
+    workflow = _read(".github/workflows/ci.yml")
+
+    assert "for attempt in 1 2 3; do" in workflow
+    assert "docker build --target gateway -f rust/Dockerfile -t deepseek-rust-gateway:parity ." in workflow
+    assert 'if [ "$attempt" -eq 3 ]; then' in workflow
+    assert 'sleep "$((attempt * 5))"' in workflow
+
+
+def test_rust_image_has_current_oci_version_label() -> None:
+    dockerfile = _read("rust/Dockerfile")
+    assert f'org.opencontainers.image.version="{VERSION}"' in dockerfile
+
+
+class _SidecarHandler(BaseHTTPRequestHandler):
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+    def _send(self, payload: dict[str, Any], status: int = 200) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        if self.path == "/":
+            body = b"<!doctype html><main>native ui</main>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/healthz":
+            self._send({"ok": True, "service": "deepseek-gateway-rs"})
+            return
+        if self.path == "/v1/models":
+            self._send(
+                {
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "deepseek-v4-pro",
+                            "object": "model",
+                            "created": 1,
+                            "owned_by": "deepseek-infra",
+                        },
+                        {
+                            "id": "deepseek-v4-flash",
+                            "object": "model",
+                            "created": 1,
+                            "owned_by": "deepseek-infra",
+                        },
+                    ],
+                }
+            )
+            return
+        if self.path == "/metrics":
+            body = (
+                "requests_total 1\n"
+                "request_duration_seconds 0.1\n"
+                "request_payload_bytes 1\n"
+                "response_payload_bytes 1\n"
+                "backend_errors_total 0\n"
+                "vector_rank_transport_total{encoding=\"binary\",outcome=\"success\"} 1\n"
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; version=0.0.4")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_error(404)
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        if self.path == "/rag/vectors/rank-binary":
+            assert self.headers.get("Content-Type") == "application/vnd.deepseek.vector-rank.v1+octet-stream"
+            magic, dimensions, candidate_count, *values = struct.unpack("<8sII6d", body)
+            assert (magic, dimensions, candidate_count) == (b"DSVRNK01", 2, 2)
+            assert values == [1.0, 0.0, 0.25, 0.0, 1.0, 0.0]
+            response = struct.pack("<8sIId", b"DSVRSP01", 1, 0, 1.0)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/vnd.deepseek.vector-rank.v1+octet-stream")
+            self.send_header("Content-Length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+            return
+        request = json.loads(body.decode("utf-8"))
+        if self.path == "/v1/chat/completions":
+            assert request["stream"] is False
+            # The route's own envelope now, which is the oracle's: a flat
+            # `{"error": <message>, "code": <code>}` at `AppError`'s default status for a missing
+            # credential. It used to be a nested error object at `503`.
+            self._send(
+                {
+                    "error": "Missing DeepSeek API Key. Set DEEPSEEK_API_KEY or enter a key in settings.",
+                    "code": "missing_api_key",
+                },
+                status=400,
+            )
+            return
+        if self.path == "/mcp/request/prepare":
+            assert request["method"] == "tools/call"
+            self._send(
+                {
+                    "ok": True,
+                    "messageType": "request",
+                    "request": request,
+                    "routing": {"owner": "python", "category": "tools"},
+                }
+            )
+            return
+        if self.path == "/policy/url":
+            assert request["url"].startswith("http://localhost")
+            self._send(
+                {
+                    "allowed": False,
+                    "code": "localhost_blocked",
+                    "reason": "localhost is blocked",
+                    "decision_id": "pd_test_001",
+                    "capability": "NetworkFetch",
+                    "risk_level": "High",
+                }
+            )
+            return
+        if self.path == "/rag/query/normalize":
+            assert "语言" in request["query"]
+            self._send({"normalized": "rust 语言", "tokens": ["rust", "语言"]})
+            return
+        if self.path == "/rag/vectors/rank":
+            assert request["query"] == [1.0, 0.0]
+            assert request["candidates"] == [[0.25, 0.0], [1.0, 0.0]]
+            self._send({"index": 1, "similarity": 1.0})
+            return
+        if self.path == "/rag/documents/prepare":
+            assert request["text"] == "A\r\n\u4e2d\u6587\U0001f680B"
+            assert set(request) == {"documentId", "text", "metadata", "chunking"}
+            self._send(
+                {
+                    "ok": True,
+                    "document": {"documentId": request["documentId"], "characterCount": 6, "chunkCount": 3},
+                    "chunks": [{"index": 0, "text": "A\n\u4e2d", "start": 0, "end": 3}],
+                }
+            )
+            return
+        self.send_error(404)
+
+
+@pytest.fixture
+def sidecar_url() -> Iterator[str]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _SidecarHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+        server.server_close()
+
+
+def test_smoke_exercises_all_offline_sidecar_contracts(sidecar_url: str) -> None:
+    checks = smoke.run_smoke(sidecar_url, wait_seconds=1, timeout=1)
+
+    assert [check.name for check in checks] == [
+        "health",
+        "metrics",
+        "frontend",
+        "models_catalog",
+        "chat_missing_credential",
+        "mcp_protocol_preparation",
+        "policy",
+        "rag",
+        "rag_vector_rank",
+        "rag_vector_rank_binary",
+        "rag_document_preparation",
+    ]
+
+
+def test_smoke_rejects_malformed_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _MalformedResponse:
+        status = 200
+
+        def __enter__(self) -> _MalformedResponse:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        @staticmethod
+        def read() -> bytes:
+            return b"not-json"
+
+    monkeypatch.setattr(smoke, "urlopen", lambda *args, **kwargs: _MalformedResponse())
+
+    with pytest.raises(smoke.SmokeFailure, match="invalid JSON"):
+        smoke._request_json("http://127.0.0.1:8787", "GET", "/healthz")

@@ -1,0 +1,12 @@
+{
+  "packId": "pack_office",
+  "name": "Office Pack",
+  "description": "Generate slides, write papers and read documents for office workflows.",
+  "version": "1.0.0",
+  "author": "builtin",
+  "skills": [
+    {"skillId": "skill_ppt_generator"},
+    {"skillId": "skill_paper_writer"},
+    {"skillId": "skill_document_reader"}
+  ]
+}

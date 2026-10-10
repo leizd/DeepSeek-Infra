@@ -1,0 +1,88 @@
+{
+  "version": "4.4.13",
+  "commit": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "testedRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "sourceRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+  "sourceTreeDirty": false,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "sourceContext": {
+    "schemaVersion": 2,
+    "version": "4.4.13",
+    "testedRevision": "6dcd843fe5b3b9db16d568087fa5fcfcf931b735",
+    "sourceTreeDirty": false,
+    "capturedAt": "2026-08-10T10:41:18Z",
+    "generator": "scripts/generate_release_evidence.py",
+    "repository": "local",
+    "workflowRunId": "local",
+    "workflowAttempt": 1,
+    "eventName": "local",
+    "ref": "refs/heads/codex/4.4.13-projected-recovery"
+  },
+  "generatedAt": "2026-08-10T10:41:40+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "skillApiRoutes": "PASS",
+    "builtinSkillsLoad": "PASS",
+    "customSkillCreate": "PASS",
+    "inputSchemaValidation": "PASS",
+    "toolPermissionGate": "PASS",
+    "artifactPolicy": "PASS",
+    "projectBinding": "PASS",
+    "skillExport": "PASS"
+  },
+  "details": {
+    "skillApiRoutes": [
+      "/api/skills",
+      "/api/skills/{skill_id}/run"
+    ],
+    "builtinSkillIds": [
+      "audio_transcript_summarizer",
+      "browser_to_report",
+      "download_and_summarize",
+      "form_assistant",
+      "image_explainer",
+      "media_to_report",
+      "pdf_reader",
+      "skill_code_review",
+      "skill_document_reader",
+      "skill_paper_writer",
+      "skill_ppt_generator",
+      "skill_research_brief",
+      "skill_study_tutor",
+      "video_brief_generator",
+      "web_researcher",
+      "webpage_reader",
+      "webpage_summarizer",
+      "website_summarizer"
+    ],
+    "toolPermissionGate": {
+      "tool": "fetch_url",
+      "action": "deny",
+      "policyVerdict": "denied",
+      "risk": "high",
+      "reasons": [
+        "capability_denied:full"
+      ],
+      "violations": [],
+      "capability": "full",
+      "reason": "Tool is out of scope for the 'full' capability profile",
+      "suggestion": "Switch capability or add the tool to CAPABILITY_PROFILES['full']"
+    },
+    "skillRun": {
+      "skillRunId": "run-e5a9f75255df260f",
+      "projectId": "proj-74d2f10ed6ea",
+      "artifactIds": [
+        "art-a63f5be043f6bb93"
+      ],
+      "savedItemIds": [
+        "saved-7ec89bb9c19592c5"
+      ]
+    }
+  }
+}

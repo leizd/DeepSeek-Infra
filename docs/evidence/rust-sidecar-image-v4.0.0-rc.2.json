@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "rust-sidecar-image.v1",
+  "version": "4.0.0-rc.2",
+  "commit": "824447a168a38d7042b8b28a4ce646202b49ad5d",
+  "generatedAt": "2026-07-15T07:57:16Z",
+  "status": "PASS",
+  "tag": "deepseek-rust-gateway:4.0.0-rc.2",
+  "digest": "sha256:92743a92495a1d64b62c6ffad147ef878c64c583adc4e89dd457d1ec3d031f40",
+  "digestKind": "local-image-id",
+  "publishedRegistryDigest": false
+}

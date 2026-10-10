@@ -1,0 +1,29 @@
+# Link against rustc's own bundled mingw-w64 libraries rather than the system MinGW's.
+#
+# Why this is here: rustc's `windows-gnu` target uses `gcc` from PATH as its linker
+# driver, and that driver injects its own library search path. On a host with a system
+# MinGW installed, an *older* `libkernel32.a` therefore lands on the link line, and its
+# import stub wins `__imp_WakeByAddressSingle` from libstd's own stub. That stub is from
+# an era when kernel32 exported the futex APIs; Windows 10/11 exports them from
+# kernelbase only, so the linked binary dies at load with
+#
+#     0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND
+#
+# How it presented: `cargo test -p deepseek-policy --lib` could not start its harness at
+# all, while the crate's examples and the other crates' test binaries were fine — they
+# happened to resolve the same symbol from libstd. `-Wl,--trace-symbol` names the
+# provider rather than leaving it to inference:
+#
+#     libkernel32.a(dqifs01464.o): definition of __imp_WakeByAddressSingle
+#
+# resolved to /d/mingw64 (GCC 8.1.0). rustc's raw-dylib stubs carry no DLL name — every
+# `WakeByAddress*` stub inside libstd has a four-byte, all-zero `.idata$7` — so the import
+# descriptor is chosen at link time and any earlier archive can claim the symbol.
+#
+# Requires the `rust-mingw` component, which a windows-gnu host toolchain installs by
+# default. Scoped to this triple deliberately: nothing about MSVC builds or other targets
+# should inherit it. One caveat — `RUSTFLAGS` in the environment takes precedence over
+# this file, so a stray value there silently overrides these flags and brings the failure
+# back along with a full rebuild.
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "link-self-contained=yes"]

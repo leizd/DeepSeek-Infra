@@ -1,0 +1,74 @@
+version: v2
+title: DeepSeek Infra · 本地优先的 Agentic AI 基础设施平台
+size: [960, 540]
+theme:
+  colors:
+    bg: "#F2F1ED"
+    ink: "#082D4F"
+    accent: "#D27347"
+    accentStrong: "#F05023"
+    structure: "#3E4A5F"
+    gray: "#7A7F87"
+    hairline: "#D8D6D0"
+    panel: "#FFFFFF"
+    softCool: "#E2E8EE"
+    softWarm: "#F5E4D8"
+    ok: "#3E7A5E"
+  textStyles:
+    kicker:
+      fontSize: 11
+      color: "$accent"
+      fontFamily: MiSans
+      bold: true
+      letterSpacing: 2
+    pageTitle:
+      fontSize: 26
+      color: "$ink"
+      fontFamily: MiSans
+      bold: true
+      lineHeight: 1.25
+    display:
+      fontFamily: 思源宋体
+      color: "$ink"
+    body:
+      fontSize: 13
+      color: "$ink"
+      fontFamily: MiSans
+      lineHeight: 1.55
+    note:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      lineHeight: 1.4
+    headerMeta:
+      fontSize: 10
+      color: "$structure"
+      fontFamily: MiSans
+      bold: true
+      letterSpacing: 3
+  tableStyles:
+    default:
+      cellStyle:
+        fontSize: 11
+        color: "$ink"
+        fontFamily: MiSans
+        border: [null, null, {style: solid, width: 1, color: "$hairline"}, null]
+        align: [left, middle]
+      firstRowStyle:
+        fill: {type: solid, color: "$softCool"}
+        bold: true
+        color: "$structure"
+pages:
+  - pages/01_cover.page
+  - pages/02_positioning.page
+  - pages/03_numbers.page
+  - pages/04_architecture.page
+  - pages/05_request_flow.page
+  - pages/06_modules.page
+  - pages/07_security.page
+  - pages/08_quality.page
+  - pages/09_screenshots.page
+  - pages/10_deployment.page
+  - pages/11_evolution.page
+  - pages/12_roadmap.page
+  - pages/13_closing.page

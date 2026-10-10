@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze storage commitment and canonical document semantics omitted by the v1 field-only inventory.",
+  "normalization": "LF-normalized SHA-256 of public inventory/fixture bytes",
+  "corpora": [
+    {
+      "id": "storage-receipt-commit-semantics-v2",
+      "path": "compat/native-runtime/v2/storage/receipt_commit_vectors.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen object-set-v1, Receipt v4, and Commit v4 semantic vectors",
+      "sha256": "f5ac4fba666b51911cdc559a4fe0aa7f0501eec404d1dcbd87370b3d6d582731"
+    }
+  ]
+}

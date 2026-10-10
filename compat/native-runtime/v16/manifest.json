@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze blast-radius monotonic safety floors and process-backed atomic admission observations without moving Go control ownership. Preserve Python structural/numeric equality and exact per-check errors.",
+  "normalization": "LF-normalized SHA-256 of public validator fixture bytes",
+  "corpora": [
+    {
+      "id": "safety-admission-evidence-semantics-v16",
+      "path": "compat/native-runtime/v16/evidence/safety_admission_evidence_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen blast-radius and atomic budget Evidence semantics",
+      "sha256": "0a3ec7efe2ac29c2814432887d4ca4494896bc44c037ba1b7545eb3629ff856d"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze replica lag, replication compliance, and maintenance-window observations: first-copy fallback, no-replica sentinels, required-job mode stringification, lag objectives, and fail-open clock parsing. This does not contact MinIO or move payload bytes.",
+  "normalization": "LF-normalized SHA-256 of public validator fixture bytes",
+  "corpora": [
+    {
+      "id": "replica-compliance-semantics-v27",
+      "path": "compat/native-runtime/v27/transfer/replica_compliance_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen replica lag, compliance, and maintenance-window semantics",
+      "sha256": "2bc55bdb3352bdd2f36d183ceb9e5e1a4d33e1130c7fba69ce7bdcef2c9a9be9"
+    }
+  ]
+}

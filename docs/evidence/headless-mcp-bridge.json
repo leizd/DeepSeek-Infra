@@ -1,0 +1,93 @@
+{
+  "schemaVersion": "headless-mcp-bridge-evidence.v1",
+  "version": "4.5.3",
+  "commit": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "testedRevision": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "sourceRevision": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "sourceTreeDirty": true,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "generatedAt": "2026-08-17T00:39:19Z",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "gitSha": "6f2cc6c86018d0ab7315b50348d120246aa86d01",
+  "gitDirty": true,
+  "status": "PASS",
+  "transport": {
+    "server": "embedded-or-local-http",
+    "bridge": "builtin-stdio-http",
+    "mcpUrl": "http://127.0.0.1:8000/mcp",
+    "auth": "disabled"
+  },
+  "covers": [
+    "initialize",
+    "tools/list",
+    "tools/call:data_transform",
+    "policy_denial:fetch_url_ssrf",
+    "stdio_to_http_bridge"
+  ],
+  "steps": [
+    {
+      "name": "server.healthz",
+      "status": "pass",
+      "detail": "status=ok",
+      "data": {
+        "url": "http://127.0.0.1:8000/healthz"
+      }
+    },
+    {
+      "name": "bridge.start",
+      "status": "pass",
+      "detail": "builtin stdio -> Streamable HTTP bridge started",
+      "data": {
+        "bridge": "builtin-python"
+      }
+    },
+    {
+      "name": "mcp.initialize",
+      "status": "pass",
+      "detail": "protocol=2025-06-18 server=deepseek-infra",
+      "data": {
+        "protocolVersion": "2025-06-18",
+        "serverInfo": {
+          "name": "deepseek-infra",
+          "title": "DeepSeek Infra MCP Tool Hub",
+          "version": "4.5.3"
+        }
+      }
+    },
+    {
+      "name": "mcp.tools_list",
+      "status": "pass",
+      "detail": "28 tools exposed",
+      "data": {
+        "toolCount": 28,
+        "requiredTools": [
+          "data_transform",
+          "fetch_url"
+        ]
+      }
+    },
+    {
+      "name": "mcp.tools_call",
+      "status": "pass",
+      "detail": "data_transform count=4",
+      "data": {
+        "tool": "data_transform",
+        "count": 4
+      }
+    },
+    {
+      "name": "mcp.policy_denial",
+      "status": "pass",
+      "detail": "fetch_url localhost probe blocked by Tool Policy",
+      "data": {
+        "tool": "fetch_url",
+        "probe": "http://127.0.0.1/admin"
+      }
+    }
+  ]
+}

@@ -1,0 +1,423 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+
+DEFAULT_REQUIREMENTS = Path("release/4_0_rc_requirements.json")
+DEFAULT_ARCHITECTURE_DECISION = Path("release/4_0_runtime_decision.json")
+CI_ENV_PREFIX = "RC_CI_"
+PASSING_CI_RESULTS = {"success"}
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"expected a JSON object: {path}")
+    return raw
+
+
+def _workflow_jobs(root: Path) -> set[str]:
+    text = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    return set(re.findall(r"^  ([A-Za-z0-9_-]+):\s*$", text, flags=re.MULTILINE))
+
+
+def _coverage_gate(root: Path) -> float:
+    text = (root / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r"^fail_under\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*$", text, flags=re.MULTILINE)
+    if not match:
+        raise ValueError("pyproject.toml does not define coverage report fail_under")
+    return float(match.group(1))
+
+
+def _ci_env_name(job: str) -> str:
+    return CI_ENV_PREFIX + re.sub(r"[^A-Za-z0-9]", "_", job).upper()
+
+
+def _result(requirement: dict[str, Any], passed: bool, observed: Any, detail: str) -> dict[str, Any]:
+    return {
+        "id": requirement["id"],
+        "label": requirement["label"],
+        "category": requirement["category"],
+        "owner": requirement["owner"],
+        "blocking": bool(requirement["blocking"]),
+        "passed": passed,
+        "required": requirement["required"],
+        "observed": observed,
+        "detail": detail,
+        "evidence": requirement["evidence"],
+    }
+
+
+def _check_ci_results(root: Path, requirement: dict[str, Any]) -> dict[str, Any]:
+    required_jobs = [str(job) for job in requirement["required_jobs"]]
+    missing_jobs = [job for job in required_jobs if job not in _workflow_jobs(root)]
+    env_results = {job: os.getenv(_ci_env_name(job)) for job in required_jobs}
+    supplied = {job: value for job, value in env_results.items() if value is not None}
+
+    if missing_jobs:
+        return _result(requirement, False, False, f"workflow jobs missing: {', '.join(missing_jobs)}")
+    if supplied:
+        absent = [job for job, value in env_results.items() if value is None]
+        failed = [job for job, value in supplied.items() if str(value).lower() not in PASSING_CI_RESULTS]
+        if absent:
+            return _result(requirement, False, supplied, f"CI results missing: {', '.join(absent)}")
+        if failed:
+            return _result(requirement, False, supplied, f"CI jobs not green: {', '.join(failed)}")
+        return _result(requirement, True, supplied, "live CI dependency results are green")
+
+    observed = bool(requirement["observed"])
+    return _result(requirement, observed, observed, "recorded merged baseline; live CI results were not supplied")
+
+
+def _check_rag_cases(root: Path, requirement: dict[str, Any]) -> dict[str, Any]:
+    fixture = _load_json(root / "fixtures/rag/parity_cases.json")
+    groups = ("normalization_cases", "ranking_cases", "citation_cases", "index_validation_cases")
+    count = sum(len(fixture.get(group, [])) for group in groups)
+    required = int(requirement["required"])
+    return _result(requirement, count >= required, count, f"{count}/{required} deterministic cases present")
+
+
+def _check_files_exist(root: Path, requirement: dict[str, Any]) -> dict[str, Any]:
+    missing = [path for path in requirement["evidence"] if not (root / path).is_file()]
+    passed = not missing and bool(requirement["observed"])
+    detail = "all contract files present" if not missing else f"files missing: {', '.join(missing)}"
+    return _result(requirement, passed, not missing, detail)
+
+
+def _check_files_contain(root: Path, requirement: dict[str, Any]) -> dict[str, Any]:
+    paths = [root / path for path in requirement["evidence"]]
+    missing = [str(path.relative_to(root)) for path in paths if not path.is_file()]
+    if missing:
+        return _result(requirement, False, False, f"files missing: {', '.join(missing)}")
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in paths)
+    missing_needles = [needle for needle in requirement["needles"] if needle not in combined]
+    passed = not missing_needles and bool(requirement["observed"])
+    detail = "rollback contract present" if passed else f"rollback markers missing: {', '.join(missing_needles)}"
+    return _result(requirement, passed, not missing_needles, detail)
+
+
+def _check_workflow_job(root: Path, requirement: dict[str, Any]) -> dict[str, Any]:
+    job = str(requirement["job"])
+    files_present = all((root / path).is_file() for path in requirement["evidence"])
+    env_result = os.getenv(_ci_env_name(job))
+    observed = bool(requirement["observed"]) if env_result is None else env_result.lower() in PASSING_CI_RESULTS
+    passed = job in _workflow_jobs(root) and files_present and observed
+    source = "recorded baseline" if env_result is None else f"live CI result: {env_result}"
+    return _result(requirement, passed, observed, f"workflow job '{job}' and evidence files present; {source}")
+
+
+def _check_default_rust_disabled(root: Path, requirement: dict[str, Any]) -> dict[str, Any]:
+    env_text = (root / ".env.example").read_text(encoding="utf-8")
+    compose_text = (root / "docker-compose.yml").read_text(encoding="utf-8")
+    flags = ("GATEWAY", "MCP", "POLICY", "RAG", "RAG_DOCUMENT_PREP")
+    enabled = [flag for flag in flags if f"DEEPSEEK_RUST_{flag}=0" not in env_text]
+    binary_defaulted = "DEEPSEEK_RUST_RAG_VECTOR_TRANSPORT=json" not in env_text
+    compose_opted_in = "rust-gateway:" in compose_text or "DEEPSEEK_RUST_" in compose_text
+    passed = not enabled and not binary_defaulted and not compose_opted_in
+    detail = "all Rust flags are 0, vector transport defaults to JSON, and default Compose is Python-only"
+    if enabled or binary_defaulted or compose_opted_in:
+        detail = (
+            f"non-default state found: flags={enabled}, binary_defaulted={binary_defaulted}, "
+            f"compose_opted_in={compose_opted_in}"
+        )
+    return _result(requirement, passed, passed, detail)
+
+
+def _json_path(value: Any, path: list[Any]) -> Any:
+    current = value
+    for part in path:
+        if isinstance(current, dict) and isinstance(part, str) and part in current:
+            current = current[part]
+        elif isinstance(current, list) and isinstance(part, int) and 0 <= part < len(current):
+            current = current[part]
+        else:
+            raise ValueError(f"JSON path not found: {path!r}")
+    return current
+
+
+def _check_observed_numbers_gte(requirement: dict[str, Any]) -> dict[str, Any]:
+    values = requirement.get("observed")
+    required = float(requirement["required"])
+    if not isinstance(values, list) or len(values) != 2:
+        return _result(requirement, False, values, "exactly two complete coverage results are required")
+    observed = [float(value) for value in values]
+    passed = all(value >= required for value in observed)
+    return _result(requirement, passed, observed, f"runs={observed!r}; each must be >= {required:.2f}%")
+
+
+def _check_json_collection_count(root: Path, requirement: dict[str, Any]) -> dict[str, Any]:
+    source = root / str(requirement["evidence"][0])
+    data = _load_json(source)
+    collection = _json_path(data, list(requirement["path"]))
+    if not isinstance(collection, list):
+        raise ValueError(f"expected a JSON list at {requirement['path']!r}: {source}")
+    observed = len(collection)
+    required = int(requirement["required"])
+    return _result(requirement, observed >= required, observed, f"{observed}/{required} cases present")
+
+
+def _check_release_json_metadata(path: Path, data: dict[str, Any], target_version: str) -> list[str]:
+    errors: list[str] = []
+    if data.get("version") != target_version:
+        errors.append(f"version={data.get('version')!r}")
+    if data.get("status") != "PASS":
+        errors.append(f"status={data.get('status')!r}")
+    commit = data.get("commit")
+    if not isinstance(commit, str) or not commit.strip():
+        errors.append("commit missing")
+    return errors
+
+
+def _check_evidence_number_gte(
+    root: Path, requirement: dict[str, Any], target_version: str
+) -> dict[str, Any]:
+    source = root / str(requirement["evidence"][0])
+    data = _load_json(source)
+    errors = _check_release_json_metadata(source, data, target_version)
+    value = _json_path(data, list(requirement["path"]))
+    observed = float(value)
+    required = float(requirement["required"])
+    if errors:
+        return _result(requirement, False, observed, f"invalid evidence metadata: {', '.join(errors)}")
+    return _result(requirement, observed >= required, observed, f"{observed:.2f} >= {required:.2f}")
+
+
+def _check_release_evidence(
+    root: Path, requirement: dict[str, Any], target_version: str
+) -> dict[str, Any]:
+    missing: list[str] = []
+    invalid: list[str] = []
+    for rel in requirement["evidence"]:
+        path = root / str(rel)
+        if not path.is_file():
+            missing.append(str(rel))
+            continue
+        normalized = str(rel).replace("\\", "/")
+        if path.suffix == ".json" and normalized.startswith(("docs/evidence/", "evals/reports/")):
+            try:
+                errors = _check_release_json_metadata(path, _load_json(path), target_version)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                errors = [str(exc)]
+            if errors:
+                invalid.append(f"{rel}: {', '.join(errors)}")
+    passed = not missing and not invalid
+    detail = "all release evidence exists with rc.2 PASS metadata"
+    if missing or invalid:
+        detail = f"missing={missing!r}; invalid={invalid!r}"
+    return _result(requirement, passed, passed, detail)
+
+
+def _architecture_decision_path(root: Path, requirement: dict[str, Any]) -> Path:
+    path = Path(str(requirement.get("decision_file", DEFAULT_ARCHITECTURE_DECISION)))
+    return path if path.is_absolute() else root / path
+
+
+def _decision_contract_errors(decision: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    expected_values = {
+        "schema_version": 1,
+        "target_version": "4.0.0",
+        "status": "approved",
+        "architecture": "python_first_hybrid",
+    }
+    for field, expected in expected_values.items():
+        if decision.get(field) != expected:
+            errors.append(f"{field} must be {expected!r}")
+
+    approved_by = decision.get("approved_by")
+    if not isinstance(approved_by, list) or not approved_by or not all(isinstance(item, str) and item.strip() for item in approved_by):
+        errors.append("approved_by must be a non-empty list of names")
+    return errors
+
+
+def _matches_field_type(value: Any, field_type: str) -> bool:
+    if field_type == "boolean":
+        return isinstance(value, bool)
+    if field_type == "list":
+        return isinstance(value, list)
+    if field_type == "object":
+        return isinstance(value, dict)
+    if field_type == "string":
+        return isinstance(value, str)
+    raise ValueError(f"unsupported architecture decision field type: {field_type}")
+
+
+def _check_architecture_decision(root: Path, requirement: dict[str, Any]) -> dict[str, Any]:
+    path = _architecture_decision_path(root, requirement)
+    if not path.is_file():
+        return _result(requirement, False, None, f"architecture decision file missing: {path}")
+
+    try:
+        decision = _load_json(path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return _result(requirement, False, None, f"invalid architecture decision file: {exc}")
+
+    errors = _decision_contract_errors(decision)
+    field = str(requirement["field"])
+    if field not in decision:
+        errors.append(f"missing decision field: {field}")
+        value: Any = None
+    else:
+        value = decision[field]
+        field_type = str(requirement["field_type"])
+        if not _matches_field_type(value, field_type):
+            errors.append(f"{field} must be a {field_type}")
+        else:
+            if field_type in {"list", "object", "string"} and not value and not bool(requirement.get("allow_empty", False)):
+                errors.append(f"{field} must not be empty")
+            if "allowed_values" in requirement and value not in requirement["allowed_values"]:
+                errors.append(f"{field} must be one of {requirement['allowed_values']!r}")
+            if "expected" in requirement and value != requirement["expected"]:
+                errors.append(f"{field} must equal {requirement['expected']!r}")
+            if field_type == "object":
+                missing = [name for name in requirement.get("required_fields", []) if name not in value or value[name] in (None, "")]
+                if missing:
+                    errors.append(f"{field} is missing lifecycle fields: {', '.join(missing)}")
+
+    for companion, expected in requirement.get("additional_expected", {}).items():
+        if decision.get(companion) != expected:
+            errors.append(f"{companion} must equal {expected!r}")
+
+    if errors:
+        return _result(requirement, False, value, "; ".join(errors))
+    return _result(requirement, True, value, f"approved architecture decision: {field}={value!r}")
+
+
+def _evaluate_one(
+    root: Path,
+    requirement: dict[str, Any],
+    coverage_override: float | None,
+    target_version: str,
+) -> dict[str, Any]:
+    check = str(requirement["check"])
+    if check == "ci_results":
+        return _check_ci_results(root, requirement)
+    if check == "pyproject_coverage_gate":
+        observed = _coverage_gate(root)
+        required = float(requirement["required"])
+        return _result(requirement, observed >= required, observed, f"{observed:.2f}% >= {required:.2f}%")
+    if check == "observed_number_gte":
+        observed = float(coverage_override if coverage_override is not None else requirement["observed"])
+        required = float(requirement["required"])
+        return _result(requirement, observed >= required, observed, f"{observed:.2f}% vs {required:.2f}% required")
+    if check == "observed_numbers_gte":
+        return _check_observed_numbers_gte(requirement)
+    if check == "workflow_job":
+        return _check_workflow_job(root, requirement)
+    if check == "rag_parity_cases":
+        return _check_rag_cases(root, requirement)
+    if check == "json_collection_count_gte":
+        return _check_json_collection_count(root, requirement)
+    if check == "evidence_number_gte":
+        return _check_evidence_number_gte(root, requirement, target_version)
+    if check == "release_evidence":
+        return _check_release_evidence(root, requirement, target_version)
+    if check == "files_exist":
+        return _check_files_exist(root, requirement)
+    if check == "files_contain":
+        return _check_files_contain(root, requirement)
+    if check == "default_rust_disabled":
+        return _check_default_rust_disabled(root, requirement)
+    if check == "architecture_decision":
+        return _check_architecture_decision(root, requirement)
+    if check in {"decision_recorded", "capability_complete", "advisory"}:
+        observed = bool(requirement["observed"])
+        detail = "recorded as complete" if observed else requirement["description"]
+        return _result(requirement, observed, observed, detail)
+    raise ValueError(f"unsupported readiness check: {check}")
+
+
+def evaluate_readiness(root: Path, requirements: dict[str, Any], coverage_override: float | None = None) -> dict[str, Any]:
+    items = requirements.get("requirements")
+    if not isinstance(items, list) or not items:
+        raise ValueError("requirements must be a non-empty list")
+    target_version = str(requirements["target_version"])
+    results = [_evaluate_one(root, item, coverage_override, target_version) for item in items]
+    blockers = [item for item in results if item["blocking"] and not item["passed"]]
+    advisories = [item for item in results if not item["blocking"] and not item["passed"]]
+    return {
+        "schema_version": 1,
+        "baseline_version": requirements["baseline_version"],
+        "target_version": requirements["target_version"],
+        "ready": not blockers,
+        "summary": {
+            "passed": sum(1 for item in results if item["passed"]),
+            "blocked": len(blockers),
+            "advisories": len(advisories),
+            "total": len(results),
+        },
+        "blocker_ids": [item["id"] for item in blockers],
+        "advisory_ids": [item["id"] for item in advisories],
+        "results": results,
+    }
+
+
+def _format_value(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:.2f}"
+    return str(value).lower() if isinstance(value, bool) else str(value)
+
+
+def render_report(report: dict[str, Any]) -> str:
+    lines = ["4.0.0 RC Readiness", ""]
+    for item in report["results"]:
+        if item["passed"]:
+            prefix = "PASS"
+        elif item["blocking"]:
+            prefix = "BLOCK"
+        else:
+            prefix = "ADVISE"
+        suffix = ""
+        if item["id"] == "python_coverage_gate":
+            suffix = f": {_format_value(item['observed'])}%"
+        elif item["id"] in {"python_measured_coverage", "rust_measured_line_coverage"}:
+            operator = ">=" if item["passed"] else "<"
+            suffix = f": {_format_value(item['observed'])}% {operator} {_format_value(item['required'])}%"
+        elif item["id"].endswith("_cases") or item["id"].startswith("rag_vector_binary_"):
+            suffix = f": {item['observed']}/{item['required']}"
+        lines.append(f"{prefix:<6} {item['label']}{suffix}")
+    lines.extend(["", f"Decision: {'READY' if report['ready'] else 'NOT READY'} FOR {report['target_version']}"])
+    return "\n".join(lines)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Check whether the repository is ready to create a 4.0.0 release candidate")
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--requirements", type=Path, default=DEFAULT_REQUIREMENTS)
+    parser.add_argument("--python-coverage", type=float, help="override measured Python coverage for CI or local evidence")
+    parser.add_argument("--json-out", type=Path, help="write the complete readiness report as JSON")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--strict", action="store_true", help="exit non-zero when any blocker remains")
+    mode.add_argument("--report-only", action="store_true", help="report blockers without failing the process")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    root = args.root.resolve()
+    requirements_path = args.requirements
+    if not requirements_path.is_absolute():
+        requirements_path = root / requirements_path
+    try:
+        requirements = _load_json(requirements_path)
+        report = evaluate_readiness(root, requirements, coverage_override=args.python_coverage)
+    except (OSError, ValueError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        print(f"RC readiness configuration error: {exc}", file=sys.stderr)
+        return 2
+
+    print(render_report(report))
+    if args.json_out:
+        output = args.json_out if args.json_out.is_absolute() else root / args.json_out
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return 1 if args.strict and not report["ready"] else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

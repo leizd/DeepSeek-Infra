@@ -1,0 +1,348 @@
+pageType: content
+background:
+  type: solid
+  color: "$bg"
+elements:
+  # ---- 顶部文档轴 ----
+  - elementId: header-left
+    elementType: text
+    bounds: [48, 16, 300, 14]
+    content:
+      style: "$headerMeta"
+      wrap: false
+      align: [left, middle]
+      text: DEEPSEEK INFRA
+  - elementId: header-right
+    elementType: text
+    bounds: [612, 16, 300, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [right, middle]
+      text: 架构 · 04 / 13
+  - elementId: header-rule
+    elementType: shape
+    bounds: [48, 44, 864, 1]
+    shapeName: rect
+    fill: {type: solid, color: "$hairline"}
+  # ---- kicker + 标题 ----
+  - elementId: kicker
+    elementType: text
+    bounds: [48, 60, 300, 14]
+    content:
+      style: "$kicker"
+      wrap: false
+      align: [left, middle]
+      text: 03 · 架构总览
+  - elementId: page-title
+    elementType: text
+    bounds: [48, 80, 700, 34]
+    content:
+      style: "$pageTitle"
+      wrap: false
+      align: [left, middle]
+      text: 五层架构——Python 是默认且权威的运行时
+  # ---- L1 Client Layer ----
+  - elementId: layer-1
+    elementType: shape
+    bounds: [48, 132, 652, 56]
+    shapeName: rect
+    fill: {type: solid, color: "$panel"}
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: layer-1-name
+    elementType: text
+    bounds: [64, 150, 166, 20]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      lineHeight: 1.35
+      align: [left, middle]
+      text: L1 · Client Layer
+  - elementId: layer-1-content
+    elementType: text
+    bounds: [246, 140, 438, 40]
+    content:
+      fontSize: 11
+      color: "$ink"
+      fontFamily: MiSans
+      lineHeight: 1.4
+      align: [left, middle]
+      text: Web / PWA · Desktop WebView · Android APK · OpenAI SDK /v1 · MCP /mcp · A2A /a2a
+  - elementId: arrow-1
+    elementType: line
+    bounds: [369, 188, 2, 21]
+    viewBox: [2, 21]
+    points: "1,0 1,21"
+    curve: sharp
+    arrow: [null, arrow]
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: arrow-1-label
+    elementType: text
+    bounds: [384, 191, 300, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: HTTP · NDJSON · SSE · JSON-RPC 2.0
+  # ---- L2 Python Runtime ----
+  - elementId: layer-2
+    elementType: shape
+    bounds: [48, 209, 652, 50]
+    shapeName: rect
+    fill: {type: solid, color: "$softCool"}
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: layer-2-name
+    elementType: text
+    bounds: [64, 217, 166, 34]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      lineHeight: 1.35
+      align: [left, middle]
+      text: L2 · Python Runtime · FastAPI / ASGI
+  - elementId: layer-2-content
+    elementType: text
+    bounds: [246, 226, 438, 16]
+    content:
+      fontSize: 11
+      color: "$ink"
+      fontFamily: MiSans
+      lineHeight: 1.4
+      align: [left, middle]
+      text: 本地 token 鉴权 · HTTP / SSE 流式 · 凭据 · MCP 传输会话 · 工具执行 · 持久化
+  - elementId: arrow-2
+    elementType: line
+    bounds: [369, 259, 2, 21]
+    viewBox: [2, 21]
+    points: "1,0 1,21"
+    curve: sharp
+    arrow: [null, arrow]
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: arrow-2-label
+    elementType: text
+    bounds: [384, 262, 300, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 内部组件调用 · Python 拥有
+  # ---- L3 核心运行时组件 ----
+  - elementId: layer-3
+    elementType: shape
+    bounds: [48, 280, 652, 78]
+    shapeName: rect
+    fill: {type: solid, color: "$panel"}
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: layer-3-name
+    elementType: text
+    bounds: [64, 309, 166, 20]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      lineHeight: 1.35
+      align: [left, middle]
+      text: L3 · 核心运行时组件
+  - elementId: layer-3-content
+    elementType: text
+    bounds: [246, 288, 214, 62]
+    content:
+      fontSize: 11
+      color: "$ink"
+      fontFamily: MiSans
+      lineHeight: 1.35
+      align: [left, middle]
+      text: |
+        <p>LLM Gateway：路由 · 上下文 · 调度 · 预算 · 语义缓存</p>
+        <p>Agent DAG + A2A：Planner → 并行 → Critic → Synthesizer</p>
+  - elementId: rust-box
+    elementType: shape
+    bounds: [476, 288, 208, 62]
+    shapeName: rect
+    border: {style: dash, width: 1, color: "$structure"}
+  - elementId: rust-box-text
+    elementType: text
+    bounds: [484, 292, 192, 54]
+    content:
+      fontSize: 10
+      fontFamily: MiSans
+      lineHeight: 1.35
+      align: [left, middle]
+      text: |
+        <p><span style="color:$structure"><strong>可选 Rust Sidecar（默认禁用）</strong></span></p>
+        <p><span style="color:$gray">5 个确定性委托</span></p>
+        <p><span style="color:$gray">超时 / 分歧即回退 Python</span></p>
+  - elementId: arrow-3
+    elementType: line
+    bounds: [369, 358, 2, 21]
+    viewBox: [2, 21]
+    points: "1,0 1,21"
+    curve: sharp
+    arrow: [null, arrow]
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: arrow-3-label
+    elementType: text
+    bounds: [384, 361, 300, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: SQLite · 本地读写
+  # ---- L4 Local Data & Observability ----
+  - elementId: layer-4
+    elementType: shape
+    bounds: [48, 379, 652, 50]
+    shapeName: rect
+    fill: {type: solid, color: "$softCool"}
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: layer-4-name
+    elementType: text
+    bounds: [64, 387, 166, 34]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      lineHeight: 1.35
+      align: [left, middle]
+      text: L4 · Local Data & Observability
+  - elementId: layer-4-content
+    elementType: text
+    bounds: [246, 396, 438, 16]
+    content:
+      fontSize: 11
+      color: "$ink"
+      fontFamily: MiSans
+      lineHeight: 1.4
+      align: [left, middle]
+      text: SQLite 向量 RAG · 长期记忆 · 语义缓存 · Trace / Span · 预算账本
+  - elementId: arrow-4
+    elementType: line
+    bounds: [369, 429, 2, 21]
+    viewBox: [2, 21]
+    points: "1,0 1,21"
+    curve: sharp
+    arrow: [null, arrow]
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: arrow-4-label
+    elementType: text
+    bounds: [384, 432, 300, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 显式出站调用 · HTTPS
+  # ---- L5 显式外部调用 ----
+  - elementId: layer-5
+    elementType: shape
+    bounds: [48, 450, 652, 50]
+    shapeName: rect
+    fill: {type: solid, color: "$panel"}
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: layer-5-name
+    elementType: text
+    bounds: [64, 467, 166, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      lineHeight: 1.35
+      align: [left, middle]
+      text: L5 · 显式外部调用
+  - elementId: layer-5-content
+    elementType: text
+    bounds: [246, 467, 438, 16]
+    content:
+      fontSize: 11
+      color: "$ink"
+      fontFamily: MiSans
+      lineHeight: 1.4
+      align: [left, middle]
+      text: DeepSeek API · Tavily Search · Ollama 端侧推理（llama-cpp / MLC）
+  # ---- 右栏：金句侧注 + 图例 ----
+  - elementId: quote-bar
+    elementType: shape
+    bounds: [720, 136, 3, 58]
+    shapeName: rect
+    fill: {type: solid, color: "$accent"}
+  - elementId: quote-text
+    elementType: text
+    bounds: [734, 134, 178, 66]
+    content:
+      fontFamily: 思源宋体
+      fontSize: 14
+      color: "$accent"
+      lineHeight: 1.55
+      align: [left, top]
+      text: 「Rust 不读文件、不写索引、不持凭据、不执行工具。」
+  - elementId: quote-note
+    elementType: text
+    bounds: [734, 208, 178, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: Python fallback 全程可用
+  - elementId: legend-title
+    elementType: text
+    bounds: [720, 244, 100, 14]
+    content:
+      fontSize: 10
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 图例
+  - elementId: legend-line-solid
+    elementType: line
+    bounds: [720, 273, 40, 2]
+    viewBox: [40, 2]
+    points: "0,1 40,1"
+    curve: sharp
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: legend-label-solid
+    elementType: text
+    bounds: [770, 267, 142, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 实线 = 数据流
+  - elementId: legend-line-dash
+    elementType: line
+    bounds: [720, 301, 40, 2]
+    viewBox: [40, 2]
+    points: "0,1 40,1"
+    curve: sharp
+    border: {style: dash, width: 1, color: "$structure"}
+  - elementId: legend-label-dash
+    elementType: text
+    bounds: [770, 295, 142, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 虚线 = 可选委托

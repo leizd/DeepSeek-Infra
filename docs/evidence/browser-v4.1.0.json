@@ -1,0 +1,58 @@
+{
+  "version": "4.1.0",
+  "commit": "1e423dfe",
+  "generatedAt": "2026-07-19T06:14:52Z",
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "browserSessionCreate": "PASS",
+    "readPage": "PASS",
+    "screenshot": "PASS",
+    "extractLinks": "PASS",
+    "unsafeActionBlocked": "PASS",
+    "confirmationRequired": "PASS",
+    "snapshotToMedia": "PASS",
+    "snapshotToRag": "PASS",
+    "auditLog": "PASS",
+    "redactSecrets": "PASS",
+    "repeatedClose": "PASS",
+    "sessionExpired": "PASS",
+    "downloadLimit": "PASS"
+  },
+  "details": {
+    "runtimeRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-browser-smoke-n6zodlvx",
+    "fixtures": "D:\\deepseek\\tests\\fixtures\\browser",
+    "projectId": "proj-d43f67ec6d9d",
+    "browserSessionId": "browser_305ed526d2787786",
+    "mediaIds": [
+      "media_b1b429f71d30256d",
+      "media_9a86ce18365ed3b3"
+    ],
+    "localRag": {
+      "enabled": true,
+      "backend": "sqlite_vec",
+      "databasePath": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-browser-smoke-n6zodlvx\\.local-rag\\rag.sqlite3",
+      "sqliteVecAvailable": false,
+      "embeddingProvider": "hash",
+      "embeddingProviderRequested": "hash",
+      "embeddingDimensions": 64,
+      "embeddingModelPathConfigured": false,
+      "tokenizerPathConfigured": false,
+      "hybridSearch": "bm25+vector",
+      "bm25K1": 1.5,
+      "bm25B": 0.75,
+      "incremental": true,
+      "lastError": "sqlite-vec unavailable: No module named 'sqlite_vec'",
+      "indexedItems": 2,
+      "indexedFiles": 0,
+      "indexedMedia": 2,
+      "indexedMemories": 0,
+      "vectorTableAvailable": false
+    },
+    "auditLog": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-browser-smoke-n6zodlvx\\.browser-audit\\audit.jsonl"
+  }
+}

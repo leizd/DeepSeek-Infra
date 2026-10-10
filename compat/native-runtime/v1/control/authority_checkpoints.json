@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "checkpoints": [
+    {
+      "schema": "control-authority-v1",
+      "authorityGeneration": 1,
+      "previousDigest": null,
+      "createdAt": "2026-09-03T00:00:00Z",
+      "controlSchemaVersion": 8,
+      "policies": [
+        {
+          "policyId": "策略-一",
+          "policyRevision": 1,
+          "enabled": true,
+          "label": "<edge>& line"
+        }
+      ],
+      "targets": [
+        {
+          "targetId": "minio-a",
+          "kind": "s3",
+          "endpoint": "https://minio.example",
+          "credentialReference": "vault://prod"
+        }
+      ],
+      "receiptMutationGenerations": {
+        "receipt-b": 2,
+        "receipt-a": 1
+      },
+      "promotionEpochs": {
+        "slot": 3
+      },
+      "drainGenerations": {},
+      "placementGenerations": {
+        "zone": 4
+      },
+      "controlBootEpoch": 7,
+      "mutationId": "mutation-α",
+      "payloadDigest": "d3b91f69f52037c6d23df4cd4556f8bfdd6c51ef1b5002d3b29d302e884584ae",
+      "digest": "1199eca9ddd13e8057afb2acb79efa73ea5db6c595b89c28cda9994251072dd5"
+    },
+    {
+      "schema": "control-authority-v1",
+      "authorityGeneration": 2,
+      "previousDigest": "1199eca9ddd13e8057afb2acb79efa73ea5db6c595b89c28cda9994251072dd5",
+      "createdAt": "2026-09-03T00:00:01Z",
+      "controlSchemaVersion": 8,
+      "policies": [
+        {
+          "policyId": "p2",
+          "policyRevision": 2
+        }
+      ],
+      "targets": [],
+      "receiptMutationGenerations": {},
+      "promotionEpochs": {},
+      "drainGenerations": {},
+      "placementGenerations": {},
+      "controlBootEpoch": 8,
+      "mutationId": "mutation-2",
+      "payloadDigest": "7d17eeec366b4215708dc3f3d691496d273dfe9a59198a77b1fecd69c8347a2b",
+      "digest": "c29399fa62bb96b73ee050b72183ab9fdc788aa8470e6f98302091402c5b3b5a"
+    }
+  ]
+}

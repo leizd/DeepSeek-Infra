@@ -1,0 +1,257 @@
+pageType: content
+background:
+  type: solid
+  color: "$bg"
+elements:
+  # ===== 顶部文档轴 =====
+  - elementId: header-doc-axis
+    elementType: text
+    bounds: [48, 16, 300, 14]
+    content:
+      style: "$headerMeta"
+      wrap: false
+      align: [left, middle]
+      text: DEEPSEEK INFRA
+  - elementId: header-page-tag
+    elementType: text
+    bounds: [612, 16, 300, 14]
+    content:
+      fontSize: 10
+      color: "$gray"
+      fontFamily: MiSans
+      wrap: false
+      align: [right, middle]
+      text: 质量 · 08 / 13
+  - elementId: header-rule
+    elementType: line
+    bounds: [48, 44, 864, 2]
+    viewBox: [864, 2]
+    points: "0,1 864,1"
+    border: {style: solid, width: 1, color: "$hairline"}
+
+  # ===== kicker + 页标题 =====
+  - elementId: kicker
+    elementType: text
+    bounds: [48, 60, 400, 16]
+    content:
+      style: "$kicker"
+      wrap: false
+      align: [left, middle]
+      text: 07 · 质量证据
+  - elementId: page-title
+    elementType: text
+    bounds: [48, 80, 700, 36]
+    content:
+      style: "$pageTitle"
+      wrap: false
+      align: [left, middle]
+      text: 离线评测，全是 CI 硬门禁
+
+  # ===== 左区：离线基准横向 bar 图 =====
+  - elementId: bench-chart-caption
+    elementType: text
+    bounds: [48, 134, 300, 16]
+    content:
+      fontSize: 11
+      bold: true
+      color: "$structure"
+      fontFamily: MiSans
+      wrap: false
+      align: [left, middle]
+      text: 离线基准实测（ms）
+  # 形状构建的横向条形图（线性刻度 2.15px/ms，零线 x=200）
+  - elementId: bench-zero-line
+    elementType: line
+    bounds: [200, 158, 1, 224]
+    viewBox: [1, 224]
+    points: "0,0 0,224"
+    border: {style: solid, width: 1, color: "$structure"}
+  - elementId: bench-label-1
+    elementType: text
+    bounds: [48, 164, 144, 16]
+    content: {fontSize: 11, color: "$ink", fontFamily: MiSans, wrap: false, align: [right, middle], text: 语义缓存 lookup}
+  - elementId: bench-bar-1
+    elementType: shape
+    bounds: [200, 164, 18, 16]
+    shapeName: rect
+    fill: {type: solid, color: "$structure"}
+  - elementId: bench-val-1
+    elementType: text
+    bounds: [226, 164, 70, 16]
+    content: {fontSize: 11, bold: true, color: "$ink", fontFamily: MiSans, wrap: false, align: [left, middle], text: 8.4 ms}
+  - elementId: bench-label-2
+    elementType: text
+    bounds: [48, 212, 144, 16]
+    content: {fontSize: 11, color: "$ink", fontFamily: MiSans, wrap: false, align: [right, middle], text: 语义缓存 store}
+  - elementId: bench-bar-2
+    elementType: shape
+    bounds: [200, 212, 39, 16]
+    shapeName: rect
+    fill: {type: solid, color: "$structure"}
+  - elementId: bench-val-2
+    elementType: text
+    bounds: [247, 212, 70, 16]
+    content: {fontSize: 11, bold: true, color: "$ink", fontFamily: MiSans, wrap: false, align: [left, middle], text: 17.9 ms}
+  - elementId: bench-label-3
+    elementType: text
+    bounds: [48, 260, 144, 16]
+    content: {fontSize: 11, color: "$ink", fontFamily: MiSans, wrap: false, align: [right, middle], text: RAG 检索 avg}
+  - elementId: bench-bar-3
+    elementType: shape
+    bounds: [200, 260, 44, 16]
+    shapeName: rect
+    fill: {type: solid, color: "$accent"}
+  - elementId: bench-val-3
+    elementType: text
+    bounds: [252, 260, 70, 16]
+    content: {fontSize: 11, bold: true, color: "$accent", fontFamily: MiSans, wrap: false, align: [left, middle], text: 20.2 ms}
+  - elementId: bench-label-4
+    elementType: text
+    bounds: [48, 308, 144, 16]
+    content: {fontSize: 11, color: "$ink", fontFamily: MiSans, wrap: false, align: [right, middle], text: RAG 检索 P95}
+  - elementId: bench-bar-4
+    elementType: shape
+    bounds: [200, 308, 47, 16]
+    shapeName: rect
+    fill: {type: solid, color: "$structure"}
+  - elementId: bench-val-4
+    elementType: text
+    bounds: [255, 308, 70, 16]
+    content: {fontSize: 11, bold: true, color: "$ink", fontFamily: MiSans, wrap: false, align: [left, middle], text: 21.7 ms}
+  - elementId: bench-label-5
+    elementType: text
+    bounds: [48, 356, 144, 16]
+    content: {fontSize: 11, color: "$ink", fontFamily: MiSans, wrap: false, align: [right, middle], text: 索引 95 chunks}
+  - elementId: bench-bar-5
+    elementType: shape
+    bounds: [200, 356, 280, 16]
+    shapeName: rect
+    fill: {type: solid, color: "$structure"}
+  - elementId: bench-val-5
+    elementType: text
+    bounds: [488, 356, 70, 16]
+    content: {fontSize: 11, bold: true, color: "$ink", fontFamily: MiSans, wrap: false, align: [left, middle], text: 130 ms}
+  - elementId: bench-chart-note
+    elementType: text
+    bounds: [48, 424, 492, 30]
+    content:
+      style: "$note"
+      align: [left, top]
+      text: |
+        Windows 11 · Python 3.13 · i7-13700H · 16GB · SSD · runs 10 · warmup 2（README Benchmarks）
+
+  # ===== 右区：质量门禁清单 =====
+  - elementId: gate-1
+    elementType: text
+    bounds: [580, 136, 332, 34]
+    content:
+      fontSize: 11
+      color: "$structure"
+      fontFamily: MiSans
+      align: [left, top]
+      text: |
+        <p><span style="font-size:12px;color:$ink"><strong>RAG 检索质量</strong></span></p>
+        <p style="margin-top:4px">Recall@5 <span style="color:$accent"><strong>1.000</strong></span> · MRR <span style="color:$accent">0.917</span> · Citation Accuracy 0.8333</p>
+  - elementId: gate-sep-1
+    elementType: line
+    bounds: [580, 176, 332, 1]
+    viewBox: [332, 1]
+    points: "0,0 332,0"
+    border: {style: solid, width: 1, color: "$hairline"}
+  - elementId: gate-2
+    elementType: text
+    bounds: [580, 182, 332, 34]
+    content:
+      fontSize: 11
+      color: "$structure"
+      fontFamily: MiSans
+      align: [left, top]
+      text: |
+        <p><span style="font-size:12px;color:$ink"><strong>语义缓存</strong></span></p>
+        <p style="margin-top:4px">精确命中 <span style="color:$accent"><strong>1.00</strong></span> / 无关误命中 <span style="color:$accent"><strong>0.00</strong></span></p>
+  - elementId: gate-sep-2
+    elementType: line
+    bounds: [580, 222, 332, 1]
+    viewBox: [332, 1]
+    points: "0,0 332,0"
+    border: {style: solid, width: 1, color: "$hairline"}
+  - elementId: gate-3
+    elementType: text
+    bounds: [580, 228, 332, 34]
+    content:
+      fontSize: 11
+      color: "$structure"
+      fontFamily: MiSans
+      align: [left, top]
+      text: |
+        <p><span style="font-size:12px;color:$ink"><strong>Tool Policy Engine</strong></span></p>
+        <p style="margin-top:4px">26 个攻防用例 Pass Rate <span style="color:$accent"><strong>1.000</strong></span></p>
+  - elementId: gate-sep-3
+    elementType: line
+    bounds: [580, 268, 332, 1]
+    viewBox: [332, 1]
+    points: "0,0 332,0"
+    border: {style: solid, width: 1, color: "$hairline"}
+  - elementId: gate-4
+    elementType: text
+    bounds: [580, 274, 332, 50]
+    content:
+      fontSize: 11
+      color: "$structure"
+      fontFamily: MiSans
+      align: [left, top]
+      text: |
+        <p><span style="font-size:12px;color:$ink"><strong>注入对抗门禁</strong></span></p>
+        <p style="margin-top:4px">blockRate ≥ 0.85 · FPR ≤ 0.10 · bypassRate ≤ 0.15</p>
+        <p style="margin-top:2px">安全语料实测 <span style="color:$ok"><strong>1.0 / 0.0 / 0.0（全 PASS）</strong></span></p>
+  - elementId: gate-sep-4
+    elementType: line
+    bounds: [580, 330, 332, 1]
+    viewBox: [332, 1]
+    points: "0,0 332,0"
+    border: {style: solid, width: 1, color: "$hairline"}
+  - elementId: gate-5
+    elementType: text
+    bounds: [580, 336, 332, 34]
+    content:
+      fontSize: 11
+      color: "$structure"
+      fontFamily: MiSans
+      align: [left, top]
+      text: |
+        <p><span style="font-size:12px;color:$ink"><strong>Agent Eval 门禁</strong></span></p>
+        <p style="margin-top:4px">Tool Call ≥ 0.90 · Success ≥ 0.85 · Regression ≥ 0.90</p>
+  - elementId: gate-sep-5
+    elementType: line
+    bounds: [580, 376, 332, 1]
+    viewBox: [332, 1]
+    points: "0,0 332,0"
+    border: {style: solid, width: 1, color: "$hairline"}
+  - elementId: gate-6
+    elementType: text
+    bounds: [580, 382, 332, 44]
+    content:
+      fontSize: 11
+      color: "$structure"
+      fontFamily: MiSans
+      align: [left, top]
+      text: |
+        <p><span style="font-size:12px;color:$ink"><strong>覆盖率硬门禁</strong></span></p>
+        <p style="margin-top:4px">Python 95%（实测 <span style="color:$accent"><strong>95.2521%</strong></span>，2599 tests）/ Rust 80%</p>
+  - elementId: gate-sep-6
+    elementType: line
+    bounds: [580, 432, 332, 1]
+    viewBox: [332, 1]
+    points: "0,0 332,0"
+    border: {style: solid, width: 1, color: "$hairline"}
+  - elementId: gate-7
+    elementType: text
+    bounds: [580, 438, 332, 46]
+    content:
+      fontSize: 11
+      color: "$structure"
+      fontFamily: MiSans
+      align: [left, top]
+      text: |
+        <p><span style="font-size:12px;color:$ink"><strong>CI 检查链</strong></span></p>
+        <p style="margin-top:4px">ruff → mypy → pytest --cov → npm check → 安全扫描 → Docker gate</p>

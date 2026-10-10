@@ -1,0 +1,32 @@
+{
+  "skillId": "skill_code_review",
+  "name": "Code Review Skill",
+  "description": "Review local code for bugs, regressions, missing tests, and security risks.",
+  "version": "1.0.0",
+  "systemPrompt": "You are a code review Skill. Lead with concrete findings, cite files or snippets, prioritize correctness and missing tests, and avoid broad style churn.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "scope": {"type": "string"},
+      "focus": {"type": "string"}
+    },
+    "required": ["scope"],
+    "additionalProperties": true
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "content": {"type": "string"},
+      "mode": {"type": "string"}
+    },
+    "required": ["content"],
+    "additionalProperties": true
+  },
+  "allowedTools": ["search_files", "read_file_chunk", "python_eval"],
+  "memoryPolicy": {"scope": "project", "read": true, "write": false},
+  "artifactPolicy": {"autoSave": true, "types": ["md"]},
+  "projectBinding": {"enabled": true},
+  "exampleInputs": [
+    {"scope": "deepseek_infra/infra/tool_runtime", "focus": "permission boundaries and tests"}
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "skillId": "skill_study_tutor",
+  "name": "Study Tutor Skill",
+  "description": "Explain study questions, worked examples, mistakes, and revision notes.",
+  "version": "1.0.0",
+  "systemPrompt": "You are a study tutor Skill. Explain step by step, diagnose misconceptions, and save concise review notes when useful.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "question": {"type": "string"},
+      "subject": {"type": "string"},
+      "level": {"type": "string"}
+    },
+    "required": ["question"],
+    "additionalProperties": true
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "content": {"type": "string"},
+      "mode": {"type": "string"}
+    },
+    "required": ["content"],
+    "additionalProperties": true
+  },
+  "allowedTools": ["search_files", "python_eval", "create_mindmap", "create_document"],
+  "memoryPolicy": {"scope": "project", "read": true, "write": false},
+  "artifactPolicy": {"autoSave": true, "types": ["md", "svg", "docx"]},
+  "projectBinding": {"enabled": true},
+  "exampleInputs": [
+    {"question": "Explain why quicksort average complexity is O(n log n).", "subject": "Data structures", "level": "exam prep"}
+  ]
+}

@@ -1,0 +1,122 @@
+{
+  "schemaVersion": "a2a-third-party-peer-evidence.v1",
+  "version": "2.6.3",
+  "commit": "f4b69f9",
+  "generatedAt": "2026-06-30T02:29:38Z",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "gitSha": "f4b69f9",
+  "gitDirty": true,
+  "peer": {
+    "name": "A2A Interop Peer",
+    "url": "http://127.0.0.1:57749",
+    "endpoint": "http://127.0.0.1:57749/a2a/agents/interop-peer",
+    "type": "third-party",
+    "protocolVersion": "0.3.0"
+  },
+  "peerType": "third-party",
+  "checks": {
+    "agentCard": "PASS",
+    "messageSend": "PASS",
+    "messageStream": "PASS",
+    "tasksGet": "PASS",
+    "tasksCancel": "PASS",
+    "tasksList": "PASS",
+    "artifactChunks": "PASS",
+    "sseFinalEvent": "PASS"
+  },
+  "status": "PASS",
+  "steps": [
+    {
+      "name": "a2a.agent_card",
+      "status": "pass",
+      "detail": "name=A2A Interop Peer protocol=0.3.0",
+      "data": {
+        "skills": 1,
+        "endpoint": "http://127.0.0.1:57749/a2a/agents/interop-peer"
+      }
+    },
+    {
+      "name": "a2a.message_send",
+      "status": "pass",
+      "detail": "task=task_2cde3cf0769a8a7375db896f state=working",
+      "data": {
+        "taskId": "task_2cde3cf0769a8a7375db896f"
+      }
+    },
+    {
+      "name": "a2a.tasks_get",
+      "status": "pass",
+      "detail": "task=task_2cde3cf0769a8a7375db896f",
+      "data": {
+        "taskId": "task_2cde3cf0769a8a7375db896f"
+      }
+    },
+    {
+      "name": "a2a.message_stream",
+      "status": "pass",
+      "detail": "events=5 final=completed",
+      "data": {
+        "events": 5,
+        "artifactUpdates": 2,
+        "chunkIndices": [
+          0,
+          1
+        ],
+        "taskId": "task_dc6afcd31b1ea9e59fa1dac4",
+        "finalState": "completed"
+      }
+    },
+    {
+      "name": "a2a.artifact_chunks",
+      "status": "pass",
+      "detail": "chunks=2 indices=[0, 1]",
+      "data": {
+        "events": 5,
+        "artifactUpdates": 2,
+        "chunkIndices": [
+          0,
+          1
+        ],
+        "taskId": "task_dc6afcd31b1ea9e59fa1dac4",
+        "finalState": "completed"
+      }
+    },
+    {
+      "name": "a2a.sse_final_event",
+      "status": "pass",
+      "detail": "final=completed",
+      "data": {
+        "events": 5,
+        "artifactUpdates": 2,
+        "chunkIndices": [
+          0,
+          1
+        ],
+        "taskId": "task_dc6afcd31b1ea9e59fa1dac4",
+        "finalState": "completed"
+      }
+    },
+    {
+      "name": "a2a.tasks_list",
+      "status": "pass",
+      "detail": "2 tasks listed",
+      "data": {
+        "taskCount": 2,
+        "taskId": "task_2cde3cf0769a8a7375db896f"
+      }
+    },
+    {
+      "name": "a2a.tasks_cancel",
+      "status": "pass",
+      "detail": "task=task_117a0753bdba385ea4051fc5 state=canceling",
+      "data": {
+        "taskId": "task_117a0753bdba385ea4051fc5",
+        "state": "canceling"
+      }
+    }
+  ]
+}

@@ -1,0 +1,157 @@
+"""Media Library routes for multimodal workspace objects."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+
+from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.infra.media import ingestion, library, schema
+from deepseek_infra.infra.tool_runtime.ocr_trace import (
+    OcrTrace,
+    derive_ocr_correlation_id,
+    new_ocr_correlation_id,
+    sanitize_correlation_id,
+)
+from deepseek_infra.web.http_utils import json_response, read_json_body, require_api_auth, truthy
+
+REQUEST_ID_HEADER = "X-DeepSeek-Request-ID"
+
+
+@dataclass(frozen=True)
+class MediaRouteDeps:
+    read_multipart_form: Callable[..., Any]
+
+
+def create_media_router(deps: MediaRouteDeps) -> APIRouter:
+    router = APIRouter()
+
+    @router.post("/api/media")
+    async def api_media_create(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        request_id = _incoming_correlation_id(request)
+        content_type = request.headers.get("Content-Type", "")
+        if "multipart/form-data" in content_type:
+            fields, uploads = await deps.read_multipart_form(request)
+            if not uploads:
+                raise AppError("No media uploaded", code=ErrorCode.INVALID_PAYLOAD)
+            if len(uploads) > schema.MAX_MEDIA_UPLOADS_PER_REQUEST:
+                raise AppError("Too many media uploads in one request", code=ErrorCode.UPLOAD_TOO_LARGE, status=413)
+            project_id = request.query_params.get("projectId", "") or _first(fields, "projectId")
+            process = truthy(request.query_params.get("process", "")) or _truthy_field(fields, "process")
+            ocr_enabled = _truthy_field(fields, "ocrEnabled")
+            ocr_api_key = _first(fields, "apiKey")
+            media_items = []
+            for ordinal, upload in enumerate(uploads, start=1):
+                data = upload.get("data")
+                schema.validate_media_upload_size(len(data) if isinstance(data, bytes) else 0)
+                schema.validate_media_mime_type(upload.get("content_type"), filename=str(upload.get("filename") or ""))
+                title = _first(fields, "title") if len(uploads) == 1 else ""
+                media_items.append(
+                    ingestion.ingest_upload(
+                        upload,
+                        project_id=project_id,
+                        title=title,
+                        source={"kind": "upload", "refId": str(upload.get("filename") or "")},
+                        process=process,
+                        ocr_enabled=ocr_enabled,
+                        ocr_api_key=ocr_api_key,
+                        ocr_trace=_upload_trace(request_id, ordinal=ordinal, total=len(uploads)),
+                    )
+                )
+            return json_response(
+                {"ok": True, "media": media_items[0], "mediaItems": media_items},
+                headers={REQUEST_ID_HEADER: request_id},
+            )
+
+        payload = await read_json_body(request, max_bytes=16_000_000)
+        media = ingestion.register_from_payload(payload, ocr_trace=OcrTrace(correlation_id=request_id))
+        return json_response({"ok": True, "media": media}, headers={REQUEST_ID_HEADER: request_id})
+
+    @router.get("/api/media")
+    async def api_media_list(request: Request) -> JSONResponse:
+        require_api_auth(request)
+        return json_response(
+            {
+                "ok": True,
+                "media": library.list_media(
+                    project_id=str(request.query_params.get("projectId") or ""),
+                    media_type=str(request.query_params.get("type") or ""),
+                    status=str(request.query_params.get("status") or ""),
+                ),
+            }
+        )
+
+    @router.get("/api/media/{media_id}")
+    async def api_media_get(request: Request, media_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response({"ok": True, "media": library.get_media(media_id)})
+
+    @router.patch("/api/media/{media_id}")
+    async def api_media_patch(request: Request, media_id: str) -> JSONResponse:
+        require_api_auth(request)
+        payload = await read_json_body(request, max_bytes=1_000_000)
+        if not isinstance(payload, dict):
+            raise AppError("Media patch must be an object", code=ErrorCode.INVALID_PAYLOAD)
+        patch: dict[str, Any] = {key: payload[key] for key in ("title", "projectId", "metadata") if key in payload}
+        if not patch:
+            raise AppError("Media patch did not include any supported fields", code=ErrorCode.INVALID_PAYLOAD)
+        return json_response({"ok": True, "media": library.update_media(media_id, patch)})
+
+    @router.post("/api/media/{media_id}/process")
+    async def api_media_process(request: Request, media_id: str) -> JSONResponse:
+        require_api_auth(request)
+        request_id = _incoming_correlation_id(request)
+        payload = await read_json_body(request) if int(request.headers.get("Content-Length") or "0") > 0 else {}
+        return json_response(
+            ingestion.process_media(
+                media_id,
+                ocr_enabled=truthy(payload.get("ocrEnabled")) if "ocrEnabled" in payload else None,
+                ocr_api_key=str(payload.get("apiKey") or ""),
+                force=truthy(request.query_params.get("force", "")) or truthy(payload.get("force")),
+                ocr_trace=OcrTrace(correlation_id=request_id),
+            ),
+            headers={REQUEST_ID_HEADER: request_id},
+        )
+
+    @router.get("/api/media/{media_id}/segments")
+    async def api_media_segments(request: Request, media_id: str) -> JSONResponse:
+        require_api_auth(request)
+        library.get_media(media_id)
+        return json_response({"ok": True, "segments": library.list_segments(media_id)})
+
+    @router.delete("/api/media/{media_id}")
+    async def api_media_delete(request: Request, media_id: str) -> JSONResponse:
+        require_api_auth(request)
+        return json_response({"ok": True, "deleted": library.delete_media(media_id)})
+
+    return router
+
+
+def _first(fields: dict[str, list[str]], name: str) -> str:
+    values = fields.get(name) or []
+    return str(values[0] if values else "").strip()
+
+
+def _truthy_field(fields: dict[str, list[str]], name: str) -> bool:
+    return any(truthy(value) for value in fields.get(name, []))
+
+
+def _incoming_correlation_id(request: Request) -> str:
+    """Reuse a caller-supplied request identifier when it is log-safe.
+
+    The header name matches the one the optional Rust sidecar echoes outbound, so
+    one identifier can span both planes. An unusable or absent value falls back to
+    a system-generated id rather than being echoed back unvalidated.
+    """
+    return sanitize_correlation_id(request.headers.get(REQUEST_ID_HEADER, "")) or new_ocr_correlation_id()
+
+
+def _upload_trace(request_id: str, *, ordinal: int, total: int) -> OcrTrace:
+    if total <= 1:
+        return OcrTrace(correlation_id=request_id)
+    return OcrTrace(correlation_id=derive_ocr_correlation_id(request_id, ordinal))

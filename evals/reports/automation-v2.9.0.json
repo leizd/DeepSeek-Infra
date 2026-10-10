@@ -1,0 +1,59 @@
+{
+  "version": "2.9.0",
+  "commit": "43261d6a7671",
+  "generatedAt": "2026-07-04T07:45:27+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "automationCreate": "PASS",
+    "manualRun": "PASS",
+    "scheduleTrigger": "PASS",
+    "eventTrigger": "PASS",
+    "runSkillAction": "PASS",
+    "browserReadOnlyAction": "PASS",
+    "projectExportAction": "PASS",
+    "unsafeActionBlocked": "PASS",
+    "runHistory": "PASS",
+    "traceLinked": "PASS",
+    "artifactOutput": "PASS",
+    "templates": "PASS",
+    "evidenceGenerated": "PASS",
+    "goldenCasesLoaded": "PASS",
+    "coreActionsCovered": "PASS"
+  },
+  "details": {
+    "runtimeRoot": "C:\\Users\\12393\\AppData\\Local\\Temp\\deepseek-automation-eval-d6uzbogw",
+    "fixtures": "D:\\deepseek\\tests\\fixtures\\automation",
+    "projectId": "proj-75127ff1060e",
+    "automationIds": [
+      "auto_c8d85350adb70b41",
+      "auto_c578a9f18fa1e3b5",
+      "auto_3f09313f447e6594",
+      "auto_7367c0ab154428d0",
+      "auto_41567d5e0985d71a",
+      "auto_990d4d8c440ff57f",
+      "auto_c5cf721937bf1fc5"
+    ],
+    "runIds": [
+      "auto_run_d1e9f39c84449f86",
+      "auto_run_df2441b084fe04b1",
+      "auto_run_2127b71bb87066dc",
+      "auto_run_28921a6f230ab3c4",
+      "auto_run_18040f4635ff6c1d",
+      "auto_run_7a4837a037e5847a",
+      "auto_run_5b95b5e1dcecbf01"
+    ],
+    "savedItemCount": 3,
+    "artifactCount": 1,
+    "caseCount": 3
+  },
+  "summary": {
+    "caseCount": 3,
+    "passCount": 15,
+    "checkCount": 15
+  }
+}

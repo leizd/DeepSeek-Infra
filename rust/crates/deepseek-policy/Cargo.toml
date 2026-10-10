@@ -1,0 +1,45 @@
+[package]
+name = "deepseek-policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deepseek-core = { path = "../deepseek-core" }
+deepseek-protocol = { path = "../deepseek-protocol" }
+futures-util.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+# The sealed frontend mirror seals each generation with the same streaming age
+# implementation the production `backup-crypto` CLI runs, and proves the result with
+# the same decrypt round trip. Linking the library is what keeps the two from
+# drifting; a second copy of the crypto would be a second thing to get wrong.
+backup-crypto = { path = "../backup-crypto" }
+blake2 = { workspace = true }
+base64 = { workspace = true }
+chrono = "=0.4.45"
+fancy-regex = "=0.19.2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = { workspace = true }
+sha2 = { workspace = true }
+sha1 = { workspace = true }
+md-5 = { workspace = true }
+rusqlite = { workspace = true }
+idna = "1.1.0"
+encoding_rs = "=0.8.35"
+# DOCX is a ZIP of WordprocessingML. `zip` reads stored and deflate entries;
+# `quick-xml` walks the same elements `xml.etree` does. Both are new because
+# nothing already in the lockfile can do either.
+zip = { version = "=0.6.6", default-features = false, features = ["deflate"] }
+quick-xml = "=0.31.0"
+# Selectable PDF text. `lopdf` reads classic and compressed xref tables and
+# inflates content streams; the text walk then follows pypdf's plain mode.
+lopdf = "=0.36.0"
+# Inspect pdftoppm's rendered PNG pixels before accepting OCR text from a blank PDF page.
+png = "=0.18.1"
+
+[dev-dependencies]
+tempfile = "3.27.0"

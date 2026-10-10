@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeepSeek Infra 前端重构 · 方案预览</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    background:#0e0e11;color:#e8e8ec;
+    font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:56px 24px;
+  }
+  h1{font-size:26px;font-weight:700;letter-spacing:-.02em}
+  .sub{margin-top:10px;color:#8a8a94;font-size:13px;letter-spacing:.04em}
+  .cards{
+    margin-top:46px;display:grid;gap:18px;width:min(900px,100%);
+    grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
+  }
+  a.card{
+    display:block;text-decoration:none;color:inherit;
+    background:#141419;border:1px solid #232330;border-radius:12px;
+    padding:24px 22px 20px;transition:border-color .15s ease,transform .15s ease;
+  }
+  a.card:hover{border-color:#3d3d4d;transform:translateY(-2px)}
+  .name{font-size:16px;font-weight:700}
+  .concept{margin-top:9px;font-size:12.5px;color:#9a9aa4;line-height:1.7;min-height:42px}
+  .dots{display:flex;gap:8px;margin-top:18px}
+  .dots span{width:14px;height:14px;border-radius:50%;border:1px solid rgba(255,255,255,.14)}
+  .go{margin-top:18px;font-size:12px;color:#c4c4cf;letter-spacing:.06em}
+  a.card:hover .go{color:#ffffff}
+</style>
+</head>
+<body>
+  <h1>DeepSeek Infra 前端重构 · 方案预览</h1>
+  <p class="sub">三套视觉方案静态演示 · 未改动正式前端</p>
+
+  <div class="cards">
+    <a class="card" href="scheme-a.html">
+      <div class="name">方案 A · 信号台</div>
+      <p class="concept">终端运维气质。只有"活的"元素才发光,信号绿只给连接态、激活态与完成勾。</p>
+      <div class="dots">
+        <span style="background:#171a1b"></span>
+        <span style="background:#1b2023"></span>
+        <span style="background:#d8e2ed"></span>
+        <span style="background:#00ff66"></span>
+        <span style="background:#ff4040"></span>
+      </div>
+      <div class="go">进入演示 →</div>
+    </a>
+
+    <a class="card" href="scheme-b.html">
+      <div class="name">方案 B · 仪器</div>
+      <p class="concept">精密仪器气质。整屏唯一彩色是信号橙,只出现在关键操作与激活态,其余纯灰阶。</p>
+      <div class="dots">
+        <span style="background:#000000"></span>
+        <span style="background:#1a1a1a"></span>
+        <span style="background:#666666"></span>
+        <span style="background:#ffffff"></span>
+        <span style="background:#ff5900"></span>
+      </div>
+      <div class="go">进入演示 →</div>
+    </a>
+
+    <a class="card" href="scheme-c.html">
+      <div class="name">方案 C · 稿纸</div>
+      <p class="concept">编辑部研究稿气质。直角零圆角、1px 发丝线代替卡片与阴影,对话即文档。</p>
+      <div class="dots">
+        <span style="background:#f8f7f2"></span>
+        <span style="background:#252525"></span>
+        <span style="background:#1d6151"></span>
+        <span style="background:#fde460"></span>
+        <span style="background:#e3ffcc"></span>
+      </div>
+      <div class="go">进入演示 →</div>
+    </a>
+  </div>
+</body>
+</html>

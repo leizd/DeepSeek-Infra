@@ -1,0 +1,7 @@
+# Optional edge inference backends for local GGUF / device-side models.
+# Install this only on machines that will run local models.
+llama-cpp-python>=0.3.0,<1
+
+# MLC-LLM support is wired behind EDGE_INFERENCE_PROVIDER=mlc, but distribution
+# varies by platform. Install the package recommended by the official MLC docs
+# for your device/GPU stack when enabling that provider.

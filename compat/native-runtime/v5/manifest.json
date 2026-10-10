@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze the provider and process semantics behind the five federation runtime Evidence claims.",
+  "normalization": "LF-normalized SHA-256 of public inventory/fixture bytes",
+  "corpora": [
+    {
+      "id": "federation-runtime-e2e-proof-semantics-v5",
+      "path": "compat/native-runtime/v5/evidence/federation_runtime_proof_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen two-Fleet four-MinIO runtime proof semantics",
+      "sha256": "071813443030d3444ee779269849f57e86de440a6d4e36d2e76326ba56e17fcc"
+    }
+  ]
+}

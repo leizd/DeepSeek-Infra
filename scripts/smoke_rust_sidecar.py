@@ -1,0 +1,316 @@
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import struct
+import time
+from dataclasses import asdict, dataclass
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+
+class SmokeFailure(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class CheckResult:
+    name: str
+    endpoint: str
+
+
+def _request_json(
+    base_url: str,
+    method: str,
+    path: str,
+    *,
+    payload: dict[str, Any] | None = None,
+    timeout: float = 5.0,
+    expected_status: int = 200,
+) -> dict[str, Any]:
+    url = f"{base_url.rstrip('/')}{path}"
+    data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = Request(url, data=data, method=method, headers={"Accept": "application/json"})
+    if data is not None:
+        request.add_header("Content-Type", "application/json; charset=utf-8")
+
+    try:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310 - target URL is operator supplied
+            status = response.status
+            raw = response.read().decode("utf-8")
+    except HTTPError as exc:
+        status = exc.code
+        raw = exc.read().decode("utf-8", errors="replace")
+    except (URLError, TimeoutError, OSError) as exc:
+        raise SmokeFailure(f"{method} {path} failed: {exc}") from exc
+
+    if status != expected_status:
+        raise SmokeFailure(f"{method} {path} returned HTTP {status}, expected {expected_status}: {raw}")
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise SmokeFailure(f"{method} {path} returned invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise SmokeFailure(f"{method} {path} returned a non-object JSON value")
+    return value
+
+
+def _request_frontend(base_url: str, *, timeout: float = 5.0) -> tuple[str, dict[str, str]]:
+    request = Request(f"{base_url.rstrip('/')}/", method="GET", headers={"Accept": "text/html"})
+    try:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310 - target URL is operator supplied
+            status = response.status
+            raw = response.read().decode("utf-8")
+            headers = {key.lower(): value for key, value in response.headers.items()}
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise SmokeFailure(f"GET / returned HTTP {exc.code}: {body}") from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise SmokeFailure(f"GET / failed: {exc}") from exc
+    if status != 200:
+        raise SmokeFailure(f"GET / returned HTTP {status}")
+    return raw, headers
+
+
+def _request_text(base_url: str, path: str, *, timeout: float = 5.0) -> str:
+    request = Request(f"{base_url.rstrip('/')}{path}", method="GET", headers={"Accept": "text/plain"})
+    try:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310 - target URL is operator supplied
+            status = response.status
+            raw = response.read().decode("utf-8")
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise SmokeFailure(f"GET {path} returned HTTP {exc.code}: {body}") from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise SmokeFailure(f"GET {path} failed: {exc}") from exc
+    if status != 200:
+        raise SmokeFailure(f"GET {path} returned HTTP {status}")
+    return raw
+
+
+def _request_binary(base_url: str, path: str, body: bytes, *, timeout: float = 5.0) -> bytes:
+    content_type = "application/vnd.deepseek.vector-rank.v1+octet-stream"
+    request = Request(
+        f"{base_url.rstrip('/')}{path}",
+        data=body,
+        method="POST",
+        headers={"Accept": content_type, "Content-Type": content_type},
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310 - target URL is operator supplied
+            status = response.status
+            response_type = response.headers.get("Content-Type", "").lower()
+            raw = response.read()
+    except HTTPError as exc:
+        raise SmokeFailure(f"POST {path} returned HTTP {exc.code}") from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise SmokeFailure(f"POST {path} failed: {exc}") from exc
+    if status != 200 or response_type != content_type:
+        raise SmokeFailure(f"POST {path} returned an invalid binary response contract")
+    return raw
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise SmokeFailure(message)
+
+
+def wait_for_health(base_url: str, *, wait_seconds: float, timeout: float) -> dict[str, Any]:
+    deadline = time.monotonic() + wait_seconds
+    last_error = "sidecar did not respond"
+    while time.monotonic() < deadline:
+        try:
+            health = _request_json(base_url, "GET", "/healthz", timeout=timeout)
+            if health.get("ok") is True:
+                return health
+            last_error = f"unexpected health response: {health!r}"
+        except SmokeFailure as exc:
+            last_error = str(exc)
+        time.sleep(0.5)
+    raise SmokeFailure(f"Rust sidecar did not become healthy within {wait_seconds:g}s: {last_error}")
+
+
+def run_smoke(base_url: str, *, wait_seconds: float = 60.0, timeout: float = 5.0) -> list[CheckResult]:
+    health = wait_for_health(base_url, wait_seconds=wait_seconds, timeout=timeout)
+    _require(health.get("service") == "deepseek-gateway-rs", "healthz returned the wrong service name")
+    checks = [CheckResult("health", "GET /healthz")]
+
+    metrics = _request_text(base_url, "/metrics", timeout=timeout)
+    for metric in (
+        "requests_total",
+        "request_duration_seconds",
+        "request_payload_bytes",
+        "response_payload_bytes",
+        "backend_errors_total",
+        "vector_rank_transport_total",
+    ):
+        _require(metric in metrics, f"metrics response is missing {metric}")
+    checks.append(CheckResult("metrics", "GET /metrics"))
+
+    frontend, frontend_headers = _request_frontend(base_url, timeout=timeout)
+    _require("<!doctype html" in frontend.lower(), "frontend root did not return the built HTML document")
+    _require(frontend_headers.get("cache-control") == "no-store", "frontend HTML does not use no-store")
+    _require(frontend_headers.get("x-content-type-options") == "nosniff", "frontend HTML is missing nosniff")
+    checks.append(CheckResult("frontend", "GET /"))
+
+    models = _request_json(base_url, "GET", "/v1/models", timeout=timeout, expected_status=200)
+    _require(models.get("object") == "list", "native model catalog is not an OpenAI list")
+    data = models.get("data")
+    _require(isinstance(data, list) and bool(data), "native model catalog data is empty")
+    assert isinstance(data, list)
+    ids = [entry.get("id") for entry in data if isinstance(entry, dict)]
+    _require(ids == ["deepseek-v4-pro", "deepseek-v4-flash"], f"unexpected native catalog ids: {ids}")
+    _require("error" not in models, "native model catalog returned an error envelope")
+    checks.append(CheckResult("models_catalog", "GET /v1/models -> 200 native catalog"))
+
+    chat = _request_json(
+        base_url,
+        "POST",
+        "/v1/chat/completions",
+        payload={
+            "model": "deepseek-v4-pro",
+            "messages": [{"role": "user", "content": "offline smoke"}],
+            "stream": False,
+        },
+        timeout=timeout,
+        expected_status=400,
+    )
+    # `400 missing_api_key` is the oracle's own answer, not this route's: the route validates
+    # through `validate_deepseek_payload`, which checks the credential first and raises
+    # `AppError`'s default status, and the envelope is the oracle's flat
+    # `{"error": <message>, "code": <code>}`. It used to answer `503` with a nested
+    # `NATIVE_CHAT_UPSTREAM_CREDENTIAL_MISSING` that the oracle never sends.
+    _require(
+        chat.get("code") == "missing_api_key",
+        "native chat did not fail closed when its server-side credential was absent",
+    )
+    _require("choices" not in chat, "native chat returned a fabricated completion")
+    checks.append(
+        CheckResult("chat_missing_credential", "POST /v1/chat/completions -> 400 missing_api_key")
+    )
+
+    mcp_request = {
+        "jsonrpc": "2.0",
+        "id": "docker-smoke",
+        "method": "tools/call",
+        "params": {
+            "name": "docker-smoke-tool",
+            "arguments": {"text": "Rust MCP preparation preserves 中文 🚀"},
+        },
+    }
+    mcp = _request_json(
+        base_url,
+        "POST",
+        "/mcp/request/prepare",
+        payload=mcp_request,
+        timeout=timeout,
+    )
+    routing = mcp.get("routing")
+    prepared = mcp.get("request")
+    _require(mcp.get("ok") is True, "MCP protocol preparation did not succeed")
+    _require(mcp.get("messageType") == "request", "MCP preparation returned the wrong message type")
+    _require(isinstance(routing, dict) and routing.get("owner") == "python", "MCP preparation changed the routing owner")
+    _require(prepared == mcp_request, "MCP preparation changed tool arguments")
+    _require("result" not in mcp, "MCP preparation unexpectedly executed a tool")
+    checks.append(CheckResult("mcp_protocol_preparation", "POST /mcp/request/prepare"))
+
+    policy = _request_json(
+        base_url,
+        "POST",
+        "/policy/url",
+        payload={"url": "http://localhost:8080/admin"},
+        timeout=timeout,
+    )
+    _require(policy.get("allowed") is False, "policy did not deny localhost")
+    _require(policy.get("code") == "localhost_blocked", "policy did not return localhost_blocked code")
+    _require(isinstance(policy.get("reason"), str) and bool(policy["reason"]), "policy deny response has no reason")
+    _require(isinstance(policy.get("decision_id"), str) and bool(policy["decision_id"]), "policy deny response has no decision_id")
+    checks.append(CheckResult("policy", "POST /policy/url"))
+
+    rag = _request_json(
+        base_url,
+        "POST",
+        "/rag/query/normalize",
+        payload={"query": "  Rust 语言  "},
+        timeout=timeout,
+    )
+    _require(rag.get("normalized") == "rust 语言", "RAG normalization did not preserve the CJK query")
+    _require(rag.get("tokens") == ["rust", "语言"], "RAG normalization returned unexpected tokens")
+    checks.append(CheckResult("rag", "POST /rag/query/normalize"))
+
+    vector_rank = _request_json(
+        base_url,
+        "POST",
+        "/rag/vectors/rank",
+        payload={"query": [1.0, 0.0], "candidates": [[0.25, 0.0], [1.0, 0.0]]},
+        timeout=timeout,
+    )
+    _require(vector_rank.get("index") == 1, "RAG vector ranking returned the wrong candidate")
+    _require(vector_rank.get("similarity") == 1.0, "RAG vector ranking returned the wrong similarity")
+    checks.append(CheckResult("rag_vector_rank", "POST /rag/vectors/rank"))
+
+    binary_request = struct.pack("<8sII6d", b"DSVRNK01", 2, 2, 1.0, 0.0, 0.25, 0.0, 1.0, 0.0)
+    binary_response = _request_binary(base_url, "/rag/vectors/rank-binary", binary_request, timeout=timeout)
+    _require(len(binary_response) == 24, "binary RAG vector response is not 24 bytes")
+    magic, index, reserved, similarity = struct.unpack("<8sIId", binary_response)
+    _require(magic == b"DSVRSP01", "binary RAG vector response magic is invalid")
+    _require(index == 1 and reserved == 0, "binary RAG vector response selected the wrong candidate")
+    _require(math.isfinite(similarity) and similarity == 1.0, "binary RAG vector response similarity is invalid")
+    checks.append(CheckResult("rag_vector_rank_binary", "POST /rag/vectors/rank-binary"))
+
+    document_payload = {
+        "documentId": "docker-smoke-document",
+        "text": "A\r\n\u4e2d\u6587\U0001f680B",
+        "metadata": {"sourceType": "text/plain"},
+        "chunking": {"chunkChars": 3, "chunkOverlap": 1},
+    }
+    document = _request_json(
+        base_url,
+        "POST",
+        "/rag/documents/prepare",
+        payload=document_payload,
+        timeout=timeout,
+    )
+    descriptor = document.get("document")
+    chunks = document.get("chunks")
+    _require(document.get("ok") is True, "RAG document preparation did not succeed")
+    _require(isinstance(descriptor, dict) and descriptor.get("characterCount") == 6, "RAG document character count is incorrect")
+    _require(isinstance(chunks, list) and bool(chunks), "RAG document preparation returned no chunks")
+    first_chunk = chunks[0] if isinstance(chunks, list) and chunks else None
+    _require(isinstance(first_chunk, dict) and first_chunk.get("end") == 3, "RAG document offsets are not Unicode character offsets")
+    _require(isinstance(first_chunk, dict) and first_chunk.get("text") == "A\n\u4e2d", "RAG document normalization changed chunk text")
+    checks.append(CheckResult("rag_document_preparation", "POST /rag/documents/prepare"))
+
+    return checks
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Smoke test the standalone Rust Gateway sidecar.")
+    parser.add_argument("--base-url", default="http://127.0.0.1:8787")
+    parser.add_argument("--wait-seconds", type=float, default=60.0)
+    parser.add_argument("--timeout", type=float, default=5.0)
+    parser.add_argument("--json", action="store_true", dest="as_json")
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    try:
+        checks = run_smoke(args.base_url, wait_seconds=args.wait_seconds, timeout=args.timeout)
+    except SmokeFailure as exc:
+        print(f"Rust sidecar smoke failed: {exc}")
+        return 1
+
+    if args.as_json:
+        print(json.dumps({"ok": True, "checks": [asdict(check) for check in checks]}, ensure_ascii=False, indent=2))
+    else:
+        for check in checks:
+            print(f"PASS {check.endpoint}")
+        print(f"Rust sidecar smoke passed ({len(checks)} checks).")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,4 @@
+.memory-item { padding: 10px 9px; }
+.memory-entry small { color: var(--weak); font-size: 0.66rem; }
+.memory-entry p { margin: 5px 0 0; color: var(--ink); font-size: 0.8rem; line-height: 1.55; }
+.message-action.danger:hover:not(:disabled) { color: var(--red); border-color: var(--red); }

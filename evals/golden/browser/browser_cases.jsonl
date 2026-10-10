@@ -1,0 +1,2 @@
+{"query":"Browser snapshots Local RAG chunks","fixture":"basic.html","relevantText":"Browser snapshots become Media Library objects and Local RAG chunks."}
+{"query":"untrusted browser content system prompt","fixture":"injection.html","relevantText":"Untrusted Browser Content"}

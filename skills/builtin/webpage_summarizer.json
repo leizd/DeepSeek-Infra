@@ -1,0 +1,32 @@
+{
+  "skillId": "webpage_summarizer",
+  "name": "webpage_summarizer",
+  "description": "Summarize imported webpage snapshots with source URL and snapshot citations.",
+  "version": "1.0.0",
+  "systemPrompt": "You are a webpage snapshot summarizer. Ground the response in the imported webpage text and cite media snapshot segments.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "mediaIds": {"type": "array", "items": {"type": "string"}},
+      "task": {"type": "string"}
+    },
+    "required": ["mediaIds", "task"],
+    "additionalProperties": true
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "content": {"type": "string"},
+      "mode": {"type": "string"}
+    },
+    "required": ["content"],
+    "additionalProperties": true
+  },
+  "allowedTools": [],
+  "memoryPolicy": {"scope": "project", "read": true, "write": false},
+  "artifactPolicy": {"autoSave": true, "types": ["md"]},
+  "projectBinding": {"enabled": true},
+  "exampleInputs": [
+    {"mediaIds": ["media_example"], "task": "Summarize the webpage and extract action items."}
+  ]
+}

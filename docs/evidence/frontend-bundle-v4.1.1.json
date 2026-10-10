@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "version": "4.1.1",
+  "sourceRevision": "4c576181e26dda621b39bdec7e5d1e205df9a737",
+  "sourceTreeDirty": true,
+  "releaseRevision": null,
+  "ciRevision": null,
+  "generatedAt": "2026-07-19T08:57:53.424667+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "initialEntry": "static/ui/assets/index-CueWuT1L.js",
+  "initialBytes": 372017,
+  "tracePageChunk": "static/ui/assets/TracePage-BdTFuPxC.js",
+  "tracePageBytes": 760,
+  "traceDetailChunk": "static/ui/assets/TraceDetailView-BcyZ9jqs.js",
+  "traceDetailBytes": 10900,
+  "traceCss": [
+    "assets/TraceDetailView-9c1yjKWd.css"
+  ],
+  "checks": {
+    "tracePageDynamicEntry": "PASS",
+    "traceDetailDynamicEntry": "PASS",
+    "traceImplementationDeferred": "PASS",
+    "traceCssDeferred": "PASS"
+  }
+}

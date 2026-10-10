@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze recovery-copy Receipt/Commit authentication: missing/authenticated/conflicting/corrupt, raw receipt SHA-256 binding, schema 1-4, identity compares, committed commitHash recomputation, and parent-copy checks. This does not read MinIO or move payload bytes.",
+  "normalization": "LF-normalized SHA-256 of public validator fixture bytes",
+  "corpora": [
+    {
+      "id": "recovery-authenticate-semantics-v26",
+      "path": "compat/native-runtime/v26/transfer/recovery_authenticate_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen recovery-copy Receipt/Commit authentication status machine",
+      "sha256": "5f8e64ea94469f40711cdcc69c57b13dca1926b0a08a2b47e05ce0a092487ede"
+    }
+  ]
+}

@@ -1,0 +1,435 @@
+{
+  "version": "4.0.0",
+  "commit": "481772d7ced4",
+  "generatedAt": "2026-07-15T11:07:12+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "securityReview": "PASS",
+    "promptInjectionScan": "PASS",
+    "secretExfiltrationScan": "PASS",
+    "securityManifestExport": "PASS",
+    "toolGrantRiskDiff": "PASS",
+    "trustSkill": "PASS",
+    "tamperDetection": "PASS",
+    "runSecurityMetadata": "PASS",
+    "blockSkill": "PASS",
+    "securityPackReview": "PASS",
+    "securitySummary": "PASS",
+    "securityApiActions": "PASS",
+    "securityUi": "PASS",
+    "securityAssets": "PASS",
+    "securityJsSyntax": "PASS",
+    "ciReleaseGate": "PASS"
+  },
+  "details": {
+    "review": {
+      "schemaVersion": "skill-security-review.v1",
+      "reviewId": "sec-skill-skill_security_smoke_risky-369fe0ba5671c4d0",
+      "kind": "skill",
+      "skillId": "skill_security_smoke_risky",
+      "name": "Security Smoke Risky Skill",
+      "version": "1.0.0",
+      "builtin": false,
+      "trustLevel": "high-risk",
+      "reviewStatus": "high-risk",
+      "riskScore": 100,
+      "allowedToolsRisk": [
+        {
+          "tool": "fetch_url",
+          "risk": "network",
+          "riskScore": 42,
+          "network": true,
+          "filesystem": false,
+          "sensitive": false,
+          "requiresApproval": false
+        },
+        {
+          "tool": "forget_memory",
+          "risk": "requires approval",
+          "riskScore": 44,
+          "network": false,
+          "filesystem": false,
+          "sensitive": false,
+          "requiresApproval": true
+        },
+        {
+          "tool": "python_eval",
+          "risk": "medium",
+          "riskScore": 12,
+          "network": false,
+          "filesystem": false,
+          "sensitive": false,
+          "requiresApproval": false
+        },
+        {
+          "tool": "search_files",
+          "risk": "filesystem",
+          "riskScore": 10,
+          "network": false,
+          "filesystem": true,
+          "sensitive": false,
+          "requiresApproval": false
+        }
+      ],
+      "requiresApprovalCount": 1,
+      "capabilities": [
+        "assistant",
+        "code",
+        "research"
+      ],
+      "findings": [
+        {
+          "type": "prompt_injection",
+          "field": "systemPrompt",
+          "severity": "high",
+          "message": "Suspicious instruction in systemPrompt.",
+          "suggestion": "Remove instructions that try to override upstream system or developer guidance."
+        },
+        {
+          "type": "secret_exfiltration",
+          "field": "systemPrompt",
+          "severity": "high",
+          "message": "Suspicious instruction in systemPrompt.",
+          "suggestion": "Remove instructions that request exposing credentials, tokens, or private files."
+        },
+        {
+          "type": "secret_file_access",
+          "field": "systemPrompt",
+          "severity": "high",
+          "message": "Suspicious instruction in systemPrompt.",
+          "suggestion": "Do not instruct Skills to read credential stores or secret-bearing files."
+        },
+        {
+          "type": "network_exfiltration",
+          "field": "systemPrompt",
+          "severity": "medium",
+          "message": "Suspicious instruction in systemPrompt.",
+          "suggestion": "Keep network usage explicit and bounded to the Skill allowedTools policy."
+        },
+        {
+          "type": "high_risk_tool",
+          "field": "allowedTools.fetch_url",
+          "severity": "high",
+          "message": "Tool fetch_url is network.",
+          "suggestion": "Review the tool grant and require approval before trusting the Skill."
+        },
+        {
+          "type": "high_risk_tool",
+          "field": "allowedTools.forget_memory",
+          "severity": "high",
+          "message": "Tool forget_memory is requires approval.",
+          "suggestion": "Review the tool grant and require approval before trusting the Skill."
+        }
+      ],
+      "manifest": {
+        "schemaVersion": "skill-security-manifest.v1",
+        "kind": "skill",
+        "skillId": "skill_security_smoke_risky",
+        "version": "1.0.0",
+        "contentHash": "sha256:369fe0ba5671c4d0edb7af6001810a6bd47652ca5f65865d024d2723378ce8f1",
+        "schemaHash": "sha256:42ce6ae0ed1a5afd6f95bd854ddd4f357680527d5beac785087f771ae7910f51",
+        "promptHash": "sha256:4ec53d6d9ebd8905dcbe37a081b7fe4135c97b0154e3818ef6cdce2943636c94",
+        "toolGrantHash": "sha256:c15dff3f6d484d1ada54c37f4f852af4d26b4bd9304088743c975c9091312d2f",
+        "packId": "",
+        "reviewStatus": "",
+        "signed": false
+      },
+      "lastSecurityReviewAt": "2026-07-15T11:07:11+00:00",
+      "signed": false
+    },
+    "toolGrantDiff": {
+      "added": [
+        "fetch_url",
+        "forget_memory"
+      ],
+      "removed": []
+    },
+    "tamperReview": {
+      "schemaVersion": "skill-security-review.v1",
+      "reviewId": "sec-skill-skill_security_smoke_safe-6a1dbfec434057e2",
+      "kind": "skill",
+      "skillId": "skill_security_smoke_safe",
+      "name": "Security Smoke Safe Skill",
+      "version": "1.0.0",
+      "builtin": false,
+      "trustLevel": "high-risk",
+      "reviewStatus": "high-risk",
+      "riskScore": 100,
+      "allowedToolsRisk": [
+        {
+          "tool": "search_files",
+          "risk": "filesystem",
+          "riskScore": 10,
+          "network": false,
+          "filesystem": true,
+          "sensitive": false,
+          "requiresApproval": false
+        }
+      ],
+      "requiresApprovalCount": 0,
+      "capabilities": [
+        "code"
+      ],
+      "findings": [
+        {
+          "type": "prompt_injection",
+          "field": "systemPrompt",
+          "severity": "high",
+          "message": "Suspicious instruction in systemPrompt.",
+          "suggestion": "Remove instructions that try to override upstream system or developer guidance."
+        },
+        {
+          "type": "secret_exfiltration",
+          "field": "systemPrompt",
+          "severity": "high",
+          "message": "Suspicious instruction in systemPrompt.",
+          "suggestion": "Remove instructions that request exposing credentials, tokens, or private files."
+        },
+        {
+          "type": "tamper_detected",
+          "field": "contentHash",
+          "severity": "high",
+          "message": "Trusted Skill content hash changed since trust was granted.",
+          "suggestion": "Review the diff and trust the new content only after validation."
+        }
+      ],
+      "manifest": {
+        "schemaVersion": "skill-security-manifest.v1",
+        "kind": "skill",
+        "skillId": "skill_security_smoke_safe",
+        "version": "1.0.0",
+        "contentHash": "sha256:6a1dbfec434057e2c74ff32f51d534b24edb3432b2c2fd848c218bf99c1eb4dc",
+        "schemaHash": "sha256:42ce6ae0ed1a5afd6f95bd854ddd4f357680527d5beac785087f771ae7910f51",
+        "promptHash": "sha256:5542770742e6ea8ee0e03ee7e70d2d9330aaca8776e127d61278369b28c492d3",
+        "toolGrantHash": "sha256:d0d5ab39c517d3d0a4d8a7f5f1855604779d628f3c3e6c5710345288317a7027",
+        "packId": "",
+        "reviewStatus": "",
+        "signed": false
+      },
+      "lastSecurityReviewAt": "2026-07-15T11:07:11+00:00",
+      "signed": false
+    },
+    "blockedRuns": [
+      {
+        "schemaVersion": "skill-run.v1",
+        "skillRunId": "run-b4931165a590b425",
+        "skillId": "skill_security_smoke_run",
+        "skillVersion": "1.0.0",
+        "packId": "",
+        "projectId": "",
+        "status": "failed",
+        "startedAt": "2026-07-15T11:07:11+00:00",
+        "completedAt": "2026-07-15T11:07:11+00:00",
+        "latencyMs": 0,
+        "offline": true,
+        "model": "",
+        "inputSummary": "topic=blocked",
+        "outputSummary": "",
+        "artifactIds": [],
+        "savedItemIds": [],
+        "artifactCount": 0,
+        "savedItemCount": 0,
+        "errorReason": "High-risk Skill requires explicit securityApproved=true before running",
+        "failureCategory": "security_review_blocked",
+        "diagnosticSuggestion": "Review Skill trust status, suspicious prompt findings, and allowedTools risk before approving the run.",
+        "traceId": "",
+        "links": {},
+        "redacted": false,
+        "runSecurityLevel": "high-risk",
+        "securityReviewId": "sec-skill-skill_security_smoke_run-c692b232de7e9151",
+        "trustedAtRun": false,
+        "toolGrantHashAtRun": "sha256:c15dff3f6d484d1ada54c37f4f852af4d26b4bd9304088743c975c9091312d2f",
+        "blockedReason": "High-risk Skill requires explicit securityApproved=true before running",
+        "approvalRequired": true
+      }
+    ],
+    "approvedRun": {
+      "schemaVersion": "skill-run.v1",
+      "skillRunId": "run-583ee954d0b4a126",
+      "skillId": "skill_security_smoke_run",
+      "skillVersion": "1.0.0",
+      "packId": "",
+      "projectId": "",
+      "status": "completed",
+      "startedAt": "2026-07-15T11:07:11+00:00",
+      "completedAt": "2026-07-15T11:07:11+00:00",
+      "latencyMs": 0,
+      "offline": true,
+      "model": "",
+      "inputSummary": "topic=approved",
+      "outputSummary": "# approved Skill: Security Smoke Risky Skill (skill_security_smoke_run) ## Result Offline Skill run completed. The registry, schema, permissions, project binding, and artifact policy were exercised.",
+      "artifactIds": [
+        "art-f7617435ced995c7"
+      ],
+      "savedItemIds": [],
+      "artifactCount": 1,
+      "savedItemCount": 0,
+      "errorReason": "",
+      "failureCategory": "",
+      "diagnosticSuggestion": "",
+      "traceId": "8693eeae682f4b2fa821a04304323c9a",
+      "links": {
+        "trace": "/api/traces/8693eeae682f4b2fa821a04304323c9a"
+      },
+      "redacted": false,
+      "runSecurityLevel": "high-risk",
+      "securityReviewId": "sec-skill-skill_security_smoke_run-c692b232de7e9151",
+      "trustedAtRun": false,
+      "toolGrantHashAtRun": "sha256:c15dff3f6d484d1ada54c37f4f852af4d26b4bd9304088743c975c9091312d2f",
+      "blockedReason": "",
+      "approvalRequired": true
+    },
+    "packReview": {
+      "schemaVersion": "skill-security-review.v1",
+      "reviewId": "sec-pack-pack_security_smoke-e0ad013ffbf4399a",
+      "kind": "pack",
+      "packId": "pack_security_smoke",
+      "name": "Security Smoke Pack",
+      "version": "1.0.0",
+      "builtin": false,
+      "trustLevel": "high-risk",
+      "reviewStatus": "high-risk",
+      "riskScore": 100,
+      "allowedToolsRisk": [
+        {
+          "tool": "fetch_url",
+          "risk": "network",
+          "riskScore": 42,
+          "network": true,
+          "filesystem": false,
+          "sensitive": false,
+          "requiresApproval": false
+        },
+        {
+          "tool": "forget_memory",
+          "risk": "requires approval",
+          "riskScore": 44,
+          "network": false,
+          "filesystem": false,
+          "sensitive": false,
+          "requiresApproval": true
+        },
+        {
+          "tool": "python_eval",
+          "risk": "medium",
+          "riskScore": 12,
+          "network": false,
+          "filesystem": false,
+          "sensitive": false,
+          "requiresApproval": false
+        },
+        {
+          "tool": "search_files",
+          "risk": "filesystem",
+          "riskScore": 10,
+          "network": false,
+          "filesystem": true,
+          "sensitive": false,
+          "requiresApproval": false
+        }
+      ],
+      "requiresApprovalCount": 1,
+      "capabilities": [
+        "assistant",
+        "code",
+        "research"
+      ],
+      "findings": [
+        {
+          "type": "prompt_injection",
+          "field": "skills.skill_security_smoke_pack.systemPrompt",
+          "severity": "high",
+          "message": "Suspicious instruction in systemPrompt.",
+          "suggestion": "Remove instructions that try to override upstream system or developer guidance."
+        },
+        {
+          "type": "secret_exfiltration",
+          "field": "skills.skill_security_smoke_pack.systemPrompt",
+          "severity": "high",
+          "message": "Suspicious instruction in systemPrompt.",
+          "suggestion": "Remove instructions that request exposing credentials, tokens, or private files."
+        },
+        {
+          "type": "secret_file_access",
+          "field": "skills.skill_security_smoke_pack.systemPrompt",
+          "severity": "high",
+          "message": "Suspicious instruction in systemPrompt.",
+          "suggestion": "Do not instruct Skills to read credential stores or secret-bearing files."
+        },
+        {
+          "type": "high_risk_tool",
+          "field": "skills.skill_security_smoke_pack.allowedTools.fetch_url",
+          "severity": "high",
+          "message": "Tool fetch_url is network.",
+          "suggestion": "Review the tool grant and require approval before trusting the Skill."
+        },
+        {
+          "type": "high_risk_tool",
+          "field": "skills.skill_security_smoke_pack.allowedTools.forget_memory",
+          "severity": "high",
+          "message": "Tool forget_memory is requires approval.",
+          "suggestion": "Review the tool grant and require approval before trusting the Skill."
+        },
+        {
+          "type": "high_risk_tool",
+          "field": "allowedTools.fetch_url",
+          "severity": "high",
+          "message": "Tool fetch_url is network.",
+          "suggestion": "Review the tool grant and require approval before trusting the Skill."
+        },
+        {
+          "type": "high_risk_tool",
+          "field": "allowedTools.forget_memory",
+          "severity": "high",
+          "message": "Tool forget_memory is requires approval.",
+          "suggestion": "Review the tool grant and require approval before trusting the Skill."
+        }
+      ],
+      "skillReviews": [
+        {
+          "skillId": "skill_security_smoke_pack",
+          "reviewStatus": "high-risk",
+          "riskScore": 100,
+          "findingCount": 6,
+          "toolGrantHash": "sha256:c15dff3f6d484d1ada54c37f4f852af4d26b4bd9304088743c975c9091312d2f"
+        }
+      ],
+      "manifest": {
+        "schemaVersion": "skill-security-manifest.v1",
+        "kind": "pack",
+        "packId": "pack_security_smoke",
+        "version": "1.0.0",
+        "contentHash": "sha256:e0ad013ffbf4399a4808635d496dd91dd36e5a4b6f0c9dfdb8352b3a58c17efd",
+        "schemaHash": "sha256:adbce66fb8353fcb42dbd999d25d703b13ea0728a6a971d623fb47900e4a5db7",
+        "promptHash": "sha256:959ef24a960475c02e2188ff35b00b2a8c184f3ceb4aca30d461b46d862c69e2",
+        "toolGrantHash": "sha256:c15dff3f6d484d1ada54c37f4f852af4d26b4bd9304088743c975c9091312d2f",
+        "reviewStatus": "",
+        "signed": false
+      },
+      "lastSecurityReviewAt": "2026-07-15T11:07:11+00:00",
+      "signed": false
+    },
+    "summary": {
+      "skillCount": 22,
+      "packCount": 5,
+      "trusted": 22,
+      "needsReview": 0,
+      "highRisk": 4,
+      "blocked": 1,
+      "averageRiskScore": 65.41
+    },
+    "assets": [
+      "docs/assets/skill-security-review.png",
+      "docs/assets/skill-trust-store.png"
+    ],
+    "securityJsSyntax": {
+      "returnCode": 0,
+      "stderr": ""
+    }
+  }
+}

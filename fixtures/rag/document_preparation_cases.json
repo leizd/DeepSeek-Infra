@@ -1,0 +1,2316 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "name": "basic_single_character",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_short_text",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "short text",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_exact_chunk_size",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijkl",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_chunk_size_plus_one",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklm",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_two_full_chunks",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnopqrstuvwx",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_last_short_chunk",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnop",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_long_no_newline",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_two_paragraphs",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "first paragraph\n\nsecond paragraph",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_many_blank_lines",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "alpha\n\n\n\n\nbeta",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_leading_trailing_space",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "  alpha beta  ",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_tabs",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "alpha\tbeta\tgamma",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_crlf",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "alpha\r\nbeta\r\n",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_cr_only",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "alpha\rbeta\r",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_lf_only",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "alpha\nbeta\n",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_trailing_spaces_per_line",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "alpha   \n beta\t \n",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_nul_removed",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "alpha\u0000beta",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_paragraph_boundary_late",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "aaaaaa\n\nbbbbbbb\nccccccc",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_newline_boundary_late",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefgh\nijklmnop",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_newline_boundary_early",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "a\nbcdefghijklmnop",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_many_paragraphs",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "paragraph 0\n\nparagraph 1\n\nparagraph 2\n\nparagraph 3\n\nparagraph 4\n\nparagraph 5\n\nparagraph 6\n\nparagraph 7\n\nparagraph 8\n\nparagraph 9\n\nparagraph 10\n\nparagraph 11\n\nparagraph 12\n\nparagraph 13\n\nparagraph 14\n\nparagraph 15\n\nparagraph 16\n\nparagraph 17\n\nparagraph 18\n\nparagraph 19",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_numeric_text",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "1234567890",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_punctuation",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "alpha, beta; gamma: delta!",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_markdown",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "# Heading\n\n- one\n- two\n",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_json_text",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "{\"hello\":\"world\"}",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "basic_code_text",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "def hello():\n    return 'world'\n",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "overlap_zero",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 8,
+          "chunkOverlap": 0
+        }
+      }
+    },
+    {
+      "name": "overlap_one",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 8,
+          "chunkOverlap": 1
+        }
+      }
+    },
+    {
+      "name": "overlap_two",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 8,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "overlap_half_minus_one",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 8,
+          "chunkOverlap": 3
+        }
+      }
+    },
+    {
+      "name": "overlap_half",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 8,
+          "chunkOverlap": 4
+        }
+      }
+    },
+    {
+      "name": "overlap_near_size",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 8,
+          "chunkOverlap": 7
+        }
+      }
+    },
+    {
+      "name": "overlap_small_zero",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 2,
+          "chunkOverlap": 0
+        }
+      }
+    },
+    {
+      "name": "overlap_small_one",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 2,
+          "chunkOverlap": 1
+        }
+      }
+    },
+    {
+      "name": "overlap_three_one",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 3,
+          "chunkOverlap": 1
+        }
+      }
+    },
+    {
+      "name": "overlap_five_four",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 5,
+          "chunkOverlap": 4
+        }
+      }
+    },
+    {
+      "name": "overlap_large_small",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 64,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "overlap_large_half",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 64,
+          "chunkOverlap": 32
+        }
+      }
+    },
+    {
+      "name": "overlap_last_chunk",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 9,
+          "chunkOverlap": 3
+        }
+      }
+    },
+    {
+      "name": "overlap_multi_chunk",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 10,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "overlap_high_overlap",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 20,
+          "chunkOverlap": 19
+        }
+      }
+    },
+    {
+      "name": "overlap_paragraph_boundary_near_size",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "aaaaaa\nbbbbbbbbbbbb",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 10,
+          "chunkOverlap": 9
+        }
+      }
+    },
+    {
+      "name": "unicode_cjk",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-cjk",
+        "text": "中文文档分块测试",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_mixed_cjk",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-mixed_cjk",
+        "text": "DeepSeek 中文 RAG preparation",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_emoji",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-emoji",
+        "text": "alpha 🚀 beta 🙂 gamma",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_non_bmp",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-non_bmp",
+        "text": "A𠀀B🧠C",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_combining",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-combining",
+        "text": "Café and école",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_fullwidth",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-fullwidth",
+        "text": "全角，标点。测试！",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_arabic",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-arabic",
+        "text": "مرحبا بالعالم",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_japanese",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-japanese",
+        "text": "日本語の文書チャンク",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_korean",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-korean",
+        "text": "한국어 문서 청크",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_multilingual",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-multilingual",
+        "text": "English 中文 日本語 한국어 العربية 🚀",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_unicode_nbsp",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-unicode_nbsp",
+        "text": "alpha beta",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_unicode_em_space",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-unicode_em_space",
+        "text": "alpha beta",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_unicode_line_separator",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-unicode_line_separator",
+        "text": "alpha beta",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_unicode_paragraph_separator",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-unicode_paragraph_separator",
+        "text": "alpha beta",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_zero_width_joiner",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-zero_width_joiner",
+        "text": "developer 👩‍💻 notes",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_variation_selector",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-variation_selector",
+        "text": "text ✈️ flight",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_regional_indicators",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-regional_indicators",
+        "text": "flags 🇨🇳🇺🇸",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_math",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-math",
+        "text": "∑ α β γ ∞",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_devanagari",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-devanagari",
+        "text": "हिन्दी दस्तावेज़",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "unicode_thai",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-thai",
+        "text": "เอกสารภาษาไทย",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "metadata_empty",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "metadata must not change text",
+        "metadata": {},
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "metadata_display_name",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "metadata must not change text",
+        "metadata": {
+          "displayName": "notes.txt"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "metadata_source_type",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "metadata must not change text",
+        "metadata": {
+          "sourceType": "text/plain"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "metadata_kind",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "metadata must not change text",
+        "metadata": {
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "metadata_all",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "metadata must not change text",
+        "metadata": {
+          "displayName": "notes.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "metadata_numeric",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "metadata must not change text",
+        "metadata": {
+          "displayName": 7,
+          "sourceType": "text/plain"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "metadata_boolean",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "metadata must not change text",
+        "metadata": {
+          "displayName": true,
+          "sourceType": "text/plain"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "metadata_null",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "metadata must not change text",
+        "metadata": {
+          "displayName": null,
+          "sourceType": "text/plain"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "metadata_float",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "metadata must not change text",
+        "metadata": {
+          "displayName": 1.5,
+          "sourceType": "text/plain"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "metadata_unknown_string",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "metadata must not change text",
+        "metadata": {
+          "displayName": "x.txt",
+          "unknown": "ignored"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "metadata_unknown_number",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "metadata must not change text",
+        "metadata": {
+          "displayName": "x.txt",
+          "unknown": 9
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "metadata_unknown_object",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "metadata must not change text",
+        "metadata": {
+          "displayName": "x.txt",
+          "unknown": {
+            "nested": true
+          }
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "metadata_unknown_array",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "metadata must not change text",
+        "metadata": {
+          "displayName": "x.txt",
+          "unknown": [
+            1,
+            2,
+            3
+          ]
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "metadata_unicode_name",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "metadata must not change text",
+        "metadata": {
+          "displayName": "中文🚀.txt",
+          "sourceType": "text/plain"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "metadata_empty_strings",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "metadata must not change text",
+        "metadata": {
+          "displayName": "",
+          "sourceType": "",
+          "kind": ""
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_top_level_array",
+      "expect": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "payload": []
+    },
+    {
+      "name": "invalid_top_level_string",
+      "expect": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "payload": "text"
+    },
+    {
+      "name": "invalid_missing_document_id",
+      "expect": {
+        "ok": false,
+        "code": "invalid_document_id"
+      },
+      "payload": {
+        "text": "x",
+        "metadata": {},
+        "chunking": {
+          "chunkChars": 4,
+          "chunkOverlap": 0
+        }
+      }
+    },
+    {
+      "name": "invalid_null_document_id",
+      "expect": {
+        "ok": false,
+        "code": "invalid_document_id"
+      },
+      "payload": {
+        "documentId": null,
+        "text": "x",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_empty_document_id",
+      "expect": {
+        "ok": false,
+        "code": "invalid_document_id"
+      },
+      "payload": {
+        "documentId": "",
+        "text": "x",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_space_document_id",
+      "expect": {
+        "ok": false,
+        "code": "invalid_document_id"
+      },
+      "payload": {
+        "documentId": " doc ",
+        "text": "x",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_numeric_document_id",
+      "expect": {
+        "ok": false,
+        "code": "invalid_document_id"
+      },
+      "payload": {
+        "documentId": 7,
+        "text": "x",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_missing_text",
+      "expect": {
+        "ok": false,
+        "code": "invalid_text"
+      },
+      "payload": {
+        "documentId": "doc",
+        "metadata": {},
+        "chunking": {
+          "chunkChars": 4,
+          "chunkOverlap": 0
+        }
+      }
+    },
+    {
+      "name": "invalid_null_text",
+      "expect": {
+        "ok": false,
+        "code": "invalid_text"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": null,
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_numeric_text",
+      "expect": {
+        "ok": false,
+        "code": "invalid_text"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": 7,
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_empty_text",
+      "expect": {
+        "ok": false,
+        "code": "invalid_text"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_whitespace_text",
+      "expect": {
+        "ok": false,
+        "code": "invalid_text"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": " \t\r\n ",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_metadata_array",
+      "expect": {
+        "ok": false,
+        "code": "invalid_metadata"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": [],
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_metadata_string",
+      "expect": {
+        "ok": false,
+        "code": "invalid_metadata"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": "bad",
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_metadata_display_object",
+      "expect": {
+        "ok": false,
+        "code": "invalid_metadata"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "displayName": {
+            "x": 1
+          }
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_metadata_path",
+      "expect": {
+        "ok": false,
+        "code": "invalid_metadata"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "absolutePath": "/tmp/file"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_metadata_temp_path",
+      "expect": {
+        "ok": false,
+        "code": "invalid_metadata"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "temporaryPath": "C:/tmp"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_metadata_sensitive_field_1",
+      "expect": {
+        "ok": false,
+        "code": "invalid_metadata"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "authorization": "Bearer x"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_metadata_sensitive_field_2",
+      "expect": {
+        "ok": false,
+        "code": "invalid_metadata"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "apiKey": "secret"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_metadata_sensitive_field_3",
+      "expect": {
+        "ok": false,
+        "code": "invalid_metadata"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "token": "secret"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_metadata_raw_bytes",
+      "expect": {
+        "ok": false,
+        "code": "invalid_metadata"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "rawFileBytes": "AAAA"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        }
+      }
+    },
+    {
+      "name": "invalid_missing_chunking",
+      "expect": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "payload": {
+        "documentId": "doc",
+        "text": "x",
+        "metadata": {}
+      }
+    },
+    {
+      "name": "invalid_chunking_array",
+      "expect": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": []
+      }
+    },
+    {
+      "name": "invalid_chunk_size_zero",
+      "expect": {
+        "ok": false,
+        "code": "invalid_chunk_size"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 0,
+          "chunkOverlap": 0
+        }
+      }
+    },
+    {
+      "name": "invalid_chunk_size_negative",
+      "expect": {
+        "ok": false,
+        "code": "invalid_chunk_size"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": -1,
+          "chunkOverlap": 0
+        }
+      }
+    },
+    {
+      "name": "invalid_chunk_size_float",
+      "expect": {
+        "ok": false,
+        "code": "invalid_chunk_size"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 1.5,
+          "chunkOverlap": 0
+        }
+      }
+    },
+    {
+      "name": "invalid_chunk_size_bool",
+      "expect": {
+        "ok": false,
+        "code": "invalid_chunk_size"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": true,
+          "chunkOverlap": 0
+        }
+      }
+    },
+    {
+      "name": "invalid_overlap_negative",
+      "expect": {
+        "ok": false,
+        "code": "invalid_chunk_overlap"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 4,
+          "chunkOverlap": -1
+        }
+      }
+    },
+    {
+      "name": "invalid_overlap_float",
+      "expect": {
+        "ok": false,
+        "code": "invalid_chunk_overlap"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 4,
+          "chunkOverlap": 1.5
+        }
+      }
+    },
+    {
+      "name": "invalid_overlap_bool",
+      "expect": {
+        "ok": false,
+        "code": "invalid_chunk_overlap"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 4,
+          "chunkOverlap": true
+        }
+      }
+    },
+    {
+      "name": "invalid_overlap_equal",
+      "expect": {
+        "ok": false,
+        "code": "chunk_overlap_too_large"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdef",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 4,
+          "chunkOverlap": 4
+        }
+      }
+    },
+    {
+      "name": "invalid_overlap_larger",
+      "expect": {
+        "ok": false,
+        "code": "chunk_overlap_too_large"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "abcdef",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 4,
+          "chunkOverlap": 5
+        }
+      }
+    },
+    {
+      "name": "invalid_unknown_top_field",
+      "expect": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        },
+        "extra": true
+      }
+    },
+    {
+      "name": "invalid_top_upload_path",
+      "expect": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 12,
+          "chunkOverlap": 2
+        },
+        "uploadPath": "/tmp/file"
+      }
+    },
+    {
+      "name": "invalid_unknown_chunking_field",
+      "expect": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "payload": {
+        "documentId": "doc-base",
+        "text": "x",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 4,
+          "chunkOverlap": 0,
+          "mode": "new"
+        }
+      }
+    },
+    {
+      "name": "generated_excessive_nesting",
+      "expect": {
+        "ok": false,
+        "code": "nesting_limit_exceeded"
+      },
+      "generate": "excessive_nesting"
+    },
+    {
+      "name": "generated_document_too_large",
+      "expect": {
+        "ok": false,
+        "code": "document_too_large"
+      },
+      "generate": "document_too_large"
+    },
+    {
+      "name": "generated_request_too_large",
+      "expect": {
+        "ok": false,
+        "code": "request_too_large"
+      },
+      "generate": "request_too_large"
+    },
+    {
+      "name": "generated_invalid_json",
+      "expect": {
+        "ok": false,
+        "code": "invalid_request"
+      },
+      "generate": "invalid_json"
+    },
+    {
+      "name": "hash_stable_a",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-a",
+        "text": "stable hash text",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 1
+        }
+      }
+    },
+    {
+      "name": "hash_stable_b",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-a",
+        "text": "stable hash text",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 1
+        }
+      },
+      "assert": {
+        "sameDocumentHashAs": "hash_stable_a"
+      }
+    },
+    {
+      "name": "hash_text_changed",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-a",
+        "text": "stable hash text changed",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 1
+        }
+      },
+      "assert": {
+        "differentDocumentHashFrom": "hash_stable_a"
+      }
+    },
+    {
+      "name": "hash_document_id_changed",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-b",
+        "text": "stable hash text",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 1
+        }
+      },
+      "assert": {
+        "sameDocumentHashAs": "hash_stable_a",
+        "differentChunkIdsFrom": "hash_stable_a"
+      }
+    },
+    {
+      "name": "hash_metadata_changed",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-a",
+        "text": "stable hash text",
+        "metadata": {
+          "displayName": "other.txt"
+        },
+        "chunking": {
+          "chunkChars": 6,
+          "chunkOverlap": 1
+        }
+      },
+      "assert": {
+        "sameDocumentHashAs": "hash_stable_a"
+      }
+    },
+    {
+      "name": "hash_crlf",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-crlf",
+        "text": "alpha\r\nbeta",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 8,
+          "chunkOverlap": 1
+        }
+      }
+    },
+    {
+      "name": "hash_lf",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-crlf",
+        "text": "alpha\nbeta",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 8,
+          "chunkOverlap": 1
+        }
+      },
+      "assert": {
+        "sameDocumentHashAs": "hash_crlf"
+      }
+    },
+    {
+      "name": "hash_chunk_config_changed",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-a",
+        "text": "stable hash text",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 8,
+          "chunkOverlap": 2
+        }
+      },
+      "assert": {
+        "differentDocumentHashFrom": "hash_stable_a"
+      }
+    },
+    {
+      "name": "hash_unicode_stable_a",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-unicode",
+        "text": "中文🚀 hash",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 4,
+          "chunkOverlap": 1
+        }
+      }
+    },
+    {
+      "name": "hash_unicode_stable_b",
+      "expect": {
+        "ok": true
+      },
+      "payload": {
+        "documentId": "doc-unicode",
+        "text": "中文🚀 hash",
+        "metadata": {
+          "displayName": "fixture.txt",
+          "sourceType": "text/plain",
+          "kind": "text"
+        },
+        "chunking": {
+          "chunkChars": 4,
+          "chunkOverlap": 1
+        }
+      },
+      "assert": {
+        "sameDocumentHashAs": "hash_unicode_stable_a"
+      }
+    }
+  ]
+}

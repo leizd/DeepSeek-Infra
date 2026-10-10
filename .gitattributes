@@ -1,0 +1,8 @@
+graphify-out/graph.json merge=graphify
+/go/internal/protocol/**/*.pb.go text eol=lf
+/proto/generated/*.json text eol=lf
+/proto/generated/*.pb binary
+/rust/crates/deepseek-policy/assets/tool_catalog_v1.json text eol=lf
+/go/**/testdata/**/*.json text eol=lf
+# Generated Java is checked byte for byte by native_android_codegen.
+/android/app/src/main/java/com/deepseek/mobile/platform/v1/*.java text eol=lf whitespace=-blank-at-eol

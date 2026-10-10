@@ -1,0 +1,473 @@
+{
+  "schema_version": 1,
+  "runtime": "go",
+  "mode": "shadow",
+  "unique_writer": {
+    "table": "control_writer",
+    "fencing": "fencing_token",
+    "lease": "lease_until",
+    "runtime_field": "go"
+  },
+  "database": "sqlite",
+  "filename": "go-control/control.sqlite3",
+  "sqlite": {
+    "driver": "modernc.org/sqlite@v1.58.0",
+    "journal_mode": "WAL",
+    "synchronous": "FULL",
+    "foreign_keys": true,
+    "transaction_lock": "IMMEDIATE",
+    "defensive": true,
+    "double_quoted_strings": false,
+    "trusted_schema": false,
+    "max_open_connections": 1,
+    "maximum_payload_bytes": 1048576,
+    "record_digest": "sha256-canonical-json",
+    "event_journal": "control_events",
+    "event_mutation": "insert-only",
+    "operation_journal": "control_operations",
+    "operation_mutation": "insert-only",
+    "legacy_file_store": "reject-and-preserve",
+    "unknown_user_objects": "reject-before-write-connection",
+    "identity_open": "immutable-read-only",
+    "secret_material": "reject passwords, tokens, credentials, and private keys; persist references and digests only"
+  },
+  "migrations": [
+    {
+      "version": 1,
+      "up": "create strict domain tables, append-only event journal, and fenced writer metadata in one transaction",
+      "down": "drop domain tables and event journal; retain writer fencing metadata; set schema_version and user_version to 0"
+    },
+    {
+      "version": 2,
+      "up": "create per-domain cutover rows and append-only cutover journal; widen schema_version bound to 2",
+      "down": "drop cutover tables and journal together with domain tables during rollback to schema 0"
+    },
+    {
+      "version": 3,
+      "up": "create append-only replay-safe control operation journal; widen schema_version bound to 3",
+      "down": "drop operation journal together with domain and cutover tables during rollback to schema 0"
+    },
+    {
+      "version": 4,
+      "up": "bind storage dispatch intent to the action claim; widen schema_version bound to 4",
+      "down": "drop storage dispatch intent tables during rollback to schema 0"
+    },
+    {
+      "version": 5,
+      "up": "create action leases and atomic resource admission; widen schema_version bound to 5",
+      "down": "drop action lease and resource lease tables during rollback to schema 0"
+    },
+    {
+      "version": 6,
+      "up": "create the immutable action reconciliation boundary; widen schema_version bound to 6",
+      "down": "drop the reconciliation boundary during rollback to schema 0"
+    },
+    {
+      "version": 7,
+      "up": "create the immutable action verification boundary; widen schema_version bound to 7",
+      "down": "drop the verification boundary during rollback to schema 0"
+    },
+    {
+      "version": 8,
+      "up": "create control authority head, append-only checkpoint journal, and append-only cutover authorizations; widen schema_version bound to 8",
+      "down": "drop cutover authorizations, authority checkpoints, and the authority head during rollback to schema 0"
+    },
+    {
+      "version": 9,
+      "up": "widen the control operation journal result status to PROPOSED or APPLIED, preserving every row and the frozen immutability triggers; widen schema_version bound to 9",
+      "down": "no down migration: a journal row that records an applied result cannot be rewritten as a proposal"
+    },
+    {
+      "version": 10,
+      "up": "create an append-only signed per-domain promotion artifact journal; reject upgrade of v9 stores with unsigned promotion history",
+      "down": "schema-0 rollback refuses retained promotion history; an empty promotion artifact journal may be dropped"
+    },
+    {
+      "version": 11,
+      "up": "record policy and target inventory digests and read-only source attestation in the same transaction as imported records and events",
+      "down": "schema-0 rollback refuses retained inventory imports; an empty inventory import journal may be dropped"
+    },
+    {
+      "version": 12,
+      "up": "create an append-only attested inventory handback journal; the handback removes the imported records, their events and the import provenance row in one transaction so the fenced Python source can re-own the domain",
+      "down": "schema-0 rollback refuses retained handback history; an empty handback journal may be dropped"
+    },
+    {
+      "version": 13,
+      "up": "bind the exact manifest bytes, Python source path and legacy projection directory to each new attested inventory import; first signed promotion reattests that source and projection; an older unpromoted import retains history with null binding and cannot promote until handed back and reexported; an older already promoted import refuses upgrade without inventing source proof",
+      "down": "schema-0 rollback refuses retained inventory imports; older binaries cannot read v13 stores"
+    },
+    {
+      "version": 14,
+      "up": "bind the fenced Python scheduler target-health snapshot to the same target inventory manifest; create strict immutable health and provenance tables; reattest the scheduler source at import and first signed promotion; retain older target imports without inventing health proof",
+      "down": "schema-0 rollback refuses retained target-health rows or provenance; pre-promotion handback removes health, targets and provenance in one Go transaction; older binaries cannot open v14 stores"
+    },
+    {
+      "version": 15,
+      "up": "add the append-only control_operator_mutations journal beside the signed control_operations journal, so an authenticated operator write is recorded with its own provenance (actor, actionId, the live cutover executionEpoch/revision/fencingToken and the writer fence) instead of borrowing the signed channel's APPLIED status",
+      "down": "schema-0 rollback refuses retained operator mutations; an empty operator journal may be dropped; older binaries cannot open v15 stores"
+    }
+  ],
+  "tables": [
+    {
+      "name": "policies",
+      "domain": "policy",
+      "ownership_ids": [
+        "policy_crud"
+      ]
+    },
+    {
+      "name": "targets",
+      "domain": "target",
+      "ownership_ids": [
+        "target_registry"
+      ]
+    },
+    {
+      "name": "scheduler_runs",
+      "domain": "scheduler_run",
+      "ownership_ids": [
+        "backup_scheduler",
+        "job_controller"
+      ]
+    },
+    {
+      "name": "action_journal",
+      "domain": "action",
+      "ownership_ids": [
+        "action_journal",
+        "resilience_coordinator",
+        "dr_orchestration"
+      ]
+    },
+    {
+      "name": "risk_observations",
+      "domain": "risk",
+      "ownership_ids": [
+        "risk_lifecycle"
+      ]
+    },
+    {
+      "name": "wave_schedules",
+      "domain": "wave",
+      "ownership_ids": [
+        "wave_scheduler"
+      ]
+    },
+    {
+      "name": "federation_peers",
+      "domain": "peer",
+      "ownership_ids": [
+        "federation_peer_registry"
+      ]
+    },
+    {
+      "name": "federation_grants",
+      "domain": "grant",
+      "ownership_ids": [
+        "ingress_grant_lifecycle"
+      ]
+    },
+    {
+      "name": "federation_sessions",
+      "domain": "session",
+      "ownership_ids": [
+        "federation_session_lifecycle"
+      ]
+    },
+    {
+      "name": "federation_transfers",
+      "domain": "transfer",
+      "ownership_ids": [
+        "federated_transfer_journal"
+      ]
+    },
+    {
+      "name": "forecasts",
+      "domain": "forecast",
+      "ownership_ids": [
+        "capacity_forecast"
+      ]
+    },
+    {
+      "name": "agent_runs",
+      "domain": "agent_run",
+      "ownership_ids": [
+        "agent_dag_scheduler"
+      ]
+    }
+  ],
+  "cutover": {
+    "table": "control_cutover",
+    "events": "control_cutover_events",
+    "default_state": "shadow",
+    "first_candidate_domain": "policy",
+    "go_authoritative": "authorized-by-control-authority-claim",
+    "states": [
+      "shadow",
+      "dual_evaluate",
+      "go_authoritative",
+      "python_shadow",
+      "python_disabled"
+    ],
+    "promotion_preconditions": [
+      "the deployment opened the store with the cutover-authority capability (default off)",
+      "a control-authority-v1 checkpoint is installed as the live authority head",
+      "the presented checkpoint is that live tip (generation and digest)",
+      "the transition is legal, and the revision, epoch and fencing token expectations match",
+      "a canonical control-domain-promotion-v1 artifact is signed by the deployment-pinned Ed25519 key for this domain, transfer and authority tip"
+    ],
+    "de_promotion": "requires no authority so ownership is always recoverable",
+    "epoch_advance": "only inside the authorizing transaction"
+  },
+  "promotion_artifact": {
+    "schema": "control-domain-promotion-v1",
+    "table": "control_promotion_artifacts",
+    "mutation": "insert-only with the cutover authorization in one transaction",
+    "signer": "DEEPSEEKD_PROMOTION_SIGNER_KEY is a deployment-pinned Ed25519 public key; empty refuses promotion",
+    "fields": "domain, transferId, actionId, executionEpoch, fromState, toState, expectedRevision, expectedEpoch, fencingToken, authorityGeneration, authorityDigest, optional inventoryManifestDigest and inventorySourceDigest, fleetId, environment, issuedAt, expiresAt, signerKeyId, signature",
+    "history": "v9 stores with unsigned cutover authorization rows cannot be silently upgraded as signed"
+  },
+  "inventory_import": {
+    "table": "control_inventory_imports",
+    "mutation": "insert-only in one transaction with the imported policy or target records and control_events",
+    "source_attestation": "a live read-only Python SQLite check creates a private Go attestation token including the source boot epoch; unverified direct imports cannot promote",
+    "first_promotion_reattestation": "v13 stores the exact manifest bytes, source path and chosen projection directory with each attested import; the first signed promotion rereads both source and projection before committing and refuses drift; a migrated unpromoted v11/v12 import has no invented binding and must be handed back and reexported before promotion; an already promoted older import blocks upgrade",
+    "legacy_projection": "the export manifest binds the sibling .backup-policies or .backup-targets directory's exact state as legacyProjection: the file count plus a canonical digest over each file's name, size and SHA-256. The Go attester re-derives that digest from the directory (inferred from the standard .backup-control layout, or named explicitly for a nonstandard source path) and refuses the import when the directory appeared, vanished or changed. The directory is bound and rechecked, not frozen: the SQLite fence cannot reach it, so the Python service must stay stopped",
+    "signed_promotion": "a nonempty policy or target domain requires an attested import whose transfer ID, authority tip, boot epoch, row and event counts, manifest digest and source digest match the signed artifact",
+    "linked_fence": {
+      "tables": [
+        "control_authority_head",
+        "control_authority_outbox",
+        "control_authority_mutations",
+        "control_boot_state",
+        "lifecycle_intents",
+        "target_receipt_mutations"
+      ],
+      "objects": "18 triggers, three per table (insert, update, delete), named native_control_fence_<table>_no_<operation>; the global tables are frozen by any fence, a linked table only for the domain its own row names",
+      "python_denial": "the production control connection translates the fence abort into PythonWriterMechanicallyDeniedError, so a restarted Python service cannot move the authority tip, the boot epoch or the linked intent and receipt state the transfer binds",
+      "verification": "the Go source attester requires these exact objects byte for byte before it will read a single row, and the checked-in Python fixtures are the cross-language proof",
+      "lift": "the linked objects survive a partial revocation and are removed only when the last fence is lifted; the append-only revocation journal remains"
+    },
+    "open_gaps": "source read and Go commit are separate transactions; the projection directory is not mechanically frozen and a concurrent external write after the last check can still race the Go commit; existing Go shadow history and the Python control state outside the fenced set remain unproven",
+    "target_health": {
+      "export_schema": "python-control-inventory-export-v2",
+      "binding_schema": "python-backup-target-health-v1",
+      "tables": [
+        "backup_target_health",
+        "control_target_health_imports"
+      ],
+      "source": "a read-only fenced copy of .backup-scheduler/scheduler.db; --scheduler-db is required for a nonstandard layout and its absolute path is durably retained",
+      "source_validation": "exact Python health column types and nullability, exact immutable fence SQL, transfer ID plus authority, target-source and health digests, sorted unique rows and original SQLite value types",
+      "mutation": "both snapshots and provenance are inserted in the same Go transaction; update, replace and delete guards protect the imported snapshot",
+      "public_read": "GET /api/workspace/backup-targets reads target records and the health snapshot in one authoritative Go transaction; an empty response requires a real attested empty source; a v1 target import without health returns TARGET_HEALTH_NOT_TRANSFERRED",
+      "first_promotion": "reread the persisted fenced scheduler source as well as the target control source and legacy projection; after promotion no retired Python source is read by the public route",
+      "handback": "pre-promotion Go handback removes health and target snapshots in one transaction; Python journals scheduler revocation before control revocation and can recover an interrupted second commit or receipt publication",
+      "open_gaps": "local isolated-copy integration only; native provider probes and health refresh are not implemented; three databases plus the projection directory are not one atomic store and the legacy processes must remain stopped during handoff or handback; no production, platform or exact-head acceptance"
+    }
+  },
+  "inventory_handback": {
+    "schema": "control-inventory-handback-v1",
+    "table": "control_inventory_handbacks",
+    "mutation": "insert-only, written in the same transaction that removes the imported records, their control_events and the import provenance row",
+    "writer": "go/cmd/control-inventory-handback writes the canonical document; the Python source verifies those exact bytes before it lifts its own fence",
+    "preconditions": [
+      "the domain is still in dual evaluation and holds no promotion artifact or cutover authorization",
+      "the presented transfer ID is the one the import journal records",
+      "the imported record and event counts are unchanged, one event per row",
+      "no other writer or time is recorded on any imported row or event",
+      "no handback for the same domain and transfer exists"
+    ],
+    "effect": "the domain returns to exactly its pre-import Go state, so a later transfer can be imported under a new transfer ID; Python re-owns the source once its own receipt is published and the last held fence releases the linked control state",
+    "python_receipt": "python-control-inventory-handback-receipt-v1, published by scripts/native_control_handoff.py --rollback after the source fence row and its guard triggers are removed in one transaction and the revocation is journaled append-only",
+    "open_gaps": "the two SQLite databases are not one atomic store; an existing Go shadow history and the Python control state outside the fenced set are still not transferable, and no production handback has been performed",
+    "republication": "control-inventory-handback --reexport reads the original committed immutable handback after output publication failure, without a second rollback or ownership change; v2 Python rollback may republish its receipt only from matching append-only revocation records"
+  },
+  "production_authority": {
+    "source": "the durable control_cutover record, read through store.IsGoAuthoritative(domain)",
+    "governed_domain": "action",
+    "self_assertion": "rejected: WithAuthoritative(true) is a claim that must be backed by the durable record, and a larger epoch is never authority",
+    "gated_entry_points": [
+      "Coordinator.ExecuteStorageAction",
+      "Coordinator.ReconcileStorageAction",
+      "Coordinator.ReconcileClaimedStorageAction",
+      "Coordinator.ExecuteClaimedStorageAction"
+    ],
+    "non_authoritative_path": "unchanged qualification path; it does not consult the cutover record",
+    "refusal": "CUTOVER_NOT_AUTHORIZED before any durable write, with the cutover record left untouched"
+  },
+  "internal_api": {
+    "prefix": "/internal/",
+    "routes": [
+      "/internal/shadow/evaluate",
+      "/internal/shadow/snapshot",
+      "/internal/action/execute",
+      "/internal/action/dispatch",
+      "/internal/cutover/status",
+      "/internal/cutover/transition",
+      "/internal/authority/head",
+      "/internal/authority/claim",
+      "/internal/mutation/apply"
+    ],
+    "authority_claim": {
+      "body": "a control-authority-v1 checkpoint, bounded to 16 MiB and checked by the store for integrity, live chain, writer lease and deployment capability",
+      "success": "200 with head and advanced; an exact replay returns advanced=false without a second journal append",
+      "unclaimed_head": "GET /internal/authority/head returns 404 CONTROL_AUTHORITY_NOT_CLAIMED before the first claim",
+      "refusals": "400 malformed or null checkpoint, 413 oversized checkpoint, 409 invalid chain or disabled cutover capability"
+    },
+    "mutation_apply": {
+      "body": "the exact canonical control-mutation-request-v2 document bytes",
+      "authority": "the signer public key, fleet id and environment come from DEEPSEEKD_MUTATION_SIGNER_KEY / DEEPSEEKD_FLEET_ID / DEEPSEEKD_ENVIRONMENT, never from the request",
+      "unconfigured_signer": "503 MUTATION_SIGNER_NOT_CONFIGURED",
+      "refusal": "409 with the store error code (for example CUTOVER_NOT_AUTHORIZED)",
+      "success": "200 with the operation result; a retry of the same operation is ALREADY_APPLIED and never applies twice",
+      "oversized_body": "413 MUTATION_REQUEST_TOO_LARGE"
+    },
+    "authentication": "Authorization: Bearer <DEEPSEEKD_INTERNAL_BEARER>",
+    "credential_min_length": 32,
+    "peer": "loopback-only, independent of the listener address",
+    "comparison": "constant-time",
+    "anonymous_deployment": "routes stay mounted but every request answers 401 INTERNAL_API_UNAUTHORIZED",
+    "unauthorized_response": {
+      "status": 401,
+      "body": {
+        "error": "INTERNAL_API_UNAUTHORIZED"
+      },
+      "challenge": "WWW-Authenticate: Bearer"
+    },
+    "public_api_unaffected": [
+      "/healthz",
+      "/api/control/status",
+      "/api/*"
+    ],
+    "cutover_coupling": "DEEPSEEKD_CONTROL_AUTHORITY is refused unless an internal API bearer is configured, so the migration authority cannot be claimed over an unauthenticated channel"
+  },
+  "authority": {
+    "schema": "control-authority-v1",
+    "head": {
+      "table": "control_authority_head",
+      "single_row": true,
+      "immutable": "insert-or-cas-update only; delete refused"
+    },
+    "checkpoints": {
+      "table": "control_authority_checkpoints",
+      "mutation": "insert-only",
+      "chain": "monotonic generation; previous digest must match the live tip"
+    },
+    "cutover_authorizations": {
+      "table": "control_cutover_authorizations",
+      "mutation": "insert-only",
+      "binds": [
+        "domain",
+        "transferId",
+        "authority generation and digest",
+        "from and to state",
+        "previous and next revision, epoch and fencing token"
+      ]
+    },
+    "claim": "store.ClaimControlAuthority advances the head; it is the only path that installs production control authority, reachable through bearer-guarded POST /internal/authority/claim",
+    "deployment_gate": "store.OpenOptions.AuthorizeCutover, taken from DEEPSEEKD_CONTROL_AUTHORITY, which config refuses unless an internal API bearer is configured",
+    "open_gaps": [
+      "signed per-domain promotion has local Go store and HTTP tests but no production cutover or independent export/import evidence",
+      "no provider-backed kill/takeover reconciliation evidence exists yet",
+      "no production ownership cutover or exact-head release evidence exists yet"
+    ]
+  },
+  "operations": {
+    "table": "control_operations",
+    "mutation": "insert-only",
+    "result_status": "PROPOSED for a v1 proposal; APPLIED for a v2 apply-mutation",
+    "already_applied": "computed-on-accept-retry",
+    "production_apply": "implemented-through-v2-apply-mutation",
+    "production_apply_scope": "reachable over the authenticated internal plane at POST /internal/mutation/apply (the body is the canonical v2 document; the signer key is deployment configuration, never caller-supplied). Verification parity is complete across Python, Go and Rust (compat v32, 34 cases).",
+    "production_apply_reason": "the frozen control-mutation-request-v1 carries exactly one intent, shadow-compare, whose payload is a comparison expectation with no record body; it cannot authorize a production mutation, and reinterpreting it as one is forbidden. Acceptance is therefore refused once the domain is Go-authoritative, before any durable write.",
+    "production_apply_contract_revision": "control-mutation-request-v2 (compat v32): operation apply-mutation, payload field recordPayload, and a distinct signature domain. Applied by Control.ApplyMutation, which requires the deployment cutover capability, a durably Go-authoritative domain, the live cutover revision/epoch/fencing token, the request's actionId + executionEpoch, and the record body the signer committed to.",
+    "production_apply_atomicity": "the record write, the operation journal row and the control event are one transaction; a retry of the same operation is idempotent and never applies twice",
+    "shadow_write_guard": "shadow persistence uses PutShadow, which checks the durable cutover in the write transaction for every domain; direct Put also refuses unsigned writes to promoted non-fenced control domains. A promoted domain cannot be mutated through the shadow API instead of the signed v2 apply channel",
+    "production_apply_refusals": [
+      "no cutover capability or a domain that is not durably Go-authoritative",
+      "a fenced domain (action/scheduler_run/wave/transfer) whose mutations belong to the lease and admission path",
+      "a stale cutover revision, epoch or fencing token",
+      "a record revision that is not the next one",
+      "a record body carrying secret material, or one using floats",
+      "reuse of an operation ID in a different control domain, even with an identical payload digest"
+    ],
+    "first_candidate_domain": "policy"
+  },
+  "operator_mutation": {
+    "table": "control_operator_mutations",
+    "mutation": "insert-only",
+    "purpose": "record an authenticated operator's write of a control record, so a browser-driven change has provenance without being confused with a deployment-signed mutation",
+    "why_a_separate_table": "control_operations.result_status is CHECK-constrained to ('PROPOSED','APPLIED'), where APPLIED means a verified control-mutation-request-v2. Widening it would make the two channels indistinguishable in the audit journal, so the operator channel journals separately and the signed channel stays unambiguous",
+    "authorization": "the authenticated operator session, plus store.OpenOptions.AuthorizeCutover and a durably go_authoritative cutover for the domain; never on the caller's assertion",
+    "epoch_source": "read from the live control_cutover record inside the write transaction; the caller cannot supply actionId-adjacent authority",
+    "journaled_fields": [
+      "operationId (the caller's idempotency key)",
+      "domain, recordId, recordRevision, recordState",
+      "payloadDigest and requestDigest",
+      "actionId and the live executionEpoch",
+      "cutoverRevision and fencingToken",
+      "writer_fencing_token",
+      "actor and recorded_at"
+    ],
+    "atomicity": "the record write, its control event and the operator journal row are one transaction",
+    "already_applied": "computed-on-accept-retry; a retry of the same operation id and body returns ALREADY_APPLIED without a second write, and the same id with a different body is MUTATION_REQUEST_REPLAY_CONFLICT",
+    "refusals": [
+      "no AuthorizeCutover capability on the store",
+      "a domain that is not durably go_authoritative",
+      "a fenced domain (action/scheduler_run/wave/transfer) whose mutations belong to the lease and admission path",
+      "a missing operationId, actionId or actor",
+      "record admission: invalid identifier, unknown domain, a revision that is not the next one, or secret-bearing material under the engine's shared record rule",
+      "the signed channel is not consulted or modified by this path"
+    ],
+    "transport_rules_not_applied": "the signed channel's validateMutationRecordPayload (which refuses a float) and rejectMutationBodySecretKeys (which flags the bare fragment 'credential') are intentionally not applied to the operator channel: a stored policy always carries float placement percentages and a recoveryDrill.credentialRef, so applying either would make the domain unwritable. The engine's shared record rule still runs through prepareControlRecordWrite, and the signed channel is unchanged",
+    "open_gap": "no public route serves a policy create/update/delete through this channel yet, so the policy write path is not reachable end to end",
+    "declared_in": "go/internal/store/operator_mutation.go"
+  },
+  "policy_write_routes": {
+    "create": "POST /api/workspace/backup-policies — normalises the body and writes it through the operator channel",
+    "update": "PATCH /api/workspace/backup-policies/{policy_id} — merges only the oracle's 18 patch fields, advances the revision the store owns, and preserves createdAt",
+    "delete": "DELETE /api/workspace/backup-policies/{policy_id} — refused with 501 GO_POLICY_DELETE_UNSUPPORTED",
+    "delete_reason": "this store's read path reports a record whose append-only events outlive it as CORRUPT_RECORD (orphaned control events), so removing the row would make the id unreadable rather than absent. A delete needs a terminal tombstone state that Get and the inventory list both honour; it does not exist yet",
+    "admission": "the read route's Host allowlist and bearer/cookie token, then the operator channel's cutover and admission gates",
+    "state_projection": "the store's state column is ACTIVE when the document is enabled and DISABLED otherwise; the policy transition table allows creation in either state and a rewrite in place, because the oracle stores disabled policies and updates them without a state change",
+    "target_bindings": "read lazily from the authoritative target inventory exactly as the oracle does — only an id that is neither managed-local nor unbound needs the registry, so a policy with no registered target does not depend on the target cutover; a registry read that fails refuses the write with GO_CONTROL_TARGET_REGISTRY_UNAVAILABLE",
+    "create_revision_narrowing": "a create must start at policyRevision 1. This store only adopts a higher baseline through the attested inventory import (allowImportedBaseline), which carries source provenance the route does not have; the oracle would store a later revision, so a create asking for one is refused by name instead of silently rewritten",
+    "declared_in": "go/internal/api/backup_policy_writes.go"
+  },
+  "writer_plan": {
+    "lease_fencing": "control_writer",
+    "maintenance_controller": "control_writer",
+    "config_runtime_lifecycle": "control_store_meta",
+    "control_api": "control_store_meta"
+  },
+  "companion_stores": [
+    {
+      "id": "a2a_task_lifecycle",
+      "role": "go_service_local_durable_state",
+      "database": "sqlite",
+      "filename": "a2a.sqlite3",
+      "table": "tasks",
+      "schema": "CREATE TABLE tasks (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, state TEXT NOT NULL, document BLOB NOT NULL)",
+      "journal_mode": "WAL",
+      "synchronous": "FULL",
+      "writer_lock": "a2a.writer.lock",
+      "ownership_ids": [
+        "a2a_task_lifecycle"
+      ],
+      "declared_in": "go/internal/a2a/store.go"
+    }
+  ],
+  "forbidden_python_path_components": [
+    ".backup-control",
+    ".backup-scheduler",
+    ".backup-policies",
+    ".backup-targets",
+    ".resilience-journal",
+    ".resilience-risk",
+    ".resilience-waves",
+    ".resilience-scheduler",
+    ".resilience-capacity",
+    ".federation"
+  ]
+}

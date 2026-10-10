@@ -1,0 +1,12 @@
+{
+  "packId": "pack_research",
+  "name": "Research Pack",
+  "description": "Brief a research topic, read source documents and write up findings.",
+  "version": "1.0.0",
+  "author": "builtin",
+  "skills": [
+    {"skillId": "skill_research_brief"},
+    {"skillId": "skill_document_reader"},
+    {"skillId": "skill_paper_writer"}
+  ]
+}

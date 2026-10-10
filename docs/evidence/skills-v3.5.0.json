@@ -1,0 +1,70 @@
+{
+  "version": "3.5.0",
+  "commit": "0d9bb32c931a",
+  "generatedAt": "2026-07-13T03:18:24+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "skillApiRoutes": "PASS",
+    "builtinSkillsLoad": "PASS",
+    "customSkillCreate": "PASS",
+    "inputSchemaValidation": "PASS",
+    "toolPermissionGate": "PASS",
+    "artifactPolicy": "PASS",
+    "projectBinding": "PASS",
+    "skillExport": "PASS"
+  },
+  "details": {
+    "skillApiRoutes": [
+      "/api/skills",
+      "/api/skills/{skill_id}/run"
+    ],
+    "builtinSkillIds": [
+      "audio_transcript_summarizer",
+      "browser_to_report",
+      "download_and_summarize",
+      "form_assistant",
+      "image_explainer",
+      "media_to_report",
+      "pdf_reader",
+      "skill_code_review",
+      "skill_document_reader",
+      "skill_paper_writer",
+      "skill_ppt_generator",
+      "skill_research_brief",
+      "skill_study_tutor",
+      "video_brief_generator",
+      "web_researcher",
+      "webpage_reader",
+      "webpage_summarizer",
+      "website_summarizer"
+    ],
+    "toolPermissionGate": {
+      "tool": "fetch_url",
+      "action": "deny",
+      "policyVerdict": "denied",
+      "risk": "high",
+      "reasons": [
+        "capability_denied:full"
+      ],
+      "violations": [],
+      "capability": "full",
+      "reason": "Tool is out of scope for the 'full' capability profile",
+      "suggestion": "Switch capability or add the tool to CAPABILITY_PROFILES['full']"
+    },
+    "skillRun": {
+      "skillRunId": "run-cf6c9a86ba462809",
+      "projectId": "proj-ae0fbfd156c2",
+      "artifactIds": [
+        "art-c0639134dc444154"
+      ],
+      "savedItemIds": [
+        "saved-5280b9b4903435ad"
+      ]
+    }
+  }
+}

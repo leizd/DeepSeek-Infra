@@ -1,0 +1,6 @@
+# Optional local RAG infra dependencies for v1.7.6.
+# Core app behavior falls back to pure SQLite + hash embeddings when these are absent.
+sqlite-vec>=0.1.6,<1
+onnxruntime>=1.18,<2
+tokenizers>=0.19,<1
+numpy>=1.26,<3

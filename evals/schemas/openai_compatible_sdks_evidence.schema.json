@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deepseek-infra.local/schemas/openai_compatible_sdks_evidence.schema.json",
+  "title": "OpenAI-compatible SDKs Smoke Evidence",
+  "type": "object",
+  "required": ["schemaVersion", "version", "commit", "generatedAt", "environment", "gitSha", "gitDirty", "baseUrl", "model", "sdks", "status", "steps"],
+  "properties": {
+    "schemaVersion": {
+      "const": "openai-compatible-sdks-evidence.v1"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "commit": {
+      "type": "string"
+    },
+    "generatedAt": {
+      "type": "string"
+    },
+    "environment": {
+      "type": "object",
+      "required": ["os", "python", "ci"],
+      "properties": {
+        "os": {"type": "string"},
+        "python": {"type": "string"},
+        "ci": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    },
+    "gitSha": {
+      "type": "string"
+    },
+    "gitDirty": {
+      "type": "boolean"
+    },
+    "baseUrl": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "sdks": {
+      "type": "object",
+      "required": ["langchain", "litellm", "llamaindex"],
+      "properties": {
+        "langchain": {
+          "type": "object",
+          "required": ["modelsList", "chatCompletion", "streaming"],
+          "properties": {
+            "modelsList": {"enum": ["PASS", "FAIL", "SKIPPED"]},
+            "chatCompletion": {"enum": ["PASS", "FAIL", "SKIPPED"]},
+            "streaming": {"enum": ["PASS", "FAIL", "SKIPPED"]}
+          },
+          "additionalProperties": false
+        },
+        "litellm": {
+          "type": "object",
+          "required": ["modelsList", "chatCompletion", "streaming"],
+          "properties": {
+            "modelsList": {"enum": ["PASS", "FAIL", "SKIPPED"]},
+            "chatCompletion": {"enum": ["PASS", "FAIL", "SKIPPED"]},
+            "streaming": {"enum": ["PASS", "FAIL", "SKIPPED"]}
+          },
+          "additionalProperties": false
+        },
+        "llamaindex": {
+          "type": "object",
+          "required": ["chatCompletion"],
+          "properties": {
+            "chatCompletion": {"enum": ["PASS", "FAIL", "SKIPPED"]}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "status": {
+      "enum": ["PASS", "FAIL"]
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status", "detail"],
+        "properties": {
+          "name": {"type": "string"},
+          "status": {"enum": ["pass", "fail", "warn"]},
+          "detail": {"type": "string"},
+          "data": {"type": "object"}
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

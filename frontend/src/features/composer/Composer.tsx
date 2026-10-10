@@ -1,0 +1,161 @@
+import { useEffect, useRef, type ClipboardEvent } from "react";
+
+import { useAttachments } from "../../contexts/AttachmentsContext";
+import { useChat } from "../../contexts/ChatContext";
+import { useOverlay } from "../../contexts/OverlayContext";
+import { useProjects } from "../../contexts/ProjectsContext";
+import { useSettings } from "../../contexts/SettingsContext";
+import { Icon } from "../../shared/ui/Icon";
+import { AttachmentList } from "../attachments/AttachmentList";
+import { ATTACHMENT_ACCEPT } from "../attachments/attachmentMapper";
+import { ModelSelector } from "./ModelSelector";
+import { useComposer } from "./useComposer";
+
+export function Composer({ initialPrompt, onInitialPromptUsed }: { initialPrompt: string; onInitialPromptUsed(): void }) {
+  const chat = useChat();
+  const overlay = useOverlay();
+  const settings = useSettings();
+  const projects = useProjects();
+  const attachments = useAttachments();
+  const composer = useComposer();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const busy = chat.state.requestStatus === "streaming";
+
+  useEffect(() => {
+    if (!initialPrompt) return;
+    composer.setValue(initialPrompt);
+    onInitialPromptUsed();
+  }, [initialPrompt, onInitialPromptUsed]);
+
+  function onPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = event.clipboardData?.files;
+    if (!files?.length) return;
+    event.preventDefault();
+    attachments.addFiles(files);
+  }
+
+  return (
+    <form className="composer" onSubmit={composer.onSubmit}>
+      <AttachmentList />
+      {chat.quoteDraft && (
+        <div className="quote-preview" aria-label="引用预览">
+          <span className="quote-preview-label">{chat.quoteDraft.isFragment ? "引用片段" : "引用"}</span>
+          <span className="quote-preview-text">{chat.quoteDraft.fragment || chat.quoteDraft.text}</span>
+          <span className="quote-preview-actions">
+            <button
+              type="button"
+              aria-label="跳转到原消息"
+              onClick={() => {
+                document.querySelector(`[data-message-id="${chat.quoteDraft?.messageId}"]`)?.scrollIntoView({ block: "center" });
+              }}
+            >
+              定位
+            </button>
+            <button type="button" aria-label="移除引用" onClick={chat.clearQuote}><Icon name="close" /></button>
+          </span>
+        </div>
+      )}
+      <textarea
+        id="reactPromptInput"
+        aria-label="输入消息"
+        placeholder="给 DeepSeek 发送消息"
+        rows={1}
+        value={composer.value}
+        onChange={(event) => composer.setValue(event.target.value)}
+        onKeyDown={composer.onKeyDown}
+        onPaste={onPaste}
+        disabled={busy}
+      />
+      <input
+        ref={fileInputRef}
+        className="sr-only"
+        type="file"
+        multiple
+        accept={ATTACHMENT_ACCEPT}
+        aria-label="添加附件"
+        tabIndex={-1}
+        onChange={(event) => {
+          if (event.target.files?.length) attachments.addFiles(event.target.files);
+          event.target.value = "";
+        }}
+      />
+      <div className="composer-toolbar">
+        <div className="composer-options">
+          {projects.activeProject && (
+            <button
+              className="option-button project-chip active"
+              type="button"
+              title="点击打开项目面板"
+              onClick={() => overlay.openOverlay("projects")}
+            >
+              {projects.activeProject.name}
+              <span
+                className="project-chip-clear"
+                role="button"
+                aria-label="取消项目关联"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  projects.setActive("");
+                }}
+              >
+                <Icon name="close" />
+              </span>
+            </button>
+          )}
+          <button
+            className="option-button"
+            type="button"
+            aria-label="添加附件"
+            disabled={attachments.state.uploading}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            附件
+          </button>
+          <ModelSelector />
+          <button
+            className={settings.thinkingEnabled ? "option-button active" : "option-button"}
+            type="button"
+            aria-pressed={settings.thinkingEnabled}
+            onClick={() => settings.setThinkingEnabled(!settings.thinkingEnabled)}
+          >
+            思考
+          </button>
+          <button
+            className={settings.searchEnabled ? "option-button active" : "option-button"}
+            type="button"
+            aria-pressed={settings.searchEnabled}
+            onClick={() => settings.setSearchEnabled(!settings.searchEnabled)}
+          >
+            联网
+          </button>
+          <button
+            className={settings.agentMode ? "option-button active" : "option-button"}
+            type="button"
+            aria-pressed={settings.agentMode}
+            onClick={() => settings.setAgentMode(!settings.agentMode)}
+          >
+            多 Agent
+          </button>
+          <button className="option-button" type="button" onClick={() => overlay.openOverlay("settings")}>连接设置</button>
+        </div>
+        {busy ? (
+          <>
+            <button
+              className="option-button pause-button"
+              type="button"
+              aria-pressed={chat.outputPaused}
+              onClick={() => (chat.outputPaused ? chat.resumeOutput() : chat.pauseOutput())}
+            >
+              {chat.outputPaused ? "继续输出" : "暂停输出"}
+            </button>
+            <button className="stop-button" type="button" onClick={chat.stopGeneration}>停止生成</button>
+          </>
+        ) : (
+          <button className="send-button swap-btn" type="submit" disabled={!composer.canSend} aria-label="发送消息">
+            <span className="swap"><span className="a">发送</span><span className="b">↗</span></span>
+          </button>
+        )}
+      </div>
+    </form>
+  );
+}

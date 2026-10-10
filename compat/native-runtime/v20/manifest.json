@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze Fleet online-signer custody envelopes and replica-attestation issuance. Encrypted test bundles are included so Rust can load keys without a Python callback; passphrases live only in tests. This does not move payload bytes or production authority.",
+  "normalization": "LF-normalized SHA-256 of public validator fixture bytes",
+  "corpora": [
+    {
+      "id": "federation-custody-issuance-v20",
+      "path": "compat/native-runtime/v20/federation/federation_custody_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen Fleet private-key envelope and attestation issuance semantics",
+      "sha256": "15d15077662ffb4fac9623a23d36891fd71a15a9c95cccf9c09f09bd321fb55a"
+    }
+  ]
+}

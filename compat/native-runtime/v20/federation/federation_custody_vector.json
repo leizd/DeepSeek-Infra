@@ -1,0 +1,604 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "scope": "validator-parity-only-not-provider-execution-evidence",
+  "issued_at": "2026-09-05T12:00:00Z",
+  "now": "2026-09-05T12:00:01Z",
+  "kdf": {
+    "algorithm": "Argon2id",
+    "length": 32,
+    "iterations": 3,
+    "lanes": 4,
+    "memoryKiB": 65536,
+    "saltBytes": 16
+  },
+  "aead": {
+    "algorithm": "AES-256-GCM",
+    "nonceBytes": 12
+  },
+  "domains": {
+    "certificate": "deepseek-infra:federation-online-signer-certificate-v1",
+    "document": "deepseek-infra:federation-document",
+    "envelope": "deepseek-infra:federation-private-key-envelope-v1"
+  },
+  "root_identity": {
+    "schema": "fleet-identity-v1",
+    "fleetId": "fleet-a",
+    "rootKeyId": "fed-root-25f7541f225074507e10536b",
+    "rootPublicKey": "GKtNSN9H7X6_bbzjwBNecsoDg0wuX9P_hq7Fuu6eGUg",
+    "rootFingerprint": "sha256:25f7541f225074507e10536b037c147590654efa4738f1247e1949e08f1a5173",
+    "signatureAlgorithm": "Ed25519",
+    "createdAt": "2026-09-05T12:00:00Z"
+  },
+  "certificate": {
+    "schema": "federation-online-signer-certificate-v1",
+    "fleetId": "fleet-a",
+    "rootKeyId": "fed-root-25f7541f225074507e10536b",
+    "rootFingerprint": "sha256:25f7541f225074507e10536b037c147590654efa4738f1247e1949e08f1a5173",
+    "signerKeyId": "fed-signer-8cc5c38b49fa46c03cd5485e",
+    "signerPublicKey": "xyTw2BwqDxQtGjP3uEaDNMHHPaey1fteq1WK7XjSWs0",
+    "signatureAlgorithm": "Ed25519",
+    "purposes": [
+      "EVIDENCE",
+      "REPLICA_ATTESTATION"
+    ],
+    "sequence": 1,
+    "issuedAt": "2026-09-05T12:00:00Z",
+    "notBefore": "2026-09-05T12:00:00Z",
+    "expiresAt": "2026-10-05T12:00:00Z",
+    "rootSignature": "QmpemBf4K1JYW1FLErnpS-kGeZMrzgQqg9b27_zB9lRz5zKM7wRDqqQEfUHyX8Lt62MAlvLZ0yZJMY5sRl5NCw"
+  },
+  "root_bundle": {
+    "createdAt": "2026-09-05T12:00:00Z",
+    "fleetIdentity": {
+      "createdAt": "2026-09-05T12:00:00Z",
+      "fleetId": "fleet-a",
+      "rootFingerprint": "sha256:25f7541f225074507e10536b037c147590654efa4738f1247e1949e08f1a5173",
+      "rootKeyId": "fed-root-25f7541f225074507e10536b",
+      "rootPublicKey": "GKtNSN9H7X6_bbzjwBNecsoDg0wuX9P_hq7Fuu6eGUg",
+      "schema": "fleet-identity-v1",
+      "signatureAlgorithm": "Ed25519"
+    },
+    "privateKeyEnvelope": {
+      "aead": {
+        "algorithm": "AES-256-GCM",
+        "nonce": "bYGECAGom8AjGesd"
+      },
+      "bindingDigest": "sha256:2ebdcd1c0fbc54c578550fe63e293b21db992845d50e031dece022ff1a80ecc5",
+      "ciphertext": "bMyQh1RWNqWXkOxAmc69sOMVyJOqV6nvf9tZwAcElrZ6tePo9pQsw5FFGe3DlK3I8w19S8ANLHNFROFIHZT3nQ",
+      "kdf": {
+        "algorithm": "Argon2id",
+        "iterations": 3,
+        "lanes": 4,
+        "length": 32,
+        "memoryKiB": 65536,
+        "salt": "lTY8FhyHgwtCiCaakHhu4w"
+      },
+      "schema": "federation-private-key-envelope-v1"
+    },
+    "schema": "fleet-federation-root-private-v1"
+  },
+  "signer_bundle": {
+    "certificate": {
+      "expiresAt": "2026-10-05T12:00:00Z",
+      "fleetId": "fleet-a",
+      "issuedAt": "2026-09-05T12:00:00Z",
+      "notBefore": "2026-09-05T12:00:00Z",
+      "purposes": [
+        "EVIDENCE",
+        "REPLICA_ATTESTATION"
+      ],
+      "rootFingerprint": "sha256:25f7541f225074507e10536b037c147590654efa4738f1247e1949e08f1a5173",
+      "rootKeyId": "fed-root-25f7541f225074507e10536b",
+      "rootSignature": "QmpemBf4K1JYW1FLErnpS-kGeZMrzgQqg9b27_zB9lRz5zKM7wRDqqQEfUHyX8Lt62MAlvLZ0yZJMY5sRl5NCw",
+      "schema": "federation-online-signer-certificate-v1",
+      "sequence": 1,
+      "signatureAlgorithm": "Ed25519",
+      "signerKeyId": "fed-signer-8cc5c38b49fa46c03cd5485e",
+      "signerPublicKey": "xyTw2BwqDxQtGjP3uEaDNMHHPaey1fteq1WK7XjSWs0"
+    },
+    "createdAt": "2026-09-05T12:00:00Z",
+    "privateKeyEnvelope": {
+      "aead": {
+        "algorithm": "AES-256-GCM",
+        "nonce": "RM15O74EakRCktoL"
+      },
+      "bindingDigest": "sha256:7863924787ef85d313e4a5e5c232c0d64e13fcee7f3e85169a67c457810e1e38",
+      "ciphertext": "hXXE4ZUSLPHR8gWADrmCFFxpkUwzbaON0FylXbg7mJPm8JqOxEKPjS9o1L26izq2ftst3citK0J3HwzIuWmESg",
+      "kdf": {
+        "algorithm": "Argon2id",
+        "iterations": 3,
+        "lanes": 4,
+        "length": 32,
+        "memoryKiB": 65536,
+        "salt": "UpLKi9_wVMpxOPsC6tLHiw"
+      },
+      "schema": "federation-private-key-envelope-v1"
+    },
+    "schema": "fleet-federation-online-signer-private-v1"
+  },
+  "unsigned_document": {
+    "schema": "federated-replica-attestation-v1",
+    "fleetId": "fleet-a",
+    "transferId": "sha256:abababababababababababababababababababababababababababababababab",
+    "sourceFleetId": "fleet-a",
+    "destinationFleetId": "fleet-b",
+    "backupId": "backup-custody-1",
+    "objectSetDigest": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "note": "custody-issuance"
+  },
+  "signed_document": {
+    "schema": "federated-replica-attestation-v1",
+    "fleetId": "fleet-a",
+    "transferId": "sha256:abababababababababababababababababababababababababababababababab",
+    "sourceFleetId": "fleet-a",
+    "destinationFleetId": "fleet-b",
+    "backupId": "backup-custody-1",
+    "objectSetDigest": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+    "note": "custody-issuance",
+    "signerKeyId": "fed-signer-8cc5c38b49fa46c03cd5485e",
+    "signatureAlgorithm": "Ed25519",
+    "signature": "T08stQaPzwS9TNkKlqrElTQWm3xNgkDSlr72dsGGZyT2naXy9wa1lqglVgE6AapuKDtYMVrL54lSOpV-3zRHDw"
+  },
+  "sign_cases": [
+    {
+      "name": "valid",
+      "document": {
+        "schema": "federated-replica-attestation-v1",
+        "fleetId": "fleet-a",
+        "transferId": "sha256:abababababababababababababababababababababababababababababababab",
+        "sourceFleetId": "fleet-a",
+        "destinationFleetId": "fleet-b",
+        "backupId": "backup-custody-1",
+        "objectSetDigest": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "note": "custody-issuance"
+      },
+      "purpose": "REPLICA_ATTESTATION",
+      "expected_error": null
+    },
+    {
+      "name": "wrong-purpose",
+      "document": {
+        "schema": "federated-replica-attestation-v1",
+        "fleetId": "fleet-a",
+        "transferId": "sha256:abababababababababababababababababababababababababababababababab",
+        "sourceFleetId": "fleet-a",
+        "destinationFleetId": "fleet-b",
+        "backupId": "backup-custody-1",
+        "objectSetDigest": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "note": "custody-issuance"
+      },
+      "purpose": "INGRESS_GRANT",
+      "expected_error": "FEDERATION_SIGNER_PURPOSE_NOT_ALLOWED"
+    },
+    {
+      "name": "unknown-purpose",
+      "document": {
+        "schema": "federated-replica-attestation-v1",
+        "fleetId": "fleet-a",
+        "transferId": "sha256:abababababababababababababababababababababababababababababababab",
+        "sourceFleetId": "fleet-a",
+        "destinationFleetId": "fleet-b",
+        "backupId": "backup-custody-1",
+        "objectSetDigest": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "note": "custody-issuance"
+      },
+      "purpose": "NOT_A_PURPOSE",
+      "expected_error": "FEDERATION_SIGNER_PURPOSE_INVALID"
+    },
+    {
+      "name": "non-object",
+      "document": [
+        "x"
+      ],
+      "purpose": "REPLICA_ATTESTATION",
+      "expected_error": "FEDERATION_DOCUMENT_INVALID"
+    },
+    {
+      "name": "already-signed",
+      "document": {
+        "schema": "federated-replica-attestation-v1",
+        "fleetId": "fleet-a",
+        "transferId": "sha256:abababababababababababababababababababababababababababababababab",
+        "sourceFleetId": "fleet-a",
+        "destinationFleetId": "fleet-b",
+        "backupId": "backup-custody-1",
+        "objectSetDigest": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "note": "custody-issuance",
+        "signature": "x"
+      },
+      "purpose": "REPLICA_ATTESTATION",
+      "expected_error": "FEDERATION_DOCUMENT_ALREADY_SIGNED"
+    },
+    {
+      "name": "missing-schema",
+      "document": {
+        "fleetId": "fleet-a"
+      },
+      "purpose": "REPLICA_ATTESTATION",
+      "expected_error": "FEDERATION_DOCUMENT_SCHEMA_INVALID"
+    },
+    {
+      "name": "missing-fleet",
+      "document": {
+        "schema": "federated-replica-attestation-v1"
+      },
+      "purpose": "REPLICA_ATTESTATION",
+      "expected_error": "FEDERATION_DOCUMENT_FLEET_ID_REQUIRED"
+    },
+    {
+      "name": "fleet-mismatch",
+      "document": {
+        "schema": "federated-replica-attestation-v1",
+        "fleetId": "fleet-b",
+        "transferId": "sha256:abababababababababababababababababababababababababababababababab",
+        "sourceFleetId": "fleet-a",
+        "destinationFleetId": "fleet-b",
+        "backupId": "backup-custody-1",
+        "objectSetDigest": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "note": "custody-issuance"
+      },
+      "purpose": "REPLICA_ATTESTATION",
+      "expected_error": "FEDERATION_DOCUMENT_FLEET_MISMATCH"
+    },
+    {
+      "name": "secret-field",
+      "document": {
+        "schema": "federated-replica-attestation-v1",
+        "fleetId": "fleet-a",
+        "transferId": "sha256:abababababababababababababababababababababababababababababababab",
+        "sourceFleetId": "fleet-a",
+        "destinationFleetId": "fleet-b",
+        "backupId": "backup-custody-1",
+        "objectSetDigest": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "note": "custody-issuance",
+        "privateKey": "hidden"
+      },
+      "purpose": "REPLICA_ATTESTATION",
+      "expected_error": "FEDERATION_DOCUMENT_CONTAINS_SECRET"
+    },
+    {
+      "name": "null-document",
+      "document": null,
+      "purpose": "REPLICA_ATTESTATION",
+      "expected_error": "FEDERATION_DOCUMENT_INVALID"
+    },
+    {
+      "name": "bool-document",
+      "document": true,
+      "purpose": "REPLICA_ATTESTATION",
+      "expected_error": "FEDERATION_DOCUMENT_INVALID"
+    }
+  ],
+  "envelope_cases": [
+    {
+      "name": "valid",
+      "envelope": {
+        "aead": {
+          "algorithm": "AES-256-GCM",
+          "nonce": "RM15O74EakRCktoL"
+        },
+        "bindingDigest": "sha256:7863924787ef85d313e4a5e5c232c0d64e13fcee7f3e85169a67c457810e1e38",
+        "ciphertext": "hXXE4ZUSLPHR8gWADrmCFFxpkUwzbaON0FylXbg7mJPm8JqOxEKPjS9o1L26izq2ftst3citK0J3HwzIuWmESg",
+        "kdf": {
+          "algorithm": "Argon2id",
+          "iterations": 3,
+          "lanes": 4,
+          "length": 32,
+          "memoryKiB": 65536,
+          "salt": "UpLKi9_wVMpxOPsC6tLHiw"
+        },
+        "schema": "federation-private-key-envelope-v1"
+      },
+      "passphrase_kind": "signer",
+      "binding": {
+        "schema": "federation-online-signer-certificate-v1",
+        "fleetId": "fleet-a",
+        "rootKeyId": "fed-root-25f7541f225074507e10536b",
+        "rootFingerprint": "sha256:25f7541f225074507e10536b037c147590654efa4738f1247e1949e08f1a5173",
+        "signerKeyId": "fed-signer-8cc5c38b49fa46c03cd5485e",
+        "signerPublicKey": "xyTw2BwqDxQtGjP3uEaDNMHHPaey1fteq1WK7XjSWs0",
+        "signatureAlgorithm": "Ed25519",
+        "purposes": [
+          "EVIDENCE",
+          "REPLICA_ATTESTATION"
+        ],
+        "sequence": 1,
+        "issuedAt": "2026-09-05T12:00:00Z",
+        "notBefore": "2026-09-05T12:00:00Z",
+        "expiresAt": "2026-10-05T12:00:00Z",
+        "rootSignature": "QmpemBf4K1JYW1FLErnpS-kGeZMrzgQqg9b27_zB9lRz5zKM7wRDqqQEfUHyX8Lt62MAlvLZ0yZJMY5sRl5NCw"
+      },
+      "expected_error": null
+    },
+    {
+      "name": "short-passphrase",
+      "envelope": {
+        "aead": {
+          "algorithm": "AES-256-GCM",
+          "nonce": "RM15O74EakRCktoL"
+        },
+        "bindingDigest": "sha256:7863924787ef85d313e4a5e5c232c0d64e13fcee7f3e85169a67c457810e1e38",
+        "ciphertext": "hXXE4ZUSLPHR8gWADrmCFFxpkUwzbaON0FylXbg7mJPm8JqOxEKPjS9o1L26izq2ftst3citK0J3HwzIuWmESg",
+        "kdf": {
+          "algorithm": "Argon2id",
+          "iterations": 3,
+          "lanes": 4,
+          "length": 32,
+          "memoryKiB": 65536,
+          "salt": "UpLKi9_wVMpxOPsC6tLHiw"
+        },
+        "schema": "federation-private-key-envelope-v1"
+      },
+      "passphrase_kind": "short",
+      "binding": {
+        "schema": "federation-online-signer-certificate-v1",
+        "fleetId": "fleet-a",
+        "rootKeyId": "fed-root-25f7541f225074507e10536b",
+        "rootFingerprint": "sha256:25f7541f225074507e10536b037c147590654efa4738f1247e1949e08f1a5173",
+        "signerKeyId": "fed-signer-8cc5c38b49fa46c03cd5485e",
+        "signerPublicKey": "xyTw2BwqDxQtGjP3uEaDNMHHPaey1fteq1WK7XjSWs0",
+        "signatureAlgorithm": "Ed25519",
+        "purposes": [
+          "EVIDENCE",
+          "REPLICA_ATTESTATION"
+        ],
+        "sequence": 1,
+        "issuedAt": "2026-09-05T12:00:00Z",
+        "notBefore": "2026-09-05T12:00:00Z",
+        "expiresAt": "2026-10-05T12:00:00Z",
+        "rootSignature": "QmpemBf4K1JYW1FLErnpS-kGeZMrzgQqg9b27_zB9lRz5zKM7wRDqqQEfUHyX8Lt62MAlvLZ0yZJMY5sRl5NCw"
+      },
+      "expected_error": "FEDERATION_PRIVATE_KEY_PASSPHRASE_INVALID"
+    },
+    {
+      "name": "wrong-passphrase",
+      "envelope": {
+        "aead": {
+          "algorithm": "AES-256-GCM",
+          "nonce": "RM15O74EakRCktoL"
+        },
+        "bindingDigest": "sha256:7863924787ef85d313e4a5e5c232c0d64e13fcee7f3e85169a67c457810e1e38",
+        "ciphertext": "hXXE4ZUSLPHR8gWADrmCFFxpkUwzbaON0FylXbg7mJPm8JqOxEKPjS9o1L26izq2ftst3citK0J3HwzIuWmESg",
+        "kdf": {
+          "algorithm": "Argon2id",
+          "iterations": 3,
+          "lanes": 4,
+          "length": 32,
+          "memoryKiB": 65536,
+          "salt": "UpLKi9_wVMpxOPsC6tLHiw"
+        },
+        "schema": "federation-private-key-envelope-v1"
+      },
+      "passphrase_kind": "wrong",
+      "binding": {
+        "schema": "federation-online-signer-certificate-v1",
+        "fleetId": "fleet-a",
+        "rootKeyId": "fed-root-25f7541f225074507e10536b",
+        "rootFingerprint": "sha256:25f7541f225074507e10536b037c147590654efa4738f1247e1949e08f1a5173",
+        "signerKeyId": "fed-signer-8cc5c38b49fa46c03cd5485e",
+        "signerPublicKey": "xyTw2BwqDxQtGjP3uEaDNMHHPaey1fteq1WK7XjSWs0",
+        "signatureAlgorithm": "Ed25519",
+        "purposes": [
+          "EVIDENCE",
+          "REPLICA_ATTESTATION"
+        ],
+        "sequence": 1,
+        "issuedAt": "2026-09-05T12:00:00Z",
+        "notBefore": "2026-09-05T12:00:00Z",
+        "expiresAt": "2026-10-05T12:00:00Z",
+        "rootSignature": "QmpemBf4K1JYW1FLErnpS-kGeZMrzgQqg9b27_zB9lRz5zKM7wRDqqQEfUHyX8Lt62MAlvLZ0yZJMY5sRl5NCw"
+      },
+      "expected_error": "FEDERATION_PRIVATE_KEY_UNAVAILABLE"
+    },
+    {
+      "name": "nul-passphrase",
+      "envelope": {
+        "aead": {
+          "algorithm": "AES-256-GCM",
+          "nonce": "RM15O74EakRCktoL"
+        },
+        "bindingDigest": "sha256:7863924787ef85d313e4a5e5c232c0d64e13fcee7f3e85169a67c457810e1e38",
+        "ciphertext": "hXXE4ZUSLPHR8gWADrmCFFxpkUwzbaON0FylXbg7mJPm8JqOxEKPjS9o1L26izq2ftst3citK0J3HwzIuWmESg",
+        "kdf": {
+          "algorithm": "Argon2id",
+          "iterations": 3,
+          "lanes": 4,
+          "length": 32,
+          "memoryKiB": 65536,
+          "salt": "UpLKi9_wVMpxOPsC6tLHiw"
+        },
+        "schema": "federation-private-key-envelope-v1"
+      },
+      "passphrase_kind": "nul",
+      "binding": {
+        "schema": "federation-online-signer-certificate-v1",
+        "fleetId": "fleet-a",
+        "rootKeyId": "fed-root-25f7541f225074507e10536b",
+        "rootFingerprint": "sha256:25f7541f225074507e10536b037c147590654efa4738f1247e1949e08f1a5173",
+        "signerKeyId": "fed-signer-8cc5c38b49fa46c03cd5485e",
+        "signerPublicKey": "xyTw2BwqDxQtGjP3uEaDNMHHPaey1fteq1WK7XjSWs0",
+        "signatureAlgorithm": "Ed25519",
+        "purposes": [
+          "EVIDENCE",
+          "REPLICA_ATTESTATION"
+        ],
+        "sequence": 1,
+        "issuedAt": "2026-09-05T12:00:00Z",
+        "notBefore": "2026-09-05T12:00:00Z",
+        "expiresAt": "2026-10-05T12:00:00Z",
+        "rootSignature": "QmpemBf4K1JYW1FLErnpS-kGeZMrzgQqg9b27_zB9lRz5zKM7wRDqqQEfUHyX8Lt62MAlvLZ0yZJMY5sRl5NCw"
+      },
+      "expected_error": "FEDERATION_PRIVATE_KEY_PASSPHRASE_INVALID"
+    },
+    {
+      "name": "envelope-not-object",
+      "envelope": "nope",
+      "passphrase_kind": "signer",
+      "binding": {
+        "schema": "federation-online-signer-certificate-v1",
+        "fleetId": "fleet-a",
+        "rootKeyId": "fed-root-25f7541f225074507e10536b",
+        "rootFingerprint": "sha256:25f7541f225074507e10536b037c147590654efa4738f1247e1949e08f1a5173",
+        "signerKeyId": "fed-signer-8cc5c38b49fa46c03cd5485e",
+        "signerPublicKey": "xyTw2BwqDxQtGjP3uEaDNMHHPaey1fteq1WK7XjSWs0",
+        "signatureAlgorithm": "Ed25519",
+        "purposes": [
+          "EVIDENCE",
+          "REPLICA_ATTESTATION"
+        ],
+        "sequence": 1,
+        "issuedAt": "2026-09-05T12:00:00Z",
+        "notBefore": "2026-09-05T12:00:00Z",
+        "expiresAt": "2026-10-05T12:00:00Z",
+        "rootSignature": "QmpemBf4K1JYW1FLErnpS-kGeZMrzgQqg9b27_zB9lRz5zKM7wRDqqQEfUHyX8Lt62MAlvLZ0yZJMY5sRl5NCw"
+      },
+      "expected_error": "FEDERATION_PRIVATE_KEY_ENVELOPE_INVALID"
+    },
+    {
+      "name": "schema",
+      "envelope": {
+        "aead": {
+          "algorithm": "AES-256-GCM",
+          "nonce": "RM15O74EakRCktoL"
+        },
+        "bindingDigest": "sha256:7863924787ef85d313e4a5e5c232c0d64e13fcee7f3e85169a67c457810e1e38",
+        "ciphertext": "hXXE4ZUSLPHR8gWADrmCFFxpkUwzbaON0FylXbg7mJPm8JqOxEKPjS9o1L26izq2ftst3citK0J3HwzIuWmESg",
+        "kdf": {
+          "algorithm": "Argon2id",
+          "iterations": 3,
+          "lanes": 4,
+          "length": 32,
+          "memoryKiB": 65536,
+          "salt": "UpLKi9_wVMpxOPsC6tLHiw"
+        },
+        "schema": "other"
+      },
+      "passphrase_kind": "signer",
+      "binding": {
+        "schema": "federation-online-signer-certificate-v1",
+        "fleetId": "fleet-a",
+        "rootKeyId": "fed-root-25f7541f225074507e10536b",
+        "rootFingerprint": "sha256:25f7541f225074507e10536b037c147590654efa4738f1247e1949e08f1a5173",
+        "signerKeyId": "fed-signer-8cc5c38b49fa46c03cd5485e",
+        "signerPublicKey": "xyTw2BwqDxQtGjP3uEaDNMHHPaey1fteq1WK7XjSWs0",
+        "signatureAlgorithm": "Ed25519",
+        "purposes": [
+          "EVIDENCE",
+          "REPLICA_ATTESTATION"
+        ],
+        "sequence": 1,
+        "issuedAt": "2026-09-05T12:00:00Z",
+        "notBefore": "2026-09-05T12:00:00Z",
+        "expiresAt": "2026-10-05T12:00:00Z",
+        "rootSignature": "QmpemBf4K1JYW1FLErnpS-kGeZMrzgQqg9b27_zB9lRz5zKM7wRDqqQEfUHyX8Lt62MAlvLZ0yZJMY5sRl5NCw"
+      },
+      "expected_error": "FEDERATION_PRIVATE_KEY_ENVELOPE_INVALID"
+    },
+    {
+      "name": "binding-mismatch",
+      "envelope": {
+        "aead": {
+          "algorithm": "AES-256-GCM",
+          "nonce": "RM15O74EakRCktoL"
+        },
+        "bindingDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "ciphertext": "hXXE4ZUSLPHR8gWADrmCFFxpkUwzbaON0FylXbg7mJPm8JqOxEKPjS9o1L26izq2ftst3citK0J3HwzIuWmESg",
+        "kdf": {
+          "algorithm": "Argon2id",
+          "iterations": 3,
+          "lanes": 4,
+          "length": 32,
+          "memoryKiB": 65536,
+          "salt": "UpLKi9_wVMpxOPsC6tLHiw"
+        },
+        "schema": "federation-private-key-envelope-v1"
+      },
+      "passphrase_kind": "signer",
+      "binding": {
+        "schema": "federation-online-signer-certificate-v1",
+        "fleetId": "fleet-a",
+        "rootKeyId": "fed-root-25f7541f225074507e10536b",
+        "rootFingerprint": "sha256:25f7541f225074507e10536b037c147590654efa4738f1247e1949e08f1a5173",
+        "signerKeyId": "fed-signer-8cc5c38b49fa46c03cd5485e",
+        "signerPublicKey": "xyTw2BwqDxQtGjP3uEaDNMHHPaey1fteq1WK7XjSWs0",
+        "signatureAlgorithm": "Ed25519",
+        "purposes": [
+          "EVIDENCE",
+          "REPLICA_ATTESTATION"
+        ],
+        "sequence": 1,
+        "issuedAt": "2026-09-05T12:00:00Z",
+        "notBefore": "2026-09-05T12:00:00Z",
+        "expiresAt": "2026-10-05T12:00:00Z",
+        "rootSignature": "QmpemBf4K1JYW1FLErnpS-kGeZMrzgQqg9b27_zB9lRz5zKM7wRDqqQEfUHyX8Lt62MAlvLZ0yZJMY5sRl5NCw"
+      },
+      "expected_error": "FEDERATION_PRIVATE_KEY_ENVELOPE_INVALID"
+    },
+    {
+      "name": "short-ciphertext",
+      "envelope": {
+        "aead": {
+          "algorithm": "AES-256-GCM",
+          "nonce": "RM15O74EakRCktoL"
+        },
+        "bindingDigest": "sha256:7863924787ef85d313e4a5e5c232c0d64e13fcee7f3e85169a67c457810e1e38",
+        "ciphertext": "AA",
+        "kdf": {
+          "algorithm": "Argon2id",
+          "iterations": 3,
+          "lanes": 4,
+          "length": 32,
+          "memoryKiB": 65536,
+          "salt": "UpLKi9_wVMpxOPsC6tLHiw"
+        },
+        "schema": "federation-private-key-envelope-v1"
+      },
+      "passphrase_kind": "signer",
+      "binding": {
+        "schema": "federation-online-signer-certificate-v1",
+        "fleetId": "fleet-a",
+        "rootKeyId": "fed-root-25f7541f225074507e10536b",
+        "rootFingerprint": "sha256:25f7541f225074507e10536b037c147590654efa4738f1247e1949e08f1a5173",
+        "signerKeyId": "fed-signer-8cc5c38b49fa46c03cd5485e",
+        "signerPublicKey": "xyTw2BwqDxQtGjP3uEaDNMHHPaey1fteq1WK7XjSWs0",
+        "signatureAlgorithm": "Ed25519",
+        "purposes": [
+          "EVIDENCE",
+          "REPLICA_ATTESTATION"
+        ],
+        "sequence": 1,
+        "issuedAt": "2026-09-05T12:00:00Z",
+        "notBefore": "2026-09-05T12:00:00Z",
+        "expiresAt": "2026-10-05T12:00:00Z",
+        "rootSignature": "QmpemBf4K1JYW1FLErnpS-kGeZMrzgQqg9b27_zB9lRz5zKM7wRDqqQEfUHyX8Lt62MAlvLZ0yZJMY5sRl5NCw"
+      },
+      "expected_error": "FEDERATION_PRIVATE_KEY_ENVELOPE_INVALID"
+    },
+    {
+      "name": "null-envelope",
+      "envelope": null,
+      "passphrase_kind": "signer",
+      "binding": {
+        "schema": "federation-online-signer-certificate-v1",
+        "fleetId": "fleet-a",
+        "rootKeyId": "fed-root-25f7541f225074507e10536b",
+        "rootFingerprint": "sha256:25f7541f225074507e10536b037c147590654efa4738f1247e1949e08f1a5173",
+        "signerKeyId": "fed-signer-8cc5c38b49fa46c03cd5485e",
+        "signerPublicKey": "xyTw2BwqDxQtGjP3uEaDNMHHPaey1fteq1WK7XjSWs0",
+        "signatureAlgorithm": "Ed25519",
+        "purposes": [
+          "EVIDENCE",
+          "REPLICA_ATTESTATION"
+        ],
+        "sequence": 1,
+        "issuedAt": "2026-09-05T12:00:00Z",
+        "notBefore": "2026-09-05T12:00:00Z",
+        "expiresAt": "2026-10-05T12:00:00Z",
+        "rootSignature": "QmpemBf4K1JYW1FLErnpS-kGeZMrzgQqg9b27_zB9lRz5zKM7wRDqqQEfUHyX8Lt62MAlvLZ0yZJMY5sRl5NCw"
+      },
+      "expected_error": "FEDERATION_PRIVATE_KEY_UNAVAILABLE"
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "schemaVersion": "rust-coverage.v1",
+  "version": "4.0.2",
+  "commit": "dacff4c8a2467028e4851a3abed48d86239f0491",
+  "generatedAt": "2026-07-16T09:46:19Z",
+  "status": "PASS",
+  "threshold": {
+    "metric": "line",
+    "minimumPercent": 80.0
+  },
+  "workspaceCrates": [
+    "deepseek-core",
+    "deepseek-gateway",
+    "deepseek-mcp",
+    "deepseek-policy",
+    "deepseek-rag"
+  ],
+  "coverage": {
+    "lines": {
+      "count": 4020,
+      "covered": 3225,
+      "percent": 80.22388059701493
+    },
+    "functions": {
+      "count": 479,
+      "covered": 419,
+      "percent": 87.47390396659708
+    },
+    "regions": {
+      "count": 6601,
+      "covered": 5440,
+      "percent": 82.41175579457658
+    }
+  },
+  "rustTestCount": 172,
+  "coreCrateExclusions": [],
+  "coverageOmit": [],
+  "tool": "cargo-llvm-cov 0.6.21",
+  "commands": {
+    "measure": [
+      "cargo",
+      "llvm-cov",
+      "--manifest-path",
+      "rust/Cargo.toml",
+      "--workspace",
+      "--all-features",
+      "--json",
+      "--summary-only",
+      "--output-path",
+      "D:\\deepseek\\artifacts\\rust-coverage-raw.json"
+    ],
+    "lcov": [
+      "cargo",
+      "llvm-cov",
+      "report",
+      "--manifest-path",
+      "rust/Cargo.toml",
+      "--lcov",
+      "--output-path",
+      "D:\\deepseek\\artifacts\\rust-coverage.lcov"
+    ],
+    "testInventory": "cargo test --manifest-path rust/Cargo.toml --workspace --all-features -- --list --format terse"
+  },
+  "artifacts": {
+    "summary": "artifacts/rust-coverage.json",
+    "lcov": "artifacts/rust-coverage.lcov"
+  }
+}

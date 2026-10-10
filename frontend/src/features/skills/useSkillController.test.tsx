@@ -1,0 +1,288 @@
+// @vitest-environment jsdom
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, renderHook, waitFor, act } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PropsWithChildren } from "react";
+
+import type { ProjectSkillBinding, Skill } from "../../api/skillsApi";
+import { SKILLS_QUERY_KEY, projectSkillBindingQueryKey } from "../../app/queryKeys";
+
+vi.mock("../../api/skillsApi", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../api/skillsApi")>();
+  return {
+    ...original,
+    listSkills: vi.fn(),
+    setSkillDisabled: vi.fn(),
+    deleteSkill: vi.fn(),
+    createSkill: vi.fn(),
+    updateSkillPrompt: vi.fn(),
+    fetchProjectSkillBinding: vi.fn(),
+    saveProjectSkillBinding: vi.fn(),
+  };
+});
+
+import {
+  createSkill,
+  deleteSkill,
+  fetchProjectSkillBinding,
+  listSkills,
+  saveProjectSkillBinding,
+  setSkillDisabled,
+  updateSkillPrompt,
+} from "../../api/skillsApi";
+import { useSkillController } from "./useSkillController";
+
+const listSkillsMock = vi.mocked(listSkills);
+const setSkillDisabledMock = vi.mocked(setSkillDisabled);
+const deleteSkillMock = vi.mocked(deleteSkill);
+const createSkillMock = vi.mocked(createSkill);
+const updateSkillPromptMock = vi.mocked(updateSkillPrompt);
+const fetchBindingMock = vi.mocked(fetchProjectSkillBinding);
+const saveBindingMock = vi.mocked(saveProjectSkillBinding);
+
+function skill(skillId: string, disabled = false): Skill {
+  return { skillId, name: skillId, description: "", version: "1.0.0", systemPrompt: "", builtin: false, disabled, updatedAt: "" };
+}
+
+function binding(enabledSkills: readonly string[]): ProjectSkillBinding {
+  return { enabledSkills: [...enabledSkills], defaultSkill: "", recentSkills: [], enabledPacks: [] };
+}
+
+function createTestQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+}
+
+function wrapperFor(client: QueryClient) {
+  return function Wrapper({ children }: PropsWithChildren) {
+    return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  };
+}
+
+let serverSkills: Skill[];
+
+beforeEach(() => {
+  serverSkills = [skill("s1"), skill("s2", true)];
+  listSkillsMock.mockImplementation(() => Promise.resolve([...serverSkills]));
+  setSkillDisabledMock.mockImplementation((skillId: string, disabled: boolean) => {
+    serverSkills = serverSkills.map((item) => (item.skillId === skillId ? { ...item, disabled } : item));
+    return Promise.resolve(undefined);
+  });
+  deleteSkillMock.mockImplementation((skillId: string) => {
+    serverSkills = serverSkills.filter((item) => item.skillId !== skillId);
+    return Promise.resolve(undefined);
+  });
+  createSkillMock.mockImplementation((draft) => {
+    const created = { ...skill("s-new"), name: draft.name };
+    serverSkills.push(created);
+    return Promise.resolve(created);
+  });
+  updateSkillPromptMock.mockImplementation((draft) => {
+    serverSkills = serverSkills.map((item) => (item.skillId === draft.skillId ? { ...item, name: draft.name } : item));
+    return Promise.resolve({ ...skill(draft.skillId), name: draft.name });
+  });
+  saveBindingMock.mockImplementation((_projectId, input) =>
+    Promise.resolve(binding(input.enabledSkills)),
+  );
+});
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
+describe("useSkillController", () => {
+  it("toggles a skill disabled flag inside the cache", async () => {
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.skills).toHaveLength(2));
+
+    const [init] = listSkillsMock.mock.calls[0] as [RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+
+    await act(async () => {
+      await result.current.toggle(skill("s1"));
+    });
+    expect(setSkillDisabledMock).toHaveBeenCalledWith("s1", true);
+    expect(client.getQueryData<Skill[]>(SKILLS_QUERY_KEY)?.find((item) => item.skillId === "s1")?.disabled).toBe(true);
+  });
+
+  it("creates, updates and deletes skills with list invalidation", async () => {
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.skills).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.create({ name: "新技能", description: "", systemPrompt: "提示词" });
+    });
+    expect(createSkillMock).toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.update({ skillId: "s1", name: "改名", description: "", systemPrompt: "x" });
+    });
+    expect(updateSkillPromptMock).toHaveBeenCalledWith({ skillId: "s1", name: "改名", description: "", systemPrompt: "x" });
+
+    await act(async () => {
+      await result.current.remove("s2");
+    });
+    expect(deleteSkillMock).toHaveBeenCalledWith("s2");
+    expect(client.getQueryData<Skill[]>(SKILLS_QUERY_KEY)?.map((item) => item.skillId)).toEqual(["s1", "s-new"]);
+    await waitFor(() => expect(listSkillsMock.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it("tracks concurrent skill toggles independently", async () => {
+    const resolvers = new Map<string, () => void>();
+    setSkillDisabledMock.mockImplementation(
+      (skillId: string, disabled: boolean) =>
+        new Promise<void>((resolve) => {
+          resolvers.set(skillId, () => {
+            serverSkills = serverSkills.map((item) => (item.skillId === skillId ? { ...item, disabled } : item));
+            resolve();
+          });
+        }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.skills).toHaveLength(2));
+
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.toggle(skill("s1"));
+      second = result.current.toggle(skill("s2", true));
+    });
+    await waitFor(() => {
+      expect(result.current.isTogglingSkill("s1")).toBe(true);
+      expect(result.current.isTogglingSkill("s2")).toBe(true);
+    });
+
+    await act(async () => {
+      resolvers.get("s1")?.();
+      await first;
+    });
+    await waitFor(() => expect(result.current.isTogglingSkill("s1")).toBe(false));
+    expect(result.current.isTogglingSkill("s2")).toBe(true);
+
+    await act(async () => {
+      resolvers.get("s2")?.();
+      await second;
+    });
+  });
+
+  it("suppresses a same-frame duplicate skill creation", async () => {
+    let resolveCreate!: (value: Skill) => void;
+    createSkillMock.mockImplementation(
+      () => new Promise<Skill>((resolve) => {
+        resolveCreate = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.skills).toHaveLength(2));
+    const draft = { name: "新技能", description: "说明", systemPrompt: "提示词" };
+
+    let first!: Promise<void>;
+    let duplicate!: Promise<void>;
+    act(() => {
+      first = result.current.create(draft);
+      duplicate = result.current.create({ ...draft });
+    });
+    await waitFor(() => expect(createSkillMock).toHaveBeenCalledTimes(1));
+    expect(result.current.creating).toBe(true);
+
+    await act(async () => {
+      resolveCreate({ ...skill("s-new"), name: draft.name });
+      await Promise.all([first, duplicate]);
+    });
+  });
+
+  it("does not reuse an update promise for a different skill draft", async () => {
+    let resolveUpdate!: (value: Skill) => void;
+    updateSkillPromptMock.mockImplementation(
+      () => new Promise<Skill>((resolve) => {
+        resolveUpdate = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.skills).toHaveLength(2));
+
+    let first!: Promise<void>;
+    let different!: Promise<void>;
+    act(() => {
+      first = result.current.update({ skillId: "s1", name: "草稿甲", description: "", systemPrompt: "x" });
+      different = result.current.update({ skillId: "s1", name: "草稿乙", description: "", systemPrompt: "x" });
+    });
+    await expect(different).rejects.toMatchObject({
+      name: "EntityActionConflictError",
+      activeOperation: "update",
+    });
+    expect(updateSkillPromptMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(result.current.error).toContain("正在保存"));
+
+    await act(async () => {
+      resolveUpdate({ ...skill("s1"), name: "草稿甲" });
+      await first;
+    });
+  });
+
+  it("does not reuse a toggle promise for a different target state", async () => {
+    let resolveToggle!: () => void;
+    setSkillDisabledMock.mockImplementation(
+      () => new Promise<void>((resolve) => {
+        resolveToggle = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.skills).toHaveLength(2));
+
+    let first!: Promise<void>;
+    let different!: Promise<void>;
+    act(() => {
+      first = result.current.toggle(skill("s1", false));
+      different = result.current.toggle(skill("s1", true));
+    });
+    await expect(different).rejects.toMatchObject({ name: "EntityActionConflictError" });
+    expect(setSkillDisabledMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveToggle();
+      await first;
+    });
+  });
+
+  it("rejects removal while the same skill is being updated", async () => {
+    let resolveUpdate!: (value: Skill) => void;
+    updateSkillPromptMock.mockImplementation(
+      () => new Promise<Skill>((resolve) => {
+        resolveUpdate = resolve;
+      }),
+    );
+    const client = createTestQueryClient();
+    const { result } = renderHook(() => useSkillController(), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.skills).toHaveLength(2));
+
+    let updateAction!: Promise<void>;
+    let removeAction!: Promise<void>;
+    act(() => {
+      updateAction = result.current.update({ skillId: "s1", name: "改名", description: "", systemPrompt: "x" });
+      removeAction = result.current.remove("s1");
+    });
+
+    await expect(removeAction).rejects.toMatchObject({ name: "EntityActionConflictError" });
+    await waitFor(() => expect(updateSkillPromptMock).toHaveBeenCalledTimes(1));
+    expect(deleteSkillMock).not.toHaveBeenCalled();
+    expect(result.current.isUpdatingSkill("s1")).toBe(true);
+
+    await act(async () => {
+      resolveUpdate({ ...skill("s1"), name: "改名" });
+      await updateAction;
+    });
+  });
+});

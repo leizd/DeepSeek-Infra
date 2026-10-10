@@ -1,0 +1,5 @@
+{
+  "jsonrpc": "2.0",
+  "method": "foo/bar",
+  "id": "invalid-method-1"
+}

@@ -1,0 +1,20 @@
+{
+  "fingerprint": "node=102030405060|platform=win32|home=C:/owned-fixture|exec=C:/owned-fixture/python.exe|project=C:/owned-fixture/deepseek",
+  "envelope": {
+    "version": 1,
+    "data": {
+      "nonce": "UTkobUpgDpwBiD7roq+Piw==",
+      "ciphertext": "q8/lRU+KVOv2YbT5/jaSdwB3qXfV+hqK7DNrbTLNBHgJCXpdcia1SrwJP28jIg/vYEExo1YpGzcqWBCPgSn8/EwMegyufzIumxMrQOOxeVzElLklZYsJZm+LXXdyktHXxwwLWN6Ro6EhGNam/LRoRAVlqgMoqgCLiD7uiikw8H/YLuhYCESDqJlBlpo81w+t4JQV9qil20Rr604DCpmQrTSw8ts+qR0F8k3v2jGuoMyWuMfV59CXxSg2",
+      "mac": "LRGnz5qsIDjDWKSNRrG9l1Ay4Bt5PCgsIlHPAaAIq1g="
+    }
+  },
+  "expected": {
+    "deepseek_api_key": "sk-owned-gui-fixture",
+    "tavily_api_key": "tv-owned-gui-fixture",
+    "host": "127.0.0.1",
+    "port": 8123,
+    "allow_lan": false,
+    "ocr_enabled": true,
+    "auth_disabled": false
+  }
+}

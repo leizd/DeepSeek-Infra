@@ -1,0 +1,2976 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "scope": "validator-parity-only-not-provider-execution-evidence",
+  "now": "2026-09-05T15:00:00Z",
+  "ast_matches_source_commit": {
+    "JOB_SCHEMA_VERSION": true,
+    "TERMINAL_PHASES": true,
+    "ACTIVE_PHASES": true,
+    "MODES": true,
+    "enqueue_replica_jobs": true,
+    "_set_phase": true,
+    "execute_replication_job": true,
+    "_fail_job": true,
+    "process_pending_jobs": true,
+    "has_open_required_jobs": true
+  },
+  "terminal_phases": [
+    "committed",
+    "failed",
+    "failed-terminal",
+    "superseded"
+  ],
+  "active_phases": [
+    "checking-target",
+    "committing",
+    "components-verified",
+    "queued",
+    "repair-needed",
+    "retry-wait",
+    "transferring-components",
+    "writing-receipt"
+  ],
+  "modes": [
+    "best-effort",
+    "required"
+  ],
+  "cases": [
+    {
+      "name": "backoff-attempts-0",
+      "op": "backoff",
+      "attempts": 0,
+      "expected": {
+        "seconds": 1
+      }
+    },
+    {
+      "name": "backoff-attempts-1",
+      "op": "backoff",
+      "attempts": 1,
+      "expected": {
+        "seconds": 2
+      }
+    },
+    {
+      "name": "backoff-attempts-2",
+      "op": "backoff",
+      "attempts": 2,
+      "expected": {
+        "seconds": 4
+      }
+    },
+    {
+      "name": "backoff-attempts-3",
+      "op": "backoff",
+      "attempts": 3,
+      "expected": {
+        "seconds": 8
+      }
+    },
+    {
+      "name": "backoff-attempts-4",
+      "op": "backoff",
+      "attempts": 4,
+      "expected": {
+        "seconds": 16
+      }
+    },
+    {
+      "name": "backoff-attempts-5",
+      "op": "backoff",
+      "attempts": 5,
+      "expected": {
+        "seconds": 32
+      }
+    },
+    {
+      "name": "backoff-attempts-8",
+      "op": "backoff",
+      "attempts": 8,
+      "expected": {
+        "seconds": 256
+      }
+    },
+    {
+      "name": "backoff-attempts-9",
+      "op": "backoff",
+      "attempts": 9,
+      "expected": {
+        "seconds": 256
+      }
+    },
+    {
+      "name": "backoff-attempts-negative",
+      "op": "backoff",
+      "attempts": -3,
+      "expected": {
+        "seconds": 0.125
+      }
+    },
+    {
+      "name": "enqueue-fresh-required",
+      "op": "enqueue",
+      "policy": {
+        "policyId": "policy-frozen-1",
+        "primaryTargetId": "target-a",
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "target-b",
+              "mode": "required"
+            }
+          ]
+        }
+      },
+      "primary_target_id": "target-a",
+      "backup_id": "backup-frozen-1",
+      "run_id": "run-frozen-1",
+      "schedule_slot": "replica/backup-frozen-1",
+      "slot_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "primary_receipt": {
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [
+          {
+            "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "size": 8
+          }
+        ],
+        "snapshotKind": "full",
+        "size": 8,
+        "ignored": "no"
+      },
+      "existing_jobs": [],
+      "job_ids": [
+        "repl_frozen_1"
+      ],
+      "expected": {
+        "jobs": [
+          {
+            "schemaVersion": 2,
+            "jobId": "repl_frozen_1",
+            "policyId": "policy-frozen-1",
+            "backupId": "backup-frozen-1",
+            "primaryTargetId": "target-a",
+            "replicaTargetId": "target-b",
+            "mode": "required",
+            "phase": "queued",
+            "runId": "run-frozen-1",
+            "scheduleSlot": "replica/backup-frozen-1",
+            "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "objects": [
+              {
+                "digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                "size": 8
+              }
+            ],
+            "primaryReceiptSnapshot": {
+              "snapshotKind": "full",
+              "size": 8
+            },
+            "createdAt": "2026-09-05T15:00:00Z",
+            "updatedAt": "2026-09-05T15:00:00Z",
+            "error": null,
+            "attempts": 0,
+            "maxAttempts": 5
+          }
+        ]
+      }
+    },
+    {
+      "name": "enqueue-disabled",
+      "op": "enqueue",
+      "policy": {
+        "policyId": "policy-frozen-1",
+        "primaryTargetId": "target-a",
+        "replication": {
+          "enabled": false,
+          "targets": [
+            {
+              "targetId": "target-b",
+              "mode": "required"
+            }
+          ]
+        }
+      },
+      "primary_target_id": "target-a",
+      "backup_id": "backup-frozen-1",
+      "run_id": "run-frozen-1",
+      "schedule_slot": "slot",
+      "slot_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "existing_jobs": [],
+      "job_ids": [
+        "repl_frozen_1"
+      ],
+      "expected": {
+        "jobs": []
+      }
+    },
+    {
+      "name": "enqueue-missing-replication",
+      "op": "enqueue",
+      "policy": {
+        "policyId": "policy-frozen-1"
+      },
+      "primary_target_id": "target-a",
+      "backup_id": "backup-frozen-1",
+      "run_id": "run-frozen-1",
+      "schedule_slot": "slot",
+      "slot_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "existing_jobs": [],
+      "job_ids": [
+        "repl_frozen_1"
+      ],
+      "expected": {
+        "jobs": []
+      }
+    },
+    {
+      "name": "enqueue-skip-self-primary",
+      "op": "enqueue",
+      "policy": {
+        "policyId": "policy-frozen-1",
+        "primaryTargetId": "target-a",
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "target-a",
+              "mode": "required"
+            }
+          ]
+        }
+      },
+      "primary_target_id": "target-a",
+      "backup_id": "backup-frozen-1",
+      "run_id": "run-frozen-1",
+      "schedule_slot": "slot",
+      "slot_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "existing_jobs": [],
+      "job_ids": [
+        "repl_frozen_1"
+      ],
+      "expected": {
+        "jobs": []
+      }
+    },
+    {
+      "name": "enqueue-idempotent-open-job",
+      "op": "enqueue",
+      "policy": {
+        "policyId": "policy-frozen-1",
+        "primaryTargetId": "target-a",
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "target-b",
+              "mode": "required"
+            }
+          ]
+        }
+      },
+      "primary_target_id": "target-a",
+      "backup_id": "backup-frozen-1",
+      "run_id": "run-new",
+      "schedule_slot": "slot",
+      "slot_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "existing_jobs": [
+        {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "retry-wait",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5
+        }
+      ],
+      "job_ids": [
+        "repl_unused"
+      ],
+      "expected": {
+        "jobs": [
+          {
+            "schemaVersion": 2,
+            "jobId": "repl_frozen_1",
+            "policyId": "policy-frozen-1",
+            "backupId": "backup-frozen-1",
+            "primaryTargetId": "target-a",
+            "replicaTargetId": "target-b",
+            "mode": "required",
+            "phase": "retry-wait",
+            "runId": "run-frozen-1",
+            "scheduleSlot": "replica/backup-frozen-1",
+            "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "objects": [],
+            "primaryReceiptSnapshot": {},
+            "createdAt": "2026-09-05T15:00:00Z",
+            "updatedAt": "2026-09-05T15:00:00Z",
+            "error": null,
+            "attempts": 0,
+            "maxAttempts": 5
+          }
+        ]
+      }
+    },
+    {
+      "name": "enqueue-terminal-allows-new",
+      "op": "enqueue",
+      "policy": {
+        "policyId": "policy-frozen-1",
+        "primaryTargetId": "target-a",
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "target-b",
+              "mode": "required"
+            }
+          ]
+        }
+      },
+      "primary_target_id": "target-a",
+      "backup_id": "backup-frozen-1",
+      "run_id": "run-frozen-2",
+      "schedule_slot": "slot",
+      "slot_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "existing_jobs": [
+        {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "committed",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5
+        }
+      ],
+      "job_ids": [
+        "repl_frozen_2"
+      ],
+      "expected": {
+        "jobs": [
+          {
+            "schemaVersion": 2,
+            "jobId": "repl_frozen_2",
+            "policyId": "policy-frozen-1",
+            "backupId": "backup-frozen-1",
+            "primaryTargetId": "target-a",
+            "replicaTargetId": "target-b",
+            "mode": "required",
+            "phase": "queued",
+            "runId": "run-frozen-2",
+            "scheduleSlot": "slot",
+            "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "objectSetDigest": "",
+            "controlObjectDigest": "",
+            "objects": [],
+            "primaryReceiptSnapshot": {},
+            "createdAt": "2026-09-05T15:00:00Z",
+            "updatedAt": "2026-09-05T15:00:00Z",
+            "error": null,
+            "attempts": 0,
+            "maxAttempts": 5
+          }
+        ]
+      }
+    },
+    {
+      "name": "enqueue-unknown-mode-becomes-required",
+      "op": "enqueue",
+      "policy": {
+        "policyId": "policy-frozen-1",
+        "primaryTargetId": "target-a",
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "target-b",
+              "mode": "BEST-EFFORT"
+            }
+          ]
+        }
+      },
+      "primary_target_id": "target-a",
+      "backup_id": "backup-frozen-1",
+      "run_id": "run-frozen-1",
+      "schedule_slot": "slot",
+      "slot_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "existing_jobs": [],
+      "job_ids": [
+        "repl_frozen_1"
+      ],
+      "expected": {
+        "jobs": [
+          {
+            "schemaVersion": 2,
+            "jobId": "repl_frozen_1",
+            "policyId": "policy-frozen-1",
+            "backupId": "backup-frozen-1",
+            "primaryTargetId": "target-a",
+            "replicaTargetId": "target-b",
+            "mode": "required",
+            "phase": "queued",
+            "runId": "run-frozen-1",
+            "scheduleSlot": "slot",
+            "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "objectSetDigest": "",
+            "controlObjectDigest": "",
+            "objects": [],
+            "primaryReceiptSnapshot": {},
+            "createdAt": "2026-09-05T15:00:00Z",
+            "updatedAt": "2026-09-05T15:00:00Z",
+            "error": null,
+            "attempts": 0,
+            "maxAttempts": 5
+          }
+        ]
+      }
+    },
+    {
+      "name": "enqueue-best-effort",
+      "op": "enqueue",
+      "policy": {
+        "policyId": "policy-frozen-1",
+        "primaryTargetId": "target-a",
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "target-b",
+              "mode": "best-effort"
+            }
+          ]
+        }
+      },
+      "primary_target_id": "target-a",
+      "backup_id": "backup-frozen-1",
+      "run_id": "run-frozen-1",
+      "schedule_slot": "slot",
+      "slot_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "existing_jobs": [],
+      "job_ids": [
+        "repl_frozen_1"
+      ],
+      "expected": {
+        "jobs": [
+          {
+            "schemaVersion": 2,
+            "jobId": "repl_frozen_1",
+            "policyId": "policy-frozen-1",
+            "backupId": "backup-frozen-1",
+            "primaryTargetId": "target-a",
+            "replicaTargetId": "target-b",
+            "mode": "best-effort",
+            "phase": "queued",
+            "runId": "run-frozen-1",
+            "scheduleSlot": "slot",
+            "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "objectSetDigest": "",
+            "controlObjectDigest": "",
+            "objects": [],
+            "primaryReceiptSnapshot": {},
+            "createdAt": "2026-09-05T15:00:00Z",
+            "updatedAt": "2026-09-05T15:00:00Z",
+            "error": null,
+            "attempts": 0,
+            "maxAttempts": 5
+          }
+        ]
+      }
+    },
+    {
+      "name": "enqueue-failback-catchup",
+      "op": "enqueue",
+      "policy": {
+        "policyId": "policy-frozen-1",
+        "primaryTargetId": "target-old",
+        "replication": {
+          "enabled": true,
+          "targets": []
+        }
+      },
+      "primary_target_id": "target-a",
+      "backup_id": "backup-frozen-1",
+      "run_id": "run-frozen-1",
+      "schedule_slot": "slot",
+      "slot_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "existing_jobs": [],
+      "job_ids": [
+        "repl_frozen_1"
+      ],
+      "expected": {
+        "jobs": [
+          {
+            "schemaVersion": 2,
+            "jobId": "repl_frozen_1",
+            "policyId": "policy-frozen-1",
+            "backupId": "backup-frozen-1",
+            "primaryTargetId": "target-a",
+            "replicaTargetId": "target-old",
+            "mode": "required",
+            "phase": "queued",
+            "runId": "run-frozen-1",
+            "scheduleSlot": "slot",
+            "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "objectSetDigest": "",
+            "controlObjectDigest": "",
+            "objects": [],
+            "primaryReceiptSnapshot": {},
+            "createdAt": "2026-09-05T15:00:00Z",
+            "updatedAt": "2026-09-05T15:00:00Z",
+            "error": null,
+            "attempts": 0,
+            "maxAttempts": 5
+          }
+        ]
+      }
+    },
+    {
+      "name": "enqueue-empty-receipt",
+      "op": "enqueue",
+      "policy": {
+        "policyId": "policy-frozen-1",
+        "primaryTargetId": "target-a",
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "target-b",
+              "mode": "required"
+            }
+          ]
+        }
+      },
+      "primary_target_id": "target-a",
+      "backup_id": "backup-frozen-1",
+      "run_id": "run-frozen-1",
+      "schedule_slot": "slot",
+      "slot_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "primary_receipt": {},
+      "existing_jobs": [],
+      "job_ids": [
+        "repl_frozen_1"
+      ],
+      "expected": {
+        "jobs": [
+          {
+            "schemaVersion": 2,
+            "jobId": "repl_frozen_1",
+            "policyId": "policy-frozen-1",
+            "backupId": "backup-frozen-1",
+            "primaryTargetId": "target-a",
+            "replicaTargetId": "target-b",
+            "mode": "required",
+            "phase": "queued",
+            "runId": "run-frozen-1",
+            "scheduleSlot": "slot",
+            "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "objectSetDigest": "",
+            "controlObjectDigest": "",
+            "objects": [],
+            "primaryReceiptSnapshot": {},
+            "createdAt": "2026-09-05T15:00:00Z",
+            "updatedAt": "2026-09-05T15:00:00Z",
+            "error": null,
+            "attempts": 0,
+            "maxAttempts": 5
+          }
+        ]
+      }
+    },
+    {
+      "name": "enqueue-control-digest-fallback",
+      "op": "enqueue",
+      "policy": {
+        "policyId": "policy-frozen-1",
+        "primaryTargetId": "target-a",
+        "replication": {
+          "enabled": true,
+          "targets": [
+            {
+              "targetId": "target-b",
+              "mode": "required"
+            }
+          ]
+        }
+      },
+      "primary_target_id": "target-a",
+      "backup_id": "backup-frozen-1",
+      "run_id": "run-frozen-1",
+      "schedule_slot": "slot",
+      "slot_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "primary_receipt": {
+        "objectDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "objects": "not-list"
+      },
+      "existing_jobs": [],
+      "job_ids": [
+        "repl_frozen_1"
+      ],
+      "expected": {
+        "jobs": [
+          {
+            "schemaVersion": 2,
+            "jobId": "repl_frozen_1",
+            "policyId": "policy-frozen-1",
+            "backupId": "backup-frozen-1",
+            "primaryTargetId": "target-a",
+            "replicaTargetId": "target-b",
+            "mode": "required",
+            "phase": "queued",
+            "runId": "run-frozen-1",
+            "scheduleSlot": "slot",
+            "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "objectSetDigest": "",
+            "controlObjectDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "objects": [],
+            "primaryReceiptSnapshot": {},
+            "createdAt": "2026-09-05T15:00:00Z",
+            "updatedAt": "2026-09-05T15:00:00Z",
+            "error": null,
+            "attempts": 0,
+            "maxAttempts": 5
+          }
+        ]
+      }
+    },
+    {
+      "name": "enqueue-skip-non-dict-target",
+      "op": "enqueue",
+      "policy": {
+        "policyId": "policy-frozen-1",
+        "primaryTargetId": "target-a",
+        "replication": {
+          "enabled": true,
+          "targets": [
+            "target-b",
+            {
+              "targetId": "target-c"
+            }
+          ]
+        }
+      },
+      "primary_target_id": "target-a",
+      "backup_id": "backup-frozen-1",
+      "run_id": "run-frozen-1",
+      "schedule_slot": "slot",
+      "slot_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "existing_jobs": [],
+      "job_ids": [
+        "repl_frozen_1"
+      ],
+      "expected": {
+        "jobs": [
+          {
+            "schemaVersion": 2,
+            "jobId": "repl_frozen_1",
+            "policyId": "policy-frozen-1",
+            "backupId": "backup-frozen-1",
+            "primaryTargetId": "target-a",
+            "replicaTargetId": "target-c",
+            "mode": "required",
+            "phase": "queued",
+            "runId": "run-frozen-1",
+            "scheduleSlot": "slot",
+            "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "objectSetDigest": "",
+            "controlObjectDigest": "",
+            "objects": [],
+            "primaryReceiptSnapshot": {},
+            "createdAt": "2026-09-05T15:00:00Z",
+            "updatedAt": "2026-09-05T15:00:00Z",
+            "error": null,
+            "attempts": 0,
+            "maxAttempts": 5
+          }
+        ]
+      }
+    },
+    {
+      "name": "set-phase-unguarded-unknown",
+      "op": "set-phase",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "queued",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 0,
+        "maxAttempts": 5
+      },
+      "phase": "made-up-phase",
+      "extra": {
+        "attempts": 2
+      },
+      "expected": {
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "made-up-phase",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 2,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "claim-missing",
+      "op": "claim",
+      "job_id": "repl_missing",
+      "job": null,
+      "expected": {
+        "status": "error",
+        "error": "not-found",
+        "jobId": "repl_missing"
+      }
+    },
+    {
+      "name": "claim-queued",
+      "op": "claim",
+      "job_id": "repl_frozen_1",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "queued",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 0,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "status": "claimed",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "checking-target",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 1,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "claim-resume-transferring",
+      "op": "claim",
+      "job_id": "repl_frozen_1",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "transferring-components",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 2,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "status": "claimed",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "checking-target",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 3,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "claim-repair-needed-reclaims",
+      "op": "claim",
+      "job_id": "repl_frozen_1",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "repair-needed",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 1,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "status": "claimed",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "checking-target",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 2,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "claim-attempts-zero-falsy",
+      "op": "claim",
+      "job_id": "repl_frozen_1",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "queued",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 0,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "status": "claimed",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "checking-target",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 1,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "claim-attempts-fullwidth",
+      "op": "claim",
+      "job_id": "repl_frozen_1",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "queued",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": "２",
+        "maxAttempts": 5
+      },
+      "expected": {
+        "status": "claimed",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "checking-target",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 3,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "type-claim-attempts-object",
+      "op": "claim",
+      "job_id": "repl_frozen_1",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "queued",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": {
+          "n": 1
+        },
+        "maxAttempts": 5
+      },
+      "expected": {
+        "status": "error",
+        "oracle_exception": "TypeError",
+        "jobId": "repl_frozen_1",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "queued",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": {
+            "n": 1
+          },
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "fail-required-retry",
+      "op": "fail",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "checking-target",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 1,
+        "maxAttempts": 5
+      },
+      "error": "target resolve failed",
+      "mode": "required",
+      "expected": {
+        "status": "retry-wait",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "retry-wait",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": "target resolve failed",
+          "attempts": 1,
+          "maxAttempts": 5,
+          "nextRetryAt": "2026-09-05T15:00:02Z"
+        }
+      }
+    },
+    {
+      "name": "fail-required-max",
+      "op": "fail",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "checking-target",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 5,
+        "maxAttempts": 5
+      },
+      "error": "target resolve failed",
+      "mode": "required",
+      "expected": {
+        "status": "failed-terminal",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "failed-terminal",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": "target resolve failed",
+          "attempts": 5,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "fail-required-spool-missing",
+      "op": "fail",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "checking-target",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 1,
+        "maxAttempts": 5
+      },
+      "error": "replication spool package missing; cannot re-encrypt",
+      "mode": "required",
+      "expected": {
+        "status": "repair-needed",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "repair-needed",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": "replication spool package missing; cannot re-encrypt",
+          "attempts": 1,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "fail-required-spool-missing-casefold",
+      "op": "fail",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "checking-target",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 8,
+        "maxAttempts": 5
+      },
+      "error": "SPOOL FILE MISSING",
+      "mode": "required",
+      "expected": {
+        "status": "repair-needed",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "repair-needed",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": "SPOOL FILE MISSING",
+          "attempts": 8,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "fail-required-spool-without-missing",
+      "op": "fail",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "checking-target",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 1,
+        "maxAttempts": 5
+      },
+      "error": "spool locked",
+      "mode": "required",
+      "expected": {
+        "status": "retry-wait",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "retry-wait",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": "spool locked",
+          "attempts": 1,
+          "maxAttempts": 5,
+          "nextRetryAt": "2026-09-05T15:00:02Z"
+        }
+      }
+    },
+    {
+      "name": "fail-best-effort-always-failed",
+      "op": "fail",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "best-effort",
+        "phase": "checking-target",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 1,
+        "maxAttempts": 5
+      },
+      "error": "replication spool package missing",
+      "mode": "best-effort",
+      "expected": {
+        "status": "failed",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "best-effort",
+          "phase": "failed",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": "replication spool package missing",
+          "attempts": 1,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "fail-attempts-zero-falsy-becomes-one",
+      "op": "fail",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "checking-target",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 0,
+        "maxAttempts": 5
+      },
+      "error": "boom",
+      "mode": "required",
+      "expected": {
+        "status": "retry-wait",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "retry-wait",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": "boom",
+          "attempts": 1,
+          "maxAttempts": 5,
+          "nextRetryAt": "2026-09-05T15:00:02Z"
+        }
+      }
+    },
+    {
+      "name": "fail-message-truncated",
+      "op": "fail",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "checking-target",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 5,
+        "maxAttempts": 5
+      },
+      "error": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "mode": "required",
+      "expected": {
+        "status": "failed-terminal",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "failed-terminal",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "attempts": 5,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "fail-backoff-attempts-8",
+      "op": "fail",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "checking-target",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 8,
+        "maxAttempts": 9
+      },
+      "error": "writer busy",
+      "mode": "required",
+      "expected": {
+        "status": "retry-wait",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "retry-wait",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": "writer busy",
+          "attempts": 8,
+          "maxAttempts": 9,
+          "nextRetryAt": "2026-09-05T15:04:16Z"
+        }
+      }
+    },
+    {
+      "name": "type-fail-attempts-array",
+      "op": "fail",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "queued",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": [
+          1
+        ],
+        "maxAttempts": 5
+      },
+      "error": "boom",
+      "mode": "required",
+      "expected": {
+        "status": "error",
+        "oracle_exception": "TypeError",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "queued",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": [
+            1
+          ],
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "classify-queued",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "queued",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 0,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "decision": "pending",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "queued",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "classify-retry-wait-future",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "retry-wait",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 0,
+        "maxAttempts": 5,
+        "nextRetryAt": "2026-09-05T15:00:01Z"
+      },
+      "expected": {
+        "decision": "skip-backoff",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "retry-wait",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5,
+          "nextRetryAt": "2026-09-05T15:00:01Z"
+        }
+      }
+    },
+    {
+      "name": "classify-retry-wait-equal-now",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "retry-wait",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 0,
+        "maxAttempts": 5,
+        "nextRetryAt": "2026-09-05T15:00:00Z"
+      },
+      "expected": {
+        "decision": "pending",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "retry-wait",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5,
+          "nextRetryAt": "2026-09-05T15:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "classify-retry-wait-past",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "retry-wait",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 0,
+        "maxAttempts": 5,
+        "nextRetryAt": "2026-09-05T14:59:59Z"
+      },
+      "expected": {
+        "decision": "pending",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "retry-wait",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5,
+          "nextRetryAt": "2026-09-05T14:59:59Z"
+        }
+      }
+    },
+    {
+      "name": "classify-retry-wait-invalid",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "retry-wait",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 0,
+        "maxAttempts": 5,
+        "nextRetryAt": "not-a-time"
+      },
+      "expected": {
+        "decision": "pending",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "retry-wait",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5,
+          "nextRetryAt": "not-a-time"
+        }
+      }
+    },
+    {
+      "name": "classify-repair-needed-pending",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "repair-needed",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 0,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "decision": "pending",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "repair-needed",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "has-open-required-true",
+      "op": "has-open-required",
+      "policy_id": "policy-frozen-1",
+      "backup_id": "backup-frozen-1",
+      "jobs": [
+        {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "queued",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5
+        }
+      ],
+      "expected": {
+        "open": true
+      }
+    },
+    {
+      "name": "has-open-required-terminal-false",
+      "op": "has-open-required",
+      "policy_id": "policy-frozen-1",
+      "jobs": [
+        {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "committed",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5
+        }
+      ],
+      "expected": {
+        "open": false
+      }
+    },
+    {
+      "name": "has-open-best-effort-false",
+      "op": "has-open-required",
+      "policy_id": "policy-frozen-1",
+      "jobs": [
+        {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "best-effort",
+          "phase": "queued",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5
+        }
+      ],
+      "expected": {
+        "open": false
+      }
+    },
+    {
+      "name": "has-open-empty-slot-matches",
+      "op": "has-open-required",
+      "policy_id": "policy-frozen-1",
+      "slot_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "jobs": [
+        {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "queued",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5
+        }
+      ],
+      "expected": {
+        "open": true
+      }
+    },
+    {
+      "name": "has-open-slot-mismatch",
+      "op": "has-open-required",
+      "policy_id": "policy-frozen-1",
+      "slot_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "jobs": [
+        {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "queued",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5
+        }
+      ],
+      "expected": {
+        "open": false
+      }
+    },
+    {
+      "name": "has-open-missing-job-id-skipped",
+      "op": "has-open-required",
+      "policy_id": "policy-frozen-1",
+      "jobs": [
+        {
+          "schemaVersion": 2,
+          "jobId": "",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "queued",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5
+        }
+      ],
+      "expected": {
+        "open": false
+      }
+    },
+    {
+      "name": "classify-active-checking-target",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "checking-target",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 1,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "decision": "pending",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "checking-target",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 1,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "classify-active-committing",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "committing",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 1,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "decision": "pending",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "committing",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 1,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "classify-active-components-verified",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "components-verified",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 1,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "decision": "pending",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "components-verified",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 1,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "classify-active-queued",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "queued",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 1,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "decision": "pending",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "queued",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 1,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "classify-active-repair-needed",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "repair-needed",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 1,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "decision": "pending",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "repair-needed",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 1,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "classify-active-retry-wait",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "retry-wait",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 1,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "decision": "pending",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "retry-wait",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 1,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "classify-active-transferring-components",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "transferring-components",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 1,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "decision": "pending",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "transferring-components",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 1,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "classify-active-writing-receipt",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "writing-receipt",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 1,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "decision": "pending",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "writing-receipt",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 1,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "claim-terminal-committed",
+      "op": "claim",
+      "job_id": "repl_frozen_1",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "committed",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 2,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "status": "terminal",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "committed",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 2,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "classify-terminal-committed",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "committed",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 0,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "decision": "skip-inactive",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "committed",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "claim-terminal-failed",
+      "op": "claim",
+      "job_id": "repl_frozen_1",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "failed",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 2,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "status": "terminal",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "failed",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 2,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "classify-terminal-failed",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "failed",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 0,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "decision": "skip-inactive",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "failed",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "claim-terminal-failed-terminal",
+      "op": "claim",
+      "job_id": "repl_frozen_1",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "failed-terminal",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 2,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "status": "terminal",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "failed-terminal",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 2,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "classify-terminal-failed-terminal",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "failed-terminal",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 0,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "decision": "skip-inactive",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "failed-terminal",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "claim-terminal-superseded",
+      "op": "claim",
+      "job_id": "repl_frozen_1",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "superseded",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 2,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "status": "terminal",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "superseded",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 2,
+          "maxAttempts": 5
+        }
+      }
+    },
+    {
+      "name": "classify-terminal-superseded",
+      "op": "classify-pending",
+      "job": {
+        "schemaVersion": 2,
+        "jobId": "repl_frozen_1",
+        "policyId": "policy-frozen-1",
+        "backupId": "backup-frozen-1",
+        "primaryTargetId": "target-a",
+        "replicaTargetId": "target-b",
+        "mode": "required",
+        "phase": "superseded",
+        "runId": "run-frozen-1",
+        "scheduleSlot": "replica/backup-frozen-1",
+        "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "objects": [],
+        "primaryReceiptSnapshot": {},
+        "createdAt": "2026-09-05T15:00:00Z",
+        "updatedAt": "2026-09-05T15:00:00Z",
+        "error": null,
+        "attempts": 0,
+        "maxAttempts": 5
+      },
+      "expected": {
+        "decision": "skip-inactive",
+        "job": {
+          "schemaVersion": 2,
+          "jobId": "repl_frozen_1",
+          "policyId": "policy-frozen-1",
+          "backupId": "backup-frozen-1",
+          "primaryTargetId": "target-a",
+          "replicaTargetId": "target-b",
+          "mode": "required",
+          "phase": "superseded",
+          "runId": "run-frozen-1",
+          "scheduleSlot": "replica/backup-frozen-1",
+          "slotDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "objectSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "controlObjectDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "objects": [],
+          "primaryReceiptSnapshot": {},
+          "createdAt": "2026-09-05T15:00:00Z",
+          "updatedAt": "2026-09-05T15:00:00Z",
+          "error": null,
+          "attempts": 0,
+          "maxAttempts": 5
+        }
+      }
+    }
+  ]
+}

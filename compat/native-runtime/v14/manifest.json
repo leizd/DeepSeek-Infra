@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze retention safety, execution decisions, resilience scores, and provider-byte-bound repair/rebalance destination semantics before Rust assumes production validation.",
+  "normalization": "LF-normalized SHA-256 of public validator fixture bytes",
+  "corpora": [
+    {
+      "id": "control-storage-evidence-semantics-v14",
+      "path": "compat/native-runtime/v14/evidence/control_storage_evidence_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen retention, decision, resilience, repair and rebalance Evidence semantics",
+      "sha256": "ef83b45ad4b14ef6c0d12f16890f728721f72c929e31c6d7176dcb347cd8e810"
+    }
+  ]
+}

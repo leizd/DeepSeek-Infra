@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "source_version": "4.8.0",
+  "envelope": "evidence-proof-v2",
+  "frozen_proof_types": [
+    "dr-readiness-proof-v1",
+    "predictive-planning-proof-v1"
+  ]
+}

@@ -1,0 +1,1937 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "release/**", "rc/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  EVIDENCE_CONTEXT_PATH: artifacts/evidence-context/evidence-source-context.json
+
+jobs:
+  release-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check release version consistency
+        run: python scripts/check_release_version.py --strict-branch
+
+  evidence-context:
+    needs: release-version
+    runs-on: ubuntu-latest
+    outputs:
+      tested-revision: ${{ steps.context.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: context
+        name: Capture exact-merge Evidence context
+        run: >-
+          python scripts/capture_evidence_context.py
+          --version $RELEASE_VERSION
+          --out "$EVIDENCE_CONTEXT_PATH"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-source-context
+          path: ${{ env.EVIDENCE_CONTEXT_PATH }}
+          if-no-files-found: error
+
+  test:
+    needs: release-version
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install native backup helper toolchain
+        uses: dtolnay/rust-toolchain@1.85.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: npm ci --prefix frontend
+      - run: npm run build --prefix frontend
+      - run: ruff check .
+      - run: mypy .
+      - run: pytest --cov --cov-report=term-missing --cov-report=json:artifacts/coverage.json --cov-fail-under=95.0
+      - if: matrix.python == '3.12'
+        run: python scripts/report_coverage_debt.py --coverage artifacts/coverage.json --json-out artifacts/coverage-debt.json
+      - if: matrix.python == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-debt-python-3.12
+          path: |
+            artifacts/coverage.json
+            artifacts/coverage-debt.json
+      - run: node --check static/vendor/katex/katex.min.js
+
+  frontend:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - run: npm run typecheck --prefix frontend
+      - run: npm test --prefix frontend
+      - run: npm run build --prefix frontend
+      - run: python scripts/check_frontend_bundle.py --out docs/evidence/frontend-bundle-v$RELEASE_VERSION.json
+      - run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer frontend
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-frontend
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-frontend
+          path: artifacts/evidence-producer-frontend
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: react-frontend
+          path: |
+            static/ui
+            docs/evidence/frontend-bundle-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: error
+
+  stateless-mcp:
+    needs: release-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: stateless-mcp/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - run: npm ci --prefix stateless-mcp
+      - run: npm run check --prefix stateless-mcp
+
+  frontend-browser:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - run: npm run build --prefix frontend
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-browser.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: python scripts/smoke_frontend_browser.py --out docs/evidence/frontend-browser-v$RELEASE_VERSION.json
+      - run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer frontend-browser
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-frontend-browser
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-frontend-browser
+          path: artifacts/evidence-producer-frontend-browser
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-browser-smoke
+          path: docs/evidence/frontend-browser-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: error
+
+  security:
+    needs: release-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install pip-audit bandit detect-secrets
+      - run: npm ci --prefix frontend
+      - run: npm ci --prefix stateless-mcp
+      - name: npm audit (high; documented exceptions gated)
+        run: |
+          mkdir -p artifacts
+          status=0
+          npm audit --prefix frontend --audit-level=high --json > artifacts/npm-audit.json || status=$?
+          if [ "$status" -gt 1 ]; then cat artifacts/npm-audit.json; exit "$status"; fi
+          python scripts/check_npm_audit.py artifacts/npm-audit.json
+      - name: Stateless MCP npm audit (high)
+        run: npm audit --prefix stateless-mcp --audit-level=high
+      - run: pip-audit -r requirements.txt -r requirements-dev.txt -r requirements-browser.txt -r requirements-s3-e2e.txt
+      - run: bandit -r deepseek_infra --severity-level high -q
+      - run: detect-secrets scan --baseline .secrets.baseline
+
+  packed-delta-s3-e2e:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+      MINIO_ROOT_USER: deepseekci
+      MINIO_ROOT_PASSWORD: ci-packed-delta-${{ github.run_id }} # pragma: allowlist secret
+      AWS_ACCESS_KEY_ID: deepseekci
+      AWS_SECRET_ACCESS_KEY: ci-packed-delta-${{ github.run_id }} # pragma: allowlist secret
+      DEEPSEEK_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+      DEEPSEEK_TEST_S3_BUCKET: deepseek-packed-e2e
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-s3-e2e.txt
+      - name: Build the real Age backup crypto helper
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ""
+      - run: python scripts/build_backup_crypto.py
+      - name: Start pinned MinIO server
+        run: >-
+          docker run --detach --name deepseek-minio
+          --publish 9000:9000
+          --env MINIO_ROOT_USER
+          --env MINIO_ROOT_PASSWORD
+          ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+          server /data --address ":9000"
+      - name: Wait for MinIO health endpoint
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs deepseek-minio
+          exit 1
+      - name: Run real HTTP packed incremental restore
+        run: >-
+          python scripts/run_packed_delta_s3_e2e.py
+          --out docs/evidence/packed-delta-s3-v$RELEASE_VERSION.json
+      - name: Stage packed-delta exact-merge Evidence
+        run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer packed-delta-s3-e2e
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-packed-delta-s3-e2e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-packed-delta-s3-e2e
+          path: artifacts/evidence-producer-packed-delta-s3-e2e
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: packed-delta-s3-e2e
+          path: docs/evidence/packed-delta-s3-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: warn
+      - name: Collect MinIO diagnostics
+        if: always()
+        run: docker logs deepseek-minio || true
+
+  object-set-s3-e2e:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+      MINIO_ROOT_USER: deepseekci
+      MINIO_ROOT_PASSWORD: ci-object-set-${{ github.run_id }} # pragma: allowlist secret
+      AWS_ACCESS_KEY_ID: deepseekci
+      AWS_SECRET_ACCESS_KEY: ci-object-set-${{ github.run_id }} # pragma: allowlist secret
+      DEEPSEEK_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+      DEEPSEEK_TEST_S3_BUCKET: deepseek-object-set-e2e
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-s3-e2e.txt
+      - name: Build the real Age backup crypto helper
+        uses: dtolnay/rust-toolchain@1.85.0
+      - run: python scripts/build_backup_crypto.py
+      - name: Start pinned MinIO server
+        run: >-
+          docker run --detach --name deepseek-minio-object-set
+          --publish 9000:9000
+          --env MINIO_ROOT_USER
+          --env MINIO_ROOT_PASSWORD
+          ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+          server /data --address ":9000"
+      - name: Wait for MinIO health endpoint
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs deepseek-minio-object-set
+          exit 1
+      - name: Run real MinIO cold, warm, and corrupt-cache recovery gates
+        run: >-
+          python scripts/run_object_set_s3_e2e.py
+          --out docs/evidence/object-set-s3-v$RELEASE_VERSION.json
+      - name: Stage object-set exact-merge Evidence
+        run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer object-set-s3-e2e
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-object-set-s3-e2e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-object-set-s3-e2e
+          path: artifacts/evidence-producer-object-set-s3-e2e
+          if-no-files-found: error
+      - name: Upload object-set recovery report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: object-set-s3-e2e
+          path: docs/evidence/object-set-s3-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: warn
+      - name: Collect object-set MinIO diagnostics
+        if: always()
+        run: docker logs deepseek-minio-object-set || true
+
+  recovery-fault-evidence:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Build the real Age backup crypto helper
+        uses: dtolnay/rust-toolchain@1.85.0
+      - run: python scripts/build_backup_crypto.py
+      - name: Run real process restart and injected recovery fault gates
+        run: >-
+          python scripts/run_recovery_fault_evidence.py
+          --out docs/evidence/recovery-faults-v$RELEASE_VERSION.json
+      - name: Stage recovery fault exact-merge Evidence
+        run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer recovery-fault-evidence
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-recovery-fault-evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-recovery-fault-evidence
+          path: artifacts/evidence-producer-recovery-fault-evidence
+          if-no-files-found: error
+      - name: Upload recovery fault report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovery-fault-evidence
+          path: docs/evidence/recovery-faults-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: warn
+
+  replica-healing-s3-e2e:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+      MINIO_ROOT_USER: deepseekci
+      MINIO_ROOT_PASSWORD: ci-healing-${{ github.run_id }} # pragma: allowlist secret
+      AWS_ACCESS_KEY_ID: deepseekci
+      AWS_SECRET_ACCESS_KEY: ci-healing-${{ github.run_id }} # pragma: allowlist secret
+      DEEPSEEK_TEST_S3_ENDPOINT_A: http://127.0.0.1:9000
+      DEEPSEEK_TEST_S3_ENDPOINT_B: http://127.0.0.1:9001
+      DEEPSEEK_TEST_S3_BUCKET_A: deepseek-healing-pri
+      DEEPSEEK_TEST_S3_BUCKET_B: deepseek-healing-rep
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-s3-e2e.txt
+      - name: Build the real Age backup crypto helper
+        uses: dtolnay/rust-toolchain@1.85.0
+      - run: python scripts/build_backup_crypto.py
+      - name: Start Primary MinIO server (Target A)
+        run: >-
+          docker run --detach --name deepseek-minio-pri
+          --publish 9000:9000
+          --env MINIO_ROOT_USER
+          --env MINIO_ROOT_PASSWORD
+          ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+          server /data --address ":9000"
+      - name: Start Replica MinIO server (Target B)
+        run: >-
+          docker run --detach --name deepseek-minio-rep
+          --publish 9001:9001
+          --env MINIO_ROOT_USER
+          --env MINIO_ROOT_PASSWORD
+          ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+          server /data --address ":9001"
+      - name: Wait for MinIO health endpoints
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:9000/minio/health/live >/dev/null && \
+               curl --fail --silent http://127.0.0.1:9001/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs deepseek-minio-pri
+          docker logs deepseek-minio-rep
+          exit 1
+      - name: Run dual MinIO autonomous healing and write failover gates
+        run: >-
+          python scripts/run_replica_healing_s3_e2e.py
+          --out docs/evidence/replica-healing-s3-v$RELEASE_VERSION.json
+      - name: Stage replica-healing exact-merge Evidence
+        run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer replica-healing-s3-e2e
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-replica-healing-s3-e2e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-replica-healing-s3-e2e
+          path: artifacts/evidence-producer-replica-healing-s3-e2e
+          if-no-files-found: error
+      - name: Upload replica-healing report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: replica-healing-s3-e2e
+          path: docs/evidence/replica-healing-s3-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: warn
+      - name: Collect MinIO diagnostics
+        if: always()
+        run: |
+          docker logs deepseek-minio-pri || true
+          docker logs deepseek-minio-rep || true
+
+  storage-control-plane-minio-e2e:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+      MINIO_ROOT_USER: deepseekci
+      MINIO_ROOT_PASSWORD: ci-storage-control-${{ github.run_id }} # pragma: allowlist secret
+      AWS_ACCESS_KEY_ID: deepseekci
+      AWS_SECRET_ACCESS_KEY: ci-storage-control-${{ github.run_id }} # pragma: allowlist secret
+      FEDERATION_MINIO_ROOT_USER: deepseekfederation
+      FEDERATION_MINIO_ROOT_PASSWORD: ci-federation-storage-${{ github.run_id }} # pragma: allowlist secret
+      DEEPSEEK_TEST_FEDERATION_ACCESS_KEY_ID: deepseekfederation
+      DEEPSEEK_TEST_FEDERATION_SECRET_ACCESS_KEY: ci-federation-storage-${{ github.run_id }} # pragma: allowlist secret
+      DEEPSEEK_TEST_S3_ENDPOINT_A: http://127.0.0.1:9000
+      DEEPSEEK_TEST_S3_ENDPOINT_B: http://127.0.0.1:9001
+      DEEPSEEK_TEST_S3_ENDPOINT_C: http://127.0.0.1:9002
+      DEEPSEEK_TEST_S3_ENDPOINT_D: http://127.0.0.1:9003
+      DEEPSEEK_TEST_S3_ENDPOINT_E: http://127.0.0.1:9004
+      DEEPSEEK_TEST_MINIO_CONTAINER_A: deepseek-minio-control-a
+      DEEPSEEK_TEST_MINIO_CONTAINER_B: deepseek-minio-control-b
+      DEEPSEEK_TEST_MINIO_CONTAINER_C: deepseek-minio-control-c
+      DEEPSEEK_TEST_MINIO_CONTAINER_D: deepseek-minio-control-d
+      DEEPSEEK_TEST_MINIO_CONTAINER_E: deepseek-minio-control-e
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-s3-e2e.txt
+      - name: Build the real Age backup crypto helper
+        uses: dtolnay/rust-toolchain@1.85.0
+      - run: python scripts/build_backup_crypto.py
+      - name: Start isolated Storage Control Plane MinIO harness
+        run: |
+          docker run --detach --name "$DEEPSEEK_TEST_MINIO_CONTAINER_A" \
+            --publish 9000:9000 \
+            --env MINIO_ROOT_USER \
+            --env MINIO_ROOT_PASSWORD \
+            ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
+            server /data --address ":9000"
+          docker run --detach --name "$DEEPSEEK_TEST_MINIO_CONTAINER_B" \
+            --publish 9001:9001 \
+            --env MINIO_ROOT_USER \
+            --env MINIO_ROOT_PASSWORD \
+            ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
+            server /data --address ":9001"
+          docker run --detach --name "$DEEPSEEK_TEST_MINIO_CONTAINER_C" \
+            --publish 9002:9002 \
+            --env MINIO_ROOT_USER \
+            --env MINIO_ROOT_PASSWORD \
+            ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
+            server /data --address ":9002"
+          MINIO_ROOT_USER="$FEDERATION_MINIO_ROOT_USER" MINIO_ROOT_PASSWORD="$FEDERATION_MINIO_ROOT_PASSWORD" \
+          docker run --detach --name "$DEEPSEEK_TEST_MINIO_CONTAINER_D" \
+            --publish 9003:9003 \
+            --env MINIO_ROOT_USER \
+            --env MINIO_ROOT_PASSWORD \
+            ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
+            server /data --address ":9003"
+          MINIO_ROOT_USER="$FEDERATION_MINIO_ROOT_USER" MINIO_ROOT_PASSWORD="$FEDERATION_MINIO_ROOT_PASSWORD" \
+          docker run --detach --name "$DEEPSEEK_TEST_MINIO_CONTAINER_E" \
+            --publish 9004:9004 \
+            --env MINIO_ROOT_USER \
+            --env MINIO_ROOT_PASSWORD \
+            ghcr.io/leizd/minio:RELEASE.2025-09-07T16-13-09Z@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2 \
+            server /data --address ":9004"
+      - name: Wait for all MinIO health endpoints
+        run: |
+          for attempt in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:9000/minio/health/live >/dev/null && \
+               curl --fail --silent http://127.0.0.1:9001/minio/health/live >/dev/null && \
+               curl --fail --silent http://127.0.0.1:9002/minio/health/live >/dev/null && \
+               curl --fail --silent http://127.0.0.1:9003/minio/health/live >/dev/null && \
+               curl --fail --silent http://127.0.0.1:9004/minio/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+      - name: Run real four-MinIO Storage Control Plane and Federation gates
+        run: >-
+          python scripts/run_storage_control_plane_minio_e2e.py
+          --out docs/evidence/storage-control-plane-minio-v$RELEASE_VERSION.json
+      - name: Stage Storage Control Plane exact-merge Evidence
+        run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer storage-control-plane-minio-e2e
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-storage-control-plane-minio-e2e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-storage-control-plane-minio-e2e
+          path: artifacts/evidence-producer-storage-control-plane-minio-e2e
+          if-no-files-found: error
+      - name: Upload Storage Control Plane report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-control-plane-minio-e2e
+          path: |
+            docs/evidence/storage-control-plane-minio-v${{ env.RELEASE_VERSION }}.json
+            docs/evidence/storage-control-plane-autonomous-proof-v${{ env.RELEASE_VERSION }}.json
+            docs/evidence/storage-control-plane-predictive-proof-v${{ env.RELEASE_VERSION }}.json
+            docs/evidence/federation-trust-proof-v${{ env.RELEASE_VERSION }}.json
+            docs/evidence/federated-replica-proof-v${{ env.RELEASE_VERSION }}.json
+            docs/evidence/federated-dr-proof-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: warn
+      - name: Collect Storage Control Plane MinIO diagnostics
+        if: always()
+        run: |
+          docker logs "$DEEPSEEK_TEST_MINIO_CONTAINER_A" || true
+          docker logs "$DEEPSEEK_TEST_MINIO_CONTAINER_B" || true
+          docker logs "$DEEPSEEK_TEST_MINIO_CONTAINER_C" || true
+          docker logs "$DEEPSEEK_TEST_MINIO_CONTAINER_D" || true
+          docker logs "$DEEPSEEK_TEST_MINIO_CONTAINER_E" || true
+
+  eval:
+    needs:
+      - evidence-context
+      - release-version
+
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: python evals/runners/run_offline_eval_suite.py --include-agent --strict --out evals/reports/latest.json --markdown evals/reports/latest.md
+      - run: python evals/runners/run_injection_adversarial.py --strict --no-report
+      - run: python evals/runners/run_security_corpus.py --strict --out evals/reports/security-latest.json --markdown evals/reports/security-latest.md
+      - run: python evals/runners/compare_eval_baseline.py --strict --baseline evals/baselines/v2.2.6.json --current evals/reports/latest.json --agent-baseline evals/baselines/agent-v2.2.8.json --out evals/reports/baseline-compare-latest.json
+      - run: python evals/runners/run_agent_eval.py --report-dir evals/reports --strict
+      - run: python evals/runners/run_skill_eval.py --out evals/reports/skills-v$RELEASE_VERSION.json --strict
+      - run: python evals/runners/run_media_eval.py --out evals/reports/media-v$RELEASE_VERSION.json --strict
+      - run: python evals/runners/run_browser_eval.py --out evals/reports/browser-v$RELEASE_VERSION.json --strict --version $RELEASE_VERSION
+      - run: python evals/runners/run_automation_eval.py --out evals/reports/automation-v$RELEASE_VERSION.json --strict --version $RELEASE_VERSION
+      - run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer eval
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-eval
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-eval
+          path: artifacts/evidence-producer-eval
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: offline-eval-report
+          path: |
+            evals/reports/latest.json
+            evals/reports/latest.md
+            evals/reports/agent-latest.json
+            evals/reports/agent-latest.md
+            evals/reports/baseline-compare-latest.json
+            evals/reports/security-latest.json
+            evals/reports/security-latest.md
+            evals/reports/skills-v${{ env.RELEASE_VERSION }}.json
+            evals/reports/media-v${{ env.RELEASE_VERSION }}.json
+            evals/reports/browser-v${{ env.RELEASE_VERSION }}.json
+            evals/reports/automation-v${{ env.RELEASE_VERSION }}.json
+
+  docker:
+    needs: release-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t deepseek-infra:test .
+      - run: docker build -f stateless-mcp/Dockerfile -t deepseek-infra-stateless-mcp:test .
+      - run: cp .env.example .env && docker compose config
+      - run: docker compose -f docker-compose.stateless-mcp.yml config
+
+  stateless-mcp-failover:
+    needs:
+      - release-version
+      - stateless-mcp
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: stateless-mcp/package-lock.json
+      - run: npm ci --prefix stateless-mcp
+      - name: Simulate instance loss and verify retry, lease recovery, and idempotency
+        run: npm run smoke:failover --prefix stateless-mcp
+      - name: Show stateless MCP logs
+        if: failure()
+        run: docker compose -f docker-compose.stateless-mcp.yml -f stateless-mcp/compose.failover.yml logs --no-color
+      - name: Stop stateless MCP stack
+        if: always()
+        run: docker compose -f docker-compose.stateless-mcp.yml -f stateless-mcp/compose.failover.yml down --volumes --remove-orphans
+
+  native-browser-engine:
+    needs:
+      - release-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.85.0
+      # The same browser the oracle drives: the pinned Playwright installs a pinned
+      # Chromium, so engine and oracle are compared on one revision rather than two.
+      - name: Install a Chromium for the engine to drive
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -r requirements-browser.txt
+          python -m playwright install --with-deps chromium
+      - name: Point the engine at that Chromium
+        run: |
+          set -euo pipefail
+          chrome="$(find "$HOME/.cache/ms-playwright" -maxdepth 3 -type f -name chrome -print -quit)"
+          test -x "$chrome"
+          echo "DEEPSEEK_BROWSER_CHROMIUM=$chrome" >> "$GITHUB_ENV"
+          # The documented opt-in for a host without user namespaces. The engine's own
+          # end-to-end test sets it for the sidecar it spawns; the live test runs
+          # in-process, so the lane has to. This is the same switch the image leaves to
+          # the operator, used here for the same reason.
+          echo "DEEPSEEK_BROWSER_NO_SANDBOX=1" >> "$GITHUB_ENV"
+      # The gateway's end-to-end test spawns the sidecar binary next to the test
+      # executable, so the binary is built before the test that spawns it.
+      - name: Build the browser engine sidecar
+        run: >-
+          cargo build --locked --manifest-path rust/Cargo.toml
+          -p deepseek-browser --examples
+      - name: Live engine tests
+        run: >-
+          cargo test --locked --manifest-path rust/Cargo.toml
+          -p deepseek-browser --tests
+      - name: Gateway to engine seam
+        run: >-
+          cargo test --locked --manifest-path rust/Cargo.toml
+          -p deepseek-gateway --test browser_engine_e2e
+      - name: Engine parity against the Playwright oracle
+        run: >-
+          python tasks/native-runtime/browser_engine_parity_probe.py
+          --rust-example rust/target/debug/examples/browser_engine_parity_probe
+          --report artifacts/browser-engine-parity.json
+
+  native-probe-parity:
+    needs:
+      - release-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Install the oracle's dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt -r requirements-dev.txt
+      - name: Build the probe examples
+        run: cargo build --locked --manifest-path rust/Cargo.toml --workspace --examples
+      # These three probes drive their own Rust side and answer `return 0 if not problems
+      # else 1`, so the lane is the gate and the exit code is the verdict. Until this
+      # lane existed they were local evidence only: a change that broke one of them
+      # would have been caught by whoever remembered to run it, not by CI.
+      - name: Title parity
+        run: >-
+          python tasks/native-runtime/title_parity_probe.py
+          --rust-example rust/target/debug/examples/title_parity_probe
+      - name: File routes parity
+        run: >-
+          python tasks/native-runtime/file_routes_parity_probe.py
+          --rust-example rust/target/debug/examples/file_routes_parity_probe
+      - name: Chat stream events parity
+        run: >-
+          python tasks/native-runtime/chat_stream_events_parity_probe.py
+          --rust-example rust/target/debug/examples/chat_stream_events_parity_probe
+      # The older pairs print a report for a human to diff. The harness runs both sides of
+      # each one and exits non-zero when a pair disagrees, which is what turns thirty-odd
+      # pairs of local evidence into gates in one step. The pairs it deliberately does not
+      # run, and the remaining store fixture-clock divergence, are printed on every run.
+      - name: Every other probe pair
+        run: python tasks/native-runtime/check_probe_pairs.py
+
+  rust-docker:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build Rust sidecar image
+        run: docker build --target gateway -f rust/Dockerfile -t deepseek-rust-gateway:$RELEASE_VERSION .
+      - name: Build browser engine image
+        run: docker build --target browser -f rust/Dockerfile -t deepseek-browser-engine:$RELEASE_VERSION .
+      - name: Record Rust sidecar image identity
+        run: >-
+          python scripts/record_rust_sidecar_image.py
+          --tag deepseek-rust-gateway:$RELEASE_VERSION
+          --out docs/evidence/rust-sidecar-image-v$RELEASE_VERSION.json
+      - name: Run Rust sidecar
+        run: docker run --detach --name deepseek-rust-gateway --publish 127.0.0.1:8787:8787 -e AUTH_DISABLED=1 deepseek-rust-gateway:$RELEASE_VERSION
+      - name: Smoke test Rust sidecar
+        run: python scripts/smoke_rust_sidecar.py --base-url http://127.0.0.1:8787
+      - run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer rust-docker
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-rust-docker
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-rust-docker
+          path: artifacts/evidence-producer-rust-docker
+          if-no-files-found: error
+      - name: Show Rust sidecar logs
+        if: failure()
+        run: docker logs deepseek-rust-gateway || true
+      - name: Upload Rust sidecar image identity
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-sidecar-image
+          path: docs/evidence/rust-sidecar-image-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: error
+      - name: Stop Rust sidecar
+        if: always()
+        run: docker rm --force deepseek-rust-gateway || true
+
+  hybrid-runtime-e2e:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and start hybrid runtime
+        run: |
+          cp .env.example .env
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.hybrid-test.yml \
+            up --detach --build
+      - name: Run hybrid runtime smoke tests
+        run: python scripts/smoke_hybrid_runtime.py --json > docs/evidence/hybrid-runtime-e2e-v$RELEASE_VERSION.json
+      - run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer hybrid-runtime-e2e
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-hybrid-runtime-e2e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-hybrid-runtime-e2e
+          path: artifacts/evidence-producer-hybrid-runtime-e2e
+          if-no-files-found: error
+      - name: Upload hybrid runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hybrid-runtime-e2e
+          path: docs/evidence/hybrid-runtime-e2e-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: error
+      - name: Show hybrid runtime logs
+        if: failure()
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.hybrid-test.yml \
+            logs --no-color || true
+      - name: Stop hybrid runtime
+        if: always()
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.hybrid-test.yml \
+            down --volumes --remove-orphans || true
+
+  rag-parity:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build Rust sidecar image for RAG parity
+        run: |
+          for attempt in 1 2 3; do
+            if docker build --target gateway -f rust/Dockerfile -t deepseek-rust-gateway:parity .; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
+      - name: Start Rust sidecar for RAG parity
+        run: |
+          docker run --detach \
+            --name deepseek-rust-rag-parity \
+            --publish 127.0.0.1:8787:8787 \
+            deepseek-rust-gateway:parity
+      - name: Run deterministic RAG parity corpus
+        run: |
+          python scripts/check_rag_parity.py \
+            --base-url http://127.0.0.1:8787 \
+            --strict \
+            --report docs/evidence/rag-parity-v$RELEASE_VERSION.json
+      - run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer rag-parity
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-rag-parity
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-rag-parity
+          path: artifacts/evidence-producer-rag-parity
+          if-no-files-found: error
+      - name: Show Rust RAG parity logs
+        if: failure()
+        run: docker logs deepseek-rust-rag-parity || true
+      - name: Upload RAG parity report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-parity-report
+          path: docs/evidence/rag-parity-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: warn
+      - name: Stop Rust RAG parity sidecar
+        if: always()
+        run: docker rm --force deepseek-rust-rag-parity || true
+
+  rag-vector-binary-parity:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build release Rust sidecar for binary vector parity
+        run: docker build --target gateway -f rust/Dockerfile -t deepseek-rust-gateway:rag-vector-binary-parity .
+      - name: Start Rust sidecar for binary vector parity
+        run: |
+          docker run --detach \
+            --name deepseek-rust-rag-vector-binary-parity \
+            --publish 127.0.0.1:8787:8787 \
+            deepseek-rust-gateway:rag-vector-binary-parity
+      - name: Run deterministic compact binary parity corpus
+        run: |
+          python scripts/check_rag_vector_binary_parity.py \
+            --base-url http://127.0.0.1:8787 \
+            --strict \
+            --report docs/evidence/rag-vector-binary-parity-v$RELEASE_VERSION.json
+      - run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer rag-vector-binary-parity
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-rag-vector-binary-parity
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-rag-vector-binary-parity
+          path: artifacts/evidence-producer-rag-vector-binary-parity
+          if-no-files-found: error
+      - name: Show Rust binary vector parity logs
+        if: failure()
+        run: docker logs deepseek-rust-rag-vector-binary-parity || true
+      - name: Upload binary vector parity report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-vector-binary-parity
+          path: docs/evidence/rag-vector-binary-parity-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: error
+      - name: Stop Rust binary vector parity sidecar
+        if: always()
+        run: docker rm --force deepseek-rust-rag-vector-binary-parity || true
+
+  gateway-request-parity:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build Rust sidecar image for Gateway request parity
+        run: docker build --target gateway -f rust/Dockerfile -t deepseek-rust-gateway:request-parity .
+      - name: Start Rust sidecar for Gateway request parity
+        run: |
+          docker run --detach \
+            --name deepseek-rust-gateway-request-parity \
+            --publish 127.0.0.1:8787:8787 \
+            deepseek-rust-gateway:request-parity
+      - name: Run deterministic Gateway request parity corpus
+        run: |
+          python scripts/check_gateway_request_parity.py \
+            --base-url http://127.0.0.1:8787 \
+            --strict \
+            --report docs/evidence/gateway-request-parity-v$RELEASE_VERSION.json
+      - run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer gateway-request-parity
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-gateway-request-parity
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-gateway-request-parity
+          path: artifacts/evidence-producer-gateway-request-parity
+          if-no-files-found: error
+      - name: Show Rust Gateway request parity logs
+        if: failure()
+        run: docker logs deepseek-rust-gateway-request-parity || true
+      - name: Upload Gateway request parity report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-request-parity-report
+          path: docs/evidence/gateway-request-parity-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: warn
+      - name: Stop Rust Gateway request parity sidecar
+        if: always()
+        run: docker rm --force deepseek-rust-gateway-request-parity || true
+
+  mcp-protocol-parity:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build Rust sidecar image for MCP protocol parity
+        run: docker build --target gateway -f rust/Dockerfile -t deepseek-rust-gateway:mcp-protocol-parity .
+      - name: Start Rust sidecar for MCP protocol parity
+        run: |
+          docker run --detach \
+            --name deepseek-rust-mcp-protocol-parity \
+            --publish 127.0.0.1:8787:8787 \
+            deepseek-rust-gateway:mcp-protocol-parity
+      - name: Run deterministic MCP protocol parity corpus
+        run: |
+          python scripts/check_mcp_protocol_parity.py \
+            --base-url http://127.0.0.1:8787 \
+            --strict \
+            --report docs/evidence/mcp-protocol-parity-v$RELEASE_VERSION.json
+      - run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer mcp-protocol-parity
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-mcp-protocol-parity
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-mcp-protocol-parity
+          path: artifacts/evidence-producer-mcp-protocol-parity
+          if-no-files-found: error
+      - name: Show Rust MCP protocol parity logs
+        if: failure()
+        run: docker logs deepseek-rust-mcp-protocol-parity || true
+      - name: Upload MCP protocol parity report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-protocol-parity-report
+          path: docs/evidence/mcp-protocol-parity-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: warn
+      - name: Stop Rust MCP protocol parity sidecar
+        if: always()
+        run: docker rm --force deepseek-rust-mcp-protocol-parity || true
+
+  rag-document-preparation-parity:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build Rust sidecar image for RAG document preparation parity
+        run: docker build --target gateway -f rust/Dockerfile -t deepseek-rust-gateway:rag-document-preparation-parity .
+      - name: Start Rust sidecar for RAG document preparation parity
+        run: |
+          docker run --detach \
+            --name deepseek-rust-rag-document-preparation-parity \
+            --publish 127.0.0.1:8787:8787 \
+            deepseek-rust-gateway:rag-document-preparation-parity
+      - name: Run deterministic RAG document preparation parity corpus
+        run: |
+          python scripts/check_rag_document_preparation_parity.py \
+            --base-url http://127.0.0.1:8787 \
+            --strict \
+            --report docs/evidence/rag-document-preparation-parity-v$RELEASE_VERSION.json
+      - run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer rag-document-preparation-parity
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-rag-document-preparation-parity
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-rag-document-preparation-parity
+          path: artifacts/evidence-producer-rag-document-preparation-parity
+          if-no-files-found: error
+      - name: Show Rust RAG document preparation parity logs
+        if: failure()
+        run: docker logs deepseek-rust-rag-document-preparation-parity || true
+      - name: Upload RAG document preparation parity report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-document-preparation-parity-report
+          path: docs/evidence/rag-document-preparation-parity-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: warn
+      - name: Stop Rust RAG document preparation parity sidecar
+        if: always()
+        run: docker rm --force deepseek-rust-rag-document-preparation-parity || true
+
+  release-readiness:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - run: npm run build --prefix frontend
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-browser.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: python scripts/generate_release_evidence.py --version $RELEASE_VERSION
+      - run: python scripts/doctor.py --offline
+      - run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer release-readiness
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-release-readiness
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-release-readiness
+          path: artifacts/evidence-producer-release-readiness
+          if-no-files-found: error
+
+  docs:
+    needs: release-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python scripts/update_docs_language_nav.py --check
+      - run: python scripts/check_doc_links.py
+
+  rust:
+    needs: release-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - name: Build frontend for the production gateway contract
+        run: npm run build --prefix frontend
+      - name: Install PDF renderer and OCR engine used by gateway tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install offline compatibility oracle dependencies
+        run: python -m pip install -r requirements.txt -r requirements-ocr.txt
+      - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+      - run: cargo clippy --locked --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --manifest-path rust/Cargo.toml --all
+
+  native-s3-transport:
+    needs: release-version
+    runs-on: ubuntu-latest
+    # The provider step runs the Go recovery suite under the race detector. Measured in
+    # exact-head CI 37447970451: the instrumented build adds ~44s and the suite goes
+    # 63.01s -> 86.15s. The bound is raised from 20 so neither is cut off mid-suite.
+    timeout-minutes: 40
+    env:
+      GOTOOLCHAIN: local
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: clippy
+      - name: Install checksum-pinned Go 1.27.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+          install_dir="$RUNNER_TEMP/go-1.27.1"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+          echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir"
+          echo "$install_dir/go/bin" >> "$GITHUB_PATH"
+      - run: test "$(go env GOVERSION)" = "go1.27.1"
+      - run: python -m pip install -r requirements.txt -r requirements-s3-e2e.txt
+      - name: Download and verify Go modules before proxy isolation
+        working-directory: go
+        run: |
+          go mod download
+          go mod verify
+      - name: Check native transport on the frozen MSRV
+        run: cargo clippy --locked --manifest-path rust/Cargo.toml -p deepseek-storage --all-targets --all-features -- -D warnings
+      - name: Native S3 boundary tests
+        run: cargo test --locked --manifest-path rust/Cargo.toml -p deepseek-storage --features s3 --lib --test s3_transport
+      - name: Real three-MinIO Rust bytes and Go control recovery tests
+        env:
+          GOPROXY: "off"
+        run: python scripts/run_native_s3_e2e.py
+
+  native-protocol:
+    needs: release-version
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+      GOSUMDB: sum.golang.org
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install checksum-pinned Protobuf descriptor validator
+        run: >-
+          python -m pip install --disable-pip-version-check --no-deps
+          --only-binary=:all: --require-hashes
+          -r requirements-native-protocol.txt
+      - name: Install checksum-pinned Go 1.27.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+          install_dir="$RUNNER_TEMP/go-1.27.1"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+          echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir"
+          echo "$install_dir/go/bin" >> "$GITHUB_PATH"
+      - run: test "$(go env GOVERSION)" = "go1.27.1"
+      - name: Install checksum-pinned protoc 36.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/protoc-36.1-linux-x86_64.zip"
+          install_dir="$RUNNER_TEMP/protoc-36.1"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            https://github.com/protocolbuffers/protobuf/releases/download/v36.1/protoc-36.1-linux-x86_64.zip
+          echo "c4bc672d9d49214dc8cafdceadf4df92182d6ca8e3ec65a56b2d7de5602669b4  $archive" | sha256sum --check --strict
+          unzip -q "$archive" -d "$install_dir"
+          echo "$install_dir/bin" >> "$GITHUB_PATH"
+      - name: Install pinned Go protobuf generators
+        shell: bash
+        env:
+          GOBIN: ${{ runner.temp }}/native-proto-plugins
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          mkdir -p "$GOBIN"
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+          echo "$GOBIN" >> "$GITHUB_PATH"
+      - run: python scripts/native_codegen.py --check
+      - name: Install checksum-pinned Android Java Lite generator
+        shell: bash
+        run: |
+          set -euo pipefail
+          plugin="$RUNNER_TEMP/protoc-gen-grpc-java-1.84.0-linux-x86_64.exe"
+          curl --fail --location --silent --show-error --output "$plugin" \
+            https://repo.maven.apache.org/maven2/io/grpc/protoc-gen-grpc-java/1.84.0/protoc-gen-grpc-java-1.84.0-linux-x86_64.exe
+          echo "907c2d4efc2bae9b21cada75c31b36f3821e15b7be96311e214a6be65bcd20aa  $plugin" | sha256sum --check --strict
+          chmod +x "$plugin"
+          echo "PROTOC_GEN_GRPC_JAVA=$plugin" >> "$GITHUB_ENV"
+      - run: python scripts/native_android_codegen.py --check
+      - run: python scripts/native_runtime_contract.py --check
+      - run: python scripts/native_runtime_evidence.py
+      - run: python scripts/control_plane_shadow.py --check --export-report artifacts/control-shadow-report.json
+
+  native-go:
+    needs: release-version
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+      GOSUMDB: sum.golang.org
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Install checksum-pinned Go 1.27.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+          install_dir="$RUNNER_TEMP/go-1.27.1"
+          curl --fail --location --silent --show-error \
+            --output "$archive" \
+            https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+          echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
+          mkdir -p "$install_dir"
+          tar -xzf "$archive" -C "$install_dir"
+          echo "$install_dir/go/bin" >> "$GITHUB_PATH"
+      - run: test "$(go env GOVERSION)" = "go1.27.1"
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test ./...
+      # Pure-Go SQLite instrumentation runs hundreds of exact-schema fixtures.
+      # The measured full store suite can exceed Go's default ten-minute bound.
+      - run: go test -race -timeout=30m ./...
+      - name: Go coverage
+        # The profile is uploaded so a difference between this job's number and a developer's is
+        # diffed rather than inferred. On this suite the differences are single statements — a
+        # `select` whose two cases race, a drive-letter rule that only a Windows path can reach —
+        # and the gate's whole margin above its 95.0% floor is about two of them.
+        run: python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile coverage.out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-coverage-profile-1.27.1
+          path: go/coverage.out
+          if-no-files-found: warn
+      - name: Android Go SQLite compatibility checks
+        env:
+          # Propagate the same connector selection to process tests' child builds.
+          GOFLAGS: "-tags=deepseek_android"
+        run: |
+          go vet ./...
+          go test -race -timeout=30m ./...
+          python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile android-coverage.out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-android-coverage-profile-1.27.1
+          path: go/android-coverage.out
+          if-no-files-found: warn
+      - name: Build fail-closed Rust worker boundary
+        run: cargo build --locked --manifest-path ../rust/Cargo.toml -p deepseek-worker
+      - name: Run real Go-to-Rust worker boundary
+        shell: bash
+        env:
+          DEEPSEEK_WORKER_LISTEN: 127.0.0.1:50052
+          DEEPSEEK_TEST_RUST_WORKER_TARGET: 127.0.0.1:50052
+        run: |
+          set -euo pipefail
+          worker_log="$RUNNER_TEMP/deepseek-worker.log"
+          ../rust/target/debug/deepseek-worker >"$worker_log" 2>&1 &
+          worker_pid=$!
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if kill -0 "$worker_pid" 2>/dev/null; then
+              kill -INT "$worker_pid" 2>/dev/null || true
+              for _ in {1..50}; do
+                if ! kill -0 "$worker_pid" 2>/dev/null; then
+                  break
+                fi
+                sleep 0.1
+              done
+              if kill -0 "$worker_pid" 2>/dev/null; then
+                kill -TERM "$worker_pid" 2>/dev/null || true
+              fi
+            fi
+            wait "$worker_pid" 2>/dev/null || true
+            if [ "$status" -ne 0 ]; then
+              cat "$worker_log"
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          ready=0
+          for _ in {1..50}; do
+            if ! kill -0 "$worker_pid" 2>/dev/null; then
+              break
+            fi
+            if { exec 3<>/dev/tcp/127.0.0.1/50052; } 2>/dev/null; then
+              exec 3>&-
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Rust worker did not become ready" >&2
+            exit 1
+          fi
+          go test -tags=integration ./internal/worker \
+            -run '^TestRustWorkerWithoutAuthorityFailsClosedAndKeepsMissingEffectUnknown$|^TestRustWorkerUnconfiguredInstallRemainsFailClosed$|^TestRustWorkerStorageMutationFailsClosedWithoutAuth$|^TestRustCoordinatorStorageActionAgainstRealWorker$' \
+            -count=1 -timeout=30s
+      - name: Run real Go-to-Rust TLS worker boundary
+        env:
+          DEEPSEEK_TEST_RUST_WORKER_BINARY: ${{ github.workspace }}/rust/target/debug/deepseek-worker
+        run: go test -tags=integration ./internal/worker -run '^TestRustWorkerTLSRealBoundary$' -count=1 -timeout=30s
+      - name: Run authenticated Go-to-Rust epoch install boundary
+        shell: bash
+        env:
+          DEEPSEEK_WORKER_LISTEN: 127.0.0.1:50053
+          DEEPSEEK_TEST_RUST_WORKER_TARGET: 127.0.0.1:50053
+          DEEPSEEK_TEST_RUST_WORKER_AUTHORITY: "1"
+          DEEPSEEK_WORKER_STATE_ROOT: ${{ runner.temp }}/deepseek-worker-authority
+          DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY: 11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo
+          DEEPSEEK_WORKER_AUTHORITY_FLEET_ID: fleet-a
+          DEEPSEEK_WORKER_AUTHORITY_ENVIRONMENT: test
+          DEEPSEEK_WORKER_AUTHORITY_FENCING_TOKEN: "4"
+        run: |
+          set -euo pipefail
+          worker_log="$RUNNER_TEMP/deepseek-worker-authority.log"
+          ../rust/target/debug/deepseek-worker >"$worker_log" 2>&1 &
+          worker_pid=$!
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if kill -0 "$worker_pid" 2>/dev/null; then
+              kill -INT "$worker_pid" 2>/dev/null || true
+              for _ in {1..50}; do
+                if ! kill -0 "$worker_pid" 2>/dev/null; then
+                  break
+                fi
+                sleep 0.1
+              done
+              if kill -0 "$worker_pid" 2>/dev/null; then
+                kill -TERM "$worker_pid" 2>/dev/null || true
+              fi
+            fi
+            wait "$worker_pid" 2>/dev/null || true
+            if [ "$status" -ne 0 ]; then
+              cat "$worker_log"
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          ready=0
+          for _ in {1..50}; do
+            if ! kill -0 "$worker_pid" 2>/dev/null; then
+              break
+            fi
+            if { exec 3<>/dev/tcp/127.0.0.1/50053; } 2>/dev/null; then
+              exec 3>&-
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Configured Rust worker did not become ready" >&2
+            exit 1
+          fi
+          go test -tags=integration ./internal/worker \
+            -run '^TestRustWorkerInstallsEpochFromSignedAuthorityRequest$' \
+            -count=1 -timeout=30s
+
+  rust-coverage:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+      CARGO_LLVM_COV_VERSION: "0.6.21"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - name: Build frontend for the production gateway contract
+        run: npm run build --prefix frontend
+      - name: Install PDF renderer and OCR engine used by gateway tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install offline compatibility oracle dependencies
+        run: python -m pip install -r requirements.txt -r requirements-ocr.txt
+      - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: llvm-tools-preview
+      - run: cargo install cargo-llvm-cov --locked --version "$CARGO_LLVM_COV_VERSION"
+      - name: Enforce Rust workspace line coverage
+        run: >-
+          python scripts/run_rust_coverage.py
+          --threshold 80
+          --artifact-out artifacts/rust-coverage.json
+          --lcov-out artifacts/rust-coverage.lcov
+          --evidence-out docs/evidence/rust-coverage-v$RELEASE_VERSION.json
+      - run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer rust-coverage
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-rust-coverage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-rust-coverage
+          path: artifacts/evidence-producer-rust-coverage
+          if-no-files-found: error
+      - name: Upload Rust coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-coverage
+          path: |
+            artifacts/rust-coverage.json
+            artifacts/rust-coverage.lcov
+            docs/evidence/rust-coverage-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: error
+
+  rust-sidecar-performance:
+    needs:
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/evidence-context/evidence-source-context.json
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - run: python -m pip install -r requirements.txt
+      - name: Build locked release sidecar
+        run: cargo build --release --locked --manifest-path rust/Cargo.toml -p deepseek-gateway
+      - name: Run bounded layered benchmark
+        run: >-
+          python scripts/run_rust_sidecar_benchmarks.py
+          --skip-build
+          --iterations 2
+          --warmups 1
+          --concurrency 1,8,32
+          --timeout 45
+          --artifact-out artifacts/rust-sidecar-performance.json
+          --evidence-out docs/evidence/rust-sidecar-performance-v$RELEASE_VERSION.json
+      - run: >-
+          python scripts/prepare_evidence_artifact.py
+          --producer rust-sidecar-performance
+          --version $RELEASE_VERSION
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --out artifacts/evidence-producer-rust-sidecar-performance
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-producer-rust-sidecar-performance
+          path: artifacts/evidence-producer-rust-sidecar-performance
+          if-no-files-found: error
+      - name: Upload informational performance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-sidecar-performance
+          path: |
+            artifacts/rust-sidecar-performance.json
+            docs/evidence/rust-sidecar-performance-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: error
+
+  evidence-assembly:
+    if: always()
+    needs:
+      - evidence-context
+      - frontend
+      - frontend-browser
+      - stateless-mcp
+      - stateless-mcp-failover
+      - packed-delta-s3-e2e
+      - object-set-s3-e2e
+      - recovery-fault-evidence
+      - replica-healing-s3-e2e
+      - storage-control-plane-minio-e2e
+      - security
+      - eval
+      - release-readiness
+      - rust-docker
+      - hybrid-runtime-e2e
+      - gateway-request-parity
+      - mcp-protocol-parity
+      - rag-parity
+      - rag-document-preparation-parity
+      - rag-vector-binary-parity
+      - rust-coverage
+      - rust-sidecar-performance
+      - native-protocol
+      - native-go
+      - native-s3-transport
+      - release-version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every upstream Evidence gate
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+        run: exit 1
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: evidence-producer-*
+          path: artifacts/downloaded
+          merge-multiple: false
+      - name: Assemble exact-merge Evidence
+        run: >-
+          python scripts/assemble_release_evidence.py
+          --downloads-root artifacts/downloaded
+          --context "$EVIDENCE_CONTEXT_PATH"
+          --version $RELEASE_VERSION
+          --github-sha "$GITHUB_SHA"
+          --out release-evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence-v${{ env.RELEASE_VERSION }}
+          path: release-evidence
+          if-no-files-found: error
+
+  release-package:
+    needs:
+      - evidence-assembly
+      - evidence-context
+      - release-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-evidence-v${{ env.RELEASE_VERSION }}
+          path: artifacts/release-evidence
+      - uses: actions/download-artifact@v4
+        with:
+          name: evidence-source-context
+          path: artifacts/evidence-context
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: npm ci --prefix frontend
+      - run: npm run build --prefix frontend
+      - name: Restore assembled Evidence into package staging tree
+        run: |
+          cp -R artifacts/release-evidence/docs/evidence/. docs/evidence/
+          cp -R artifacts/release-evidence/evals/reports/. evals/reports/
+      - name: Require canonical release note
+        run: python scripts/check_release_version.py --require-release-note
+      - name: Run strict exact-merge preflight
+        run: >-
+          python scripts/preflight_release.py
+          --version $RELEASE_VERSION
+          --ga
+          --provenance-strict
+          --expected-revision "$GITHUB_SHA"
+          --json > artifacts/preflight-v$RELEASE_VERSION.json
+      - name: Build real release ZIP and manifests
+        run: >-
+          python scripts/release.py
+          --version $RELEASE_VERSION
+          --skip-frontend-build
+      - name: Reverify packaged Evidence bytes
+        run: >-
+          python scripts/verify_release_package.py
+          --archive dist/deepseek-infra-$RELEASE_VERSION.zip
+          --release-manifest dist/deepseek-infra-$RELEASE_VERSION.zip.manifest.json
+          --evidence-root artifacts/release-evidence
+          --version $RELEASE_VERSION
+          --expected-revision "$GITHUB_SHA"
+          --out artifacts/preflight-v$RELEASE_VERSION.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deepseek-infra-release-v${{ env.RELEASE_VERSION }}
+          path: |
+            dist/deepseek-infra-${{ env.RELEASE_VERSION }}.zip
+            dist/deepseek-infra-${{ env.RELEASE_VERSION }}.zip.sha256
+            dist/deepseek-infra-${{ env.RELEASE_VERSION }}.zip.manifest.json
+            artifacts/preflight-v${{ env.RELEASE_VERSION }}.json
+          if-no-files-found: error
+
+  rc-readiness:
+    if: always()
+    needs:
+      - test
+      - frontend
+      - frontend-browser
+      - stateless-mcp
+      - stateless-mcp-failover
+      - packed-delta-s3-e2e
+      - object-set-s3-e2e
+      - recovery-fault-evidence
+      - storage-control-plane-minio-e2e
+      - security
+      - eval
+      - docker
+      - rust-docker
+      - hybrid-runtime-e2e
+      - gateway-request-parity
+      - mcp-protocol-parity
+      - rag-parity
+      - rag-vector-binary-parity
+      - rag-document-preparation-parity
+      - release-readiness
+      - docs
+      - rust
+      - rust-coverage
+      - rust-sidecar-performance
+      - evidence-assembly
+      - release-package
+      - release-version
+    runs-on: ubuntu-latest
+    env:
+      RC_CI_TEST: ${{ needs.test.result }}
+      RC_CI_FRONTEND: ${{ needs.frontend.result }}
+      RC_CI_FRONTEND_BROWSER: ${{ needs['frontend-browser'].result }}
+      RC_CI_STATELESS_MCP: ${{ needs['stateless-mcp'].result }}
+      RC_CI_STATELESS_MCP_FAILOVER: ${{ needs['stateless-mcp-failover'].result }}
+      RC_CI_PACKED_DELTA_S3_E2E: ${{ needs['packed-delta-s3-e2e'].result }}
+      RC_CI_OBJECT_SET_S3_E2E: ${{ needs['object-set-s3-e2e'].result }}
+      RC_CI_RECOVERY_FAULT_EVIDENCE: ${{ needs['recovery-fault-evidence'].result }}
+      RC_CI_STORAGE_CONTROL_PLANE_MINIO_E2E: ${{ needs['storage-control-plane-minio-e2e'].result }}
+      RC_CI_SECURITY: ${{ needs.security.result }}
+      RC_CI_EVAL: ${{ needs.eval.result }}
+      RC_CI_DOCKER: ${{ needs.docker.result }}
+      RC_CI_RUST_DOCKER: ${{ needs['rust-docker'].result }}
+      RC_CI_HYBRID_RUNTIME_E2E: ${{ needs['hybrid-runtime-e2e'].result }}
+      RC_CI_GATEWAY_REQUEST_PARITY: ${{ needs['gateway-request-parity'].result }}
+      RC_CI_MCP_PROTOCOL_PARITY: ${{ needs['mcp-protocol-parity'].result }}
+      RC_CI_RAG_PARITY: ${{ needs['rag-parity'].result }}
+      RC_CI_RAG_VECTOR_BINARY_PARITY: ${{ needs['rag-vector-binary-parity'].result }}
+      RC_CI_RAG_DOCUMENT_PREPARATION_PARITY: ${{ needs['rag-document-preparation-parity'].result }}
+      RC_CI_RELEASE_READINESS: ${{ needs['release-readiness'].result }}
+      RC_CI_DOCS: ${{ needs.docs.result }}
+      RC_CI_RUST: ${{ needs.rust.result }}
+      RC_CI_RUST_COVERAGE: ${{ needs['rust-coverage'].result }}
+      RC_CI_RUST_SIDECAR_PERFORMANCE: ${{ needs['rust-sidecar-performance'].result }}
+      RC_CI_EVIDENCE_ASSEMBLY: ${{ needs['evidence-assembly'].result }}
+      RC_CI_RELEASE_PACKAGE: ${{ needs['release-package'].result }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check 4.0 RC readiness
+        shell: bash
+        run: |
+          test "$RC_CI_FRONTEND" = "success"
+          test "$RC_CI_STATELESS_MCP" = "success"
+          test "$RC_CI_STATELESS_MCP_FAILOVER" = "success"
+          test "$RC_CI_PACKED_DELTA_S3_E2E" = "success"
+          test "$RC_CI_OBJECT_SET_S3_E2E" = "success"
+          test "$RC_CI_RECOVERY_FAULT_EVIDENCE" = "success"
+          test "$RC_CI_STORAGE_CONTROL_PLANE_MINIO_E2E" = "success"
+          test "$RC_CI_EVIDENCE_ASSEMBLY" = "success"
+          test "$RC_CI_RELEASE_PACKAGE" = "success"
+          mode=--report-only
+          branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          case "$branch" in
+            release/*|rc/*) mode=--strict ;;
+          esac
+          python scripts/check_4_0_rc_readiness.py \
+            --requirements release/4_0_rc_requirements.json \
+            --json-out artifacts/4-0-rc-readiness.json \
+            "$mode"
+      - name: Upload 4.0 RC readiness report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 4-0-rc-readiness
+          path: artifacts/4-0-rc-readiness.json
+          if-no-files-found: error

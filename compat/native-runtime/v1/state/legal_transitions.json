@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "source_version": "4.8.0",
+  "peer_trust": [
+    "PENDING",
+    "VERIFIED",
+    "ACTIVE",
+    "SUSPENDED",
+    "REVOKED"
+  ],
+  "effect_states": [
+    "EFFECT_STATE_UNSPECIFIED",
+    "EFFECT_STATE_NOT_APPLIED",
+    "EFFECT_STATE_APPLIED",
+    "EFFECT_STATE_UNKNOWN"
+  ],
+  "fail_closed": [
+    "stale_execution_epoch_rejected",
+    "unknown_effect_is_not_not_applied",
+    "zero_epoch_rejected",
+    "empty_action_id_rejected"
+  ]
+}

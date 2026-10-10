@@ -1,0 +1,323 @@
+{
+  "version": "4.2.2",
+  "commit": "a7584868b4b8",
+  "generatedAt": "2026-07-21T03:15:42+00:00",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "status": "PASS",
+  "checks": {
+    "skillRunHistory": "PASS",
+    "runMetadataPersist": "PASS",
+    "analyticsSummary": "PASS",
+    "projectRunHistory": "PASS",
+    "traceLink": "PASS",
+    "artifactLink": "PASS",
+    "projectAnalytics": "PASS",
+    "failureDiagnostics": "PASS",
+    "retentionCleanup": "PASS",
+    "privacyRedaction": "PASS",
+    "analyticsApiActions": "PASS",
+    "reactSkillSurface": "PASS",
+    "analyticsAssets": "PASS",
+    "frontendTypecheckGate": "PASS",
+    "ciReleaseGate": "PASS"
+  },
+  "details": {
+    "run": {
+      "schemaVersion": "skill-run.v1",
+      "skillRunId": "run-987a158dea6485e9",
+      "skillId": "skill_research_brief",
+      "skillVersion": "1.0.0",
+      "packId": "pack_research",
+      "projectId": "proj-d36f07eb6fa5",
+      "status": "completed",
+      "startedAt": "2026-07-21T03:15:41+00:00",
+      "completedAt": "2026-07-21T03:15:41+00:00",
+      "latencyMs": 0,
+      "offline": true,
+      "model": "",
+      "inputSummary": "topic=Skill Run Analytics, depth=quick",
+      "outputSummary": "# Skill Run Analytics Skill: Research Brief Skill (skill_research_brief) ## Result Offline Skill run completed. The registry, schema, permissions, project binding, and artifact policy were exercised. ## Project Context [Project context] projectId: proj-d36f07eb6fa5 name: Skill Analytics Smoke Project",
+      "artifactIds": [
+        "art-d5b165d180385463"
+      ],
+      "savedItemIds": [
+        "saved-b599e1625cdf3616"
+      ],
+      "artifactCount": 1,
+      "savedItemCount": 1,
+      "errorReason": "",
+      "failureCategory": "",
+      "diagnosticSuggestion": "",
+      "traceId": "6ed6df2f89b04c85a45f7d1826aa902b",
+      "links": {
+        "trace": "/api/traces/6ed6df2f89b04c85a45f7d1826aa902b",
+        "projectRuns": "/api/workspace/projects/proj-d36f07eb6fa5/skill-runs",
+        "projectAnalytics": "/api/workspace/projects/proj-d36f07eb6fa5/skill-analytics",
+        "savedItems": "/api/workspace/projects/proj-d36f07eb6fa5/saved-items",
+        "artifacts": "/api/workspace/projects/proj-d36f07eb6fa5/artifacts"
+      },
+      "redacted": false,
+      "runSecurityLevel": "trusted",
+      "securityReviewId": "sec-skill-skill_research_brief-049425a8b42ed688",
+      "trustedAtRun": true,
+      "toolGrantHashAtRun": "sha256:ac47fe0befdd31f02b451ac9b8fab066636811e53d0b6ce7ed8222d8f673ce31",
+      "blockedReason": "",
+      "approvalRequired": false
+    },
+    "summary": {
+      "scope": "skill",
+      "skillId": "skill_research_brief",
+      "packId": "",
+      "projectId": "",
+      "totalRuns": 1,
+      "successRuns": 1,
+      "failedRuns": 0,
+      "successRate": 1.0,
+      "failureRate": 0.0,
+      "averageLatencyMs": 0.0,
+      "p50LatencyMs": 0,
+      "p90LatencyMs": 0,
+      "artifactCount": 1,
+      "savedItemCount": 1,
+      "projectBindingRuns": 1,
+      "topSkills": [
+        {
+          "id": "skill_research_brief",
+          "count": 1
+        }
+      ],
+      "topPacks": [
+        {
+          "id": "pack_research",
+          "count": 1
+        }
+      ],
+      "failureCategories": [],
+      "securityLevels": [
+        {
+          "id": "trusted",
+          "count": 1
+        }
+      ],
+      "recentTrend": [
+        {
+          "date": "2026-07-15",
+          "runs": 0,
+          "failed": 0
+        },
+        {
+          "date": "2026-07-16",
+          "runs": 0,
+          "failed": 0
+        },
+        {
+          "date": "2026-07-17",
+          "runs": 0,
+          "failed": 0
+        },
+        {
+          "date": "2026-07-18",
+          "runs": 0,
+          "failed": 0
+        },
+        {
+          "date": "2026-07-19",
+          "runs": 0,
+          "failed": 0
+        },
+        {
+          "date": "2026-07-20",
+          "runs": 0,
+          "failed": 0
+        },
+        {
+          "date": "2026-07-21",
+          "runs": 1,
+          "failed": 0
+        }
+      ],
+      "recentRuns": [
+        {
+          "schemaVersion": "skill-run.v1",
+          "skillRunId": "run-987a158dea6485e9",
+          "skillId": "skill_research_brief",
+          "skillVersion": "1.0.0",
+          "packId": "pack_research",
+          "projectId": "proj-d36f07eb6fa5",
+          "status": "completed",
+          "startedAt": "2026-07-21T03:15:41+00:00",
+          "completedAt": "2026-07-21T03:15:41+00:00",
+          "latencyMs": 0,
+          "offline": true,
+          "model": "",
+          "inputSummary": "topic=Skill Run Analytics, depth=quick",
+          "outputSummary": "# Skill Run Analytics Skill: Research Brief Skill (skill_research_brief) ## Result Offline Skill run completed. The registry, schema, permissions, project binding, and artifact policy were exercised. ## Project Context [Project context] projectId: proj-d36f07eb6fa5 name: Skill Analytics Smoke Project",
+          "artifactIds": [
+            "art-d5b165d180385463"
+          ],
+          "savedItemIds": [
+            "saved-b599e1625cdf3616"
+          ],
+          "artifactCount": 1,
+          "savedItemCount": 1,
+          "errorReason": "",
+          "failureCategory": "",
+          "diagnosticSuggestion": "",
+          "traceId": "6ed6df2f89b04c85a45f7d1826aa902b",
+          "links": {
+            "trace": "/api/traces/6ed6df2f89b04c85a45f7d1826aa902b",
+            "projectRuns": "/api/workspace/projects/proj-d36f07eb6fa5/skill-runs",
+            "projectAnalytics": "/api/workspace/projects/proj-d36f07eb6fa5/skill-analytics",
+            "savedItems": "/api/workspace/projects/proj-d36f07eb6fa5/saved-items",
+            "artifacts": "/api/workspace/projects/proj-d36f07eb6fa5/artifacts"
+          },
+          "redacted": false,
+          "runSecurityLevel": "trusted",
+          "securityReviewId": "sec-skill-skill_research_brief-049425a8b42ed688",
+          "trustedAtRun": true,
+          "toolGrantHashAtRun": "sha256:ac47fe0befdd31f02b451ac9b8fab066636811e53d0b6ce7ed8222d8f673ce31",
+          "blockedReason": "",
+          "approvalRequired": false
+        }
+      ],
+      "generatedAt": "2026-07-21T03:15:41+00:00"
+    },
+    "projectSummary": {
+      "scope": "project",
+      "skillId": "",
+      "packId": "",
+      "projectId": "proj-d36f07eb6fa5",
+      "totalRuns": 1,
+      "successRuns": 1,
+      "failedRuns": 0,
+      "successRate": 1.0,
+      "failureRate": 0.0,
+      "averageLatencyMs": 0.0,
+      "p50LatencyMs": 0,
+      "p90LatencyMs": 0,
+      "artifactCount": 1,
+      "savedItemCount": 1,
+      "projectBindingRuns": 1,
+      "topSkills": [
+        {
+          "id": "skill_research_brief",
+          "count": 1
+        }
+      ],
+      "topPacks": [
+        {
+          "id": "pack_research",
+          "count": 1
+        }
+      ],
+      "failureCategories": [],
+      "securityLevels": [
+        {
+          "id": "trusted",
+          "count": 1
+        }
+      ],
+      "recentTrend": [
+        {
+          "date": "2026-07-15",
+          "runs": 0,
+          "failed": 0
+        },
+        {
+          "date": "2026-07-16",
+          "runs": 0,
+          "failed": 0
+        },
+        {
+          "date": "2026-07-17",
+          "runs": 0,
+          "failed": 0
+        },
+        {
+          "date": "2026-07-18",
+          "runs": 0,
+          "failed": 0
+        },
+        {
+          "date": "2026-07-19",
+          "runs": 0,
+          "failed": 0
+        },
+        {
+          "date": "2026-07-20",
+          "runs": 0,
+          "failed": 0
+        },
+        {
+          "date": "2026-07-21",
+          "runs": 1,
+          "failed": 0
+        }
+      ],
+      "recentRuns": [
+        {
+          "schemaVersion": "skill-run.v1",
+          "skillRunId": "run-987a158dea6485e9",
+          "skillId": "skill_research_brief",
+          "skillVersion": "1.0.0",
+          "packId": "pack_research",
+          "projectId": "proj-d36f07eb6fa5",
+          "status": "completed",
+          "startedAt": "2026-07-21T03:15:41+00:00",
+          "completedAt": "2026-07-21T03:15:41+00:00",
+          "latencyMs": 0,
+          "offline": true,
+          "model": "",
+          "inputSummary": "topic=Skill Run Analytics, depth=quick",
+          "outputSummary": "# Skill Run Analytics Skill: Research Brief Skill (skill_research_brief) ## Result Offline Skill run completed. The registry, schema, permissions, project binding, and artifact policy were exercised. ## Project Context [Project context] projectId: proj-d36f07eb6fa5 name: Skill Analytics Smoke Project",
+          "artifactIds": [
+            "art-d5b165d180385463"
+          ],
+          "savedItemIds": [
+            "saved-b599e1625cdf3616"
+          ],
+          "artifactCount": 1,
+          "savedItemCount": 1,
+          "errorReason": "",
+          "failureCategory": "",
+          "diagnosticSuggestion": "",
+          "traceId": "6ed6df2f89b04c85a45f7d1826aa902b",
+          "links": {
+            "trace": "/api/traces/6ed6df2f89b04c85a45f7d1826aa902b",
+            "projectRuns": "/api/workspace/projects/proj-d36f07eb6fa5/skill-runs",
+            "projectAnalytics": "/api/workspace/projects/proj-d36f07eb6fa5/skill-analytics",
+            "savedItems": "/api/workspace/projects/proj-d36f07eb6fa5/saved-items",
+            "artifacts": "/api/workspace/projects/proj-d36f07eb6fa5/artifacts"
+          },
+          "redacted": false,
+          "runSecurityLevel": "trusted",
+          "securityReviewId": "sec-skill-skill_research_brief-049425a8b42ed688",
+          "trustedAtRun": true,
+          "toolGrantHashAtRun": "sha256:ac47fe0befdd31f02b451ac9b8fab066636811e53d0b6ce7ed8222d8f673ce31",
+          "blockedReason": "",
+          "approvalRequired": false
+        }
+      ],
+      "generatedAt": "2026-07-21T03:15:41+00:00"
+    },
+    "cleanup": {
+      "ok": true,
+      "deleted": 1,
+      "remaining": 1,
+      "scope": {
+        "status": "failed",
+        "skillId": "",
+        "packId": "",
+        "projectId": ""
+      }
+    },
+    "assets": [
+      "docs/assets/skill-runs.png",
+      "docs/assets/skill-analytics.png"
+    ]
+  }
+}

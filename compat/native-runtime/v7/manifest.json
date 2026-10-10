@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze authenticated Go-to-Rust control-authority-request-v1 canonical bytes, digest, and fail-closed verification without granting production mutation.",
+  "normalization": "LF-normalized SHA-256 of public inventory/fixture bytes",
+  "corpora": [
+    {
+      "id": "control-authority-request-semantics-v7",
+      "path": "compat/native-runtime/v7/control/authority_request_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen Go-to-Rust control-authority-request-v1 verification vector",
+      "sha256": "ede2e056ad6c164613649abd5dc8c3dd9f06045226a24ccbb47b494cbb6c28e8"
+    }
+  ]
+}

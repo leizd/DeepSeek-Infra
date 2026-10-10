@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze federated recovery capability, signed DR attestation, production restore, cleanup, and immutable failure-observation semantics before Rust assumes production validation.",
+  "normalization": "LF-normalized SHA-256 of redacted public fixture bytes",
+  "corpora": [
+    {
+      "id": "federated-dr-proof-semantics-v11",
+      "path": "compat/native-runtime/v11/evidence/federated_dr_proof_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "redacted",
+      "title": "Frozen signed federated DR proof semantics",
+      "sha256": "01a739690a23cea6b4e80421925141858017e541784280818bcdfee75ac4a34b"
+    }
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "schemaVersion": "continue-dev-mcp-evidence.v1",
+  "version": "2.6.0",
+  "commit": "2e2782e",
+  "generatedAt": "2026-06-28T10:00:00Z",
+  "environment": {
+    "os": "Windows",
+    "python": "3.13.5",
+    "ci": false
+  },
+  "client": "Continue.dev",
+  "clientVersion": "1.2.0",
+  "clientCommit": "",
+  "gitSha": "2e2782e",
+  "gitDirty": true,
+  "status": "PASS",
+  "transport": {
+    "type": "streamable-http",
+    "mcpUrl": "http://127.0.0.1:8000/mcp",
+    "auth": "disabled"
+  },
+  "covers": [
+    "configLoaded",
+    "mcpInitialize",
+    "toolsList",
+    "lowRiskToolCall",
+    "policyDenial",
+    "promptInjectionClean"
+  ],
+  "checks": {
+    "configLoaded": "PASS",
+    "mcpInitialize": "PASS",
+    "toolsList": "PASS",
+    "lowRiskToolCall": "PASS",
+    "policyDenial": "PASS",
+    "promptInjectionClean": "PASS"
+  },
+  "steps": [
+    {
+      "name": "server.healthz",
+      "status": "pass",
+      "detail": "status=ok",
+      "data": {
+        "url": "http://127.0.0.1:8000/healthz"
+      }
+    },
+    {
+      "name": "config.loaded",
+      "status": "pass",
+      "detail": "Continue.dev MCP config loaded with streamable-http transport",
+      "data": {
+        "transport": "streamable-http"
+      }
+    },
+    {
+      "name": "mcp.initialize",
+      "status": "pass",
+      "detail": "protocol=2025-06-18 server=deepseek-infra",
+      "data": {
+        "protocolVersion": "2025-06-18",
+        "serverInfo": {
+          "name": "deepseek-infra",
+          "title": "DeepSeek Infra MCP Tool Hub",
+          "version": "2.6.0"
+        }
+      }
+    },
+    {
+      "name": "mcp.tools_list",
+      "status": "pass",
+      "detail": "17 tools exposed",
+      "data": {
+        "toolCount": 17,
+        "requiredTools": [
+          "data_transform",
+          "fetch_url"
+        ]
+      }
+    },
+    {
+      "name": "mcp.tools_call",
+      "status": "pass",
+      "detail": "data_transform count=4",
+      "data": {
+        "tool": "data_transform",
+        "count": 4
+      }
+    },
+    {
+      "name": "mcp.policy_denial",
+      "status": "pass",
+      "detail": "fetch_url localhost probe blocked by Tool Policy",
+      "data": {
+        "tool": "fetch_url",
+        "probe": "http://127.0.0.1/admin"
+      }
+    }
+  ]
+}

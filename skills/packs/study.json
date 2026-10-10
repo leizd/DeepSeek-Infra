@@ -1,0 +1,12 @@
+{
+  "packId": "pack_study",
+  "name": "Study Pack",
+  "description": "Study, write and read learning materials with worked examples and revision notes.",
+  "version": "1.0.0",
+  "author": "builtin",
+  "skills": [
+    {"skillId": "skill_study_tutor"},
+    {"skillId": "skill_paper_writer"},
+    {"skillId": "skill_document_reader"}
+  ]
+}

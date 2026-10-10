@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_version": "4.8.0",
+  "source_commit": "a37735c68398fc8f795babaa269e2de6a5acd567",
+  "compatibility_reason": "Freeze replica reconcile/rebalance planners: keyset cursor wrap, retired skip without scan, lastScannedCommittedAt first-append order, max_repairs inner-only, needs-repair selection, drain/capacity/fd candidate priority, and watermark inclusive compare. This does not execute repairs, create jobs, contact MinIO, or move payload bytes.",
+  "normalization": "LF-normalized SHA-256 of public validator fixture bytes",
+  "corpora": [
+    {
+      "id": "replica-planner-semantics-v29",
+      "path": "compat/native-runtime/v29/transfer/replica_planner_vector.json",
+      "eventual_owner": "rust",
+      "sensitivity": "public",
+      "title": "Frozen replica reconcile/rebalance planner semantics",
+      "sha256": "c7d27dee478ad414d91c5587b3f62c9c6c63a69c8e34cbca2a5d21e13c5e41d8"
+    }
+  ]
+}

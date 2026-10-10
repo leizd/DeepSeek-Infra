@@ -1,0 +1,790 @@
+# Release Readiness
+
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+适用版本：v4.8.0。
+
+Release v4.4.13 — **Projected Recovery & Production Remote Restore**。本版让远端恢复冻结为明确的 Contributor/Project 投影：`selectionDigest` 跨重试不可变，跨文件 `parent-range` 依赖进入只读 Support 集，Metadata 平面完整校验而 Payload 平面选择性物化；未选中 Contributor 不被改动。API/UI 如实上报 `networkSelective: false`（Whole-Age Object）。真实 MinIO + 真实 Age Helper + Executor + Slot Commit + Receipt/Catalog + Federated Complete 全链路成为 CI 门禁。根 `VERSION` 仍是版本事实源；正式 PASS 只来自对应提交的 CI 与 exact-merge Evidence。
+
+## 1. Release Preflight — 版本一致性体检
+
+发版前确认版本号在所有该出现的地方都同步，eval 报告是当前版本，且发布脚本仍排除本地缓存 / 日志 / 密钥：
+
+```bash
+python scripts/preflight_release.py --version 4.4.13
+```
+
+检查项：
+
+- README 版本徽章是 `4.4.13`。
+- `CHANGELOG.md` 顶部有 `## [4.4.13]` 条目。
+- `Dockerfile` 示例 tag 是 `deepseek-infra:4.4.13`。
+- `docs/IMPLEMENTATION_STATUS.md` 与 `evals/README.md` 的「适用版本」是 `v4.4.13`。
+- `docs/EVIDENCE_INDEX.md` 存在且包含 Headless MCP bridge / A2A external peer / A2A third-party peer / Edge Router / Continue.dev MCP / OpenAI-compatible SDK / Workspace Core / Media Layer / Skill System / eval reports 索引。
+- `evals/reports/latest.json`、`agent-latest.json`、`baseline-compare-latest.json` 与 `security-latest.json` 的 `version` 是 `4.4.13`，且包含统一 metadata。
+- `docs/evidence/headless-mcp-bridge.json` 可解析、版本为 `4.4.13`，且关键 MCP bridge 步骤全为 PASS。
+- `docs/evidence/a2a-external-peer.json` 可解析、版本为 `4.4.13`，且关键 A2A external peer checks 全为 PASS。
+- `docs/evidence/a2a-third-party-peer.json` 缺失或版本陈旧时为 WARNING；同版本 evidence 存在时必须 `peerType=third-party`、`status=PASS` 且八类 A2A checks 全 PASS。
+- `docs/evidence/edge-router-smoke.json` 缺失或版本陈旧时为 WARNING；同版本 evidence 存在时必须 `status=PASS` 且四类 Edge checks 全 PASS。
+- `docs/evidence/edge-router-v4.4.13.json` 必须存在、版本为 `4.4.13`、`status=PASS`，且 doctor / status shape / route-preview API / fake provider / routing policy / fallback / forced-local 409 checks 全 PASS。
+- `docs/evidence/continue-dev-mcp.json` 缺失或版本陈旧时为 WARNING；同版本 evidence 存在时必须 `status=PASS` 且六类 MCP checks 全 PASS。
+- `docs/evidence/openai-compatible-sdks.json` 缺失或版本陈旧时为 WARNING；同版本 evidence 存在时必须 `status=PASS` 且 LangChain/LiteLLM/LlamaIndex 关键 SDK checks 全 PASS。
+- `docs/evidence/workspace-v4.4.13.json` 必须存在、版本为 `4.4.13`、`status=PASS`，且 Project / Saved Items / Artifact / Export / secret redaction checks 全 PASS。
+- `docs/evidence/media-v4.4.13.json` 必须存在、版本为 `4.4.13`、`status=PASS`，且 image / PDF / webpage import、segments、media-to-RAG、citations、project export 与 secret redaction checks 全 PASS。
+- `docs/evidence/browser-v4.4.13.json` must exist for Browser Control releases, report `status=PASS`, and prove session creation, page read, screenshot, link extraction, private-host blocking, confirmation gates, Media snapshots, RAG chunks and audit logging.
+- `docs/evidence/automation-v4.4.13.json` must exist for Automation Runtime releases, report `status=PASS`, and prove create/manual/schedule/event/Skill/Browser read-only/export/safety/history/trace/artifact/template checks.
+- `docs/evidence/skills-v4.4.13.json` 必须存在、版本为 `4.4.13`、`status=PASS`，且 Skill API route / registry / runner / artifact / project binding checks 全 PASS。
+- `docs/evidence/skills-ui-v4.4.13.json` 必须存在、版本为 `4.4.13`、`status=PASS`，且 Skill Workbench entrypoint / schema form / project binding / result links / styles / JS syntax / CI syntax gate checks 全 PASS。
+- `docs/evidence/skill-builder-v4.4.13.json`、`docs/evidence/skill-packs-v4.4.13.json`、`docs/evidence/skill-eval-dashboard-v4.4.13.json`、`docs/evidence/skill-versioning-v4.4.13.json`、`docs/evidence/skill-analytics-v4.4.13.json`、`docs/evidence/skill-security-v4.4.13.json`、`docs/evidence/skill-catalog-v4.4.13.json` 与 `evals/reports/skills-v4.4.13.json` 必须存在、版本匹配、`status=PASS`，且 Skill authoring / Pack / Eval / Versioning / Analytics / Security / Catalog checks 全 PASS。
+- `docs/evidence/context-taint-v4.4.13.json` 必须存在、版本为 `4.4.13`、`status=PASS`，且 web / file / media injection、tool directive、tainted-turn escalation、risk diagnostics checks 全 PASS。
+- `quality_gate_evidence` 确认 coverage 80%、offline eval、Agent Eval、baseline compare、injection strict 与 security corpus 全部 PASS。
+- Dockerfile / GitHub workflows / scripts / `deepseek_infra/**/*.py` / README / CHANGELOG / docs markdown 不出现 `???`、`锟斤拷`、`鈥`、`鏋`、`杩`、`\ufffd` 等乱码。
+- `scripts/release.py` 仍排除 `.traces` / `.local-rag` / `.auth-token` / `.env` / `server*.log`。
+
+退出码：`1` 表示有 `FAIL`；GUI、本地模型、第三方生态这类 `WARNING` 不阻断 CI。`--json` 输出机器可读摘要。
+
+实现：[`scripts/preflight_release.py`](../scripts/preflight_release.py)；测试：[`tests/test_preflight_release.py`](../tests/test_preflight_release.py)。
+
+## 2. Release Smoke Suite — 一键编排
+
+把 doctor、Workspace Core smoke、Media Layer smoke、strict 离线评测、security corpus、Agent 评测、baseline compare、可选 MCP / A2A smoke 串成一个命令：
+
+```bash
+# 离线，CI 安全：doctor + workspace smoke + media/browser smoke + strict eval suite + security corpus + Agent eval + baseline compare
+
+python scripts/smoke_release.py --offline
+
+# 带服务：额外跑 MCP / A2A 兼容 smoke
+python scripts/smoke_release.py --with-server --base-url http://127.0.0.1:8000 --token <token>
+```
+
+`smoke_release.py` 只编排，不持有新逻辑。任意阶段非零退出则整体退出 `1`。可用 `--skip-doctor` / `--skip-workspace` / `--skip-evals` / `--skip-security` / `--skip-agent` / `--skip-compare` / `--skip-mcp` / `--skip-a2a` 裁剪。
+
+实现：[`scripts/smoke_release.py`](../scripts/smoke_release.py)；测试：[`tests/test_smoke_release.py`](../tests/test_smoke_release.py)。
+
+## 3. Release Manifest & Checksum — 发布产物证明
+
+每次跑 [`scripts/release.py`](../scripts/release.py) 不再只产出一个 zip，还会在 `dist/` 下产出三件套：
+
+```text
+dist/deepseek-infra-4.4.13.zip
+dist/deepseek-infra-4.4.13.zip.sha256
+dist/deepseek-infra-4.4.13.manifest.json
+```
+
+`manifest.json` 记录发布的关键事实，可独立校验：
+
+```json
+{
+  "schemaVersion": "release-manifest.v1",
+  "version": "4.4.13",
+  "commit": "abc1234",
+  "builtAt": "2026-06-28T00:00:00Z",
+  "python": "3.12",
+  "coverageGate": "80%",
+  "qualityGates": {
+    "coverage": "80%",
+    "offlineEval": "PASS",
+    "agentEval": "PASS",
+    "injectionStrict": "PASS",
+    "baselineCompare": "PASS",
+    "securityCorpus": "PASS",
+    "workspaceCore": "PASS",
+    "contextTaint": "PASS",
+    "mediaLayer": "PASS",
+    "browserControl": "PASS",
+    "automationRuntime": "PASS",
+    "skillSystem": "PASS",
+    "skillWorkbench": "PASS",
+    "skillBuilder": "PASS",
+    "skillPacks": "PASS",
+    "skillEvalDashboard": "PASS",
+    "skillVersioning": "PASS",
+    "skillAnalytics": "PASS",
+    "skillSecurity": "PASS",
+    "skillCatalog": "PASS",
+    "edgeRouter": "PASS"
+  },
+  "evalReport": "evals/reports/latest.json",
+  "agentReport": "evals/reports/agent-latest.json",
+  "evidence": [
+    "docs/evidence/headless-mcp-bridge.json",
+    "docs/evidence/a2a-external-peer.json",
+    "docs/evidence/a2a-third-party-peer.json",
+    "docs/evidence/edge-router-smoke.json",
+    "docs/evidence/edge-router-v4.4.13.json",
+    "docs/evidence/continue-dev-mcp.json",
+    "docs/evidence/openai-compatible-sdks.json",
+    "docs/evidence/workspace-v4.4.13.json",
+    "docs/evidence/context-taint-v4.4.13.json",
+    "docs/evidence/media-v4.4.13.json",
+    "docs/evidence/skills-v4.4.13.json",
+    "docs/evidence/skills-ui-v4.4.13.json",
+    "docs/evidence/skill-builder-v4.4.13.json",
+    "docs/evidence/skill-packs-v4.4.13.json",
+    "docs/evidence/skill-eval-dashboard-v4.4.13.json",
+    "docs/evidence/skill-versioning-v4.4.13.json",
+    "docs/evidence/skill-analytics-v4.4.13.json",
+    "docs/evidence/skill-security-v4.4.13.json",
+    "docs/evidence/skill-catalog-v4.4.13.json",
+    "evals/reports/latest.json",
+    "evals/reports/agent-latest.json",
+    "evals/reports/baseline-compare-latest.json",
+    "evals/reports/security-latest.json",
+    "evals/reports/skills-v4.4.13.json",
+    "evals/reports/media-v4.4.13.json",
+    "docs/evidence/browser-v4.4.13.json",
+    "evals/reports/browser-v4.4.13.json",
+    "docs/evidence/automation-v4.4.13.json",
+    "evals/reports/automation-v4.4.13.json",
+    "docs/EVIDENCE_INDEX.md"
+  ],
+  "artifact": "deepseek-infra-4.4.13.zip",
+  "sha256": "...",
+  "bytes": 1234567
+}
+```
+
+`.sha256` 是标准 `<hex>  <filename>` 格式，可用 `sha256sum -c` 校验。`--no-manifest` 可跳过这两个伴生产物；`--dry-run` 只枚举将要打包的文件数，不写 zip / checksum / manifest。
+
+实现：[`deepseek_infra/infra/diagnostics/release_manifest.py`](../deepseek_infra/infra/diagnostics/release_manifest.py)；测试：[`tests/test_release_manifest.py`](../tests/test_release_manifest.py)。
+
+## 4. CI release-readiness job
+
+`.github/workflows/ci.yml` 的 `release-readiness` job 在干净 Ubuntu runner 中跑：
+
+```yaml
+- run: python scripts/smoke_mcp_headless_bridge.py --out docs/evidence/headless-mcp-bridge.json
+- run: python scripts/smoke_a2a_external_peer.py --out docs/evidence/a2a-external-peer.json
+- run: python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v4.4.13.json
+- run: python scripts/smoke_edge_router.py --offline --out docs/evidence/edge-router-v4.4.13.json
+- run: python scripts/smoke_media.py --offline --out docs/evidence/media-v4.4.13.json
+- run: python scripts/smoke_browser.py --offline --out docs/evidence/browser-v4.4.13.json --version 4.4.13
+- run: python scripts/smoke_automation.py --offline --out docs/evidence/automation-v4.4.13.json --version 4.4.13
+- run: python scripts/smoke_skills.py --offline --out docs/evidence/skills-v4.4.13.json
+- run: python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v4.4.13.json
+- run: python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v4.4.13.json
+- run: python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v4.4.13.json
+- run: python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v4.4.13.json --report-out evals/reports/skills-v4.4.13.json
+- run: python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v4.4.13.json
+- run: python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v4.4.13.json
+- run: python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v4.4.13.json
+- run: python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v4.4.13.json
+- run: python scripts/smoke_context_taint.py --offline --out docs/evidence/context-taint-v4.4.13.json
+- run: python evals/runners/run_media_eval.py --strict --out evals/reports/media-v4.4.13.json
+- run: python evals/runners/run_browser_eval.py --strict --out evals/reports/browser-v4.4.13.json --version 4.4.13
+- run: python evals/runners/run_automation_eval.py --strict --out evals/reports/automation-v4.4.13.json --version 4.4.13
+- run: python scripts/preflight_release.py --version 4.4.13
+- run: python scripts/doctor.py --offline
+- run: python scripts/release.py --clean-workspace --dry-run
+```
+
+CI 不强制安装真实第三方 A2A server、Ollama 或 GGUF 模型；第三方/实机 evidence 缺失时是 WARNING。Edge Router 的 v4.4.13 dry-run evidence 不依赖真模型，属于硬门禁。
+
+## 5. Headless MCP Evidence（v2.3.2）
+
+`preflight_release.py` 自 v2.3.2 起增加 `headless_mcp_bridge_evidence` 硬检查。它读取 `docs/evidence/headless-mcp-bridge.json`，确认无 GUI 的 MCP stdio bridge 路径已经自动跑通：
+
+- `bridge.start`
+- `mcp.initialize`
+- `mcp.tools_list`
+- `mcp.tools_call`
+- `mcp.policy_denial`
+
+本项是最低交付标准，缺失或失败会让 preflight 返回 `FAIL`。刷新命令：
+
+```bash
+python scripts/smoke_mcp_headless_bridge.py --out docs/evidence/headless-mcp-bridge.json
+```
+
+## 6. A2A External Peer Evidence（v2.3.3）
+
+`preflight_release.py` 自 v2.3.3 起增加 `a2a_external_peer_evidence` 硬检查。它读取 `docs/evidence/a2a-external-peer.json`，确认一个无 GUI、无 API key 的外部 A2A peer 路径已经自动跑通：
+
+- `agentCard`
+- `messageSend`
+- `messageStream`
+- `tasksGet`
+- `tasksCancel`
+- `tasksList`
+- `artifactChunks`
+- `sseFinalEvent`
+
+本项是最低交付标准，缺失或失败会让 preflight 返回 `FAIL`。刷新命令：
+
+```bash
+python scripts/smoke_a2a_external_peer.py --out docs/evidence/a2a-external-peer.json
+```
+
+## 7. A2A Third-Party Peer Evidence（v2.4.4）
+
+`preflight_release.py` 自 v2.4.4 起增加 `a2a_third_party_peer_evidence` 可选检查。它读取 `docs/evidence/a2a-third-party-peer.json`，确认 DeepSeek Infra 的 `A2AClient` 路径已经连接到第三方或第三方风格 A2A-compatible peer，并完成完整互操作 smoke：
+
+- `agentCard`
+- `messageSend`
+- `messageStream`
+- `tasksGet`
+- `tasksCancel`
+- `tasksList`
+- `artifactChunks`
+- `sseFinalEvent`
+
+本项缺失或版本陈旧时返回 `WARNING`，避免没有第三方生态环境的 CI runner 被阻断；同版本 evidence 文件存在时，统一 metadata、`peerType=third-party`、`status=PASS` 与八类 checks 都必须通过，否则 preflight 返回 `FAIL`。刷新命令：
+
+```bash
+python scripts/smoke_a2a_external_peer.py --peer-url http://<third-party-host>:<port> --peer-type third-party --out docs/evidence/a2a-third-party-peer.json --markdown docs/evidence/a2a-third-party-peer.md
+```
+
+当前 evidence 记录的是 A2A-compatible third-party-style smoke peer；LangGraph / CrewAI / Google A2A reference 等具体实现仍保留在 [a2a-third-party-plan.md](integrations/a2a-third-party-plan.md) 中作为后续候选。
+
+## 8. Edge Router Stabilization Evidence（v2.7.3）
+
+`preflight_release.py` 自 v2.8.1 起增加 `edge_router_evidence` 硬检查。它读取 `docs/evidence/edge-router-v4.4.13.json`，确认 Edge Router 在无真实模型、无 optional backend 的离线环境里仍可验证：
+
+- `edgeDoctor`
+- `statusShape`
+- `routePreviewApi`
+- `fakeProvider`
+- `routingPolicy`
+- `fallbackPolicy`
+- `forcedLocalUnavailable`
+
+本项是 v2.8.1 的最低交付标准，缺失、版本不匹配或任一 check 非 PASS 都会让 preflight 返回 `FAIL`。刷新命令：
+
+```bash
+python scripts/smoke_edge_router.py --offline --out docs/evidence/edge-router-v4.4.13.json
+```
+
+该 evidence 不加载 GGUF / MLC 模型；真实推理仍通过下面的实机 smoke 作为可选兼容性证据补充。
+
+## 9. Edge Router Smoke Evidence（v2.4.3）— 可选实机
+
+`preflight_release.py` 自 v2.4.3 起增加 `edge_router_smoke_evidence` 可选检查。它读取 `docs/evidence/edge-router-smoke.json`，确认 Edge / Ollama / 本地 OpenAI-compatible provider 路径已经记录结构化 evidence：
+
+- `ollamaModelsListed`
+- `openaiCompatibleLocalCall`
+- `edgeStatusEndpoint`
+- `fallbackReady`
+
+本项缺失或版本陈旧时返回 `WARNING`，避免没有 Ollama / GGUF 模型的 CI runner 被强制阻断；同版本 evidence 文件存在时，`status=PASS` 与四类 checks 都必须通过，否则 preflight 返回 `FAIL`。刷新命令：
+
+```bash
+python examples/edge_router_smoke.py --require-ollama --out docs/evidence/edge-router-smoke.json --markdown docs/evidence/edge-router-smoke.md
+```
+
+真实 GGUF / MLC 推理仍依赖本地模型文件与可选依赖；本检查只把可复现的本地 provider 路径纳入 release evidence。缺失或版本陈旧不会阻断默认 CI。
+
+## 10. Continue.dev MCP Evidence（v2.4.5）
+
+`preflight_release.py` 自 v2.4.5 起增加 `continue_dev_mcp_evidence` 可选检查。它读取 `docs/evidence/continue-dev-mcp.json`，确认 Continue.dev MCP client 路径已经记录结构化 evidence：
+
+- `configLoaded`
+- `mcpInitialize`
+- `toolsList`
+- `lowRiskToolCall`
+- `policyDenial`
+- `promptInjectionClean`
+
+本项缺失或版本陈旧时返回 `WARNING`，避免没有 Continue.dev GUI 环境的 CI runner 被强制阻断；同版本 evidence 文件存在时，统一 metadata、`status=PASS` 与六类 checks 都必须通过，否则 preflight 返回 `FAIL`。Continue.dev 配置指南与验证 runbook 见 [docs/integrations/continue-dev.md](integrations/continue-dev.md)。
+
+## 11. OpenAI-Compatible SDK Evidence（v2.4.6）
+
+`preflight_release.py` 自 v2.4.6 起增加 `openai_compatible_sdk_evidence` 可选检查。它读取 `docs/evidence/openai-compatible-sdks.json`，确认 LangChain (ChatOpenAI)、LiteLLM、LlamaIndex (OpenAILike) 等 OpenAI-compatible SDK 路径已经记录结构化 evidence：
+
+- `sdks.langchain.modelsList`
+- `sdks.langchain.chatCompletion`
+- `sdks.langchain.streaming`
+- `sdks.litellm.modelsList`
+- `sdks.litellm.chatCompletion`
+- `sdks.litellm.streaming`
+- `sdks.llamaindex.chatCompletion`
+
+本项缺失或版本陈旧时返回 `WARNING`，避免没有安装 LangChain / LiteLLM / LlamaIndex 等可选依赖的 CI runner 被强制阻断；同版本 evidence 文件存在时，统一 metadata、`status=PASS` 与七类 SDK checks 都必须通过，否则 preflight 返回 `FAIL`。SDK smoke 依赖放在 `requirements-sdk-smoke.txt` 中，与默认运行时依赖解耦。
+
+```bash
+python scripts/smoke_openai_compatible_sdks.py --base-url http://127.0.0.1:8000/v1 --model deepseek-v4-pro --out docs/evidence/openai-compatible-sdks.json --markdown docs/evidence/openai-compatible-sdks.md
+```
+
+## 11. Workspace Core Evidence（v4.4.13）
+
+`preflight_release.py` 自 v2.5.0 起增加 `workspace_core_evidence` 硬检查。它读取 `docs/evidence/workspace-v4.4.13.json`，确认 Workspace Core 已经用离线 smoke 跑通：
+
+- `projectCreate`
+- `savedItemCreate`
+- `artifactList`
+- `conversationExport`
+- `projectExportZip`
+- `secretRedaction`
+
+本项是 v2.8.1 的最低交付标准，缺失或失败会让 preflight 返回 `FAIL`。刷新命令：
+
+```bash
+python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v4.4.13.json
+```
+
+## 12. Media Layer Evidence（v4.4.13）
+
+`preflight_release.py` 自 v2.7.0 起增加 `media_layer_evidence` 硬检查。它读取 `docs/evidence/media-v4.4.13.json`，确认 Multimodal Media Layer 已经完成离线核心验收：
+
+- `imageImport`
+- `pdfPageIndex`
+- `webpageSnapshot`
+- `mediaSegments`
+- `mediaToRag`
+- `mediaCitations`
+- `projectExportIncludesMedia`
+- `secretRedaction`
+
+刷新命令：
+
+```bash
+python scripts/smoke_media.py --offline --out docs/evidence/media-v4.4.13.json
+python evals/runners/run_media_eval.py --strict --out evals/reports/media-v4.4.13.json
+```
+
+## 13. Skill System Evidence（v4.4.13）
+
+`preflight_release.py` 自 v2.7.0 起增加 `skill_system_evidence` 硬检查。它读取 `docs/evidence/skills-v4.4.13.json`，确认 Skill System 已经完成 Web API 接入与离线核心验收：
+
+- `skillApiRoutes`
+- `builtinSkillsLoad`
+- `customSkillCreate`
+- `inputSchemaValidation`
+- `toolPermissionGate`
+- `artifactPolicy`
+- `projectBinding`
+- `skillExport`
+
+刷新命令：
+
+```bash
+python scripts/smoke_skills.py --offline --out docs/evidence/skills-v4.4.13.json
+```
+
+
+## 13. Skill Workbench UI Evidence（v4.4.13）
+`preflight_release.py` 自 v2.7.0 起增加 `skill_ui_evidence` 硬检查。它读取 `docs/evidence/skills-ui-v4.4.13.json`，确认 Skill Workbench 前端已经完成本地 UI 接入与离线验收：
+
+- `skillWorkbenchEntrypoint`
+- `skillRunSchemaForm`
+- `skillApiActions`
+- `projectSkillBindingUi`
+- `skillRunResultLinks`
+- `skillPanelLifecycle`
+- `skillPanelStyles`
+- `skillJsSyntax`
+- `ciSyntaxGate`
+
+刷新命令：
+
+```bash
+python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v4.4.13.json
+```
+
+## 14. Skill Builder Evidence (v4.4.13)
+
+`preflight_release.py` 自 v2.7.0 起增加 `skill_builder_evidence` 硬检查。它读取 `docs/evidence/skill-builder-v4.4.13.json` 并验证本地创作路径：
+
+- Builder 入口：`New Skill`、`skillBuilderHost` 和 `skillBuilderForm` 存在。
+- 克隆内置 Skill：内置 Skill 可变为可编辑的自定义 Skill。
+- 可视化 schema 编辑器：key、title、description、type、required、default、enum 和 maxLength 可生成 `inputSchema`。
+- Tool 权限选择器：已选工具携带风险标签且仍通过后端 schema 验证。
+- 验证与试运行：保存前 `action=validate` 和 `action=dry_run` 正常工作。
+- 保存与导出：已保存的自定义 Skill 仍使用现有导出路径。
+- UI 资源：`docs/assets/skill-builder.png` 和 `docs/assets/skill-builder-dry-run.png` 存在，用于 README / evidence 审查。
+
+刷新命令：
+
+```bash
+python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v4.4.13.json
+```
+
+## 15. Skill Packs Evidence (v4.4.13)
+
+`preflight_release.py` 自 v2.7.0 起增加 `skill_packs_evidence` 硬检查。它读取 `docs/evidence/skill-packs-v4.4.13.json` 并验证本地 Skill Pack 路径：
+
+- Pack schema 验证：`deepseek_infra/infra/skills/pack.py` 校验 packId / name / description / version / author / skills，其中嵌入的 Skill 配置通过 `validate_skill_config` 验证。
+- 内置模板库：Study / Research / Code / Office Skill Pack 从 `skills/packs/` 加载。
+- Pack 导入 / 导出：导入会将嵌入的 Skill 安装到本地；导出会嵌入完整的 Skill 配置，使 pack 保持自包含。
+- skillId 冲突处理：`onConflict=error` 会报错，`skip` 跳过已存在的 Skill，`overwrite` 重新安装。
+- Tool 权限差异：`tool_permission_summary` 为每个 allowedTool 标注风险级别并标记高风险 / 需审批工具。
+- 项目 pack 绑定：`enable_pack_for_project` 将 Pack 的 Skill 添加到项目并记录 `enabledPacks`。
+- Pack 安装试运行：安装内置 Pack 会将其引用的 Skill 启用到项目上。
+- Skills 工作台由 `frontend/src/features/skills/SkillsDrawer.tsx` 和 `useSkillController.ts` 提供，前端 `typecheck`、Vitest 与生产构建共同作为发布门禁。
+- Pack 资源：`docs/assets/skill-packs.png` 和 `docs/assets/skill-pack-import.png` 存在。
+
+刷新命令：
+
+```bash
+python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v4.4.13.json
+```
+
+## 16. Skill Eval Dashboard Evidence（v4.4.13）
+
+`preflight_release.py` 自 v2.7.0 起增加 `skill_eval_dashboard_evidence` 硬检查。它读取 `docs/evidence/skill-eval-dashboard-v4.4.13.json` 和 `evals/reports/skills-v4.4.13.json`，然后验证本地 Skill 质量路径：
+
+- Eval 仪表板入口：`skillEvalButton`、`skillEvalHost`、汇总卡片、Skill 行、Pack 行和用例列表存在。
+- Eval 用例构建器：本地用例可捕获 `skillId`、输入 JSON、关键词、必需 JSON 路径、禁止模式、预期 artifact 和项目绑定需求。
+- Skill Eval API 操作：`eval_report`、`list_eval_cases`、`create_eval_case` 和 `delete_eval_case` 通过 `POST /api/skills` 接入。
+- Skill / Pack 评分：schema、Tool Policy、artifact policy、project binding、content、latency 和 overall score 针对 Skill 和 Pack 范围输出。
+- 回归比较：当前和基线报告可标记新增失败、已修复失败和评分回归。
+- 导出操作：Workbench 可导出 JSON、导出 Markdown 并复制摘要。
+- Eval 资源：`docs/assets/skill-eval-dashboard.png` 和 `docs/assets/skill-eval-case-builder.png` 存在。
+
+刷新命令：
+
+```bash
+python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v4.4.13.json --report-out evals/reports/skills-v4.4.13.json
+```
+
+## 17. Skill Versioning Evidence（v4.4.13）
+
+`preflight_release.py` 自 v2.7.0 起增加 `skill_versioning_evidence` 硬检查。它读取 `docs/evidence/skill-versioning-v4.4.13.json`，然后验证本地 Skill / Pack 生命周期路径：
+
+- Skill 修订快照：自定义 Skill 创建/更新会保存版本化历史，包含修订元数据和内容散列。
+- Skill diff：当前版本和历史版本可比较 prompt、schemas、tools、memory、artifacts、project binding 和 eval summary。
+- 迁移计划：schema 变更会标记重命名、必填字段、已删除字段以及现有 project/eval/saved 元数据引用。
+- Skill 回滚：自定义 Skill 可从历史恢复，同时保留回滚检查点。
+- Pack 版本安装与回滚：自定义 Pack 记录版本化项目绑定，并可回滚到历史修订版。
+- Eval 感知的升级门槛：Pack 升级在安装前包含 score、pass rate、regression count 和 recommendation 元数据。
+- 版本 UI 资源：`docs/assets/skill-version-history.png` 和 `docs/assets/skill-version-diff.png` 存在。
+
+刷新命令：
+
+```bash
+python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v4.4.13.json
+```
+
+## 18. Skill Analytics Evidence（v4.4.13）
+
+`preflight_release.py` 自 v2.7.0 起增加 `skill_analytics_evidence` 硬检查。它读取 `docs/evidence/skill-analytics-v4.4.13.json`，然后验证本地 Skill 使用回路：
+
+- Skill 运行历史：已完成和失败的运行均持久化，包含稳定的运行元数据。
+- 使用分析：生成 success/failure rate、latency、top Skills/Packs、artifacts、saved items、project binding usage 和趋势摘要。
+- 失败诊断：schema 验证失败被分类并包含修复建议。
+- 项目链接：project run history、project analytics、trace links 和 artifact links 存在。
+- 保留与隐私：失败运行可被清理，运行摘要可在保留元数据的同时被脱敏。
+- Runs UI：Skill Workbench 暴露 Runs 选项卡、汇总卡片、运行详情、清理、导出和脱敏控件。
+
+刷新命令：
+
+```bash
+python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v4.4.13.json
+```
+
+## 17. Evidence Index & Metadata（v2.3.4）
+
+
+## 19. Skill Security Evidence（v4.4.13）
+
+`preflight_release.py` 自 v2.7.0 起增加 `skill_security_evidence` 硬检查。它读取 `docs/evidence/skill-security-v4.4.13.json`，然后验证本地 Skill 信任路径：
+
+- 安全审查：Skill 和 Pack 审查产出 trust level、risk score、findings、allowedTools risk、approval count 和 manifest hashes。
+- 静态扫描：检测 prompt injection、secret exfiltration、secret file access、network exfiltration、hidden tool instructions 和 encoded suspicious text。
+- 信任生命周期：覆盖本地信任、取消信任、封禁和篡改检测。
+- 签名准备：security manifests 包含 content、schema、prompt 和 tool-grant 散列，`signed=false`。
+- 运行元数据：Skill 分析记录 securityReviewId、runSecurityLevel、trustedAtRun、toolGrantHashAtRun、approvalRequired 和 blockedReason。
+- Security UI：Skill Workbench 暴露 Security 选项卡、摘要、审查详情、manifest 预览和信任/封禁操作。
+
+刷新命令：
+
+```bash
+python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v4.4.13.json
+```
+
+## 20. Skill Catalog Evidence（v4.4.13）
+
+`preflight_release.py` 自 v2.7.0 起增加 `skill_catalog_evidence` 硬检查。它读取 `docs/evidence/skill-catalog-v4.4.13.json`，然后验证本地 Skill Marketplace-lite 路径：
+
+- Catalog manifest：本地目录只索引本机 Skills / Packs，并记录 source、summary 和 local-only 状态。
+- Catalog list / search：可列出内置 Skill、内置 Pack、自定义 / imported Pack，并按 query 与 trust filters 搜索。
+- Install preview：安装前返回 included Skills、新增 enabledSkills、工具权限摘要、风险分数、eval 分数和项目绑定变化。
+- 安全门禁：high-risk 且未批准的条目无法安装，blocked 条目始终禁止安装。
+- Project binding：Catalog install / uninstall 会更新项目 enabledSkills、enabledPacks 和 pack version metadata。
+- Catalog UI：Skill Workbench 暴露 Catalog 选项卡、摘要卡片、搜索/筛选、预检详情和导出 controls。
+
+刷新命令：
+
+```bash
+python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v4.4.13.json
+```
+
+v2.3.4 新增 [`docs/EVIDENCE_INDEX.md`](../docs/EVIDENCE_INDEX.md) 作为所有互操作证据的统一入口，并在 preflight 中检查：
+
+- `docs/EVIDENCE_INDEX.md` 存在。
+- 关键证据 JSON（headless MCP bridge、A2A external peer、A2A third-party peer、Edge Router、Continue.dev MCP、OpenAI-compatible SDK、Workspace Core、Skill System、latest eval、agent eval）包含统一 metadata：`version`、`commit`、`generatedAt`、`environment`（含 `os` / `python` / `ci`）、`status`。
+- release manifest 包含 `evidence` 列表。
+
+刷新命令：
+
+```bash
+python scripts/smoke_mcp_headless_bridge.py --out docs/evidence/headless-mcp-bridge.json
+python scripts/smoke_a2a_external_peer.py --out docs/evidence/a2a-external-peer.json
+python scripts/smoke_a2a_external_peer.py --peer-url http://<third-party-host>:<port> --peer-type third-party --out docs/evidence/a2a-third-party-peer.json --markdown docs/evidence/a2a-third-party-peer.md
+python examples/edge_router_smoke.py --require-ollama --out docs/evidence/edge-router-smoke.json --markdown docs/evidence/edge-router-smoke.md
+python scripts/smoke_openai_compatible_sdks.py --base-url http://127.0.0.1:8000/v1 --model deepseek-v4-pro --out docs/evidence/openai-compatible-sdks.json --markdown docs/evidence/openai-compatible-sdks.md
+python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v4.4.13.json
+python scripts/smoke_media.py --offline --out docs/evidence/media-v4.4.13.json
+python scripts/smoke_browser.py --offline --out docs/evidence/browser-v4.4.13.json --version 4.4.13
+python scripts/smoke_automation.py --offline --out docs/evidence/automation-v4.4.13.json --version 4.4.13
+python scripts/smoke_skills.py --offline --out docs/evidence/skills-v4.4.13.json
+python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v4.4.13.json
+python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v4.4.13.json
+python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v4.4.13.json
+python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v4.4.13.json --report-out evals/reports/skills-v4.4.13.json
+python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v4.4.13.json
+python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v4.4.13.json
+python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v4.4.13.json
+python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v4.4.13.json
+python evals/runners/run_media_eval.py --strict --out evals/reports/media-v4.4.13.json
+python evals/runners/run_browser_eval.py --strict --out evals/reports/browser-v4.4.13.json --version 4.4.13
+python evals/runners/run_automation_eval.py --strict --out evals/reports/automation-v4.4.13.json --version 4.4.13
+python evals/runners/run_offline_eval_suite.py --include-agent --strict --out evals/reports/latest.json --markdown evals/reports/latest.md
+python evals/runners/run_security_corpus.py --strict --out evals/reports/security-latest.json --markdown evals/reports/security-latest.md
+python evals/runners/run_agent_eval.py --report-dir evals/reports --strict
+python evals/runners/compare_eval_baseline.py --strict --baseline evals/baselines/v2.2.6.json --current evals/reports/latest.json --agent-baseline evals/baselines/agent-v2.2.8.json --out evals/reports/baseline-compare-latest.json
+```
+
+## 17. Docs Encoding Sanity（v2.3.4；v2.7.2 expanded）
+
+`preflight_release.py` 自 v2.3.4 起新增 `docs_encoding_sanity` 硬检查；v2.8.1 将范围扩大到 release-facing 文件，扫描以下路径是否包含编码乱码：
+
+- `CHANGELOG.md`
+- `Dockerfile`
+- `README.md`
+- `.github/workflows/*.yml`
+- `scripts/*.py`
+- `deepseek_infra/**/*.py`
+- `docs/**/*.md`
+
+识别模式：连续 `???`、`锟斤拷`、`鈥`、`鏋`、`杩`、Unicode replacement character `\ufffd`。Markdown 的 inline code 与 fenced code blocks 会被忽略，方便文档保留检查示例；命中正文、Dockerfile、workflow 或脚本即 FAIL。
+
+## 19. Quality Gate Evidence（v4.4.13）
+
+`preflight_release.py` 自 v2.4.2 起增加 `quality_gate_evidence` 硬检查。它聚合以下证据：
+
+- coverage gate：`pyproject.toml` 与 CI 均为 80%。
+- offline eval：`evals/reports/latest.json` `status=PASS`。
+- Agent Eval：`evals/reports/agent-latest.json` `status=PASS`。
+- baseline compare：`evals/reports/baseline-compare-latest.json` `status=PASS`。
+- injection strict：`latest.json` 的 `injection.status=PASS` 且 `gateMode=hard`。
+- security corpus：`evals/reports/security-latest.json` `status=PASS`。
+- Workspace Core：`docs/evidence/workspace-v4.4.13.json` `status=PASS`。
+- Media Layer：`docs/evidence/media-v4.4.13.json` 和 `evals/reports/media-v4.4.13.json` `status=PASS`。
+- Automation Runtime：`docs/evidence/automation-v4.4.13.json` 和 `evals/reports/automation-v4.4.13.json` `status=PASS`。
+- Skill System：`docs/evidence/skills-v4.4.13.json` `status=PASS`。
+- Skill Workbench UI：`docs/evidence/skills-ui-v4.4.13.json` `status=PASS`。
+- Skill Builder：`docs/evidence/skill-builder-v4.4.13.json` `status=PASS`。
+- Skill Packs：`docs/evidence/skill-packs-v4.4.13.json` `status=PASS`。
+- Skill Eval Dashboard：`docs/evidence/skill-eval-dashboard-v4.4.13.json` 和 `evals/reports/skills-v4.4.13.json` `status=PASS`。
+- Skill Versioning：`docs/evidence/skill-versioning-v4.4.13.json` `status=PASS`。
+- Skill Analytics：`docs/evidence/skill-analytics-v4.4.13.json` `status=PASS`。
+- Skill Security：`docs/evidence/skill-security-v4.4.13.json` `status=PASS`。
+- Skill Catalog：`docs/evidence/skill-catalog-v4.4.13.json` `status=PASS`。
+
+刷新命令：
+
+```bash
+python scripts/update_eval_report.py
+python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v4.4.13.json
+python scripts/smoke_edge_router.py --offline --out docs/evidence/edge-router-v4.4.13.json
+python scripts/smoke_skills.py --offline --out docs/evidence/skills-v4.4.13.json
+python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v4.4.13.json
+python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v4.4.13.json
+python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v4.4.13.json
+python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v4.4.13.json --report-out evals/reports/skills-v4.4.13.json
+python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v4.4.13.json
+python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v4.4.13.json
+python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v4.4.13.json
+python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v4.4.13.json
+python scripts/preflight_release.py --version 4.4.13
+```
+
+## 20. GUI Interop Evidence Checklist（v2.3.1）
+
+`preflight_release.py` 自 v2.3.1 起增加 `gui_interop_evidence` 检查，扫描 `docs/COMPATIBILITY.md` 中 Claude Desktop / Cursor 行的状态标记：
+
+- **🟡 状态**：GUI 实机证据尚未填入，检查结果为 `WARNING`。
+- **✅ GUI tested 状态**：人工完成 GUI 验证 runbook 并更新矩阵后，检查结果为 `PASS`。
+
+详见 [docs/integrations/claude-desktop.md](integrations/claude-desktop.md) 和 [docs/integrations/cursor.md](integrations/cursor.md)。
+
+## Encrypted backup and external portability gate（v4.4.2+）
+
+以下合同自加密备份起保留为硬边界：
+
+```powershell
+pytest tests/test_backup_crypto.py tests/test_workspace_backups.py tests/test_web_workspace_routes.py
+npm run check --prefix stateless-mcp
+cargo test --locked --manifest-path rust/Cargo.toml -p backup-crypto -p deepseek-backup
+```
+
+- 密码或 X25519 Identity 只经单独继承的匿名 pipe/handle 进入 Rust helper；命令行、环境变量、Session JSON、Journal 和日志均不得出现 Secret。
+- age 包在认证成功前只能返回 `locked`、保护类型和密文摘要；Manifest、Contributor 清单和业务元数据不能从密文外泄漏。
+- helper 不可用时能力接口明确报告 unavailable；请求加密时必须失败，不能回落为明文。
+- encrypted Safety Backup 继承来源保护模式；密码/X25519 Secret 只在事务所需时间内保留并在消费、超时或失败后清零。
+- `coveragePolicy=strict` 时，已配置但不可用的外部 durable Contributor 必须阻断备份；`best-effort` 必须在 Manifest 中留下明确 omission。
+- Stateless MCP snapshot 只含版本化 JSONL 任务、幂等索引和有界日志；不含 Redis URL、token、instance/lease/fencing/OTel 部署状态。queued/running 恢复为 inert `interrupted`，绝不自动重新执行。
+
+Rust helper 的本地构建需要可用的 Rust native linker；缺失 linker 的开发机不能把 `cargo test` 写成 PASS，最终事实源是对应提交的 CI。
+
+## Fenced backup commits and replica lineage gate（v4.4.5）
+
+```powershell
+pytest tests/test_backup_fenced_commit_contracts.py tests/test_backup_governance_contracts.py `
+  tests/test_backup_lease_guard.py tests/test_backup_commit_markers.py `
+  tests/test_backup_writer_lease.py tests/test_backup_reconcile.py `
+  tests/test_backup_catalog_projection.py tests/test_backup_target_lineage.py `
+  tests/test_backup_retention_cas.py tests/test_backup_mirror_generation.py `
+  tests/test_backup_mirror_variants.py
+npm run check --prefix frontend
+```
+
+- 同一 Schedule Slot 只能形成一个正式 Commit Marker；digest 相同则收敛，不同则 `slot-commit-conflict`。
+- 过期 Run Lease 拒绝 complete/phase/requeue/fail；目标 Writer Lease 串行化可见突变。
+- 无 Commit 的对象/Receipt 在对账后保持不可见或进入 `.orphaned/`。
+- Catalog 是事件投影，stale head / generation 以 CAS 拒绝；目标 rollback/fork/clone 在写意图下阻断。
+- Retention Preview 绑定 catalog head / target generation / policy digest；Mirror 按不可变 Generation 读写，Epoch/Sequence 围栏与 Policy Recipient 变体隔离。
+- 前端仅 Leader 标签页上传 Mirror，携带 `clientReplicaId` 与单调 `clientSequence`。
+
+## Effective snapshot dedup and cross-file restore gate（v4.4.11）
+
+```powershell
+pytest tests/test_backup_4411_contracts.py tests/test_backup_4410_contracts.py
+cargo test --locked --manifest-path rust/Cargo.toml -p deepseek-backup
+```
+
+- 未变化大文件的 Chunk Map 必须通过 Snapshot Ref 跨任意 Incremental 继承，Map 内容只存一份；Files/Maps/Refs/Lineage 必须单事务提交，损坏只允许强制 Full。
+- 复用范围严格限定 Immediate Parent Effective Snapshot；跨文件 Chunk 需要精确 SHA-256 + Length，Rename/Copy 可用 `parent-file` 达到零 Payload，不得回指已删除历史内容。
+- `incremental-v4` 必须写 `parent-range`；v2/v3 `parentOrdinal` 继续兼容。所有 PUT 必须在 Immutable Parent View 上准备校验后，才能执行 Tombstone 与 Replace。
+- Bloom 只允许跳过确定 Miss，Positive 必须进入批量 SQLite Exact Lookup；Bloom/Index 损坏不得造成错误复用，路径与 Hash 不得进入远端元数据或遥测。
+- `deepseek-backup scan-batch` 必须与 Python 结果一致；Telemetry 按实际文件统计 Rust/回退和原因，回退率大于 10% 仅标记 degraded。
+- Multipart 冲突只有目标 Digest 与 Expected Size 同时精确匹配才能收敛；Provider 丢失 Metadata 时 Capability Probe 必须拒绝 Scheduled Ready。
+
+## Packed Delta and persistent snapshot state gate（v4.4.12）
+
+```powershell
+pytest tests/test_backup_packed_delta_contracts.py tests/test_backup_448_contracts.py `
+  tests/test_backup_4411_contracts.py tests/test_backup_4410_contracts.py
+python scripts/run_packed_delta_s3_e2e.py `
+  --out docs/evidence/packed-delta-s3-v4.4.13.json
+```
+
+- Full 必须写完整 `snapshot_file_ops` Checkpoint，Incremental 只写 changed/deleted PUT/DELETE；`current_effective_files` 与单行 `current_effective_heads` 必须在同一个 `BEGIN IMMEDIATE` 事务中收敛。
+- File Version 由 Size、File SHA 与可选 Chunk Map 内容寻址；Rename/Copy 共享 Version。Head/Root 不一致、迁移断链或提交冲突必须标 stale 并 Force Full。
+- `incremental-v5` 的 CDC Payload 必须全部 Pack，Whole Payload 不超过 16 MiB 时 Pack，超过阈值保持 typed standalone；Pack 只属于当前 Snapshot，不得新增历史依赖。
+- Pack Target/Max/Alignment 固定为 64 MiB / 72 MiB / 8 bytes。恢复必须独立验证 Pack SHA、Blob Range SHA、File SHA 与 Merkle Root，最多持有四个 Pack Handle。
+- Rust Batch 必须复用一个长生命周期 JSONL Process，以 Worker + 预计工作集共同限流并流式回传；单文件失败只回退该文件。
+- Index GC 必须保留任何仍被 Snapshot Ops 或 Current View 引用的 File Version/Chunk Map；Maintenance 只允许阈值化 `incremental_vacuum`，不得在 Commit 路径完整 `VACUUM`。
+- Dedicated `packed-delta-s3-e2e` job 使用固定 MinIO Image，通过真实 HTTP 验证 Full、v5 Pack、Multipart 中断恢复、Range GET 与字节级 Restore。只有 exact-merge job 成功后才能声称该 Evidence PASS。
+
+## Projected Recovery and production remote restore gate（v4.4.13）
+
+```powershell
+pytest tests/test_backup_projection.py tests/test_backup_projected_materialize.py `
+  tests/test_backup_remote_restore_projection.py tests/test_backup_remote_restore_projection_e2e.py
+python scripts/run_packed_delta_s3_e2e.py `
+  --out docs/evidence/packed-delta-s3-v4.4.13.json
+```
+
+- 创建 Restore Session 时必须冻结 `selection` 并持久化 `selectionDigest`；Retry 改选必须返回 `409 restore-selection-mismatch`，选择一旦冻结不可改变。
+- Metadata 平面必须完整应用 F0→I1→…→In 逻辑链并逐层校验 Merkle Root；只有 Payload Byte 物化允许选择性。`restoreOutputSet` 与 `restoreDependencySet` 严格分离，跨文件 `parent-range` / `parent-file` 依赖只进入 Support Scratch，绝不写入最终树，未选中 Contributor 一律不被改动。
+- 选择性解压只读取 `manifest.json` / `operations.json` / Pack Index，并只解压所需 Full 条目、所需 Pack 与 Standalone；Pack 首次使用前才做 Size/SHA 校验。
+- API/UI 必须如实上报 `networkSelective: false` 与 `whole-age-object` 理由，不得把选择性物化宣传成网络级 Selective Fetch。
+- Federated 交易的 `serverTransactionDigest` 必须纳入 `selectionDigest`；`requiresFrontendApply` / `requiresExternalMcp` 由 selection 推导；Safety Backup 始终 Full。
+- 远端祖先 Hold 在 Complete / Abort / Federated 交易前失败时释放，`recovery-required` 时保留；TTL 为最终兜底。
+- Adaptive Full 决策必须使用 Pack 容器真实物理字节；Index Maintenance 的 auto-vacuum 迁移必须「新建 DB → 复制 live state → 校验 Head/Root → 原子 swap」，成功前保留旧 DB。
+- Dedicated MinIO job 必须使用真实 Rust Age Helper 驱动 Policy → Scheduler → Executor → S3 → Receipt → Restore → Federated Commit/Complete 全链路，最终 Workspace 与 I1 Snapshot 字节级一致。
+
+## Stateless MCP reliability gate（v4.4.2+）
+
+无状态 MCP 不生成并提交新的版本化 evidence JSON；它以当前提交的 workflow checks 作为事实源：
+
+| Job | 必须证明 |
+| --- | --- |
+| `stateless-mcp` | TypeScript 严格检查与单元测试通过；请求级 server factory、鉴权/Host、路径 containment、幂等、lease/fencing、retry 和 telemetry 合同无回归。 |
+| `docker` | `stateless-mcp/Dockerfile` 可构建，`docker-compose.stateless-mcp.yml` 可解析。 |
+| `stateless-mcp-failover` | NGINX 命中两个实例；task owner 被突然终止；客户端切换实例重试；租约到期后恢复；同一幂等键不重复执行。旧 owner fencing 由 `stateless-mcp` 单元 gate 固定。 |
+
+本地复现：
+
+```powershell
+npm ci --prefix stateless-mcp
+npm run check --prefix stateless-mcp
+npm run smoke:failover --prefix stateless-mcp
+```
+
+只有对应提交的 GitHub checks 全绿时，才能声称无状态 MCP reliability gate 通过。Redis AOF 本身仍不进入 release ZIP 或默认 `/data` 卷；配置 external Contributor 后，当前版本只导出可移植的逻辑任务快照。
+
+## 发版前最小流程
+
+```bash
+# 1. 刷新 eval / agent 报告到当前版本
+python scripts/update_eval_report.py
+
+# 2. 刷新 headless MCP bridge evidence
+python scripts/smoke_mcp_headless_bridge.py --out docs/evidence/headless-mcp-bridge.json
+
+# 3. 刷新 A2A external peer evidence
+python scripts/smoke_a2a_external_peer.py --out docs/evidence/a2a-external-peer.json
+
+# 4. 刷新 A2A third-party evidence（需要第三方或第三方风格 A2A-compatible peer）
+python scripts/smoke_a2a_external_peer.py --peer-url http://<third-party-host>:<port> --peer-type third-party --out docs/evidence/a2a-third-party-peer.json --markdown docs/evidence/a2a-third-party-peer.md
+
+# 5. 刷新 Edge Router dry-run evidence（离线硬门禁）
+python scripts/smoke_edge_router.py --offline --out docs/evidence/edge-router-v4.4.13.json
+
+# 6. 刷新 Edge Router smoke evidence（可选，需要本地 Ollama / Ollama-compatible provider）
+python examples/edge_router_smoke.py --require-ollama --out docs/evidence/edge-router-smoke.json --markdown docs/evidence/edge-router-smoke.md
+
+# 7. 刷新 Workspace Core evidence（离线）
+python scripts/smoke_workspace.py --offline --out docs/evidence/workspace-v4.4.13.json
+
+# 8. 刷新 Skill System evidence（离线）
+python scripts/smoke_skills.py --offline --out docs/evidence/skills-v4.4.13.json
+
+# 9. 刷新 Skill Workbench UI evidence（离线）
+python scripts/smoke_skills_ui.py --offline --out docs/evidence/skills-ui-v4.4.13.json
+
+# 9. 刷新 Skill Builder evidence（离线）
+python scripts/smoke_skill_builder.py --offline --out docs/evidence/skill-builder-v4.4.13.json
+
+# 10. 刷新 Skill Packs evidence（离线）
+python scripts/smoke_skill_packs.py --offline --out docs/evidence/skill-packs-v4.4.13.json
+
+# 11. 刷新 Skill Eval Dashboard evidence（离线）
+python scripts/smoke_skill_eval_dashboard.py --offline --out docs/evidence/skill-eval-dashboard-v4.4.13.json --report-out evals/reports/skills-v4.4.13.json
+
+# 12. 刷新 Skill Versioning evidence（离线）
+python scripts/smoke_skill_versioning.py --offline --out docs/evidence/skill-versioning-v4.4.13.json
+
+# 13. 刷新 Skill Analytics evidence（离线）
+python scripts/smoke_skill_analytics.py --offline --out docs/evidence/skill-analytics-v4.4.13.json
+
+# 14. 刷新 Skill Security evidence（离线）
+python scripts/smoke_skill_security.py --offline --out docs/evidence/skill-security-v4.4.13.json
+
+# 15. 刷新 Skill Catalog evidence（离线）
+python scripts/smoke_skill_catalog.py --offline --out docs/evidence/skill-catalog-v4.4.13.json
+
+# 16. 版本一致性与质量证据体检
+python scripts/preflight_release.py --version 4.4.13
+
+# 17. 运行时体检
+python scripts/doctor.py --offline
+
+# 18. 一键 smoke（离线）
+python scripts/smoke_release.py --offline
+
+# 19. 打包并生成 manifest + checksum + qualityGates
+python scripts/release.py --clean-workspace --version 4.4.13
+
+# 20. 无状态 MCP 类型、单测与容器故障恢复
+npm ci --prefix stateless-mcp
+npm run check --prefix stateless-mcp
+npm run smoke:failover --prefix stateless-mcp
+```
+
+也可以直接用 `python scripts/smoke_release.py --offline` 刷新离线质量证据；本地模型和第三方生态 evidence 需要在具备对应环境时单独补齐。

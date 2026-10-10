@@ -1,0 +1,190 @@
+from __future__ import annotations
+
+import contextlib
+import http.client
+import json
+import threading
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import deepseek_infra.web.server as server_module
+from deepseek_infra.core.errors import ErrorCode
+from deepseek_infra.infra.workspace import projects
+
+
+@contextlib.contextmanager
+def _running_server() -> Iterator[Any]:
+    server, _ = server_module.create_server(0, host="127.0.0.1")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _request(
+    server: Any,
+    method: str,
+    path: str,
+    *,
+    body: bytes | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, bytes, http.client.HTTPResponse]:
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+    try:
+        connection.request(method, path, body=body, headers=headers or {})
+        response = connection.getresponse()
+        data = response.read()
+        return response.status, data, response
+    finally:
+        connection.close()
+
+
+def _auth_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {server_module.settings.auth.token}", "Content-Type": "application/json"}
+
+
+def _collect_route_paths(routes: list[Any]) -> set[str]:
+    paths: set[str] = set()
+    for route in routes:
+        path = getattr(route, "path", "")
+        if path:
+            paths.add(path)
+        original = getattr(route, "original_router", None)
+        if original is not None:
+            paths |= _collect_route_paths(getattr(original, "routes", []))
+    return paths
+
+
+def test_media_routes_are_registered() -> None:
+    paths = _collect_route_paths(server_module.create_app().routes)
+    assert "/api/media" in paths
+    assert "/api/media/{media_id}" in paths
+    assert "/api/media/{media_id}/process" in paths
+    assert "/api/media/{media_id}/segments" in paths
+
+
+def test_media_auth_enforced() -> None:
+    with _running_server() as server:
+        status, data, _ = _request(server, "GET", "/api/media")
+
+    payload = json.loads(data.decode("utf-8"))
+    assert status == 401
+    assert payload["code"] == ErrorCode.UNAUTHORIZED.value
+
+
+def test_media_json_register_list_segments_and_delete(tmp_settings: Path) -> None:
+    project = projects.create_project("Media Route Project")
+    body = json.dumps(
+        {
+            "projectId": project["projectId"],
+            "type": "webpage",
+            "title": "Route Snapshot",
+            "html": "<main><h1>Media API</h1><p>Segments are citable.</p></main>",
+            "process": True,
+        }
+    ).encode("utf-8")
+
+    with _running_server() as server:
+        status, created_raw, _ = _request(server, "POST", "/api/media", body=body, headers=_auth_headers())
+        assert status == 200
+        created = json.loads(created_raw.decode("utf-8"))
+        media_id = created["media"]["mediaId"]
+        assert created["media"]["status"] == "ready"
+
+        status, list_raw, _ = _request(server, "GET", f"/api/media?projectId={project['projectId']}", headers=_auth_headers())
+        assert status == 200
+        listed = json.loads(list_raw.decode("utf-8"))
+        assert listed["media"][0]["mediaId"] == media_id
+
+        status, segments_raw, _ = _request(server, "GET", f"/api/media/{media_id}/segments", headers=_auth_headers())
+        assert status == 200
+        segments = json.loads(segments_raw.decode("utf-8"))
+        assert segments["segments"][0]["citation"]["uri"].startswith(f"media://{media_id}")
+
+        patch_body = json.dumps({"title": "Updated Route Snapshot", "metadata": {"reviewed": True}}).encode("utf-8")
+        status, patch_raw, _ = _request(server, "PATCH", f"/api/media/{media_id}", body=patch_body, headers=_auth_headers())
+        assert status == 200
+        patched = json.loads(patch_raw.decode("utf-8"))
+        assert patched["media"]["title"] == "Updated Route Snapshot"
+        assert patched["media"]["metadata"]["reviewed"] is True
+
+        reprocess_body = json.dumps({"force": True}).encode("utf-8")
+        status, process_raw, _ = _request(server, "POST", f"/api/media/{media_id}/process?force=true", body=reprocess_body, headers=_auth_headers())
+        assert status == 200
+        assert json.loads(process_raw.decode("utf-8"))["media"]["status"] == "ready"
+
+        status, deleted_raw, _ = _request(server, "DELETE", f"/api/media/{media_id}", headers=_auth_headers())
+        assert status == 200
+        assert json.loads(deleted_raw.decode("utf-8"))["deleted"] == 1
+
+
+def test_media_create_echoes_only_a_log_safe_request_correlation_id(tmp_settings: Path) -> None:
+    project = projects.create_project("Correlation Project")
+    body = json.dumps(
+        {
+            "projectId": project["projectId"],
+            "type": "webpage",
+            "title": "Traceable Snapshot",
+            "html": "<main><p>Traceable.</p></main>",
+            "process": True,
+        }
+    ).encode("utf-8")
+
+    with _running_server() as server:
+        status, _, supplied = _request(
+            server,
+            "POST",
+            "/api/media",
+            body=body,
+            headers={**_auth_headers(), "X-DeepSeek-Request-ID": "client-supplied-1"},
+        )
+        assert status == 200
+        assert supplied.getheader("X-DeepSeek-Request-ID") == "client-supplied-1"
+
+        status, _, unsafe = _request(
+            server,
+            "POST",
+            "/api/media",
+            body=body,
+            headers={**_auth_headers(), "X-DeepSeek-Request-ID": "bad id"},
+        )
+        assert status == 200
+        echoed = unsafe.getheader("X-DeepSeek-Request-ID")
+        assert echoed
+        assert echoed != "bad id"
+
+        status, _, generated = _request(server, "POST", "/api/media", body=body, headers=_auth_headers())
+        assert status == 200
+        assert generated.getheader("X-DeepSeek-Request-ID")
+
+
+def test_media_process_echoes_request_correlation_id(tmp_settings: Path) -> None:
+    project = projects.create_project("Correlation Process Project")
+    body = json.dumps(
+        {
+            "projectId": project["projectId"],
+            "type": "webpage",
+            "title": "Reprocessed Snapshot",
+            "html": "<main><p>Reprocessed.</p></main>",
+        }
+    ).encode("utf-8")
+
+    with _running_server() as server:
+        status, created_raw, _ = _request(server, "POST", "/api/media", body=body, headers=_auth_headers())
+        assert status == 200
+        media_id = json.loads(created_raw.decode("utf-8"))["media"]["mediaId"]
+
+        status, _, response = _request(
+            server,
+            "POST",
+            f"/api/media/{media_id}/process",
+            body=b"{}",
+            headers={**_auth_headers(), "X-DeepSeek-Request-ID": "process-1"},
+        )
+        assert status == 200
+        assert response.getheader("X-DeepSeek-Request-ID") == "process-1"
