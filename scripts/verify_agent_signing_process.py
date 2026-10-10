@@ -235,8 +235,8 @@ def record_command(command: list[str], cwd: Path, env: dict[str, str], output: P
     (output / f"{label}.log").write_bytes(raw)
     if completed.returncode:
         raise RuntimeError(f"{label} failed; preserved log, exit={completed.returncode}")
-    if label == "go-producer" and any(f"--- PASS: TestNativeAgentSigningProducer/{phase}".encode() not in raw for phase in ("plan", "tasks")):
-        raise ValueError("Producer exit success without both nonzero scenarios is not qualification")
+    if label == "go-producer" and any(f"--- PASS: TestNativeAgentSigningProducer/{phase}".encode() not in raw for phase in ("plan", "tasks", "writer-expiry")):
+        raise ValueError("Producer exit success without all three nonzero scenarios is not qualification")
 
 
 def compile_producer(scratch: Path, output: Path, cache_root: Path) -> tuple[Path, dict[str, str]]:
@@ -257,7 +257,7 @@ def compile_producer(scratch: Path, output: Path, cache_root: Path) -> tuple[Pat
     binary = scratch / ("native-agent-api-tests.exe" if os.name == "nt" else "native-agent-api-tests")
     record_command(["go", "test", "-c", "-p=2", "-overlay", overlay_path.as_posix(), "-o", binary.as_posix(), "./internal/api"],
                    ROOT / "go", environment, output, "go-build", timeout=600)
-    record_command([binary.as_posix(), "-test.run=^TestNativeAgentSigningProducer$", "-test.v", "-test.timeout=60s"],
+    record_command([binary.as_posix(), "-test.run=^TestNativeAgentSigningProducer$", "-test.v", "-test.timeout=120s"],
                    ROOT / "go/internal/api", environment, output, "go-producer")
     (output / "producer.json").write_text(json.dumps({"goVersion": version, "productionCGOEnabled": False,
         "realUTC": True, "productionGoAuthorityAndRPC": True, "rustSigningQualified": False,

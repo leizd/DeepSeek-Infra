@@ -242,10 +242,16 @@ func TestNativeAgentSigningProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	if scenario == "writer-expiry" {
-		if document.Payload.LeaseUntil <= document.Payload.WriterLeaseUntil {
+		// Signing and replay renew the Go writer. The immutable grant retains
+		// its earlier deadline, so wait for the latest actual writer lease.
+		writerDeadline := control.Writer().LeaseUntil
+		if writerDeadline < document.Payload.WriterLeaseUntil || document.Payload.LeaseUntil <= writerDeadline {
 			t.Fatal("writer must expire while the action remains live")
 		}
-		time.Sleep(time.Until(time.Unix(document.Payload.WriterLeaseUntil, 0).Add(100 * time.Millisecond)))
+		time.Sleep(time.Until(time.Unix(writerDeadline, 0).Add(100 * time.Millisecond)))
+		if control.Writer().LeaseUntil != writerDeadline || time.Now().Unix() < writerDeadline {
+			t.Fatal("the actual writer lease did not expire without another renewal")
+		}
 		if time.Now().Unix() >= document.Payload.LeaseUntil {
 			t.Fatal("action expired before writer-expiry check")
 		}
@@ -262,7 +268,7 @@ func TestNativeAgentSigningProcess(t *testing.T) {
 		_, err := resumed.AuthorizeAgentExecution(ctx, forgedLiveDates, input.RequestId, input.Nonce, binding)
 		return err
 	}); status.Code(err) != codes.FailedPrecondition {
-		t.Fatal("cancelled or writer-expired scope received Rust signing authority")
+		t.Fatalf("terminal signing denial: got code=%s want=%s error=%v", status.Code(err), codes.FailedPrecondition, err)
 	}
 	nativeSigningWrite(t, filepath.Join(directory, "process-result.json"), map[string]any{
 		"scenario": scenario, "status": "PASS", "realUTC": true, "grantSha256": nativeSigningID(string(grant)),
@@ -338,4 +344,31 @@ func TestNativeAgentSigningProducer(t *testing.T) {
 			t.Logf("realUTC=true phase=%s executionEpoch=%d metadataEpoch=%d", phase, claim.Fence.ExecutionEpoch, claim.MetadataEpoch)
 		})
 	}
+	t.Run("writer-expiry", func(t *testing.T) {
+		control := nativeSigningControl(t, 5)
+		client, _ := nativeSigningRPC(t, control)
+		claim := nativeSigningClaim(t, client, "plan")
+		before := control.Writer().LeaseUntil
+		time.Sleep(1100 * time.Millisecond)
+		ctx, cancel := context.WithTimeout(controlRPCContext(t, testInternalBearer), 8*time.Second)
+		defer cancel()
+		input := &agentv1.RenewAgentRunExecutionRequest{Fence: claim.Fence, RunId: claim.RunId,
+			Owner: claim.Owner, ClaimToken: claim.ClaimToken, LeaseSeconds: 60}
+		renewed, err := client.RenewExecution(ctx, input)
+		writerDeadline := control.Writer().LeaseUntil
+		if err != nil || renewed.GetClaim() == nil || writerDeadline <= before ||
+			renewed.Claim.WriterLeaseUntil != writerDeadline || renewed.Claim.LeaseUntil <= writerDeadline {
+			t.Fatalf("actual writer renewal did not advance its deadline while action remained live: %v", err)
+		}
+		time.Sleep(time.Until(time.Unix(writerDeadline, 0).Add(100 * time.Millisecond)))
+		if control.Writer().LeaseUntil != writerDeadline || time.Now().Unix() >= renewed.Claim.LeaseUntil {
+			t.Fatal("writer-expiry observation moved its deadline or expired the action")
+		}
+		ctx, cancel = context.WithTimeout(controlRPCContext(t, testInternalBearer), 8*time.Second)
+		defer cancel()
+		if _, err := client.RenewExecution(ctx, input); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("expired actual writer was renewed: code=%s error=%v", status.Code(err), err)
+		}
+		t.Logf("realUTC=true writerDeadlineAdvanced=true before=%d after=%d expiredWriterDenied=true", before, writerDeadline)
+	})
 }
