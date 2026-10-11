@@ -237,6 +237,7 @@ fn v2_migration_preserves_unbound_intent_and_rolls_back_on_identity_failure() {
     connection
         .execute_batch(
             "BEGIN IMMEDIATE;
+        DROP TABLE agent_node_effects;
         DROP TRIGGER storage_grant_no_update;
         DROP TRIGGER storage_grant_no_delete;
         DROP TRIGGER storage_grant_no_replace;
@@ -268,7 +269,7 @@ fn v2_migration_preserves_unbound_intent_and_rolls_back_on_identity_failure() {
     assert_eq!(
         connection
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_schema WHERE name LIKE 'storage_rpc_%' OR name LIKE 'storage_grant_%' OR name IN ('storage_operation_grants','epoch_grant_replay')",
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name LIKE 'storage_rpc_%' OR name LIKE 'storage_grant_%' OR name IN ('storage_operation_grants','epoch_grant_replay','agent_node_effects') OR name LIKE 'agent_node_%'",
                 [],
                 |row| row.get::<_, i64>(0)
             )
@@ -281,7 +282,15 @@ fn v2_migration_preserves_unbound_intent_and_rolls_back_on_identity_failure() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        4
+        5
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM agent_node_effects", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0,
+        "migration must not infer Agent nodes for historical storage intents"
     );
     assert_eq!(
         connection
