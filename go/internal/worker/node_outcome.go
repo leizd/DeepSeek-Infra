@@ -22,3 +22,9 @@ func VerifyAgentNodeEffect(effect *agentv1.AgentNodeEffectMetadata, intent *agen
 	return agentproof.VerifyAgentNodeEffect(effect, intent, writerFencingToken,
 		agentproof.Binding{PublicKey: binding.PublicKey, FleetID: binding.FleetID, Environment: binding.Environment})
 }
+
+// Keep the production client validation interface backed by the same verifier.
+func nodeOutcomeHex(value string) bool { return agentproof.ValidNodeOutcomeDigest(value) }
+func nodeOutcomeArtifact(reference *agentv1.AgentArtifactReference) bool {
+	return agentproof.ValidNodeOutcomeArtifact(reference)
+}

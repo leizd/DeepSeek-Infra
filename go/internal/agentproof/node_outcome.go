@@ -30,7 +30,8 @@ func (outcome *VerifiedAgentNodeOutcome) Evidence() *agentv1.AgentNodeOutcomeEvi
 	return proto.Clone(outcome.evidence).(*agentv1.AgentNodeOutcomeEvidence)
 }
 
-func nodeOutcomeHex(value string) bool {
+// ValidNodeOutcomeDigest accepts canonical lowercase SHA-256 metadata only.
+func ValidNodeOutcomeDigest(value string) bool {
 	if len(value) != 64 {
 		return false
 	}
@@ -42,8 +43,9 @@ func nodeOutcomeHex(value string) bool {
 	return true
 }
 
-func nodeOutcomeArtifact(reference *agentv1.AgentArtifactReference) bool {
-	return reference != nil && len(reference.ProtoReflect().GetUnknown()) == 0 && nodeOutcomeHex(reference.Sha256) && reference.Length > 0 && reference.Length <= 128*1024*1024
+// ValidNodeOutcomeArtifact rejects unknown fields and unbounded body references.
+func ValidNodeOutcomeArtifact(reference *agentv1.AgentArtifactReference) bool {
+	return reference != nil && len(reference.ProtoReflect().GetUnknown()) == 0 && ValidNodeOutcomeDigest(reference.Sha256) && reference.Length > 0 && reference.Length <= 128*1024*1024
 }
 
 // The expected intent and original writer token come from Go's durable admitted
@@ -60,14 +62,14 @@ func VerifyAgentNodeOutcome(receipt *agentv1.AgentNodeOutcomeReceipt, intent *ag
 	if evidence.SchemaVersion != 1 || len(evidence.ProtoReflect().GetUnknown()) != 0 || evidence.Fence == nil ||
 		len(evidence.Fence.ProtoReflect().GetUnknown()) != 0 || !proto.Equal(evidence.Fence, intent.Fence) ||
 		evidence.OperationId != intent.OperationId || !strings.HasPrefix(evidence.OperationId, "agent-node-") || len(evidence.OperationId) != 75 ||
-		!nodeOutcomeHex(evidence.OperationId[11:]) || evidence.RunId == "" || evidence.RunId != intent.RunId ||
+		!ValidNodeOutcomeDigest(evidence.OperationId[11:]) || evidence.RunId == "" || evidence.RunId != intent.RunId ||
 		evidence.NodeId == "" || evidence.NodeId != intent.NodeId || evidence.Phase != intent.Phase ||
 		(evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN && evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS) ||
 		(evidence.Phase == agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN && evidence.NodeId != "leader") ||
-		!nodeOutcomeArtifact(evidence.Request) || !proto.Equal(evidence.Request, intent.Request) || !nodeOutcomeArtifact(evidence.PublicEvent) ||
-		!nodeOutcomeHex(evidence.PlanDigest) || evidence.PlanDigest != intent.PlanDigest || evidence.MetadataIndex < 0 ||
+		!ValidNodeOutcomeArtifact(evidence.Request) || !proto.Equal(evidence.Request, intent.Request) || !ValidNodeOutcomeArtifact(evidence.PublicEvent) ||
+		!ValidNodeOutcomeDigest(evidence.PlanDigest) || evidence.PlanDigest != intent.PlanDigest || evidence.MetadataIndex < 0 ||
 		evidence.MetadataIndex != intent.MetadataIndex || evidence.MetadataEpoch == 0 || evidence.MetadataEpoch != intent.MetadataEpoch ||
-		evidence.WriterFencingToken != writerFencingToken || !nodeOutcomeHex(evidence.OutcomeSha256) || evidence.OutcomeLength == 0 ||
+		evidence.WriterFencingToken != writerFencingToken || !ValidNodeOutcomeDigest(evidence.OutcomeSha256) || evidence.OutcomeLength == 0 ||
 		evidence.OutcomeLength > 1024*1024 || evidence.FleetId != binding.FleetID || evidence.Environment != binding.Environment ||
 		evidence.Fence.ActionId == "" || evidence.Fence.ExecutionEpoch == 0 {
 		return invalid()
