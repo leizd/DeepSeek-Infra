@@ -1449,9 +1449,12 @@ jobs:
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test ./...
-      # Pure-Go SQLite instrumentation runs hundreds of exact-schema fixtures.
-      # The measured full store suite can exceed Go's default ten-minute bound.
-      - run: go test -race -timeout=30m ./...
+      # The full pure-Go SQLite race suite exceeded 30m while creating its final fixtures.
+      # Keep every test, bound each package at 60m, and preserve per-test timing evidence.
+      - name: Full Go race tests with timing reports
+        run: |
+          mkdir -p ../artifacts/go-race
+          go test -race -json -timeout=60m ./... > ../artifacts/go-race/default.jsonl 2> ../artifacts/go-race/default.stderr.log
       - name: Go coverage
         # The profile is uploaded so a difference between this job's number and a developer's is
         # diffed rather than inferred. On this suite the differences are single statements — a
@@ -1470,7 +1473,8 @@ jobs:
           GOFLAGS: "-tags=deepseek_android"
         run: |
           go vet ./...
-          go test -race -timeout=30m ./...
+          mkdir -p ../artifacts/go-race
+          go test -race -json -timeout=60m ./... > ../artifacts/go-race/android.jsonl 2> ../artifacts/go-race/android.stderr.log
           python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile android-coverage.out
       - uses: actions/upload-artifact@v4
         if: always()
@@ -1478,6 +1482,13 @@ jobs:
           name: go-android-coverage-profile-1.27.1
           path: go/android-coverage.out
           if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-race-timing-reports-1.27.1
+          path: artifacts/go-race/
+          if-no-files-found: warn
+          retention-days: 7
       - name: Build fail-closed Rust worker boundary
         run: cargo build --locked --manifest-path ../rust/Cargo.toml -p deepseek-worker
       - name: Run real Go-to-Rust worker boundary

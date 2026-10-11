@@ -560,7 +560,7 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 		if retained.State != "EFFECT_UNKNOWN" || retained.PublicEvent != nil || retained.OutcomeReceipt != nil {
 			t.Fatal("unknown effect was promoted to success")
 		}
-		_, err := production.ExecuteAgentPlan(context.Background(), request)
+		_, err = production.ExecuteAgentPlan(context.Background(), request)
 		var rpcFailure interface{ GRPCStatus() *status.Status }
 		if status.Code(err) != codes.FailedPrecondition || !errors.As(err, &rpcFailure) || rpcFailure.GRPCStatus() == nil ||
 			rpcFailure.GRPCStatus().Code() != codes.FailedPrecondition || rpcFailure.GRPCStatus().Message() != "EFFECT_UNKNOWN" {
