@@ -1,7 +1,25 @@
 # Rust 构建磁盘策略
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
 本项目的日常构建使用低磁盘占用配置、固定缓存和磁盘余量保护。Python
 脚本仅负责离线构建与验证；产品运行时仍由 Rust/Go 二进制承担。
+
+## Go and Docker verification also runs in the cloud
+
+The user moved this task's Go compilation/tests and Docker verification to
+GitHub Actions on 2026-10-11. The existing `ci.yml` workflow is dispatched on an
+already reviewed/uploaded cloud revision; builds, module/build caches, image
+layers and isolated containers stay on GitHub-hosted runners. Collect only
+coverage profiles, job metadata and small evidence reports. Do not download
+compiler caches, Docker image archives or volumes, or recreate local builds as a
+fallback. Source formatting, type checks and installed codegen tools stay local.
+
+See [native cloud verification](NATIVE_CLOUD_VERIFICATION.md) for commands and
+exact-revision checks. This changes the verification location. Existing local Go
+caches and Docker data require a separate inspected, authorized cleanup.
 
 ## GitHub 云端构建
 
@@ -319,3 +337,13 @@ D: 2.73 GiB；历史释放量不代表当前可用空间。新记录为
 
 这些是本地源码与构建策略证据；全产品生产迁移及精确提交 CI 验收
 仍需按 `tasks/native-runtime/` 和 release 契约完成。
+
+## 2026-10-11 cloud transfer and physical reclaim
+
+Go and Docker now run on the approved GitHub Actions snapshot too. The local
+task-cache cleanup and offline VHDX compaction preserved all runtime volumes,
+source files, tools and failure logs, while the observed host free-space delta
+was C: +1.7 GiB and D: +73.6 GiB. The exact remaining 34 Go archives and referenced
+build records are recorded in `artifacts/native-20261011-go-docker-cloud/cleanup-summary.json`.
+See [cloud verification](NATIVE_CLOUD_VERIFICATION.md) for current execution and
+qualification status. Local native compilation remains disabled on this host.

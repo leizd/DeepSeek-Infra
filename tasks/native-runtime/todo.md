@@ -4,6 +4,33 @@
 [中文](../../README.md) / [English](../../README.en.md)
 <!-- docs-language-switcher:end -->
 
+## 2026-10-11 Go/Docker cloud execution and cache cleanup
+
+The approved test-only expiry repair is uploaded as `9dd2ea89` / tree `a5dbe4d3`.
+Exact run `38101509722` passes all fourteen Go/Docker jobs, including both
+default/Android tests and races, Android-compatible SQLite and the actual
+native worker process boundary. Default coverage is 10277/10816 = 95.016642%;
+Android coverage is 10103/10626 = 95.078110%, at the original 95% floor.
+Only 1,259,118 report bytes are downloaded. The exact source match and result
+are recorded in `artifacts/native-20261011-go-docker-cloud-retry/cloud-evidence.json`.
+Run `38098810886` and its failure logs remain historical evidence; six other
+jobs in the new full CI run still fail and full release readiness is NOT_READY.
+
+The authorized obsolete task-cache cleanup is executed. All 25 Docker volume
+objects, 23 retained volume contents, 3574 source files and the real Git state
+are preserved and verified. Offline supported VHDX compaction returned space:
+observed C: +1.7 GiB and D: +73.6 GiB. Docker is stopped again. The audit receipt
+is `artifacts/native-20261011-go-docker-cloud/cleanup-summary.json`.
+34 approved task archives (18.3 MiB) remain after automatic review rejected the
+bounded retry; 21 referenced build records remain while unrelated records are
+preserved. No broader prune is authorized by this cleanup result.
+
+Rust, Go and Docker compilation/tests stay in GitHub Actions; no compiler cache
+or Docker image archive is downloaded. Full CI still requires Linux typing,
+SDK/Hono audit, docs navigation and benchmark hash-order repairs. Agent node
+execution, provider/tool effects, recovery and platform qualification remain
+required; release readiness is **NOT_READY**.
+
 ## Production Go Agent authorization — 2026-10-10
 
 - [x] Add the versioned Go authorization RPC using durable Go admission and the
@@ -19,8 +46,13 @@
 - [x] Complete all ten default/native_android Go gates at the original 95%
   coverage floor (95.007396% / 95.068699%). Independently rehash the immutable
   snapshot and successful logs after interrupted aggregate finalization.
-- [ ] Freeze and review these new inputs, obtain their upload authorization,
-  and qualify the production Go-to-Rust RPC process path on the exact cloud commit.
+- [x] Freeze/review and upload exactly the sixteen explicitly authorized files as
+  `92833d06` / tree `8b8a1318`; exact cloud run `38097512432` passes the production
+  Go authorization RPC and all three real UTC Rust custody/TLS/restart/terminal
+  denial cases. Complete Rust checks pass: 1414 tests / one original Redis ignore,
+  all 15 crates and 76260/93234 = 81.794195% line coverage at the unchanged 80% floor.
+  Verify all 806 native inputs and local HEAD/index; download only 4,562,578 report
+  bytes. Compiler/dependency caches stay in the cloud; signing is not node-effect proof.
 - [ ] Continue actual durable Agent phase/node/provider/tool execution and
   recovery. The new authorization primitive alone does not qualify those effects.
 

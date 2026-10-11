@@ -71,9 +71,24 @@ pytest -m "not integration and not slow" -p no:cacheprovider
 pytest tests/test_mcp.py -v -p no:cacheprovider
 ```
 
-### Native Changes Local Verification
+### Native Verification
 
-Run the matching local command before touching native directories:
+On the current disk-constrained Windows host, the user has moved Rust, Go and
+Docker compilation, tests and verification containers to GitHub Actions. Use the
+reviewed uploaded snapshot on `codex/rust-cloud/20261010` and dispatch `ci.yml`
+for Go/Docker gates; `rust-cloud.yml` is the bounded Rust workflow. Do not start
+local Go/Cargo builds, Go tests, Docker image builds or verification stacks as a
+fallback. Formatting, source/type checks, codegen with installed tools and report
+collection may remain local. Verify the cloud run's exact revision, required jobs
+and original coverage floors, and download only reports, never compiler caches,
+Docker images or volumes. See `docs/NATIVE_CLOUD_VERIFICATION.md`.
+
+Uncommitted executable changes require a reviewed snapshot and the user's
+specific upload authorization before cloud qualification; never silently test an
+older remote revision. Existing local cache/data cleanup is a separate operation.
+
+The commands below describe the matching gates for other hosts, or local native
+verification explicitly requested by the user:
 
 ```bash
 # Rust workspace lint & tests (when touching rust/):

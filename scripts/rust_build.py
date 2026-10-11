@@ -139,7 +139,7 @@ def cache_environment(
 
 def prepare_cache(target: Path) -> None:
     target.mkdir(parents=True, exist_ok=True)
-    if os.name == "nt":
+    if sys.platform == "win32":
         # Mark this build directory for lossless NTFS compression of future files.
         # Do not recursively modify arbitrary caller-selected existing content.
         compact = Path(os.environ["SystemRoot"]) / "System32/compact.exe"
@@ -203,6 +203,8 @@ class _WindowsJob:
     """A gated child is assigned before it can spawn Cargo or other descendants."""
 
     def __init__(self) -> None:
+        if sys.platform != "win32":
+            raise OSError("Windows process jobs require Windows")
         from ctypes import wintypes
 
         class BasicLimits(ctypes.Structure):
@@ -237,6 +239,8 @@ class _WindowsJob:
             raise ctypes.WinError(error)
 
     def assign(self, pid: int) -> None:
+        if sys.platform != "win32":
+            raise OSError("Windows process jobs require Windows")
         handle = self.kernel.OpenProcess(0x100 | 0x1, False, pid)  # SET_QUOTA | TERMINATE
         if not handle:
             raise ctypes.WinError(ctypes.get_last_error())
@@ -247,10 +251,14 @@ class _WindowsJob:
             self.kernel.CloseHandle(handle)
 
     def terminate(self) -> None:
+        if sys.platform != "win32":
+            raise OSError("Windows process jobs require Windows")
         if not self.kernel.TerminateJobObject(self.handle, DISK_FULL_EXIT):
             raise ctypes.WinError(ctypes.get_last_error())
 
     def close(self) -> None:
+        if sys.platform != "win32":
+            raise OSError("Windows process jobs require Windows")
         if self.handle:
             self.kernel.CloseHandle(self.handle)
             self.handle = None

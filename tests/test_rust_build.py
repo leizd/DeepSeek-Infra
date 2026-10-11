@@ -122,7 +122,7 @@ def _environment(target: Path) -> dict[str, str]:
 
 
 def _alive(pid: int) -> bool:
-    if os.name == "nt":
+    if sys.platform == "win32":
         from ctypes import wintypes
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
@@ -560,6 +560,8 @@ def test_packaging_build_uses_shared_cache_and_valid_manifest_from_either_root_f
 
 @pytest.mark.skipif(os.name != "nt", reason="NTFS directory inheritance")
 def test_new_cache_files_inherit_lossless_compression(tmp_path: Path) -> None:
+    if sys.platform != "win32":
+        pytest.skip("NTFS directory inheritance requires Windows")
     target = tmp_path / "target"
     rust_build.prepare_cache(target)
     content = bytes(range(256)) * 2048

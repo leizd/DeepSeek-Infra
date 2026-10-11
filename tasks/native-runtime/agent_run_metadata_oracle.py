@@ -39,7 +39,7 @@ def reference() -> tuple[dict[str, Any], list[dict[str, str]]]:
 def metadata(raw: dict[str, Any], ns: dict[str, Any]) -> dict[str, Any]:
     # Transport normalization is explicit: this corpus checks Go's reducer of
     # typed metadata, not a future Rust public-JSON parser or artifact custody.
-    result = {key: raw[key] for key in ("type", "phase", "status", "scope", "plan") if key in raw}
+    result: dict[str, Any] = {key: raw[key] for key in ("type", "phase", "status", "scope", "plan") if key in raw}
     if not isinstance(result.get("plan"), list):
         result.pop("plan", None)
     output = raw.get("output") or {}

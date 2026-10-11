@@ -14,11 +14,16 @@ all ten complete Go gates pass at the original 95% floor (95.007396% default,
 successful command receipts and an independent immutable-source rehash; host
 exit/container removal are unobserved. Both Rust test services reject the new
 method and pass pinned Rustfmt; Rust compilation remains cloud-only. Script lint,
-959-file source typecheck and 15 boundary tests pass. Exact-input cloud process
-qualification and upload authorization are
-pending. Earlier `4ffc3f2` cloud evidence below is historical proof for that
-snapshot and does not qualify these changed Go/Proto inputs. Actual Agent
-effects and full migration remain unfinished; readiness is `NOT_READY`.
+959-file source typecheck and 15 boundary tests pass. Explicit authorization
+uploads exactly sixteen reviewed files as `92833d06` / tree `8b8a1318`.
+Exact cloud run `38097512432` passes the production Go authorization RPC in all
+three real UTC plan/tasks/writer-expiry cases, immutable replay across forced
+Rust restart and terminal Go/Rust denial. Complete Rust checks pass: 1414 tests /
+one original Redis ignore, all 15 crates and 76260/93234 = 81.794195% line coverage
+at the unchanged 80% floor. The collector matches all 806 native inputs and local
+HEAD/index; only 4,562,578 report bytes are downloaded. Compilation/caches stay
+in the cloud. Earlier `4ffc3f2` evidence remains historical for its own snapshot.
+Actual Agent effects and full migration remain unfinished; readiness is `NOT_READY`.
 
 **2026-10-10 process signing checkpoint:** exact cloud commit `7ca579c` passes
 actual real-UTC plan/tasks signing through production Rust custody and Worker
@@ -446,6 +451,33 @@ plans remain; this matrix is the unified tracker.
 Legend: `doc` documented target; `code` native code exists; `wire` production
 or public entry uses it; `local` this workspace verified; `ci` exact-head CI;
 `prod` production owner. `py` = Python still owns the live path.
+
+## 2026-10-11 Go/Docker cloud execution and cache cleanup
+
+The approved test-only expiry repair is uploaded as `9dd2ea89` / tree `a5dbe4d3`.
+Exact run `38101509722` passes all fourteen Go/Docker jobs, including both
+default/Android tests and races, Android-compatible SQLite and the actual
+native worker process boundary. Default coverage is 10277/10816 = 95.016642%;
+Android coverage is 10103/10626 = 95.078110%, at the original 95% floor.
+Only 1,259,118 report bytes are downloaded. The exact source match and result
+are recorded in `artifacts/native-20261011-go-docker-cloud-retry/cloud-evidence.json`.
+Run `38098810886` and its failure logs remain historical evidence; six other
+jobs in the new full CI run still fail and full release readiness is NOT_READY.
+
+The authorized obsolete task-cache cleanup is executed. All 25 Docker volume
+objects, 23 retained volume contents, 3574 source files and the real Git state
+are preserved and verified. Offline supported VHDX compaction returned space:
+observed C: +1.7 GiB and D: +73.6 GiB. Docker is stopped again. The audit receipt
+is `artifacts/native-20261011-go-docker-cloud/cleanup-summary.json`.
+34 approved task archives (18.3 MiB) remain after automatic review rejected the
+bounded retry; 21 referenced build records remain while unrelated records are
+preserved. No broader prune is authorized by this cleanup result.
+
+Rust, Go and Docker compilation/tests stay in GitHub Actions; no compiler cache
+or Docker image archive is downloaded. Full CI still requires Linux typing,
+SDK/Hono audit, docs navigation and benchmark hash-order repairs. Agent node
+execution, provider/tool effects, recovery and platform qualification remain
+required; release readiness is **NOT_READY**.
 
 ## Local integration — 2026-10-07
 
