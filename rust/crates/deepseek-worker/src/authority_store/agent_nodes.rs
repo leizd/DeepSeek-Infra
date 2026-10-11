@@ -186,7 +186,7 @@ impl AuthorityStore {
             request: row.intent.request,
             plan_digest: row.intent.plan_digest,
             metadata_index: row.metadata_index,
-            metadata_epoch: row.metadata_epoch,
+            metadata_epoch: row.intent.metadata_epoch,
             writer_fencing_token: row.token,
             created_at: row.created_at,
             confirmed_at: row.updated_at,

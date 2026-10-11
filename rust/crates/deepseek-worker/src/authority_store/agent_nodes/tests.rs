@@ -244,6 +244,10 @@ fn outcome_evidence_comes_from_confirmed_journal_and_exact_sanitized_projection(
         evidence.request,
         fixture.response.intent.as_ref().unwrap().request
     );
+    assert_eq!(
+        evidence.metadata_epoch,
+        fixture.response.intent.as_ref().unwrap().metadata_epoch
+    );
     assert_eq!(evidence.writer_fencing_token, fixture.config.fencing_token);
     assert_eq!(evidence.outcome_sha256, outcome.output_sha256);
     assert_eq!(evidence.outcome_length, output.len() as u64);
