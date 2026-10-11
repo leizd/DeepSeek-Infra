@@ -1,3 +1,18 @@
+## Agent node dispatch continuation — 2026-10-11
+
+- The exact `ca84511a` full CI is qualified (37/37 jobs); the Android staging
+  follow-up `a9799fa7` is in cloud validation. Retain both revision-bound reports.
+- Prepared: transactional single-fresh node reservations, authenticated typed
+  begin/read RPCs, immutable-node/generic-completion guards, and Rust live-scope
+  validation. Native execution tests and unchanged coverage floors await cloud CI.
+- [ ] Wire the Rust-owned node effect journal and real provider/tool execution.
+- [ ] Verify outcomes independently, admit dependencies, and settle Go phases.
+- [ ] Complete public durable Agent workflows, all presets and restart/takeover.
+- [ ] Finish retained native ownership, desktop/Android and zero-Python workloads.
+
+No control reservation, imported event, static check or green legacy CI is full
+Agent provider qualification or whole-product migration completion.
+
 # 4.8.1 Todo — Native Runtime Contract Freeze
 
 <!-- docs-language-switcher:start -->

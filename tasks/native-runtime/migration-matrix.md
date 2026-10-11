@@ -1,3 +1,17 @@
+## Agent node control progress — 2026-10-11
+
+The next snapshot adds native Go node dispatch intent ownership and typed
+`AgentNodeControl` begin/read RPCs, plus Rust validation against the existing
+phase claim and live lease. This is a prepared control slice awaiting cloud
+native tests. It does not promote the Agent product row to integrated or cut over:
+actual Rust provider/tool effects, independent outcomes, DAG dependency
+admission, phase settlement and recovery remain unfinished. All original Agent
+presets, actions, platform coverage and zero-Python acceptance still apply.
+
+The preceding `ca84511a` exact-head CI passed 37/37 jobs with original floors.
+Its reports are under `artifacts/native-20261011-ci-contract-sync-preview`;
+`a9799fa7` is the subsequent Android staging repair under cloud validation.
+
 # Native runtime migration matrix
 
 <!-- docs-language-switcher:start -->

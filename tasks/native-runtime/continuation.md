@@ -1,3 +1,29 @@
+## Agent node dispatch control prepared — 2026-10-11
+
+The `ca84511a` snapshot passed all 37 full CI jobs, both Rust cloud jobs, and
+all 14 original Go/Docker gates. Python 3.10/3.11/3.12 each ran 5750 passing
+tests; the original Python/Go/Rust coverage floors remain 95/95/80 percent.
+The exact reports are in `artifacts/native-20261011-ci-contract-sync-preview`.
+The Android staging cleanup follow-up `a9799fa7` is undergoing exact-head CI.
+
+The next reviewed snapshot implements a Go-owned per-node dispatch reservation
+and the additive `AgentNodeControl` Protobuf service on the existing authenticated
+listener. It returns the Go-selected task and the current execution claim.
+A lost response or another operation ID cannot obtain a second fresh dispatch.
+Generic completion cannot erase an unresolved node or release its resources.
+Rust's control client verifies the returned immutable phase/node scope and
+rechecks the live Go lease before returning it to an execution caller.
+
+The prepared source and review are under
+`artifacts/native-20261011-agent-node-dispatch`; native tests run only in the
+cloud. No native test result is inferred from formatting or code generation.
+Reservations and imported Agent metadata are not independent effect receipts.
+Dependencies still require verified Rust outcomes; the full product remains
+`NOT_READY`. Next implement and wire the Rust node effect journal, real
+provider/tool dispatch, verified outcomes, Go settlement/dependency admission,
+SSE results, and takeover/reconciliation. Retain all Agent presets, planning,
+confirmation, cancellation, retries, resynthesis and platform requirements.
+
 # Native runtime continuation record
 
 <!-- docs-language-switcher:start -->

@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package deepseek.agent.v1;
+
+import "agent/v1/agent.proto";
+import "common/v1/common.proto";
+
+option go_package = "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1;agentv1";
+
+// A Go-owned reservation is not a provider receipt. Its fence and immutable
+// task come from the admitted run, rather than the dispatch caller.
+message AgentNodeDispatchIntent {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  deepseek.common.v1.ActionFence fence = 3;
+  string run_id = 4;
+  string node_id = 5;
+  AgentRunExecutionPhase phase = 6;
+  string task = 7;
+  repeated string depends_on = 8;
+  AgentArtifactReference request = 9;
+  string plan_digest = 10;
+  int64 metadata_index = 11;
+  uint64 metadata_epoch = 12;
+  string state = 13;
+  int64 recorded_at = 14;
+}
+
+message BeginAgentNodeDispatchRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  deepseek.common.v1.ActionFence fence = 4;
+  string run_id = 5;
+  string node_id = 6;
+  string owner = 7;
+  string claim_token = 8;
+}
+
+message BeginAgentNodeDispatchResponse {
+  // Only the first committed reservation can be fresh. A lost response, a new
+  // operation ID or a takeover must never authorize a second provider call.
+  bool fresh = 1;
+  AgentNodeDispatchIntent intent = 2;
+  AgentRunExecutionClaim claim = 3;
+}
+
+message GetAgentNodeDispatchRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string run_id = 2;
+  string node_id = 3;
+}
+
+message GetAgentNodeDispatchResponse {
+  // Absence is not a NOT_APPLIED remote effect proof or a dispatch permission.
+  bool found = 1;
+  AgentNodeDispatchIntent intent = 2;
+}
+
+// Reuses deepseekd's authenticated control listener, writer and action leases.
+// Rust owns a separate effect journal, provider execution and outcome proof.
+service AgentNodeControl {
+  rpc BeginDispatch(BeginAgentNodeDispatchRequest) returns (BeginAgentNodeDispatchResponse);
+  rpc GetDispatch(GetAgentNodeDispatchRequest) returns (GetAgentNodeDispatchResponse);
+}

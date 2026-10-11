@@ -1370,6 +1370,7 @@ func (store *Control) putLeasedControlRecord(record Record, dispatch *StorageDis
 type controlRecordWrite struct {
 	agentEvent            bool
 	agentExecution        bool
+	agentNodeDispatch     bool
 	record                Record
 	table                 string
 	intentJSON            []byte
@@ -1451,6 +1452,15 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 		(nativeAgentExecution(record.Payload) || exists && nativeAgentExecution(existing.Payload)) {
 		if !exists || !write.allowBoundLease || !sameAgentExecutionIntent(existing, record) {
 			return ErrAgentRunExecutionRequired
+		}
+	}
+	if record.Domain == "action" && !write.agentNodeDispatch &&
+		(nativeAgentNodeDispatches(record.Payload) || exists && nativeAgentNodeDispatches(existing.Payload)) {
+		if !exists || !sameAgentNodeDispatches(existing, record) ||
+			record.State == "SUCCEEDED" || record.State == "FAILED_BEFORE_EFFECT" {
+			// Keeping an unresolved intent in the payload does not turn a
+			// generic completion into independent Rust effect verification.
+			return ErrAgentNodeDispatchRequired
 		}
 	}
 	from := ""

@@ -1,0 +1,110 @@
+package api
+
+import (
+	"context"
+	"errors"
+
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
+	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+)
+
+type agentNodeService struct {
+	agentv1.UnimplementedAgentNodeControlServer
+	run *agentRunService
+}
+
+func nodeDispatchProtocol(intent store.AgentNodeDispatch) *agentv1.AgentNodeDispatchIntent {
+	phase := agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS
+	if intent.Phase == "plan" {
+		phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN
+	}
+	return &agentv1.AgentNodeDispatchIntent{SchemaVersion: intent.SchemaVersion, OperationId: intent.OperationID,
+		Fence: &commonv1.ActionFence{ActionId: intent.ActionID, ExecutionEpoch: intent.ExecutionEpoch},
+		RunId: intent.RunID, NodeId: intent.NodeID, Phase: phase, Task: intent.Task,
+		DependsOn: append([]string(nil), intent.DependsOn...), Request: artifactProtocol(intent.Request),
+		PlanDigest: intent.PlanDigest, MetadataIndex: intent.MetadataIndex, MetadataEpoch: intent.MetadataEpoch,
+		State: intent.State, RecordedAt: intent.RecordedAt}
+}
+
+func nodeDispatchError(err error) error {
+	if errors.Is(err, store.ErrAgentNodeDispatchRequired) {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	if errors.Is(err, store.ErrAgentNodeDependencyUnverified) {
+		return status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return executionWriteError(err)
+}
+
+func (service *agentNodeService) BeginDispatch(ctx context.Context, input *agentv1.BeginAgentNodeDispatchRequest) (*agentv1.BeginAgentNodeDispatchResponse, error) {
+	if err := service.run.executionProcess(); err != nil {
+		return nil, err
+	}
+	if input == nil || input.SchemaVersion != 1 || input.Fence == nil ||
+		len(input.ProtoReflect().GetUnknown()) != 0 || len(input.Fence.ProtoReflect().GetUnknown()) != 0 {
+		return nil, status.Error(codes.InvalidArgument, "AGENT_NODE_DISPATCH_REQUIRED")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
+	input = proto.Clone(input).(*agentv1.BeginAgentNodeDispatchRequest)
+	result, err := service.run.control.BeginAgentNodeDispatch(store.AgentNodeDispatchRequest{OperationID: input.OperationId,
+		Actor: input.Actor, ActionID: input.Fence.ActionId, Epoch: input.Fence.ExecutionEpoch,
+		RunID: input.RunId, NodeID: input.NodeId, Owner: input.Owner, ClaimToken: input.ClaimToken})
+	if err != nil {
+		return nil, nodeDispatchError(err)
+	}
+	claim, err := executionClaimProtocol(result.Admission, result.WriterLeaseUntil)
+	if err != nil {
+		return nil, err
+	}
+	return &agentv1.BeginAgentNodeDispatchResponse{Fresh: result.Fresh, Intent: nodeDispatchProtocol(result.Intent), Claim: claim}, nil
+}
+
+func (service *agentNodeService) GetDispatch(ctx context.Context, input *agentv1.GetAgentNodeDispatchRequest) (*agentv1.GetAgentNodeDispatchResponse, error) {
+	if err := service.run.executionProcess(); err != nil {
+		return nil, err
+	}
+	if input == nil || input.Fence == nil || !store.ValidRecordID(input.Fence.ActionId) || input.Fence.ExecutionEpoch == 0 ||
+		!store.ValidRecordID(input.RunId) || input.NodeId == "" || len(input.NodeId) > 64 ||
+		len(input.ProtoReflect().GetUnknown()) != 0 || len(input.Fence.ProtoReflect().GetUnknown()) != 0 {
+		return nil, status.Error(codes.InvalidArgument, "AGENT_NODE_DISPATCH_REQUIRED")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
+	_, authoritative, err := service.run.authority()
+	if err != nil {
+		return nil, err
+	}
+	cutover, err := service.run.control.GetCutover("action")
+	if err != nil {
+		return nil, nodeDispatchError(err)
+	}
+	if !authoritative || !store.IsDomainGoAuthoritative(cutover.State) {
+		return nil, status.Error(codes.FailedPrecondition, "CUTOVER_NOT_AUTHORIZED")
+	}
+	record, intent, found, err := service.run.control.AgentNodeDispatchSnapshot(input.Fence.ActionId, input.NodeId)
+	if err != nil {
+		return nil, nodeDispatchError(err)
+	}
+	if record.ID == "" {
+		return nil, status.Error(codes.NotFound, "AGENT_EXECUTION_NOT_FOUND")
+	}
+	binding, err := store.AgentRunExecutionBindingFromRecord(record)
+	if err != nil || binding.RunID != input.RunId {
+		return nil, status.Error(codes.FailedPrecondition, "FENCE_MISMATCH")
+	}
+	if record.ExecutionEpoch != input.Fence.ExecutionEpoch {
+		return nil, status.Error(codes.FailedPrecondition, "STALE_EXECUTION_EPOCH")
+	}
+	result := &agentv1.GetAgentNodeDispatchResponse{Found: found}
+	if found {
+		result.Intent = nodeDispatchProtocol(intent)
+	}
+	return result, nil
+}

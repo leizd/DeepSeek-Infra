@@ -2,7 +2,9 @@
 use crate::{WorkerAuthorityConfig, authority_request};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use deepseek_protocol::generated::deepseek::agent::v1::{
-    AgentRunExecutionClaim, AgentRunExecutionPhase, RenewAgentRunExecutionRequest,
+    AgentRunExecutionClaim, AgentRunExecutionPhase, BeginAgentNodeDispatchRequest,
+    BeginAgentNodeDispatchResponse, RenewAgentRunExecutionRequest,
+    agent_node_control_client::AgentNodeControlClient,
     agent_run_control_client::AgentRunControlClient,
 };
 use ed25519_dalek::{Signature, VerifyingKey};
@@ -135,6 +137,114 @@ impl AgentExecutionControl {
         }
         Ok(live)
     }
+
+    /// Reserve a Go-selected node under the existing phase lease. This does not
+    /// install a Rust epoch, persist an effect or call a provider. The dispatcher
+    /// must verify its signed phase grant and durable Rust fence independently.
+    /// A non-fresh response never permits another uncertain provider operation.
+    pub async fn begin_node_dispatch(
+        &self,
+        claim: &AgentRunExecutionClaim,
+        operation_id: &str,
+        actor: &str,
+        node_id: &str,
+    ) -> Result<BeginAgentNodeDispatchResponse, Status> {
+        let now = authority_request::utc_z_now().map_err(|_| unavailable())?;
+        let seconds = authority_request::parse_utc_z_str(&now).map_err(|_| unavailable())?;
+        validate_claim(claim, seconds)?;
+        if operation_id.is_empty() || actor.is_empty() || node_id.is_empty() {
+            return Err(Status::invalid_argument("AGENT_NODE_DISPATCH_REQUIRED"));
+        }
+        let channel = self.endpoint.connect().await.map_err(|_| unavailable())?;
+        let mut client = AgentNodeControlClient::new(channel).max_decoding_message_size(64 * 1024);
+        let mut request = Request::new(BeginAgentNodeDispatchRequest {
+            schema_version: 1,
+            operation_id: operation_id.into(),
+            actor: actor.into(),
+            fence: claim.fence.clone(),
+            run_id: claim.run_id.clone(),
+            node_id: node_id.into(),
+            owner: claim.owner.clone(),
+            claim_token: claim.claim_token.clone(),
+        });
+        request
+            .metadata_mut()
+            .insert("authorization", self.authorization.clone());
+        let mut response = client
+            .begin_dispatch(request)
+            .await
+            .map_err(|_| Status::failed_precondition("AGENT_NODE_DISPATCH_DENIED"))?
+            .into_inner();
+        validate_node_dispatch(&response, claim, node_id, seconds)?;
+        let live = self
+            .renew(response.claim.as_ref().ok_or_else(invalid)?)
+            .await?;
+        let now = authority_request::utc_z_now().map_err(|_| unavailable())?;
+        let seconds = authority_request::parse_utc_z_str(&now).map_err(|_| unavailable())?;
+        response.claim = Some(live);
+        validate_node_dispatch(&response, claim, node_id, seconds)?;
+        Ok(response)
+    }
+}
+
+fn validate_node_dispatch(
+    response: &BeginAgentNodeDispatchResponse,
+    admitted: &AgentRunExecutionClaim,
+    node_id: &str,
+    now: i64,
+) -> Result<(), Status> {
+    let live = response.claim.as_ref().ok_or_else(invalid)?;
+    validate_claim(live, now)?;
+    let mut expected = admitted.clone();
+    // Beginning a node changes only the phase's transient execution state.
+    // Claim identity, metadata scope and the original action fence remain bound.
+    expected.state = "EXECUTING".into();
+    expected.lease_until = live.lease_until;
+    expected.writer_lease_until = live.writer_lease_until;
+    if expected != *live {
+        return Err(Status::failed_precondition(
+            "AGENT_EXECUTION_BINDING_MISMATCH",
+        ));
+    }
+    let intent = response.intent.as_ref().ok_or_else(invalid)?;
+    let operation = intent.operation_id.strip_prefix("agent-node-");
+    let role_allowed = match AgentRunExecutionPhase::try_from(live.phase) {
+        Ok(AgentRunExecutionPhase::Plan) => node_id == "leader" && intent.depends_on.is_empty(),
+        Ok(AgentRunExecutionPhase::Tasks) => matches!(
+            node_id,
+            "researcher" | "coder" | "reasoner" | "critic" | "synthesis"
+        ),
+        _ => false,
+    };
+    if intent.schema_version != 1
+        || intent.fence != live.fence
+        || intent.run_id != live.run_id
+        || intent.node_id != node_id
+        || intent.phase != live.phase
+        || intent.request != live.request
+        || intent.plan_digest != live.plan_digest
+        || intent.metadata_index != live.metadata_index
+        || intent.metadata_epoch != live.metadata_epoch
+        || intent.state != "INTENT_RECORDED"
+        || intent.recorded_at < 0
+        || intent.recorded_at > now.saturating_add(30)
+        || intent.task.is_empty()
+        || intent.task.len() > 16 * 1024
+        || !operation.is_some_and(hex64)
+        || !role_allowed
+        || intent.depends_on.len() > 4
+        || intent.depends_on.iter().any(|id| {
+            id == node_id || !matches!(id.as_str(), "researcher" | "coder" | "reasoner" | "critic")
+        })
+        || intent
+            .depends_on
+            .iter()
+            .enumerate()
+            .any(|(index, id)| intent.depends_on[..index].contains(id))
+    {
+        return Err(Status::failed_precondition("AGENT_NODE_DISPATCH_INVALID"));
+    }
+    Ok(())
 }
 
 pub fn load_agent_execution_control_from_env(
@@ -347,4 +457,210 @@ pub fn verify_agent_execution_grant(
         .verify_strict(&message, &signature)
         .map_err(|_| invalid())?;
     Ok(value)
+}
+
+#[cfg(test)]
+mod node_dispatch_tests {
+    use super::*;
+    use deepseek_protocol::generated::deepseek::{
+        agent::v1::{AgentArtifactReference, AgentNodeDispatchIntent},
+        common::v1::ActionFence,
+    };
+
+    fn fixture(
+        phase: AgentRunExecutionPhase,
+    ) -> (AgentRunExecutionClaim, BeginAgentNodeDispatchResponse) {
+        let phase_name = if phase == AgentRunExecutionPhase::Plan {
+            "plan"
+        } else {
+            "tasks"
+        };
+        let identity = format!("agent-run-execution-v1\nrun_rpc\n{phase_name}\n4\n");
+        let action_id = format!("agent-exec-{:x}", Sha256::digest(identity.as_bytes()));
+        let admitted = AgentRunExecutionClaim {
+            fence: Some(ActionFence {
+                action_id,
+                execution_epoch: 1,
+            }),
+            run_id: "run_rpc".into(),
+            phase: phase as i32,
+            request: Some(AgentArtifactReference {
+                sha256: "b".repeat(64),
+                length: 100,
+            }),
+            plan_digest: "a".repeat(64),
+            metadata_index: 4,
+            metadata_epoch: 3,
+            owner: "rust-agent-worker".into(),
+            claim_token: "fixture-claim-token".into(),
+            lease_until: 1060,
+            claim_revision: 1,
+            writer_fencing_token: 1,
+            writer_lease_until: 1200,
+            state: "CLAIMED".into(),
+            reconciliation_required: false,
+        };
+        let mut live = admitted.clone();
+        live.state = "EXECUTING".into();
+        let intent = AgentNodeDispatchIntent {
+            schema_version: 1,
+            operation_id: format!("agent-node-{}", "c".repeat(64)),
+            fence: live.fence.clone(),
+            run_id: live.run_id.clone(),
+            node_id: if phase == AgentRunExecutionPhase::Plan {
+                "leader"
+            } else {
+                "coder"
+            }
+            .into(),
+            phase: live.phase,
+            task: "write the implementation".into(),
+            depends_on: vec![],
+            request: live.request.clone(),
+            plan_digest: live.plan_digest.clone(),
+            metadata_index: live.metadata_index,
+            metadata_epoch: live.metadata_epoch,
+            state: "INTENT_RECORDED".into(),
+            recorded_at: 1000,
+        };
+        (
+            admitted,
+            BeginAgentNodeDispatchResponse {
+                fresh: true,
+                intent: Some(intent),
+                claim: Some(live),
+            },
+        )
+    }
+
+    #[test]
+    fn node_dispatch_scope_preserves_identity_across_execution_and_renewal() {
+        for phase in [AgentRunExecutionPhase::Plan, AgentRunExecutionPhase::Tasks] {
+            let (admitted, mut response) = fixture(phase);
+            let role = response.intent.as_ref().unwrap().node_id.clone();
+            validate_node_dispatch(&response, &admitted, &role, 1000).unwrap();
+            response.claim.as_mut().unwrap().lease_until = 1100;
+            response.claim.as_mut().unwrap().writer_lease_until = 1300;
+            response.fresh = false;
+            validate_node_dispatch(&response, &admitted, &role, 1000).unwrap();
+            let mut executing = admitted;
+            executing.state = "EXECUTING".into();
+            validate_node_dispatch(&response, &executing, &role, 1000).unwrap();
+        }
+    }
+
+    #[test]
+    fn node_dispatch_scope_rejects_corrupt_or_rebound_intents() {
+        type Change = fn(&mut BeginAgentNodeDispatchResponse);
+        let changes: &[(&str, Change)] = &[
+            ("missing claim", |r| r.claim = None),
+            ("missing intent", |r| r.intent = None),
+            ("schema", |r| r.intent.as_mut().unwrap().schema_version = 2),
+            ("fence", |r| r.intent.as_mut().unwrap().fence = None),
+            ("epoch", |r| {
+                r.intent
+                    .as_mut()
+                    .unwrap()
+                    .fence
+                    .as_mut()
+                    .unwrap()
+                    .execution_epoch += 1
+            }),
+            ("run", |r| {
+                r.intent.as_mut().unwrap().run_id = "other".into()
+            }),
+            ("node", |r| {
+                r.intent.as_mut().unwrap().node_id = "critic".into()
+            }),
+            ("phase", |r| {
+                r.intent.as_mut().unwrap().phase = AgentRunExecutionPhase::Plan as i32
+            }),
+            ("request", |r| r.intent.as_mut().unwrap().request = None),
+            ("plan", |r| {
+                r.intent.as_mut().unwrap().plan_digest = "d".repeat(64)
+            }),
+            ("index", |r| r.intent.as_mut().unwrap().metadata_index += 1),
+            ("metadata fence", |r| {
+                r.intent.as_mut().unwrap().metadata_epoch += 1
+            }),
+            ("state", |r| {
+                r.intent.as_mut().unwrap().state = "CONFIRMED".into()
+            }),
+            ("future time", |r| {
+                r.intent.as_mut().unwrap().recorded_at = 1031
+            }),
+            ("negative time", |r| {
+                r.intent.as_mut().unwrap().recorded_at = -1
+            }),
+            ("empty task", |r| r.intent.as_mut().unwrap().task.clear()),
+            ("oversized task", |r| {
+                r.intent.as_mut().unwrap().task = "x".repeat(16 * 1024 + 1)
+            }),
+            ("operation prefix", |r| {
+                r.intent.as_mut().unwrap().operation_id = "c".repeat(64)
+            }),
+            ("operation digest", |r| {
+                r.intent.as_mut().unwrap().operation_id = "agent-node-Z".into()
+            }),
+            ("self dependency", |r| {
+                r.intent.as_mut().unwrap().depends_on = vec!["coder".into()]
+            }),
+            ("unknown dependency", |r| {
+                r.intent.as_mut().unwrap().depends_on = vec!["foreign".into()]
+            }),
+            ("duplicate dependency", |r| {
+                r.intent.as_mut().unwrap().depends_on = vec!["reasoner".into(), "reasoner".into()]
+            }),
+            ("too many dependencies", |r| {
+                r.intent.as_mut().unwrap().depends_on = vec!["reasoner".into(); 5]
+            }),
+        ];
+        let (admitted, response) = fixture(AgentRunExecutionPhase::Tasks);
+        for (name, change) in changes {
+            let mut changed = response.clone();
+            change(&mut changed);
+            assert!(
+                validate_node_dispatch(&changed, &admitted, "coder", 1000).is_err(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn node_dispatch_scope_rejects_changed_live_claim_and_expiry() {
+        type Change = fn(&mut AgentRunExecutionClaim);
+        let changes: &[(&str, Change)] = &[
+            ("claim token", |c| c.claim_token = "other".into()),
+            ("owner", |c| c.owner = "other".into()),
+            ("writer fence", |c| c.writer_fencing_token += 1),
+            ("claim revision", |c| c.claim_revision += 1),
+            ("metadata index", |c| c.metadata_index += 1),
+            ("plan digest", |c| c.plan_digest = "d".repeat(64)),
+            ("claimed state", |c| c.state = "CLAIMED".into()),
+            ("reconciliation", |c| c.reconciliation_required = true),
+            ("action expiry", |c| c.lease_until = 1000),
+            ("writer expiry", |c| c.writer_lease_until = 1000),
+        ];
+        let (admitted, response) = fixture(AgentRunExecutionPhase::Tasks);
+        for (name, change) in changes {
+            let mut changed = response.clone();
+            change(changed.claim.as_mut().unwrap());
+            assert!(
+                validate_node_dispatch(&changed, &admitted, "coder", 1000).is_err(),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn node_dispatch_scope_accepts_only_phase_roles_and_valid_dependencies() {
+        let (admitted, mut response) = fixture(AgentRunExecutionPhase::Tasks);
+        response.intent.as_mut().unwrap().depends_on = vec!["researcher".into(), "reasoner".into()];
+        validate_node_dispatch(&response, &admitted, "coder", 1000).unwrap();
+        response.intent.as_mut().unwrap().node_id = "leader".into();
+        assert!(validate_node_dispatch(&response, &admitted, "leader", 1000).is_err());
+        let (admitted, mut response) = fixture(AgentRunExecutionPhase::Plan);
+        response.intent.as_mut().unwrap().depends_on = vec!["coder".into()];
+        assert!(validate_node_dispatch(&response, &admitted, "leader", 1000).is_err());
+    }
 }
