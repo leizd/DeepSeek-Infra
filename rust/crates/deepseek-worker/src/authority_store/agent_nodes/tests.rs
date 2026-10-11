@@ -222,7 +222,12 @@ fn outcome_evidence_comes_from_confirmed_journal_and_exact_sanitized_projection(
         "python_disabled",
     )
     .unwrap();
-    let reference = artifacts.put(&event).unwrap();
+    let different_bytes = artifacts.put(&event).unwrap();
+    let output =
+        authority_request::canonical_json_bytes(&json!({"runId":"run_rpc","publicEvent":event}))
+            .unwrap();
+    let stored: Value = serde_json::from_slice(&output).unwrap();
+    let reference = artifacts.put(&stored["publicEvent"]).unwrap();
     let public = AgentArtifactReference {
         sha256: reference.sha256,
         length: reference.length,
@@ -233,10 +238,21 @@ fn outcome_evidence_comes_from_confirmed_journal_and_exact_sanitized_projection(
             .agent_node_outcome_evidence(&query, public.clone(), &fixture.config)
             .is_err()
     );
-    let output =
-        authority_request::canonical_json_bytes(&json!({"runId":"run_rpc","publicEvent":event}))
-            .unwrap();
+
     let outcome = store.confirm_agent_node(&permit, &output, NOW).unwrap();
+    assert_ne!(different_bytes.sha256, public.sha256);
+    assert!(
+        store
+            .agent_node_outcome_evidence(
+                &query,
+                AgentArtifactReference {
+                    sha256: different_bytes.sha256,
+                    length: different_bytes.length,
+                },
+                &fixture.config
+            )
+            .is_err()
+    );
     let evidence = store
         .agent_node_outcome_evidence(&query, public.clone(), &fixture.config)
         .unwrap();
