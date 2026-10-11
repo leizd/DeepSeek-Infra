@@ -14,9 +14,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func agentExecutionRPCStore(t *testing.T, promoteAction bool) *store.Control {
+func agentExecutionRPCStore(t *testing.T, promoteAction bool, outcomeKey ...string) *store.Control {
 	t.Helper()
-	control := agentRPCStore(t)
+	control := agentRPCStore(t, outcomeKey...)
 	if promoteAction {
 		for _, next := range []store.CutoverState{store.CutoverDualEvaluate, store.CutoverGoAuthoritative} {
 			current, err := control.GetCutover("action")

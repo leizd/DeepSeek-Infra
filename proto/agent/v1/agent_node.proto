@@ -55,6 +55,23 @@ message GetAgentNodeDispatchResponse {
   // Absence is not a NOT_APPLIED remote effect proof or a dispatch permission.
   bool found = 1;
   AgentNodeDispatchIntent intent = 2;
+  AgentNodeOutcomeReceipt outcome_receipt = 3;
+}
+
+// A recorded proof never grants dispatch, marks a phase complete, or releases locks.
+message RecordAgentNodeOutcomeRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  deepseek.common.v1.ActionFence fence = 4;
+  string run_id = 5;
+  string node_id = 6;
+  AgentNodeOutcomeReceipt outcome_receipt = 7;
+}
+
+message RecordAgentNodeOutcomeResponse {
+  bool already_recorded = 1;
+  string receipt_sha256 = 2;
 }
 
 // Reuses deepseekd's authenticated control listener, writer and action leases.
@@ -62,6 +79,7 @@ message GetAgentNodeDispatchResponse {
 service AgentNodeControl {
   rpc BeginDispatch(BeginAgentNodeDispatchRequest) returns (BeginAgentNodeDispatchResponse);
   rpc GetDispatch(GetAgentNodeDispatchRequest) returns (GetAgentNodeDispatchResponse);
+  rpc RecordOutcome(RecordAgentNodeOutcomeRequest) returns (RecordAgentNodeOutcomeResponse);
 }
 
 message ExecuteAgentPlanRequest {

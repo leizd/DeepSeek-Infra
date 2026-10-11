@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	AgentNodeControl_BeginDispatch_FullMethodName = "/deepseek.agent.v1.AgentNodeControl/BeginDispatch"
 	AgentNodeControl_GetDispatch_FullMethodName   = "/deepseek.agent.v1.AgentNodeControl/GetDispatch"
+	AgentNodeControl_RecordOutcome_FullMethodName = "/deepseek.agent.v1.AgentNodeControl/RecordOutcome"
 )
 
 // AgentNodeControlClient is the client API for AgentNodeControl service.
@@ -32,6 +33,7 @@ const (
 type AgentNodeControlClient interface {
 	BeginDispatch(ctx context.Context, in *BeginAgentNodeDispatchRequest, opts ...grpc.CallOption) (*BeginAgentNodeDispatchResponse, error)
 	GetDispatch(ctx context.Context, in *GetAgentNodeDispatchRequest, opts ...grpc.CallOption) (*GetAgentNodeDispatchResponse, error)
+	RecordOutcome(ctx context.Context, in *RecordAgentNodeOutcomeRequest, opts ...grpc.CallOption) (*RecordAgentNodeOutcomeResponse, error)
 }
 
 type agentNodeControlClient struct {
@@ -62,6 +64,16 @@ func (c *agentNodeControlClient) GetDispatch(ctx context.Context, in *GetAgentNo
 	return out, nil
 }
 
+func (c *agentNodeControlClient) RecordOutcome(ctx context.Context, in *RecordAgentNodeOutcomeRequest, opts ...grpc.CallOption) (*RecordAgentNodeOutcomeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordAgentNodeOutcomeResponse)
+	err := c.cc.Invoke(ctx, AgentNodeControl_RecordOutcome_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentNodeControlServer is the server API for AgentNodeControl service.
 // All implementations must embed UnimplementedAgentNodeControlServer
 // for forward compatibility.
@@ -71,6 +83,7 @@ func (c *agentNodeControlClient) GetDispatch(ctx context.Context, in *GetAgentNo
 type AgentNodeControlServer interface {
 	BeginDispatch(context.Context, *BeginAgentNodeDispatchRequest) (*BeginAgentNodeDispatchResponse, error)
 	GetDispatch(context.Context, *GetAgentNodeDispatchRequest) (*GetAgentNodeDispatchResponse, error)
+	RecordOutcome(context.Context, *RecordAgentNodeOutcomeRequest) (*RecordAgentNodeOutcomeResponse, error)
 	mustEmbedUnimplementedAgentNodeControlServer()
 }
 
@@ -86,6 +99,9 @@ func (UnimplementedAgentNodeControlServer) BeginDispatch(context.Context, *Begin
 }
 func (UnimplementedAgentNodeControlServer) GetDispatch(context.Context, *GetAgentNodeDispatchRequest) (*GetAgentNodeDispatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetDispatch not implemented")
+}
+func (UnimplementedAgentNodeControlServer) RecordOutcome(context.Context, *RecordAgentNodeOutcomeRequest) (*RecordAgentNodeOutcomeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecordOutcome not implemented")
 }
 func (UnimplementedAgentNodeControlServer) mustEmbedUnimplementedAgentNodeControlServer() {}
 func (UnimplementedAgentNodeControlServer) testEmbeddedByValue()                          {}
@@ -144,6 +160,24 @@ func _AgentNodeControl_GetDispatch_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentNodeControl_RecordOutcome_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordAgentNodeOutcomeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentNodeControlServer).RecordOutcome(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentNodeControl_RecordOutcome_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentNodeControlServer).RecordOutcome(ctx, req.(*RecordAgentNodeOutcomeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentNodeControl_ServiceDesc is the grpc.ServiceDesc for AgentNodeControl service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -158,6 +192,10 @@ var AgentNodeControl_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetDispatch",
 			Handler:    _AgentNodeControl_GetDispatch_Handler,
+		},
+		{
+			MethodName: "RecordOutcome",
+			Handler:    _AgentNodeControl_RecordOutcome_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

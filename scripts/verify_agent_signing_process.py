@@ -317,7 +317,8 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
         expiry = (datetime.now(timezone.utc) + timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
         environment = dict(go_environment, DEEPSEEK_AGENT_SIGNING_PROBE_DIR=case.as_posix(),
             DEEPSEEK_AGENT_SIGNING_PROBE_CASE=scenario, DEEPSEEK_AGENT_SIGNING_WORKER_BEARER=bearer,
-            DEEPSEEK_AGENT_PLANNER_ARTIFACT_REFERENCE_FILE=reference_file.as_posix())
+            DEEPSEEK_AGENT_PLANNER_ARTIFACT_REFERENCE_FILE=reference_file.as_posix(),
+            DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY=binding["signerPublicKey"])
         if PRIVATE_ENV & set(environment) or "DEEPSEEK_API_KEY" in environment:
             raise ValueError("Planner Go environment contains private Rust configuration")
         workers = []
@@ -391,10 +392,10 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                 raise ValueError("Planner probe bypassed the production Go node client")
             if scenario == "planner-success":
                 receipts = [body for body in documents if hashlib.sha256(body).hexdigest() == result["outcomeReceiptSha256"]]
-                if not result.get("signedOutcomeVerified") or not result.get("signedOutcomeTamperingDenied") or len(receipts) != 1 or \
+                if not result.get("goOutcomePersisted") or not result.get("signedOutcomeVerified") or not result.get("signedOutcomeTamperingDenied") or len(receipts) != 1 or \
                         len(receipts[0]) != result["outcomeReceiptLength"] or len(documents) != 3:
                     raise ValueError("Confirmed Rust result lacks an immutable signature verified by production Go")
-            elif not result.get("unknownHasNoReceipt") or result.get("signedOutcomeVerified") or len(documents) != 2:
+            elif not result.get("unknownOutcomeRecordingDenied") or not result.get("unknownHasNoReceipt") or result.get("signedOutcomeVerified") or len(documents) != 2:
                 raise ValueError("Uncertain effect acquired a signature or successful Go outcome")
             result.update(outcomeSignatureJournalVerified=True, actualHTTPRequestCount=len(received), httpFenceVerified=True, bodyCustodyVerified=True,
                 inputBodySeededByOfflineOracle=True, outputBodyWriter="rust", provider="controlled-loopback-http-fixture")

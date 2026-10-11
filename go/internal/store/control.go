@@ -54,8 +54,10 @@ type OpenOptions struct {
 	// separately signed, per-domain ownership transition. Empty refuses every
 	// promotion, even when AuthorizeCutover is enabled.
 	PromotionSignerPublicKey string
-	FleetID                  string
-	Environment              string
+	// AgentOutcomeSignerPublicKey pins Rust historical outcome custody. Empty refuses ingestion.
+	AgentOutcomeSignerPublicKey string
+	FleetID                     string
+	Environment                 string
 }
 
 type Record struct {
@@ -85,22 +87,23 @@ type Snapshot struct {
 }
 
 type Control struct {
-	mu                  sync.Mutex
-	path                string
-	databasePath        string
-	owner               string
-	token               int64
-	leaseUntil          int64
-	leaseSeconds        int64
-	now                 func() int64
-	schema              int
-	db                  *sql.DB
-	closed              bool
-	admissionFaultStage string
-	authorizeCutover    bool
-	promotionSignerKey  string
-	fleetID             string
-	environment         string
+	mu                    sync.Mutex
+	path                  string
+	databasePath          string
+	owner                 string
+	token                 int64
+	leaseUntil            int64
+	leaseSeconds          int64
+	now                   func() int64
+	schema                int
+	db                    *sql.DB
+	closed                bool
+	admissionFaultStage   string
+	authorizeCutover      bool
+	promotionSignerKey    string
+	agentOutcomeSignerKey string
+	fleetID               string
+	environment           string
 }
 
 type rowScanner interface {
@@ -193,16 +196,17 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 		leaseSeconds = 30
 	}
 	store := &Control{
-		path:               resolved,
-		databasePath:       databasePath,
-		owner:              opts.Owner,
-		leaseSeconds:       leaseSeconds,
-		now:                nowFn,
-		db:                 db,
-		authorizeCutover:   opts.AuthorizeCutover,
-		promotionSignerKey: opts.PromotionSignerPublicKey,
-		fleetID:            opts.FleetID,
-		environment:        opts.Environment,
+		path:                  resolved,
+		databasePath:          databasePath,
+		owner:                 opts.Owner,
+		leaseSeconds:          leaseSeconds,
+		now:                   nowFn,
+		db:                    db,
+		authorizeCutover:      opts.AuthorizeCutover,
+		promotionSignerKey:    opts.PromotionSignerPublicKey,
+		agentOutcomeSignerKey: opts.AgentOutcomeSignerPublicKey,
+		fleetID:               opts.FleetID,
+		environment:           opts.Environment,
 	}
 	if err := store.bootstrapAndClaim(databaseExisted); err != nil {
 		_ = db.Close()
@@ -1371,6 +1375,7 @@ type controlRecordWrite struct {
 	agentEvent            bool
 	agentExecution        bool
 	agentNodeDispatch     bool
+	agentNodeOutcome      bool
 	record                Record
 	table                 string
 	intentJSON            []byte
@@ -1463,6 +1468,12 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 			return ErrAgentNodeDispatchRequired
 		}
 	}
+	if record.Domain == "action" && !write.agentNodeOutcome &&
+		(nativeAgentNodeOutcomes(record.Payload) || exists && nativeAgentNodeOutcomes(existing.Payload)) {
+		if !exists || !sameAgentNodeOutcomes(existing, record) {
+			return ErrAgentNodeOutcomeRequired
+		}
+	}
 	from := ""
 	if exists {
 		from = existing.State
@@ -1485,6 +1496,13 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 		}
 	}
 	legal := LegalTransition(record.Domain, from, record.State)
+	// Typed native metadata writes can retain EXECUTING without changing the
+	// public action state machine. Both scopes were verified by their private entry points.
+	if !legal && exists && record.Domain == "action" && record.State == "EXECUTING" &&
+		existing.State == record.State && existing.ExecutionEpoch == record.ExecutionEpoch &&
+		(write.agentNodeDispatch || write.agentNodeOutcome) {
+		legal = true
+	}
 	if !legal && write.allowBoundLease && record.Domain == "action" {
 		legal = (store.schema >= SchemaV6 && reconciliationTransition(from, record.State, existing.ExecutionEpoch, record.ExecutionEpoch)) ||
 			(store.schema >= SchemaV7 && verificationTransition(from, record.State, existing.ExecutionEpoch, record.ExecutionEpoch))

@@ -70,12 +70,13 @@ func Start(ctx context.Context, cfg config.Config) (*Server, error) {
 		// it without an authenticated internal control plane, so a process can
 		// never authorize a promotion over an unauthenticated channel.
 		control, err = store.OpenControl(store.OpenOptions{
-			Path:                     storeDir,
-			Owner:                    owner,
-			AuthorizeCutover:         cfg.ControlAuthority,
-			PromotionSignerPublicKey: cfg.PromotionSignerPublicKey,
-			FleetID:                  cfg.FleetID,
-			Environment:              cfg.Environment,
+			Path:                        storeDir,
+			Owner:                       owner,
+			AuthorizeCutover:            cfg.ControlAuthority,
+			PromotionSignerPublicKey:    cfg.PromotionSignerPublicKey,
+			AgentOutcomeSignerPublicKey: cfg.AgentOutcomeSignerPublicKey,
+			FleetID:                     cfg.FleetID,
+			Environment:                 cfg.Environment,
 		})
 		if err != nil {
 			_ = listener.Close()

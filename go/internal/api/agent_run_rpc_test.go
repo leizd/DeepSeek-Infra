@@ -19,10 +19,14 @@ import (
 
 // This fixture authorizes a fresh empty deployment only; it makes no claim
 // about importing an existing Python Agent history or Rust artifact custody.
-func agentRPCStore(t *testing.T) *store.Control {
+func agentRPCStore(t *testing.T, outcomeKey ...string) *store.Control {
 	t.Helper()
+	key := ""
+	if len(outcomeKey) == 1 {
+		key = outcomeKey[0]
+	}
 	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "agent-rpc-test", Now: func() int64 { return 1000 },
-		AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic, FleetID: mutationFleetID, Environment: mutationEnvironment})
+		AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic, AgentOutcomeSignerPublicKey: key, FleetID: mutationFleetID, Environment: mutationEnvironment})
 	if err != nil {
 		t.Fatal(err)
 	}

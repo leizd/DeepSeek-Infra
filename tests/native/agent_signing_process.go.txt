@@ -37,7 +37,8 @@ func nativeSigningControl(t *testing.T, writerSeconds int64) *store.Control {
 	control, err := store.OpenControl(store.OpenOptions{
 		Path: t.TempDir(), Owner: "native-agent-signing-probe", LeaseSeconds: writerSeconds,
 		AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic,
-		FleetID: mutationFleetID, Environment: mutationEnvironment,
+		AgentOutcomeSignerPublicKey: os.Getenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY"),
+		FleetID:                     mutationFleetID, Environment: mutationEnvironment,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -472,6 +473,8 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 	query.OperationId = admitted.Intent.OperationId
 	binding := worker.ControlSignerBinding{PublicKey: ready.PublicKey, FleetID: mutationFleetID, Environment: mutationEnvironment}
 	receiptHash, receiptLength := "", 0
+	nodes := agentv1.NewAgentNodeControlClient(connection)
+	goOutcomePersisted, unknownOutcomeRecordingDenied := false, false
 	if scenario == "planner-success" {
 		verified, err := worker.VerifyAgentNodeEffect(result, admitted.Intent, claim.WriterFencingToken, binding)
 		if err != nil || verified.Evidence().ProviderPlan[0].Id != "coder" {
@@ -494,6 +497,36 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 		}
 		digest := sha256.Sum256(raw)
 		receiptHash, receiptLength = hex.EncodeToString(digest[:]), len(raw)
+		consume := &agentv1.RecordAgentNodeOutcomeRequest{SchemaVersion: 1, OperationId: "process-plan-outcome-record",
+			Actor: "operator:agent-test", Fence: claim.Fence, RunId: claim.RunId, NodeId: "leader", OutcomeReceipt: result.OutcomeReceipt}
+		for _, alter := range []func(*agentv1.RecordAgentNodeOutcomeRequest){
+			func(x *agentv1.RecordAgentNodeOutcomeRequest) { x.OutcomeReceipt.Signature[0] ^= 1 },
+			func(x *agentv1.RecordAgentNodeOutcomeRequest) { x.OutcomeReceipt.Evidence.WriterFencingToken++ },
+		} {
+			forged := proto.Clone(consume).(*agentv1.RecordAgentNodeOutcomeRequest)
+			alter(forged)
+			if _, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), forged); status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("Go persisted a forged Rust receipt: %v", err)
+			}
+		}
+		first, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), consume)
+		if err != nil || first.AlreadyRecorded || first.ReceiptSha256 != receiptHash {
+			t.Fatalf("Go receipt persistence failed: %v", err)
+		}
+		replay, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), consume)
+		if err != nil || !replay.AlreadyRecorded || replay.ReceiptSha256 != receiptHash {
+			t.Fatalf("Go receipt replay failed: %v", err)
+		}
+		stored, err := nodes.GetDispatch(controlRPCContext(t, testInternalBearer), &agentv1.GetAgentNodeDispatchRequest{Fence: claim.Fence, RunId: claim.RunId, NodeId: "leader"})
+		if err != nil || !proto.Equal(stored.GetOutcomeReceipt(), result.OutcomeReceipt) {
+			t.Fatalf("Go history query lost receipt: %v", err)
+		}
+		run, _, err := control.AgentRunMetadata(claim.RunId)
+		resources, resourceErr := control.GetResourceLeases(claim.Fence.ActionId)
+		if err != nil || resourceErr != nil || run.NextIndex != 2 || run.Status != "planning" || len(resources) != 1 {
+			t.Fatal("receipt ingestion fabricated phase settlement")
+		}
+		goOutcomePersisted = true
 	}
 	nativeSigningWrite(t, filepath.Join(directory, "restart-request.json"), map[string]bool{"restart": true})
 	var restarted nativeSigningWorkerReady
@@ -516,6 +549,14 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 			t.Fatalf("planner replay changed immutable evidence: %v", err)
 		}
 	} else {
+		if _, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), &agentv1.RecordAgentNodeOutcomeRequest{SchemaVersion: 1, OperationId: "unknown-outcome-record", Actor: "operator:agent-test", Fence: claim.Fence, RunId: claim.RunId, NodeId: "leader"}); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("unknown effect was recorded: %v", err)
+		}
+		stored, err := nodes.GetDispatch(controlRPCContext(t, testInternalBearer), &agentv1.GetAgentNodeDispatchRequest{Fence: claim.Fence, RunId: claim.RunId, NodeId: "leader"})
+		if err != nil || stored.GetOutcomeReceipt() != nil {
+			t.Fatal("unknown effect gained durable receipt")
+		}
+		unknownOutcomeRecordingDenied = true
 		if retained.State != "EFFECT_UNKNOWN" || retained.PublicEvent != nil || retained.OutcomeReceipt != nil {
 			t.Fatal("unknown effect was promoted to success")
 		}
@@ -534,6 +575,7 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 		"productionGoNodeClient": true, "signedOutcomeVerified": scenario == "planner-success", "signedOutcomeTamperingDenied": scenario == "planner-success",
 		"unknownHasNoReceipt":  scenario == "planner-unknown" && retained.OutcomeReceipt == nil,
 		"outcomeReceiptSha256": receiptHash, "outcomeReceiptLength": receiptLength,
+		"goOutcomePersisted": goOutcomePersisted, "unknownOutcomeRecordingDenied": unknownOutcomeRecordingDenied,
 		"goControlAuthorityAndReservation": true, "restartPreserved": true, "noDuplicateProviderSend": true,
 		"productionProviderQualified": false, "goPhaseSettlementQualified": false,
 	})

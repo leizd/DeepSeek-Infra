@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"github.com/leizd/DeepSeek-Infra/go/internal/agentproof"
+
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
@@ -31,10 +33,13 @@ func nodeDispatchProtocol(intent store.AgentNodeDispatch) *agentv1.AgentNodeDisp
 }
 
 func nodeDispatchError(err error) error {
-	if errors.Is(err, store.ErrAgentNodeDispatchRequired) {
+	if errors.Is(err, store.ErrAgentNodeDispatchRequired) || errors.Is(err, store.ErrAgentNodeOutcomeRequired) {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
-	if errors.Is(err, store.ErrAgentNodeDependencyUnverified) {
+	if errors.Is(err, store.ErrAgentNodeOutcomeConflict) {
+		return status.Error(codes.AlreadyExists, err.Error())
+	}
+	if errors.Is(err, store.ErrAgentNodeDependencyUnverified) || errors.Is(err, agentproof.ErrAgentNodeOutcomeInvalid) {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	}
 	return executionWriteError(err)
@@ -88,7 +93,7 @@ func (service *agentNodeService) GetDispatch(ctx context.Context, input *agentv1
 	if !authoritative || !store.IsDomainGoAuthoritative(cutover.State) {
 		return nil, status.Error(codes.FailedPrecondition, "CUTOVER_NOT_AUTHORIZED")
 	}
-	record, intent, found, err := service.run.control.AgentNodeDispatchSnapshot(input.Fence.ActionId, input.NodeId)
+	record, intent, receipt, found, err := service.run.control.AgentNodeOutcomeSnapshot(input.Fence.ActionId, input.NodeId)
 	if err != nil {
 		return nil, nodeDispatchError(err)
 	}
@@ -105,6 +110,30 @@ func (service *agentNodeService) GetDispatch(ctx context.Context, input *agentv1
 	result := &agentv1.GetAgentNodeDispatchResponse{Found: found}
 	if found {
 		result.Intent = nodeDispatchProtocol(intent)
+		result.OutcomeReceipt = receipt
 	}
 	return result, nil
+}
+
+// Receipt ingestion preserves historical evidence without granting another send.
+func (service *agentNodeService) RecordOutcome(ctx context.Context, input *agentv1.RecordAgentNodeOutcomeRequest) (*agentv1.RecordAgentNodeOutcomeResponse, error) {
+	if err := service.run.executionProcess(); err != nil {
+		return nil, err
+	}
+	if input == nil || input.SchemaVersion != 1 || input.Fence == nil || input.OutcomeReceipt == nil ||
+		len(input.ProtoReflect().GetUnknown()) != 0 || len(input.Fence.ProtoReflect().GetUnknown()) != 0 {
+		return nil, status.Error(codes.InvalidArgument, "AGENT_NODE_OUTCOME_REQUIRED")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
+	input = proto.Clone(input).(*agentv1.RecordAgentNodeOutcomeRequest)
+	result, err := service.run.control.RecordAgentNodeOutcome(store.AgentNodeOutcomeRequest{
+		OperationID: input.OperationId, Actor: input.Actor, ActionID: input.Fence.ActionId, Epoch: input.Fence.ExecutionEpoch,
+		RunID: input.RunId, NodeID: input.NodeId, Receipt: input.OutcomeReceipt,
+	})
+	if err != nil {
+		return nil, nodeDispatchError(err)
+	}
+	return &agentv1.RecordAgentNodeOutcomeResponse{AlreadyRecorded: result.AlreadyRecorded, ReceiptSha256: result.ReceiptSHA256}, nil
 }

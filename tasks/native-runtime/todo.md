@@ -1111,3 +1111,12 @@ work is tracked against the full product matrix, with 5.0 still **未完成**.
 - [ ] Any change to a frozen contract.
 - [ ] Any non-reproducible generated binding.
 - [ ] Missing exact-head provider/native Evidence.
+
+
+### Native node outcome ingestion (2026-10-11, cloud validation pending)
+
+Go now receives the Rust-custody node receipt through the registered authenticated `AgentNodeControl.RecordOutcome` protobuf RPC. The independent `agentproof` verifier checks the deployment-pinned Rust public key, original Go dispatch intent/writer, action and metadata epochs, exact request/result references and signature. Receipt bytes and their original writer witness are immutable in Go control history; replay has one durable proof and rejected evidence leaves no partial mutation. Historical receipt queries survive dispatch lease expiry and process restart, without renewing a lease, releasing resources or manufacturing phase/public-event completion. The existing worker verifier API remains compatible and raw request/provider bodies stay in Rust.
+
+The actual controlled HTTP process probe requires successful receipt persistence/replay through the production Go RPC and forbids recording `EFFECT_UNKNOWN`. Independent Go unit and race cases cover signature/scope denial, concurrency, history immutability, expired lease and restart. Native compilation/tests/coverage remain in GitHub Actions with the original 80% Rust and 95% Go floors.
+
+**NOT_READY:** this slice is evidence ingestion. Go plan projection, atomic phase/DAG settlement, task/tool execution, public Agent workflow, live providers, all retained capabilities, zero-Python workloads and platform/release evidence remain unfinished. A receipt, artifact reference or successful RPC cannot substitute for those results.
