@@ -187,7 +187,7 @@ impl AgentExecutionControl {
     }
 }
 
-fn validate_node_dispatch(
+pub(crate) fn validate_node_dispatch(
     response: &BeginAgentNodeDispatchResponse,
     admitted: &AgentRunExecutionClaim,
     node_id: &str,

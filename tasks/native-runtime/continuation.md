@@ -1,3 +1,29 @@
+## Rust Agent node journal continuation — 2026-10-11
+
+The exact Android staging repair `a9799fa7` is now qualified: both bounded Rust
+jobs and all 37 CI jobs pass, including 14 Go/Docker gates and both original
+95 percent Go coverage floors. Reports are retained under
+`artifacts/native-20261011-android-stage-retirement-preview`.
+
+Agent node admission (`a422d256`) passed Rust but failed Go's intentionally
+fenced generic action mutation channel. `1f6afa1c` fixes domain admission without
+weakening that fence; ordinary Go and race tests pass, while complete Go coverage
+is 94.9111 percent. The next tests exposed two harness mistakes, now corrected in
+`fa274e77`; its exact-head cloud gates are pending. Failure logs are preserved.
+
+This Rust follow-up adds a separately keyed, signed-scope node effect journal,
+atomic v4-to-v5 migration, immutable known results, single-use dispatch permits,
+restart-to-EFFECT_UNKNOWN recovery, historical metadata reads and clock/tamper
+rejection. Fifteen new native tests await cloud execution. It does not qualify
+actual provider/tool effects, signed outcome settlement, DAG dependencies or the
+public Agent workflow. Full product readiness remains NOT_READY.
+
+Continue with the actual worker execution RPC, provider/tool adapter and
+independent outcome proof/Go settlement; retain all original presets, platforms,
+compatibility contracts and zero-Python acceptance. Native compilation, tests and
+Docker stay in GitHub Actions; download reports only. Standing human authorization
+`以后直接提交，不用询问` covers reviewed commits on `codex/rust-cloud/20261010`.
+
 ## Agent node dispatch control prepared — 2026-10-11
 
 The `ca84511a` snapshot passed all 37 full CI jobs, both Rust cloud jobs, and

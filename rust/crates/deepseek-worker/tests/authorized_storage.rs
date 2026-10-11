@@ -358,6 +358,9 @@ async fn v1_migration_preserves_legacy_journal_and_rolls_back_on_identity_failur
     connection
         .execute("DROP TABLE storage_effect_bindings", [])
         .unwrap();
+    connection
+        .execute("DROP TABLE agent_node_effects", [])
+        .unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     let wrong_identity = WorkerAuthorityConfig {
         fleet_id: "wrong-fleet".into(),
@@ -385,7 +388,7 @@ async fn v1_migration_preserves_legacy_journal_and_rolls_back_on_identity_failur
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        4
+        5
     );
     assert_eq!(
         connection

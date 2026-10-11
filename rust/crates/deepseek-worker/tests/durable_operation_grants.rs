@@ -528,6 +528,9 @@ fn v3_migration_preserves_epoch_bytes_without_inventing_grants() {
     database
         .execute("DROP TABLE storage_operation_grants", [])
         .unwrap();
+    database
+        .execute("DROP TABLE agent_node_effects", [])
+        .unwrap();
     database.pragma_update(None, "user_version", 3).unwrap();
     let wrong = WorkerAuthorityConfig {
         fleet_id: "wrong-fleet".into(),
@@ -545,7 +548,7 @@ fn v3_migration_preserves_epoch_bytes_without_inventing_grants() {
     let version: i64 = database
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     let retained: Vec<u8> = database
         .query_row("SELECT request FROM epoch_installs", [], |row| row.get(0))
         .unwrap();

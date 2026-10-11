@@ -1,3 +1,16 @@
+## Rust node effect journal — 2026-10-11
+
+- Prepared: signed-scope Rust-owned node effects, one fresh permit, immutable
+  bounded canonical output, atomic v5 migration and fail-closed restart recovery.
+- [ ] Qualify the fifteen new Rust tests and original complete coverage floors in cloud.
+- [ ] Expose and exercise the actual worker execution RPC and provider/tool path.
+- [ ] Sign/verify outcomes, settle Go phases and admit proven DAG dependencies.
+- [ ] Complete public Agent workflows, platforms and all remaining native ownership.
+
+The Android staging repair `a9799fa7` is qualified (37/37 CI); the latest Agent
+control correction `fa274e77` awaits exact-head cloud gates. Neither reservations
+nor this prepared journal prove a provider effect or full migration completion.
+
 ## Agent node dispatch continuation — 2026-10-11
 
 - The exact `ca84511a` full CI is qualified (37/37 jobs); the Android staging

@@ -1,3 +1,16 @@
+## Rust node custody progress — 2026-10-11
+
+| Capability | Native owner / implementation | Current evidence | Remaining acceptance |
+| --- | --- | --- | --- |
+| Agent node effect journal | Rust worker `agent_node_effect` / `authority_store::agent_nodes`, additive schema v5 | Prepared source and fifteen native regression tests; cloud pending | Actual worker RPC/provider calls, independent signed outcomes, Go DAG settlement, public workflows and platform/recovery workloads |
+
+The journal reserves individual signed nodes under an installed action epoch;
+replayed/absent outcomes remain EFFECT_UNKNOWN and known canonical responses stay
+in Rust custody. No epoch is implicitly installed, no imported event is outcome
+proof, and no Agent production cutover is claimed. The exact `a9799fa7` staging
+repair passes all 37 CI jobs with the original Go/Rust floors. Full readiness
+remains NOT_READY; all retained product matrix entries still require acceptance.
+
 ## Agent node control progress — 2026-10-11
 
 The next snapshot adds native Go node dispatch intent ownership and typed
