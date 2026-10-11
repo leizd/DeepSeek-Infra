@@ -145,8 +145,9 @@ func TestAgentNodeDispatchRejectsProjectedDependencyCompletion(t *testing.T) {
 	control, input := agentNodeDispatchFixture(t)
 	projection := eventMutation(t, control, 4, agent.RunEvent{Type: "agent_output", Phase: "coder"})
 	projection.Create = nil
-	if _, err := control.AppendAgentRunEvent(projection); err != nil {
-		t.Fatal(err)
+	before := countControlEvents(t, control)
+	if _, err := control.AppendAgentRunEvent(projection); !errors.Is(err, ErrAgentRunExecutionRequired) || countControlEvents(t, control) != before {
+		t.Fatalf("generic output bypassed the unresolved native reservation: %v", err)
 	}
 	input.NodeID, input.OperationID = "critic", "node-critic-begin"
 	if _, err := control.BeginAgentNodeDispatch(input); !errors.Is(err, ErrAgentNodeDependencyUnverified) {

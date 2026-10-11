@@ -149,6 +149,23 @@ func (store *Control) AppendAgentRunEvent(input AgentRunEventMutation) (AgentRun
 	if run.NextIndex != mutation.ExpectedIndex {
 		return AgentRunEventResult{}, ErrRevisionConflict
 	}
+	// A public result projection cannot substitute for verified native settlement.
+	// Keep the reservation even after its deadline: an unresolved effect is not
+	// unapplied. Cancellation, operator plan edits and immutable replays remain
+	// available without claiming that the execution succeeded.
+	claimsOutcome := mutation.Event.Type == "done" || mutation.Event.Type == "agent_output" ||
+		mutation.Event.Type == "run_status" && mutation.Event.Status == "done" ||
+		mutation.Event.Type == "agent" && (mutation.Event.Status == "done" || mutation.Event.Status == "error")
+	if found && claimsOutcome {
+		var reserved bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM action_resource_leases WHERE resource_key=?)`,
+			"agent-run:"+mutation.RunID).Scan(&reserved); err != nil {
+			return AgentRunEventResult{}, err
+		}
+		if reserved {
+			return AgentRunEventResult{}, ErrAgentRunExecutionRequired
+		}
+	}
 	if !found {
 		if mutation.Create == nil || mutation.Event.Type != "run_status" || mutation.Event.Status != "created" || !validAgentArtifact(mutation.Create.Request) {
 			return AgentRunEventResult{}, ErrAgentRunMetadataInvalid
