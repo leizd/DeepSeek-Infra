@@ -116,6 +116,89 @@ fn outcome(row: Stored) -> Result<AgentNodeEffectOutcome, Status> {
 }
 
 impl AuthorityStore {
+    pub(crate) fn agent_node_outcome_evidence(
+        &self,
+        query: &crate::QueryAgentNodeEffect,
+        public_event: deepseek_protocol::generated::deepseek::agent::v1::AgentArtifactReference,
+        config: &WorkerAuthorityConfig,
+    ) -> Result<deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeEvidence, Status>
+    {
+        use deepseek_protocol::generated::deepseek::agent::v1::{
+            AgentNodeOutcomeEvidence, AgentRunPlanNode,
+        };
+        let snapshot = self.agent_node_snapshot(query)?.ok_or_else(denied)?;
+        if snapshot.state != "CONFIRMED" {
+            return Err(denied());
+        }
+        let row = stored(&self.connection, &query.operation_id)?.ok_or_else(denied)?;
+        let output: serde_json::Value =
+            serde_json::from_slice(row.output.as_ref().ok_or_else(denied)?)
+                .map_err(|_| denied())?;
+        if output["runId"] != query.run_id
+            || output["publicEvent"]["type"] != "agent_plan"
+            || row.node_id != "leader"
+        {
+            return Err(denied());
+        }
+        let event = deepseek_policy::agent_run_data::sanitize(&output["publicEvent"]);
+        let bytes = serde_json::to_vec(&event).map_err(|_| denied())?;
+        use sha2::{Digest as _, Sha256};
+        if public_event.sha256 != format!("{:x}", Sha256::digest(&bytes))
+            || public_event.length != bytes.len() as u64
+        {
+            return Err(denied());
+        }
+        // These are provider scheduling candidates; Go owns their normalization,
+        // admission and the resulting plan/DAG. Bodies remain in the Rust store.
+        let provider_plan = event["plan"]["tasks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|task| {
+                let id = task.get("role").or_else(|| task.get("id"))?.as_str()?;
+                let text = task
+                    .get("task")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let depends_on = task
+                    .get("depends_on")
+                    .or_else(|| task.get("dependsOn"))
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect();
+                Some(AgentRunPlanNode {
+                    id: id.into(),
+                    task: text.into(),
+                    depends_on,
+                })
+            })
+            .collect();
+        Ok(AgentNodeOutcomeEvidence {
+            schema_version: 1,
+            fence: row.intent.fence,
+            operation_id: row.operation_id,
+            run_id: row.run_id,
+            node_id: row.node_id,
+            phase: row.phase,
+            request: row.intent.request,
+            plan_digest: row.intent.plan_digest,
+            metadata_index: row.metadata_index,
+            metadata_epoch: row.metadata_epoch,
+            writer_fencing_token: row.token,
+            created_at: row.created_at,
+            confirmed_at: row.updated_at,
+            outcome_sha256: snapshot.output_sha256.ok_or_else(denied)?,
+            outcome_length: snapshot.output_length.ok_or_else(denied)?,
+            public_event: Some(public_event),
+            provider_plan,
+            fleet_id: config.fleet_id.clone(),
+            environment: config.environment.clone(),
+        })
+    }
+
     /// Historical reads do not spend a dispatch reservation or require a live
     /// lease. The complete outcome stays in Rust and is projected by its executor.
     pub(crate) fn agent_node_outcome(

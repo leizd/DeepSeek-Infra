@@ -539,11 +539,12 @@ type AgentNodeEffectMetadata struct {
 	NodeId      string                 `protobuf:"bytes,4,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
 	State       string                 `protobuf:"bytes,5,opt,name=state,proto3" json:"state,omitempty"`
 	// Scheduling references only; request/response bodies never enter Go.
-	PublicEvent   *AgentArtifactReference `protobuf:"bytes,6,opt,name=public_event,json=publicEvent,proto3" json:"public_event,omitempty"`
-	OutcomeSha256 string                  `protobuf:"bytes,7,opt,name=outcome_sha256,json=outcomeSha256,proto3" json:"outcome_sha256,omitempty"`
-	OutcomeLength uint64                  `protobuf:"varint,8,opt,name=outcome_length,json=outcomeLength,proto3" json:"outcome_length,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PublicEvent    *AgentArtifactReference  `protobuf:"bytes,6,opt,name=public_event,json=publicEvent,proto3" json:"public_event,omitempty"`
+	OutcomeSha256  string                   `protobuf:"bytes,7,opt,name=outcome_sha256,json=outcomeSha256,proto3" json:"outcome_sha256,omitempty"`
+	OutcomeLength  uint64                   `protobuf:"varint,8,opt,name=outcome_length,json=outcomeLength,proto3" json:"outcome_length,omitempty"`
+	OutcomeReceipt *AgentNodeOutcomeReceipt `protobuf:"bytes,9,opt,name=outcome_receipt,json=outcomeReceipt,proto3" json:"outcome_receipt,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *AgentNodeEffectMetadata) Reset() {
@@ -632,6 +633,273 @@ func (x *AgentNodeEffectMetadata) GetOutcomeLength() uint64 {
 	return 0
 }
 
+func (x *AgentNodeEffectMetadata) GetOutcomeReceipt() *AgentNodeOutcomeReceipt {
+	if x != nil {
+		return x.OutcomeReceipt
+	}
+	return nil
+}
+
+// This signed payload is constructed from a confirmed Rust journal row. It is
+// historical effect evidence, not permission to dispatch or a Go status flag.
+type AgentNodeOutcomeEvidence struct {
+	state              protoimpl.MessageState  `protogen:"open.v1"`
+	SchemaVersion      uint32                  `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Fence              *commonv1.ActionFence   `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
+	OperationId        string                  `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	RunId              string                  `protobuf:"bytes,4,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	NodeId             string                  `protobuf:"bytes,5,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	Phase              AgentRunExecutionPhase  `protobuf:"varint,6,opt,name=phase,proto3,enum=deepseek.agent.v1.AgentRunExecutionPhase" json:"phase,omitempty"`
+	Request            *AgentArtifactReference `protobuf:"bytes,7,opt,name=request,proto3" json:"request,omitempty"`
+	PlanDigest         string                  `protobuf:"bytes,8,opt,name=plan_digest,json=planDigest,proto3" json:"plan_digest,omitempty"`
+	MetadataIndex      int64                   `protobuf:"varint,9,opt,name=metadata_index,json=metadataIndex,proto3" json:"metadata_index,omitempty"`
+	MetadataEpoch      uint64                  `protobuf:"varint,10,opt,name=metadata_epoch,json=metadataEpoch,proto3" json:"metadata_epoch,omitempty"`
+	WriterFencingToken int64                   `protobuf:"varint,11,opt,name=writer_fencing_token,json=writerFencingToken,proto3" json:"writer_fencing_token,omitempty"`
+	CreatedAt          string                  `protobuf:"bytes,12,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	ConfirmedAt        string                  `protobuf:"bytes,13,opt,name=confirmed_at,json=confirmedAt,proto3" json:"confirmed_at,omitempty"`
+	OutcomeSha256      string                  `protobuf:"bytes,14,opt,name=outcome_sha256,json=outcomeSha256,proto3" json:"outcome_sha256,omitempty"`
+	OutcomeLength      uint64                  `protobuf:"varint,15,opt,name=outcome_length,json=outcomeLength,proto3" json:"outcome_length,omitempty"`
+	PublicEvent        *AgentArtifactReference `protobuf:"bytes,16,opt,name=public_event,json=publicEvent,proto3" json:"public_event,omitempty"`
+	ProviderPlan       []*AgentRunPlanNode     `protobuf:"bytes,17,rep,name=provider_plan,json=providerPlan,proto3" json:"provider_plan,omitempty"`
+	FleetId            string                  `protobuf:"bytes,18,opt,name=fleet_id,json=fleetId,proto3" json:"fleet_id,omitempty"`
+	Environment        string                  `protobuf:"bytes,19,opt,name=environment,proto3" json:"environment,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *AgentNodeOutcomeEvidence) Reset() {
+	*x = AgentNodeOutcomeEvidence{}
+	mi := &file_agent_v1_agent_node_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentNodeOutcomeEvidence) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentNodeOutcomeEvidence) ProtoMessage() {}
+
+func (x *AgentNodeOutcomeEvidence) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_node_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentNodeOutcomeEvidence.ProtoReflect.Descriptor instead.
+func (*AgentNodeOutcomeEvidence) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *AgentNodeOutcomeEvidence) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *AgentNodeOutcomeEvidence) GetFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *AgentNodeOutcomeEvidence) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *AgentNodeOutcomeEvidence) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *AgentNodeOutcomeEvidence) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *AgentNodeOutcomeEvidence) GetPhase() AgentRunExecutionPhase {
+	if x != nil {
+		return x.Phase
+	}
+	return AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_UNSPECIFIED
+}
+
+func (x *AgentNodeOutcomeEvidence) GetRequest() *AgentArtifactReference {
+	if x != nil {
+		return x.Request
+	}
+	return nil
+}
+
+func (x *AgentNodeOutcomeEvidence) GetPlanDigest() string {
+	if x != nil {
+		return x.PlanDigest
+	}
+	return ""
+}
+
+func (x *AgentNodeOutcomeEvidence) GetMetadataIndex() int64 {
+	if x != nil {
+		return x.MetadataIndex
+	}
+	return 0
+}
+
+func (x *AgentNodeOutcomeEvidence) GetMetadataEpoch() uint64 {
+	if x != nil {
+		return x.MetadataEpoch
+	}
+	return 0
+}
+
+func (x *AgentNodeOutcomeEvidence) GetWriterFencingToken() int64 {
+	if x != nil {
+		return x.WriterFencingToken
+	}
+	return 0
+}
+
+func (x *AgentNodeOutcomeEvidence) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
+func (x *AgentNodeOutcomeEvidence) GetConfirmedAt() string {
+	if x != nil {
+		return x.ConfirmedAt
+	}
+	return ""
+}
+
+func (x *AgentNodeOutcomeEvidence) GetOutcomeSha256() string {
+	if x != nil {
+		return x.OutcomeSha256
+	}
+	return ""
+}
+
+func (x *AgentNodeOutcomeEvidence) GetOutcomeLength() uint64 {
+	if x != nil {
+		return x.OutcomeLength
+	}
+	return 0
+}
+
+func (x *AgentNodeOutcomeEvidence) GetPublicEvent() *AgentArtifactReference {
+	if x != nil {
+		return x.PublicEvent
+	}
+	return nil
+}
+
+func (x *AgentNodeOutcomeEvidence) GetProviderPlan() []*AgentRunPlanNode {
+	if x != nil {
+		return x.ProviderPlan
+	}
+	return nil
+}
+
+func (x *AgentNodeOutcomeEvidence) GetFleetId() string {
+	if x != nil {
+		return x.FleetId
+	}
+	return ""
+}
+
+func (x *AgentNodeOutcomeEvidence) GetEnvironment() string {
+	if x != nil {
+		return x.Environment
+	}
+	return ""
+}
+
+// Signature covers the canonical protobuf encoding of evidence with the fixed
+// deepseek-infra:agent-node-outcome-proof-v1 domain. Private keys stay in Rust.
+type AgentNodeOutcomeReceipt struct {
+	state           protoimpl.MessageState    `protogen:"open.v1"`
+	SchemaVersion   uint32                    `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Evidence        *AgentNodeOutcomeEvidence `protobuf:"bytes,2,opt,name=evidence,proto3" json:"evidence,omitempty"`
+	Signature       []byte                    `protobuf:"bytes,3,opt,name=signature,proto3" json:"signature,omitempty"`
+	SignerPublicKey string                    `protobuf:"bytes,4,opt,name=signer_public_key,json=signerPublicKey,proto3" json:"signer_public_key,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *AgentNodeOutcomeReceipt) Reset() {
+	*x = AgentNodeOutcomeReceipt{}
+	mi := &file_agent_v1_agent_node_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentNodeOutcomeReceipt) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentNodeOutcomeReceipt) ProtoMessage() {}
+
+func (x *AgentNodeOutcomeReceipt) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_node_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentNodeOutcomeReceipt.ProtoReflect.Descriptor instead.
+func (*AgentNodeOutcomeReceipt) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *AgentNodeOutcomeReceipt) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *AgentNodeOutcomeReceipt) GetEvidence() *AgentNodeOutcomeEvidence {
+	if x != nil {
+		return x.Evidence
+	}
+	return nil
+}
+
+func (x *AgentNodeOutcomeReceipt) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+func (x *AgentNodeOutcomeReceipt) GetSignerPublicKey() string {
+	if x != nil {
+		return x.SignerPublicKey
+	}
+	return ""
+}
+
 type QueryAgentNodeEffectRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	OperationId   string                 `protobuf:"bytes,1,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
@@ -644,7 +912,7 @@ type QueryAgentNodeEffectRequest struct {
 
 func (x *QueryAgentNodeEffectRequest) Reset() {
 	*x = QueryAgentNodeEffectRequest{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[7]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -656,7 +924,7 @@ func (x *QueryAgentNodeEffectRequest) String() string {
 func (*QueryAgentNodeEffectRequest) ProtoMessage() {}
 
 func (x *QueryAgentNodeEffectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[7]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -669,7 +937,7 @@ func (x *QueryAgentNodeEffectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryAgentNodeEffectRequest.ProtoReflect.Descriptor instead.
 func (*QueryAgentNodeEffectRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{7}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *QueryAgentNodeEffectRequest) GetOperationId() string {
@@ -711,7 +979,7 @@ type QueryAgentNodeEffectResponse struct {
 
 func (x *QueryAgentNodeEffectResponse) Reset() {
 	*x = QueryAgentNodeEffectResponse{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[8]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -723,7 +991,7 @@ func (x *QueryAgentNodeEffectResponse) String() string {
 func (*QueryAgentNodeEffectResponse) ProtoMessage() {}
 
 func (x *QueryAgentNodeEffectResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[8]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -736,7 +1004,7 @@ func (x *QueryAgentNodeEffectResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryAgentNodeEffectResponse.ProtoReflect.Descriptor instead.
 func (*QueryAgentNodeEffectResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{8}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *QueryAgentNodeEffectResponse) GetFound() bool {
@@ -804,7 +1072,7 @@ const file_agent_v1_agent_node_proto_rawDesc = "" +
 	"\x05actor\x18\x03 \x01(\tR\x05actor\x12?\n" +
 	"\x05claim\x18\x04 \x01(\v2).deepseek.agent.v1.AgentRunExecutionClaimR\x05claim\x12,\n" +
 	"\x12signed_phase_grant\x18\x05 \x01(\fR\x10signedPhaseGrant\x125\n" +
-	"\x05fence\x18\x06 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\"\xd5\x02\n" +
+	"\x05fence\x18\x06 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\"\xaa\x03\n" +
 	"\x17AgentNodeEffectMetadata\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x125\n" +
 	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12\x15\n" +
@@ -813,7 +1081,36 @@ const file_agent_v1_agent_node_proto_rawDesc = "" +
 	"\x05state\x18\x05 \x01(\tR\x05state\x12L\n" +
 	"\fpublic_event\x18\x06 \x01(\v2).deepseek.agent.v1.AgentArtifactReferenceR\vpublicEvent\x12%\n" +
 	"\x0eoutcome_sha256\x18\a \x01(\tR\routcomeSha256\x12%\n" +
-	"\x0eoutcome_length\x18\b \x01(\x04R\routcomeLength\"\xa7\x01\n" +
+	"\x0eoutcome_length\x18\b \x01(\x04R\routcomeLength\x12S\n" +
+	"\x0foutcome_receipt\x18\t \x01(\v2*.deepseek.agent.v1.AgentNodeOutcomeReceiptR\x0eoutcomeReceipt\"\xd7\x06\n" +
+	"\x18AgentNodeOutcomeEvidence\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x125\n" +
+	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12!\n" +
+	"\foperation_id\x18\x03 \x01(\tR\voperationId\x12\x15\n" +
+	"\x06run_id\x18\x04 \x01(\tR\x05runId\x12\x17\n" +
+	"\anode_id\x18\x05 \x01(\tR\x06nodeId\x12?\n" +
+	"\x05phase\x18\x06 \x01(\x0e2).deepseek.agent.v1.AgentRunExecutionPhaseR\x05phase\x12C\n" +
+	"\arequest\x18\a \x01(\v2).deepseek.agent.v1.AgentArtifactReferenceR\arequest\x12\x1f\n" +
+	"\vplan_digest\x18\b \x01(\tR\n" +
+	"planDigest\x12%\n" +
+	"\x0emetadata_index\x18\t \x01(\x03R\rmetadataIndex\x12%\n" +
+	"\x0emetadata_epoch\x18\n" +
+	" \x01(\x04R\rmetadataEpoch\x120\n" +
+	"\x14writer_fencing_token\x18\v \x01(\x03R\x12writerFencingToken\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\f \x01(\tR\tcreatedAt\x12!\n" +
+	"\fconfirmed_at\x18\r \x01(\tR\vconfirmedAt\x12%\n" +
+	"\x0eoutcome_sha256\x18\x0e \x01(\tR\routcomeSha256\x12%\n" +
+	"\x0eoutcome_length\x18\x0f \x01(\x04R\routcomeLength\x12L\n" +
+	"\fpublic_event\x18\x10 \x01(\v2).deepseek.agent.v1.AgentArtifactReferenceR\vpublicEvent\x12H\n" +
+	"\rprovider_plan\x18\x11 \x03(\v2#.deepseek.agent.v1.AgentRunPlanNodeR\fproviderPlan\x12\x19\n" +
+	"\bfleet_id\x18\x12 \x01(\tR\afleetId\x12 \n" +
+	"\venvironment\x18\x13 \x01(\tR\venvironment\"\xd3\x01\n" +
+	"\x17AgentNodeOutcomeReceipt\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12G\n" +
+	"\bevidence\x18\x02 \x01(\v2+.deepseek.agent.v1.AgentNodeOutcomeEvidenceR\bevidence\x12\x1c\n" +
+	"\tsignature\x18\x03 \x01(\fR\tsignature\x12*\n" +
+	"\x11signer_public_key\x18\x04 \x01(\tR\x0fsignerPublicKey\"\xa7\x01\n" +
 	"\x1bQueryAgentNodeEffectRequest\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x125\n" +
 	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12\x15\n" +
@@ -841,7 +1138,7 @@ func file_agent_v1_agent_node_proto_rawDescGZIP() []byte {
 	return file_agent_v1_agent_node_proto_rawDescData
 }
 
-var file_agent_v1_agent_node_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_agent_v1_agent_node_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_agent_v1_agent_node_proto_goTypes = []any{
 	(*AgentNodeDispatchIntent)(nil),        // 0: deepseek.agent.v1.AgentNodeDispatchIntent
 	(*BeginAgentNodeDispatchRequest)(nil),  // 1: deepseek.agent.v1.BeginAgentNodeDispatchRequest
@@ -850,41 +1147,51 @@ var file_agent_v1_agent_node_proto_goTypes = []any{
 	(*GetAgentNodeDispatchResponse)(nil),   // 4: deepseek.agent.v1.GetAgentNodeDispatchResponse
 	(*ExecuteAgentPlanRequest)(nil),        // 5: deepseek.agent.v1.ExecuteAgentPlanRequest
 	(*AgentNodeEffectMetadata)(nil),        // 6: deepseek.agent.v1.AgentNodeEffectMetadata
-	(*QueryAgentNodeEffectRequest)(nil),    // 7: deepseek.agent.v1.QueryAgentNodeEffectRequest
-	(*QueryAgentNodeEffectResponse)(nil),   // 8: deepseek.agent.v1.QueryAgentNodeEffectResponse
-	(*commonv1.ActionFence)(nil),           // 9: deepseek.common.v1.ActionFence
-	(AgentRunExecutionPhase)(0),            // 10: deepseek.agent.v1.AgentRunExecutionPhase
-	(*AgentArtifactReference)(nil),         // 11: deepseek.agent.v1.AgentArtifactReference
-	(*AgentRunExecutionClaim)(nil),         // 12: deepseek.agent.v1.AgentRunExecutionClaim
+	(*AgentNodeOutcomeEvidence)(nil),       // 7: deepseek.agent.v1.AgentNodeOutcomeEvidence
+	(*AgentNodeOutcomeReceipt)(nil),        // 8: deepseek.agent.v1.AgentNodeOutcomeReceipt
+	(*QueryAgentNodeEffectRequest)(nil),    // 9: deepseek.agent.v1.QueryAgentNodeEffectRequest
+	(*QueryAgentNodeEffectResponse)(nil),   // 10: deepseek.agent.v1.QueryAgentNodeEffectResponse
+	(*commonv1.ActionFence)(nil),           // 11: deepseek.common.v1.ActionFence
+	(AgentRunExecutionPhase)(0),            // 12: deepseek.agent.v1.AgentRunExecutionPhase
+	(*AgentArtifactReference)(nil),         // 13: deepseek.agent.v1.AgentArtifactReference
+	(*AgentRunExecutionClaim)(nil),         // 14: deepseek.agent.v1.AgentRunExecutionClaim
+	(*AgentRunPlanNode)(nil),               // 15: deepseek.agent.v1.AgentRunPlanNode
 }
 var file_agent_v1_agent_node_proto_depIdxs = []int32{
-	9,  // 0: deepseek.agent.v1.AgentNodeDispatchIntent.fence:type_name -> deepseek.common.v1.ActionFence
-	10, // 1: deepseek.agent.v1.AgentNodeDispatchIntent.phase:type_name -> deepseek.agent.v1.AgentRunExecutionPhase
-	11, // 2: deepseek.agent.v1.AgentNodeDispatchIntent.request:type_name -> deepseek.agent.v1.AgentArtifactReference
-	9,  // 3: deepseek.agent.v1.BeginAgentNodeDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	11, // 0: deepseek.agent.v1.AgentNodeDispatchIntent.fence:type_name -> deepseek.common.v1.ActionFence
+	12, // 1: deepseek.agent.v1.AgentNodeDispatchIntent.phase:type_name -> deepseek.agent.v1.AgentRunExecutionPhase
+	13, // 2: deepseek.agent.v1.AgentNodeDispatchIntent.request:type_name -> deepseek.agent.v1.AgentArtifactReference
+	11, // 3: deepseek.agent.v1.BeginAgentNodeDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	0,  // 4: deepseek.agent.v1.BeginAgentNodeDispatchResponse.intent:type_name -> deepseek.agent.v1.AgentNodeDispatchIntent
-	12, // 5: deepseek.agent.v1.BeginAgentNodeDispatchResponse.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
-	9,  // 6: deepseek.agent.v1.GetAgentNodeDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	14, // 5: deepseek.agent.v1.BeginAgentNodeDispatchResponse.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
+	11, // 6: deepseek.agent.v1.GetAgentNodeDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	0,  // 7: deepseek.agent.v1.GetAgentNodeDispatchResponse.intent:type_name -> deepseek.agent.v1.AgentNodeDispatchIntent
-	12, // 8: deepseek.agent.v1.ExecuteAgentPlanRequest.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
-	9,  // 9: deepseek.agent.v1.ExecuteAgentPlanRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	9,  // 10: deepseek.agent.v1.AgentNodeEffectMetadata.fence:type_name -> deepseek.common.v1.ActionFence
-	11, // 11: deepseek.agent.v1.AgentNodeEffectMetadata.public_event:type_name -> deepseek.agent.v1.AgentArtifactReference
-	9,  // 12: deepseek.agent.v1.QueryAgentNodeEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	6,  // 13: deepseek.agent.v1.QueryAgentNodeEffectResponse.effect:type_name -> deepseek.agent.v1.AgentNodeEffectMetadata
-	1,  // 14: deepseek.agent.v1.AgentNodeControl.BeginDispatch:input_type -> deepseek.agent.v1.BeginAgentNodeDispatchRequest
-	3,  // 15: deepseek.agent.v1.AgentNodeControl.GetDispatch:input_type -> deepseek.agent.v1.GetAgentNodeDispatchRequest
-	5,  // 16: deepseek.agent.v1.AgentNodeWorker.ExecutePlan:input_type -> deepseek.agent.v1.ExecuteAgentPlanRequest
-	7,  // 17: deepseek.agent.v1.AgentNodeWorker.QueryEffect:input_type -> deepseek.agent.v1.QueryAgentNodeEffectRequest
-	2,  // 18: deepseek.agent.v1.AgentNodeControl.BeginDispatch:output_type -> deepseek.agent.v1.BeginAgentNodeDispatchResponse
-	4,  // 19: deepseek.agent.v1.AgentNodeControl.GetDispatch:output_type -> deepseek.agent.v1.GetAgentNodeDispatchResponse
-	6,  // 20: deepseek.agent.v1.AgentNodeWorker.ExecutePlan:output_type -> deepseek.agent.v1.AgentNodeEffectMetadata
-	8,  // 21: deepseek.agent.v1.AgentNodeWorker.QueryEffect:output_type -> deepseek.agent.v1.QueryAgentNodeEffectResponse
-	18, // [18:22] is the sub-list for method output_type
-	14, // [14:18] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	14, // 8: deepseek.agent.v1.ExecuteAgentPlanRequest.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
+	11, // 9: deepseek.agent.v1.ExecuteAgentPlanRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	11, // 10: deepseek.agent.v1.AgentNodeEffectMetadata.fence:type_name -> deepseek.common.v1.ActionFence
+	13, // 11: deepseek.agent.v1.AgentNodeEffectMetadata.public_event:type_name -> deepseek.agent.v1.AgentArtifactReference
+	8,  // 12: deepseek.agent.v1.AgentNodeEffectMetadata.outcome_receipt:type_name -> deepseek.agent.v1.AgentNodeOutcomeReceipt
+	11, // 13: deepseek.agent.v1.AgentNodeOutcomeEvidence.fence:type_name -> deepseek.common.v1.ActionFence
+	12, // 14: deepseek.agent.v1.AgentNodeOutcomeEvidence.phase:type_name -> deepseek.agent.v1.AgentRunExecutionPhase
+	13, // 15: deepseek.agent.v1.AgentNodeOutcomeEvidence.request:type_name -> deepseek.agent.v1.AgentArtifactReference
+	13, // 16: deepseek.agent.v1.AgentNodeOutcomeEvidence.public_event:type_name -> deepseek.agent.v1.AgentArtifactReference
+	15, // 17: deepseek.agent.v1.AgentNodeOutcomeEvidence.provider_plan:type_name -> deepseek.agent.v1.AgentRunPlanNode
+	7,  // 18: deepseek.agent.v1.AgentNodeOutcomeReceipt.evidence:type_name -> deepseek.agent.v1.AgentNodeOutcomeEvidence
+	11, // 19: deepseek.agent.v1.QueryAgentNodeEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	6,  // 20: deepseek.agent.v1.QueryAgentNodeEffectResponse.effect:type_name -> deepseek.agent.v1.AgentNodeEffectMetadata
+	1,  // 21: deepseek.agent.v1.AgentNodeControl.BeginDispatch:input_type -> deepseek.agent.v1.BeginAgentNodeDispatchRequest
+	3,  // 22: deepseek.agent.v1.AgentNodeControl.GetDispatch:input_type -> deepseek.agent.v1.GetAgentNodeDispatchRequest
+	5,  // 23: deepseek.agent.v1.AgentNodeWorker.ExecutePlan:input_type -> deepseek.agent.v1.ExecuteAgentPlanRequest
+	9,  // 24: deepseek.agent.v1.AgentNodeWorker.QueryEffect:input_type -> deepseek.agent.v1.QueryAgentNodeEffectRequest
+	2,  // 25: deepseek.agent.v1.AgentNodeControl.BeginDispatch:output_type -> deepseek.agent.v1.BeginAgentNodeDispatchResponse
+	4,  // 26: deepseek.agent.v1.AgentNodeControl.GetDispatch:output_type -> deepseek.agent.v1.GetAgentNodeDispatchResponse
+	6,  // 27: deepseek.agent.v1.AgentNodeWorker.ExecutePlan:output_type -> deepseek.agent.v1.AgentNodeEffectMetadata
+	10, // 28: deepseek.agent.v1.AgentNodeWorker.QueryEffect:output_type -> deepseek.agent.v1.QueryAgentNodeEffectResponse
+	25, // [25:29] is the sub-list for method output_type
+	21, // [21:25] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_agent_node_proto_init() }
@@ -899,7 +1206,7 @@ func file_agent_v1_agent_node_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_agent_node_proto_rawDesc), len(file_agent_v1_agent_node_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

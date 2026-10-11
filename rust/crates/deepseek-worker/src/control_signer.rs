@@ -27,11 +27,54 @@ pub struct ControlSigner {
     key: ControlSigningKey,
     journal: SignatureJournal,
 }
+
+#[cfg(test)]
+#[path = "node_outcome_signer_tests.rs"]
+mod node_outcome_tests;
 impl std::fmt::Debug for ControlSigner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ControlSigner")
             .field("public_key", &self.key.public_key())
             .finish()
+    }
+}
+
+impl ControlSigner {
+    pub(crate) fn sign_node_outcome(
+        &mut self,
+        evidence: deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeEvidence,
+    ) -> Result<deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeReceipt, Status>
+    {
+        use deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeReceipt;
+        use prost::Message as _;
+        let payload = evidence.encode_to_vec();
+        let signature = self
+            .key
+            .sign_agent_node_outcome(&evidence)
+            .map_err(|_| Status::failed_precondition("AGENT_NODE_OUTCOME_INVALID"))?;
+        let receipt = AgentNodeOutcomeReceipt {
+            schema_version: 1,
+            evidence: Some(evidence),
+            signature,
+            signer_public_key: self.key.public_key(),
+        };
+        let bytes = receipt.encode_to_vec();
+        let mut identity = b"deepseek-infra:agent-node-outcome-receipt-v1:request\0".to_vec();
+        identity.extend(&payload);
+        let request_id = format!("{:x}", Sha256::digest(&identity));
+        let mut nonce = b"deepseek-infra:agent-node-outcome-receipt-v1:nonce\0".to_vec();
+        nonce.extend(&payload);
+        let nonce = format!("{:x}", Sha256::digest(&nonce));
+        if let Some(prior) = self.journal.existing(&request_id)? {
+            if prior != bytes {
+                return Err(Status::failed_precondition(
+                    "AGENT_NODE_OUTCOME_RECEIPT_CORRUPT",
+                ));
+            }
+        } else {
+            self.journal.record(&request_id, &nonce, &bytes)?;
+        }
+        Ok(receipt)
     }
 }
 fn invalid() -> io::Error {

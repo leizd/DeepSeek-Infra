@@ -83,6 +83,40 @@ message AgentNodeEffectMetadata {
   AgentArtifactReference public_event = 6;
   string outcome_sha256 = 7;
   uint64 outcome_length = 8;
+  AgentNodeOutcomeReceipt outcome_receipt = 9;
+}
+
+// This signed payload is constructed from a confirmed Rust journal row. It is
+// historical effect evidence, not permission to dispatch or a Go status flag.
+message AgentNodeOutcomeEvidence {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string operation_id = 3;
+  string run_id = 4;
+  string node_id = 5;
+  AgentRunExecutionPhase phase = 6;
+  AgentArtifactReference request = 7;
+  string plan_digest = 8;
+  int64 metadata_index = 9;
+  uint64 metadata_epoch = 10;
+  int64 writer_fencing_token = 11;
+  string created_at = 12;
+  string confirmed_at = 13;
+  string outcome_sha256 = 14;
+  uint64 outcome_length = 15;
+  AgentArtifactReference public_event = 16;
+  repeated AgentRunPlanNode provider_plan = 17;
+  string fleet_id = 18;
+  string environment = 19;
+}
+
+// Signature covers the canonical protobuf encoding of evidence with the fixed
+// deepseek-infra:agent-node-outcome-proof-v1 domain. Private keys stay in Rust.
+message AgentNodeOutcomeReceipt {
+  uint32 schema_version = 1;
+  AgentNodeOutcomeEvidence evidence = 2;
+  bytes signature = 3;
+  string signer_public_key = 4;
 }
 
 message QueryAgentNodeEffectRequest {

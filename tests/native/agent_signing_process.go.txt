@@ -440,7 +440,10 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 		t.Fatal("planner accepted a rebound claim")
 	}
 	query := &agentv1.QueryAgentNodeEffectRequest{Fence: claim.Fence, RunId: claim.RunId, NodeId: "leader"}
-	result, executeError := call(rpc, bearer, request)
+	production := nativeSigningWorker(t, ready, bearer, "localhost")
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+	result, executeError := production.ExecuteAgentPlan(ctx, request)
+	cancel()
 	if scenario == "planner-success" {
 		if executeError != nil || result.GetState() != "CONFIRMED" || result.GetPublicEvent().GetLength() == 0 ||
 			len(result.GetPublicEvent().GetSha256()) != 64 || result.GetFence().GetExecutionEpoch() != claim.Fence.ExecutionEpoch ||
@@ -452,51 +455,82 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 		if status.Code(executeError) != codes.Unavailable {
 			t.Fatalf("uncertain provider response admitted: %v", executeError)
 		}
-		// Read the existing Go reservation for its identity; Fresh cannot be spent again.
-		connection, err := grpc.NewClient(origin[len("http://"):], grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}
+	// Read the immutable Go reservation after dispatch; this never spends Fresh.
+	connection, err := grpc.NewClient(origin[len("http://"):], grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	ctx, cancel = context.WithTimeout(controlRPCContext(t, testInternalBearer), 5*time.Second)
+	admitted, err := agentv1.NewAgentNodeControlClient(connection).GetDispatch(ctx, &agentv1.GetAgentNodeDispatchRequest{
+		Fence: claim.Fence, RunId: claim.RunId, NodeId: "leader"})
+	cancel()
+	if err != nil || !admitted.Found || admitted.Intent == nil {
+		t.Fatalf("Go reservation missing: %v", err)
+	}
+	query.OperationId = admitted.Intent.OperationId
+	binding := worker.ControlSignerBinding{PublicKey: ready.PublicKey, FleetID: mutationFleetID, Environment: mutationEnvironment}
+	receiptHash, receiptLength := "", 0
+	if scenario == "planner-success" {
+		verified, err := worker.VerifyAgentNodeEffect(result, admitted.Intent, claim.WriterFencingToken, binding)
+		if err != nil || verified.Evidence().ProviderPlan[0].Id != "coder" {
+			t.Fatalf("production Go receipt verification failed: %v", err)
+		}
+		for _, alter := range []func(*agentv1.AgentNodeEffectMetadata){
+			func(x *agentv1.AgentNodeEffectMetadata) { x.OutcomeReceipt.Signature[0] ^= 1 },
+			func(x *agentv1.AgentNodeEffectMetadata) { x.PublicEvent.Length++ },
+			func(x *agentv1.AgentNodeEffectMetadata) { x.OutcomeReceipt.Evidence.Fence.ExecutionEpoch++ },
+		} {
+			tampered := proto.Clone(result).(*agentv1.AgentNodeEffectMetadata)
+			alter(tampered)
+			if _, err := worker.VerifyAgentNodeEffect(tampered, admitted.Intent, claim.WriterFencingToken, binding); !errors.Is(err, worker.ErrAgentNodeOutcomeInvalid) {
+				t.Fatalf("production Go accepted a forged result: %v", err)
+			}
+		}
+		raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(result.OutcomeReceipt)
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = connection.Close() })
-		ctx, cancel := context.WithTimeout(controlRPCContext(t, testInternalBearer), 5*time.Second)
-		intent, err := agentv1.NewAgentNodeControlClient(connection).GetDispatch(ctx, &agentv1.GetAgentNodeDispatchRequest{
-			Fence: claim.Fence, RunId: claim.RunId, NodeId: "leader"})
-		cancel()
-		if err != nil || !intent.Found || intent.Intent == nil {
-			t.Fatalf("lost-response reservation missing: %v", err)
-		}
-		query.OperationId = intent.Intent.OperationId
+		digest := sha256.Sum256(raw)
+		receiptHash, receiptLength = hex.EncodeToString(digest[:]), len(raw)
 	}
 	nativeSigningWrite(t, filepath.Join(directory, "restart-request.json"), map[string]bool{"restart": true})
 	var restarted nativeSigningWorkerReady
 	nativeSigningRead(t, filepath.Join(directory, "worker-restarted.json"), &restarted)
-	rpc = newClient(restarted)
-	ctx, cancel = context.WithTimeout(metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+bearer), 10*time.Second)
-	retained, err := rpc.QueryEffect(ctx, query)
+	production = nativeSigningWorker(t, restarted, bearer, "localhost")
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+	retained, err := production.QueryAgentNodeEffect(ctx, query)
 	cancel()
-	if err != nil || !retained.Found || retained.Effect == nil {
+	if err != nil || retained == nil {
 		t.Fatalf("historical Rust node proof missing after restart: %v", err)
 	}
 	if scenario == "planner-success" {
-		if !proto.Equal(result, retained.Effect) {
+		if !proto.Equal(result, retained) {
 			t.Fatal("restart changed the confirmed planner projection")
 		}
-		if replay, err := call(rpc, bearer, request); err != nil || !proto.Equal(replay, result) {
+		if _, err := worker.VerifyAgentNodeEffect(retained, admitted.Intent, claim.WriterFencingToken, binding); err != nil {
+			t.Fatal(err)
+		}
+		if replay, err := production.ExecuteAgentPlan(context.Background(), request); err != nil || !proto.Equal(replay, result) {
 			t.Fatalf("planner replay changed immutable evidence: %v", err)
 		}
 	} else {
-		if retained.Effect.State != "EFFECT_UNKNOWN" || retained.Effect.PublicEvent != nil {
+		if retained.State != "EFFECT_UNKNOWN" || retained.PublicEvent != nil || retained.OutcomeReceipt != nil {
 			t.Fatal("unknown effect was promoted to success")
 		}
-		if _, err := call(rpc, bearer, request); status.Code(err) != codes.FailedPrecondition || status.Convert(err).Message() != "EFFECT_UNKNOWN" {
+		if _, err := production.ExecuteAgentPlan(context.Background(), request); status.Code(err) != codes.FailedPrecondition || status.Convert(err).Message() != "EFFECT_UNKNOWN" {
 			t.Fatalf("unknown effect received a fresh dispatch: %v", err)
 		}
 	}
 	nativeSigningWrite(t, filepath.Join(directory, "process-result.json"), map[string]any{
 		"status": "PASS", "scenario": scenario, "operationId": query.OperationId, "actionId": claim.Fence.ActionId,
-		"executionEpoch": claim.Fence.ExecutionEpoch, "runId": claim.RunId, "state": retained.Effect.State,
-		"publicEvent": retained.Effect.PublicEvent, "outcomeSha256": retained.Effect.OutcomeSha256,
-		"outcomeLength": retained.Effect.OutcomeLength, "realUTC": true, "authenticatedProductionRPC": true,
+		"executionEpoch": claim.Fence.ExecutionEpoch, "runId": claim.RunId, "state": retained.State,
+		"publicEvent": retained.PublicEvent, "outcomeSha256": retained.OutcomeSha256,
+		"outcomeLength": retained.OutcomeLength, "realUTC": true, "authenticatedProductionRPC": true,
+		"productionGoNodeClient": true, "signedOutcomeVerified": scenario == "planner-success", "signedOutcomeTamperingDenied": scenario == "planner-success",
+		"unknownHasNoReceipt":  scenario == "planner-unknown" && retained.OutcomeReceipt == nil,
+		"outcomeReceiptSha256": receiptHash, "outcomeReceiptLength": receiptLength,
 		"goControlAuthorityAndReservation": true, "restartPreserved": true, "noDuplicateProviderSend": true,
 		"productionProviderQualified": false, "goPhaseSettlementQualified": false,
 	})

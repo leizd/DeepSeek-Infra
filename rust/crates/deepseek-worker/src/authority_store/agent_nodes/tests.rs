@@ -181,6 +181,140 @@ fn started(result: AgentNodeEffectStart) -> AgentNodeEffectPermit {
     }
 }
 
+fn planner_fixture() -> Fixture {
+    let mut fixture = Fixture::new();
+    let claim = fixture.response.claim.as_mut().unwrap();
+    claim.phase = 1;
+    claim.fence.as_mut().unwrap().action_id = format!(
+        "agent-exec-{:x}",
+        Sha256::digest(b"agent-run-execution-v1\nrun_rpc\nplan\n4\n")
+    );
+    let intent = fixture.response.intent.as_mut().unwrap();
+    intent.fence = claim.fence.clone();
+    intent.phase = 1;
+    intent.node_id = "leader".into();
+    intent.task = "plan".into();
+    intent.operation_id = agent_node_effect::node_operation_id(intent).unwrap();
+    let mut epoch: Value = serde_json::from_slice(&fixture.epoch).unwrap();
+    epoch["actionId"] = claim.fence.as_ref().unwrap().action_id.clone().into();
+    fixture.epoch = signed(epoch, b"deepseek-infra:control-authority-request-v1\0");
+    let mut grant: Value = serde_json::from_slice(&fixture.grant).unwrap();
+    grant["actionId"] = claim.fence.as_ref().unwrap().action_id.clone().into();
+    grant["payload"] = crate::agent_execution_grant::claim_payload(claim).unwrap();
+    fixture.grant = signed(grant, b"deepseek-infra:control-agent-execution-grant-v1\0");
+    fixture
+}
+
+#[test]
+fn outcome_evidence_comes_from_confirmed_journal_and_exact_sanitized_projection() {
+    let fixture = planner_fixture();
+    let mut worker = fixture.worker(true);
+    let permit = started(fixture.begin(&mut worker, true).unwrap());
+    let query = crate::QueryAgentNodeEffect {
+        operation_id: permit.operation_id.clone(),
+        fence: permit.fence.clone(),
+        run_id: "run_rpc".into(),
+        node_id: "leader".into(),
+    };
+    let event = json!({"type":"agent_plan","plan":{"tasks":[{"role":"coder","task":"implement","depends_on":["researcher"]}]}});
+    let mut artifacts = deepseek_policy::agent_run_data::ArtifactStore::open_native(
+        fixture.root.path(),
+        "python_disabled",
+    )
+    .unwrap();
+    let reference = artifacts.put(&event).unwrap();
+    let public = AgentArtifactReference {
+        sha256: reference.sha256,
+        length: reference.length,
+    };
+    let store = worker.authority_store.as_mut().unwrap();
+    assert!(
+        store
+            .agent_node_outcome_evidence(&query, public.clone(), &fixture.config)
+            .is_err()
+    );
+    let output =
+        authority_request::canonical_json_bytes(&json!({"runId":"run_rpc","publicEvent":event}))
+            .unwrap();
+    let outcome = store.confirm_agent_node(&permit, &output, NOW).unwrap();
+    let evidence = store
+        .agent_node_outcome_evidence(&query, public.clone(), &fixture.config)
+        .unwrap();
+    assert_eq!(
+        evidence.request,
+        fixture.response.intent.as_ref().unwrap().request
+    );
+    assert_eq!(evidence.writer_fencing_token, fixture.config.fencing_token);
+    assert_eq!(evidence.outcome_sha256, outcome.output_sha256);
+    assert_eq!(evidence.outcome_length, output.len() as u64);
+    assert_eq!(evidence.provider_plan[0].id, "coder");
+    assert_eq!(evidence.provider_plan[0].depends_on, ["researcher"]);
+    let mut rebound = public.clone();
+    rebound.length += 1;
+    assert!(
+        store
+            .agent_node_outcome_evidence(&query, rebound, &fixture.config)
+            .is_err()
+    );
+    let mut rebound = public.clone();
+    rebound.sha256 = "f".repeat(64);
+    assert!(
+        store
+            .agent_node_outcome_evidence(&query, rebound, &fixture.config)
+            .is_err()
+    );
+    drop(worker);
+    let recovered = fixture.worker(false);
+    assert_eq!(
+        recovered
+            .authority_store
+            .as_ref()
+            .unwrap()
+            .agent_node_outcome_evidence(&query, public, &fixture.config)
+            .unwrap(),
+        evidence
+    );
+}
+
+#[test]
+fn malformed_confirmed_projection_never_produces_outcome_evidence() {
+    for output in [
+        json!({}),
+        json!({"runId":"foreign","publicEvent":{"type":"agent_plan"}}),
+        json!({"runId":"run_rpc","publicEvent":{"type":"agent_chunk"}}),
+    ] {
+        let fixture = planner_fixture();
+        let mut worker = fixture.worker(true);
+        let permit = started(fixture.begin(&mut worker, true).unwrap());
+        let query = crate::QueryAgentNodeEffect {
+            operation_id: permit.operation_id.clone(),
+            fence: permit.fence.clone(),
+            run_id: "run_rpc".into(),
+            node_id: "leader".into(),
+        };
+        let store = worker.authority_store.as_mut().unwrap();
+        store
+            .confirm_agent_node(
+                &permit,
+                &authority_request::canonical_json_bytes(&output).unwrap(),
+                NOW,
+            )
+            .unwrap();
+        assert!(
+            store
+                .agent_node_outcome_evidence(
+                    &query,
+                    AgentArtifactReference {
+                        sha256: "a".repeat(64),
+                        length: 1
+                    },
+                    &fixture.config
+                )
+                .is_err()
+        );
+    }
+}
+
 #[test]
 fn provider_send_requires_the_live_stored_grant_and_dispatch_state() {
     let fixture = Fixture::new();

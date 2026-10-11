@@ -9,6 +9,7 @@ import (
 
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"google.golang.org/grpc"
@@ -27,6 +28,7 @@ type Client struct {
 	tlsSecured     bool
 	bearerAttached bool
 	signer         actionv1.ControlSignerClient
+	nodes          agentv1.AgentNodeWorkerClient
 }
 
 func New(rpc actionv1.WorkerClient) *Client {

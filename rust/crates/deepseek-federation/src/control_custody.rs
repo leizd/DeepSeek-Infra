@@ -34,6 +34,59 @@ impl ControlSigningKey {
         &self.binding
     }
 
+    /// A distinct typed purpose. Neither arbitrary bytes nor a caller-selected
+    /// signature domain can reach this API or the control-signing RPC.
+    pub fn sign_agent_node_outcome(
+        &self,
+        evidence: &deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeEvidence,
+    ) -> Result<Vec<u8>, FederationIdentityError> {
+        use prost::Message as _;
+        let invalid = || error("AGENT_NODE_OUTCOME_INVALID");
+        let hex = |s: &str| {
+            s.len() == 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        };
+        let reference = |r: Option<
+            &deepseek_protocol::generated::deepseek::agent::v1::AgentArtifactReference,
+        >| {
+            r.is_some_and(|r| hex(&r.sha256) && r.length > 0 && r.length <= 128 * 1024 * 1024)
+        };
+        let fence = evidence.fence.as_ref().ok_or_else(invalid)?;
+        if evidence.schema_version != 1
+            || deepseek_protocol::validate_fence(fence).is_err()
+            || evidence.operation_id.len() != 75
+            || !evidence.operation_id.starts_with("agent-node-")
+            || !hex(&evidence.operation_id[11..])
+            || evidence.run_id.is_empty()
+            || evidence.node_id.is_empty()
+            || !matches!(evidence.phase, 1 | 2)
+            || (evidence.phase == 1 && evidence.node_id != "leader")
+            || !reference(evidence.request.as_ref())
+            || !reference(evidence.public_event.as_ref())
+            || !hex(&evidence.plan_digest)
+            || evidence.metadata_index < 0
+            || evidence.metadata_epoch == 0
+            || evidence.writer_fencing_token <= 0
+            || evidence.created_at.is_empty()
+            || evidence.confirmed_at.is_empty()
+            || !hex(&evidence.outcome_sha256)
+            || evidence.outcome_length == 0
+            || evidence.outcome_length > 1024 * 1024
+            || self.binding["fleetId"] != evidence.fleet_id
+            || self.binding["environment"] != evidence.environment
+        {
+            return Err(invalid());
+        }
+        let bytes = evidence.encode_to_vec();
+        if bytes.len() > 1024 * 1024 {
+            return Err(invalid());
+        }
+        let mut message = b"deepseek-infra:agent-node-outcome-proof-v1\0".to_vec();
+        message.extend(bytes);
+        Ok(self.key.sign(&message).to_bytes().to_vec())
+    }
+
     // No arbitrary-byte signing API. Callers still validate the complete document
     // before issuance; the domain separator cannot be selected over RPC.
     pub fn sign_control_document(

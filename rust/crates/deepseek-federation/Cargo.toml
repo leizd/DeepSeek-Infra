@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 base64 = { workspace = true }
 deepseek-protocol = { path = "../deepseek-protocol" }
+prost.workspace = true
 deepseek-storage = { path = "../deepseek-storage" }
 ed25519-dalek = { workspace = true, features = ["pkcs8", "alloc"] }
 aes-gcm = { workspace = true }

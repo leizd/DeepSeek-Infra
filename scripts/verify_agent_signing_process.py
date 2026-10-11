@@ -382,7 +382,21 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                         raise ValueError("Confirmed provider bytes, immutable outcome and Rust public projection do not match")
                 elif rows[0][2:] != (None, None) or db.execute("SELECT count(*) FROM artifacts").fetchone()[0] != 1:
                     raise ValueError("An uncertain HTTP effect acquired a successful result body")
-            result.update(actualHTTPRequestCount=len(received), httpFenceVerified=True, bodyCustodyVerified=True,
+            signatures = state_root / "rust-worker/control-signatures.sqlite3"
+            with sqlite3.connect(signatures.as_uri() + "?mode=ro", uri=True) as db:
+                if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    raise ValueError("Rust outcome signature journal integrity failed")
+                documents = [row[0] for row in db.execute("SELECT document FROM signatures")]
+            if not result.get("productionGoNodeClient"):
+                raise ValueError("Planner probe bypassed the production Go node client")
+            if scenario == "planner-success":
+                receipts = [body for body in documents if hashlib.sha256(body).hexdigest() == result["outcomeReceiptSha256"]]
+                if not result.get("signedOutcomeVerified") or not result.get("signedOutcomeTamperingDenied") or len(receipts) != 1 or \
+                        len(receipts[0]) != result["outcomeReceiptLength"] or len(documents) != 3:
+                    raise ValueError("Confirmed Rust result lacks an immutable signature verified by production Go")
+            elif not result.get("unknownHasNoReceipt") or result.get("signedOutcomeVerified") or len(documents) != 2:
+                raise ValueError("Uncertain effect acquired a signature or successful Go outcome")
+            result.update(outcomeSignatureJournalVerified=True, actualHTTPRequestCount=len(received), httpFenceVerified=True, bodyCustodyVerified=True,
                 inputBodySeededByOfflineOracle=True, outputBodyWriter="rust", provider="controlled-loopback-http-fixture")
             results.append(result)
             (output / f"{scenario}-result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

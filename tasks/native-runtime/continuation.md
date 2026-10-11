@@ -1,3 +1,9 @@
+## 2026-10-11: Signed native node outcomes (cloud qualification pending)
+
+Rust now derives typed, purpose-separated outcome receipts from its confirmed node journal and immutable sanitized public artifact, and persists the signature before returning it. The production Go worker client verifies the signature, pinned fleet/environment/key, admitted fence and node scope, original writer token, request and result digests, and exact public reference. Historical results grant no fresh dispatch or phase transition; EFFECT_UNKNOWN carries no successful receipt. New unit and actual Go/Rust/HTTP process checks cover tampering, restart, immutable receipt recovery and interrupted responses. Native builds and all coverage gates remain cloud-only.
+
+The parent revision `d39e4689f26ffd301516b4f8a7ed81408ddfbc6e` passed 1446 Rust tests and 81.9371% workspace line coverage; its full CI is still running. This receipt snapshot is not yet cloud-qualified or applied to the root checkout. Go atomic phase/DAG settlement, task/tool/provider effects, public Agent flows, retained feature/platform workloads and zero-Python runtime proof remain unfinished. Full migration readiness remains **NOT_READY**.
+
 <!-- native-planner-worker-20261011 -->
 The current isolated candidate adds authenticated typed planner execution and historical node queries to the production Rust worker. It reuses the native request policy, reads the immutable request body by its bound Rust artifact reference, checks the stored signed grant and installed epoch immediately before one bounded HTTP exchange, and persists received-result evidence before publishing a Rust-owned public-event reference. The planner path reads budget data without schema/pragma writes. It never turns an unknown effect into a fresh dispatch.
 

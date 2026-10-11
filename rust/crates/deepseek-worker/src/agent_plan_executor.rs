@@ -71,6 +71,42 @@ pub fn load_agent_plan_executor_from_env() -> Result<Option<AgentPlanExecutor>, 
 }
 
 impl WorkerRpcService {
+    async fn publish_attested_plan(
+        &self,
+        executor: &AgentPlanExecutor,
+        outcome: AgentNodeEffectOutcome,
+        run_id: &str,
+    ) -> Result<AgentNodeEffectMetadata, Status> {
+        let query = QueryAgentNodeEffect {
+            operation_id: outcome.operation_id.clone(),
+            fence: outcome.fence.clone(),
+            run_id: run_id.into(),
+            node_id: outcome.node_id.clone(),
+        };
+        let mut metadata = executor.publish_known(outcome, run_id).await?;
+        // Lock order matches the existing signer RPC: worker, then custody.
+        let worker = self.worker.lock().await;
+        let config = worker.agent_node_authority()?;
+        let evidence = worker
+            .authority_store
+            .as_ref()
+            .ok_or_else(unavailable)?
+            .agent_node_outcome_evidence(
+                &query,
+                metadata.public_event.clone().ok_or_else(unavailable)?,
+                &config,
+            )?;
+        let receipt = self
+            .control_signer
+            .as_ref()
+            .ok_or_else(unavailable)?
+            .lock()
+            .await
+            .sign_node_outcome(evidence)?;
+        metadata.outcome_receipt = Some(receipt);
+        Ok(metadata)
+    }
+
     pub fn with_agent_plan_executor(mut self, executor: AgentPlanExecutor) -> Self {
         self.agent_plan_executor = Some(Arc::new(executor));
         self
@@ -180,6 +216,7 @@ impl AgentPlanExecutor {
             }),
             outcome_sha256: outcome.output_sha256,
             outcome_length: outcome.output.len() as u64,
+            outcome_receipt: None,
         })
     }
 }
@@ -252,8 +289,8 @@ impl AgentNodeWorker for WorkerRpcService {
         let result = self.begin_agent_node_effect(begin).await?;
         let permit = match result {
             AgentNodeEffectStart::Confirmed(outcome) => {
-                return executor
-                    .publish_known(outcome, &claim.run_id)
+                return self
+                    .publish_attested_plan(executor, outcome, &claim.run_id)
                     .await
                     .map(Response::new);
             }
@@ -277,8 +314,8 @@ impl AgentNodeWorker for WorkerRpcService {
             self.confirm_agent_node_effect(&permit, &envelope).await
         }.await;
         match sent {
-            Ok(outcome) => executor
-                .publish_known(outcome, &claim.run_id)
+            Ok(outcome) => self
+                .publish_attested_plan(executor, outcome, &claim.run_id)
                 .await
                 .map(Response::new),
             Err(error) => {
@@ -325,11 +362,9 @@ impl AgentNodeWorker for WorkerRpcService {
                 .ok_or_else(unavailable)?
                 .agent_node_outcome(&selector)?
                 .ok_or_else(unavailable)?;
+            let executor = self.agent_plan_executor.as_ref().ok_or_else(unavailable)?;
             let effect = self
-                .agent_plan_executor
-                .as_ref()
-                .ok_or_else(unavailable)?
-                .publish_known(outcome, &selector.run_id)
+                .publish_attested_plan(executor, outcome, &selector.run_id)
                 .await?;
             return Ok(Response::new(QueryAgentNodeEffectResponse {
                 found: true,
@@ -347,6 +382,7 @@ impl AgentNodeWorker for WorkerRpcService {
                 public_event: None,
                 outcome_sha256: effect.output_sha256.unwrap_or_default(),
                 outcome_length: effect.output_length.unwrap_or(0),
+                outcome_receipt: None,
             }),
         }))
     }
