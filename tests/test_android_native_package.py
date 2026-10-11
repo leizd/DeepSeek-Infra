@@ -193,6 +193,39 @@ def test_native_bundle_failed_restore_keeps_previous_assets_for_recovery(
     assert sibling.read_bytes() == b"unrelated output"
 
 
+@pytest.mark.parametrize("winerror", [5, 32, None])
+def test_native_bundle_refused_retirement_does_not_leak_staged_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, winerror: int | None,
+) -> None:
+    test_native_bundle_omits_python_and_preserves_input_files(tmp_path)
+    root, output = tmp_path / "repo", tmp_path / "output"
+    destination = output / "assets/native"
+    prior = {path.relative_to(destination).as_posix(): path.read_bytes() for path in destination.rglob("*") if path.is_file()}
+    sibling = output / "assets/retained.txt"
+    sibling.write_bytes(b"unrelated output")
+    (root / "static/ui/index.html").write_text("<html>replacement</html>", encoding="utf-8")
+    original_rename = Path.rename
+    refused = 0
+    waits: list[float] = []
+
+    def deny_retirement(source: Path, target: Path | str) -> Path:
+        nonlocal refused
+        if source == destination:
+            refused += 1
+            raise publication_lock(winerror)
+        return original_rename(source, target)
+
+    monkeypatch.setattr(Path, "rename", deny_retirement)
+    monkeypatch.setattr("scripts.build_android_native.time.sleep", waits.append)
+    with pytest.raises(PermissionError):
+        stage_bundle(root, output, {"arm64-v8a": {"rust": tmp_path / "rust", "go": tmp_path / "go"}})
+    assert refused == (4 if winerror is not None else 1)
+    assert len(waits) == (3 if winerror is not None else 0) and sum(waits) <= 0.301
+    assert {path.relative_to(destination).as_posix(): path.read_bytes() for path in destination.rglob("*") if path.is_file()} == prior
+    assert sibling.read_bytes() == b"unrelated output"
+    assert not list(output.glob(".native-stage-*"))
+
+
 def test_native_source_identity_rejects_a_parent_repository(tmp_path: Path) -> None:
     subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=Native fixture", "-c", "user.email=fixture@localhost",

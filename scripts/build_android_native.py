@@ -167,6 +167,14 @@ def stage_bundle(root: Path, output: Path, binaries: dict[str, dict[str, Path]])
             raise
         preserve_staging = False
     finally:
+        if preserve_staging:
+            # A refused retirement leaves the prior generation at destination;
+            # only staged copies remain to clean. Use lstat so an access error
+            # cannot be mistaken for absence and delete a recoverable generation.
+            try:
+                (staging / "previous").lstat()
+            except FileNotFoundError:
+                preserve_staging = False
         if not preserve_staging:
             shutil.rmtree(staging)
     return manifest
