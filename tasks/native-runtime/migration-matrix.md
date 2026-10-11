@@ -4,6 +4,42 @@
 [中文](../../README.md) / [English](../../README.en.md)
 <!-- docs-language-switcher:end -->
 
+## 2026-10-11 exact cloud results and source-contract/package repair
+
+The authorized twelve-file tree is uploaded as `e416cf59` / tree `1f200669`.
+Rust run `38105173434` passes both required jobs: 1416 tests, one original Redis
+ignore, all 15 crates, and 76311/93271 = 81.816427% line coverage at the unchanged
+80% floor. The two semantic-hash regressions pass. The actual Go/Rust signing
+process cases and the five-delegate layered sidecar semantic benchmark pass;
+latency measurements remain informational under the existing workflow settings.
+
+Full CI run `38105173957` finishes with 34 successful jobs and three failed
+Python test jobs. All fourteen Go/Docker gates pass; default coverage is
+10277/10816 = 95.016642% and Android coverage is 10103/10626 = 95.078110%.
+Each Python version fails the same four source-contract/inventory cases while
+reported coverage remains 95.51%-95.58%, above the original 95% floor. Existing
+Evidence/RC jobs passing for this 4.8.0 workflow do not prove native 5.0 readiness.
+Exact outcomes, report hashes and retained failures are in
+`artifacts/native-20261011-full-ci-repair-preview/full-ci-evidence.json`.
+
+The follow-up candidate derives Android test versions from VERSION, verifies
+both platform SQLite connectors and the complete offline frontend/native build
+chain, and regenerates the inventory's two missing Python-owned domains without
+changing authority. Repeated Windows asset-publication refusals also require a
+bounded same-move retry: persistent denial restores prior resources, and a
+failed restore retains them for explicit recovery. The first Windows failures
+and diagnostic results remain preserved; no permission or registry change occurs.
+The five affected suites pass all 36 offline/source tests and mypy 2.4.0 passes
+all 959 source files in Linux mode. This new source remains unqualified by cloud
+CI until its reviewed snapshot receives specific upload authorization.
+
+Rust, Go and Docker builds/caches stay in GitHub Actions, and only reports are
+downloaded. The earlier authorized cache cleanup is complete with documented
+bounded remainders; no further Docker start, broad prune or production-data
+operation is part of this repair. Actual Agent node/provider/tool execution,
+durable effect settlement/reconciliation, and complete platform/zero-Python
+qualification remain required. Full migration and readiness stay **NOT_READY**.
+
 **Current authorization inputs — 2026-10-10:** the new typed Go Agent
 authorization RPC calls production Rust custody after durable Go admission and
 rechecks current authority before returning. Focused real-store regressions

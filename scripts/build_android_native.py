@@ -12,6 +12,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +68,20 @@ def copy_file(source: Path, destination: Path) -> None:
     temporary.replace(destination)
 
 
+def rename_bundle_directory(source: Path, destination: Path) -> None:
+    # Windows can temporarily refuse a newly written directory move. Retry only
+    # the same unpublished move, with a 300 ms total wait and no permission changes.
+    for attempt in range(4):
+        try:
+            source.rename(destination)
+            return
+        except PermissionError as error:
+            if (getattr(error, "winerror", None) not in (5, 32) or attempt == 3
+                    or not source.exists() or destination.exists()):
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+
 def source_identity(root: Path) -> dict[str, Any]:
     def git(*args: str) -> bytes:
         return subprocess.check_output(["git", "-C", str(root), *args])
@@ -109,10 +124,11 @@ def stage_bundle(root: Path, output: Path, binaries: dict[str, dict[str, Path]])
     # old Vite chunks in the APK even though they are absent from the new manifest.
     # The temporary directory is under this explicit build output; only its own
     # staged/retired resources are cleaned, and sibling outputs are preserved.
-    with tempfile.TemporaryDirectory(prefix=".native-stage-", dir=output) as temporary:
-        staging = Path(temporary).resolve()
-        if not staging.is_relative_to(output):
-            raise ValueError("Native staging directory escapes build output")
+    staging = Path(tempfile.mkdtemp(prefix=".native-stage-", dir=output)).resolve()
+    if not staging.is_relative_to(output):
+        raise ValueError("Native staging directory escapes build output")
+    preserve_staging = False
+    try:
         assets = staging / "native"
         for dirname in ("static", "skills"):
             directory = root / dirname
@@ -133,13 +149,26 @@ def stage_bundle(root: Path, output: Path, binaries: dict[str, dict[str, Path]])
         destination.parent.mkdir(parents=True, exist_ok=True)
         previous = staging / "previous"
         if destination.exists():
-            destination.rename(previous)
+            # Keep the prior generation through interruption or failed restore.
+            preserve_staging = True
+            rename_bundle_directory(destination, previous)
         try:
-            assets.rename(destination)
-        except OSError:
+            rename_bundle_directory(assets, destination)
+        except BaseException as publication_error:
             if previous.exists():
-                previous.rename(destination)
+                try:
+                    rename_bundle_directory(previous, destination)
+                except OSError as restore_error:
+                    raise RuntimeError(
+                        f"Native asset publication failed ({publication_error}); "
+                        f"prior assets remain for recovery at {previous}"
+                    ) from restore_error
+            preserve_staging = False
             raise
+        preserve_staging = False
+    finally:
+        if not preserve_staging:
+            shutil.rmtree(staging)
     return manifest
 
 

@@ -11,6 +11,9 @@ import pytest
 from scripts.build_android_native import inspect_executable, source_identity, stage_bundle
 
 
+VERSION = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+
+
 def elf(path: Path, *, machine: int = 183, interpreter: str = "/system/bin/linker64", alignment: int = 16384) -> Path:
     interp = interpreter.encode() + b"\0" if interpreter else b""
     ident = b"\x7fELF\x02\x01\x01" + bytes(9)
@@ -47,11 +50,11 @@ def test_native_bundle_omits_python_and_preserves_input_files(tmp_path: Path) ->
     golden = root / "evals/golden/skills/skill_eval_cases.jsonl"
     golden.parent.mkdir(parents=True)
     golden.write_text('{"caseId":"tutor-golden","skillId":"tutor"}\n', encoding="utf-8")
-    (root / "VERSION").write_text("4.8.0\n", encoding="utf-8")
+    (root / "VERSION").write_text(f"{VERSION}\n", encoding="utf-8")
     rust = elf(tmp_path / "rust")
     go = elf(tmp_path / "go")
     manifest = stage_bundle(root, output, {"arm64-v8a": {"rust": rust, "go": go}})
-    assert manifest["version"] == "4.8.0"
+    assert manifest["version"] == VERSION
     assert {entry["path"] for entry in manifest["assets"]} == {
         "skills/builtin/example.json", "static/ui/index.html", "static/ui/.vite/manifest.json",
         "evals/golden/skills/skill_eval_cases.jsonl",
@@ -68,7 +71,7 @@ def test_native_bundle_requires_the_runtime_evaluation_corpus_before_staging(tmp
     (root / "static/ui").mkdir(parents=True)
     (root / "static/ui/index.html").write_text("<html>React</html>", encoding="utf-8")
     (root / "skills").mkdir()
-    (root / "VERSION").write_text("4.8.0\n", encoding="utf-8")
+    (root / "VERSION").write_text(f"{VERSION}\n", encoding="utf-8")
     rust, go = elf(tmp_path / "rust"), elf(tmp_path / "go")
     with pytest.raises(ValueError, match="evaluation corpus"):
         stage_bundle(root, output, {"arm64-v8a": {"rust": rust, "go": go}})
@@ -85,7 +88,7 @@ def test_native_bundle_rebuild_replaces_stale_assets_and_preserves_siblings(tmp_
     golden = root / "evals/golden/skills/skill_eval_cases.jsonl"
     golden.parent.mkdir(parents=True)
     golden.write_text('{"caseId":"one"}\n', encoding="utf-8")
-    (root / "VERSION").write_text("4.8.0\n", encoding="utf-8")
+    (root / "VERSION").write_text(f"{VERSION}\n", encoding="utf-8")
     rust, go = elf(tmp_path / "rust"), elf(tmp_path / "go")
     binaries = {"arm64-v8a": {"rust": rust, "go": go}}
     stage_bundle(root, output, binaries)
@@ -101,13 +104,102 @@ def test_native_bundle_rebuild_replaces_stale_assets_and_preserves_siblings(tmp_
     assert sibling.read_bytes() == b"unrelated output"
 
 
+def publication_lock(winerror: int | None) -> PermissionError:
+    error = PermissionError(13, "asset publication is locked")
+    if winerror is not None:
+        setattr(error, "winerror", winerror)
+    return error
+
+
+@pytest.mark.parametrize("winerror", [5, 32])
+def test_native_bundle_recovers_a_transient_windows_publication_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, winerror: int,
+) -> None:
+    original_rename = Path.rename
+    injected = False
+    waits: list[float] = []
+
+    def locked_once(source: Path, destination: Path | str) -> Path:
+        nonlocal injected
+        if source.name == "native" and source.parent.name.startswith(".native-stage-") and not injected:
+            injected = True
+            raise publication_lock(winerror)
+        return original_rename(source, destination)
+
+    monkeypatch.setattr(Path, "rename", locked_once)
+    monkeypatch.setattr("scripts.build_android_native.time.sleep", waits.append)
+    # Verify the existing first-build/rebuild manifest, stale asset and sibling
+    # behavior through a refused move, rather than merely counting retries.
+    test_native_bundle_rebuild_replaces_stale_assets_and_preserves_siblings(tmp_path)
+    assert injected and waits[0] == 0.05
+
+
+@pytest.mark.parametrize("winerror", [5, None])
+def test_native_bundle_persistent_publication_refusal_restores_previous_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, winerror: int | None,
+) -> None:
+    test_native_bundle_omits_python_and_preserves_input_files(tmp_path)
+    root, output = tmp_path / "repo", tmp_path / "output"
+    destination = output / "assets/native"
+    prior = {path.relative_to(destination).as_posix(): path.read_bytes() for path in destination.rglob("*") if path.is_file()}
+    sibling = output / "assets/retained.txt"
+    sibling.write_bytes(b"unrelated output")
+    (root / "static/ui/index.html").write_text("<html>replacement</html>", encoding="utf-8")
+    original_rename = Path.rename
+    refused = 0
+    waits: list[float] = []
+
+    def deny_publication(source: Path, target: Path | str) -> Path:
+        nonlocal refused
+        if source.name == "native" and source.parent.name.startswith(".native-stage-"):
+            refused += 1
+            raise publication_lock(winerror)
+        return original_rename(source, target)
+
+    monkeypatch.setattr(Path, "rename", deny_publication)
+    monkeypatch.setattr("scripts.build_android_native.time.sleep", waits.append)
+    with pytest.raises(PermissionError):
+        stage_bundle(root, output, {"arm64-v8a": {"rust": tmp_path / "rust", "go": tmp_path / "go"}})
+    assert refused == (4 if winerror is not None else 1)
+    assert len(waits) == (3 if winerror is not None else 0) and sum(waits) <= 0.301
+    assert {path.relative_to(destination).as_posix(): path.read_bytes() for path in destination.rglob("*") if path.is_file()} == prior
+    assert sibling.read_bytes() == b"unrelated output"
+    assert not list(output.glob(".native-stage-*"))
+
+
+def test_native_bundle_failed_restore_keeps_previous_assets_for_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_native_bundle_omits_python_and_preserves_input_files(tmp_path)
+    root, output = tmp_path / "repo", tmp_path / "output"
+    destination = output / "assets/native"
+    prior = {path.relative_to(destination).as_posix(): path.read_bytes() for path in destination.rglob("*") if path.is_file()}
+    sibling = output / "assets/retained.txt"
+    sibling.write_bytes(b"unrelated output")
+    original_rename = Path.rename
+
+    def deny_publish_and_restore(source: Path, target: Path | str) -> Path:
+        if source.parent.name.startswith(".native-stage-") and source.name in {"native", "previous"}:
+            raise publication_lock(5)
+        return original_rename(source, target)
+
+    monkeypatch.setattr(Path, "rename", deny_publish_and_restore)
+    monkeypatch.setattr("scripts.build_android_native.time.sleep", lambda _: None)
+    with pytest.raises(RuntimeError, match="prior assets remain for recovery"):
+        stage_bundle(root, output, {"arm64-v8a": {"rust": tmp_path / "rust", "go": tmp_path / "go"}})
+    retired = list(output.glob(".native-stage-*/previous"))
+    assert len(retired) == 1 and not destination.exists()
+    assert {path.relative_to(retired[0]).as_posix(): path.read_bytes() for path in retired[0].rglob("*") if path.is_file()} == prior
+    assert sibling.read_bytes() == b"unrelated output"
+
+
 def test_native_source_identity_rejects_a_parent_repository(tmp_path: Path) -> None:
     subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=Native fixture", "-c", "user.email=fixture@localhost",
                     "commit", "--quiet", "--allow-empty", "-m", "Fixture"], check=True)
     copied_source = tmp_path / "copied-source"
     copied_source.mkdir()
-    (copied_source / "VERSION").write_text("4.8.0\n", encoding="utf-8")
+    (copied_source / "VERSION").write_text(f"{VERSION}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="Git working tree root"):
         source_identity(copied_source)
 
@@ -115,7 +207,7 @@ def test_native_source_identity_rejects_a_parent_repository(tmp_path: Path) -> N
 def test_native_source_identity_binds_runtime_contracts_and_evaluation_inputs(tmp_path: Path) -> None:
     subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
     fixtures = {
-        "VERSION": "4.8.0\n", "rust/src.rs": "fn main() {}\n",
+        "VERSION": f"{VERSION}\n", "rust/src.rs": "fn main() {}\n",
         "release/native_runtime_ownership_v1.json": "{}\n", "compat/frozen.json": "{}\n",
         "evals/golden/skills/skill_eval_cases.jsonl": '{"caseId":"one","skillId":"tutor"}\n',
     }
