@@ -382,7 +382,7 @@ func TestAgentNodeDispatchRefusesBrokenRunLeaseAndResourceEvidence(t *testing.T)
 			case "expired-action-lease":
 				_, err = control.db.Exec("UPDATE action_leases SET lease_until=? WHERE action_id=?", control.now(), input.ActionID)
 			case "missing-resource":
-				_, err = control.db.Exec("DELETE FROM resource_leases WHERE action_id=?", input.ActionID)
+				_, err = control.db.Exec("DELETE FROM action_resource_leases WHERE action_id=?", input.ActionID)
 			case "missing-run":
 				_, err = control.db.Exec("DELETE FROM agent_runs WHERE id=?", input.RunID)
 			case "metadata-epoch":
@@ -403,14 +403,23 @@ func TestAgentNodeDispatchRefusesBrokenRunLeaseAndResourceEvidence(t *testing.T)
 			if _, err := control.BeginAgentNodeDispatch(input); err == nil {
 				t.Fatalf("broken %s evidence admitted a dispatch", scenario)
 			}
-			after, found, err := control.Get("action", input.ActionID)
-			if err != nil || !found || after.Revision != before.Revision || after.State != before.State ||
-				!bytes.Equal(after.Payload, before.Payload) || countControlEvents(t, control) != count {
-				t.Fatalf("refused %s changed the action or its history: %+v %v", scenario, after, err)
+			// Corrupting metadata authority deliberately makes the public reader
+			// fail closed. Inspect raw row bytes only to prove this refused write
+			// did not change the previously validated action; do not authorize it.
+			var revision int64
+			var epoch uint64
+			var state string
+			var payload []byte
+			err = control.db.QueryRow("SELECT revision,execution_epoch,state,payload_json FROM action_journal WHERE id=?", input.ActionID).
+				Scan(&revision, &epoch, &state, &payload)
+			if err != nil || revision != before.Revision || epoch != before.ExecutionEpoch || state != before.State ||
+				!bytes.Equal(payload, before.Payload) || countControlEvents(t, control) != count {
+				t.Fatalf("refused %s changed the action or its history: %v", scenario, err)
 			}
 			if input.OperationID != "" {
-				if _, exists, err := control.ReadOperatorMutation(input.OperationID); err != nil || exists {
-					t.Fatalf("refused %s left an applied receipt: %v %v", scenario, exists, err)
+				var receipts int
+				if err := control.db.QueryRow("SELECT COUNT(*) FROM control_operator_mutations WHERE operation_id=?", input.OperationID).Scan(&receipts); err != nil || receipts != 0 {
+					t.Fatalf("refused %s left an applied receipt: %d %v", scenario, receipts, err)
 				}
 			}
 		})
