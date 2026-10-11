@@ -169,11 +169,22 @@ func (store *Control) BeginAgentNodeDispatch(input AgentNodeDispatchRequest) (Ag
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	tx, context, err := store.beginOperatorMutationTx(input.OperationID, input.ActionID, input.Actor, "action")
+	// The generic operator action channel stays fenced. As with phase admission,
+	// enter through Agent authority and require the action authority/lease here.
+	tx, context, err := store.beginOperatorMutationTx(input.OperationID, input.RunID, input.Actor, "agent_run")
 	if err != nil {
 		return AgentNodeDispatchResult{}, err
 	}
 	defer tx.Rollback()
+	actionAuthority, err := readCutoverTx(tx, "action")
+	if err != nil {
+		return AgentNodeDispatchResult{}, err
+	}
+	if !IsDomainGoAuthoritative(actionAuthority.State) {
+		return AgentNodeDispatchResult{}, ErrCutoverNotAuthorized
+	}
+	// The receipt describes the action row, using that domain's actual cutover.
+	context.cutover = actionAuthority
 	lease, err := store.agentNodeLeaseTx(tx, input, context.now)
 	if err != nil {
 		return AgentNodeDispatchResult{}, err

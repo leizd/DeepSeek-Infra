@@ -20,13 +20,15 @@ def test_native_contract_check_passes() -> None:
     report = check_all()
     assert report["ok"] is True
     assert report["go"] == "1.27.1"
-    # Include the browser and platform OCR contracts in the complete inventory.
-    assert report["proto_files"] == 10
+    # Include browser, platform OCR and typed Agent node dispatch contracts.
+    assert report["proto_files"] == 11
     assert (ROOT / "proto/browser/v1/browser.proto").is_file()
     assert (ROOT / "proto/platform/v1/ocr.proto").is_file()
-    # The authenticated AgentChatScheduler adds an agent gRPC service binding.
-    assert report["generated_outputs"] == 17
+    assert (ROOT / "proto/agent/v1/agent_node.proto").is_file()
+    # Agent run and node services each retain their generated gRPC binding.
+    assert report["generated_outputs"] == 19
     assert (ROOT / "go/internal/protocol/agentv1/agent_grpc.pb.go").is_file()
+    assert (ROOT / "go/internal/protocol/agentv1/agent_node_grpc.pb.go").is_file()
 
 
 def test_go_shadow_process_cannot_mutate() -> None:

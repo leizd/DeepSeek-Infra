@@ -24,6 +24,54 @@ func agentNodeDispatchFixture(t *testing.T) (*Control, AgentNodeDispatchRequest)
 		Owner: lease.Owner, ClaimToken: lease.ClaimToken}
 }
 
+func TestAgentNodeDispatchKeepsGenericActionChannelFenced(t *testing.T) {
+	control, input := agentNodeDispatchFixture(t)
+	authority, err := control.GetCutover("action")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := control.BeginAgentNodeDispatch(input)
+	if err != nil || !result.Fresh || result.Mutation.Domain != "action" ||
+		result.Mutation.RecordID != input.ActionID || result.Mutation.CutoverRevision != authority.Revision ||
+		result.Mutation.FencingToken != authority.FencingToken {
+		t.Fatalf("typed Agent dispatch lost action authority provenance: %+v %v", result, err)
+	}
+	before := countControlEvents(t, control)
+	_, err = control.ApplyOperatorMutation(OperatorMutation{OperationID: "generic-agent-action-write", ActionID: input.ActionID,
+		Actor: input.Actor, Record: result.Admission.Record})
+	if !errors.Is(err, ErrMutationRequestDomainFenced) || countControlEvents(t, control) != before {
+		t.Fatalf("typed Agent admission opened the generic action write channel: %v", err)
+	}
+}
+
+func TestAgentNodeDispatchDeniesEitherLostAuthorityWithoutPartialIntent(t *testing.T) {
+	for _, domain := range []string{"agent_run", "action"} {
+		t.Run(domain, func(t *testing.T) {
+			control, input := agentNodeDispatchFixture(t)
+			if _, err := control.db.Exec("UPDATE control_cutover SET state=? WHERE domain=?", CutoverShadow, domain); err != nil {
+				t.Fatal(err)
+			}
+			before := countControlEvents(t, control)
+			if _, err := control.BeginAgentNodeDispatch(input); !errors.Is(err, ErrCutoverNotAuthorized) {
+				t.Fatalf("lost %s authority still admitted a provider dispatch: %v", domain, err)
+			}
+			if countControlEvents(t, control) != before {
+				t.Fatal("refused dispatch wrote action history")
+			}
+			if _, found, err := control.ReadOperatorMutation(input.OperationID); err != nil || found {
+				t.Fatalf("refused dispatch retained an applied receipt: %v %v", found, err)
+			}
+			if _, found, err := control.AgentNodeDispatch(input.ActionID, input.NodeID); err != nil || found {
+				t.Fatalf("refused dispatch retained a partial intent: %v %v", found, err)
+			}
+			resources, err := control.GetResourceLeases(input.ActionID)
+			if err != nil || len(resources) != 1 {
+				t.Fatalf("refused dispatch released the live phase resource: %+v %v", resources, err)
+			}
+		})
+	}
+}
+
 func TestAgentNodeDispatchLostResponseReplayIsNeverFresh(t *testing.T) {
 	control, input := agentNodeDispatchFixture(t)
 	count := countControlEvents(t, control)
