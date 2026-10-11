@@ -6,6 +6,7 @@ import argparse
 from datetime import datetime, timedelta, timezone
 import base64
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
 import json
 import os
@@ -18,6 +19,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -232,6 +234,172 @@ def process_cases(binary: Path, go_environment: dict[str, str], worker: Path, pr
     return results
 
 
+def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: Path, provisioner: Path,
+                          scratch: Path, output: Path) -> list[dict]:
+    """Controlled HTTP fixtures exercise the production executable, not a delegate.
+
+    Python seeds only isolated oracle input bodies. Rust validates those exact
+    references and is the sole writer of node outcomes and public result bodies.
+    This does not prove live upstream availability or Go phase/DAG settlement.
+    """
+    custody = scratch / "rust-planner-custody"
+    custody.mkdir(mode=0o700)
+    password, bundle = custody / "passphrase", custody / "bundle.json"
+    password.write_bytes(secrets.token_urlsafe(48).encode())
+    password.chmod(0o600)
+    provision_environment = child_environment(dict(os.environ))
+    provision_environment.update({"DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE": bundle.as_posix(),
+        "DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE": password.as_posix(),
+        "DEEPSEEK_WORKER_AUTHORITY_FLEET_ID": "fleet-a", "DEEPSEEK_WORKER_AUTHORITY_ENVIRONMENT": "production"})
+    provisioned = subprocess.run([provisioner.as_posix()], cwd=ROOT, env=provision_environment,
+                                capture_output=True, timeout=60, check=False)
+    (output / "planner-provisioning.json").write_text(json.dumps({"exitCode": provisioned.returncode,
+        "stdoutSha256": hashlib.sha256(provisioned.stdout).hexdigest(),
+        "stderrSha256": hashlib.sha256(provisioned.stderr).hexdigest()}) + "\n", encoding="utf-8")
+    if provisioned.returncode:
+        raise RuntimeError("Planner custody provisioning failed; private output is not retained")
+    binding = validate_public_binding(json.loads(provisioned.stdout))
+    ca_file, cert_file, key_file = create_tls(custody)
+    results = []
+    for scenario in ["planner-success", "planner-unknown"]:
+        case = scratch / scenario
+        case.mkdir()
+        artifact_root = case / "rust-artifacts"
+        artifact_root.mkdir(mode=0o700)
+        request_body = {"requestPayload": {"messages": [{"role": "user", "content": "Prepare an isolated verification plan"}]}}
+        request_bytes = json.dumps(request_body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        reference = {"sha256": hashlib.sha256(request_bytes).hexdigest(), "length": len(request_bytes)}
+        reference_file = case / "artifact-reference.json"
+        reference_file.write_text(json.dumps(reference) + "\n", encoding="utf-8")
+        catalog = artifact_root / "objects-v1.sqlite"
+        with sqlite3.connect(catalog) as db:
+            db.executescript("PRAGMA application_id=1146306882; PRAGMA user_version=1; "
+                "CREATE TABLE artifacts(sha256 TEXT PRIMARY KEY CHECK(length(sha256)=64), "
+                "length INTEGER NOT NULL CHECK(length>0 AND length<=134217728), "
+                "bytes BLOB NOT NULL CHECK(length(bytes)=length)) STRICT; "
+                "CREATE TRIGGER artifacts_no_update BEFORE UPDATE ON artifacts BEGIN SELECT RAISE(ABORT,'immutable artifact'); END; "
+                "CREATE TRIGGER artifacts_no_delete BEFORE DELETE ON artifacts BEGIN SELECT RAISE(ABORT,'immutable artifact'); END;")
+            db.execute("INSERT INTO artifacts(sha256,length,bytes) VALUES (?,?,?)", (reference["sha256"], reference["length"], request_bytes))
+        received = []
+        plan = {"summary": "Controlled provider plan", "tasks": [{"role": "coder", "task": "inspect", "dependsOn": []}]}
+        response_body = {"id": "planner-fixture", "model": "deepseek-v4-pro",
+            "choices": [{"message": {"role": "assistant", "content": json.dumps(plan)}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}
+        response_bytes = json.dumps(response_body, separators=(",", ":")).encode()
+
+        class ProviderFixture(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 1024**2:
+                    self.send_error(400)
+                    return
+                body = json.loads(self.rfile.read(length))
+                received.append({"actionId": self.headers.get("X-DeepSeek-Action-Id"),
+                    "executionEpoch": self.headers.get("X-DeepSeek-Execution-Epoch"),
+                    "operationId": self.headers.get("X-DeepSeek-Node-Operation-Id"),
+                    "model": body.get("model"), "stream": body.get("stream"), "toolsPresent": "tools" in body})
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response_bytes) + (64 if scenario == "planner-unknown" else 0)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(response_bytes)
+                self.wfile.flush()
+                self.close_connection = True
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), ProviderFixture)
+        provider_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        provider_thread.start()
+        bearer = secrets.token_urlsafe(48)
+        expiry = (datetime.now(timezone.utc) + timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        environment = dict(go_environment, DEEPSEEK_AGENT_SIGNING_PROBE_DIR=case.as_posix(),
+            DEEPSEEK_AGENT_SIGNING_PROBE_CASE=scenario, DEEPSEEK_AGENT_SIGNING_WORKER_BEARER=bearer,
+            DEEPSEEK_AGENT_PLANNER_ARTIFACT_REFERENCE_FILE=reference_file.as_posix())
+        if PRIVATE_ENV & set(environment) or "DEEPSEEK_API_KEY" in environment:
+            raise ValueError("Planner Go environment contains private Rust configuration")
+        workers = []
+        producer = None
+        try:
+            with (output / f"{scenario}-go.log").open("wb") as log:
+                producer = subprocess.Popen([binary.as_posix(), "-test.run=^TestNativeAgentPlanProcess$", "-test.v", "-test.timeout=4m"],
+                    cwd=ROOT / "go/internal/api", env=environment, stdout=log, stderr=subprocess.STDOUT)
+            ready = wait_json(case / "go-ready.json", producer)
+            address = ready["origin"].removeprefix("http://").split(":")
+            if len(address) != 2 or address[0] != "127.0.0.1" or not 0 < int(address[1]) <= 65535 or \
+                    ready["fleetId"] != binding["fleetId"] or ready["environment"] != binding["environment"]:
+                raise ValueError("Planner Go control endpoint is not the isolated loopback deployment")
+            state_root = case / "rust-state"
+            state_root.mkdir()
+            rust_environment = dict(provision_environment, DEEPSEEK_WORKER_TLS_CERT_FILE=cert_file.as_posix(),
+                DEEPSEEK_WORKER_TLS_KEY_FILE=key_file.as_posix(), DEEPSEEK_WORKER_SERVICE_BEARER=bearer,
+                DEEPSEEK_WORKER_SERVICE_BEARER_EXPIRES_AT=expiry, DEEPSEEK_WORKER_SERVICE_NAME="go-control-plane",
+                DEEPSEEK_WORKER_SERVICE_ROLE="controller", DEEPSEEK_WORKER_STATE_ROOT=state_root.as_posix(),
+                DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY=binding["signerPublicKey"],
+                DEEPSEEK_WORKER_AUTHORITY_FENCING_TOKEN=str(ready["fencingToken"]), GO_CONTROL_ADDR=ready["origin"],
+                DEEPSEEK_INTERNAL_BEARER=ready["internalBearer"], DEEPSEEK_AGENT_ARTIFACT_DIR=artifact_root.as_posix(),
+                DEEPSEEK_INFRA_ROOT=case.as_posix(), DEEPSEEK_AGENT_DATA_MODE="python_disabled",
+                DEEPSEEK_API_URL=f"http://127.0.0.1:{server.server_port}/chat", DEEPSEEK_API_KEY="isolated-fixture-credential")
+            live, target = start_worker(worker, rust_environment, ca_file, output / f"{scenario}-rust.log")
+            workers.append(live)
+            public_ready = {"Target": target, "TrustRootFile": ca_file.as_posix(), "PublicKey": binding["signerPublicKey"], "ExpiresAt": expiry}
+            write_ready(case / "worker-ready.json", public_ready)
+            wait_json(case / "restart-request.json", producer)
+            stop_child(live)
+            restarted, target = start_worker(worker, rust_environment, ca_file, output / f"{scenario}-rust-restarted.log")
+            workers.append(restarted)
+            write_ready(case / "worker-restarted.json", dict(public_ready, Target=target))
+            code = producer.wait(timeout=180)
+            result = json.loads((case / "process-result.json").read_text(encoding="utf-8")) if code == 0 else {}
+            if code or result.get("status") != "PASS" or result.get("scenario") != scenario or len(received) != 1:
+                raise RuntimeError(f"Planner process qualification failed: {scenario}, exit={code}, HTTP requests={len(received)}")
+            sent = received[0]
+            if sent["actionId"] != result["actionId"] or sent["executionEpoch"] != str(result["executionEpoch"]) or \
+                    sent["operationId"] != result["operationId"] or sent["model"] != "deepseek-v4-pro" or sent["toolsPresent"]:
+                raise ValueError("Actual HTTP exchange did not carry the admitted planner identity and request policy")
+            stop_child(restarted)
+            journal = state_root / "rust-worker/authority.sqlite3"
+            with sqlite3.connect(journal.as_uri() + "?mode=ro", uri=True) as db:
+                if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    raise ValueError("Rust planner journal integrity failed")
+                rows = db.execute("SELECT operation_id,state,output,output_sha256 FROM agent_node_effects").fetchall()
+            if len(rows) != 1 or rows[0][0] != result["operationId"] or rows[0][1] != result["state"]:
+                raise ValueError("Rust journal did not retain exactly the admitted node")
+            with sqlite3.connect(catalog.as_uri() + "?mode=ro", uri=True) as db:
+                if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    raise ValueError("Rust planner body catalog integrity failed")
+                if scenario == "planner-success":
+                    output_bytes = rows[0][2]
+                    envelope = json.loads(output_bytes)
+                    event_ref = result["publicEvent"]
+                    body = db.execute("SELECT length,bytes FROM artifacts WHERE sha256=?", (event_ref["sha256"],)).fetchone()
+                    if not body or body[0] != event_ref["length"] or hashlib.sha256(body[1]).hexdigest() != event_ref["sha256"] or \
+                            json.loads(body[1]) != envelope["publicEvent"] or envelope["publicEvent"]["plan"] != plan or \
+                            envelope["runId"] != result["runId"] or hashlib.sha256(output_bytes).hexdigest() != result["outcomeSha256"] or \
+                            rows[0][3] != result["outcomeSha256"] or envelope["providerResponseSha256"] != hashlib.sha256(response_bytes).hexdigest():
+                        raise ValueError("Confirmed provider bytes, immutable outcome and Rust public projection do not match")
+                elif rows[0][2:] != (None, None) or db.execute("SELECT count(*) FROM artifacts").fetchone()[0] != 1:
+                    raise ValueError("An uncertain HTTP effect acquired a successful result body")
+            result.update(actualHTTPRequestCount=len(received), httpFenceVerified=True, bodyCustodyVerified=True,
+                inputBodySeededByOfflineOracle=True, outputBodyWriter="rust", provider="controlled-loopback-http-fixture")
+            results.append(result)
+            (output / f"{scenario}-result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+            print(json.dumps({"scenario": scenario, "status": "PASS", "HTTPRequests": len(received), "state": result["state"]}), flush=True)
+        finally:
+            if producer is not None:
+                stop_child(producer)
+            for owned in workers:
+                stop_child(owned)
+            server.shutdown()
+            server.server_close()
+            provider_thread.join(timeout=5)
+            for path in output.glob(f"{scenario}-*.log"):
+                path.write_bytes(path.read_bytes().replace(bearer.encode(), b"[redacted-probe-bearer]"))
+    return results
+
+
 def record_command(command: list[str], cwd: Path, env: dict[str, str], output: Path, label: str, timeout: int = 300) -> None:
     completed = run_guarded(command, cwd=cwd, env=env, capture_output=True, timeout=timeout)
     raw = (completed.stdout or b"") + (completed.stderr or b"")
@@ -300,12 +468,14 @@ def main() -> int:
     (output / "probe-inputs.json").write_text(json.dumps(inputs, indent=2) + "\n", encoding="utf-8")
     status = "FAIL"
     results = []
+    planner_results = []
     started_at = datetime.now(timezone.utc).isoformat()
     try:
         with tempfile.TemporaryDirectory(prefix="agent-signing-", dir=output.parent) as directory:
             binary, environment = compile_producer(Path(directory), output, args.go_cache.resolve())
             if not args.preflight:
                 results = process_cases(binary, environment, args.worker.resolve(), args.provisioner.resolve(), Path(directory), output)
+                planner_results = planner_process_cases(binary, environment, args.worker.resolve(), args.provisioner.resolve(), Path(directory), output)
         if source_inventory() != before:
             raise ValueError("Source inputs changed during process qualification")
         status = "PREFLIGHT_PASS" if args.preflight else "PASS"
@@ -314,6 +484,7 @@ def main() -> int:
         report: dict[str, object] = {"status": status, "checkedAt": datetime.now(timezone.utc).isoformat(), "platform": platform.platform(),
                   "scope": "Go authority and Rust custody process signing" if not args.preflight else "Actual real-UTC Go producer and authenticated RPC only",
                   "rustCompiledByThisRunner": False, "rustSigningQualified": status == "PASS", "cases": results,
+                  "plannerProcessCases": planner_results, "plannerControlledHTTPQualified": status == "PASS" and len(planner_results) == 2,
                   "runtimePythonQualified": False, "providerEffectsQualified": False, "readiness": "NOT_READY",
                   "startedAt": started_at, "sourceUnchanged": source_inventory() == before,
                   "sourceManifestSha256": hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest(),

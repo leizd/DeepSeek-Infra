@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 
 use deepseek_protocol::generated::deepseek::action::v1::control_signer_server::ControlSignerServer;
 use deepseek_protocol::generated::deepseek::action::v1::worker_server::WorkerServer;
+use deepseek_protocol::generated::deepseek::agent::v1::agent_node_worker_server::AgentNodeWorkerServer;
 use deepseek_worker::{Worker, WorkerRpcService, authority_config_from_env, load_worker_transport};
 use tonic::transport::Server;
 
@@ -84,6 +85,7 @@ fn configured_worker(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address = configured_listen_addr(std::env::var("DEEPSEEK_WORKER_LISTEN"))?;
     let transport = load_worker_transport(|name| std::env::var(name))?;
+    let agent_plan = deepseek_worker::load_agent_plan_executor_from_env()?;
     // Validate provider configuration before opening the durable authority store.
     #[cfg(feature = "s3")]
     let storage = deepseek_worker::load_worker_storage_transport(|name| std::env::var(name))?;
@@ -136,6 +138,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(control) => service.with_agent_execution_control(control),
         None => service,
     };
+    let service = match agent_plan {
+        Some(executor) => service.with_agent_plan_executor(executor),
+        None => service,
+    };
     #[cfg(feature = "s3")]
     let service = match storage {
         Some(storage) => service.with_transport(storage),
@@ -150,6 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     builder
         .add_service(ControlSignerServer::new(service.clone()))
+        .add_service(AgentNodeWorkerServer::new(service.clone()))
         .add_service(WorkerServer::new(service))
         .serve_with_shutdown(address, async {
             let _ = tokio::signal::ctrl_c().await;

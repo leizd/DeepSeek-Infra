@@ -116,6 +116,60 @@ fn outcome(row: Stored) -> Result<AgentNodeEffectOutcome, Status> {
 }
 
 impl AuthorityStore {
+    /// Historical reads do not spend a dispatch reservation or require a live
+    /// lease. The complete outcome stays in Rust and is projected by its executor.
+    pub(crate) fn agent_node_outcome(
+        &self,
+        query: &crate::QueryAgentNodeEffect,
+    ) -> Result<Option<AgentNodeEffectOutcome>, Status> {
+        let Some(snapshot) = self.agent_node_snapshot(query)? else {
+            return Ok(None);
+        };
+        if snapshot.state != "CONFIRMED" {
+            return Ok(None);
+        }
+        stored(&self.connection, &query.operation_id)?
+            .map(outcome)
+            .transpose()
+    }
+
+    /// Recheck the stored signed grant, writer and installed epoch immediately
+    /// before starting provider I/O. A permit alone cannot outlive its lease.
+    pub(crate) fn agent_node_send_deadline(
+        &self,
+        permit: &AgentNodeEffectPermit,
+        config: &WorkerAuthorityConfig,
+        now: &str,
+    ) -> Result<i64, Status> {
+        if self.fencing_token != permit.fencing_token
+            || config.fencing_token != permit.fencing_token
+        {
+            return Err(denied());
+        }
+        live(&self.connection, &permit.fence, permit.fencing_token)?;
+        let row = stored(&self.connection, &permit.operation_id)?.ok_or_else(denied)?;
+        let at = authority_request::parse_utc_z_str(now).map_err(|_| denied())?;
+        if row.state != "DISPATCHING"
+            || row.intent_digest != permit.intent_digest
+            || row.grant_digest != permit.grant_digest
+            || at < authority_request::parse_utc_z_str(&row.updated_at).map_err(|_| denied())?
+        {
+            return Err(denied());
+        }
+        let response = BeginAgentNodeDispatchResponse {
+            fresh: false,
+            intent: Some(row.intent),
+            claim: Some(row.claim),
+        };
+        agent_node_effect::validate_scope(&response, &row.grant, config, now)?;
+        let grant: serde_json::Value = serde_json::from_slice(&row.grant).map_err(|_| denied())?;
+        let expires =
+            authority_request::parse_utc_z_str(grant["expiresAt"].as_str().ok_or_else(denied)?)
+                .map_err(|_| denied())?;
+        let claim = response.claim.as_ref().ok_or_else(denied)?;
+        Ok(expires.min(claim.lease_until).min(claim.writer_lease_until))
+    }
+
     pub(crate) fn agent_node_snapshot(
         &self,
         query: &crate::QueryAgentNodeEffect,

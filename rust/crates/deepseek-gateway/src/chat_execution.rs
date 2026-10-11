@@ -114,7 +114,7 @@ impl UpstreamConfig {
         }
     }
 
-    fn validate(&self) -> Result<reqwest::Url, ChatExecutionError> {
+    pub fn validate(&self) -> Result<reqwest::Url, ChatExecutionError> {
         if self.api_key.is_empty() {
             return Err(ChatExecutionError::MissingUpstreamCredential);
         }
@@ -430,6 +430,73 @@ pub async fn exchange_turn(
     turn_from_payload(&payload)
 }
 
+/// One bounded provider exchange with the already-admitted action identity.
+/// The caller must validate its live Go lease and Rust epoch immediately before
+/// invoking this method. There are no transport retries or redirects.
+pub async fn exchange_fenced_turn(
+    config: &UpstreamConfig,
+    body: &Value,
+    fence: &deepseek_protocol::ActionFence,
+    operation_id: &str,
+    maximum_response_bytes: usize,
+) -> Result<(UpstreamTurn, String), ChatExecutionError> {
+    use futures_util::StreamExt as _;
+    use sha2::{Digest as _, Sha256};
+
+    if deepseek_protocol::validate_fence(fence).is_err()
+        || !operation_id.starts_with("agent-node-")
+        || operation_id.len() != 75
+        || !operation_id[11..]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        || maximum_response_bytes == 0
+        || maximum_response_bytes > 128 * 1024 * 1024
+    {
+        return Err(ChatExecutionError::UpstreamMalformed);
+    }
+    let response = upstream_client(config, true)?
+        .post(config.validate()?)
+        .header("Authorization", format!("Bearer {}", config.api_key))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .header("X-DeepSeek-Action-Id", &fence.action_id)
+        .header(
+            "X-DeepSeek-Execution-Epoch",
+            fence.execution_epoch.to_string(),
+        )
+        .header("X-DeepSeek-Node-Operation-Id", operation_id)
+        .body(serde_json::to_vec(body).map_err(|_| ChatExecutionError::UpstreamMalformed)?)
+        .send()
+        .await
+        .map_err(|_| ChatExecutionError::UpstreamUnreachable)?;
+    if !response.status().is_success() {
+        return Err(ChatExecutionError::UpstreamStatus {
+            status: response.status().as_u16(),
+        });
+    }
+    if response
+        .content_length()
+        .is_some_and(|size| size > maximum_response_bytes as u64)
+    {
+        return Err(ChatExecutionError::UpstreamMalformed);
+    }
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(next) = stream.next().await {
+        let next = next.map_err(|_| ChatExecutionError::UpstreamUnreachable)?;
+        if next.len() > maximum_response_bytes.saturating_sub(bytes.len()) {
+            return Err(ChatExecutionError::UpstreamMalformed);
+        }
+        bytes.extend_from_slice(&next);
+    }
+    let payload: Value =
+        serde_json::from_slice(&bytes).map_err(|_| ChatExecutionError::UpstreamMalformed)?;
+    Ok((
+        turn_from_payload(&payload)?,
+        format!("{:x}", Sha256::digest(&bytes)),
+    ))
+}
+
 /// Open one streaming upstream turn and hand back the live response.
 ///
 /// Split from the decoding loop on purpose: the caller needs the *status* before
@@ -508,6 +575,179 @@ pub fn openai_completion_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fenced_fixture(
+        status: u16,
+        payload: Vec<u8>,
+        chunked: bool,
+    ) -> (UpstreamConfig, std::thread::JoinHandle<String>) {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/chat", listener.local_addr().unwrap());
+        let location = url.clone();
+        let task = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            let mut buffer = [0; 1024];
+            loop {
+                let count = socket.read(&mut buffer).unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&buffer[..count]);
+                if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..end]).to_ascii_lowercase();
+                    let length = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: "))
+                        .unwrap()
+                        .parse::<usize>()
+                        .unwrap();
+                    if bytes.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let header = if chunked {
+                format!(
+                    "HTTP/1.1 {status} Fixture\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+                )
+            } else {
+                format!(
+                    "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nLocation: {location}\r\nConnection: close\r\n\r\n",
+                    payload.len()
+                )
+            };
+            socket.write_all(header.as_bytes()).unwrap();
+            if chunked {
+                socket
+                    .write_all(format!("{:x}\r\n", payload.len()).as_bytes())
+                    .unwrap();
+                socket.write_all(&payload).unwrap();
+                socket.write_all(b"\r\n0\r\n\r\n").unwrap();
+            } else {
+                socket.write_all(&payload).unwrap();
+            }
+            drop(socket);
+            listener.set_nonblocking(true).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(
+                matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+                "provider received a retry or redirect"
+            );
+            String::from_utf8(bytes).unwrap()
+        });
+        (
+            UpstreamConfig {
+                url,
+                api_key: "fixture-credential".into(),
+                timeout: Duration::from_secs(2),
+            },
+            task,
+        )
+    }
+
+    fn effect_identity() -> (deepseek_protocol::ActionFence, String) {
+        (
+            deepseek_protocol::ActionFence {
+                action_id: "agent-exec-fixture".into(),
+                execution_epoch: 7,
+            },
+            format!("agent-node-{}", "a".repeat(64)),
+        )
+    }
+
+    #[tokio::test]
+    async fn fenced_http_carries_the_exact_identity_and_hashes_received_bytes() {
+        use sha2::{Digest as _, Sha256};
+        let payload = serde_json::to_vec(&upstream_body()).unwrap();
+        let digest = format!("{:x}", Sha256::digest(&payload));
+        let (config, task) = fenced_fixture(200, payload, false);
+        let (fence, operation) = effect_identity();
+        let (turn, receipt) = exchange_fenced_turn(
+            &config,
+            &json!({"model":"deepseek-v4-pro","messages":[]}),
+            &fence,
+            &operation,
+            4096,
+        )
+        .await
+        .unwrap();
+        assert_eq!(turn.content(), "hello");
+        assert_eq!(receipt, digest);
+        let actual = task.join().unwrap().to_ascii_lowercase();
+        for header in [
+            "x-deepseek-action-id: agent-exec-fixture",
+            "x-deepseek-execution-epoch: 7",
+            operation.as_str(),
+        ] {
+            assert!(actual.contains(header), "missing exact fence header");
+        }
+    }
+
+    #[tokio::test]
+    async fn fenced_http_does_not_retry_errors_or_follow_redirects() {
+        let (fence, operation) = effect_identity();
+        for status in [302, 503] {
+            let (config, task) = fenced_fixture(status, vec![], false);
+            assert_eq!(
+                exchange_fenced_turn(&config, &json!({}), &fence, &operation, 4096)
+                    .await
+                    .unwrap_err(),
+                ChatExecutionError::UpstreamStatus { status }
+            );
+            task.join().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn fenced_http_bounds_declared_and_chunked_response_bytes() {
+        let (fence, operation) = effect_identity();
+        for chunked in [false, true] {
+            let (config, task) = fenced_fixture(200, vec![b'x'; 1024], chunked);
+            assert_eq!(
+                exchange_fenced_turn(&config, &json!({}), &fence, &operation, 100)
+                    .await
+                    .unwrap_err(),
+                ChatExecutionError::UpstreamMalformed
+            );
+            task.join().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn fenced_http_rejects_unbound_identity_before_contacting_provider() {
+        let config = UpstreamConfig {
+            url: "http://127.0.0.1:9/chat".into(),
+            api_key: "fixture".into(),
+            timeout: Duration::from_secs(1),
+        };
+        let (mut fence, operation) = effect_identity();
+        for node in ["", "agent-node-wrong"] {
+            assert_eq!(
+                exchange_fenced_turn(&config, &json!({}), &fence, node, 100)
+                    .await
+                    .unwrap_err(),
+                ChatExecutionError::UpstreamMalformed
+            );
+        }
+        for bound in [0, 128 * 1024 * 1024 + 1] {
+            assert_eq!(
+                exchange_fenced_turn(&config, &json!({}), &fence, &operation, bound)
+                    .await
+                    .unwrap_err(),
+                ChatExecutionError::UpstreamMalformed
+            );
+        }
+        fence.execution_epoch = 0;
+        assert_eq!(
+            exchange_fenced_turn(&config, &json!({}), &fence, &operation, 100)
+                .await
+                .unwrap_err(),
+            ChatExecutionError::UpstreamMalformed
+        );
+    }
 
     fn upstream_body() -> Value {
         json!({

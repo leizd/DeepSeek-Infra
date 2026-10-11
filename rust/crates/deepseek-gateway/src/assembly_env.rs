@@ -76,6 +76,7 @@ pub struct NativeAssembly {
     projects_dir: PathBuf,
     budget_dir: PathBuf,
     budget_db: PathBuf,
+    readonly_budget: bool,
 }
 
 impl NativeAssembly {
@@ -108,6 +109,7 @@ impl NativeAssembly {
             taint: ContextTaintSettings::default(),
             context_manager: ContextManagerSettings::default(),
             engine: ContextEngineSettings::default(),
+            readonly_budget: false,
         }
     }
 
@@ -119,6 +121,12 @@ impl NativeAssembly {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Bind reads to an existing budget database without schema/pragma writes.
+    pub fn with_readonly_budget(mut self) -> Self {
+        self.readonly_budget = true;
+        self
     }
 
     /// Run `f` against an [`AssemblyEnv`] bound to this assembly.
@@ -158,8 +166,20 @@ impl NativeAssembly {
 
         let today_string = today(now_epoch_seconds());
         let now_iso = utc_now_iso(now_epoch_seconds());
-        let read_spend_row = |scope: &str, day: &str| budget_store.read_spend_row(scope, day);
-        let write_spend_row = |row: &Value| budget_store.write_spend_row(row);
+        let read_spend_row = |scope: &str, day: &str| {
+            if self.readonly_budget {
+                budget_store.read_spend_row_readonly(scope, day)
+            } else {
+                budget_store.read_spend_row(scope, day)
+            }
+        };
+        let write_spend_row = |row: &Value| {
+            if self.readonly_budget {
+                Err("BUDGET_WRITER_DENIED".into())
+            } else {
+                budget_store.write_spend_row(row)
+            }
+        };
         let ledger = LedgerDeps {
             database_present: budget_store.database_present(),
             database_path: budget_store.database_path(),

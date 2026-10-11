@@ -63,3 +63,44 @@ service AgentNodeControl {
   rpc BeginDispatch(BeginAgentNodeDispatchRequest) returns (BeginAgentNodeDispatchResponse);
   rpc GetDispatch(GetAgentNodeDispatchRequest) returns (GetAgentNodeDispatchResponse);
 }
+
+message ExecuteAgentPlanRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  AgentRunExecutionClaim claim = 4;
+  bytes signed_phase_grant = 5;
+  deepseek.common.v1.ActionFence fence = 6;
+}
+
+message AgentNodeEffectMetadata {
+  string operation_id = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string run_id = 3;
+  string node_id = 4;
+  string state = 5;
+  // Scheduling references only; request/response bodies never enter Go.
+  AgentArtifactReference public_event = 6;
+  string outcome_sha256 = 7;
+  uint64 outcome_length = 8;
+}
+
+message QueryAgentNodeEffectRequest {
+  string operation_id = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string run_id = 3;
+  string node_id = 4;
+}
+
+message QueryAgentNodeEffectResponse {
+  // Absence never authorizes another provider request.
+  bool found = 1;
+  AgentNodeEffectMetadata effect = 2;
+}
+
+// Actual planner I/O and outcome custody are in the production Rust worker.
+// A known result is not Go phase settlement; independent proof is required.
+service AgentNodeWorker {
+  rpc ExecutePlan(ExecuteAgentPlanRequest) returns (AgentNodeEffectMetadata);
+  rpc QueryEffect(QueryAgentNodeEffectRequest) returns (QueryAgentNodeEffectResponse);
+}

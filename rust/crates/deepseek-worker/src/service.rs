@@ -218,6 +218,7 @@ pub struct WorkerRpcService {
     pub(crate) authenticator: Arc<dyn TransportAuthenticator>,
     pub(crate) control_signer: Option<Arc<Mutex<crate::ControlSigner>>>,
     pub(crate) agent_execution_control: Option<crate::AgentExecutionControl>,
+    pub(crate) agent_plan_executor: Option<Arc<crate::AgentPlanExecutor>>,
     #[cfg(feature = "s3")]
     transport: Option<Arc<deepseek_storage::s3::S3Transport>>,
 }
@@ -237,6 +238,7 @@ impl WorkerRpcService {
             authenticator: Arc::new(ProductionFailClosedAuthenticator),
             control_signer: None,
             agent_execution_control: None,
+            agent_plan_executor: None,
             #[cfg(feature = "s3")]
             transport: None,
         }
@@ -251,6 +253,7 @@ impl WorkerRpcService {
             authenticator,
             control_signer: None,
             agent_execution_control: None,
+            agent_plan_executor: None,
             #[cfg(feature = "s3")]
             transport: None,
         }

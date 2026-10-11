@@ -182,6 +182,95 @@ fn started(result: AgentNodeEffectStart) -> AgentNodeEffectPermit {
 }
 
 #[test]
+fn provider_send_requires_the_live_stored_grant_and_dispatch_state() {
+    let fixture = Fixture::new();
+    let mut worker = fixture.worker(true);
+    let permit = started(fixture.begin(&mut worker, true).unwrap());
+    let store = worker.authority_store.as_mut().unwrap();
+    assert_eq!(
+        store
+            .agent_node_send_deadline(&permit, &fixture.config, NOW)
+            .unwrap(),
+        authority_request::parse_utc_z_str("2026-09-04T00:02:00Z").unwrap()
+    );
+    for at in [
+        "2026-09-04T00:00:59Z",
+        "2026-09-04T00:02:00Z",
+        "2026-09-04T00:07:00Z",
+    ] {
+        assert!(
+            store
+                .agent_node_send_deadline(&permit, &fixture.config, at)
+                .is_err(),
+            "send admitted at {at}"
+        );
+    }
+    let mut foreign = fixture.config.clone();
+    foreign.fencing_token += 1;
+    assert!(
+        store
+            .agent_node_send_deadline(&permit, &foreign, NOW)
+            .is_err()
+    );
+    store.mark_agent_node_unknown(&permit, NOW).unwrap();
+    assert!(
+        store
+            .agent_node_send_deadline(&permit, &fixture.config, NOW)
+            .is_err()
+    );
+    let selector = crate::QueryAgentNodeEffect {
+        operation_id: permit.operation_id.clone(),
+        fence: permit.fence.clone(),
+        run_id: fixture.response.claim.as_ref().unwrap().run_id.clone(),
+        node_id: "coder".into(),
+    };
+    assert!(store.agent_node_outcome(&selector).unwrap().is_none());
+    let output = authority_request::canonical_json_bytes(&json!({"answer":"confirmed"})).unwrap();
+    let known = store.confirm_agent_node(&permit, &output, NOW).unwrap();
+    assert!(
+        store
+            .agent_node_send_deadline(&permit, &fixture.config, NOW)
+            .is_err()
+    );
+    assert_eq!(store.agent_node_outcome(&selector).unwrap(), Some(known));
+    let wrong_run = crate::QueryAgentNodeEffect {
+        run_id: "other".into(),
+        ..selector
+    };
+    assert!(store.agent_node_outcome(&wrong_run).is_err());
+}
+
+#[test]
+fn provider_send_refuses_a_successor_epoch() {
+    let fixture = Fixture::new();
+    let mut worker = fixture.worker(true);
+    let permit = started(fixture.begin(&mut worker, true).unwrap());
+    let mut epoch: Value = serde_json::from_slice(&fixture.epoch).unwrap();
+    epoch["executionEpoch"] = 5.into();
+    epoch["requestId"] = "5".repeat(64).into();
+    epoch["nonce"] = "6".repeat(64).into();
+    let update = signed(epoch, b"deepseek-infra:control-authority-request-v1\0");
+    let fence = ActionFence {
+        execution_epoch: 5,
+        ..permit.fence.clone()
+    };
+    worker
+        .authority_store
+        .as_mut()
+        .unwrap()
+        .install(worker.authority.as_ref().unwrap(), &fence, &update)
+        .unwrap();
+    assert!(
+        worker
+            .authority_store
+            .as_ref()
+            .unwrap()
+            .agent_node_send_deadline(&permit, &fixture.config, NOW)
+            .is_err()
+    );
+}
+
+#[test]
 fn local_epoch_and_signed_scope_are_required_without_implicit_installation() {
     let fixture = Fixture::new();
     let mut worker = fixture.worker(false);

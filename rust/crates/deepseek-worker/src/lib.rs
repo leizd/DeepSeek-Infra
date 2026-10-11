@@ -15,6 +15,7 @@ use sha2::Digest;
 
 mod agent_execution_grant;
 mod agent_node_effect;
+mod agent_plan_executor;
 mod authority_request;
 mod authority_store;
 mod control_signer;
@@ -34,6 +35,7 @@ pub use agent_node_effect::{
     AgentNodeEffectOutcome, AgentNodeEffectPermit, AgentNodeEffectSnapshot, AgentNodeEffectStart,
     BeginAgentNodeEffect, MAX_AGENT_NODE_OUTCOME_BYTES, QueryAgentNodeEffect,
 };
+pub use agent_plan_executor::{AgentPlanExecutor, load_agent_plan_executor_from_env};
 pub use control_signer::{ControlSigner, load_control_signer_from_env};
 
 pub use authority_request::{

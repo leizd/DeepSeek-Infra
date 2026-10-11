@@ -1,3 +1,9 @@
+<!-- native-planner-worker-20261011 -->
+The current isolated candidate adds authenticated typed planner execution and historical node queries to the production Rust worker. It reuses the native request policy, reads the immutable request body by its bound Rust artifact reference, checks the stored signed grant and installed epoch immediately before one bounded HTTP exchange, and persists received-result evidence before publishing a Rust-owned public-event reference. The planner path reads budget data without schema/pragma writes. It never turns an unknown effect into a fresh dispatch.
+
+Local source/codegen checks and cloud qualification are separate. The new controlled HTTP process probes cover a confirmed response and an interrupted response, restart, exact HTTP action/epoch/node headers, immutable projection and one request across replay. Python only orchestrates isolated fixtures and seeds oracle inputs; it is not the application runtime. Live-provider qualification, Go proof consumption and phase/DAG settlement, all task roles/tools, the public Agent flow, full retained feature workloads, desktop/Android/worker distribution and zero-Python runtime evidence remain unfinished. Readiness remains NOT_READY; no production data or main-branch promotion is authorized.
+<!-- /native-planner-worker-20261011 -->
+
 ## Rust node custody progress — 2026-10-11
 
 | Capability | Native owner / implementation | Current evidence | Remaining acceptance |
