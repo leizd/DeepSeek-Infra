@@ -232,7 +232,20 @@ message RenewAgentRunExecutionResponse {
   AgentRunExecutionClaim claim = 1;
 }
 
-// Authenticated Go control metadata only. Rust retains event/request bodies;
+// The Go authority chooses the immutable signing request/nonce from its own
+// admitted claim and calls the pinned TLS Rust custody service. This grant
+// authorizes only the bound phase; it is not an effect receipt or permission
+// to redispatch an uncertain/taken-over action. No private key enters Go.
+message AuthorizeAgentRunExecutionResponse {
+  bool already_applied = 1;
+  AgentRunExecutionClaim claim = 2;
+  bytes canonical_authorization = 3;
+  string signer_public_key = 4;
+  string fleet_id = 5;
+  string environment = 6;
+}
+
+// Authenticated Go control metadata and execution admission. Rust retains bodies;
 // fenced worker execution and effect reconciliation are separate commands.
 service AgentRunControl {
   rpc GetAuthority(AgentRunAuthorityInput) returns (AgentRunAuthorityOutput);
@@ -241,4 +254,5 @@ service AgentRunControl {
   rpc EventsAfter(AgentRunEventsRequest) returns (AgentRunEventsResponse);
   rpc ClaimExecution(ClaimAgentRunExecutionRequest) returns (ClaimAgentRunExecutionResponse);
   rpc RenewExecution(RenewAgentRunExecutionRequest) returns (RenewAgentRunExecutionResponse);
+  rpc AuthorizeExecution(ClaimAgentRunExecutionRequest) returns (AuthorizeAgentRunExecutionResponse);
 }

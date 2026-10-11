@@ -42,6 +42,12 @@ fn validate_fence(fence: Option<&ActionFence>) -> Result<(), Status> {
 
 #[tonic::async_trait]
 impl AgentRunControl for Fixture {
+    async fn authorize_execution(
+        &self,
+        _request: tonic::Request<ClaimAgentRunExecutionRequest>,
+    ) -> Result<Response<AuthorizeAgentRunExecutionResponse>, Status> {
+        Err(Status::unimplemented("READ_FIXTURE_HAS_NO_EXECUTION"))
+    }
     async fn claim_execution(
         &self,
         _request: tonic::Request<ClaimAgentRunExecutionRequest>,
@@ -127,7 +133,7 @@ async fn running_fixture_with_authority(authoritative: bool) -> RunningFixture {
     let directory = tempfile::tempdir().unwrap();
     let mut store = ArtifactStore::open_native(directory.path(), "python_disabled").unwrap();
     let request = store
-        .put(&json!({"model":"deepseek-v4-pro","apiKey":"fixture-private","messages":[]}))
+        .put(&json!({"model":"deepseek-v4-pro","apiKey":"fixture-private","messages":[]})) // pragma: allowlist secret
         .unwrap();
     let plan = AgentRunPlanNode {
         id: "coder".into(),

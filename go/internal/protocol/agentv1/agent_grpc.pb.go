@@ -121,19 +121,20 @@ var AgentChatScheduler_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	AgentRunControl_GetAuthority_FullMethodName   = "/deepseek.agent.v1.AgentRunControl/GetAuthority"
-	AgentRunControl_AppendEvent_FullMethodName    = "/deepseek.agent.v1.AgentRunControl/AppendEvent"
-	AgentRunControl_GetRun_FullMethodName         = "/deepseek.agent.v1.AgentRunControl/GetRun"
-	AgentRunControl_EventsAfter_FullMethodName    = "/deepseek.agent.v1.AgentRunControl/EventsAfter"
-	AgentRunControl_ClaimExecution_FullMethodName = "/deepseek.agent.v1.AgentRunControl/ClaimExecution"
-	AgentRunControl_RenewExecution_FullMethodName = "/deepseek.agent.v1.AgentRunControl/RenewExecution"
+	AgentRunControl_GetAuthority_FullMethodName       = "/deepseek.agent.v1.AgentRunControl/GetAuthority"
+	AgentRunControl_AppendEvent_FullMethodName        = "/deepseek.agent.v1.AgentRunControl/AppendEvent"
+	AgentRunControl_GetRun_FullMethodName             = "/deepseek.agent.v1.AgentRunControl/GetRun"
+	AgentRunControl_EventsAfter_FullMethodName        = "/deepseek.agent.v1.AgentRunControl/EventsAfter"
+	AgentRunControl_ClaimExecution_FullMethodName     = "/deepseek.agent.v1.AgentRunControl/ClaimExecution"
+	AgentRunControl_RenewExecution_FullMethodName     = "/deepseek.agent.v1.AgentRunControl/RenewExecution"
+	AgentRunControl_AuthorizeExecution_FullMethodName = "/deepseek.agent.v1.AgentRunControl/AuthorizeExecution"
 )
 
 // AgentRunControlClient is the client API for AgentRunControl service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Authenticated Go control metadata only. Rust retains event/request bodies;
+// Authenticated Go control metadata and execution admission. Rust retains bodies;
 // fenced worker execution and effect reconciliation are separate commands.
 type AgentRunControlClient interface {
 	GetAuthority(ctx context.Context, in *AgentRunAuthorityInput, opts ...grpc.CallOption) (*AgentRunAuthorityOutput, error)
@@ -142,6 +143,7 @@ type AgentRunControlClient interface {
 	EventsAfter(ctx context.Context, in *AgentRunEventsRequest, opts ...grpc.CallOption) (*AgentRunEventsResponse, error)
 	ClaimExecution(ctx context.Context, in *ClaimAgentRunExecutionRequest, opts ...grpc.CallOption) (*ClaimAgentRunExecutionResponse, error)
 	RenewExecution(ctx context.Context, in *RenewAgentRunExecutionRequest, opts ...grpc.CallOption) (*RenewAgentRunExecutionResponse, error)
+	AuthorizeExecution(ctx context.Context, in *ClaimAgentRunExecutionRequest, opts ...grpc.CallOption) (*AuthorizeAgentRunExecutionResponse, error)
 }
 
 type agentRunControlClient struct {
@@ -212,11 +214,21 @@ func (c *agentRunControlClient) RenewExecution(ctx context.Context, in *RenewAge
 	return out, nil
 }
 
+func (c *agentRunControlClient) AuthorizeExecution(ctx context.Context, in *ClaimAgentRunExecutionRequest, opts ...grpc.CallOption) (*AuthorizeAgentRunExecutionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AuthorizeAgentRunExecutionResponse)
+	err := c.cc.Invoke(ctx, AgentRunControl_AuthorizeExecution_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentRunControlServer is the server API for AgentRunControl service.
 // All implementations must embed UnimplementedAgentRunControlServer
 // for forward compatibility.
 //
-// Authenticated Go control metadata only. Rust retains event/request bodies;
+// Authenticated Go control metadata and execution admission. Rust retains bodies;
 // fenced worker execution and effect reconciliation are separate commands.
 type AgentRunControlServer interface {
 	GetAuthority(context.Context, *AgentRunAuthorityInput) (*AgentRunAuthorityOutput, error)
@@ -225,6 +237,7 @@ type AgentRunControlServer interface {
 	EventsAfter(context.Context, *AgentRunEventsRequest) (*AgentRunEventsResponse, error)
 	ClaimExecution(context.Context, *ClaimAgentRunExecutionRequest) (*ClaimAgentRunExecutionResponse, error)
 	RenewExecution(context.Context, *RenewAgentRunExecutionRequest) (*RenewAgentRunExecutionResponse, error)
+	AuthorizeExecution(context.Context, *ClaimAgentRunExecutionRequest) (*AuthorizeAgentRunExecutionResponse, error)
 	mustEmbedUnimplementedAgentRunControlServer()
 }
 
@@ -252,6 +265,9 @@ func (UnimplementedAgentRunControlServer) ClaimExecution(context.Context, *Claim
 }
 func (UnimplementedAgentRunControlServer) RenewExecution(context.Context, *RenewAgentRunExecutionRequest) (*RenewAgentRunExecutionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RenewExecution not implemented")
+}
+func (UnimplementedAgentRunControlServer) AuthorizeExecution(context.Context, *ClaimAgentRunExecutionRequest) (*AuthorizeAgentRunExecutionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AuthorizeExecution not implemented")
 }
 func (UnimplementedAgentRunControlServer) mustEmbedUnimplementedAgentRunControlServer() {}
 func (UnimplementedAgentRunControlServer) testEmbeddedByValue()                         {}
@@ -382,6 +398,24 @@ func _AgentRunControl_RenewExecution_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentRunControl_AuthorizeExecution_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClaimAgentRunExecutionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunControlServer).AuthorizeExecution(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunControl_AuthorizeExecution_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunControlServer).AuthorizeExecution(ctx, req.(*ClaimAgentRunExecutionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentRunControl_ServiceDesc is the grpc.ServiceDesc for AgentRunControl service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -412,6 +446,10 @@ var AgentRunControl_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RenewExecution",
 			Handler:    _AgentRunControl_RenewExecution_Handler,
+		},
+		{
+			MethodName: "AuthorizeExecution",
+			Handler:    _AgentRunControl_AuthorizeExecution_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

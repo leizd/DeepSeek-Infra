@@ -4,13 +4,37 @@
 [中文](../../README.md) / [English](../../README.en.md)
 <!-- docs-language-switcher:end -->
 
-**2026-10-10 process signing preparation:** the repository process producer
-compiles against the actual Go API/store and passes real-UTC planning/tasks.
-The cloud checks job is prepared to run the production Rust custody provisioner
-and Worker over pinned TLS, exercise real Go lease callbacks, refuse rebinding
-and expired/cancelled scope, and prove immutable journal replay across a forced
-Worker restart. The complete process cases have not run in the cloud yet;
-producer preflight and environment/public-metadata tests are not their proof.
+**Current authorization inputs — 2026-10-10:** the new typed Go Agent
+authorization RPC calls production Rust custody after durable Go admission and
+rechecks current authority before returning. Focused real-store regressions
+pass; the process fixture now requires this registered RPC for signing, replay,
+restart and terminal denial. All three actual Go producer preflight cases pass;
+all ten complete Go gates pass at the original 95% floor (95.007396% default,
+95.068699% native_android). The interrupted aggregate is recovered from
+successful command receipts and an independent immutable-source rehash; host
+exit/container removal are unobserved. Both Rust test services reject the new
+method and pass pinned Rustfmt; Rust compilation remains cloud-only. Script lint,
+959-file source typecheck and 15 boundary tests pass. Exact-input cloud process
+qualification and upload authorization are
+pending. Earlier `4ffc3f2` cloud evidence below is historical proof for that
+snapshot and does not qualify these changed Go/Proto inputs. Actual Agent
+effects and full migration remain unfinished; readiness is `NOT_READY`.
+
+**2026-10-10 process signing checkpoint:** exact cloud commit `7ca579c` passes
+actual real-UTC plan/tasks signing through production Rust custody and Worker
+over pinned TLS, six rebinding denials, exact epoch installation and immutable
+journal replay across a forced Worker restart. Run `38044427626` remains failed:
+the writer-expiry test waited for the old signed deadline while actual Go writes
+renewed the writer. The reviewed two-file correction waits for the current Go
+writer deadline and keeps the explicit denial code. All three local producer
+cases pass. Authorized commit `4ffc3f2`, tree `363d19ff`, is uploaded; exact
+cloud run `38046474182` **passes** all three real UTC signing cases, immutable
+replay after forced restart, terminal scope denial and valid two-receipt
+journals. Complete Rust checks pass with 1414 tests/one original Redis ignore
+and **81.795755%** line coverage at the original 80% floor. Only 4,558,173 report
+bytes are downloaded; all 804 local runtime files match. The exact-commit receipt
+is `agent-signing-writer-fix-preview/cloud-evidence.json`. Signing is qualified;
+actual Agent node/provider effects and the full migration remain unfinished.
 Current Go batch `agent-grant-current-v2` passes all 10 default/Android gates,
 including both races and exact **95.000931% / 95.062547%** coverage against the
 unchanged 95% floor; the final receipt confirms unchanged Go inputs. Rust caches

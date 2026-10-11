@@ -206,6 +206,9 @@ def process_cases(binary: Path, go_environment: dict[str, str], worker: Path, pr
             result = json.loads((case / "process-result.json").read_text(encoding="utf-8")) if code == 0 else {}
             if code or result.get("status") != "PASS" or result.get("scenario") != scenario:
                 raise RuntimeError(f"Actual {scenario} process signing failed; preserved logs, exit={code}")
+            for name in ("goControlAuthorizationRPC", "goControlAuthorizationReplayPreserved", "goControlTerminalDenial"):
+                if result.get(name) is not True:
+                    raise ValueError(f"Actual production Go authorization path was not qualified: {name}")
             stop_child(restarted)
             journal = state_root / "rust-worker/control-signatures.sqlite3"
             with sqlite3.connect(journal.as_uri() + "?mode=ro", uri=True) as db:
@@ -315,6 +318,9 @@ def main() -> int:
                   "startedAt": started_at, "sourceUnchanged": source_inventory() == before,
                   "sourceManifestSha256": hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest(),
                   "goProcessEntryPoint": "Integration test of actual registered ControlRPC and Control store",
+                  "goControlAuthorizationRPCQualified": status == "PASS" and all(
+                      case.get("goControlAuthorizationRPC") is True and case.get("goControlAuthorizationReplayPreserved") is True
+                      and case.get("goControlTerminalDenial") is True for case in results),
                   "fixtureMetadataArtifactReferences": True, "administrativePromotion": "Existing offline fixture key in isolated stores"}
         context_path = os.environ.get("DEEPSEEK_EVIDENCE_SOURCE_CONTEXT")
         if context_path:

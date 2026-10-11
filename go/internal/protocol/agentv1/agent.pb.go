@@ -2043,6 +2043,94 @@ func (x *RenewAgentRunExecutionResponse) GetClaim() *AgentRunExecutionClaim {
 	return nil
 }
 
+// The Go authority chooses the immutable signing request/nonce from its own
+// admitted claim and calls the pinned TLS Rust custody service. This grant
+// authorizes only the bound phase; it is not an effect receipt or permission
+// to redispatch an uncertain/taken-over action. No private key enters Go.
+type AuthorizeAgentRunExecutionResponse struct {
+	state                  protoimpl.MessageState  `protogen:"open.v1"`
+	AlreadyApplied         bool                    `protobuf:"varint,1,opt,name=already_applied,json=alreadyApplied,proto3" json:"already_applied,omitempty"`
+	Claim                  *AgentRunExecutionClaim `protobuf:"bytes,2,opt,name=claim,proto3" json:"claim,omitempty"`
+	CanonicalAuthorization []byte                  `protobuf:"bytes,3,opt,name=canonical_authorization,json=canonicalAuthorization,proto3" json:"canonical_authorization,omitempty"`
+	SignerPublicKey        string                  `protobuf:"bytes,4,opt,name=signer_public_key,json=signerPublicKey,proto3" json:"signer_public_key,omitempty"`
+	FleetId                string                  `protobuf:"bytes,5,opt,name=fleet_id,json=fleetId,proto3" json:"fleet_id,omitempty"`
+	Environment            string                  `protobuf:"bytes,6,opt,name=environment,proto3" json:"environment,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *AuthorizeAgentRunExecutionResponse) Reset() {
+	*x = AuthorizeAgentRunExecutionResponse{}
+	mi := &file_agent_v1_agent_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuthorizeAgentRunExecutionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuthorizeAgentRunExecutionResponse) ProtoMessage() {}
+
+func (x *AuthorizeAgentRunExecutionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuthorizeAgentRunExecutionResponse.ProtoReflect.Descriptor instead.
+func (*AuthorizeAgentRunExecutionResponse) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *AuthorizeAgentRunExecutionResponse) GetAlreadyApplied() bool {
+	if x != nil {
+		return x.AlreadyApplied
+	}
+	return false
+}
+
+func (x *AuthorizeAgentRunExecutionResponse) GetClaim() *AgentRunExecutionClaim {
+	if x != nil {
+		return x.Claim
+	}
+	return nil
+}
+
+func (x *AuthorizeAgentRunExecutionResponse) GetCanonicalAuthorization() []byte {
+	if x != nil {
+		return x.CanonicalAuthorization
+	}
+	return nil
+}
+
+func (x *AuthorizeAgentRunExecutionResponse) GetSignerPublicKey() string {
+	if x != nil {
+		return x.SignerPublicKey
+	}
+	return ""
+}
+
+func (x *AuthorizeAgentRunExecutionResponse) GetFleetId() string {
+	if x != nil {
+		return x.FleetId
+	}
+	return ""
+}
+
+func (x *AuthorizeAgentRunExecutionResponse) GetEnvironment() string {
+	if x != nil {
+		return x.Environment
+	}
+	return ""
+}
+
 var File_agent_v1_agent_proto protoreflect.FileDescriptor
 
 const file_agent_v1_agent_proto_rawDesc = "" +
@@ -2222,7 +2310,14 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"claimToken\x12#\n" +
 	"\rlease_seconds\x18\x05 \x01(\rR\fleaseSeconds\"a\n" +
 	"\x1eRenewAgentRunExecutionResponse\x12?\n" +
-	"\x05claim\x18\x01 \x01(\v2).deepseek.agent.v1.AgentRunExecutionClaimR\x05claim*\x8f\x01\n" +
+	"\x05claim\x18\x01 \x01(\v2).deepseek.agent.v1.AgentRunExecutionClaimR\x05claim\"\xb0\x02\n" +
+	"\"AuthorizeAgentRunExecutionResponse\x12'\n" +
+	"\x0falready_applied\x18\x01 \x01(\bR\x0ealreadyApplied\x12?\n" +
+	"\x05claim\x18\x02 \x01(\v2).deepseek.agent.v1.AgentRunExecutionClaimR\x05claim\x127\n" +
+	"\x17canonical_authorization\x18\x03 \x01(\fR\x16canonicalAuthorization\x12*\n" +
+	"\x11signer_public_key\x18\x04 \x01(\tR\x0fsignerPublicKey\x12\x19\n" +
+	"\bfleet_id\x18\x05 \x01(\tR\afleetId\x12 \n" +
+	"\venvironment\x18\x06 \x01(\tR\venvironment*\x8f\x01\n" +
 	"\x0eAgentChatPhase\x12 \n" +
 	"\x1cAGENT_CHAT_PHASE_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18AGENT_CHAT_PHASE_WORKERS\x10\x01\x12\x1d\n" +
@@ -2233,14 +2328,15 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x1eAGENT_RUN_EXECUTION_PHASE_PLAN\x10\x01\x12#\n" +
 	"\x1fAGENT_RUN_EXECUTION_PHASE_TASKS\x10\x022w\n" +
 	"\x12AgentChatScheduler\x12a\n" +
-	"\bEvaluate\x12).deepseek.agent.v1.AgentChatScheduleInput\x1a*.deepseek.agent.v1.AgentChatScheduleOutput2\x91\x05\n" +
+	"\bEvaluate\x12).deepseek.agent.v1.AgentChatScheduleInput\x1a*.deepseek.agent.v1.AgentChatScheduleOutput2\x90\x06\n" +
 	"\x0fAgentRunControl\x12e\n" +
 	"\fGetAuthority\x12).deepseek.agent.v1.AgentRunAuthorityInput\x1a*.deepseek.agent.v1.AgentRunAuthorityOutput\x12l\n" +
 	"\vAppendEvent\x12-.deepseek.agent.v1.AppendAgentRunEventRequest\x1a..deepseek.agent.v1.AppendAgentRunEventResponse\x12W\n" +
 	"\x06GetRun\x12%.deepseek.agent.v1.GetAgentRunRequest\x1a&.deepseek.agent.v1.GetAgentRunResponse\x12b\n" +
 	"\vEventsAfter\x12(.deepseek.agent.v1.AgentRunEventsRequest\x1a).deepseek.agent.v1.AgentRunEventsResponse\x12u\n" +
 	"\x0eClaimExecution\x120.deepseek.agent.v1.ClaimAgentRunExecutionRequest\x1a1.deepseek.agent.v1.ClaimAgentRunExecutionResponse\x12u\n" +
-	"\x0eRenewExecution\x120.deepseek.agent.v1.RenewAgentRunExecutionRequest\x1a1.deepseek.agent.v1.RenewAgentRunExecutionResponseBFZDgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1;agentv1b\x06proto3"
+	"\x0eRenewExecution\x120.deepseek.agent.v1.RenewAgentRunExecutionRequest\x1a1.deepseek.agent.v1.RenewAgentRunExecutionResponse\x12}\n" +
+	"\x12AuthorizeExecution\x120.deepseek.agent.v1.ClaimAgentRunExecutionRequest\x1a5.deepseek.agent.v1.AuthorizeAgentRunExecutionResponseBFZDgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1;agentv1b\x06proto3"
 
 var (
 	file_agent_v1_agent_proto_rawDescOnce sync.Once
@@ -2255,48 +2351,49 @@ func file_agent_v1_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_agent_v1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_agent_v1_agent_proto_goTypes = []any{
-	(AgentChatPhase)(0),                    // 0: deepseek.agent.v1.AgentChatPhase
-	(AgentRunExecutionPhase)(0),            // 1: deepseek.agent.v1.AgentRunExecutionPhase
-	(*AgentTaskCommand)(nil),               // 2: deepseek.agent.v1.AgentTaskCommand
-	(*AgentTaskResult)(nil),                // 3: deepseek.agent.v1.AgentTaskResult
-	(*AgentChatTask)(nil),                  // 4: deepseek.agent.v1.AgentChatTask
-	(*AgentChatOutcome)(nil),               // 5: deepseek.agent.v1.AgentChatOutcome
-	(*AgentChatScheduleInput)(nil),         // 6: deepseek.agent.v1.AgentChatScheduleInput
-	(*AgentChatScheduleOutput)(nil),        // 7: deepseek.agent.v1.AgentChatScheduleOutput
-	(*AgentArtifactReference)(nil),         // 8: deepseek.agent.v1.AgentArtifactReference
-	(*AgentRunPlanNode)(nil),               // 9: deepseek.agent.v1.AgentRunPlanNode
-	(*AgentRunEventMetadata)(nil),          // 10: deepseek.agent.v1.AgentRunEventMetadata
-	(*AgentRunCreateMetadata)(nil),         // 11: deepseek.agent.v1.AgentRunCreateMetadata
-	(*AgentRunNodeMetadata)(nil),           // 12: deepseek.agent.v1.AgentRunNodeMetadata
-	(*AgentRunSnapshot)(nil),               // 13: deepseek.agent.v1.AgentRunSnapshot
-	(*AppendAgentRunEventRequest)(nil),     // 14: deepseek.agent.v1.AppendAgentRunEventRequest
-	(*AppendAgentRunEventResponse)(nil),    // 15: deepseek.agent.v1.AppendAgentRunEventResponse
-	(*GetAgentRunRequest)(nil),             // 16: deepseek.agent.v1.GetAgentRunRequest
-	(*GetAgentRunResponse)(nil),            // 17: deepseek.agent.v1.GetAgentRunResponse
-	(*AgentRunEventsRequest)(nil),          // 18: deepseek.agent.v1.AgentRunEventsRequest
-	(*AgentRunEventsResponse)(nil),         // 19: deepseek.agent.v1.AgentRunEventsResponse
-	(*AgentRunAuthorityInput)(nil),         // 20: deepseek.agent.v1.AgentRunAuthorityInput
-	(*AgentRunAuthorityOutput)(nil),        // 21: deepseek.agent.v1.AgentRunAuthorityOutput
-	(*AgentRunExecutionClaim)(nil),         // 22: deepseek.agent.v1.AgentRunExecutionClaim
-	(*ClaimAgentRunExecutionRequest)(nil),  // 23: deepseek.agent.v1.ClaimAgentRunExecutionRequest
-	(*ClaimAgentRunExecutionResponse)(nil), // 24: deepseek.agent.v1.ClaimAgentRunExecutionResponse
-	(*RenewAgentRunExecutionRequest)(nil),  // 25: deepseek.agent.v1.RenewAgentRunExecutionRequest
-	(*RenewAgentRunExecutionResponse)(nil), // 26: deepseek.agent.v1.RenewAgentRunExecutionResponse
-	(*commonv1.ActionFence)(nil),           // 27: deepseek.common.v1.ActionFence
-	(commonv1.EffectState)(0),              // 28: deepseek.common.v1.EffectState
+	(AgentChatPhase)(0),                        // 0: deepseek.agent.v1.AgentChatPhase
+	(AgentRunExecutionPhase)(0),                // 1: deepseek.agent.v1.AgentRunExecutionPhase
+	(*AgentTaskCommand)(nil),                   // 2: deepseek.agent.v1.AgentTaskCommand
+	(*AgentTaskResult)(nil),                    // 3: deepseek.agent.v1.AgentTaskResult
+	(*AgentChatTask)(nil),                      // 4: deepseek.agent.v1.AgentChatTask
+	(*AgentChatOutcome)(nil),                   // 5: deepseek.agent.v1.AgentChatOutcome
+	(*AgentChatScheduleInput)(nil),             // 6: deepseek.agent.v1.AgentChatScheduleInput
+	(*AgentChatScheduleOutput)(nil),            // 7: deepseek.agent.v1.AgentChatScheduleOutput
+	(*AgentArtifactReference)(nil),             // 8: deepseek.agent.v1.AgentArtifactReference
+	(*AgentRunPlanNode)(nil),                   // 9: deepseek.agent.v1.AgentRunPlanNode
+	(*AgentRunEventMetadata)(nil),              // 10: deepseek.agent.v1.AgentRunEventMetadata
+	(*AgentRunCreateMetadata)(nil),             // 11: deepseek.agent.v1.AgentRunCreateMetadata
+	(*AgentRunNodeMetadata)(nil),               // 12: deepseek.agent.v1.AgentRunNodeMetadata
+	(*AgentRunSnapshot)(nil),                   // 13: deepseek.agent.v1.AgentRunSnapshot
+	(*AppendAgentRunEventRequest)(nil),         // 14: deepseek.agent.v1.AppendAgentRunEventRequest
+	(*AppendAgentRunEventResponse)(nil),        // 15: deepseek.agent.v1.AppendAgentRunEventResponse
+	(*GetAgentRunRequest)(nil),                 // 16: deepseek.agent.v1.GetAgentRunRequest
+	(*GetAgentRunResponse)(nil),                // 17: deepseek.agent.v1.GetAgentRunResponse
+	(*AgentRunEventsRequest)(nil),              // 18: deepseek.agent.v1.AgentRunEventsRequest
+	(*AgentRunEventsResponse)(nil),             // 19: deepseek.agent.v1.AgentRunEventsResponse
+	(*AgentRunAuthorityInput)(nil),             // 20: deepseek.agent.v1.AgentRunAuthorityInput
+	(*AgentRunAuthorityOutput)(nil),            // 21: deepseek.agent.v1.AgentRunAuthorityOutput
+	(*AgentRunExecutionClaim)(nil),             // 22: deepseek.agent.v1.AgentRunExecutionClaim
+	(*ClaimAgentRunExecutionRequest)(nil),      // 23: deepseek.agent.v1.ClaimAgentRunExecutionRequest
+	(*ClaimAgentRunExecutionResponse)(nil),     // 24: deepseek.agent.v1.ClaimAgentRunExecutionResponse
+	(*RenewAgentRunExecutionRequest)(nil),      // 25: deepseek.agent.v1.RenewAgentRunExecutionRequest
+	(*RenewAgentRunExecutionResponse)(nil),     // 26: deepseek.agent.v1.RenewAgentRunExecutionResponse
+	(*AuthorizeAgentRunExecutionResponse)(nil), // 27: deepseek.agent.v1.AuthorizeAgentRunExecutionResponse
+	(*commonv1.ActionFence)(nil),               // 28: deepseek.common.v1.ActionFence
+	(commonv1.EffectState)(0),                  // 29: deepseek.common.v1.EffectState
 }
 var file_agent_v1_agent_proto_depIdxs = []int32{
-	27, // 0: deepseek.agent.v1.AgentTaskCommand.fence:type_name -> deepseek.common.v1.ActionFence
-	27, // 1: deepseek.agent.v1.AgentTaskResult.fence:type_name -> deepseek.common.v1.ActionFence
-	28, // 2: deepseek.agent.v1.AgentTaskResult.state:type_name -> deepseek.common.v1.EffectState
+	28, // 0: deepseek.agent.v1.AgentTaskCommand.fence:type_name -> deepseek.common.v1.ActionFence
+	28, // 1: deepseek.agent.v1.AgentTaskResult.fence:type_name -> deepseek.common.v1.ActionFence
+	29, // 2: deepseek.agent.v1.AgentTaskResult.state:type_name -> deepseek.common.v1.EffectState
 	4,  // 3: deepseek.agent.v1.AgentChatScheduleInput.candidates:type_name -> deepseek.agent.v1.AgentChatTask
 	5,  // 4: deepseek.agent.v1.AgentChatScheduleInput.outcomes:type_name -> deepseek.agent.v1.AgentChatOutcome
 	4,  // 5: deepseek.agent.v1.AgentChatScheduleOutput.plan:type_name -> deepseek.agent.v1.AgentChatTask
 	4,  // 6: deepseek.agent.v1.AgentChatScheduleOutput.execute:type_name -> deepseek.agent.v1.AgentChatTask
 	0,  // 7: deepseek.agent.v1.AgentChatScheduleOutput.phase:type_name -> deepseek.agent.v1.AgentChatPhase
-	27, // 8: deepseek.agent.v1.AgentRunEventMetadata.fence:type_name -> deepseek.common.v1.ActionFence
+	28, // 8: deepseek.agent.v1.AgentRunEventMetadata.fence:type_name -> deepseek.common.v1.ActionFence
 	9,  // 9: deepseek.agent.v1.AgentRunEventMetadata.plan:type_name -> deepseek.agent.v1.AgentRunPlanNode
 	8,  // 10: deepseek.agent.v1.AgentRunEventMetadata.body:type_name -> deepseek.agent.v1.AgentArtifactReference
 	8,  // 11: deepseek.agent.v1.AgentRunCreateMetadata.request:type_name -> deepseek.agent.v1.AgentArtifactReference
@@ -2306,40 +2403,43 @@ var file_agent_v1_agent_proto_depIdxs = []int32{
 	10, // 15: deepseek.agent.v1.AgentRunSnapshot.last_event:type_name -> deepseek.agent.v1.AgentRunEventMetadata
 	11, // 16: deepseek.agent.v1.AppendAgentRunEventRequest.create:type_name -> deepseek.agent.v1.AgentRunCreateMetadata
 	10, // 17: deepseek.agent.v1.AppendAgentRunEventRequest.event:type_name -> deepseek.agent.v1.AgentRunEventMetadata
-	27, // 18: deepseek.agent.v1.AppendAgentRunEventRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	28, // 18: deepseek.agent.v1.AppendAgentRunEventRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	10, // 19: deepseek.agent.v1.AppendAgentRunEventResponse.event:type_name -> deepseek.agent.v1.AgentRunEventMetadata
 	13, // 20: deepseek.agent.v1.AppendAgentRunEventResponse.run:type_name -> deepseek.agent.v1.AgentRunSnapshot
-	27, // 21: deepseek.agent.v1.GetAgentRunRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	28, // 21: deepseek.agent.v1.GetAgentRunRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	13, // 22: deepseek.agent.v1.GetAgentRunResponse.run:type_name -> deepseek.agent.v1.AgentRunSnapshot
-	27, // 23: deepseek.agent.v1.AgentRunEventsRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	28, // 23: deepseek.agent.v1.AgentRunEventsRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	10, // 24: deepseek.agent.v1.AgentRunEventsResponse.events:type_name -> deepseek.agent.v1.AgentRunEventMetadata
-	27, // 25: deepseek.agent.v1.AgentRunExecutionClaim.fence:type_name -> deepseek.common.v1.ActionFence
+	28, // 25: deepseek.agent.v1.AgentRunExecutionClaim.fence:type_name -> deepseek.common.v1.ActionFence
 	1,  // 26: deepseek.agent.v1.AgentRunExecutionClaim.phase:type_name -> deepseek.agent.v1.AgentRunExecutionPhase
 	8,  // 27: deepseek.agent.v1.AgentRunExecutionClaim.request:type_name -> deepseek.agent.v1.AgentArtifactReference
 	1,  // 28: deepseek.agent.v1.ClaimAgentRunExecutionRequest.phase:type_name -> deepseek.agent.v1.AgentRunExecutionPhase
-	27, // 29: deepseek.agent.v1.ClaimAgentRunExecutionRequest.metadata_fence:type_name -> deepseek.common.v1.ActionFence
+	28, // 29: deepseek.agent.v1.ClaimAgentRunExecutionRequest.metadata_fence:type_name -> deepseek.common.v1.ActionFence
 	22, // 30: deepseek.agent.v1.ClaimAgentRunExecutionResponse.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
-	27, // 31: deepseek.agent.v1.RenewAgentRunExecutionRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	28, // 31: deepseek.agent.v1.RenewAgentRunExecutionRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	22, // 32: deepseek.agent.v1.RenewAgentRunExecutionResponse.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
-	6,  // 33: deepseek.agent.v1.AgentChatScheduler.Evaluate:input_type -> deepseek.agent.v1.AgentChatScheduleInput
-	20, // 34: deepseek.agent.v1.AgentRunControl.GetAuthority:input_type -> deepseek.agent.v1.AgentRunAuthorityInput
-	14, // 35: deepseek.agent.v1.AgentRunControl.AppendEvent:input_type -> deepseek.agent.v1.AppendAgentRunEventRequest
-	16, // 36: deepseek.agent.v1.AgentRunControl.GetRun:input_type -> deepseek.agent.v1.GetAgentRunRequest
-	18, // 37: deepseek.agent.v1.AgentRunControl.EventsAfter:input_type -> deepseek.agent.v1.AgentRunEventsRequest
-	23, // 38: deepseek.agent.v1.AgentRunControl.ClaimExecution:input_type -> deepseek.agent.v1.ClaimAgentRunExecutionRequest
-	25, // 39: deepseek.agent.v1.AgentRunControl.RenewExecution:input_type -> deepseek.agent.v1.RenewAgentRunExecutionRequest
-	7,  // 40: deepseek.agent.v1.AgentChatScheduler.Evaluate:output_type -> deepseek.agent.v1.AgentChatScheduleOutput
-	21, // 41: deepseek.agent.v1.AgentRunControl.GetAuthority:output_type -> deepseek.agent.v1.AgentRunAuthorityOutput
-	15, // 42: deepseek.agent.v1.AgentRunControl.AppendEvent:output_type -> deepseek.agent.v1.AppendAgentRunEventResponse
-	17, // 43: deepseek.agent.v1.AgentRunControl.GetRun:output_type -> deepseek.agent.v1.GetAgentRunResponse
-	19, // 44: deepseek.agent.v1.AgentRunControl.EventsAfter:output_type -> deepseek.agent.v1.AgentRunEventsResponse
-	24, // 45: deepseek.agent.v1.AgentRunControl.ClaimExecution:output_type -> deepseek.agent.v1.ClaimAgentRunExecutionResponse
-	26, // 46: deepseek.agent.v1.AgentRunControl.RenewExecution:output_type -> deepseek.agent.v1.RenewAgentRunExecutionResponse
-	40, // [40:47] is the sub-list for method output_type
-	33, // [33:40] is the sub-list for method input_type
-	33, // [33:33] is the sub-list for extension type_name
-	33, // [33:33] is the sub-list for extension extendee
-	0,  // [0:33] is the sub-list for field type_name
+	22, // 33: deepseek.agent.v1.AuthorizeAgentRunExecutionResponse.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
+	6,  // 34: deepseek.agent.v1.AgentChatScheduler.Evaluate:input_type -> deepseek.agent.v1.AgentChatScheduleInput
+	20, // 35: deepseek.agent.v1.AgentRunControl.GetAuthority:input_type -> deepseek.agent.v1.AgentRunAuthorityInput
+	14, // 36: deepseek.agent.v1.AgentRunControl.AppendEvent:input_type -> deepseek.agent.v1.AppendAgentRunEventRequest
+	16, // 37: deepseek.agent.v1.AgentRunControl.GetRun:input_type -> deepseek.agent.v1.GetAgentRunRequest
+	18, // 38: deepseek.agent.v1.AgentRunControl.EventsAfter:input_type -> deepseek.agent.v1.AgentRunEventsRequest
+	23, // 39: deepseek.agent.v1.AgentRunControl.ClaimExecution:input_type -> deepseek.agent.v1.ClaimAgentRunExecutionRequest
+	25, // 40: deepseek.agent.v1.AgentRunControl.RenewExecution:input_type -> deepseek.agent.v1.RenewAgentRunExecutionRequest
+	23, // 41: deepseek.agent.v1.AgentRunControl.AuthorizeExecution:input_type -> deepseek.agent.v1.ClaimAgentRunExecutionRequest
+	7,  // 42: deepseek.agent.v1.AgentChatScheduler.Evaluate:output_type -> deepseek.agent.v1.AgentChatScheduleOutput
+	21, // 43: deepseek.agent.v1.AgentRunControl.GetAuthority:output_type -> deepseek.agent.v1.AgentRunAuthorityOutput
+	15, // 44: deepseek.agent.v1.AgentRunControl.AppendEvent:output_type -> deepseek.agent.v1.AppendAgentRunEventResponse
+	17, // 45: deepseek.agent.v1.AgentRunControl.GetRun:output_type -> deepseek.agent.v1.GetAgentRunResponse
+	19, // 46: deepseek.agent.v1.AgentRunControl.EventsAfter:output_type -> deepseek.agent.v1.AgentRunEventsResponse
+	24, // 47: deepseek.agent.v1.AgentRunControl.ClaimExecution:output_type -> deepseek.agent.v1.ClaimAgentRunExecutionResponse
+	26, // 48: deepseek.agent.v1.AgentRunControl.RenewExecution:output_type -> deepseek.agent.v1.RenewAgentRunExecutionResponse
+	27, // 49: deepseek.agent.v1.AgentRunControl.AuthorizeExecution:output_type -> deepseek.agent.v1.AuthorizeAgentRunExecutionResponse
+	42, // [42:50] is the sub-list for method output_type
+	34, // [34:42] is the sub-list for method input_type
+	34, // [34:34] is the sub-list for extension type_name
+	34, // [34:34] is the sub-list for extension extendee
+	0,  // [0:34] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_agent_proto_init() }
@@ -2355,7 +2455,7 @@ func file_agent_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_agent_proto_rawDesc), len(file_agent_v1_agent_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   25,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

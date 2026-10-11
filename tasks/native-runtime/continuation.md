@@ -4,7 +4,73 @@
 [中文](../../README.md) / [English](../../README.en.md)
 <!-- docs-language-switcher:end -->
 
-## Current process signing preparation and cache cleanup — 2026-10-10
+## Production Go Agent authorization work — 2026-10-10
+
+The additive typed `AgentRunControl.AuthorizeExecution` RPC now connects durable
+Go admission to the existing production Rust custody client. Deployment-pinned
+public identity and loopback TLS configuration are required before claiming;
+Go derives immutable request identities, then rechecks live scope after signing.
+Focused real-store regression tests pass, including replay, cancellation,
+plan changes, expiry, signature/binding errors and reconciliation refusal.
+The two Rust test implementations of this service explicitly reject the new
+method; pinned Rustfmt checks pass. Their compilation remains cloud-only.
+Script lint, all 959 Python source files and 15 process boundary tests pass.
+The new handler has 71/73 covered statements in this focused run; this is not
+a complete Go coverage measurement.
+
+The process fixture now calls the actual registered Go RPC for first signing,
+replay and restart, and requires terminal denial through both Go and Rust.
+Its current producer preflight passes all three real Go cases; complete
+all ten default/native_android Go gates pass at the original 95% floor
+(default 95.007396%, native_android 95.068699%). Saved successful command
+receipts and a fresh rehash of all 3573 immutable snapshot inputs recover the
+interrupted aggregate; the host runner exit and container removal are not
+claimed. Production Go-to-Rust process proof for these changed inputs is
+pending cloud qualification and new explicit upload authorization. The earlier
+`4ffc3f2` cloud result remains valid for its exact snapshot; current Go/Proto
+inputs have changed and are not covered by that receipt. Rust compilation
+remains in the cloud. Actual Agent node/provider/tool effects remain unfinished
+and full release readiness remains `NOT_READY`.
+
+Current work is tracked by `artifacts/native-20261010-agent-execution-active-state.json`;
+the new focused result is `agent-authorize-go-regression-v4/receipt.json` and
+the full Go result is `agent-execution-go-agent-authorize-current-v2.json`.
+
+## Current process signing and cache cleanup — 2026-10-10
+
+The user-authorized follow-up `7ca579ca063c640214dc011a193f9fd8e44c6bf6`
+was uploaded to `codex/rust-cloud/20261010`. Actual cloud run `38044427626`
+passes complete Rust formatting, strict Clippy, 1414 tests (one existing Redis
+ignore) and all 15 crates' **81.797900%** line coverage at the unchanged 80%
+floor. Real UTC production Go/Rust signing cases for plan/tasks also pass:
+TLS/identity and six rebinding denials, exact epoch admission, immutable grant
+replay across a forced Worker restart, and two valid SQLite journal receipts.
+The run as a whole **fails** its writer-expiry case. Retain the failed aggregate
+and `agent-signing-cloud-preview-v2/partial-qualification.json`; two successful
+cases do not qualify the entire process probe.
+
+The expiry test waited on the original signed document's writer deadline.
+Actual Go renewal extends the current writer lease, so that wait did not prove
+the writer had expired. The correction reads and waits for the current Go writer
+deadline, keeps the explicit `FailedPrecondition` denial assertion, and adds a
+real UTC renewal/expiry producer regression. All three local Go producer cases
+pass (`agent-signing-process-producer-writer-fix-v8/receipt.json`); no production
+Go/Rust source changed. On explicit two-file upload authorization, commit
+`4ffc3f25a828043ea9c2e9e025efe04efdbb7f51` (tree
+`363d19ff4988b9aa6f87de9e871f9836292ccc8c`) was pushed to the same branch.
+Cloud run `38046474182` **passes** the exact correction commit: all three real
+UTC Go/Rust process cases (plan/tasks/writer-expiry), complete Rust formatting,
+strict Clippy, **1414 passing tests / one original Redis ignore**, and
+**76259/93231 = 81.795755%** line coverage at the unchanged 80% floor. Each
+process case verifies the expected denials, forced-restart immutable grant and
+SQLite integrity with exactly two receipts. Only **4,558,173 bytes** of reports
+were downloaded; no compiler/dependency cache or executable was downloaded.
+The collector rechecks both approved probe files, local HEAD/index and clean
+cloud commit context; all 804 local Rust/Go/Proto files also match the approved
+runtime. The exact receipt is
+`artifacts/native-20261010-agent-signing-writer-fix-preview/cloud-evidence.json`.
+Local task-document updates are outside that frozen upload. This qualifies the
+signing slice, not Agent provider effects or the full native migration.
 
 Branch/HEAD remain `codex/native-runtime-completion` /
 `0caf8ec4a652a21d037b06e995fe21ffa7ecdbf2`. The user-authorized cleanup removes
@@ -28,7 +94,8 @@ The driver checks private environment isolation and pinned public metadata, and
 prepares cloud-only production Rust custody provisioning, TLS, exact epoch
 installation, signed grants, rebinding/invalid-identity denial, strong process
 restart with immutable signatures, cancellation and independent writer expiry.
-These process cases are prepared, not yet qualified. Administrative promotion
+All three cloud process cases are qualified for the frozen correction above.
+Administrative promotion
 and metadata body references remain explicit offline fixtures. They cannot
 qualify provider effects, body custody, the full daemon topology or zero-Python
 workloads. Preserve the two producer fixture failures and all frozen inputs.
@@ -40,11 +107,10 @@ The offline multi-agent oracle's AST typing is repaired; its 103 cases and
 before/after generated bytes are unchanged, and the Rust fixture is preserved.
 Keep the earlier SDK-shadowing and oracle type-check failures for diagnosis.
 
-The new checks step requires an authorized follow-up cloud source upload. The
-previous upload authority applies to snapshot `291092e9` only. No new source
-has been pushed, merged, released or applied to production. Continue with the
-saved complete Go receipt, concrete upload review and the actual cloud process result;
-then implement Agent node effects/DAG/provider/recovery and remaining platforms.
+The two specifically authorized follow-ups have been pushed; no main-branch
+merge, release or production-data operation is authorized. Continue with the
+saved complete Go and corrected cloud process receipts; implement actual Agent
+node effects/DAG/provider/recovery and remaining platforms next.
 **NOT_READY**.
 
 ## Current cloud Rust qualification — 2026-10-10

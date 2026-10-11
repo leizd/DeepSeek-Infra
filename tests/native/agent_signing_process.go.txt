@@ -116,6 +116,19 @@ func nativeSigningWorker(t *testing.T, ready nativeSigningWorkerReady, bearer, h
 	return client
 }
 
+func nativeSigningConfigureGo(t *testing.T, ready nativeSigningWorkerReady, bearer string) {
+	t.Helper()
+	// Go receives public identity and authenticated client configuration only.
+	t.Setenv(worker.EnvWorkerTarget, ready.Target)
+	t.Setenv(worker.EnvWorkerTLSCAFile, ready.TrustRootFile)
+	t.Setenv(worker.EnvWorkerTLSServerName, "localhost")
+	t.Setenv(worker.EnvWorkerServiceBearer, bearer)
+	t.Setenv(worker.EnvWorkerServiceBearerExpires, ready.ExpiresAt)
+	t.Setenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY", ready.PublicKey)
+	t.Setenv("DEEPSEEK_WORKER_AUTHORITY_FLEET_ID", mutationFleetID)
+	t.Setenv("DEEPSEEK_WORKER_AUTHORITY_ENVIRONMENT", mutationEnvironment)
+}
+
 func nativeSigningID(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
@@ -176,26 +189,40 @@ func TestNativeAgentSigningProcess(t *testing.T) {
 			t.Fatal("Rust signing accepted an invalid bearer or TLS hostname")
 		}
 	}
-	var grant []byte
-	if err := call(func(ctx context.Context) error {
-		var err error
-		grant, err = rust.AuthorizeAgentExecution(ctx, claim, input.RequestId, input.Nonce, binding)
-		return err
-	}); err != nil {
-		t.Fatalf("actual Rust custody signing failed: %v", err)
+	nativeSigningConfigureGo(t, ready, bearer)
+	admission := executionRPCInput(claim.MetadataEpoch)
+	admission.Phase, admission.ExpectedIndex, admission.LeaseSeconds = claim.Phase, claim.MetadataIndex, 300
+	authorize := func() (*agentv1.AuthorizeAgentRunExecutionResponse, error) {
+		ctx, cancel := context.WithTimeout(controlRPCContext(t, testInternalBearer), 8*time.Second)
+		defer cancel()
+		return client.AuthorizeExecution(ctx, admission)
+	}
+	response, err := authorize()
+	if err != nil || response.GetClaim() == nil || !response.AlreadyApplied ||
+		response.SignerPublicKey != binding.PublicKey || response.FleetId != binding.FleetID || response.Environment != binding.Environment {
+		t.Fatalf("actual Go authorization RPC to Rust custody failed: %v", err)
+	}
+	grant, claim := response.CanonicalAuthorization, response.Claim
+	input.AgentIntent, input.Fence = claim, claim.Fence
+	if replay, err := authorize(); err != nil || !replay.AlreadyApplied || !bytes.Equal(grant, replay.CanonicalAuthorization) {
+		t.Fatalf("Go authorization replay changed its immutable grant: %v", err)
 	}
 	var document struct {
 		ActionID       string `json:"actionId"`
 		ExecutionEpoch uint64 `json:"executionEpoch"`
 		ExpiresAt      string `json:"expiresAt"`
+		RequestID      string `json:"requestId"`
+		Nonce          string `json:"nonce"`
 		Payload        struct {
 			LeaseUntil       int64 `json:"leaseUntil"`
 			WriterLeaseUntil int64 `json:"writerLeaseUntil"`
 		} `json:"payload"`
 	}
-	if json.Unmarshal(grant, &document) != nil || document.ActionID != claim.Fence.ActionId || document.ExecutionEpoch != claim.Fence.ExecutionEpoch {
+	if json.Unmarshal(grant, &document) != nil || document.ActionID != claim.Fence.ActionId || document.ExecutionEpoch != claim.Fence.ExecutionEpoch ||
+		document.RequestID == "" || document.Nonce == "" {
 		t.Fatal("signed grant does not bind the actual Go execution")
 	}
+	input.RequestId, input.Nonce = document.RequestID, document.Nonce
 	expires, err := time.Parse("2006-01-02T15:04:05Z", document.ExpiresAt)
 	if err != nil || !expires.After(time.Now()) || expires.Unix() > document.Payload.LeaseUntil || expires.Unix() > document.Payload.WriterLeaseUntil {
 		t.Fatal("Rust grant outlives its actual Go action or writer lease")
@@ -232,6 +259,10 @@ func TestNativeAgentSigningProcess(t *testing.T) {
 		t.Fatal("Rust restart changed its custody identity")
 	}
 	resumed := nativeSigningWorker(t, restarted, bearer, "localhost")
+	nativeSigningConfigureGo(t, restarted, bearer)
+	if replay, err := authorize(); err != nil || !replay.AlreadyApplied || !bytes.Equal(grant, replay.CanonicalAuthorization) {
+		t.Fatalf("Go authorization after Rust restart changed its immutable grant: %v", err)
+	}
 	if err := call(func(ctx context.Context) error {
 		replayed, err := resumed.AuthorizeAgentExecution(ctx, claim, input.RequestId, input.Nonce, binding)
 		if err == nil && !bytes.Equal(grant, replayed) {
@@ -262,6 +293,9 @@ func TestNativeAgentSigningProcess(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err := authorize(); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("Go terminal authorization denial: code=%s error=%v", status.Code(err), err)
+	}
 	forgedLiveDates := proto.Clone(claim).(*agentv1.AgentRunExecutionClaim)
 	forgedLiveDates.LeaseUntil, forgedLiveDates.WriterLeaseUntil = time.Now().Unix()+300, time.Now().Unix()+300
 	if err := call(func(ctx context.Context) error {
@@ -276,6 +310,7 @@ func TestNativeAgentSigningProcess(t *testing.T) {
 		"executionEpoch": claim.Fence.ExecutionEpoch, "metadataEpoch": claim.MetadataEpoch, "restartPreservedCanonicalGrant": true,
 		"rebindingDenied": rebindingDenied, "tlsHostnameAndBearerDenied": true, "uninstalledEpochDenied": true, "genericEpochBypassDenied": true,
 		"terminalScopeSigningDenied": true, "providerEffectsQualified": false,
+		"goControlAuthorizationRPC": true, "goControlAuthorizationReplayPreserved": true, "goControlTerminalDenial": true,
 	})
 }
 

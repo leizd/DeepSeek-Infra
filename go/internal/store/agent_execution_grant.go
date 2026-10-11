@@ -59,6 +59,12 @@ func ValidateAgentExecutionGrantIntent(intent AgentExecutionGrantIntent) error {
 	return err
 }
 
+// This deployment identity is immutable after OpenControl. Execution signers
+// must match the same realm as the authority that admitted their action.
+func (store *Control) AgentExecutionRealm() (string, string) {
+	return store.fleetID, store.environment
+}
+
 func VerifyAgentExecutionGrant(raw []byte, context AuthorityRequestContext, intent AgentExecutionGrantIntent) (map[string]any, error) {
 	expected, err := agentGrantPayload(intent)
 	if err != nil || len(raw) == 0 || len(raw) > MaxAuthorityRequestBytes || context.Now.IsZero() ||

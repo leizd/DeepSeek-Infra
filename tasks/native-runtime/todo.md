@@ -4,6 +4,26 @@
 [中文](../../README.md) / [English](../../README.en.md)
 <!-- docs-language-switcher:end -->
 
+## Production Go Agent authorization — 2026-10-10
+
+- [x] Add the versioned Go authorization RPC using durable Go admission and the
+  production TLS Rust custody client; independently recheck live scope before
+  returning the signed grant. Focused positive/refusal/replay tests pass.
+- [x] Update the real-process probe to require registered Go authorization,
+  immutable replay before/after Rust restart, and terminal denial by both runtimes.
+- [x] Add the required method to both Rust test service implementations, keeping
+  explicit execution refusal; pinned Rustfmt passes without local compilation.
+  Script lint, 959-file source typecheck and 15 boundary tests also pass.
+- [x] Compile the updated process probe and pass all three actual Go producer
+  preflight cases without a local Rust build.
+- [x] Complete all ten default/native_android Go gates at the original 95%
+  coverage floor (95.007396% / 95.068699%). Independently rehash the immutable
+  snapshot and successful logs after interrupted aggregate finalization.
+- [ ] Freeze and review these new inputs, obtain their upload authorization,
+  and qualify the production Go-to-Rust RPC process path on the exact cloud commit.
+- [ ] Continue actual durable Agent phase/node/provider/tool execution and
+  recovery. The new authorization primitive alone does not qualify those effects.
+
 ## Active work — 2026-10-10
 
 - [x] Clear the seven user-authorized Rust compilation/dependency cache roots,
@@ -12,9 +32,19 @@
 - [x] Prepare a repository Go producer/process probe against actual real-UTC
   ControlRPC and lease stores; planning/tasks preflight passes with full process
   case code compiled. Private environment/public binding/TLS fixture tests pass.
-- [ ] Obtain authorization for the concrete follow-up cloud source upload and
-  run actual production Rust custody/TLS/restart/expiry signing cases. Current
-  producer tests do not qualify those cases or provider effects.
+- [x] Upload the authorized nine-file follow-up `7ca579c`; actual cloud plan/tasks
+  signing passes with TLS, rebinding denial, forced restart and journal proof.
+  Retain run `38044427626` as failed: its writer-expiry test used the old document
+  deadline instead of the renewed Go writer deadline.
+- [x] Correct only the two reviewed probe files, retain the exact terminal denial
+  assertion and add a real UTC writer-renewal/expiry regression. All three Go
+  producer cases pass. Explicitly authorized correction `4ffc3f2` is uploaded.
+- [x] Qualify all three corrected production Rust custody/TLS/restart/writer-expiry
+  cases at exact commit `4ffc3f2`, cloud run `38046474182`. Full Rust checks pass:
+  1414 tests/one original Redis ignore and **76259/93231 = 81.795755%** line
+  coverage at the unchanged 80% floor. Source context, receipt integrity and
+  all 804 runtime files are verified. Download only 4,558,173 report bytes.
+  This proves signing; Agent node/provider effects remain unfinished.
 - [x] Complete Go `agent-grant-current-v2`: all 10 gates pass, including default
   and Android race. Exact coverage is 10205/10742 = 95.000931% and
   10031/10552 = 95.062547%; the 95% floor and frozen/current Go hashes are
@@ -30,9 +60,9 @@
   entries and **81.797900%** line coverage at the unchanged 80% floor.
   Run `38034954077` passes; `rust-cloud-preview/cloud-evidence.json` records
   source bindings and small reports without downloading compiler caches.
-- [ ] Complete the real-time production Go/Rust signer probe over TLS. Current
-  default/Android Go 95% gates already pass; the new cloud process cases remain
-  pending. Preserve each complete receipt as proof of its exact original inputs.
+- [x] Complete all three real-time production Go/Rust signer cases over TLS,
+  including actual writer expiry while the action remains live. Current
+  default/Android Go 95% gates already pass. Preserve each original input binding.
 - [x] Exercise actual Go Agent claim/renewal with default real UTC time and
   authenticated loopback RPC in an isolated fresh store. Planning/tasks,
   replay, rebinding, cancellation and expiry of the writer while its action

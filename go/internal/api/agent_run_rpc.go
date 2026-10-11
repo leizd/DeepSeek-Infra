@@ -17,8 +17,9 @@ import (
 
 type agentRunService struct {
 	agentv1.UnimplementedAgentRunControlServer
-	control *store.Control
-	health  ControlPlaneHealth
+	control         *store.Control
+	health          ControlPlaneHealth
+	executionSigner func(*store.Control) (*agentExecutionSignerSession, error)
 }
 
 func (service *agentRunService) processAuthoritative() bool {
