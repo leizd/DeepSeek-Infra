@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,7 +65,12 @@ func (fixture fixtureAgentAuthorizer) AuthorizeAgentExecution(ctx context.Contex
 // are offline fixtures; these tests do not qualify Rust custody or effects.
 func agentAuthorizeStore(t *testing.T, writerSeconds int64) *store.Control {
 	t.Helper()
-	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "agent-authorize-test", LeaseSeconds: writerSeconds,
+	return agentAuthorizeStoreWithClock(t, writerSeconds, nil)
+}
+
+func agentAuthorizeStoreWithClock(t *testing.T, writerSeconds int64, now func() int64) *store.Control {
+	t.Helper()
+	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "agent-authorize-test", LeaseSeconds: writerSeconds, Now: now,
 		AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic, FleetID: mutationFleetID, Environment: mutationEnvironment})
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +99,12 @@ func agentAuthorizeStore(t *testing.T, writerSeconds int64) *store.Control {
 
 func agentAuthorizeFixture(t *testing.T, phase string) (*store.Control, *agentRunService, agentv1.AgentRunControlClient, *agentv1.ClaimAgentRunExecutionRequest, ed25519.PrivateKey) {
 	t.Helper()
-	control := agentAuthorizeStore(t, 600)
+	return agentAuthorizeFixtureWithClock(t, phase, nil)
+}
+
+func agentAuthorizeFixtureWithClock(t *testing.T, phase string, now func() int64) (*store.Control, *agentRunService, agentv1.AgentRunControlClient, *agentv1.ClaimAgentRunExecutionRequest, ed25519.PrivateKey) {
+	t.Helper()
+	control := agentAuthorizeStoreWithClock(t, 600, now)
 	client := agentRunRPCClient(t, control, HealthFor(config.Config{Mode: config.ModeAuthoritative}))
 	epoch := uint64(0)
 	if phase == "tasks" {
@@ -207,7 +218,13 @@ func TestAgentExecutionAuthorizeRealStoreAndImmutableReplay(t *testing.T) {
 func TestAgentExecutionAuthorizeRejectsChangedScopeAndSigningErrors(t *testing.T) {
 	for _, fault := range []string{"plan-edit", "cancel-run", "cancel-context", "expired-action", "closed-store", "bad-signature", "wrong-request", "wrong-nonce", "wrong-body"} {
 		t.Run(fault, func(t *testing.T) {
-			control, service, client, input, private := agentAuthorizeFixture(t, "tasks")
+			var leaseClock atomic.Int64
+			var now func() int64
+			if fault == "expired-action" {
+				leaseClock.Store(time.Now().UTC().Unix())
+				now = leaseClock.Load
+			}
+			control, service, client, input, private := agentAuthorizeFixtureWithClock(t, "tasks", now)
 			if fault == "expired-action" {
 				input.LeaseSeconds = 1
 			}
@@ -215,7 +232,9 @@ func TestAgentExecutionAuthorizeRejectsChangedScopeAndSigningErrors(t *testing.T
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			want := codes.DataLoss
+			signerCalled := false
 			session.client = fixtureAgentAuthorizer(func(_ context.Context, claim *agentv1.AgentRunExecutionClaim, id, nonce string, binding worker.ControlSignerBinding) ([]byte, error) {
+				signerCalled = true
 				raw := fixtureAgentAuthorization(t, claim, id, nonce, binding, private, func(document map[string]any) {
 					switch fault {
 					case "wrong-request":
@@ -243,7 +262,9 @@ func TestAgentExecutionAuthorizeRejectsChangedScopeAndSigningErrors(t *testing.T
 					cancel()
 					want = codes.Canceled
 				case "expired-action":
-					time.Sleep(time.Until(time.Unix(claim.LeaseUntil, 0).Add(100 * time.Millisecond)))
+					// Keep admission live even under race instrumentation, then
+					// expire the same claim before the post-signing renewal.
+					leaseClock.Store(claim.LeaseUntil + 1)
 					want = codes.FailedPrecondition
 				case "closed-store":
 					if err := control.Close(); err != nil {
@@ -259,8 +280,12 @@ func TestAgentExecutionAuthorizeRejectsChangedScopeAndSigningErrors(t *testing.T
 				return raw, nil
 			})
 			service.executionSigner = func(*store.Control) (*agentExecutionSignerSession, error) { return session, nil }
-			if response, err := service.AuthorizeExecution(ctx, input); status.Code(err) != want || response != nil {
+			response, err := service.AuthorizeExecution(ctx, input)
+			if status.Code(err) != want || response != nil {
 				t.Fatalf("unsafe authorization escaped: code=%s want=%s error=%v", status.Code(err), want, err)
+			}
+			if fault == "expired-action" && (!signerCalled || status.Convert(err).Message() != "ACTION_LEASE_EXPIRED") {
+				t.Fatalf("expired claim did not reach the post-signing lease check: signerCalled=%t error=%v", signerCalled, err)
 			}
 		})
 	}
