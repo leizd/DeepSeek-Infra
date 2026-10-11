@@ -367,3 +367,142 @@ func TestAgentNodeDispatchRejectsCorruptHistoryBindings(t *testing.T) {
 		t.Fatalf("changed replay identity accepted: %v", err)
 	}
 }
+
+func TestAgentNodeDispatchRefusesBrokenRunLeaseAndResourceEvidence(t *testing.T) {
+	for _, scenario := range []string{"missing-action-lease", "expired-action-lease", "missing-resource", "missing-run", "metadata-epoch", "missing-plan-node", "invalid-node-input", "missing-operation", "missing-actor"} {
+		t.Run(scenario, func(t *testing.T) {
+			control, input := agentNodeDispatchFixture(t)
+			before, _, err := control.Get("action", input.ActionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch scenario {
+			case "missing-action-lease":
+				_, err = control.db.Exec("DELETE FROM action_leases WHERE action_id=?", input.ActionID)
+			case "expired-action-lease":
+				_, err = control.db.Exec("UPDATE action_leases SET lease_until=? WHERE action_id=?", control.now(), input.ActionID)
+			case "missing-resource":
+				_, err = control.db.Exec("DELETE FROM resource_leases WHERE action_id=?", input.ActionID)
+			case "missing-run":
+				_, err = control.db.Exec("DELETE FROM agent_runs WHERE id=?", input.RunID)
+			case "metadata-epoch":
+				_, err = control.db.Exec("UPDATE control_cutover SET epoch=epoch+1 WHERE domain='agent_run'")
+			case "missing-plan-node":
+				input.NodeID = "not-in-approved-plan"
+			case "invalid-node-input":
+				input.NodeID = ""
+			case "missing-operation":
+				input.OperationID = ""
+			case "missing-actor":
+				input.Actor = ""
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := countControlEvents(t, control)
+			if _, err := control.BeginAgentNodeDispatch(input); err == nil {
+				t.Fatalf("broken %s evidence admitted a dispatch", scenario)
+			}
+			after, found, err := control.Get("action", input.ActionID)
+			if err != nil || !found || after.Revision != before.Revision || after.State != before.State ||
+				!bytes.Equal(after.Payload, before.Payload) || countControlEvents(t, control) != count {
+				t.Fatalf("refused %s changed the action or its history: %+v %v", scenario, after, err)
+			}
+			if input.OperationID != "" {
+				if _, exists, err := control.ReadOperatorMutation(input.OperationID); err != nil || exists {
+					t.Fatalf("refused %s left an applied receipt: %v %v", scenario, exists, err)
+				}
+			}
+		})
+	}
+}
+
+func TestAgentNodeDispatchSQLiteWriteFailuresRollbackIntentHistoryAndReceipt(t *testing.T) {
+	for _, table := range []string{"action_journal", "control_events", "control_operator_mutations"} {
+		t.Run(table, func(t *testing.T) {
+			control, input := agentNodeDispatchFixture(t)
+			before, _, err := control.Get("action", input.ActionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			verb := "INSERT"
+			if table == "action_journal" {
+				verb = "UPDATE"
+			}
+			trigger := "CREATE TRIGGER agent_node_test_write_failure BEFORE " + verb + " ON " + table +
+				" BEGIN SELECT RAISE(ABORT,'injected Agent node write failure'); END"
+			if _, err := control.db.Exec(trigger); err != nil {
+				t.Fatal(err)
+			}
+			count := countControlEvents(t, control)
+			if _, err := control.BeginAgentNodeDispatch(input); err == nil {
+				t.Fatal("failed SQLite write still returned a fresh provider permission")
+			}
+			after, found, err := control.Get("action", input.ActionID)
+			if err != nil || !found || after.Revision != before.Revision || after.State != before.State ||
+				!bytes.Equal(after.Payload, before.Payload) || countControlEvents(t, control) != count {
+				t.Fatalf("failed %s write retained partial action state/history: %+v %v", table, after, err)
+			}
+			if _, exists, err := control.ReadOperatorMutation(input.OperationID); err != nil || exists {
+				t.Fatalf("failed %s write left an applied receipt: %v %v", table, exists, err)
+			}
+			if _, err := control.db.Exec("DROP TRIGGER agent_node_test_write_failure"); err != nil {
+				t.Fatal(err)
+			}
+			if result, err := control.BeginAgentNodeDispatch(input); err != nil || !result.Fresh {
+				t.Fatalf("rollback left a poisoned reservation: %+v %v", result, err)
+			}
+		})
+	}
+}
+
+func TestAgentNodeDispatchCommitClockLossRollsBackWithoutReleasingResources(t *testing.T) {
+	for _, scenario := range []string{"expired", "backward"} {
+		t.Run(scenario, func(t *testing.T) {
+			control, input := agentNodeDispatchFixture(t)
+			before := countControlEvents(t, control)
+			lease, found, err := control.GetActionLease(input.ActionID)
+			if err != nil || !found {
+				t.Fatalf("missing fixture lease: %v", err)
+			}
+			originalClock := control.now
+			start := originalClock()
+			calls := 0
+			control.now = func() int64 {
+				calls++
+				if calls == 1 {
+					return start
+				}
+				if scenario == "expired" {
+					return lease.LeaseUntil
+				}
+				return start - 1
+			}
+			_, err = control.BeginAgentNodeDispatch(input)
+			control.now = originalClock
+			if !errors.Is(err, ErrActionLeaseExpired) || calls < 2 || countControlEvents(t, control) != before {
+				t.Fatalf("commit %s accepted a stale dispatch or partial history: %v", scenario, err)
+			}
+			if _, exists, err := control.ReadOperatorMutation(input.OperationID); err != nil || exists {
+				t.Fatalf("commit clock loss retained an applied receipt: %v %v", exists, err)
+			}
+			resources, err := control.GetResourceLeases(input.ActionID)
+			if err != nil || len(resources) != 1 {
+				t.Fatalf("commit clock loss released its unresolved phase resource: %+v %v", resources, err)
+			}
+		})
+	}
+}
+
+func TestAgentNodeDispatchMalformedBindingAndClosedSnapshotAreExplicitErrors(t *testing.T) {
+	if _, err := readAgentNodeDispatches(Record{Payload: json.RawMessage(`{}`)}); !errors.Is(err, ErrAgentRunExecutionRequired) {
+		t.Fatalf("unbound payload silently became an empty intent map: %v", err)
+	}
+	control, input := agentNodeDispatchFixture(t)
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, found, err := control.AgentNodeDispatchSnapshot(input.ActionID, input.NodeID); err == nil || found {
+		t.Fatalf("closed storage silently looked like an absent effect: %v %v", found, err)
+	}
+}
