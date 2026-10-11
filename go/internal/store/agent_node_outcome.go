@@ -244,6 +244,13 @@ func (store *Control) RecordAgentNodeOutcome(input AgentNodeOutcomeRequest) (Age
 			return AgentNodeOutcomeResult{}, err
 		}
 	}
+	commitNow := store.now()
+	if commitNow < context.now || commitNow >= context.leaseUntil {
+		return AgentNodeOutcomeResult{}, ErrWriterFenceHeld
+	}
+	if _, err := store.assertWriterTx(tx, commitNow); err != nil {
+		return AgentNodeOutcomeResult{}, err
+	}
 	if err := store.finishOperatorMutationTx(tx, context); err != nil {
 		return AgentNodeOutcomeResult{}, err
 	}

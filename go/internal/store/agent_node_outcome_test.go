@@ -302,3 +302,156 @@ func TestAgentNodeOutcomePayloadAndReadGuards(t *testing.T) {
 		t.Fatalf("closed outcome snapshot: %v", err)
 	}
 }
+
+func TestAgentNodeOutcomeSQLiteFailureRollsBackEvidenceAndReceiptTogether(t *testing.T) {
+	for _, table := range []string{"action_journal", "control_events", operatorMutationTable} {
+		t.Run(table, func(t *testing.T) {
+			control, input, _ := agentOutcomeFixture(t)
+			before, _, err := control.Get("action", input.ActionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := countControlEvents(t, control)
+			verb := "INSERT"
+			if table == "action_journal" {
+				verb = "UPDATE"
+			}
+			trigger := "CREATE TEMP TRIGGER outcome_write_failure BEFORE " + verb + " ON " + table +
+				" BEGIN SELECT RAISE(ABORT,'injected outcome write failure'); END"
+			if _, err := control.db.Exec(trigger); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := control.RecordAgentNodeOutcome(input); err == nil {
+				t.Fatal("SQLite failure returned a recorded proof")
+			}
+			after, found, err := control.Get("action", input.ActionID)
+			if err != nil || !found || before.Revision != after.Revision || !bytes.Equal(before.Payload, after.Payload) || countControlEvents(t, control) != count {
+				t.Fatalf("failed %s write retained partial evidence/history: %v", table, err)
+			}
+			if _, found, err := control.ReadOperatorMutation(input.OperationID); err != nil || found {
+				t.Fatalf("failed write retained replay receipt: %v", err)
+			}
+			if _, _, receipt, _, err := control.AgentNodeOutcomeSnapshot(input.ActionID, input.NodeID); err != nil || receipt != nil {
+				t.Fatalf("failed write retained node proof: %v", err)
+			}
+			if _, err := control.db.Exec("DROP TRIGGER outcome_write_failure"); err != nil {
+				t.Fatal(err)
+			}
+			if result, err := control.RecordAgentNodeOutcome(input); err != nil || result.AlreadyRecorded {
+				t.Fatalf("rollback poisoned a valid retry: %v", err)
+			}
+		})
+	}
+}
+
+func TestAgentNodeOutcomeCommitWriterDeadlineAndBackwardClockRollBack(t *testing.T) {
+	for _, scenario := range []string{"expired-writer", "backward-clock"} {
+		t.Run(scenario, func(t *testing.T) {
+			control, input, _ := agentOutcomeFixture(t)
+			before, _, err := control.Get("action", input.ActionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := countControlEvents(t, control)
+			clock := control.now
+			start := clock()
+			calls := 0
+			control.now = func() int64 {
+				calls++
+				if calls == 1 {
+					return start
+				}
+				if scenario == "expired-writer" {
+					return start + control.leaseSeconds
+				}
+				return start - 1
+			}
+			_, err = control.RecordAgentNodeOutcome(input)
+			control.now = clock
+			if !errors.Is(err, ErrWriterFenceHeld) {
+				t.Fatalf("commit lost writer authority but retained proof: %v", err)
+			}
+			after, found, err := control.Get("action", input.ActionID)
+			if err != nil || !found || after.Revision != before.Revision || !bytes.Equal(after.Payload, before.Payload) || countControlEvents(t, control) != count {
+				t.Fatalf("commit clock loss retained history/evidence: %v", err)
+			}
+			if _, found, err := control.ReadOperatorMutation(input.OperationID); err != nil || found {
+				t.Fatalf("commit clock loss retained replay receipt: %v", err)
+			}
+			resources, err := control.GetResourceLeases(input.ActionID)
+			if err != nil || len(resources) != 1 {
+				t.Fatalf("commit failure released unresolved resources: %v", err)
+			}
+			if result, err := control.RecordAgentNodeOutcome(input); err != nil || result.AlreadyRecorded {
+				t.Fatalf("clock refusal poisoned a valid retry: %v", err)
+			}
+		})
+	}
+}
+
+func TestAgentNodeOutcomeCorruptOrNoncanonicalStoredEvidenceIsRefused(t *testing.T) {
+	control, input, _ := agentOutcomeFixture(t)
+	if _, err := control.RecordAgentNodeOutcome(input); err != nil {
+		t.Fatal(err)
+	}
+	record, _, err := control.Get("action", input.ActionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := readAgentNodeDispatches(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		edit func(map[string]storedAgentNodeOutcome)
+	}{
+		{"foreign-node", func(v map[string]storedAgentNodeOutcome) { v["foreign"] = v[input.NodeID]; delete(v, input.NodeID) }},
+		{"missing-writer", func(v map[string]storedAgentNodeOutcome) {
+			r := v[input.NodeID]
+			r.WriterFencingToken = 0
+			v[input.NodeID] = r
+		}},
+		{"empty-proof", func(v map[string]storedAgentNodeOutcome) { r := v[input.NodeID]; r.Receipt = nil; v[input.NodeID] = r }},
+		{"over-bound", func(v map[string]storedAgentNodeOutcome) {
+			r := v[input.NodeID]
+			r.Receipt = make([]byte, maximumPayloadBytes+1)
+			v[input.NodeID] = r
+		}},
+		{"bad-wire", func(v map[string]storedAgentNodeOutcome) {
+			r := v[input.NodeID]
+			r.Receipt = []byte{0x80}
+			v[input.NodeID] = r
+		}},
+		{"bad-signature", func(v map[string]storedAgentNodeOutcome) {
+			r := v[input.NodeID]
+			p := proto.Clone(input.Receipt).(*agentv1.AgentNodeOutcomeReceipt)
+			p.Signature[0] ^= 1
+			r.Receipt, _ = proto.Marshal(p)
+			v[input.NodeID] = r
+		}},
+		{"duplicate-wire-field", func(v map[string]storedAgentNodeOutcome) {
+			r := v[input.NodeID]
+			r.Receipt = append(r.Receipt, 0x08, 0x01)
+			v[input.NodeID] = r
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			values, err := agentNodeOutcomeBytes(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.edit(values)
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(record.Payload, &fields); err != nil {
+				t.Fatal(err)
+			}
+			fields[agentNodeOutcomeField], _ = json.Marshal(values)
+			bad := record
+			bad.Payload, _ = json.Marshal(fields)
+			if _, err := control.agentNodeOutcomes(bad, nodes); !errors.Is(err, ErrCorruptRecord) {
+				t.Fatalf("corrupt proof was exposed as trusted: %v", err)
+			}
+		})
+	}
+}
