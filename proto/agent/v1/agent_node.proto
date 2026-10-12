@@ -82,6 +82,7 @@ service AgentNodeControl {
   rpc RecordOutcome(RecordAgentNodeOutcomeRequest) returns (RecordAgentNodeOutcomeResponse);
   rpc SettlePlan(SettleAgentPlanRequest) returns (SettleAgentPlanResponse);
   rpc SettleTask(SettleAgentTaskRequest) returns (SettleAgentTaskResponse);
+  rpc CompleteTasks(CompleteAgentTasksRequest) returns (CompleteAgentTasksResponse);
 }
 
 message ExecuteAgentPlanRequest {
@@ -259,6 +260,25 @@ message SettleAgentTaskRequest {
 }
 
 message SettleAgentTaskResponse {
+  bool already_applied = 1;
+  AgentRunSnapshot run = 2;
+  string action_state = 3;
+}
+
+// Go derives completion from all retained signed task settlements. This ends the
+// task phase and releases its resource; it does not finish or synthesize the run.
+message CompleteAgentTasksRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  deepseek.common.v1.ActionFence fence = 4;
+  string run_id = 5;
+  string owner = 6;
+  string claim_token = 7;
+  int64 expected_index = 8;
+}
+
+message CompleteAgentTasksResponse {
   bool already_applied = 1;
   AgentRunSnapshot run = 2;
   string action_state = 3;

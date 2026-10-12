@@ -176,3 +176,24 @@ func (service *agentNodeService) SettleTask(ctx context.Context, input *agentv1.
 	}
 	return &agentv1.SettleAgentTaskResponse{AlreadyApplied: result.AlreadyApplied, Run: runProtocol(result.Run), ActionState: result.Action.State}, nil
 }
+
+func (service *agentNodeService) CompleteTasks(ctx context.Context, input *agentv1.CompleteAgentTasksRequest) (*agentv1.CompleteAgentTasksResponse, error) {
+	if err := service.run.executionProcess(); err != nil {
+		return nil, err
+	}
+	if input == nil || input.SchemaVersion != 1 || input.Fence == nil ||
+		len(input.ProtoReflect().GetUnknown()) != 0 || len(input.Fence.ProtoReflect().GetUnknown()) != 0 {
+		return nil, status.Error(codes.InvalidArgument, "AGENT_NODE_OUTCOME_REQUIRED")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
+	input = proto.Clone(input).(*agentv1.CompleteAgentTasksRequest)
+	result, err := service.run.control.CompleteAgentTasks(store.CompleteAgentTasksRequest{OperationID: input.OperationId, Actor: input.Actor,
+		ActionID: input.Fence.ActionId, Epoch: input.Fence.ExecutionEpoch, RunID: input.RunId, Owner: input.Owner,
+		ClaimToken: input.ClaimToken, ExpectedIndex: input.ExpectedIndex})
+	if err != nil {
+		return nil, nodeDispatchError(err)
+	}
+	return &agentv1.CompleteAgentTasksResponse{AlreadyApplied: result.AlreadyApplied, Run: runProtocol(result.Run), ActionState: result.Action.State}, nil
+}

@@ -12,6 +12,26 @@ RUNNER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(RUNNER)
 
 
+def test_dependent_critic_request_requires_scope_summary_and_zero_tool_capability():
+    result = {"actionId": "action-critic", "executionEpoch": 3, "dependentOperationId": "operation-critic"}
+    exchange = {"actionId": "action-critic", "executionEpoch": "3", "operationId": "operation-critic", "model": "deepseek-v4-pro",
+                "toolsPresent": False, "dependentTaskInPrompt": True, "predecessorSummaryInPrompt": True}
+    RUNNER.validate_dependent_task_request(exchange, result)
+
+
+@pytest.mark.parametrize("key,value", [
+    ("actionId", "other-action"), ("executionEpoch", "2"), ("operationId", "other-operation"), ("model", "other-model"),
+    ("toolsPresent", True), ("toolsPresent", None), ("toolsPresent", 0), ("dependentTaskInPrompt", False), ("predecessorSummaryInPrompt", False),
+])
+def test_dependent_critic_request_rejects_rebound_scope_missing_summary_and_extra_tools(key, value):
+    result = {"actionId": "action-critic", "executionEpoch": 3, "dependentOperationId": "operation-critic"}
+    exchange = {"actionId": "action-critic", "executionEpoch": "3", "operationId": "operation-critic", "model": "deepseek-v4-pro",
+                "toolsPresent": False, "dependentTaskInPrompt": True, "predecessorSummaryInPrompt": True}
+    exchange[key] = value
+    with pytest.raises(ValueError, match="verified scope"):
+        RUNNER.validate_dependent_task_request(exchange, result)
+
+
 @pytest.mark.parametrize("name", [
     "DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE", "DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE",
     "DEEPSEEK_WORKER_TLS_KEY_FILE", "DEEPSEEK_WORKER_AUTHORITY_NOW", "AWS_SECRET_ACCESS_KEY", "GH_TOKEN",

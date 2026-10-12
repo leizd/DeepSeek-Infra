@@ -234,6 +234,15 @@ def process_cases(binary: Path, go_environment: dict[str, str], worker: Path, pr
     return results
 
 
+def validate_dependent_task_request(exchange: dict[str, object], result: dict[str, object]) -> None:
+    # The admitted dependent is critic: the retained capability contract gives
+    # critic no tools. Its task, fence and predecessor summary remain required.
+    if exchange.get("actionId") != result["actionId"] or exchange.get("executionEpoch") != str(result["executionEpoch"]) or \
+            exchange.get("operationId") != result["dependentOperationId"] or exchange.get("model") != "deepseek-v4-pro" or \
+            exchange.get("toolsPresent") is not False or exchange.get("dependentTaskInPrompt") is not True or exchange.get("predecessorSummaryInPrompt") is not True:
+        raise ValueError("Dependent HTTP exchange lacks verified scope, role policy or Rust-owned predecessor output")
+
+
 def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: Path, provisioner: Path,
                           scratch: Path, output: Path, family: str = "planner") -> list[dict]:
     """Controlled HTTP fixtures exercise the production executable, not a delegate.
@@ -378,10 +387,7 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                 raise ValueError("Actual HTTP exchange did not carry the admitted planner identity and request policy")
             if scenario == "task-success":
                 dependent = received[1]
-                if dependent["actionId"] != result["actionId"] or dependent["executionEpoch"] != str(result["executionEpoch"]) or \
-                        dependent["operationId"] != result["dependentOperationId"] or dependent["model"] != "deepseek-v4-pro" or \
-                        not dependent["toolsPresent"] or not dependent["dependentTaskInPrompt"] or not dependent["predecessorSummaryInPrompt"]:
-                    raise ValueError("Dependent HTTP exchange lacks verified scope and Rust-owned predecessor output")
+                validate_dependent_task_request(dependent, result)
             stop_child(restarted)
             journal = state_root / "rust-worker/authority.sqlite3"
             with sqlite3.connect(journal.as_uri() + "?mode=ro", uri=True) as db:
@@ -471,8 +477,13 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                 if len(projections) != 1 or len(projections[0]) != result["projectionReceiptLength"]:
                     raise ValueError("Planner settlement lacks a unique immutable Rust projection signature")
             elif family == "task":
-                if not all(result.get(key) is True for key in ("rustRestartPreserved", "goRestartPreserved", "duplicateProviderDispatchDenied", "resourcesRetained")) or result.get("goTaskPhaseSettlementQualified"):
-                    raise ValueError("Task custody recovery or unresolved resource retention is unproven")
+                if not all(result.get(key) is True for key in ("rustRestartPreserved", "goRestartPreserved", "duplicateProviderDispatchDenied")):
+                    raise ValueError("Task custody recovery is unproven")
+                if scenario == "task-success":
+                    if not all(result.get(key) is True for key in ("goTaskPhaseSettlementQualified", "resourcesReleased", "phaseCompletionReplayedAfterGoRestart", "publicRunRemainsRunning")) or result.get("resourcesRetained"):
+                        raise ValueError("Verified task phase completion, resource release and recovery are unproven")
+                elif not result.get("resourcesRetained") or result.get("resourcesReleased") or result.get("goTaskPhaseSettlementQualified"):
+                    raise ValueError("Unresolved task phase released resources or claimed completion")
                 if scenario == "task-success":
                     receipts = [body for body in documents if hashlib.sha256(body).hexdigest() == result["outcomeReceiptSha256"]]
                     if not result.get("goOutcomePersisted") or not result.get("signedOutcomeVerified") or len(documents) != 4 or len(receipts) != 1 or len(receipts[0]) != result["outcomeReceiptLength"]:
@@ -593,6 +604,7 @@ def main() -> int:
                   "taskProcessCases": task_results, "taskControlledHTTPQualified": status == "PASS" and len(task_results) == 3,
                   "taskNodeSettlementQualified": status == "PASS" and any(case.get("goTaskNodeSettlementQualified") is True for case in task_results),
                   "dependencyDispatchQualified": status == "PASS" and any(case.get("dependencyDispatchQualified") is True for case in task_results),
+                  "taskPhaseSettlementQualified": status == "PASS" and any(case.get("goTaskPhaseSettlementQualified") is True for case in task_results),
                   "allTaskPhasesAndDAGQualified": False,
                   "runtimePythonQualified": False, "providerEffectsQualified": False, "readiness": "NOT_READY",
                   "startedAt": started_at, "sourceUnchanged": source_inventory() == before,

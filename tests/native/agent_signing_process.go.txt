@@ -1002,6 +1002,29 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 			t.Fatalf("dependent replay changed provider result: %v", err)
 		}
 	}
+	var completion *agentv1.CompleteAgentTasksRequest
+	if settlement != nil {
+		completion = &agentv1.CompleteAgentTasksRequest{SchemaVersion: 1, OperationId: "complete-task-phase", Actor: "operator:agent-test",
+			Fence: claim.Fence, RunId: claim.RunId, Owner: claim.Owner, ClaimToken: claim.ClaimToken, ExpectedIndex: 6}
+		finished, err := nodes.CompleteTasks(controlRPCContext(t, testInternalBearer), completion)
+		if err != nil || finished.AlreadyApplied || finished.ActionState != "SUCCEEDED" || finished.Run.Status != "running" || finished.Run.NextIndex != 6 {
+			t.Fatalf("actual task phase completion: %v", err)
+		}
+		replay, err := nodes.CompleteTasks(controlRPCContext(t, testInternalBearer), completion)
+		if err != nil || !replay.AlreadyApplied || !proto.Equal(replay.Run, finished.Run) {
+			t.Fatalf("task phase response loss duplicated completion: %v", err)
+		}
+		locks, err := control.GetResourceLeases(claim.Fence.ActionId)
+		if err != nil || len(locks) != 0 {
+			t.Fatal("completed task phase retained resources")
+		}
+	} else {
+		incomplete := &agentv1.CompleteAgentTasksRequest{SchemaVersion: 1, OperationId: "complete-unresolved-task-phase", Actor: "operator:agent-test",
+			Fence: claim.Fence, RunId: claim.RunId, Owner: claim.Owner, ClaimToken: claim.ClaimToken, ExpectedIndex: 4}
+		if _, err := nodes.CompleteTasks(controlRPCContext(t, testInternalBearer), incomplete); err == nil {
+			t.Fatal("unresolved task completed its phase")
+		}
+	}
 	if err := control.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -1042,9 +1065,13 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 		if err != nil || !retained.Found || !proto.Equal(retained.Intent, dependentIntent) || !proto.Equal(retained.OutcomeReceipt, critic.OutcomeReceipt) {
 			t.Fatalf("dependent Go restart: %v", err)
 		}
+		replayedPhase, err := reopened.CompleteTasks(controlRPCContext(t, testInternalBearer), completion)
+		if err != nil || !replayedPhase.AlreadyApplied || replayedPhase.Run.Status != "running" || replayedPhase.Run.NextIndex != 6 {
+			t.Fatalf("completed task phase did not survive Go restart: %v", err)
+		}
 		locks, err := control.GetResourceLeases(claim.Fence.ActionId)
-		if err != nil || len(locks) != 1 {
-			t.Fatal("node completion released unfinished phase resource")
+		if err != nil || len(locks) != 0 {
+			t.Fatal("restart restored completed phase resources")
 		}
 	}
 	nativeSigningWrite(t, filepath.Join(directory, "process-result.json"), map[string]any{
@@ -1052,8 +1079,9 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 		"operationId": admitted.Intent.OperationId, "state": known.State, "publicEvent": known.PublicEvent,
 		"outcomeSha256": known.OutcomeSha256, "outcomeReceiptSha256": receiptHash, "outcomeReceiptLength": receiptLength,
 		"signedOutcomeVerified": verified, "goOutcomePersisted": persisted, "rustRestartPreserved": true, "goRestartPreserved": true,
-		"unknownHasNoReceipt": known.OutcomeReceipt == nil, "duplicateProviderDispatchDenied": true, "resourcesRetained": true,
-		"productionGoNodeClient": true, "productionProviderQualified": false, "goTaskPhaseSettlementQualified": false,
+		"unknownHasNoReceipt": known.OutcomeReceipt == nil, "duplicateProviderDispatchDenied": true, "resourcesRetained": completion == nil, "resourcesReleased": completion != nil,
+		"productionGoNodeClient": true, "productionProviderQualified": false, "goTaskPhaseSettlementQualified": completion != nil,
+		"phaseCompletionReplayedAfterGoRestart": completion != nil, "publicRunRemainsRunning": completion != nil,
 		"goTaskNodeSettlementQualified": taskSettled, "dependencyDispatchQualified": dependencyQualified,
 		"dependentOperationId": func() string {
 			if dependentIntent != nil {

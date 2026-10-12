@@ -162,6 +162,9 @@ func (store *Control) agentExecutionAdmissionTx(tx *sql.Tx, record Record, takeo
 	if err != nil {
 		return nil, err
 	}
+	if !takeover && intent.Phase == "tasks" && completedAgentTasks(run) {
+		return nil, ErrActionNotClaimable
+	}
 	if !takeover && (run.NextIndex != intent.MetadataIndex || executionPlanDigest(run) != intent.PlanDigest || !executionPhaseReady(run, intent.Phase)) {
 		return nil, ErrActionNotClaimable
 	}
