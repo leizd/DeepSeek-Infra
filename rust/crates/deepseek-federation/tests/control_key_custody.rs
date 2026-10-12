@@ -41,6 +41,7 @@ fn node_outcome_signature_binds_typed_scope_and_fixed_domain() {
             length: 1,
         }),
         provider_plan: vec![],
+        task_output: None,
         fleet_id: "fleet-a".into(),
         environment: "test".into(),
     };
