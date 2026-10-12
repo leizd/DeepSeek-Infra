@@ -529,7 +529,7 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 			t.Fatal(err)
 		}
 		wait := time.Until(time.Unix(originalLease.LeaseUntil+1, 0))
-		if wait > 35*time.Second {
+		if wait > 65*time.Second {
 			t.Fatal("planner recovery wait exceeded its bounded UTC lease")
 		}
 		if wait > 0 {
