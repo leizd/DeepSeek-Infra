@@ -989,6 +989,8 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 	nativeSigningWrite(t, filepath.Join(directory, "restart-request.json"), map[string]bool{"restart": true})
 	var restarted nativeSigningWorkerReady
 	nativeSigningRead(t, filepath.Join(directory, "worker-restarted.json"), &restarted)
+	// Rebind the Go signer before admitting a new phase after the worker restart.
+	nativeSigningConfigureGo(t, restarted, bearer)
 	production = nativeSigningWorker(t, restarted, bearer, "localhost")
 	retained, err := production.QueryAgentNodeEffect(context.Background(), query)
 	if err != nil || !proto.Equal(retained, known) {
