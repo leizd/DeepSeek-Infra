@@ -206,6 +206,10 @@ func (rpc fixtureNodeWorker) ExecuteTask(_ context.Context, _ *agentv1.ExecuteAg
 	return nil, ErrInvalidWorkerResponse
 }
 
+func (rpc fixtureNodeWorker) ExecuteSynthesis(_ context.Context, _ *agentv1.ExecuteAgentTaskRequest, _ ...grpc.CallOption) (*agentv1.AgentNodeEffectMetadata, error) {
+	return nil, ErrInvalidWorkerResponse
+}
+
 func (rpc fixtureNodeWorker) QueryEffect(_ context.Context, input *agentv1.QueryAgentNodeEffectRequest, _ ...grpc.CallOption) (*agentv1.QueryAgentNodeEffectResponse, error) {
 	return rpc.query(input)
 }

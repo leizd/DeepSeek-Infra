@@ -282,7 +282,7 @@ fn v2_migration_preserves_unbound_intent_and_rolls_back_on_identity_failure() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        5
+        6
     );
     assert_eq!(
         connection

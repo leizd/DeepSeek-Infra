@@ -829,7 +829,7 @@ fn additive_v4_migration_preserves_epoch_and_does_not_infer_nodes() {
         database
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        5
+        6
     );
     assert_eq!(
         database
