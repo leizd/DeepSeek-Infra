@@ -198,6 +198,10 @@ type fixtureNodeWorker struct {
 func (rpc fixtureNodeWorker) ExecutePlan(_ context.Context, input *agentv1.ExecuteAgentPlanRequest, _ ...grpc.CallOption) (*agentv1.AgentNodeEffectMetadata, error) {
 	return rpc.execute(input)
 }
+func (rpc fixtureNodeWorker) ProjectPlan(_ context.Context, _ *agentv1.ProjectAgentPlanRequest, _ ...grpc.CallOption) (*agentv1.AgentPlanProjectionReceipt, error) {
+	return nil, ErrInvalidWorkerResponse
+}
+
 func (rpc fixtureNodeWorker) QueryEffect(_ context.Context, input *agentv1.QueryAgentNodeEffectRequest, _ ...grpc.CallOption) (*agentv1.QueryAgentNodeEffectResponse, error) {
 	return rpc.query(input)
 }

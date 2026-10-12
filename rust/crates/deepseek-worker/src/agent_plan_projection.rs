@@ -14,89 +14,6 @@ fn invalid() -> Status {
     Status::failed_precondition("AGENT_PLAN_PROJECTION_INVALID")
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{CallerIdentity, StaticTokenAuthenticator, Worker};
-    use deepseek_protocol::ActionFence;
-    use deepseek_protocol::generated::deepseek::agent::v1::{
-        AgentRunPlanNode, QueryAgentNodeEffectRequest,
-    };
-    use std::sync::Arc;
-
-    #[tokio::test]
-    async fn projection_requires_authenticated_controller_and_retained_custody() {
-        for role in ["controller", "worker"] {
-            let service = WorkerRpcService::new_with_authenticator(
-                Worker::new(),
-                Arc::new(StaticTokenAuthenticator::new(
-                    "fixture-bearer",
-                    CallerIdentity {
-                        service_name: "go-control-plane".into(),
-                        role: role.into(),
-                    },
-                )),
-            );
-            assert_eq!(
-                service
-                    .project_agent_plan(Request::new(ProjectAgentPlanRequest::default()))
-                    .await
-                    .unwrap_err()
-                    .code(),
-                tonic::Code::FailedPrecondition
-            );
-            let fence = ActionFence {
-                action_id: "projection-action".into(),
-                execution_epoch: 1,
-            };
-            let input = ProjectAgentPlanRequest {
-                schema_version: 1,
-                source: Some(QueryAgentNodeEffectRequest {
-                    operation_id: format!("agent-node-{}", "a".repeat(64)),
-                    fence: Some(fence.clone()),
-                    run_id: "run".into(),
-                    node_id: "leader".into(),
-                }),
-                settlement_fence: Some(fence),
-                settlement_writer_token: 1,
-                metadata_epoch: 1,
-                expected_index: 2,
-                normalized_plan: vec![AgentRunPlanNode {
-                    id: "coder".into(),
-                    task: "write".into(),
-                    depends_on: vec![],
-                }],
-                next_status: "awaiting_plan".into(),
-                planning_required: false,
-            };
-            assert_eq!(
-                service
-                    .project_agent_plan(Request::new(input.clone()))
-                    .await
-                    .unwrap_err()
-                    .code(),
-                tonic::Code::Unauthenticated
-            );
-            let mut request = Request::new(input);
-            request
-                .metadata_mut()
-                .insert("authorization", "Bearer fixture-bearer".parse().unwrap());
-            assert_eq!(
-                service
-                    .project_agent_plan(request)
-                    .await
-                    .unwrap_err()
-                    .code(),
-                if role == "worker" {
-                    tonic::Code::PermissionDenied
-                } else {
-                    tonic::Code::FailedPrecondition
-                }
-            );
-        }
-    }
-}
-
 impl WorkerRpcService {
     pub(crate) async fn project_agent_plan(
         &self,
@@ -214,5 +131,88 @@ impl WorkerRpcService {
             .await
             .sign_plan_projection(projection)?;
         Ok(Response::new(receipt))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CallerIdentity, StaticTokenAuthenticator, Worker};
+    use deepseek_protocol::ActionFence;
+    use deepseek_protocol::generated::deepseek::agent::v1::{
+        AgentRunPlanNode, QueryAgentNodeEffectRequest,
+    };
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn projection_requires_authenticated_controller_and_retained_custody() {
+        for role in ["controller", "worker"] {
+            let service = WorkerRpcService::new_with_authenticator(
+                Worker::new(),
+                Arc::new(StaticTokenAuthenticator::new(
+                    "fixture-bearer",
+                    CallerIdentity {
+                        service_name: "go-control-plane".into(),
+                        role: role.into(),
+                    },
+                )),
+            );
+            assert_eq!(
+                service
+                    .project_agent_plan(Request::new(ProjectAgentPlanRequest::default()))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::FailedPrecondition
+            );
+            let fence = ActionFence {
+                action_id: "projection-action".into(),
+                execution_epoch: 1,
+            };
+            let input = ProjectAgentPlanRequest {
+                schema_version: 1,
+                source: Some(QueryAgentNodeEffectRequest {
+                    operation_id: format!("agent-node-{}", "a".repeat(64)),
+                    fence: Some(fence.clone()),
+                    run_id: "run".into(),
+                    node_id: "leader".into(),
+                }),
+                settlement_fence: Some(fence),
+                settlement_writer_token: 1,
+                metadata_epoch: 1,
+                expected_index: 2,
+                normalized_plan: vec![AgentRunPlanNode {
+                    id: "coder".into(),
+                    task: "write".into(),
+                    depends_on: vec![],
+                }],
+                next_status: "awaiting_plan".into(),
+                planning_required: false,
+            };
+            assert_eq!(
+                service
+                    .project_agent_plan(Request::new(input.clone()))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::Unauthenticated
+            );
+            let mut request = Request::new(input);
+            request
+                .metadata_mut()
+                .insert("authorization", "Bearer fixture-bearer".parse().unwrap());
+            assert_eq!(
+                service
+                    .project_agent_plan(request)
+                    .await
+                    .unwrap_err()
+                    .code(),
+                if role == "worker" {
+                    tonic::Code::PermissionDenied
+                } else {
+                    tonic::Code::FailedPrecondition
+                }
+            );
+        }
     }
 }
