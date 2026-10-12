@@ -1496,11 +1496,9 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 		}
 	}
 	legal := LegalTransition(record.Domain, from, record.State)
-	// Typed native metadata writes can retain EXECUTING without changing the
-	// public action state machine. Both scopes were verified by their private entry points.
-	if !legal && exists && record.Domain == "action" && record.State == "EXECUTING" &&
-		existing.State == record.State && existing.ExecutionEpoch == record.ExecutionEpoch &&
-		(write.agentNodeDispatch || write.agentNodeOutcome) {
+	// Use the same narrow append rule for the write and its durable history.
+	if !legal && exists && (write.agentNodeDispatch || write.agentNodeOutcome) &&
+		nativeAgentMetadataHistoryEdge(existing, record) {
 		legal = true
 	}
 	if !legal && write.allowBoundLease && record.Domain == "action" {
@@ -1761,6 +1759,9 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 			expectedRevision = event.Revision
 		}
 		legal := LegalTransition(latest.Domain, previousState, event.State)
+		if !legal && nativeAgentMetadataHistoryEdge(final, event) {
+			legal = true
+		}
 		versionedEdge := (eventID > reconciliationBoundary && reconciliationTransition(previousState, event.State, previousEpoch, event.ExecutionEpoch)) ||
 			(eventID > verificationBoundary && verificationTransition(previousState, event.State, previousEpoch, event.ExecutionEpoch))
 		if !legal && latest.Domain == "action" && versionedEdge {
