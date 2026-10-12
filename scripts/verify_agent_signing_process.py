@@ -243,6 +243,17 @@ def validate_dependent_task_request(exchange: dict[str, object], result: dict[st
         raise ValueError("Dependent HTTP exchange lacks verified scope, role policy or Rust-owned predecessor output")
 
 
+def validate_synthesis_request(exchange: dict[str, object], result: dict[str, object]) -> None:
+    if exchange.get("actionId") != result.get("synthesisActionId") or exchange.get("actionId") == result.get("actionId") or \
+            exchange.get("executionEpoch") != str(result.get("synthesisExecutionEpoch")) or \
+            exchange.get("operationId") != result.get("synthesisOperationId") or exchange.get("model") != "deepseek-v4-pro" or \
+            exchange.get("toolsPresent") is not False or exchange.get("synthesisQueryInPrompt") is not True or \
+            exchange.get("synthesisCoderInPrompt") is not True or exchange.get("synthesisCriticInPrompt") is not True or \
+            type(exchange.get("predecessorSummaryCount")) is not int or exchange.get("predecessorSummaryCount") != 2 or \
+            exchange.get("privateReasoningInPrompt") is not False:
+        raise ValueError("Synthesis exchange lacks its own verified scope and every confirmed predecessor")
+
+
 def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: Path, provisioner: Path,
                           scratch: Path, output: Path, family: str = "planner") -> list[dict]:
     """Controlled HTTP fixtures exercise the production executable, not a delegate.
@@ -272,7 +283,7 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
     binding = validate_public_binding(json.loads(provisioned.stdout))
     ca_file, cert_file, key_file = create_tls(custody)
     results = []
-    scenarios = ["planner-success", "planner-unknown"] if family == "planner" else ["task-success", "task-tools", "task-unknown"]
+    scenarios = ["planner-success", "planner-unknown"] if family == "planner" else (["synthesis-success"] if family == "synthesis" else ["task-success", "task-tools", "task-unknown"])
     for scenario in scenarios:
         case = scratch / scenario
         case.mkdir()
@@ -297,7 +308,7 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
         response_body = {"id": "planner-fixture", "model": "deepseek-v4-pro",
             "choices": [{"message": {"role": "assistant", "content": json.dumps(plan)}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}
-        if family == "task":
+        if family in {"task", "synthesis"}:
             message: dict[str, object] = {"role": "assistant", "content": "## 摘要\nControlled public task summary", "reasoning_content": "private-task-reasoning"}
             if scenario == "task-tools":
                 message = {"role": "assistant", "content": "", "reasoning_content": "private-task-reasoning",
@@ -305,6 +316,9 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                                            "function": {"name": "read_file", "arguments": '{"path":"private-fixture-path"}'}}]}
             response_body["choices"] = [{"message": message, "finish_reason": "tool_calls" if scenario == "task-tools" else "stop"}]
         response_bytes = json.dumps(response_body, separators=(",", ":")).encode()
+        synthesis_response = dict(response_body, choices=[{"message": {"role": "assistant", "content": "Controlled final synthesis", "reasoning_content": "private-synthesis-reasoning"}, "finish_reason": "stop"}])
+        synthesis_response_bytes = json.dumps(synthesis_response, separators=(",", ":")).encode()
+
 
         class ProviderFixture(BaseHTTPRequestHandler):
             def log_message(self, *args):
@@ -322,13 +336,19 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                     "model": body.get("model"), "stream": body.get("stream"), "toolsPresent": "tools" in body,
                     "selectedTaskInPrompt": "Agent 子任务：write" in json.dumps(body, ensure_ascii=False),
                     "dependentTaskInPrompt": "Agent 子任务：review" in json.dumps(body, ensure_ascii=False),
-                    "predecessorSummaryInPrompt": "Controlled public task summary" in json.dumps(body, ensure_ascii=False)})
+                    "predecessorSummaryInPrompt": "Controlled public task summary" in json.dumps(body, ensure_ascii=False),
+                    "predecessorSummaryCount": json.dumps(body, ensure_ascii=False).count("Controlled public task summary"),
+                    "synthesisQueryInPrompt": "用户原问题：Prepare an isolated verification plan" in json.dumps(body, ensure_ascii=False),
+                    "synthesisCoderInPrompt": "任务：write" in json.dumps(body, ensure_ascii=False),
+                    "synthesisCriticInPrompt": "任务：review" in json.dumps(body, ensure_ascii=False),
+                    "privateReasoningInPrompt": "private-task-reasoning" in json.dumps(body, ensure_ascii=False)})
+                reply = synthesis_response_bytes if scenario == "synthesis-success" and len(received) == 3 else response_bytes
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(response_bytes) + (64 if scenario.endswith("-unknown") else 0)))
+                self.send_header("Content-Length", str(len(reply) + (64 if scenario.endswith("-unknown") else 0)))
                 self.send_header("Connection", "close")
                 self.end_headers()
-                self.wfile.write(response_bytes)
+                self.wfile.write(reply)
                 self.wfile.flush()
                 self.close_connection = True
 
@@ -375,19 +395,27 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
             restarted, target = start_worker(worker, rust_environment, ca_file, output / f"{scenario}-rust-restarted.log")
             workers.append(restarted)
             write_ready(case / "worker-restarted.json", dict(public_ready, Target=target))
+            if scenario == "synthesis-success":
+                wait_json(case / "synthesis-restart-request.json", producer)
+                stop_child(restarted)
+                restarted, target = start_worker(worker, rust_environment, ca_file, output / f"{scenario}-rust-synthesis-restarted.log")
+                workers.append(restarted)
+                write_ready(case / "worker-synthesis-restarted.json", dict(public_ready, Target=target))
             code = producer.wait(timeout=180)
             result = json.loads((case / "process-result.json").read_text(encoding="utf-8")) if code == 0 else {}
-            expected_calls = 2 if scenario == "task-success" else 1
+            expected_calls = 3 if scenario == "synthesis-success" else (2 if scenario == "task-success" else 1)
             if code or result.get("status") != "PASS" or result.get("scenario") != scenario or len(received) != expected_calls:
                 raise RuntimeError(f"Planner process qualification failed: {scenario}, exit={code}, HTTP requests={len(received)}")
             sent = received[0]
             if sent["actionId"] != result["actionId"] or sent["executionEpoch"] != str(result["executionEpoch"]) or \
                     sent["operationId"] != result["operationId"] or sent["model"] != "deepseek-v4-pro" or \
-                    sent["toolsPresent"] != (family == "task") or (family == "task" and not sent["selectedTaskInPrompt"]):
+                    sent["toolsPresent"] != (family in {"task", "synthesis"}) or (family in {"task", "synthesis"} and not sent["selectedTaskInPrompt"]):
                 raise ValueError("Actual HTTP exchange did not carry the admitted planner identity and request policy")
-            if scenario == "task-success":
+            if scenario in {"task-success", "synthesis-success"}:
                 dependent = received[1]
                 validate_dependent_task_request(dependent, result)
+            if scenario == "synthesis-success":
+                validate_synthesis_request(received[2], result)
             stop_child(restarted)
             journal = state_root / "rust-worker/authority.sqlite3"
             with sqlite3.connect(journal.as_uri() + "?mode=ro", uri=True) as db:
@@ -397,11 +425,15 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
             journal_state = "CONFIRMED" if result["state"] == "AWAITING_TOOLS" else result["state"]
             by_operation = {row[0]: row for row in rows}
             expected_operations = {result["operationId"]}
-            if scenario == "task-success":
+            if scenario in {"task-success", "synthesis-success"}:
                 expected_operations.add(result["dependentOperationId"])
+            if scenario == "synthesis-success":
+                expected_operations.add(result["synthesisOperationId"])
             if set(by_operation) != expected_operations or any(row[1] != journal_state for row in rows):
                 raise ValueError("Rust journal did not retain exactly the admitted nodes")
-            rows = [by_operation[result["operationId"]]] + ([by_operation[result["dependentOperationId"]]] if scenario == "task-success" else [])
+            rows = [by_operation[result["operationId"]]] + ([by_operation[result["dependentOperationId"]]] if scenario in {"task-success", "synthesis-success"} else [])
+            if scenario == "synthesis-success":
+                rows.append(by_operation[result["synthesisOperationId"]])
             with sqlite3.connect(catalog.as_uri() + "?mode=ro", uri=True) as db:
                 if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     raise ValueError("Rust planner body catalog integrity failed")
@@ -425,7 +457,7 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                         document = json.loads(retained_body[1])
                         if any(document.get(field) != expected for field, expected in expected_fields.items()):
                             raise ValueError("Go normalized plan/status diverges from the Rust public body")
-                elif family == "task" and scenario != "task-unknown":
+                elif family in {"task", "synthesis"} and scenario != "task-unknown":
                     output_bytes = rows[0][2]
                     envelope = json.loads(output_bytes)
                     event_ref = result["publicEvent"]
@@ -433,14 +465,14 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                     if not body or body[0] != event_ref["length"] or hashlib.sha256(body[1]).hexdigest() != event_ref["sha256"] or \
                             json.loads(body[1]) != envelope["publicEvent"] or envelope["runId"] != result["runId"] or \
                             hashlib.sha256(output_bytes).hexdigest() != result["outcomeSha256"] or rows[0][3] != result["outcomeSha256"] or \
-                            envelope["providerResponseSha256"] != hashlib.sha256(response_bytes).hexdigest() or db.execute("SELECT count(*) FROM artifacts").fetchone()[0] != (3 if scenario == "task-success" else 2):
+                            envelope["providerResponseSha256"] != hashlib.sha256(response_bytes).hexdigest() or db.execute("SELECT count(*) FROM artifacts").fetchone()[0] != (4 if scenario == "synthesis-success" else (3 if scenario == "task-success" else 2)):
                         raise ValueError("Task result lacks immutable Rust custody and exact provider response binding")
                     event = envelope["publicEvent"]
                     if event["phase"] != "coder" or b"private-task-reasoning" in body[1] or b"private-fixture-path" in body[1]:
                         raise ValueError("Task public projection contains private provider data")
-                    if scenario == "task-success" and (event["type"] != "agent_output" or event["output"]["id"] != "coder" or event["output"]["task"] != "write"):
+                    if scenario in {"task-success", "synthesis-success"} and (event["type"] != "agent_output" or event["output"]["id"] != "coder" or event["output"]["task"] != "write"):
                         raise ValueError("Task output changed the Go-selected role or task")
-                    if scenario == "task-success":
+                    if scenario in {"task-success", "synthesis-success"}:
                         dependent_ref = result["dependentPublicEvent"]
                         dependent_body = db.execute("SELECT length,bytes FROM artifacts WHERE sha256=?", (dependent_ref["sha256"],)).fetchone()
                         dependent_bytes = rows[1][2]
@@ -453,6 +485,20 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                                 dependent_event["phase"] != "critic" or dependent_event["type"] != "agent_output" or dependent_event["output"]["id"] != "critic" or \
                                 dependent_event["output"]["task"] != "review" or b"private-task-reasoning" in dependent_body[1]:
                             raise ValueError("Dependent result lacks exact signed Rust custody")
+                    if scenario == "synthesis-success":
+                        synthesis_ref = result["synthesisPublicEvent"]
+                        synthesis_body = db.execute("SELECT length,bytes FROM artifacts WHERE sha256=?", (synthesis_ref["sha256"],)).fetchone()
+                        synthesis_bytes = rows[2][2]
+                        synthesis_envelope = json.loads(synthesis_bytes)
+                        if not synthesis_body or synthesis_body[0] != synthesis_ref["length"] or hashlib.sha256(synthesis_body[1]).hexdigest() != synthesis_ref["sha256"] or \
+                                json.loads(synthesis_body[1]) != {"type": "content", "text": "Controlled final synthesis"} or \
+                                synthesis_envelope["publicEvent"] != json.loads(synthesis_body[1]) or synthesis_envelope["runId"] != result["runId"] or \
+                                hashlib.sha256(synthesis_bytes).hexdigest() != result["synthesisOutcomeSha256"] or rows[2][3] != result["synthesisOutcomeSha256"] or \
+                                synthesis_envelope["providerResponseSha256"] != hashlib.sha256(synthesis_response_bytes).hexdigest() or \
+                                synthesis_envelope["synthesisOutput"]["usage"] != synthesis_response["usage"] or \
+                                not isinstance(synthesis_envelope["synthesisOutput"]["latencyMs"], int) or synthesis_envelope["synthesisOutput"]["latencyMs"] < 0 or \
+                                b"private-synthesis-reasoning" in synthesis_bytes or b"private-task-reasoning" in synthesis_body[1]:
+                            raise ValueError("Synthesis lacks exact provider body custody and private-data filtering")
                     if scenario == "task-tools" and (event["type"] != "agent_tool_request" or event.get("output") or
                             envelope["toolContinuation"]["assistant"]["reasoning_content"] != "private-task-reasoning" or
                             len(envelope["toolContinuation"]["toolCalls"]) != 1):
@@ -476,22 +522,28 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                 projections = [body for body in documents if hashlib.sha256(body).hexdigest() == result["projectionReceiptSha256"]]
                 if len(projections) != 1 or len(projections[0]) != result["projectionReceiptLength"]:
                     raise ValueError("Planner settlement lacks a unique immutable Rust projection signature")
-            elif family == "task":
+            elif family in {"task", "synthesis"}:
                 if not all(result.get(key) is True for key in ("rustRestartPreserved", "goRestartPreserved", "duplicateProviderDispatchDenied")):
                     raise ValueError("Task custody recovery is unproven")
-                if scenario == "task-success":
+                if scenario in {"task-success", "synthesis-success"}:
                     if not all(result.get(key) is True for key in ("goTaskPhaseSettlementQualified", "resourcesReleased", "phaseCompletionReplayedAfterGoRestart", "publicRunRemainsRunning")) or result.get("resourcesRetained"):
                         raise ValueError("Verified task phase completion, resource release and recovery are unproven")
                 elif not result.get("resourcesRetained") or result.get("resourcesReleased") or result.get("goTaskPhaseSettlementQualified"):
                     raise ValueError("Unresolved task phase released resources or claimed completion")
-                if scenario == "task-success":
+                if scenario in {"task-success", "synthesis-success"}:
                     receipts = [body for body in documents if hashlib.sha256(body).hexdigest() == result["outcomeReceiptSha256"]]
-                    if not result.get("goOutcomePersisted") or not result.get("signedOutcomeVerified") or len(documents) != 4 or len(receipts) != 1 or len(receipts[0]) != result["outcomeReceiptLength"]:
+                    if not result.get("goOutcomePersisted") or not result.get("signedOutcomeVerified") or len(documents) != (7 if scenario == "synthesis-success" else 4) or len(receipts) != 1 or len(receipts[0]) != result["outcomeReceiptLength"]:
                         raise ValueError("Task receipt lacks actual Go verification and durable ingestion")
                     dependent_receipts = [body for body in documents if hashlib.sha256(body).hexdigest() == result["dependentReceiptSha256"]]
                     if len(dependent_receipts) != 1 or len(dependent_receipts[0]) != result["dependentReceiptLength"] or \
                             not result.get("goTaskNodeSettlementQualified") or not result.get("dependencyDispatchQualified"):
                         raise ValueError("Dependency requires independently verified Go completion and retained Rust output")
+                    if scenario == "synthesis-success":
+                        synthesis_receipts = [body for body in documents if hashlib.sha256(body).hexdigest() == result["synthesisReceiptSha256"]]
+                        if len(synthesis_receipts) != 1 or len(synthesis_receipts[0]) != result["synthesisReceiptLength"] or \
+                                not all(result.get(key) is True for key in ("synthesisGoProofPersisted", "synthesisRustRestartPreserved", "synthesisGoRestartPreserved", "synthesisDuplicateProviderDispatchDenied")) or \
+                                result.get("synthesisFinalRunSettlementQualified") is not False:
+                            raise ValueError("Synthesis signature recovery is unproven or final Go settlement was fabricated")
                 elif not result.get("unknownHasNoReceipt") or result.get("signedOutcomeVerified") or result.get("goOutcomePersisted") or len(documents) != 2:
                     raise ValueError("Incomplete task acquired a signed completion or Go receipt")
             elif not result.get("unknownOutcomeRecordingDenied") or not result.get("unknownHasNoReceipt") or result.get("signedOutcomeVerified") or len(documents) != 2:
@@ -584,6 +636,7 @@ def main() -> int:
     results = []
     planner_results = []
     task_results = []
+    synthesis_results = []
     started_at = datetime.now(timezone.utc).isoformat()
     try:
         with tempfile.TemporaryDirectory(prefix="agent-signing-", dir=output.parent) as directory:
@@ -592,6 +645,7 @@ def main() -> int:
                 results = process_cases(binary, environment, args.worker.resolve(), args.provisioner.resolve(), Path(directory), output)
                 planner_results = planner_process_cases(binary, environment, args.worker.resolve(), args.provisioner.resolve(), Path(directory), output)
                 task_results = planner_process_cases(binary, environment, args.worker.resolve(), args.provisioner.resolve(), Path(directory), output, "task")
+                synthesis_results = planner_process_cases(binary, environment, args.worker.resolve(), args.provisioner.resolve(), Path(directory), output, "synthesis")
         if source_inventory() != before:
             raise ValueError("Source inputs changed during process qualification")
         status = "PREFLIGHT_PASS" if args.preflight else "PASS"
@@ -605,6 +659,9 @@ def main() -> int:
                   "taskNodeSettlementQualified": status == "PASS" and any(case.get("goTaskNodeSettlementQualified") is True for case in task_results),
                   "dependencyDispatchQualified": status == "PASS" and any(case.get("dependencyDispatchQualified") is True for case in task_results),
                   "taskPhaseSettlementQualified": status == "PASS" and any(case.get("goTaskPhaseSettlementQualified") is True for case in task_results),
+                  "synthesisProcessCases": synthesis_results,
+                  "synthesisControlledHTTPQualified": status == "PASS" and len(synthesis_results) == 1,
+                  "synthesisFinalRunSettlementQualified": False,
                   "allTaskPhasesAndDAGQualified": False,
                   "runtimePythonQualified": False, "providerEffectsQualified": False, "readiness": "NOT_READY",
                   "startedAt": started_at, "sourceUnchanged": source_inventory() == before,

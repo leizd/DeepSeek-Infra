@@ -90,6 +90,33 @@ func (client *Client) ExecuteAgentTask(ctx context.Context, request *agentv1.Exe
 	return result, nil
 }
 
+// Synthesis has its own admitted fence and RPC. A tool request or unknown effect
+// carries no final answer and cannot be accepted as confirmed synthesis.
+func (client *Client) ExecuteAgentSynthesis(ctx context.Context, request *agentv1.ExecuteAgentTaskRequest) (*agentv1.AgentNodeEffectMetadata, error) {
+	if request == nil || request.SchemaVersion != 1 || request.OperationId == "" || len(request.OperationId) > 256 ||
+		request.Actor != "rust-agent-worker" || request.Claim == nil || request.Claim.RunId == "" ||
+		request.Claim.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS ||
+		request.Fence == nil || request.Fence.ActionId == "" || request.Fence.ExecutionEpoch == 0 ||
+		!proto.Equal(request.Fence, request.Claim.Fence) || len(request.SignedPhaseGrant) == 0 || len(request.SignedPhaseGrant) > 16384 ||
+		len(request.ProtoReflect().GetUnknown()) != 0 || request.NodeId != "synthesizer" {
+		return nil, ErrInvalidWorkerResponse
+	}
+	outbound, err := client.agentNodeContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := client.nodes.ExecuteSynthesis(outbound, request)
+	if err != nil {
+		return nil, fmt.Errorf("worker synthesis transport: %w", err)
+	}
+	if result == nil || !strings.HasPrefix(result.OperationId, "agent-node-") || len(result.OperationId) != 75 ||
+		!nodeOutcomeHex(result.OperationId[11:]) || result.State != "CONFIRMED" ||
+		!validAgentNodeEffect(result, request.Fence, result.OperationId, request.Claim.RunId, request.NodeId) {
+		return nil, ErrInvalidWorkerResponse
+	}
+	return result, nil
+}
+
 func agentTaskRole(role string) bool {
 	switch role {
 	case "researcher", "coder", "reasoner", "critic":

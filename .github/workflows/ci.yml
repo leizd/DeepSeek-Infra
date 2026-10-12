@@ -1407,7 +1407,7 @@ jobs:
         run: |
           set -euo pipefail
           plugin="$RUNNER_TEMP/protoc-gen-grpc-java-1.84.0-linux-x86_64.exe"
-          curl --fail --location --silent --show-error --output "$plugin" \
+          curl --fail --location --silent --show-error --retry 4 --retry-max-time 180 --max-time 60 --connect-timeout 10 --output "$plugin" \
             https://repo.maven.apache.org/maven2/io/grpc/protoc-gen-grpc-java/1.84.0/protoc-gen-grpc-java-1.84.0-linux-x86_64.exe
           echo "907c2d4efc2bae9b21cada75c31b36f3821e15b7be96311e214a6be65bcd20aa  $plugin" | sha256sum --check --strict
           chmod +x "$plugin"

@@ -548,7 +548,7 @@ fn v3_migration_preserves_epoch_bytes_without_inventing_grants() {
     let version: i64 = database
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
     let retained: Vec<u8> = database
         .query_row("SELECT request FROM epoch_installs", [], |row| row.get(0))
         .unwrap();

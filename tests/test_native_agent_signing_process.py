@@ -78,3 +78,28 @@ def test_disposable_tls_chain_authenticates_localhost_and_restricts_leaf_to_serv
     assert certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName) == ["localhost"]
     assert list(certificate.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value) == [ExtendedKeyUsageOID.SERVER_AUTH]
     assert key_path.parent == tmp_path
+
+
+def synthesis_exchange():
+    result = {"actionId": "task-action", "synthesisActionId": "own-synthesis-action", "synthesisExecutionEpoch": 4, "synthesisOperationId": "own-synthesis-operation"}
+    exchange = {"actionId": "own-synthesis-action", "executionEpoch": "4", "operationId": "own-synthesis-operation", "model": "deepseek-v4-pro",
+                "toolsPresent": False, "synthesisQueryInPrompt": True, "synthesisCoderInPrompt": True, "synthesisCriticInPrompt": True,
+                "predecessorSummaryCount": 2, "privateReasoningInPrompt": False}
+    return exchange, result
+
+
+def test_synthesis_request_requires_own_fence_and_all_verified_predecessors():
+    exchange, result = synthesis_exchange()
+    RUNNER.validate_synthesis_request(exchange, result)
+
+
+@pytest.mark.parametrize("key,value", [
+    ("actionId", "task-action"), ("actionId", "other"), ("executionEpoch", "3"), ("operationId", "foreign"), ("model", "foreign"),
+    ("toolsPresent", True), ("toolsPresent", None), ("synthesisQueryInPrompt", False), ("synthesisCoderInPrompt", False),
+    ("synthesisCriticInPrompt", False), ("predecessorSummaryCount", 1), ("predecessorSummaryCount", 2.0), ("privateReasoningInPrompt", True),
+])
+def test_synthesis_request_denies_rebound_scope_missing_input_private_reasoning_and_tools(key, value):
+    exchange, result = synthesis_exchange()
+    exchange[key] = value
+    with pytest.raises(ValueError, match="own verified scope"):
+        RUNNER.validate_synthesis_request(exchange, result)
