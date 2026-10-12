@@ -36,7 +36,7 @@ func readAgentOutcomeAdmissionTx(tx *sql.Tx, intent AgentNodeDispatch, currentMa
 		manifest != currentManifest {
 		return ActionLease{}, ErrActionLeaseStale
 	}
-	claim, found, err := readControlRecord(tx.QueryRow(`SELECT record_id, revision,
+	claim, metadata, found, err := scanControlRecord(tx.QueryRow(`SELECT record_id, revision,
 		execution_epoch, state, payload_json, record_digest, writer_fencing_token, recorded_at
 		FROM control_events WHERE domain='action' AND record_id=? AND revision=?`,
 		intent.ActionID, original.ClaimRevision), "action")
@@ -47,13 +47,7 @@ func readAgentOutcomeAdmissionTx(tx *sql.Tx, intent AgentNodeDispatch, currentMa
 		(claim.State != "CLAIMED" && claim.State != "RECONCILING") {
 		return ActionLease{}, ErrActionLeaseStale
 	}
-	var writer, timestamp int64
-	if err := tx.QueryRow(`SELECT writer_fencing_token, recorded_at FROM control_events
-		WHERE domain='action' AND record_id=? AND revision=?`, intent.ActionID,
-		original.ClaimRevision).Scan(&writer, &timestamp); err != nil {
-		return ActionLease{}, err
-	}
-	if writer != original.WriterFencingToken || timestamp != original.AcquiredAt {
+	if metadata.writerToken != original.WriterFencingToken || metadata.timestamp != original.AcquiredAt {
 		return ActionLease{}, ErrActionLeaseStale
 	}
 	binding, err := decodeAgentExecution(claim)

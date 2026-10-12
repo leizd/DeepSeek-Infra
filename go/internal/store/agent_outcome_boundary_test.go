@@ -15,7 +15,7 @@ import (
 )
 
 func TestAgentNodeOutcomeFaultsRetainActionAndReservations(t *testing.T) {
-	for _, change := range []string{"invalid_utf8", "private_actor", "action_cutover_read", "action_history_read", "action_lease_read", "commit_writer", "deferred_commit"} {
+	for _, change := range []string{"invalid_utf8", "missing_actor", "action_cutover_read", "action_history_read", "action_lease_read", "commit_writer", "deferred_commit"} {
 		t.Run(change, func(t *testing.T) {
 			control, input, _ := agentOutcomeFixture(t)
 			before, _, err := control.Get("action", input.ActionID)
@@ -31,8 +31,8 @@ func TestAgentNodeOutcomeFaultsRetainActionAndReservations(t *testing.T) {
 			switch change {
 			case "invalid_utf8":
 				input.Receipt.Evidence.ProviderPlan = []*agentv1.AgentRunPlanNode{{Id: "coder", Task: string([]byte{255})}}
-			case "private_actor":
-				input.Actor = "operator:AGE-SECRET-KEY-1EXAMPLE"
+			case "missing_actor":
+				input.Actor = ""
 			case "action_cutover_read":
 				statements = []string{"CREATE TEMP VIEW control_cutover AS SELECT * FROM main.control_cutover WHERE domain<>'action'"}
 			case "action_history_read":
@@ -64,6 +64,11 @@ func TestAgentNodeOutcomeFaultsRetainActionAndReservations(t *testing.T) {
 			control.token = originalToken
 			if rejected == nil {
 				t.Fatal("faulted receipt ingestion returned success")
+			}
+			if change == "action_cutover_read" {
+				if _, err := control.db.Exec("DROP VIEW temp.control_cutover"); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if change == "action_history_read" {
 				if _, err := control.db.Exec("DROP VIEW temp.control_events"); err != nil {
