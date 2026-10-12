@@ -356,3 +356,56 @@ func TestTaskSettlementPrivateMarkersCannotBeChangedByGenericWrite(t *testing.T)
 		t.Fatalf("generic refusal damaged original completion: %v", err)
 	}
 }
+
+func TestTaskSettlementFencingMetadataPreservesSecretRejection(t *testing.T) {
+	control, input, _ := taskSettlementFixture(t, false)
+	result, err := control.SettleAgentTask(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(result.Action.Payload, &fields); err != nil {
+		t.Fatal(err)
+	}
+	var markers map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(fields[agentTaskSettlementField], &markers); err != nil {
+		t.Fatal(err)
+	}
+	var writer int64
+	if err := json.Unmarshal(markers[input.NodeID]["fencingToken"], &writer); err != nil || writer != control.token {
+		t.Fatalf("writer fence was not retained as numeric fencing metadata: %d %v", writer, err)
+	}
+	if _, present := markers[input.NodeID]["writerFencingToken"]; present {
+		t.Fatal("settlement persisted the secret-bearing legacy field name")
+	}
+	before := countControlEvents(t, control)
+	for _, key := range []string{"writerFencingToken", "claimToken", "bearerToken", "privateKey"} {
+		t.Run(key, func(t *testing.T) {
+			var payload map[string]any
+			if err := json.Unmarshal(result.Action.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			nested := payload[agentTaskSettlementField].(map[string]any)[input.NodeID].(map[string]any)
+			// Numeric values must not exempt secret-bearing keys from rejection.
+			nested[key] = int64(1)
+			record := result.Action
+			record.Revision++
+			record.Payload, err = json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := control.Put(record); !errors.Is(err, ErrSecretDetected) {
+				t.Fatalf("secret-bearing nested field admitted: %v", err)
+			}
+			if countControlEvents(t, control) != before {
+				t.Fatal("secret rejection retained a partial control event")
+			}
+		})
+	}
+	if replay, err := control.SettleAgentTask(input); err != nil || !replay.AlreadyApplied || replay.Run.NextIndex != 5 {
+		t.Fatalf("secret rejection damaged retained completion: %v", err)
+	}
+	if _, err := control.BeginAgentNodeDispatch(taskDependentRequest(input)); err != nil {
+		t.Fatalf("numeric fencing metadata did not authorize verified dependency: %v", err)
+	}
+}

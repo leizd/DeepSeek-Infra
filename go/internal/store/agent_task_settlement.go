@@ -24,7 +24,7 @@ type AgentTaskSettlement struct {
 	MetadataEpoch       uint64 `json:"metadataEpoch"`
 	ActionRevision      int64  `json:"actionRevision"`
 	ExecutionEpoch      uint64 `json:"executionEpoch"`
-	WriterFencingToken  int64  `json:"writerFencingToken"`
+	WriterFencingToken  int64  `json:"fencingToken"`
 	RecordedAt          int64  `json:"recordedAt"`
 }
 
