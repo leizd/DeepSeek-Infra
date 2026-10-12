@@ -25,9 +25,9 @@ use crate::{
 
 pub struct AgentPlanExecutor {
     pub(crate) artifact_root: PathBuf,
-    workspace_root: PathBuf,
-    upstream: UpstreamConfig,
-    router: ModelRouterSettings,
+    pub(crate) workspace_root: PathBuf,
+    pub(crate) upstream: UpstreamConfig,
+    pub(crate) router: ModelRouterSettings,
 }
 
 impl std::fmt::Debug for AgentPlanExecutor {
@@ -71,7 +71,7 @@ pub fn load_agent_plan_executor_from_env() -> Result<Option<AgentPlanExecutor>, 
 }
 
 impl WorkerRpcService {
-    async fn publish_attested_plan(
+    pub(crate) async fn publish_attested_node(
         &self,
         executor: &AgentPlanExecutor,
         outcome: AgentNodeEffectOutcome,
@@ -84,6 +84,11 @@ impl WorkerRpcService {
             node_id: outcome.node_id.clone(),
         };
         let mut metadata = executor.publish_known(outcome, run_id).await?;
+        if metadata.state == "AWAITING_TOOLS" {
+            // A received tool request is retained provider evidence, not a
+            // completed task. It cannot receive an outcome completion proof.
+            return Ok(metadata);
+        }
         // Lock order matches the existing signer RPC: worker, then custody.
         let worker = self.worker.lock().await;
         let config = worker.agent_node_authority()?;
@@ -112,7 +117,10 @@ impl WorkerRpcService {
         self
     }
 
-    async fn node_send_lease(&self, permit: &AgentNodeEffectPermit) -> Result<i64, Status> {
+    pub(crate) async fn node_send_lease(
+        &self,
+        permit: &AgentNodeEffectPermit,
+    ) -> Result<i64, Status> {
         let now = authority_request::utc_z_now().map_err(|_| unavailable())?;
         let worker = self.worker.lock().await;
         let config = worker.agent_node_authority()?;
@@ -131,6 +139,18 @@ impl AgentPlanExecutor {
             .as_ref()
             .and_then(|claim| claim.request.as_ref())
             .ok_or_else(unavailable)?;
+        let model = self.router.refine_model.clone();
+        self.prepare_payload(reference, move |payload| {
+            Ok(multi_agent::planner_payload(payload, &model))
+        })
+        .await
+    }
+
+    pub(crate) async fn prepare_payload(
+        &self,
+        reference: &AgentArtifactReference,
+        shape: impl FnOnce(&Value) -> Result<Value, Status> + Send + 'static,
+    ) -> Result<Value, Status> {
         let reference = ArtifactReference {
             sha256: reference.sha256.clone(),
             length: reference.length,
@@ -150,7 +170,7 @@ impl AgentPlanExecutor {
             if !payload.is_object() {
                 return Err(Status::invalid_argument("AGENT_REQUEST_INVALID"));
             }
-            let planner = multi_agent::planner_payload(payload, &router.refine_model);
+            let shaped = shape(payload)?;
             let assembly = NativeAssembly::with_root(workspace)
                 .with_router_settings(router)
                 .with_readonly_budget();
@@ -166,7 +186,7 @@ impl AgentPlanExecutor {
                     engine: environment.engine,
                     dynamic: environment.dynamic,
                 };
-                build_deepseek_request(&planner, false, None, None, &environment)
+                build_deepseek_request(&shaped, false, None, None, &environment)
             });
             if index_needed {
                 return Err(Status::failed_precondition("AGENT_FILE_INDEX_UNAVAILABLE"));
@@ -190,10 +210,18 @@ impl AgentPlanExecutor {
             .filter(|value| value.is_object())
             .ok_or_else(unavailable)?
             .clone();
-        if envelope["runId"] != run_id
-            || event["type"] != "agent_plan"
-            || outcome.node_id != "leader"
-        {
+        let planner = outcome.node_id == "leader" && event["type"] == "agent_plan";
+        let task = deepseek_policy::multi_agent::profile(&outcome.node_id).is_some()
+            && event["phase"] == outcome.node_id
+            && event["type"] == "agent_output"
+            && event["output"]["id"] == outcome.node_id;
+        let pending_tools = deepseek_policy::multi_agent::profile(&outcome.node_id).is_some()
+            && event["phase"] == outcome.node_id
+            && event["type"] == "agent_tool_request"
+            && envelope["toolContinuation"]["toolCalls"]
+                .as_array()
+                .is_some_and(|calls| !calls.is_empty());
+        if envelope["runId"] != run_id || !(planner || task || pending_tools) {
             return Err(Status::data_loss("AGENT_PLAN_OUTCOME_CORRUPT"));
         }
         let root = self.artifact_root.clone();
@@ -209,7 +237,12 @@ impl AgentPlanExecutor {
             fence: Some(outcome.fence),
             run_id: run_id.into(),
             node_id: outcome.node_id,
-            state: "CONFIRMED".into(),
+            state: if pending_tools {
+                "AWAITING_TOOLS"
+            } else {
+                "CONFIRMED"
+            }
+            .into(),
             public_event: Some(AgentArtifactReference {
                 sha256: reference.sha256,
                 length: reference.length,
@@ -223,6 +256,14 @@ impl AgentPlanExecutor {
 
 #[tonic::async_trait]
 impl AgentNodeWorker for WorkerRpcService {
+    async fn execute_task(
+        &self,
+        request: Request<
+            deepseek_protocol::generated::deepseek::agent::v1::ExecuteAgentTaskRequest,
+        >,
+    ) -> Result<Response<AgentNodeEffectMetadata>, Status> {
+        self.execute_agent_task(request).await
+    }
     async fn project_plan(
         &self,
         request: Request<
@@ -301,7 +342,7 @@ impl AgentNodeWorker for WorkerRpcService {
         let permit = match result {
             AgentNodeEffectStart::Confirmed(outcome) => {
                 return self
-                    .publish_attested_plan(executor, outcome, &claim.run_id)
+                    .publish_attested_node(executor, outcome, &claim.run_id)
                     .await
                     .map(Response::new);
             }
@@ -326,7 +367,7 @@ impl AgentNodeWorker for WorkerRpcService {
         }.await;
         match sent {
             Ok(outcome) => self
-                .publish_attested_plan(executor, outcome, &claim.run_id)
+                .publish_attested_node(executor, outcome, &claim.run_id)
                 .await
                 .map(Response::new),
             Err(error) => {
@@ -375,7 +416,7 @@ impl AgentNodeWorker for WorkerRpcService {
                 .ok_or_else(unavailable)?;
             let executor = self.agent_plan_executor.as_ref().ok_or_else(unavailable)?;
             let effect = self
-                .publish_attested_plan(executor, outcome, &selector.run_id)
+                .publish_attested_node(executor, outcome, &selector.run_id)
                 .await?;
             return Ok(Response::new(QueryAgentNodeEffectResponse {
                 found: true,

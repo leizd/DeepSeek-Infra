@@ -134,10 +134,16 @@ impl AuthorityStore {
         let output: serde_json::Value =
             serde_json::from_slice(row.output.as_ref().ok_or_else(denied)?)
                 .map_err(|_| denied())?;
-        if output["runId"] != query.run_id
-            || output["publicEvent"]["type"] != "agent_plan"
-            || row.node_id != "leader"
-        {
+        let planner = row.phase == 1
+            && row.node_id == "leader"
+            && output["publicEvent"]["type"] == "agent_plan";
+        let task = row.phase == 2
+            && deepseek_policy::multi_agent::profile(&row.node_id).is_some()
+            && output["publicEvent"]["type"] == "agent_output"
+            && output["publicEvent"]["phase"] == row.node_id
+            && output["publicEvent"]["output"]["id"] == row.node_id
+            && output["publicEvent"]["output"]["task"] == row.intent.task;
+        if output["runId"] != query.run_id || !(planner || task) {
             return Err(denied());
         }
         let event = deepseek_policy::agent_run_data::sanitize(&output["publicEvent"]);
@@ -234,6 +240,7 @@ impl AuthorityStore {
         let at = authority_request::parse_utc_z_str(now).map_err(|_| denied())?;
         if row.state != "DISPATCHING"
             || row.intent_digest != permit.intent_digest
+            || agent_node_effect::digest(&permit.intent.encode_to_vec()) != permit.intent_digest
             || row.grant_digest != permit.grant_digest
             || at < authority_request::parse_utc_z_str(&row.updated_at).map_err(|_| denied())?
         {
@@ -251,6 +258,66 @@ impl AuthorityStore {
                 .map_err(|_| denied())?;
         let claim = response.claim.as_ref().ok_or_else(denied)?;
         Ok(expires.min(claim.lease_until).min(claim.writer_lease_until))
+    }
+
+    /// Go admits dependency completion; Rust resolves the matching immutable
+    /// provider bodies itself. Caller text and older plan generations are denied.
+    pub(crate) fn agent_task_prior_outputs(
+        &self,
+        permit: &AgentNodeEffectPermit,
+    ) -> Result<Vec<serde_json::Value>, Status> {
+        live(&self.connection, &permit.fence, permit.fencing_token)?;
+        let current = stored(&self.connection, &permit.operation_id)?.ok_or_else(denied)?;
+        if self.fencing_token != permit.fencing_token
+            || current.state != "DISPATCHING"
+            || current.intent.phase != 2
+            || current.intent_digest != permit.intent_digest
+            || current.grant_digest != permit.grant_digest
+            || agent_node_effect::digest(&permit.intent.encode_to_vec()) != permit.intent_digest
+            || permit.intent.depends_on.len() > 4
+        {
+            return Err(denied());
+        }
+        let mut outputs = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for dependency in &permit.intent.depends_on {
+            if dependency == &permit.intent.node_id
+                || !seen.insert(dependency)
+                || deepseek_policy::multi_agent::profile(dependency).is_none()
+            {
+                return Err(denied());
+            }
+            let operation: String = self.connection.query_row(
+                "SELECT operation_id FROM agent_node_effects WHERE run_id=?1 AND phase=2 AND node_id=?2 AND metadata_index<=?3 ORDER BY metadata_index DESC LIMIT 1",
+                params![permit.intent.run_id, dependency, permit.intent.metadata_index], |row| row.get(0))
+                .map_err(|_| denied())?;
+            let source = stored(&self.connection, &operation)?.ok_or_else(denied)?;
+            if source.intent.plan_digest != permit.intent.plan_digest
+                || source.intent.request != permit.intent.request
+                || source.intent.metadata_epoch > permit.intent.metadata_epoch
+                || source.token > permit.fencing_token
+                || source.intent.task.is_empty()
+            {
+                return Err(denied());
+            }
+            let source_task = source.intent.task.clone();
+            let known = outcome(source)?;
+            let envelope: serde_json::Value =
+                serde_json::from_slice(&known.output).map_err(|_| denied())?;
+            let event = &envelope["publicEvent"];
+            let output = &event["output"];
+            if envelope["runId"] != permit.intent.run_id
+                || event["type"] != "agent_output"
+                || event["phase"] != dependency.as_str()
+                || output["id"] != dependency.as_str()
+                || output["task"] != source_task
+                || !output.is_object()
+            {
+                return Err(denied());
+            }
+            outputs.push(output.clone());
+        }
+        Ok(outputs)
     }
 
     pub(crate) fn agent_node_snapshot(
@@ -334,6 +401,7 @@ impl AuthorityStore {
                 fencing_token: token,
                 grant_digest,
                 intent_digest,
+                intent: intent.clone(),
             }))
         } else {
             Ok(AgentNodeEffectStart::EffectUnknown)
@@ -362,7 +430,10 @@ impl AuthorityStore {
         if at < authority_request::parse_utc_z_str(&row.updated_at).map_err(|_| denied())? {
             return Err(denied());
         }
-        if row.intent_digest != permit.intent_digest || row.grant_digest != permit.grant_digest {
+        if row.intent_digest != permit.intent_digest
+            || row.grant_digest != permit.grant_digest
+            || agent_node_effect::digest(&permit.intent.encode_to_vec()) != permit.intent_digest
+        {
             return Err(denied());
         }
         if row.state == "CONFIRMED" {

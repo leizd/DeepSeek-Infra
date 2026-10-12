@@ -5,6 +5,8 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+mod task_executor;
+
 const NOW: &str = "2026-09-04T00:01:00Z";
 
 struct Fixture {

@@ -155,8 +155,21 @@ message QueryAgentNodeEffectResponse {
 // A known result is not Go phase settlement; independent proof is required.
 service AgentNodeWorker {
   rpc ExecutePlan(ExecuteAgentPlanRequest) returns (AgentNodeEffectMetadata);
+  rpc ExecuteTask(ExecuteAgentTaskRequest) returns (AgentNodeEffectMetadata);
   rpc QueryEffect(QueryAgentNodeEffectRequest) returns (QueryAgentNodeEffectResponse);
   rpc ProjectPlan(ProjectAgentPlanRequest) returns (AgentPlanProjectionReceipt);
+}
+
+// The caller selects only a node ID. Task text and dependencies come from the
+// worker's authenticated Go reservation; Rust reads all bodies from own custody.
+message ExecuteAgentTaskRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  AgentRunExecutionClaim claim = 4;
+  bytes signed_phase_grant = 5;
+  deepseek.common.v1.ActionFence fence = 6;
+  string node_id = 7;
 }
 
 // Rust constructs public bodies from its own confirmed planner journal. Go owns

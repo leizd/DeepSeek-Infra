@@ -28,6 +28,9 @@ func validAgentNodeEffect(effect *agentv1.AgentNodeEffectMetadata, fence *common
 			effect.OutcomeLength > 0 && effect.OutcomeLength <= 1024*1024 && effect.OutcomeReceipt != nil
 	case "EFFECT_UNKNOWN":
 		return effect.PublicEvent == nil && effect.OutcomeSha256 == "" && effect.OutcomeLength == 0 && effect.OutcomeReceipt == nil
+	case "AWAITING_TOOLS":
+		return nodeOutcomeArtifact(effect.PublicEvent) && nodeOutcomeHex(effect.OutcomeSha256) &&
+			effect.OutcomeLength > 0 && effect.OutcomeLength <= 1024*1024 && effect.OutcomeReceipt == nil
 	default:
 		return false
 	}
@@ -57,6 +60,43 @@ func (client *Client) ExecuteAgentPlan(ctx context.Context, request *agentv1.Exe
 		return nil, ErrInvalidWorkerResponse
 	}
 	return result, nil
+}
+
+// Task selection is bounded to the admitted role. Task bodies and dependency
+// results are resolved by Rust from Go's authenticated reservation and its own journal.
+// AWAITING_TOOLS carries no completion proof and cannot settle a Go task.
+func (client *Client) ExecuteAgentTask(ctx context.Context, request *agentv1.ExecuteAgentTaskRequest) (*agentv1.AgentNodeEffectMetadata, error) {
+	if request == nil || request.SchemaVersion != 1 || request.OperationId == "" || len(request.OperationId) > 256 ||
+		request.Actor != "rust-agent-worker" || request.Claim == nil || request.Claim.RunId == "" ||
+		request.Claim.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS ||
+		request.Fence == nil || request.Fence.ActionId == "" || request.Fence.ExecutionEpoch == 0 ||
+		!proto.Equal(request.Fence, request.Claim.Fence) || len(request.SignedPhaseGrant) == 0 || len(request.SignedPhaseGrant) > 16384 ||
+		len(request.ProtoReflect().GetUnknown()) != 0 || !agentTaskRole(request.NodeId) {
+		return nil, ErrInvalidWorkerResponse
+	}
+	outbound, err := client.agentNodeContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := client.nodes.ExecuteTask(outbound, request)
+	if err != nil {
+		return nil, fmt.Errorf("worker task transport: %w", err)
+	}
+	if result == nil || !strings.HasPrefix(result.OperationId, "agent-node-") || len(result.OperationId) != 75 ||
+		!nodeOutcomeHex(result.OperationId[11:]) || (result.State != "CONFIRMED" && result.State != "AWAITING_TOOLS") ||
+		!validAgentNodeEffect(result, request.Fence, result.OperationId, request.Claim.RunId, request.NodeId) {
+		return nil, ErrInvalidWorkerResponse
+	}
+	return result, nil
+}
+
+func agentTaskRole(role string) bool {
+	switch role {
+	case "researcher", "coder", "reasoner", "critic":
+		return true
+	default:
+		return false
+	}
 }
 
 // Historical queries never request a fresh dispatch or infer an unapplied

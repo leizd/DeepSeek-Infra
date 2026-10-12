@@ -759,3 +759,188 @@ func TestNativeAgentSigningProducer(t *testing.T) {
 		t.Logf("realUTC=true writerDeadlineAdvanced=true before=%d after=%d expiredWriterDenied=true", before, writerDeadline)
 	})
 }
+
+// This fixture exercises the real task producer without a scheduler shortcut,
+// local clock override, shared body store, or fabricated task settlement.
+func TestNativeAgentTaskProcess(t *testing.T) {
+	directory, scenario := os.Getenv("DEEPSEEK_AGENT_SIGNING_PROBE_DIR"), os.Getenv("DEEPSEEK_AGENT_SIGNING_PROBE_CASE")
+	if directory == "" || (scenario != "task-success" && scenario != "task-tools" && scenario != "task-unknown") {
+		t.Fatal("explicit isolated task process configuration is required")
+	}
+	for _, name := range []string{"DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE", "DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE", "DEEPSEEK_API_KEY", "DEEPSEEK_WORKER_AUTHORITY_NOW"} {
+		if _, present := os.LookupEnv(name); present {
+			t.Fatal("private runtime configuration entered Go")
+		}
+	}
+	controlDirectory := t.TempDir()
+	control := nativeSigningControl(t, 600, controlDirectory)
+	client, origin := nativeSigningRPC(t, control)
+	authority, err := client.GetAuthority(controlRPCContext(t, testInternalBearer), &agentv1.AgentRunAuthorityInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reference agentv1.AgentArtifactReference
+	nativeSigningRead(t, os.Getenv("DEEPSEEK_AGENT_PLANNER_ARTIFACT_REFERENCE_FILE"), &reference)
+	for index := int64(0); index < 4; index++ {
+		input := agentRPCAppend(index, authority.MetadataEpoch)
+		if index == 0 {
+			input.Create.Request = &reference
+		}
+		if index == 2 {
+			input.Event.Type = "agent_plan"
+			input.Event.Status = ""
+			input.Event.HasPlan = true
+			input.Event.Plan = []*agentv1.AgentRunPlanNode{{Id: "coder", Task: "write"}}
+		}
+		if index == 3 {
+			input.Event.Status = "running"
+		}
+		if _, err := client.AppendEvent(controlRPCContext(t, testInternalBearer), input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	admission := executionRPCInput(authority.MetadataEpoch)
+	claimed, err := client.ClaimExecution(controlRPCContext(t, testInternalBearer), admission)
+	if err != nil || claimed.GetClaim() == nil {
+		t.Fatalf("actual task claim: %v", err)
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "go-ready.json"), map[string]any{
+		"origin": origin, "internalBearer": testInternalBearer, "fencingToken": control.Writer().FencingToken,
+		"fleetId": mutationFleetID, "environment": mutationEnvironment})
+	var ready nativeSigningWorkerReady
+	nativeSigningRead(t, filepath.Join(directory, "worker-ready.json"), &ready)
+	bearer := os.Getenv("DEEPSEEK_AGENT_SIGNING_WORKER_BEARER")
+	nativeSigningConfigureGo(t, ready, bearer)
+	authorized, err := client.AuthorizeExecution(controlRPCContext(t, testInternalBearer), admission)
+	if err != nil || authorized.GetClaim() == nil || len(authorized.CanonicalAuthorization) == 0 {
+		t.Fatalf("actual task authorization: %v", err)
+	}
+	claim := authorized.Claim
+	request := &agentv1.ExecuteAgentTaskRequest{SchemaVersion: 1, OperationId: "task-process-dispatch", Actor: "rust-agent-worker",
+		Claim: claim, SignedPhaseGrant: authorized.CanonicalAuthorization, Fence: claim.Fence, NodeId: "coder"}
+	production := nativeSigningWorker(t, ready, bearer, "localhost")
+	changed := proto.Clone(request).(*agentv1.ExecuteAgentTaskRequest)
+	changed.NodeId = "leader"
+	if _, err := production.ExecuteAgentTask(context.Background(), changed); err == nil {
+		t.Fatal("task accepted planner role")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	result, executeError := production.ExecuteAgentTask(ctx, request)
+	cancel()
+	if scenario == "task-unknown" {
+		if status.Code(executeError) != codes.Unavailable {
+			t.Fatalf("uncertain task result: %v", executeError)
+		}
+	} else if executeError != nil || result == nil {
+		t.Fatalf("task result: %v", executeError)
+	}
+	connection, err := grpc.NewClient(origin[len("http://"):], grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	nodes := agentv1.NewAgentNodeControlClient(connection)
+	admitted, err := nodes.GetDispatch(controlRPCContext(t, testInternalBearer), &agentv1.GetAgentNodeDispatchRequest{
+		Fence: claim.Fence, RunId: claim.RunId, NodeId: "coder"})
+	if err != nil || !admitted.Found || admitted.Intent == nil || admitted.Intent.Task != "write" {
+		t.Fatalf("Go-owned task reservation: %v", err)
+	}
+	query := &agentv1.QueryAgentNodeEffectRequest{OperationId: admitted.Intent.OperationId, Fence: claim.Fence, RunId: claim.RunId, NodeId: "coder"}
+	known, err := production.QueryAgentNodeEffect(context.Background(), query)
+	if err != nil || known == nil {
+		t.Fatalf("task journal query: %v", err)
+	}
+	binding := worker.ControlSignerBinding{PublicKey: ready.PublicKey, FleetID: mutationFleetID, Environment: mutationEnvironment}
+	receiptHash, receiptLength := "", 0
+	verified, persisted := false, false
+	if scenario == "task-success" {
+		if known.State != "CONFIRMED" || !proto.Equal(known, result) {
+			t.Fatal("task lost complete outcome")
+		}
+		proof, err := worker.VerifyAgentNodeEffect(known, admitted.Intent, claim.WriterFencingToken, binding)
+		if err != nil || len(proof.Evidence().ProviderPlan) != 0 {
+			t.Fatalf("actual task custody verification: %v", err)
+		}
+		verified = true
+		forged := proto.Clone(known).(*agentv1.AgentNodeEffectMetadata)
+		forged.OutcomeReceipt.Signature[0] ^= 1
+		if _, err := worker.VerifyAgentNodeEffect(forged, admitted.Intent, claim.WriterFencingToken, binding); !errors.Is(err, worker.ErrAgentNodeOutcomeInvalid) {
+			t.Fatal("task accepted forged proof")
+		}
+		raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(known.OutcomeReceipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		receiptHash, receiptLength = hex.EncodeToString(digest[:]), len(raw)
+		record := &agentv1.RecordAgentNodeOutcomeRequest{SchemaVersion: 1, OperationId: "task-outcome-record", Actor: "operator:agent-test",
+			Fence: claim.Fence, RunId: claim.RunId, NodeId: "coder", OutcomeReceipt: known.OutcomeReceipt}
+		first, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), record)
+		if err != nil || first.AlreadyRecorded {
+			t.Fatalf("actual task Go ingestion: %v", err)
+		}
+		replay, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), record)
+		if err != nil || !replay.AlreadyRecorded || replay.ReceiptSha256 != first.ReceiptSha256 {
+			t.Fatal("Go outcome replay changed proof")
+		}
+		persisted = true
+	} else {
+		expected := "AWAITING_TOOLS"
+		if scenario == "task-unknown" {
+			expected = "EFFECT_UNKNOWN"
+		}
+		if known.State != expected || known.OutcomeReceipt != nil {
+			t.Fatal("incomplete task acquired completion proof")
+		}
+		if _, err := worker.VerifyAgentNodeEffect(known, admitted.Intent, claim.WriterFencingToken, binding); !errors.Is(err, worker.ErrAgentNodeOutcomeInvalid) {
+			t.Fatal("incomplete task verified")
+		}
+	}
+	if resources, err := control.GetResourceLeases(claim.Fence.ActionId); err != nil || len(resources) != 1 {
+		t.Fatal("producer released unresolved task resource")
+	}
+	run, found, err := control.AgentRunMetadata(claim.RunId)
+	if err != nil || !found || run.NextIndex != 4 || run.Status != "running" || run.Nodes()["coder"].State == "done" {
+		t.Fatal("producer fabricated Go DAG settlement")
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "restart-request.json"), map[string]bool{"restart": true})
+	var restarted nativeSigningWorkerReady
+	nativeSigningRead(t, filepath.Join(directory, "worker-restarted.json"), &restarted)
+	production = nativeSigningWorker(t, restarted, bearer, "localhost")
+	retained, err := production.QueryAgentNodeEffect(context.Background(), query)
+	if err != nil || !proto.Equal(retained, known) {
+		t.Fatalf("Rust task restart changed custody: %v", err)
+	}
+	replayed, replayError := production.ExecuteAgentTask(context.Background(), request)
+	if scenario == "task-unknown" {
+		if status.Code(replayError) != codes.FailedPrecondition {
+			t.Fatalf("unknown task replay dispatched: %v", replayError)
+		}
+	} else if replayError != nil || !proto.Equal(replayed, known) {
+		t.Fatalf("task replay changed retained provider result: %v", replayError)
+	}
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	control = nativeSigningControl(t, 600, controlDirectory)
+	_, restartOrigin := nativeSigningRPC(t, control)
+	restartConnection, err := grpc.NewClient(restartOrigin[len("http://"):], grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restartConnection.Close() })
+	retainedGo, err := agentv1.NewAgentNodeControlClient(restartConnection).GetDispatch(controlRPCContext(t, testInternalBearer),
+		&agentv1.GetAgentNodeDispatchRequest{Fence: claim.Fence, RunId: claim.RunId, NodeId: "coder"})
+	if err != nil || !retainedGo.Found || !proto.Equal(retainedGo.Intent, admitted.Intent) ||
+		!proto.Equal(retainedGo.OutcomeReceipt, known.OutcomeReceipt) {
+		t.Fatalf("Go task restart lost reservation or proof: %v", err)
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "process-result.json"), map[string]any{
+		"status": "PASS", "scenario": scenario, "runId": claim.RunId, "actionId": claim.Fence.ActionId, "executionEpoch": claim.Fence.ExecutionEpoch,
+		"operationId": admitted.Intent.OperationId, "state": known.State, "publicEvent": known.PublicEvent,
+		"outcomeSha256": known.OutcomeSha256, "outcomeReceiptSha256": receiptHash, "outcomeReceiptLength": receiptLength,
+		"signedOutcomeVerified": verified, "goOutcomePersisted": persisted, "rustRestartPreserved": true, "goRestartPreserved": true,
+		"unknownHasNoReceipt": known.OutcomeReceipt == nil, "duplicateProviderDispatchDenied": true, "resourcesRetained": true,
+		"productionGoNodeClient": true, "productionProviderQualified": false, "goTaskPhaseSettlementQualified": false,
+	})
+}

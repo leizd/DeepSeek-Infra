@@ -235,14 +235,16 @@ def process_cases(binary: Path, go_environment: dict[str, str], worker: Path, pr
 
 
 def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: Path, provisioner: Path,
-                          scratch: Path, output: Path) -> list[dict]:
+                          scratch: Path, output: Path, family: str = "planner") -> list[dict]:
     """Controlled HTTP fixtures exercise the production executable, not a delegate.
 
     Python seeds only isolated oracle input bodies. Rust validates those exact
     references and is the sole writer of node outcomes and public result bodies.
     This does not prove live upstream availability or Go phase/DAG settlement.
     """
-    custody = scratch / "rust-planner-custody"
+    if family not in {"planner", "task"}:
+        raise ValueError("Unknown producer family")
+    custody = scratch / f"rust-{family}-custody"
     custody.mkdir(mode=0o700)
     password, bundle = custody / "passphrase", custody / "bundle.json"
     password.write_bytes(secrets.token_urlsafe(48).encode())
@@ -253,7 +255,7 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
         "DEEPSEEK_WORKER_AUTHORITY_FLEET_ID": "fleet-a", "DEEPSEEK_WORKER_AUTHORITY_ENVIRONMENT": "production"})
     provisioned = subprocess.run([provisioner.as_posix()], cwd=ROOT, env=provision_environment,
                                 capture_output=True, timeout=60, check=False)
-    (output / "planner-provisioning.json").write_text(json.dumps({"exitCode": provisioned.returncode,
+    (output / f"{family}-provisioning.json").write_text(json.dumps({"exitCode": provisioned.returncode,
         "stdoutSha256": hashlib.sha256(provisioned.stdout).hexdigest(),
         "stderrSha256": hashlib.sha256(provisioned.stderr).hexdigest()}) + "\n", encoding="utf-8")
     if provisioned.returncode:
@@ -261,7 +263,8 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
     binding = validate_public_binding(json.loads(provisioned.stdout))
     ca_file, cert_file, key_file = create_tls(custody)
     results = []
-    for scenario in ["planner-success", "planner-unknown"]:
+    scenarios = ["planner-success", "planner-unknown"] if family == "planner" else ["task-success", "task-tools", "task-unknown"]
+    for scenario in scenarios:
         case = scratch / scenario
         case.mkdir()
         artifact_root = case / "rust-artifacts"
@@ -285,6 +288,13 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
         response_body = {"id": "planner-fixture", "model": "deepseek-v4-pro",
             "choices": [{"message": {"role": "assistant", "content": json.dumps(plan)}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}
+        if family == "task":
+            message: dict[str, object] = {"role": "assistant", "content": "## 摘要\nControlled public task summary", "reasoning_content": "private-task-reasoning"}
+            if scenario == "task-tools":
+                message = {"role": "assistant", "content": "", "reasoning_content": "private-task-reasoning",
+                           "tool_calls": [{"id": "task-call-1", "type": "function",
+                                           "function": {"name": "read_file", "arguments": '{"path":"private-fixture-path"}'}}]}
+            response_body["choices"] = [{"message": message, "finish_reason": "tool_calls" if scenario == "task-tools" else "stop"}]
         response_bytes = json.dumps(response_body, separators=(",", ":")).encode()
 
         class ProviderFixture(BaseHTTPRequestHandler):
@@ -300,10 +310,11 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                 received.append({"actionId": self.headers.get("X-DeepSeek-Action-Id"),
                     "executionEpoch": self.headers.get("X-DeepSeek-Execution-Epoch"),
                     "operationId": self.headers.get("X-DeepSeek-Node-Operation-Id"),
-                    "model": body.get("model"), "stream": body.get("stream"), "toolsPresent": "tools" in body})
+                    "model": body.get("model"), "stream": body.get("stream"), "toolsPresent": "tools" in body,
+                    "selectedTaskInPrompt": "Agent 子任务：write" in json.dumps(body, ensure_ascii=False)})
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(response_bytes) + (64 if scenario == "planner-unknown" else 0)))
+                self.send_header("Content-Length", str(len(response_bytes) + (64 if scenario.endswith("-unknown") else 0)))
                 self.send_header("Connection", "close")
                 self.end_headers()
                 self.wfile.write(response_bytes)
@@ -325,7 +336,8 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
         producer = None
         try:
             with (output / f"{scenario}-go.log").open("wb") as log:
-                producer = subprocess.Popen([binary.as_posix(), "-test.run=^TestNativeAgentPlanProcess$", "-test.v", "-test.timeout=4m"],
+                test_name = "TestNativeAgentPlanProcess" if family == "planner" else "TestNativeAgentTaskProcess"
+                producer = subprocess.Popen([binary.as_posix(), f"-test.run=^{test_name}$", "-test.v", "-test.timeout=4m"],
                     cwd=ROOT / "go/internal/api", env=environment, stdout=log, stderr=subprocess.STDOUT)
             ready = wait_json(case / "go-ready.json", producer)
             address = ready["origin"].removeprefix("http://").split(":")
@@ -358,7 +370,8 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                 raise RuntimeError(f"Planner process qualification failed: {scenario}, exit={code}, HTTP requests={len(received)}")
             sent = received[0]
             if sent["actionId"] != result["actionId"] or sent["executionEpoch"] != str(result["executionEpoch"]) or \
-                    sent["operationId"] != result["operationId"] or sent["model"] != "deepseek-v4-pro" or sent["toolsPresent"]:
+                    sent["operationId"] != result["operationId"] or sent["model"] != "deepseek-v4-pro" or \
+                    sent["toolsPresent"] != (family == "task") or (family == "task" and not sent["selectedTaskInPrompt"]):
                 raise ValueError("Actual HTTP exchange did not carry the admitted planner identity and request policy")
             stop_child(restarted)
             journal = state_root / "rust-worker/authority.sqlite3"
@@ -366,7 +379,8 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                 if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     raise ValueError("Rust planner journal integrity failed")
                 rows = db.execute("SELECT operation_id,state,output,output_sha256 FROM agent_node_effects").fetchall()
-            if len(rows) != 1 or rows[0][0] != result["operationId"] or rows[0][1] != result["state"]:
+            journal_state = "CONFIRMED" if result["state"] == "AWAITING_TOOLS" else result["state"]
+            if len(rows) != 1 or rows[0][0] != result["operationId"] or rows[0][1] != journal_state:
                 raise ValueError("Rust journal did not retain exactly the admitted node")
             with sqlite3.connect(catalog.as_uri() + "?mode=ro", uri=True) as db:
                 if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
@@ -391,6 +405,25 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                         document = json.loads(retained_body[1])
                         if any(document.get(field) != expected for field, expected in expected_fields.items()):
                             raise ValueError("Go normalized plan/status diverges from the Rust public body")
+                elif family == "task" and scenario != "task-unknown":
+                    output_bytes = rows[0][2]
+                    envelope = json.loads(output_bytes)
+                    event_ref = result["publicEvent"]
+                    body = db.execute("SELECT length,bytes FROM artifacts WHERE sha256=?", (event_ref["sha256"],)).fetchone()
+                    if not body or body[0] != event_ref["length"] or hashlib.sha256(body[1]).hexdigest() != event_ref["sha256"] or \
+                            json.loads(body[1]) != envelope["publicEvent"] or envelope["runId"] != result["runId"] or \
+                            hashlib.sha256(output_bytes).hexdigest() != result["outcomeSha256"] or rows[0][3] != result["outcomeSha256"] or \
+                            envelope["providerResponseSha256"] != hashlib.sha256(response_bytes).hexdigest() or db.execute("SELECT count(*) FROM artifacts").fetchone()[0] != 2:
+                        raise ValueError("Task result lacks immutable Rust custody and exact provider response binding")
+                    event = envelope["publicEvent"]
+                    if event["phase"] != "coder" or b"private-task-reasoning" in body[1] or b"private-fixture-path" in body[1]:
+                        raise ValueError("Task public projection contains private provider data")
+                    if scenario == "task-success" and (event["type"] != "agent_output" or event["output"]["id"] != "coder" or event["output"]["task"] != "write"):
+                        raise ValueError("Task output changed the Go-selected role or task")
+                    if scenario == "task-tools" and (event["type"] != "agent_tool_request" or event.get("output") or
+                            envelope["toolContinuation"]["assistant"]["reasoning_content"] != "private-task-reasoning" or
+                            len(envelope["toolContinuation"]["toolCalls"]) != 1):
+                        raise ValueError("Tool request was lost or became task completion")
                 elif rows[0][2:] != (None, None) or db.execute("SELECT count(*) FROM artifacts").fetchone()[0] != 1:
                     raise ValueError("An uncertain HTTP effect acquired a successful result body")
             signatures = state_root / "rust-worker/control-signatures.sqlite3"
@@ -410,6 +443,15 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                 projections = [body for body in documents if hashlib.sha256(body).hexdigest() == result["projectionReceiptSha256"]]
                 if len(projections) != 1 or len(projections[0]) != result["projectionReceiptLength"]:
                     raise ValueError("Planner settlement lacks a unique immutable Rust projection signature")
+            elif family == "task":
+                if not all(result.get(key) is True for key in ("rustRestartPreserved", "goRestartPreserved", "duplicateProviderDispatchDenied", "resourcesRetained")) or result.get("goTaskPhaseSettlementQualified"):
+                    raise ValueError("Task custody recovery or unresolved resource retention is unproven")
+                if scenario == "task-success":
+                    receipts = [body for body in documents if hashlib.sha256(body).hexdigest() == result["outcomeReceiptSha256"]]
+                    if not result.get("goOutcomePersisted") or not result.get("signedOutcomeVerified") or len(documents) != 3 or len(receipts) != 1 or len(receipts[0]) != result["outcomeReceiptLength"]:
+                        raise ValueError("Task receipt lacks actual Go verification and durable ingestion")
+                elif not result.get("unknownHasNoReceipt") or result.get("signedOutcomeVerified") or result.get("goOutcomePersisted") or len(documents) != 2:
+                    raise ValueError("Incomplete task acquired a signed completion or Go receipt")
             elif not result.get("unknownOutcomeRecordingDenied") or not result.get("unknownHasNoReceipt") or result.get("signedOutcomeVerified") or len(documents) != 2:
                 raise ValueError("Uncertain effect acquired a signature or successful Go outcome")
             result.update(outcomeSignatureJournalVerified=True, actualHTTPRequestCount=len(received), httpFenceVerified=True, bodyCustodyVerified=True,
@@ -499,6 +541,7 @@ def main() -> int:
     status = "FAIL"
     results = []
     planner_results = []
+    task_results = []
     started_at = datetime.now(timezone.utc).isoformat()
     try:
         with tempfile.TemporaryDirectory(prefix="agent-signing-", dir=output.parent) as directory:
@@ -506,6 +549,7 @@ def main() -> int:
             if not args.preflight:
                 results = process_cases(binary, environment, args.worker.resolve(), args.provisioner.resolve(), Path(directory), output)
                 planner_results = planner_process_cases(binary, environment, args.worker.resolve(), args.provisioner.resolve(), Path(directory), output)
+                task_results = planner_process_cases(binary, environment, args.worker.resolve(), args.provisioner.resolve(), Path(directory), output, "task")
         if source_inventory() != before:
             raise ValueError("Source inputs changed during process qualification")
         status = "PREFLIGHT_PASS" if args.preflight else "PASS"
@@ -515,6 +559,8 @@ def main() -> int:
                   "scope": "Go authority and Rust custody process signing" if not args.preflight else "Actual real-UTC Go producer and authenticated RPC only",
                   "rustCompiledByThisRunner": False, "rustSigningQualified": status == "PASS", "cases": results,
                   "plannerProcessCases": planner_results, "plannerControlledHTTPQualified": status == "PASS" and len(planner_results) == 2,
+                  "taskProcessCases": task_results, "taskControlledHTTPQualified": status == "PASS" and len(task_results) == 3,
+                  "allTaskPhasesAndDAGQualified": False,
                   "runtimePythonQualified": False, "providerEffectsQualified": False, "readiness": "NOT_READY",
                   "startedAt": started_at, "sourceUnchanged": source_inventory() == before,
                   "sourceManifestSha256": hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest(),

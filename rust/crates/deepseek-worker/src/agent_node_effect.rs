@@ -51,13 +51,22 @@ pub struct AgentNodeEffectSnapshot {
 
 /// Created only after an authenticated Go decision and a committed Rust fence.
 /// Its fields are private and it is deliberately not Clone or deserializable.
-#[derive(Debug)]
 pub struct AgentNodeEffectPermit {
     pub(crate) operation_id: String,
     pub(crate) fence: ActionFence,
     pub(crate) fencing_token: i64,
     pub(crate) grant_digest: String,
     pub(crate) intent_digest: String,
+    pub(crate) intent: AgentNodeDispatchIntent,
+}
+
+impl std::fmt::Debug for AgentNodeEffectPermit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentNodeEffectPermit")
+            .field("operation_id", &self.operation_id)
+            .field("fence", &self.fence)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AgentNodeEffectPermit {
