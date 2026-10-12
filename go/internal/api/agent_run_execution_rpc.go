@@ -27,6 +27,8 @@ func executionPhaseName(phase agentv1.AgentRunExecutionPhase) string {
 		return "plan"
 	case agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS:
 		return "tasks"
+	case agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS:
+		return "synthesis"
 	default:
 		return ""
 	}
@@ -40,6 +42,8 @@ func executionClaimProtocol(admission store.AdmissionResult, writerLeaseUntil in
 	phase := agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS
 	if binding.Phase == "plan" {
 		phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN
+	} else if binding.Phase == "synthesis" {
+		phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS
 	}
 	claim := admission.Lease
 	if claim.ActionID != admission.Record.ID || claim.Epoch != admission.Record.ExecutionEpoch ||

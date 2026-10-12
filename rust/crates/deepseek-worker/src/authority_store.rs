@@ -171,6 +171,13 @@ impl AuthorityStore {
                 .pragma_update(None, "user_version", 5)
                 .map_err(|_| error())?;
         }
+        if schema_version < 6 {
+            agent_nodes::migrate_v6(&transaction)?;
+            transaction
+                .pragma_update(None, "user_version", 6)
+                .map_err(|_| error())?;
+        }
+        validate_schema(&transaction, false)?;
         let (signer, fleet, environment, token): (String, String, String, i64) = transaction
             .query_row(
                 "SELECT signer,fleet,environment,fencing_token FROM worker_authority WHERE id=1",
@@ -787,11 +794,13 @@ fn validate_schema(
     if version >= 4 {
         expected.extend(grants::SCHEMA_V4.iter().map(|sql| sql.to_string()));
     }
-    if version >= 5 {
+    if version == 5 {
         expected.extend(agent_nodes::SCHEMA_V5.iter().map(|sql| sql.to_string()));
+    } else if version >= 6 {
+        expected.extend(agent_nodes::schema_v6());
     }
     expected.sort();
-    if !matches!(version, 1..=5) || application != APPLICATION_ID || actual != expected {
+    if !matches!(version, 1..=6) || application != APPLICATION_ID || actual != expected {
         return Err(error());
     }
     Ok(version as u8)

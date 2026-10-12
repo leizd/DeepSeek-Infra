@@ -86,6 +86,7 @@ const (
 	AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_UNSPECIFIED AgentRunExecutionPhase = 0
 	AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN        AgentRunExecutionPhase = 1
 	AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS       AgentRunExecutionPhase = 2
+	AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS   AgentRunExecutionPhase = 3
 )
 
 // Enum value maps for AgentRunExecutionPhase.
@@ -94,11 +95,13 @@ var (
 		0: "AGENT_RUN_EXECUTION_PHASE_UNSPECIFIED",
 		1: "AGENT_RUN_EXECUTION_PHASE_PLAN",
 		2: "AGENT_RUN_EXECUTION_PHASE_TASKS",
+		3: "AGENT_RUN_EXECUTION_PHASE_SYNTHESIS",
 	}
 	AgentRunExecutionPhase_value = map[string]int32{
 		"AGENT_RUN_EXECUTION_PHASE_UNSPECIFIED": 0,
 		"AGENT_RUN_EXECUTION_PHASE_PLAN":        1,
 		"AGENT_RUN_EXECUTION_PHASE_TASKS":       2,
+		"AGENT_RUN_EXECUTION_PHASE_SYNTHESIS":   3,
 	}
 )
 
@@ -2322,11 +2325,12 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x1cAGENT_CHAT_PHASE_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18AGENT_CHAT_PHASE_WORKERS\x10\x01\x12\x1d\n" +
 	"\x19AGENT_CHAT_PHASE_REVISION\x10\x02\x12\x1e\n" +
-	"\x1aAGENT_CHAT_PHASE_SYNTHESIS\x10\x03*\x8c\x01\n" +
+	"\x1aAGENT_CHAT_PHASE_SYNTHESIS\x10\x03*\xb5\x01\n" +
 	"\x16AgentRunExecutionPhase\x12)\n" +
 	"%AGENT_RUN_EXECUTION_PHASE_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eAGENT_RUN_EXECUTION_PHASE_PLAN\x10\x01\x12#\n" +
-	"\x1fAGENT_RUN_EXECUTION_PHASE_TASKS\x10\x022w\n" +
+	"\x1fAGENT_RUN_EXECUTION_PHASE_TASKS\x10\x02\x12'\n" +
+	"#AGENT_RUN_EXECUTION_PHASE_SYNTHESIS\x10\x032w\n" +
 	"\x12AgentChatScheduler\x12a\n" +
 	"\bEvaluate\x12).deepseek.agent.v1.AgentChatScheduleInput\x1a*.deepseek.agent.v1.AgentChatScheduleOutput2\x90\x06\n" +
 	"\x0fAgentRunControl\x12e\n" +

@@ -14,7 +14,7 @@ fn denied() -> Status {
     Status::failed_precondition("AGENT_TASK_EXECUTION_DENIED")
 }
 
-fn valid_request(input: &ExecuteAgentTaskRequest) -> bool {
+fn valid_request(input: &ExecuteAgentTaskRequest, synthesis: bool) -> bool {
     let Some(claim) = input.claim.as_ref() else {
         return false;
     };
@@ -22,7 +22,7 @@ fn valid_request(input: &ExecuteAgentTaskRequest) -> bool {
         return false;
     };
     input.schema_version == 1
-        && claim.phase == 2
+        && claim.phase == if synthesis { 3 } else { 2 }
         && !claim.run_id.is_empty()
         && claim.fence.as_ref() == Some(fence)
         && !fence.action_id.is_empty()
@@ -32,7 +32,11 @@ fn valid_request(input: &ExecuteAgentTaskRequest) -> bool {
         && input.actor == "rust-agent-worker"
         && !input.signed_phase_grant.is_empty()
         && input.signed_phase_grant.len() <= 16 * 1024
-        && multi_agent::profile(&input.node_id).is_some()
+        && if synthesis {
+            input.node_id == "synthesizer"
+        } else {
+            multi_agent::profile(&input.node_id).is_some()
+        }
 }
 
 fn task_model(role: &str) -> &'static str {
@@ -81,10 +85,47 @@ fn task_envelope(
     )
 }
 
+fn synthesis_envelope(
+    run_id: &str,
+    message: Value,
+    usage: Value,
+    calls: Vec<Value>,
+    response_sha256: &str,
+    latency_ms: u64,
+) -> Result<Value, Status> {
+    let content = message
+        .get("content")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(denied)?;
+    if !calls.is_empty() || latency_ms > i64::MAX as u64 {
+        return Err(denied());
+    }
+    Ok(
+        json!({"runId":run_id, "publicEvent":{"type":"content","text":content},
+        "synthesisOutput":{"usage":usage,"latencyMs":latency_ms},"providerResponseSha256":response_sha256}),
+    )
+}
+
 impl WorkerRpcService {
+    pub(crate) async fn execute_agent_synthesis(
+        &self,
+        request: Request<ExecuteAgentTaskRequest>,
+    ) -> Result<Response<AgentNodeEffectMetadata>, Status> {
+        self.execute_agent_output(request, true).await
+    }
+
     pub(crate) async fn execute_agent_task(
         &self,
         request: Request<ExecuteAgentTaskRequest>,
+    ) -> Result<Response<AgentNodeEffectMetadata>, Status> {
+        self.execute_agent_output(request, false).await
+    }
+
+    async fn execute_agent_output(
+        &self,
+        request: Request<ExecuteAgentTaskRequest>,
+        synthesis: bool,
     ) -> Result<Response<AgentNodeEffectMetadata>, Status> {
         let identity = self
             .authenticator
@@ -95,7 +136,7 @@ impl WorkerRpcService {
         }
         let metadata = request.metadata().clone();
         let input = request.into_inner();
-        if !valid_request(&input) {
+        if !valid_request(&input, synthesis) {
             return Err(Status::invalid_argument("AGENT_TASK_REQUEST_INVALID"));
         }
         if self.control_signer.is_none() {
@@ -159,8 +200,25 @@ impl WorkerRpcService {
                 .prepare_payload(
                     intent.request.as_ref().ok_or_else(denied)?,
                     move |payload| {
-                        multi_agent::worker_payload(payload, &role, &task, &outputs, model)
-                            .ok_or_else(denied)
+                        if synthesis {
+                            let query = payload["messages"]
+                                .as_array()
+                                .and_then(|messages| {
+                                    messages
+                                        .iter()
+                                        .rev()
+                                        .find(|message| message["role"] == "user")
+                                })
+                                .and_then(|message| message["content"].as_str())
+                                .filter(|text| !text.trim().is_empty())
+                                .ok_or_else(denied)?;
+                            Ok(multi_agent::synthesis_payload(
+                                payload, model, query, &outputs,
+                            ))
+                        } else {
+                            multi_agent::worker_payload(payload, &role, &task, &outputs, model)
+                                .ok_or_else(denied)
+                        }
                     },
                 )
                 .await?;
@@ -192,14 +250,26 @@ impl WorkerRpcService {
                 Some(Value::Array(raw)) if raw.len() == calls.len() => {}
                 _ => return Err(Status::failed_precondition("AGENT_TASK_RESULT_UNKNOWN")),
             }
-            let envelope = task_envelope(
-                (&claim.run_id, &intent.node_id, &intent.task),
-                turn.message,
-                turn.usage,
-                calls,
-                &receipt,
-                started.elapsed().as_millis().min(u64::MAX as u128) as u64,
-            )?;
+            let elapsed = started.elapsed().as_millis().min(i64::MAX as u128) as u64;
+            let envelope = if synthesis {
+                synthesis_envelope(
+                    &claim.run_id,
+                    turn.message,
+                    turn.usage,
+                    calls,
+                    &receipt,
+                    elapsed,
+                )?
+            } else {
+                task_envelope(
+                    (&claim.run_id, &intent.node_id, &intent.task),
+                    turn.message,
+                    turn.usage,
+                    calls,
+                    &receipt,
+                    elapsed,
+                )?
+            };
             self.confirm_agent_node_effect(&permit, &envelope).await
         }
         .await;
@@ -223,6 +293,76 @@ mod tests {
     use deepseek_protocol::generated::deepseek::agent::v1::AgentRunExecutionClaim;
 
     #[test]
+    fn synthesis_rejects_task_claims_tools_empty_content_and_private_reasoning() {
+        let fence = ActionFence {
+            action_id: "action".into(),
+            execution_epoch: 1,
+        };
+        let input = ExecuteAgentTaskRequest {
+            schema_version: 1,
+            operation_id: "dispatch".into(),
+            actor: "rust-agent-worker".into(),
+            signed_phase_grant: vec![1],
+            node_id: "synthesizer".into(),
+            fence: Some(fence.clone()),
+            claim: Some(AgentRunExecutionClaim {
+                phase: 3,
+                run_id: "run".into(),
+                fence: Some(fence),
+                ..Default::default()
+            }),
+        };
+        assert!(valid_request(&input, true));
+        assert!(!valid_request(&input, false));
+        let mut wrong = input.clone();
+        wrong.claim.as_mut().unwrap().phase = 2;
+        assert!(!valid_request(&wrong, true));
+        let mut wrong = input;
+        wrong.node_id = "coder".into();
+        assert!(!valid_request(&wrong, true));
+        let envelope = synthesis_envelope(
+            "run",
+            json!({"content":"final answer","reasoning_content":"private reasoning"}),
+            json!({"prompt_tokens":2,"completion_tokens":3}),
+            vec![],
+            "digest",
+            19,
+        )
+        .unwrap();
+        assert_eq!(
+            envelope["publicEvent"],
+            json!({"type":"content","text":"final answer"})
+        );
+        assert!(!envelope.to_string().contains("private reasoning"));
+        assert_eq!(envelope["synthesisOutput"]["latencyMs"], 19);
+        for message in [json!({"content":" "}), json!({"content":1}), Value::Null] {
+            assert!(synthesis_envelope("run", message, Value::Null, vec![], "digest", 0).is_err());
+        }
+        assert!(
+            synthesis_envelope(
+                "run",
+                json!({"content":"final"}),
+                Value::Null,
+                vec![json!({"function":{"name":"write_file"}})],
+                "digest",
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            synthesis_envelope(
+                "run",
+                json!({"content":"final"}),
+                Value::Null,
+                vec![],
+                "digest",
+                u64::MAX
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn task_request_requires_selected_role_and_identical_positive_fence() {
         let fence = ActionFence {
             action_id: "action".into(),
@@ -242,19 +382,19 @@ mod tests {
                 ..Default::default()
             }),
         };
-        assert!(valid_request(&input));
+        assert!(valid_request(&input, false));
         let mut wrong = input.clone();
         wrong.node_id = "leader".into();
-        assert!(!valid_request(&wrong));
+        assert!(!valid_request(&wrong, false));
         let mut wrong = input.clone();
         wrong.claim.as_mut().unwrap().phase = 1;
-        assert!(!valid_request(&wrong));
+        assert!(!valid_request(&wrong, false));
         let mut wrong = input.clone();
         wrong.fence.as_mut().unwrap().execution_epoch = 0;
-        assert!(!valid_request(&wrong));
+        assert!(!valid_request(&wrong, false));
         let mut wrong = input;
         wrong.actor = "caller".into();
-        assert!(!valid_request(&wrong));
+        assert!(!valid_request(&wrong, false));
     }
 
     #[test]

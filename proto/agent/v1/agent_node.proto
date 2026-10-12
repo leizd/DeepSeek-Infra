@@ -159,6 +159,8 @@ message QueryAgentNodeEffectResponse {
 service AgentNodeWorker {
   rpc ExecutePlan(ExecuteAgentPlanRequest) returns (AgentNodeEffectMetadata);
   rpc ExecuteTask(ExecuteAgentTaskRequest) returns (AgentNodeEffectMetadata);
+  // Only synthesis-phase claims with the Go-selected synthesizer node are valid.
+  rpc ExecuteSynthesis(ExecuteAgentTaskRequest) returns (AgentNodeEffectMetadata);
   rpc QueryEffect(QueryAgentNodeEffectRequest) returns (QueryAgentNodeEffectResponse);
   rpc ProjectPlan(ProjectAgentPlanRequest) returns (AgentPlanProjectionReceipt);
 }
@@ -235,7 +237,8 @@ message SettleAgentPlanResponse {
 }
 
 // Public scheduling counters are derived only from the confirmed Rust body and
-// covered by its custody signature. They contain no provider content or secrets.
+// covered by its custody signature. Synthesis also uses these output counters;
+// its distinct phase cannot settle a task. No provider content or secrets cross Go.
 message AgentTaskOutputMetadata {
   uint32 schema_version = 1;
   uint64 prompt_tokens = 2;

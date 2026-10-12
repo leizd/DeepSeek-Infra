@@ -65,8 +65,9 @@ func VerifyAgentNodeOutcome(receipt *agentv1.AgentNodeOutcomeReceipt, intent *ag
 		evidence.OperationId != intent.OperationId || !strings.HasPrefix(evidence.OperationId, "agent-node-") || len(evidence.OperationId) != 75 ||
 		!ValidNodeOutcomeDigest(evidence.OperationId[11:]) || evidence.RunId == "" || evidence.RunId != intent.RunId ||
 		evidence.NodeId == "" || evidence.NodeId != intent.NodeId || evidence.Phase != intent.Phase ||
-		(evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN && evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS) ||
+		(evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN && evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS && evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS) ||
 		(evidence.Phase == agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN && evidence.NodeId != "leader") ||
+		(evidence.Phase == agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS && (evidence.NodeId != "synthesizer" || evidence.TaskOutput == nil || len(evidence.ProviderPlan) != 0)) ||
 		!ValidNodeOutcomeArtifact(evidence.Request) || !proto.Equal(evidence.Request, intent.Request) || !ValidNodeOutcomeArtifact(evidence.PublicEvent) ||
 		!ValidNodeOutcomeDigest(evidence.PlanDigest) || evidence.PlanDigest != intent.PlanDigest || evidence.MetadataIndex < 0 ||
 		evidence.MetadataIndex != intent.MetadataIndex || evidence.MetadataEpoch == 0 || evidence.MetadataEpoch != intent.MetadataEpoch ||
@@ -78,7 +79,7 @@ func VerifyAgentNodeOutcome(receipt *agentv1.AgentNodeOutcomeReceipt, intent *ag
 	// Historical task receipts may predate typed counters. Settlement separately
 	// requires them; malformed or planner-attached counters are never accepted.
 	if stats := evidence.TaskOutput; stats != nil {
-		if evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS || len(evidence.ProviderPlan) != 0 ||
+		if (evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS && evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS) || len(evidence.ProviderPlan) != 0 ||
 			stats.SchemaVersion != 1 || len(stats.ProtoReflect().GetUnknown()) != 0 || stats.LatencyMs < 0 ||
 			stats.PromptTokens > math.MaxInt64 || stats.CompletionTokens > math.MaxInt64 {
 			return invalid()

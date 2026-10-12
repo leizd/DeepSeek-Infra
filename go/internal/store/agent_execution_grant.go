@@ -39,7 +39,7 @@ func agentGrantPayload(intent AgentExecutionGrantIntent) (map[string]any, error)
 	identity := fmt.Sprintf("agent-run-execution-v1\n%s\n%s\n%d\n", intent.RunID, intent.Phase, intent.MetadataIndex)
 	sum := sha256.Sum256([]byte(identity))
 	if !ValidRecordID(intent.RunID) || len(intent.RunID) > 128 || !utf8.ValidString(intent.RunID) ||
-		(intent.Phase != "plan" && intent.Phase != "tasks") || intent.ActionID != "agent-exec-"+hex.EncodeToString(sum[:]) ||
+		(intent.Phase != "plan" && intent.Phase != "tasks" && intent.Phase != "synthesis") || intent.ActionID != "agent-exec-"+hex.EncodeToString(sum[:]) ||
 		intent.ExecutionEpoch == 0 || intent.ExecutionEpoch > math.MaxInt64 || intent.MetadataEpoch == 0 || intent.MetadataEpoch > math.MaxInt64 ||
 		intent.MetadataIndex < 1 || intent.MetadataIndex >= math.MaxInt64-1 || intent.ClaimRevision < 1 || intent.WriterFencingToken < 1 ||
 		intent.RequestLength == 0 || intent.RequestLength > math.MaxInt64 || !hex64Pattern.MatchString(intent.RequestSHA256) || !hex64Pattern.MatchString(intent.PlanDigest) ||

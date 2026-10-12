@@ -119,6 +119,8 @@ func agentGrantIntent(request *actionv1.SignControlRequest) (store.AgentExecutio
 		phase = "plan"
 	case agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS:
 		phase = "tasks"
+	case agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS:
+		phase = "synthesis"
 	default:
 		return store.AgentExecutionGrantIntent{}, ErrControlSignerResponse
 	}

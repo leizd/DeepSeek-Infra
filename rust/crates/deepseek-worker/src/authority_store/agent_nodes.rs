@@ -3,6 +3,7 @@ use crate::agent_node_effect::{
     self, AgentNodeEffectOutcome, AgentNodeEffectPermit, AgentNodeEffectStart,
 };
 use crate::{WorkerAuthorityConfig, authority_request};
+use authority_request::AuthorityRequestError;
 use deepseek_protocol::ActionFence;
 use deepseek_protocol::generated::deepseek::agent::v1::{
     AgentNodeDispatchIntent, AgentRunExecutionClaim, BeginAgentNodeDispatchResponse,
@@ -24,6 +25,40 @@ pub(super) const SCHEMA_V5: &[&str] = &[
     "CREATE TRIGGER agent_node_transition BEFORE UPDATE ON agent_node_effects WHEN NOT (OLD.state=NEW.state OR (OLD.state='DISPATCHING' AND NEW.state IN ('EFFECT_UNKNOWN','CONFIRMED')) OR (OLD.state='EFFECT_UNKNOWN' AND NEW.state='CONFIRMED')) BEGIN SELECT RAISE(ABORT,'illegal Agent node effect transition'); END",
     "CREATE TRIGGER agent_node_time_monotonic BEFORE UPDATE ON agent_node_effects WHEN NEW.updated_at<OLD.updated_at OR NEW.updated_at<NEW.created_at BEGIN SELECT RAISE(ABORT,'Agent node journal clock moved backwards'); END",
 ];
+
+pub(super) fn schema_v6() -> Vec<String> {
+    let mut schema: Vec<String> = SCHEMA_V5.iter().map(|sql| sql.to_string()).collect();
+    // SQLite quotes the final name after ALTER TABLE RENAME. The validator still
+    // compares every table/trigger definition exactly, including this new CHECK.
+    schema[0] = schema[0]
+        .replace(
+            "CREATE TABLE agent_node_effects ",
+            "CREATE TABLE \"agent_node_effects\" ",
+        )
+        .replace("phase IN (1,2)", "phase IN (1,2,3)");
+    schema
+}
+
+pub(super) fn migrate_v6(connection: &Connection) -> Result<(), AuthorityRequestError> {
+    // Called only inside AuthorityStore::open's IMMEDIATE transaction, after
+    // exact v5 validation. Use SQLite's create/copy/drop/rename procedure; never
+    // alter sqlite_schema or overwrite historical outcomes/claim encodings.
+    // https://www.sqlite.org/lang_altertable.html#making_other_kinds_of_table_schema_changes
+    let sql = SCHEMA_V5[0]
+        .replace(
+            "CREATE TABLE agent_node_effects ",
+            "CREATE TABLE agent_node_effects_v6 ",
+        )
+        .replace("phase IN (1,2)", "phase IN (1,2,3)");
+    connection.execute_batch(&sql).map_err(|_| error())?;
+    connection.execute_batch("INSERT INTO agent_node_effects_v6(rowid,operation_id,action_id,epoch,fencing_token,run_id,phase,metadata_index,node_id,claim,intent,grant,claim_scope_digest,intent_digest,grant_digest,state,output,output_sha256,created_at,updated_at) SELECT rowid,operation_id,action_id,epoch,fencing_token,run_id,phase,metadata_index,node_id,claim,intent,grant,claim_scope_digest,intent_digest,grant_digest,state,output,output_sha256,created_at,updated_at FROM agent_node_effects; DROP TABLE agent_node_effects; ALTER TABLE agent_node_effects_v6 RENAME TO agent_node_effects;").map_err(|_| error())?;
+    // Install insert fencing only after historical rows have been preserved:
+    // their old writer token/epoch must not be mistaken for fresh admission.
+    for trigger in &SCHEMA_V5[1..] {
+        connection.execute_batch(trigger).map_err(|_| error())?;
+    }
+    Ok(())
+}
 
 fn denied() -> Status {
     agent_node_effect::denied()
@@ -143,7 +178,13 @@ impl AuthorityStore {
             && output["publicEvent"]["phase"] == row.node_id
             && output["publicEvent"]["output"]["id"] == row.node_id
             && output["publicEvent"]["output"]["task"] == row.intent.task;
-        if output["runId"] != query.run_id || !(planner || task) {
+        let synthesis = row.phase == 3
+            && row.node_id == "synthesizer"
+            && output["publicEvent"]["type"] == "content"
+            && output["publicEvent"]["text"]
+                .as_str()
+                .is_some_and(|text| !text.trim().is_empty());
+        if output["runId"] != query.run_id || !(planner || task || synthesis) {
             return Err(denied());
         }
         let event = deepseek_policy::agent_run_data::sanitize(&output["publicEvent"]);
@@ -182,8 +223,12 @@ impl AuthorityStore {
                 })
             })
             .collect();
-        let task_output = if task {
-            let result = &event["output"];
+        let task_output = if task || synthesis {
+            let result = if synthesis {
+                &output["synthesisOutput"]
+            } else {
+                &event["output"]
+            };
             let counter = |key: &str| -> Result<u64, Status> {
                 match result["usage"].get(key) {
                     None => Ok(0),
@@ -299,7 +344,10 @@ impl AuthorityStore {
         let current = stored(&self.connection, &permit.operation_id)?.ok_or_else(denied)?;
         if self.fencing_token != permit.fencing_token
             || current.state != "DISPATCHING"
-            || current.intent.phase != 2
+            || !matches!(current.intent.phase, 2 | 3)
+            || (current.intent.phase == 3
+                && (current.intent.node_id != "synthesizer"
+                    || current.intent.depends_on.is_empty()))
             || current.intent_digest != permit.intent_digest
             || current.grant_digest != permit.grant_digest
             || agent_node_effect::digest(&permit.intent.encode_to_vec()) != permit.intent_digest
@@ -324,6 +372,8 @@ impl AuthorityStore {
             if source.intent.plan_digest != permit.intent.plan_digest
                 || source.intent.request != permit.intent.request
                 || source.intent.metadata_epoch > permit.intent.metadata_epoch
+                || (permit.intent.phase == 3
+                    && source.intent.metadata_epoch != permit.intent.metadata_epoch)
                 || source.token > permit.fencing_token
                 || source.intent.task.is_empty()
             {

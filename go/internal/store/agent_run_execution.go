@@ -78,7 +78,7 @@ func decodeAgentExecution(record Record) (agentExecutionIntent, error) {
 	decodeErr := decoder.Decode(&intent)
 	digest, digestErr := hex.DecodeString(intent.PlanDigest)
 	if err != nil || decodeErr != nil || record.Domain != "action" || intent.SchemaVersion != 1 || !ValidRecordID(intent.RunID) ||
-		(intent.Phase != "plan" && intent.Phase != "tasks") || intent.MetadataIndex < 1 || intent.MetadataIndex >= math.MaxInt64-1 ||
+		(intent.Phase != "plan" && intent.Phase != "tasks" && intent.Phase != "synthesis") || intent.MetadataIndex < 1 || intent.MetadataIndex >= math.MaxInt64-1 ||
 		intent.MetadataEpoch == 0 || intent.MetadataEpoch > math.MaxInt64 || !validAgentArtifact(intent.Request) ||
 		digestErr != nil || len(digest) != 32 || intent.PlanDigest != strings.ToLower(intent.PlanDigest) ||
 		record.ID != executionActionID(intent) {
@@ -110,7 +110,8 @@ func readAgentExecutionActionTx(tx *sql.Tx, id string) (Record, bool, error) {
 
 func executionPhaseReady(run agent.RunMetadata, phase string) bool {
 	return phase == "plan" && (run.Status == "created" || run.Status == "planning") ||
-		phase == "tasks" && run.Status == "running" && len(run.Plan) > 0
+		phase == "tasks" && run.Status == "running" && len(run.Plan) > 0 ||
+		phase == "synthesis" && completedAgentTasks(run)
 }
 
 // The caller has decoded the immutable binding. All three lease paths read
@@ -162,6 +163,11 @@ func (store *Control) agentExecutionAdmissionTx(tx *sql.Tx, record Record, takeo
 	if err != nil {
 		return nil, err
 	}
+	if intent.Phase == "synthesis" {
+		if _, err := store.verifiedAgentSynthesisSourceTx(tx, intent); err != nil {
+			return nil, err
+		}
+	}
 	if !takeover && intent.Phase == "tasks" && completedAgentTasks(run) {
 		return nil, ErrActionNotClaimable
 	}
@@ -182,6 +188,11 @@ func (store *Control) agentExecutionRenewalTx(tx *sql.Tx, record Record) error {
 	run, err := store.agentExecutionRunTx(tx, intent)
 	if err != nil {
 		return err
+	}
+	if intent.Phase == "synthesis" {
+		if _, err := store.verifiedAgentSynthesisSourceTx(tx, intent); err != nil {
+			return err
+		}
 	}
 	// Reconciliation and verification retain their original reservations. Their
 	// lease permits observation and settlement, never another fresh dispatch.
@@ -206,7 +217,7 @@ func normalizeExecutionRequest(input AgentRunExecutionRequest) (AgentRunExecutio
 		request.LeaseSeconds = 60
 	}
 	if !ValidRecordID(request.RunID) || !utf8.ValidString(request.RunID) || len(request.RunID) > 256 || request.ExpectedIndex < 1 || request.ExpectedIndex >= math.MaxInt64-1 ||
-		(request.Phase != "plan" && request.Phase != "tasks") || request.LeaseSeconds < 1 || request.LeaseSeconds > 300 {
+		(request.Phase != "plan" && request.Phase != "tasks" && request.Phase != "synthesis") || request.LeaseSeconds < 1 || request.LeaseSeconds > 300 {
 		return request, ErrAgentRunExecutionRequired
 	}
 	for _, text := range []string{request.OperationID, request.Actor, request.Owner} {

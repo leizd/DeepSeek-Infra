@@ -145,6 +145,7 @@ pub(crate) fn node_operation_id(intent: &AgentNodeDispatchIntent) -> Result<Stri
     let phase = match intent.phase {
         1 => "plan",
         2 => "tasks",
+        3 => "synthesis",
         _ => return Err(denied()),
     };
     let identity = NodeIdentity {

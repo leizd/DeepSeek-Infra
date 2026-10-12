@@ -1774,7 +1774,8 @@ func (x *SettleAgentPlanResponse) GetActionState() string {
 }
 
 // Public scheduling counters are derived only from the confirmed Rust body and
-// covered by its custody signature. They contain no provider content or secrets.
+// covered by its custody signature. Synthesis also uses these output counters;
+// its distinct phase cannot settle a task. No provider content or secrets cross Go.
 type AgentTaskOutputMetadata struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	SchemaVersion    uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
@@ -2408,10 +2409,11 @@ const file_agent_v1_agent_node_proto_rawDesc = "" +
 	"SettlePlan\x12).deepseek.agent.v1.SettleAgentPlanRequest\x1a*.deepseek.agent.v1.SettleAgentPlanResponse\x12c\n" +
 	"\n" +
 	"SettleTask\x12).deepseek.agent.v1.SettleAgentTaskRequest\x1a*.deepseek.agent.v1.SettleAgentTaskResponse\x12l\n" +
-	"\rCompleteTasks\x12,.deepseek.agent.v1.CompleteAgentTasksRequest\x1a-.deepseek.agent.v1.CompleteAgentTasksResponse2\xb9\x03\n" +
+	"\rCompleteTasks\x12,.deepseek.agent.v1.CompleteAgentTasksRequest\x1a-.deepseek.agent.v1.CompleteAgentTasksResponse2\xa5\x04\n" +
 	"\x0fAgentNodeWorker\x12e\n" +
 	"\vExecutePlan\x12*.deepseek.agent.v1.ExecuteAgentPlanRequest\x1a*.deepseek.agent.v1.AgentNodeEffectMetadata\x12e\n" +
-	"\vExecuteTask\x12*.deepseek.agent.v1.ExecuteAgentTaskRequest\x1a*.deepseek.agent.v1.AgentNodeEffectMetadata\x12n\n" +
+	"\vExecuteTask\x12*.deepseek.agent.v1.ExecuteAgentTaskRequest\x1a*.deepseek.agent.v1.AgentNodeEffectMetadata\x12j\n" +
+	"\x10ExecuteSynthesis\x12*.deepseek.agent.v1.ExecuteAgentTaskRequest\x1a*.deepseek.agent.v1.AgentNodeEffectMetadata\x12n\n" +
 	"\vQueryEffect\x12..deepseek.agent.v1.QueryAgentNodeEffectRequest\x1a/.deepseek.agent.v1.QueryAgentNodeEffectResponse\x12h\n" +
 	"\vProjectPlan\x12*.deepseek.agent.v1.ProjectAgentPlanRequest\x1a-.deepseek.agent.v1.AgentPlanProjectionReceiptBFZDgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1;agentv1b\x06proto3"
 
@@ -2512,20 +2514,22 @@ var file_agent_v1_agent_node_proto_depIdxs = []int32{
 	22, // 48: deepseek.agent.v1.AgentNodeControl.CompleteTasks:input_type -> deepseek.agent.v1.CompleteAgentTasksRequest
 	7,  // 49: deepseek.agent.v1.AgentNodeWorker.ExecutePlan:input_type -> deepseek.agent.v1.ExecuteAgentPlanRequest
 	13, // 50: deepseek.agent.v1.AgentNodeWorker.ExecuteTask:input_type -> deepseek.agent.v1.ExecuteAgentTaskRequest
-	11, // 51: deepseek.agent.v1.AgentNodeWorker.QueryEffect:input_type -> deepseek.agent.v1.QueryAgentNodeEffectRequest
-	14, // 52: deepseek.agent.v1.AgentNodeWorker.ProjectPlan:input_type -> deepseek.agent.v1.ProjectAgentPlanRequest
-	2,  // 53: deepseek.agent.v1.AgentNodeControl.BeginDispatch:output_type -> deepseek.agent.v1.BeginAgentNodeDispatchResponse
-	4,  // 54: deepseek.agent.v1.AgentNodeControl.GetDispatch:output_type -> deepseek.agent.v1.GetAgentNodeDispatchResponse
-	6,  // 55: deepseek.agent.v1.AgentNodeControl.RecordOutcome:output_type -> deepseek.agent.v1.RecordAgentNodeOutcomeResponse
-	18, // 56: deepseek.agent.v1.AgentNodeControl.SettlePlan:output_type -> deepseek.agent.v1.SettleAgentPlanResponse
-	21, // 57: deepseek.agent.v1.AgentNodeControl.SettleTask:output_type -> deepseek.agent.v1.SettleAgentTaskResponse
-	23, // 58: deepseek.agent.v1.AgentNodeControl.CompleteTasks:output_type -> deepseek.agent.v1.CompleteAgentTasksResponse
-	8,  // 59: deepseek.agent.v1.AgentNodeWorker.ExecutePlan:output_type -> deepseek.agent.v1.AgentNodeEffectMetadata
-	8,  // 60: deepseek.agent.v1.AgentNodeWorker.ExecuteTask:output_type -> deepseek.agent.v1.AgentNodeEffectMetadata
-	12, // 61: deepseek.agent.v1.AgentNodeWorker.QueryEffect:output_type -> deepseek.agent.v1.QueryAgentNodeEffectResponse
-	16, // 62: deepseek.agent.v1.AgentNodeWorker.ProjectPlan:output_type -> deepseek.agent.v1.AgentPlanProjectionReceipt
-	53, // [53:63] is the sub-list for method output_type
-	43, // [43:53] is the sub-list for method input_type
+	13, // 51: deepseek.agent.v1.AgentNodeWorker.ExecuteSynthesis:input_type -> deepseek.agent.v1.ExecuteAgentTaskRequest
+	11, // 52: deepseek.agent.v1.AgentNodeWorker.QueryEffect:input_type -> deepseek.agent.v1.QueryAgentNodeEffectRequest
+	14, // 53: deepseek.agent.v1.AgentNodeWorker.ProjectPlan:input_type -> deepseek.agent.v1.ProjectAgentPlanRequest
+	2,  // 54: deepseek.agent.v1.AgentNodeControl.BeginDispatch:output_type -> deepseek.agent.v1.BeginAgentNodeDispatchResponse
+	4,  // 55: deepseek.agent.v1.AgentNodeControl.GetDispatch:output_type -> deepseek.agent.v1.GetAgentNodeDispatchResponse
+	6,  // 56: deepseek.agent.v1.AgentNodeControl.RecordOutcome:output_type -> deepseek.agent.v1.RecordAgentNodeOutcomeResponse
+	18, // 57: deepseek.agent.v1.AgentNodeControl.SettlePlan:output_type -> deepseek.agent.v1.SettleAgentPlanResponse
+	21, // 58: deepseek.agent.v1.AgentNodeControl.SettleTask:output_type -> deepseek.agent.v1.SettleAgentTaskResponse
+	23, // 59: deepseek.agent.v1.AgentNodeControl.CompleteTasks:output_type -> deepseek.agent.v1.CompleteAgentTasksResponse
+	8,  // 60: deepseek.agent.v1.AgentNodeWorker.ExecutePlan:output_type -> deepseek.agent.v1.AgentNodeEffectMetadata
+	8,  // 61: deepseek.agent.v1.AgentNodeWorker.ExecuteTask:output_type -> deepseek.agent.v1.AgentNodeEffectMetadata
+	8,  // 62: deepseek.agent.v1.AgentNodeWorker.ExecuteSynthesis:output_type -> deepseek.agent.v1.AgentNodeEffectMetadata
+	12, // 63: deepseek.agent.v1.AgentNodeWorker.QueryEffect:output_type -> deepseek.agent.v1.QueryAgentNodeEffectResponse
+	16, // 64: deepseek.agent.v1.AgentNodeWorker.ProjectPlan:output_type -> deepseek.agent.v1.AgentPlanProjectionReceipt
+	54, // [54:65] is the sub-list for method output_type
+	43, // [43:54] is the sub-list for method input_type
 	43, // [43:43] is the sub-list for extension type_name
 	43, // [43:43] is the sub-list for extension extendee
 	0,  // [0:43] is the sub-list for field type_name

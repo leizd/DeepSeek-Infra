@@ -210,10 +210,12 @@ pub(crate) fn validate_node_dispatch(
     let operation = intent.operation_id.strip_prefix("agent-node-");
     let role_allowed = match AgentRunExecutionPhase::try_from(live.phase) {
         Ok(AgentRunExecutionPhase::Plan) => node_id == "leader" && intent.depends_on.is_empty(),
-        Ok(AgentRunExecutionPhase::Tasks) => matches!(
-            node_id,
-            "researcher" | "coder" | "reasoner" | "critic" | "synthesis"
-        ),
+        Ok(AgentRunExecutionPhase::Tasks) => {
+            matches!(node_id, "researcher" | "coder" | "reasoner" | "critic")
+        }
+        Ok(AgentRunExecutionPhase::Synthesis) => {
+            node_id == "synthesizer" && !intent.depends_on.is_empty()
+        }
         _ => false,
     };
     if intent.schema_version != 1
@@ -289,6 +291,7 @@ fn validate_claim_scope(
     let phase = match AgentRunExecutionPhase::try_from(claim.phase) {
         Ok(AgentRunExecutionPhase::Plan) => "plan",
         Ok(AgentRunExecutionPhase::Tasks) => "tasks",
+        Ok(AgentRunExecutionPhase::Synthesis) => "synthesis",
         _ => return Err(invalid()),
     };
     let request = claim.request.as_ref().ok_or_else(invalid)?;
@@ -342,6 +345,7 @@ pub(crate) fn claim_payload(claim: &AgentRunExecutionClaim) -> Result<Value, Sta
     let phase = match AgentRunExecutionPhase::try_from(claim.phase) {
         Ok(AgentRunExecutionPhase::Plan) => "plan",
         Ok(AgentRunExecutionPhase::Tasks) => "tasks",
+        Ok(AgentRunExecutionPhase::Synthesis) => "synthesis",
         _ => return Err(invalid()),
     };
     Ok(

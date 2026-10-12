@@ -221,7 +221,12 @@ impl AgentPlanExecutor {
             && envelope["toolContinuation"]["toolCalls"]
                 .as_array()
                 .is_some_and(|calls| !calls.is_empty());
-        if envelope["runId"] != run_id || !(planner || task || pending_tools) {
+        let synthesis = outcome.node_id == "synthesizer"
+            && event["type"] == "content"
+            && event["text"]
+                .as_str()
+                .is_some_and(|text| !text.trim().is_empty());
+        if envelope["runId"] != run_id || !(planner || task || pending_tools || synthesis) {
             return Err(Status::data_loss("AGENT_PLAN_OUTCOME_CORRUPT"));
         }
         let root = self.artifact_root.clone();
@@ -263,6 +268,14 @@ impl AgentNodeWorker for WorkerRpcService {
         >,
     ) -> Result<Response<AgentNodeEffectMetadata>, Status> {
         self.execute_agent_task(request).await
+    }
+    async fn execute_synthesis(
+        &self,
+        request: Request<
+            deepseek_protocol::generated::deepseek::agent::v1::ExecuteAgentTaskRequest,
+        >,
+    ) -> Result<Response<AgentNodeEffectMetadata>, Status> {
+        self.execute_agent_synthesis(request).await
     }
     async fn project_plan(
         &self,

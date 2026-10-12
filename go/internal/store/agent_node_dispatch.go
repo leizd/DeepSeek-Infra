@@ -118,6 +118,13 @@ func agentDispatchPlanNode(run agent.RunMetadata, binding AgentRunExecutionBindi
 	if binding.Phase == "plan" && nodeID == "leader" {
 		return agent.RunPlanNode{ID: "leader", Task: "plan agent run", DependsOn: []string{}}, nil
 	}
+	if binding.Phase == "synthesis" && nodeID == "synthesizer" && completedAgentTasks(run) {
+		dependencies := make([]string, 0, len(run.Plan))
+		for _, node := range run.Plan {
+			dependencies = append(dependencies, node.ID)
+		}
+		return agent.RunPlanNode{ID: "synthesizer", Task: "synthesize verified agent outputs", DependsOn: dependencies}, nil
+	}
 	if binding.Phase == "tasks" {
 		for _, node := range run.Plan {
 			if node.ID == nodeID {
@@ -215,6 +222,11 @@ func (store *Control) BeginAgentNodeDispatch(input AgentNodeDispatchRequest) (Ag
 	completed, err := store.validatedAgentTaskSettlementsTx(tx, record)
 	if err != nil {
 		return AgentNodeDispatchResult{}, err
+	}
+	if binding.Phase == "synthesis" {
+		if _, err := store.verifiedAgentSynthesisSourceTx(tx, binding); err != nil {
+			return AgentNodeDispatchResult{}, err
+		}
 	}
 	planNode, err := agentDispatchPlanNode(run, binding, input.NodeID, completed)
 	if err != nil {

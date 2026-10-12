@@ -317,10 +317,11 @@ var AgentNodeControl_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	AgentNodeWorker_ExecutePlan_FullMethodName = "/deepseek.agent.v1.AgentNodeWorker/ExecutePlan"
-	AgentNodeWorker_ExecuteTask_FullMethodName = "/deepseek.agent.v1.AgentNodeWorker/ExecuteTask"
-	AgentNodeWorker_QueryEffect_FullMethodName = "/deepseek.agent.v1.AgentNodeWorker/QueryEffect"
-	AgentNodeWorker_ProjectPlan_FullMethodName = "/deepseek.agent.v1.AgentNodeWorker/ProjectPlan"
+	AgentNodeWorker_ExecutePlan_FullMethodName      = "/deepseek.agent.v1.AgentNodeWorker/ExecutePlan"
+	AgentNodeWorker_ExecuteTask_FullMethodName      = "/deepseek.agent.v1.AgentNodeWorker/ExecuteTask"
+	AgentNodeWorker_ExecuteSynthesis_FullMethodName = "/deepseek.agent.v1.AgentNodeWorker/ExecuteSynthesis"
+	AgentNodeWorker_QueryEffect_FullMethodName      = "/deepseek.agent.v1.AgentNodeWorker/QueryEffect"
+	AgentNodeWorker_ProjectPlan_FullMethodName      = "/deepseek.agent.v1.AgentNodeWorker/ProjectPlan"
 )
 
 // AgentNodeWorkerClient is the client API for AgentNodeWorker service.
@@ -332,6 +333,8 @@ const (
 type AgentNodeWorkerClient interface {
 	ExecutePlan(ctx context.Context, in *ExecuteAgentPlanRequest, opts ...grpc.CallOption) (*AgentNodeEffectMetadata, error)
 	ExecuteTask(ctx context.Context, in *ExecuteAgentTaskRequest, opts ...grpc.CallOption) (*AgentNodeEffectMetadata, error)
+	// Only synthesis-phase claims with the Go-selected synthesizer node are valid.
+	ExecuteSynthesis(ctx context.Context, in *ExecuteAgentTaskRequest, opts ...grpc.CallOption) (*AgentNodeEffectMetadata, error)
 	QueryEffect(ctx context.Context, in *QueryAgentNodeEffectRequest, opts ...grpc.CallOption) (*QueryAgentNodeEffectResponse, error)
 	ProjectPlan(ctx context.Context, in *ProjectAgentPlanRequest, opts ...grpc.CallOption) (*AgentPlanProjectionReceipt, error)
 }
@@ -358,6 +361,16 @@ func (c *agentNodeWorkerClient) ExecuteTask(ctx context.Context, in *ExecuteAgen
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AgentNodeEffectMetadata)
 	err := c.cc.Invoke(ctx, AgentNodeWorker_ExecuteTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentNodeWorkerClient) ExecuteSynthesis(ctx context.Context, in *ExecuteAgentTaskRequest, opts ...grpc.CallOption) (*AgentNodeEffectMetadata, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AgentNodeEffectMetadata)
+	err := c.cc.Invoke(ctx, AgentNodeWorker_ExecuteSynthesis_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -393,6 +406,8 @@ func (c *agentNodeWorkerClient) ProjectPlan(ctx context.Context, in *ProjectAgen
 type AgentNodeWorkerServer interface {
 	ExecutePlan(context.Context, *ExecuteAgentPlanRequest) (*AgentNodeEffectMetadata, error)
 	ExecuteTask(context.Context, *ExecuteAgentTaskRequest) (*AgentNodeEffectMetadata, error)
+	// Only synthesis-phase claims with the Go-selected synthesizer node are valid.
+	ExecuteSynthesis(context.Context, *ExecuteAgentTaskRequest) (*AgentNodeEffectMetadata, error)
 	QueryEffect(context.Context, *QueryAgentNodeEffectRequest) (*QueryAgentNodeEffectResponse, error)
 	ProjectPlan(context.Context, *ProjectAgentPlanRequest) (*AgentPlanProjectionReceipt, error)
 	mustEmbedUnimplementedAgentNodeWorkerServer()
@@ -410,6 +425,9 @@ func (UnimplementedAgentNodeWorkerServer) ExecutePlan(context.Context, *ExecuteA
 }
 func (UnimplementedAgentNodeWorkerServer) ExecuteTask(context.Context, *ExecuteAgentTaskRequest) (*AgentNodeEffectMetadata, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExecuteTask not implemented")
+}
+func (UnimplementedAgentNodeWorkerServer) ExecuteSynthesis(context.Context, *ExecuteAgentTaskRequest) (*AgentNodeEffectMetadata, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExecuteSynthesis not implemented")
 }
 func (UnimplementedAgentNodeWorkerServer) QueryEffect(context.Context, *QueryAgentNodeEffectRequest) (*QueryAgentNodeEffectResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method QueryEffect not implemented")
@@ -474,6 +492,24 @@ func _AgentNodeWorker_ExecuteTask_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentNodeWorker_ExecuteSynthesis_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExecuteAgentTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentNodeWorkerServer).ExecuteSynthesis(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentNodeWorker_ExecuteSynthesis_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentNodeWorkerServer).ExecuteSynthesis(ctx, req.(*ExecuteAgentTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AgentNodeWorker_QueryEffect_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(QueryAgentNodeEffectRequest)
 	if err := dec(in); err != nil {
@@ -524,6 +560,10 @@ var AgentNodeWorker_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ExecuteTask",
 			Handler:    _AgentNodeWorker_ExecuteTask_Handler,
+		},
+		{
+			MethodName: "ExecuteSynthesis",
+			Handler:    _AgentNodeWorker_ExecuteSynthesis_Handler,
 		},
 		{
 			MethodName: "QueryEffect",

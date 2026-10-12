@@ -85,6 +85,8 @@ func agentOutcomeIntent(intent AgentNodeDispatch) *agentv1.AgentNodeDispatchInte
 	phase := agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS
 	if intent.Phase == "plan" {
 		phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN
+	} else if intent.Phase == "synthesis" {
+		phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS
 	}
 	return &agentv1.AgentNodeDispatchIntent{SchemaVersion: intent.SchemaVersion, OperationId: intent.OperationID,
 		Fence: &commonv1.ActionFence{ActionId: intent.ActionID, ExecutionEpoch: intent.ExecutionEpoch},
