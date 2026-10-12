@@ -27,20 +27,25 @@ func TestSynthesisClientEnforcesItsOwnAdmittedScopeAndConfirmedAuthenticatedResp
 	input.Claim.Phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS
 	original.NodeId = "synthesizer"
 	marker := struct{}{}
-	ctx := metadata.AppendToOutgoingContext(context.WithValue(context.Background(), marker, "scope"), "authorization", "Bearer synthesis-fixture-bearer")
+	ctx := context.WithValue(context.Background(), marker, "scope")
 	calls := 0
 	response := original
 	var transport error
 	client := &Client{tlsSecured: true, bearerAttached: true, nodes: synthesisNodeFixture{call: func(out context.Context, r *agentv1.ExecuteAgentTaskRequest) (*agentv1.AgentNodeEffectMetadata, error) {
 		calls++
 		md, _ := metadata.FromOutgoingContext(out)
-		if r != input || out.Value(marker) != "scope" || len(md.Get("authorization")) != 1 || md.Get("authorization")[0] != "Bearer synthesis-fixture-bearer" {
+		if r != input || out.Value(marker) != "scope" || len(md.Get("authorization")) != 0 {
 			t.Fatal("synthesis lost authenticated identity or admitted request")
 		}
 		return response, transport
 	}}}
 	if _, err := client.ExecuteAgentSynthesis(ctx, input); err != nil || calls != 1 {
 		t.Fatalf("confirmed synthesis rejected: %v", err)
+	}
+	duplicate := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer duplicate-fixture-bearer")
+	before := calls
+	if _, err := client.ExecuteAgentSynthesis(duplicate, input); !errors.Is(err, ErrWorkerTLSConfigInvalid) || calls != before {
+		t.Fatalf("duplicate credentials replaced the attached identity: %v", err)
 	}
 	for name, change := range map[string]func(*agentv1.ExecuteAgentTaskRequest){
 		"schema":          func(r *agentv1.ExecuteAgentTaskRequest) { r.SchemaVersion = 0 },
