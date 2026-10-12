@@ -198,3 +198,42 @@ func TestAgentEpochSigningAllowsOnlyFencedReconciliation(t *testing.T) {
 		t.Fatal("inconsistent reconciliation claim")
 	}
 }
+
+func TestNativeTaskAndSynthesisGrantsPreserveTheirOwnSignedPhase(t *testing.T) {
+	for _, phase := range []struct {
+		name string
+		wire agentv1.AgentRunExecutionPhase
+	}{
+		{"tasks", agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS},
+		{"synthesis", agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS},
+	} {
+		t.Run(phase.name, func(t *testing.T) {
+			input, binding, private := agentSigningFixture()
+			input.AgentIntent.Phase = phase.wire
+			sum := sha256.Sum256([]byte("agent-run-execution-v1\nagent-run\n" + phase.name + "\n2\n"))
+			input.Fence.ActionId = "agent-exec-" + hex.EncodeToString(sum[:])
+			input.AgentIntent.Fence = proto.Clone(input.Fence).(*commonv1.ActionFence)
+			original := proto.Clone(input)
+			wrongPhase := false
+			client := &Client{tlsSecured: true, bearerAttached: true, signer: fakeControlSigner(func(request *actionv1.SignControlRequest) (*actionv1.SignControlResponse, error) {
+				return fixtureAgentSigningResponse(t, request, binding, private, func(document map[string]any) {
+					selected := phase.name
+					if wrongPhase {
+						selected = "plan"
+					}
+					document["payload"].(map[string]any)["phase"] = selected
+				}), nil
+			})}
+			if raw, err := client.SignControl(context.Background(), input, binding); err != nil || len(raw) == 0 {
+				t.Fatalf("legitimate native phase grant rejected: %v", err)
+			}
+			wrongPhase = true
+			if _, err := client.SignControl(context.Background(), input, binding); err == nil {
+				t.Fatal("valid signature for another phase authorized execution")
+			}
+			if !proto.Equal(original, input) {
+				t.Fatal("signing changed the caller's admitted fence or immutable scope")
+			}
+		})
+	}
+}

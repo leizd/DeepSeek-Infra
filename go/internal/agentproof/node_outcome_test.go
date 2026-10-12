@@ -192,3 +192,39 @@ func TestAgentNodeOutcomeRejectsReboundProjection(t *testing.T) {
 		})
 	}
 }
+
+func TestSynthesisCustodyProofRequiresOwnPhaseRoleAndTypedCounters(t *testing.T) {
+	effect, intent, binding, private := signedNodeFixture(t)
+	intent.Phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS
+	intent.NodeId = "synthesizer"
+	effect.NodeId = intent.NodeId
+	evidence := effect.OutcomeReceipt.Evidence
+	evidence.Phase = intent.Phase
+	evidence.NodeId = intent.NodeId
+	evidence.ProviderPlan = nil
+	evidence.TaskOutput = &agentv1.AgentTaskOutputMetadata{SchemaVersion: 1, PromptTokens: 13, CompletionTokens: 21, LatencyMs: 34}
+	resignNodeFixture(t, effect.OutcomeReceipt, private)
+	if _, err := VerifyAgentNodeEffect(effect, intent, 7, binding); err != nil {
+		t.Fatalf("confirmed signed synthesis rejected: %v", err)
+	}
+	for name, change := range map[string]func(*agentv1.AgentNodeOutcomeEvidence){
+		"missing-stats": func(e *agentv1.AgentNodeOutcomeEvidence) { e.TaskOutput = nil },
+		"task-role":     func(e *agentv1.AgentNodeOutcomeEvidence) { e.NodeId = "coder" },
+		"provider-plan": func(e *agentv1.AgentNodeOutcomeEvidence) {
+			e.ProviderPlan = []*agentv1.AgentRunPlanNode{{Id: "coder", Task: "injected"}}
+		},
+		"schema":           func(e *agentv1.AgentNodeOutcomeEvidence) { e.TaskOutput.SchemaVersion = 0 },
+		"latency":          func(e *agentv1.AgentNodeOutcomeEvidence) { e.TaskOutput.LatencyMs = -1 },
+		"counter-overflow": func(e *agentv1.AgentNodeOutcomeEvidence) { e.TaskOutput.PromptTokens = ^uint64(0) },
+		"unknown-field":    func(e *agentv1.AgentNodeOutcomeEvidence) { e.TaskOutput.ProtoReflect().SetUnknown([]byte{0x78, 1}) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			wrong := proto.Clone(effect.OutcomeReceipt).(*agentv1.AgentNodeOutcomeReceipt)
+			change(wrong.Evidence)
+			resignNodeFixture(t, wrong, private)
+			if _, err := VerifyAgentNodeOutcome(wrong, intent, 7, binding); !errors.Is(err, ErrAgentNodeOutcomeInvalid) {
+				t.Fatalf("signed but invalid synthesis evidence accepted: %v", err)
+			}
+		})
+	}
+}
