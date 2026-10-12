@@ -34,6 +34,39 @@ func agentExecutionRPCStore(t *testing.T, promoteAction bool, outcomeKey ...stri
 	return control
 }
 
+func TestAgentRunRPCRejectsGenericNativeCompletionAsPrecondition(t *testing.T) {
+	control := agentExecutionRPCStore(t, true)
+	client := agentRunRPCClient(t, control, HealthFor(config.Config{Mode: config.ModeAuthoritative}))
+	ctx := controlRPCContext(t, testInternalBearer)
+	epoch := seedAgentExecutionRPC(t, client)
+	claim, err := client.ClaimExecution(ctx, executionRPCInput(epoch))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []*agentv1.AgentRunEventMetadata{
+		{Type: "done"}, {Type: "run_status", Status: "done"},
+		{Type: "agent_output", Phase: "coder"}, {Type: "agent", Phase: "coder", Status: "done"},
+	} {
+		input := agentRPCAppend(4, epoch)
+		input.Event.Type, input.Event.Status, input.Event.Phase = event.Type, event.Status, event.Phase
+		_, err := client.AppendEvent(ctx, input)
+		if status.Code(err) != codes.FailedPrecondition || status.Convert(err).Message() != "AGENT_RUN_EXECUTION_REQUIRED" {
+			t.Fatalf("native settlement refusal became a transport failure: %v", err)
+		}
+		if _, found, err := control.ReadOperatorMutation(input.OperationId); err != nil || found {
+			t.Fatalf("refused RPC retained an operation receipt: %v", err)
+		}
+	}
+	run, found, err := control.AgentRunMetadata(claim.Claim.RunId)
+	if err != nil || !found || run.NextIndex != 4 || run.Status != "running" || run.Nodes()["coder"].Attempts != 0 {
+		t.Fatalf("refused RPC fabricated public completion: %+v %v", run, err)
+	}
+	resources, err := control.GetResourceLeases(claim.Claim.Fence.ActionId)
+	if err != nil || len(resources) != 1 {
+		t.Fatalf("refused RPC released unresolved resources: %v", err)
+	}
+}
+
 func TestAgentExecutionRPCPlanningLeaseHasNoFabricatedTaskProgress(t *testing.T) {
 	control := agentExecutionRPCStore(t, true)
 	client := agentRunRPCClient(t, control, HealthFor(config.Config{Mode: config.ModeAuthoritative}))

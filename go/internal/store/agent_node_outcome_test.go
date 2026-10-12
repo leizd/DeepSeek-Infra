@@ -56,6 +56,57 @@ func agentOutcomeSign(t *testing.T, receipt *agentv1.AgentNodeOutcomeReceipt, pr
 	receipt.Signature = ed25519.Sign(private, append([]byte(agentproof.NodeOutcomeDomain), encoded...))
 }
 
+func TestAgentNodeOutcomeVerifiedSchedulingTextCannotHidePrivateMaterial(t *testing.T) {
+	control, input, private := agentOutcomeFixture(t)
+	before, _, err := control.Get("action", input.ActionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := countControlEvents(t, control)
+	for _, location := range []string{"id", "task", "dependency"} {
+		for _, text := range []string{"AGE-SECRET-KEY-1EXAMPLE", "-----BEGIN PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----"} {
+			candidate := &agentv1.AgentRunPlanNode{Id: "coder", Task: "review", DependsOn: []string{"researcher"}}
+			switch location {
+			case "id":
+				candidate.Id = text
+			case "task":
+				candidate.Task = text
+			case "dependency":
+				candidate.DependsOn[0] = text
+			}
+			input.Receipt.Evidence.ProviderPlan = []*agentv1.AgentRunPlanNode{candidate}
+			agentOutcomeSign(t, input.Receipt, private)
+			lease, _, err := control.GetActionLease(input.ActionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, intent, _, found, err := control.AgentNodeOutcomeSnapshot(input.ActionID, input.NodeID)
+			if err != nil || !found {
+				t.Fatalf("missing admitted fixture intent: %v", err)
+			}
+			if _, err := agentproof.VerifyAgentNodeOutcome(input.Receipt, agentOutcomeIntent(intent), lease.WriterFencingToken,
+				agentproof.Binding{PublicKey: control.agentOutcomeSignerKey, FleetID: control.fleetID, Environment: control.environment}); err != nil {
+				t.Fatalf("fixture did not reach the verified metadata boundary: %v", err)
+			}
+			if _, err := control.RecordAgentNodeOutcome(input); !errors.Is(err, ErrSecretDetected) {
+				t.Fatalf("valid signature laundered private scheduling material: %v", err)
+			}
+			if _, found, err := control.ReadOperatorMutation(input.OperationID); err != nil || found {
+				t.Fatalf("secret-bearing receipt retained replay state: %v", err)
+			}
+		}
+	}
+	after, found, err := control.Get("action", input.ActionID)
+	if err != nil || !found || after.Revision != before.Revision || !bytes.Equal(after.Payload, before.Payload) || countControlEvents(t, control) != count {
+		t.Fatalf("private material refusal retained partial evidence/history: %v", err)
+	}
+	input.Receipt.Evidence.ProviderPlan = []*agentv1.AgentRunPlanNode{{Id: "coder", Task: "review public scheduling metadata"}}
+	agentOutcomeSign(t, input.Receipt, private)
+	if result, err := control.RecordAgentNodeOutcome(input); err != nil || result.AlreadyRecorded {
+		t.Fatalf("public signed metadata did not survive a rejected-secret retry: %v", err)
+	}
+}
+
 func TestAgentNodeOutcomeDurableReplayPreservesPhaseAndLocks(t *testing.T) {
 	control, input, _ := agentOutcomeFixture(t)
 	lease, _, _ := control.GetActionLease(input.ActionID)

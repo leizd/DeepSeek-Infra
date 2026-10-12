@@ -110,7 +110,8 @@ func agentMetadataWriteError(err error) error {
 	case errors.Is(err, internalprotocol.ErrEmptyActionID), errors.Is(err, internalprotocol.ErrZeroEpoch),
 		errors.Is(err, internalprotocol.ErrFenceMismatch), errors.Is(err, internalprotocol.ErrStaleEpoch),
 		errors.Is(err, store.ErrCutoverNotAuthorized), errors.Is(err, store.ErrWriterFenceHeld),
-		errors.Is(err, store.ErrSchemaInactive), errors.Is(err, store.ErrIllegalTransition):
+		errors.Is(err, store.ErrSchemaInactive), errors.Is(err, store.ErrIllegalTransition),
+		errors.Is(err, store.ErrAgentRunExecutionRequired):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, store.ErrCorruptRecord):
 		return status.Error(codes.DataLoss, "AGENT_CONTROL_HISTORY_INVALID")

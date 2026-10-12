@@ -22,7 +22,7 @@ const agentNodeOutcomeField = "nativeAgentNodeOutcomes"
 // Original writer is captured only after verification against the admitted lease.
 // This immutable control-history witness survives later lease settlement.
 type storedAgentNodeOutcome struct {
-	WriterFencingToken int64  `json:"writerFencingToken"`
+	WriterFencingToken int64  `json:"fencingToken"`
 	Receipt            []byte `json:"receipt"`
 }
 
@@ -99,9 +99,23 @@ func (store *Control) verifyAgentOutcome(receipt *agentv1.AgentNodeOutcomeReceip
 	if lease.Epoch != intent.ExecutionEpoch || lease.ActionID != intent.ActionID {
 		return ErrActionLeaseStale
 	}
-	_, err := agentproof.VerifyAgentNodeOutcome(receipt, agentOutcomeIntent(intent), lease.WriterFencingToken,
+	verified, err := agentproof.VerifyAgentNodeOutcome(receipt, agentOutcomeIntent(intent), lease.WriterFencingToken,
 		agentproof.Binding{PublicKey: store.agentOutcomeSignerKey, FleetID: store.fleetID, Environment: store.environment})
-	return err
+	if err != nil {
+		return err
+	}
+	// The durable protobuf contains only typed, verified public evidence. Check
+	// scheduling text before encoding it so private material cannot hide inside
+	// an otherwise valid receipt's base64 representation.
+	for _, candidate := range verified.Evidence().ProviderPlan {
+		values := append([]string{candidate.Id, candidate.Task}, candidate.DependsOn...)
+		for _, value := range values {
+			if err := rejectControlSecretMaterial(value, 0); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (store *Control) agentNodeOutcomes(record Record, nodes map[string]AgentNodeDispatch) (map[string]storedAgentNodeOutcome, error) {
