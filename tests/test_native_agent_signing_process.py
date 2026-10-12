@@ -103,3 +103,29 @@ def test_synthesis_request_denies_rebound_scope_missing_input_private_reasoning_
     exchange[key] = value
     with pytest.raises(ValueError, match="own verified scope"):
         RUNNER.validate_synthesis_request(exchange, result)
+
+
+@pytest.mark.parametrize("family", ["planner", "task", "synthesis"])
+def test_each_explicit_native_family_reaches_rust_provisioning_boundary_without_local_execution(tmp_path, monkeypatch, family):
+    calls = []
+
+    def stop_before_execution(command, **kwargs):
+        calls.append(command)
+        assert command == [(tmp_path / "provisioner").as_posix()]
+        assert kwargs["env"]["DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE"] == (tmp_path / f"rust-{family}-custody/bundle.json").as_posix()
+        raise RuntimeError("expected isolated provisioning boundary")
+
+    monkeypatch.setattr(RUNNER.subprocess, "run", stop_before_execution)
+    with pytest.raises(RuntimeError, match="expected isolated provisioning boundary"):
+        RUNNER.planner_process_cases(tmp_path / "producer", {}, tmp_path / "worker", tmp_path / "provisioner", tmp_path, tmp_path, family)
+    assert len(calls) == 1
+
+
+def test_unknown_native_family_is_denied_before_custody_or_process_creation(tmp_path, monkeypatch):
+    def forbidden_execution(*args, **kwargs):
+        pytest.fail("unknown native family reached process execution")
+
+    monkeypatch.setattr(RUNNER.subprocess, "run", forbidden_execution)
+    with pytest.raises(ValueError, match="Unknown producer family"):
+        RUNNER.planner_process_cases(tmp_path / "producer", {}, tmp_path / "worker", tmp_path / "provisioner", tmp_path, tmp_path, "unknown")
+    assert list(tmp_path.iterdir()) == []

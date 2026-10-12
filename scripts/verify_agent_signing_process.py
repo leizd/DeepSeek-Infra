@@ -262,7 +262,7 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
     references and is the sole writer of node outcomes and public result bodies.
     This does not prove live upstream availability or Go phase/DAG settlement.
     """
-    if family not in {"planner", "task"}:
+    if family not in {"planner", "task", "synthesis"}:
         raise ValueError("Unknown producer family")
     custody = scratch / f"rust-{family}-custody"
     custody.mkdir(mode=0o700)
