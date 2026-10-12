@@ -297,13 +297,26 @@ func TestAgentNodeOutcomeImmutableConflictAndGenericWriteDenial(t *testing.T) {
 
 func TestAgentNodeOutcomeExpiredLeaseAndRestartRetainHistoricalProof(t *testing.T) {
 	control, input, _ := agentOutcomeFixture(t)
-	if _, err := control.db.Exec("UPDATE action_leases SET lease_until=? WHERE action_id=?", control.now()-1, input.ActionID); err != nil {
+	lease, _, err := control.GetActionLease(input.ActionID)
+	if err != nil {
 		t.Fatal(err)
 	}
+	now := lease.LeaseUntil + 1
+	options := OpenOptions{Path: control.path, Owner: "outcome-expired-writer", Now: func() int64 { return now }, AuthorizeCutover: true,
+		PromotionSignerPublicKey: control.promotionSignerKey, AgentOutcomeSignerPublicKey: control.agentOutcomeSignerKey,
+		FleetID: control.fleetID, Environment: control.environment}
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	control, err = OpenControl(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
 	if _, err := control.RecordAgentNodeOutcome(input); err != nil {
 		t.Fatalf("expired lease erased historical proof: %v", err)
 	}
-	options := OpenOptions{Path: control.path, Owner: "outcome-successor", Now: control.now, AuthorizeCutover: true,
+	options = OpenOptions{Path: control.path, Owner: "outcome-successor", Now: control.now, AuthorizeCutover: true,
 		PromotionSignerPublicKey: control.promotionSignerKey, AgentOutcomeSignerPublicKey: control.agentOutcomeSignerKey,
 		FleetID: control.fleetID, Environment: control.environment}
 	if err := control.Close(); err != nil {

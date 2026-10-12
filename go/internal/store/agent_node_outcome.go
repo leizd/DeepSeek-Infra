@@ -183,7 +183,7 @@ func (store *Control) RecordAgentNodeOutcome(input AgentNodeOutcomeRequest) (Age
 	if err != nil {
 		return AgentNodeOutcomeResult{}, err
 	}
-	if !found || record.ExecutionEpoch != input.Epoch || record.State != "CLAIMED" && record.State != "EXECUTING" {
+	if !found || record.ExecutionEpoch != input.Epoch || !agentOutcomeRecordState(record.State) {
 		return AgentNodeOutcomeResult{}, ErrActionNotClaimable
 	}
 	binding, err := decodeAgentExecution(record)
@@ -198,14 +198,25 @@ func (store *Control) RecordAgentNodeOutcome(input AgentNodeOutcomeRequest) (Age
 		return AgentNodeOutcomeResult{}, err
 	}
 	intent, exists := nodes[input.NodeID]
-	if !exists || intent.ExecutionEpoch != input.Epoch {
+	if !exists || intent.ExecutionEpoch == 0 || intent.ExecutionEpoch > input.Epoch {
 		return AgentNodeOutcomeResult{}, ErrAgentNodeDispatchRequired
 	}
 	lease, err := readActiveActionLeaseTx(tx, record.ID)
 	if err != nil {
 		return AgentNodeOutcomeResult{}, err
 	}
-	if err := store.verifyAgentOutcome(receipt, intent, lease); err != nil {
+	if lease.Epoch != input.Epoch {
+		return AgentNodeOutcomeResult{}, ErrActionLeaseStale
+	}
+	manifest, _, err := validateActionLeaseResourcesTx(tx, lease)
+	if err != nil {
+		return AgentNodeOutcomeResult{}, err
+	}
+	original, err := readAgentOutcomeAdmissionTx(tx, intent, manifest)
+	if err != nil {
+		return AgentNodeOutcomeResult{}, err
+	}
+	if err := store.verifyAgentOutcome(receipt, intent, original); err != nil {
 		return AgentNodeOutcomeResult{}, err
 	}
 	values, err := store.agentNodeOutcomes(record, nodes)
@@ -227,7 +238,7 @@ func (store *Control) RecordAgentNodeOutcome(input AgentNodeOutcomeRequest) (Age
 		if record.Revision >= math.MaxInt64-1 {
 			return AgentNodeOutcomeResult{}, ErrRevisionConflict
 		}
-		values[input.NodeID] = storedAgentNodeOutcome{WriterFencingToken: lease.WriterFencingToken, Receipt: encoded}
+		values[input.NodeID] = storedAgentNodeOutcome{WriterFencingToken: original.WriterFencingToken, Receipt: encoded}
 		var fields map[string]json.RawMessage
 		if json.Unmarshal(record.Payload, &fields) != nil {
 			return AgentNodeOutcomeResult{}, ErrCorruptRecord

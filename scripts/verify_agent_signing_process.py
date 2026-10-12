@@ -391,6 +391,8 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
             if not result.get("productionGoNodeClient"):
                 raise ValueError("Planner probe bypassed the production Go node client")
             if scenario == "planner-success":
+                if not all(result.get(key) for key in ("historicalReceiptAfterActionTakeover", "historicalReceiptAfterGoRestart", "takeoverDidNotReauthorizeProvider", "expiredGrantReexecutionDenied")):
+                    raise ValueError("Historical receipt lacks real UTC takeover, Go restart or duplicate-dispatch denial")
                 receipts = [body for body in documents if hashlib.sha256(body).hexdigest() == result["outcomeReceiptSha256"]]
                 if not result.get("goOutcomePersisted") or not result.get("signedOutcomeVerified") or not result.get("signedOutcomeTamperingDenied") or len(receipts) != 1 or \
                         len(receipts[0]) != result["outcomeReceiptLength"] or len(documents) != 3:

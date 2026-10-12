@@ -9,7 +9,7 @@ import (
 // exact append again when reading history, without allowing arbitrary self edges.
 func nativeAgentMetadataHistoryEdge(before, after Record) bool {
 	if before.Domain != "action" || after.Domain != before.Domain || before.ID != after.ID ||
-		before.State != "EXECUTING" || after.State != before.State ||
+		!agentOutcomeRecordState(before.State) || after.State != before.State ||
 		after.Revision != before.Revision+1 || after.ExecutionEpoch != before.ExecutionEpoch ||
 		!nativeAgentExecution(before.Payload) || !sameAgentExecutionIntent(before, after) {
 		return false
@@ -27,6 +27,9 @@ func nativeAgentMetadataHistoryEdge(before, after Record) bool {
 			continue
 		}
 		if field == agentNodeDispatchField {
+			if before.State != "EXECUTING" {
+				continue
+			}
 			oldNodes, err := readAgentNodeDispatches(before)
 			newNodes, otherErr := readAgentNodeDispatches(after)
 			if err == nil && otherErr == nil && nativeMetadataMapAppend(oldNodes, newNodes) {

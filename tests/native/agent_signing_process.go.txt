@@ -21,6 +21,7 @@ import (
 	"github.com/leizd/DeepSeek-Infra/go/internal/config"
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
+	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"github.com/leizd/DeepSeek-Infra/go/internal/worker"
 	"google.golang.org/grpc"
@@ -32,10 +33,14 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func nativeSigningControl(t *testing.T, writerSeconds int64) *store.Control {
+func nativeSigningControl(t *testing.T, writerSeconds int64, existingPath ...string) *store.Control {
 	t.Helper()
+	path := t.TempDir()
+	if len(existingPath) == 1 {
+		path = existingPath[0]
+	}
 	control, err := store.OpenControl(store.OpenOptions{
-		Path: t.TempDir(), Owner: "native-agent-signing-probe", LeaseSeconds: writerSeconds,
+		Path: path, Owner: "native-agent-signing-probe", LeaseSeconds: writerSeconds,
 		AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic,
 		AgentOutcomeSignerPublicKey: os.Getenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY"),
 		FleetID:                     mutationFleetID, Environment: mutationEnvironment,
@@ -338,7 +343,7 @@ func nativeSigningRPC(t *testing.T, control *store.Control) (agentv1.AgentRunCon
 	return agentv1.NewAgentRunControlClient(connection), "http://" + listener.Addr().String()
 }
 
-func nativeSigningClaim(t *testing.T, client agentv1.AgentRunControlClient, phase string) *agentv1.AgentRunExecutionClaim {
+func nativeSigningClaim(t *testing.T, client agentv1.AgentRunControlClient, phase string, leaseSeconds ...int64) *agentv1.AgentRunExecutionClaim {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(controlRPCContext(t, testInternalBearer), 10*time.Second)
 	defer cancel()
@@ -348,6 +353,9 @@ func nativeSigningClaim(t *testing.T, client agentv1.AgentRunControlClient, phas
 	}
 	input := executionRPCInput(authority.MetadataEpoch)
 	input.ExpectedIndex, input.LeaseSeconds = 2, 300
+	if len(leaseSeconds) == 1 {
+		input.LeaseSeconds = leaseSeconds[0]
+	}
 	input.Phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN
 	if phase == "tasks" {
 		input.MetadataFence.ExecutionEpoch = seedAgentExecutionRPC(t, client)
@@ -390,9 +398,10 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 			t.Fatal("private runtime configuration entered the Go process")
 		}
 	}
-	control := nativeSigningControl(t, 600)
+	controlDirectory := t.TempDir()
+	control := nativeSigningControl(t, 600, controlDirectory)
 	client, origin := nativeSigningRPC(t, control)
-	claim := nativeSigningClaim(t, client, "plan")
+	claim := nativeSigningClaim(t, client, "plan", 30)
 	nativeSigningWrite(t, filepath.Join(directory, "go-ready.json"), map[string]any{
 		"origin": origin, "internalBearer": testInternalBearer, "fencingToken": control.Writer().FencingToken,
 		"fleetId": mutationFleetID, "environment": mutationEnvironment,
@@ -402,7 +411,7 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 	bearer := os.Getenv("DEEPSEEK_AGENT_SIGNING_WORKER_BEARER")
 	nativeSigningConfigureGo(t, ready, bearer)
 	admission := executionRPCInput(claim.MetadataEpoch)
-	admission.ExpectedIndex, admission.Phase, admission.LeaseSeconds = claim.MetadataIndex, claim.Phase, 300
+	admission.ExpectedIndex, admission.Phase, admission.LeaseSeconds = claim.MetadataIndex, claim.Phase, 30
 	ctx, cancel := context.WithTimeout(controlRPCContext(t, testInternalBearer), 10*time.Second)
 	authorized, err := client.AuthorizeExecution(ctx, admission)
 	cancel()
@@ -475,6 +484,7 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 	receiptHash, receiptLength := "", 0
 	nodes := agentv1.NewAgentNodeControlClient(connection)
 	goOutcomePersisted, unknownOutcomeRecordingDenied := false, false
+	historicalTakeoverRetained, historicalGoRestartRetained, takeoverFreshDenied, expiredGrantDenied := false, false, false, false
 	if scenario == "planner-success" {
 		verified, err := worker.VerifyAgentNodeEffect(result, admitted.Intent, claim.WriterFencingToken, binding)
 		if err != nil || verified.Evidence().ProviderPlan[0].Id != "coder" {
@@ -509,6 +519,60 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 				t.Fatalf("Go persisted a forged Rust receipt: %v", err)
 			}
 		}
+		if replay, err := production.ExecuteAgentPlan(context.Background(), request); err != nil || !proto.Equal(replay, result) {
+			t.Fatalf("live grant replay changed immutable evidence: %v", err)
+		}
+		// Let the actual UTC action lease expire. No clock override or direct
+		// lease-table editing is used by the process recovery probe.
+		originalLease, found, err := control.GetActionLease(claim.Fence.ActionId)
+		if err != nil || !found {
+			t.Fatal(err)
+		}
+		wait := time.Until(time.Unix(originalLease.LeaseUntil+1, 0))
+		if wait > 35*time.Second {
+			t.Fatal("planner recovery wait exceeded its bounded UTC lease")
+		}
+		if wait > 0 {
+			time.Sleep(wait)
+		}
+		reopen := func() {
+			if err := control.Close(); err != nil {
+				t.Fatal(err)
+			}
+			next, err := store.OpenControl(store.OpenOptions{Path: controlDirectory, Owner: "native-planner-successor", LeaseSeconds: 600,
+				AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic, AgentOutcomeSignerPublicKey: ready.PublicKey,
+				FleetID: mutationFleetID, Environment: mutationEnvironment})
+			if err != nil {
+				t.Fatal(err)
+			}
+			control = next
+			t.Cleanup(func() { _ = next.Close() })
+			_, nextOrigin := nativeSigningRPC(t, next)
+			nextConnection, err := grpc.NewClient(nextOrigin[len("http://"):], grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = nextConnection.Close() })
+			nodes = agentv1.NewAgentNodeControlClient(nextConnection)
+		}
+		reopen()
+		takeover, err := control.AdmitAndClaimAction(store.AdmissionRequest{ActionID: claim.Fence.ActionId, Owner: "planner-successor-worker", LeaseSeconds: 60})
+		if err != nil || takeover.Record.State != "RECONCILING" || takeover.Lease.Epoch != claim.Fence.ExecutionEpoch+1 ||
+			takeover.Lease.WriterFencingToken <= claim.WriterFencingToken {
+			t.Fatalf("real Go takeover lost original effect authority: %v", err)
+		}
+		if _, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), consume); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("stale Go request fence retained mutation rights: %v", err)
+		}
+		currentFence := &commonv1.ActionFence{ActionId: claim.Fence.ActionId, ExecutionEpoch: takeover.Lease.Epoch}
+		consume.Fence = currentFence
+		fresh, err := nodes.BeginDispatch(controlRPCContext(t, testInternalBearer), &agentv1.BeginAgentNodeDispatchRequest{SchemaVersion: 1,
+			OperationId: "planner-takeover-redispatch", Actor: "operator:agent-test", Fence: currentFence, RunId: claim.RunId,
+			NodeId: "leader", Owner: takeover.Lease.Owner, ClaimToken: takeover.Lease.ClaimToken})
+		if err == nil || fresh.GetFresh() {
+			t.Fatal("Go takeover authorized another provider request")
+		}
+		takeoverFreshDenied = true
 		first, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), consume)
 		if err != nil || first.AlreadyRecorded || first.ReceiptSha256 != receiptHash {
 			t.Fatalf("Go receipt persistence failed: %v", err)
@@ -517,7 +581,9 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 		if err != nil || !replay.AlreadyRecorded || replay.ReceiptSha256 != receiptHash {
 			t.Fatalf("Go receipt replay failed: %v", err)
 		}
-		stored, err := nodes.GetDispatch(controlRPCContext(t, testInternalBearer), &agentv1.GetAgentNodeDispatchRequest{Fence: claim.Fence, RunId: claim.RunId, NodeId: "leader"})
+		historicalTakeoverRetained = true
+		reopen()
+		stored, err := nodes.GetDispatch(controlRPCContext(t, testInternalBearer), &agentv1.GetAgentNodeDispatchRequest{Fence: currentFence, RunId: claim.RunId, NodeId: "leader"})
 		if err != nil || !proto.Equal(stored.GetOutcomeReceipt(), result.OutcomeReceipt) {
 			t.Fatalf("Go history query lost receipt: %v", err)
 		}
@@ -526,6 +592,7 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 		if err != nil || resourceErr != nil || run.NextIndex != 2 || run.Status != "planning" || len(resources) != 1 {
 			t.Fatal("receipt ingestion fabricated phase settlement")
 		}
+		historicalGoRestartRetained = true
 		goOutcomePersisted = true
 	}
 	nativeSigningWrite(t, filepath.Join(directory, "restart-request.json"), map[string]bool{"restart": true})
@@ -545,9 +612,13 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 		if _, err := worker.VerifyAgentNodeEffect(retained, admitted.Intent, claim.WriterFencingToken, binding); err != nil {
 			t.Fatal(err)
 		}
-		if replay, err := production.ExecuteAgentPlan(context.Background(), request); err != nil || !proto.Equal(replay, result) {
-			t.Fatalf("planner replay changed immutable evidence: %v", err)
+		_, err = production.ExecuteAgentPlan(context.Background(), request)
+		var rpcFailure interface{ GRPCStatus() *status.Status }
+		if status.Code(err) != codes.FailedPrecondition || !errors.As(err, &rpcFailure) || rpcFailure.GRPCStatus() == nil ||
+			rpcFailure.GRPCStatus().Code() != codes.FailedPrecondition || rpcFailure.GRPCStatus().Message() != "AGENT_EXECUTION_GRANT_INVALID" {
+			t.Fatalf("expired source grant regained execution permission: %v", err)
 		}
+		expiredGrantDenied = true
 	} else {
 		if _, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), &agentv1.RecordAgentNodeOutcomeRequest{SchemaVersion: 1, OperationId: "unknown-outcome-record", Actor: "operator:agent-test", Fence: claim.Fence, RunId: claim.RunId, NodeId: "leader"}); status.Code(err) != codes.InvalidArgument {
 			t.Fatalf("unknown effect was recorded: %v", err)
@@ -576,6 +647,8 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 		"unknownHasNoReceipt":  scenario == "planner-unknown" && retained.OutcomeReceipt == nil,
 		"outcomeReceiptSha256": receiptHash, "outcomeReceiptLength": receiptLength,
 		"goOutcomePersisted": goOutcomePersisted, "unknownOutcomeRecordingDenied": unknownOutcomeRecordingDenied,
+		"historicalReceiptAfterActionTakeover": historicalTakeoverRetained, "historicalReceiptAfterGoRestart": historicalGoRestartRetained,
+		"takeoverDidNotReauthorizeProvider": takeoverFreshDenied, "expiredGrantReexecutionDenied": expiredGrantDenied,
 		"goControlAuthorityAndReservation": true, "restartPreserved": true, "noDuplicateProviderSend": true,
 		"productionProviderQualified": false, "goPhaseSettlementQualified": false,
 	})
