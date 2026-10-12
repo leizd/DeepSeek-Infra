@@ -150,7 +150,30 @@ func TestTasksCompletionRestartRevalidatesOriginalWriterAndTermination(t *testin
 	if replay, err := successor.CompleteAgentTasks(input); err != nil || !replay.AlreadyApplied {
 		t.Fatalf("restart forgot original completion authority: %v", err)
 	}
-	if _, err := successor.db.Exec(`DELETE FROM action_lease_events WHERE action_id=? AND event_type='TERMINATED'`, input.ActionID); err != nil {
+	deleteTermination := `DELETE FROM action_lease_events WHERE action_id=? AND event_type='TERMINATED'`
+	if _, err := successor.db.Exec(deleteTermination, input.ActionID); err == nil || !strings.Contains(err.Error(), "ACTION_LEASE_EVENT_IMMUTABLE") {
+		t.Fatalf("termination journal was mutable: %v", err)
+	}
+	if _, _, receipt, found, err := successor.AgentNodeOutcomeSnapshot(input.ActionID, "coder"); err != nil || !found || receipt == nil {
+		t.Fatalf("refused deletion damaged retained proof: %v", err)
+	}
+	// This fixture uses a disposable test database. Simulate offline corruption
+	// inside one transaction, restoring the exact production trigger before commit.
+	corruption, err := successor.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer corruption.Rollback()
+	if _, err := corruption.Exec("DROP TRIGGER action_lease_events_no_delete"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := corruption.Exec(deleteTermination, input.ActionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := corruption.Exec(actionAdmissionSchemaObjects["action_lease_events_no_delete"]); err != nil {
+		t.Fatal(err)
+	}
+	if err := corruption.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, _, err := successor.AgentNodeOutcomeSnapshot(input.ActionID, "coder"); err == nil {
