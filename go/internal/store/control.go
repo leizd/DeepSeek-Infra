@@ -1377,6 +1377,7 @@ type controlRecordWrite struct {
 	agentExecution        bool
 	agentNodeDispatch     bool
 	agentNodeOutcome      bool
+	agentTaskSettlement   bool
 	agentPlanSettlement   bool
 	record                Record
 	table                 string
@@ -1505,7 +1506,18 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 			return ErrAgentRunExecutionRequired
 		}
 	}
+	if record.Domain == "action" && !write.agentTaskSettlement {
+		var beforeFields, afterFields map[string]json.RawMessage
+		_ = json.Unmarshal(existing.Payload, &beforeFields)
+		_ = json.Unmarshal(record.Payload, &afterFields)
+		if !bytes.Equal(beforeFields[agentTaskSettlementField], afterFields[agentTaskSettlementField]) {
+			return ErrAgentRunExecutionRequired
+		}
+	}
 	legal := LegalTransition(record.Domain, from, record.State)
+	if !legal && exists && write.agentTaskSettlement && nativeAgentTaskSettlementEdge(existing, record) {
+		legal = true
+	}
 	if !legal && exists && write.agentPlanSettlement && nativeAgentPlanSettlementEdge(existing, record) {
 		legal = true
 	}
@@ -1772,6 +1784,9 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 			expectedRevision = event.Revision
 		}
 		legal := LegalTransition(latest.Domain, previousState, event.State)
+		if !legal && nativeAgentTaskSettlementEdge(final, event) {
+			legal = true
+		}
 		if !legal && nativeAgentPlanSettlementEdge(final, event) {
 			legal = true
 		}

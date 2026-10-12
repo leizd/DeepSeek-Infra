@@ -3,7 +3,7 @@ use super::*;
 fn task_result(fixture: &Fixture) -> Value {
     let intent = fixture.response.intent.as_ref().unwrap();
     json!({"runId":intent.run_id,"publicEvent":{"type":"agent_output","phase":intent.node_id,
-        "output":{"id":intent.node_id,"task":intent.task,"content":"public summary"}},
+        "output":{"id":intent.node_id,"task":intent.task,"content":"public summary","latencyMs":123,"usage":{"prompt_tokens":7,"completion_tokens":9}}},
         "providerResponseSha256":"e".repeat(64)})
 }
 
@@ -62,6 +62,12 @@ fn task_outcome_custody_attests_only_the_admitted_complete_public_projection() {
         .unwrap();
     assert_eq!(evidence.phase, 2);
     assert!(evidence.provider_plan.is_empty());
+    let stats = evidence.task_output.unwrap();
+    assert_eq!(stats.schema_version, 1);
+    assert_eq!(stats.prompt_tokens, 7);
+    assert_eq!(stats.completion_tokens, 9);
+    assert_eq!(stats.latency_ms, 123);
+    assert!(!stats.failed);
     let mut wrong = reference;
     wrong.length += 1;
     assert!(
@@ -149,4 +155,51 @@ fn retained_tool_request_cannot_attest_completion_or_satisfy_dependencies() {
         fixture.begin(&mut worker, false).unwrap(),
         AgentNodeEffectStart::Confirmed(_)
     ));
+}
+
+#[test]
+fn task_custody_rejects_invalid_scheduling_counters() {
+    for (key, value) in [
+        ("latencyMs", json!(-1)),
+        ("latencyMs", json!("12")),
+        ("failed", json!("false")),
+        ("prompt_tokens", json!(-1)),
+        ("completion_tokens", json!(u64::MAX)),
+    ] {
+        let fixture = Fixture::new();
+        let mut worker = fixture.worker(true);
+        let permit = started(fixture.begin(&mut worker, true).unwrap());
+        let store = worker.authority_store.as_mut().unwrap();
+        let mut envelope = task_result(&fixture);
+        if key.ends_with("_tokens") {
+            envelope["publicEvent"]["output"]["usage"][key] = value;
+        } else {
+            envelope["publicEvent"]["output"][key] = value;
+        }
+        let bytes = authority_request::canonical_json_bytes(&envelope).unwrap();
+        let known = store.confirm_agent_node(&permit, &bytes, NOW).unwrap();
+        let retained: Value = serde_json::from_slice(&known.output).unwrap();
+        let public = serde_json::to_vec(&deepseek_policy::agent_run_data::sanitize(
+            &retained["publicEvent"],
+        ))
+        .unwrap();
+        let query = crate::QueryAgentNodeEffect {
+            operation_id: known.operation_id,
+            fence: known.fence,
+            run_id: "run_rpc".into(),
+            node_id: "coder".into(),
+        };
+        assert!(
+            store
+                .agent_node_outcome_evidence(
+                    &query,
+                    AgentArtifactReference {
+                        sha256: agent_node_effect::digest(&public),
+                        length: public.len() as u64
+                    },
+                    &fixture.config
+                )
+                .is_err()
+        );
+    }
 }

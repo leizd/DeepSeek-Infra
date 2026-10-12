@@ -791,6 +791,9 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 			input.Event.Status = ""
 			input.Event.HasPlan = true
 			input.Event.Plan = []*agentv1.AgentRunPlanNode{{Id: "coder", Task: "write"}}
+			if scenario == "task-success" {
+				input.Event.Plan = append(input.Event.Plan, &agentv1.AgentRunPlanNode{Id: "critic", Task: "review", DependsOn: []string{"coder"}})
+			}
 		}
 		if index == 3 {
 			input.Event.Status = "running"
@@ -853,6 +856,12 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 	binding := worker.ControlSignerBinding{PublicKey: ready.PublicKey, FleetID: mutationFleetID, Environment: mutationEnvironment}
 	receiptHash, receiptLength := "", 0
 	verified, persisted := false, false
+	taskSettled, dependencyQualified := false, false
+	var settlement *agentv1.SettleAgentTaskRequest
+	var critic *agentv1.AgentNodeEffectMetadata
+	var dependentIntent *agentv1.AgentNodeDispatchIntent
+	var dependentQuery *agentv1.QueryAgentNodeEffectRequest
+	dependentReceiptHash, dependentReceiptLength := "", 0
 	if scenario == "task-success" {
 		if known.State != "CONFIRMED" || !proto.Equal(known, result) {
 			t.Fatal("task lost complete outcome")
@@ -884,6 +893,54 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 			t.Fatal("Go outcome replay changed proof")
 		}
 		persisted = true
+		blocked := &agentv1.BeginAgentNodeDispatchRequest{SchemaVersion: 1, OperationId: "dependent-before-settlement", Actor: "operator:agent-test",
+			Fence: claim.Fence, RunId: claim.RunId, NodeId: "critic", Owner: claim.Owner, ClaimToken: claim.ClaimToken}
+		if _, err := nodes.BeginDispatch(controlRPCContext(t, testInternalBearer), blocked); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("recorded receipt alone admitted dependency: %v", err)
+		}
+		settlement = &agentv1.SettleAgentTaskRequest{SchemaVersion: 1, OperationId: "task-settle-coder", Actor: "operator:agent-test", Fence: claim.Fence,
+			RunId: claim.RunId, NodeId: "coder", Owner: claim.Owner, ClaimToken: claim.ClaimToken, ExpectedIndex: 4, SourceReceiptSha256: receiptHash}
+		settled, err := nodes.SettleTask(controlRPCContext(t, testInternalBearer), settlement)
+		if err != nil || settled.AlreadyApplied || settled.ActionState != "EXECUTING" || settled.Run.NextIndex != 5 {
+			t.Fatalf("actual coder settlement: %v", err)
+		}
+		replayed, err := nodes.SettleTask(controlRPCContext(t, testInternalBearer), settlement)
+		if err != nil || !replayed.AlreadyApplied || !proto.Equal(replayed.Run, settled.Run) {
+			t.Fatalf("coder settlement replay: %v", err)
+		}
+		dependent := proto.Clone(request).(*agentv1.ExecuteAgentTaskRequest)
+		dependent.NodeId, dependent.OperationId = "critic", "task-dependent-dispatch"
+		critic, err = production.ExecuteAgentTask(context.Background(), dependent)
+		if err != nil || critic == nil || critic.State != "CONFIRMED" {
+			t.Fatalf("actual dependency execution: %v", err)
+		}
+		retained, err := nodes.GetDispatch(controlRPCContext(t, testInternalBearer), &agentv1.GetAgentNodeDispatchRequest{Fence: claim.Fence, RunId: claim.RunId, NodeId: "critic"})
+		if err != nil || !retained.Found || retained.Intent.Task != "review" || len(retained.Intent.DependsOn) != 1 || retained.Intent.DependsOn[0] != "coder" {
+			t.Fatalf("dependent Go scope: %v", err)
+		}
+		dependentIntent = retained.Intent
+		proof, err = worker.VerifyAgentNodeEffect(critic, dependentIntent, claim.WriterFencingToken, binding)
+		if err != nil || proof.Evidence().TaskOutput == nil || proof.Evidence().TaskOutput.PromptTokens != 3 || proof.Evidence().TaskOutput.CompletionTokens != 1 {
+			t.Fatalf("dependent Rust custody counters: %v", err)
+		}
+		raw, err = proto.MarshalOptions{Deterministic: true}.Marshal(critic.OutcomeReceipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest = sha256.Sum256(raw)
+		dependentReceiptHash, dependentReceiptLength = hex.EncodeToString(digest[:]), len(raw)
+		recorded, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), &agentv1.RecordAgentNodeOutcomeRequest{SchemaVersion: 1, OperationId: "dependent-outcome-record", Actor: "operator:agent-test", Fence: claim.Fence, RunId: claim.RunId, NodeId: "critic", OutcomeReceipt: critic.OutcomeReceipt})
+		if err != nil || recorded.ReceiptSha256 != dependentReceiptHash {
+			t.Fatalf("dependent result ingestion: %v", err)
+		}
+		second := proto.Clone(settlement).(*agentv1.SettleAgentTaskRequest)
+		second.OperationId, second.NodeId, second.ExpectedIndex, second.SourceReceiptSha256 = "task-settle-critic", "critic", 5, dependentReceiptHash
+		completed, err := nodes.SettleTask(controlRPCContext(t, testInternalBearer), second)
+		if err != nil || completed.AlreadyApplied || completed.ActionState != "EXECUTING" || completed.Run.NextIndex != 6 {
+			t.Fatalf("dependent settlement: %v", err)
+		}
+		dependentQuery = &agentv1.QueryAgentNodeEffectRequest{OperationId: dependentIntent.OperationId, Fence: claim.Fence, RunId: claim.RunId, NodeId: "critic"}
+		taskSettled, dependencyQualified = true, true
 	} else {
 		expected := "AWAITING_TOOLS"
 		if scenario == "task-unknown" {
@@ -900,8 +957,22 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 		t.Fatal("producer released unresolved task resource")
 	}
 	run, found, err := control.AgentRunMetadata(claim.RunId)
-	if err != nil || !found || run.NextIndex != 4 || run.Status != "running" || run.Nodes()["coder"].State == "succeeded" {
-		t.Fatal("producer fabricated Go DAG settlement")
+	expectedCursor := int64(4)
+	if scenario == "task-success" {
+		expectedCursor = 6
+	}
+	if err != nil || !found || run.NextIndex != expectedCursor || run.Status != "running" {
+		t.Fatal("task run cursor/status mismatch")
+	}
+	if scenario == "task-success" {
+		for _, node := range []string{"coder", "critic"} {
+			output := run.Nodes()[node]
+			if output.State != "succeeded" || output.PromptTokens != 3 || output.CompletionTokens != 1 || output.LatencyMS == nil {
+				t.Fatal("settled task counters/progress missing")
+			}
+		}
+	} else if run.Nodes()["coder"].State == "succeeded" {
+		t.Fatal("incomplete task acquired Go completion")
 	}
 	nativeSigningWrite(t, filepath.Join(directory, "restart-request.json"), map[string]bool{"restart": true})
 	var restarted nativeSigningWorkerReady
@@ -918,6 +989,18 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 		}
 	} else if replayError != nil || !proto.Equal(replayed, known) {
 		t.Fatalf("task replay changed retained provider result: %v", replayError)
+	}
+	if critic != nil {
+		retained, err := production.QueryAgentNodeEffect(context.Background(), dependentQuery)
+		if err != nil || !proto.Equal(retained, critic) {
+			t.Fatalf("dependent Rust restart: %v", err)
+		}
+		dependent := proto.Clone(request).(*agentv1.ExecuteAgentTaskRequest)
+		dependent.NodeId, dependent.OperationId = "critic", "task-dependent-dispatch"
+		replay, err := production.ExecuteAgentTask(context.Background(), dependent)
+		if err != nil || !proto.Equal(replay, critic) {
+			t.Fatalf("dependent replay changed provider result: %v", err)
+		}
 	}
 	if err := control.Close(); err != nil {
 		t.Fatal(err)
@@ -949,6 +1032,21 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 		!proto.Equal(retainedGo.OutcomeReceipt, known.OutcomeReceipt) {
 		t.Fatalf("Go task restart lost reservation or proof: %v", err)
 	}
+	if settlement != nil {
+		reopened := agentv1.NewAgentNodeControlClient(restartConnection)
+		replay, err := reopened.SettleTask(controlRPCContext(t, testInternalBearer), settlement)
+		if err != nil || !replay.AlreadyApplied || replay.Run.NextIndex != 6 {
+			t.Fatalf("task settlement restart replay: %v", err)
+		}
+		retained, err := reopened.GetDispatch(controlRPCContext(t, testInternalBearer), &agentv1.GetAgentNodeDispatchRequest{Fence: claim.Fence, RunId: claim.RunId, NodeId: "critic"})
+		if err != nil || !retained.Found || !proto.Equal(retained.Intent, dependentIntent) || !proto.Equal(retained.OutcomeReceipt, critic.OutcomeReceipt) {
+			t.Fatalf("dependent Go restart: %v", err)
+		}
+		locks, err := control.GetResourceLeases(claim.Fence.ActionId)
+		if err != nil || len(locks) != 1 {
+			t.Fatal("node completion released unfinished phase resource")
+		}
+	}
 	nativeSigningWrite(t, filepath.Join(directory, "process-result.json"), map[string]any{
 		"status": "PASS", "scenario": scenario, "runId": claim.RunId, "actionId": claim.Fence.ActionId, "executionEpoch": claim.Fence.ExecutionEpoch,
 		"operationId": admitted.Intent.OperationId, "state": known.State, "publicEvent": known.PublicEvent,
@@ -956,5 +1054,25 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 		"signedOutcomeVerified": verified, "goOutcomePersisted": persisted, "rustRestartPreserved": true, "goRestartPreserved": true,
 		"unknownHasNoReceipt": known.OutcomeReceipt == nil, "duplicateProviderDispatchDenied": true, "resourcesRetained": true,
 		"productionGoNodeClient": true, "productionProviderQualified": false, "goTaskPhaseSettlementQualified": false,
+		"goTaskNodeSettlementQualified": taskSettled, "dependencyDispatchQualified": dependencyQualified,
+		"dependentOperationId": func() string {
+			if dependentIntent != nil {
+				return dependentIntent.OperationId
+			}
+			return ""
+		}(),
+		"dependentPublicEvent": func() *agentv1.AgentArtifactReference {
+			if critic != nil {
+				return critic.PublicEvent
+			}
+			return nil
+		}(),
+		"dependentOutcomeSha256": func() string {
+			if critic != nil {
+				return critic.OutcomeSha256
+			}
+			return ""
+		}(),
+		"dependentReceiptSha256": dependentReceiptHash, "dependentReceiptLength": dependentReceiptLength,
 	})
 }

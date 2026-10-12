@@ -124,7 +124,7 @@ impl AuthorityStore {
     ) -> Result<deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeEvidence, Status>
     {
         use deepseek_protocol::generated::deepseek::agent::v1::{
-            AgentNodeOutcomeEvidence, AgentRunPlanNode,
+            AgentNodeOutcomeEvidence, AgentRunPlanNode, AgentTaskOutputMetadata,
         };
         let snapshot = self.agent_node_snapshot(query)?.ok_or_else(denied)?;
         if snapshot.state != "CONFIRMED" {
@@ -182,6 +182,34 @@ impl AuthorityStore {
                 })
             })
             .collect();
+        let task_output = if task {
+            let result = &event["output"];
+            let counter = |key: &str| -> Result<u64, Status> {
+                match result["usage"].get(key) {
+                    None => Ok(0),
+                    Some(value) => value
+                        .as_u64()
+                        .filter(|count| *count <= i64::MAX as u64)
+                        .ok_or_else(denied),
+                }
+            };
+            let failed = match result.get("failed") {
+                None => false,
+                Some(value) => value.as_bool().ok_or_else(denied)?,
+            };
+            Some(AgentTaskOutputMetadata {
+                schema_version: 1,
+                prompt_tokens: counter("prompt_tokens")?,
+                completion_tokens: counter("completion_tokens")?,
+                latency_ms: result["latencyMs"]
+                    .as_i64()
+                    .filter(|ms| *ms >= 0)
+                    .ok_or_else(denied)?,
+                failed,
+            })
+        } else {
+            None
+        };
         Ok(AgentNodeOutcomeEvidence {
             schema_version: 1,
             fence: row.intent.fence,
@@ -200,6 +228,7 @@ impl AuthorityStore {
             outcome_length: snapshot.output_length.ok_or_else(denied)?,
             public_event: Some(public_event),
             provider_plan,
+            task_output,
             fleet_id: config.fleet_id.clone(),
             environment: config.environment.clone(),
         })

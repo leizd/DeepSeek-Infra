@@ -23,6 +23,7 @@ const (
 	AgentNodeControl_GetDispatch_FullMethodName   = "/deepseek.agent.v1.AgentNodeControl/GetDispatch"
 	AgentNodeControl_RecordOutcome_FullMethodName = "/deepseek.agent.v1.AgentNodeControl/RecordOutcome"
 	AgentNodeControl_SettlePlan_FullMethodName    = "/deepseek.agent.v1.AgentNodeControl/SettlePlan"
+	AgentNodeControl_SettleTask_FullMethodName    = "/deepseek.agent.v1.AgentNodeControl/SettleTask"
 )
 
 // AgentNodeControlClient is the client API for AgentNodeControl service.
@@ -36,6 +37,7 @@ type AgentNodeControlClient interface {
 	GetDispatch(ctx context.Context, in *GetAgentNodeDispatchRequest, opts ...grpc.CallOption) (*GetAgentNodeDispatchResponse, error)
 	RecordOutcome(ctx context.Context, in *RecordAgentNodeOutcomeRequest, opts ...grpc.CallOption) (*RecordAgentNodeOutcomeResponse, error)
 	SettlePlan(ctx context.Context, in *SettleAgentPlanRequest, opts ...grpc.CallOption) (*SettleAgentPlanResponse, error)
+	SettleTask(ctx context.Context, in *SettleAgentTaskRequest, opts ...grpc.CallOption) (*SettleAgentTaskResponse, error)
 }
 
 type agentNodeControlClient struct {
@@ -86,6 +88,16 @@ func (c *agentNodeControlClient) SettlePlan(ctx context.Context, in *SettleAgent
 	return out, nil
 }
 
+func (c *agentNodeControlClient) SettleTask(ctx context.Context, in *SettleAgentTaskRequest, opts ...grpc.CallOption) (*SettleAgentTaskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SettleAgentTaskResponse)
+	err := c.cc.Invoke(ctx, AgentNodeControl_SettleTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentNodeControlServer is the server API for AgentNodeControl service.
 // All implementations must embed UnimplementedAgentNodeControlServer
 // for forward compatibility.
@@ -97,6 +109,7 @@ type AgentNodeControlServer interface {
 	GetDispatch(context.Context, *GetAgentNodeDispatchRequest) (*GetAgentNodeDispatchResponse, error)
 	RecordOutcome(context.Context, *RecordAgentNodeOutcomeRequest) (*RecordAgentNodeOutcomeResponse, error)
 	SettlePlan(context.Context, *SettleAgentPlanRequest) (*SettleAgentPlanResponse, error)
+	SettleTask(context.Context, *SettleAgentTaskRequest) (*SettleAgentTaskResponse, error)
 	mustEmbedUnimplementedAgentNodeControlServer()
 }
 
@@ -118,6 +131,9 @@ func (UnimplementedAgentNodeControlServer) RecordOutcome(context.Context, *Recor
 }
 func (UnimplementedAgentNodeControlServer) SettlePlan(context.Context, *SettleAgentPlanRequest) (*SettleAgentPlanResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SettlePlan not implemented")
+}
+func (UnimplementedAgentNodeControlServer) SettleTask(context.Context, *SettleAgentTaskRequest) (*SettleAgentTaskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SettleTask not implemented")
 }
 func (UnimplementedAgentNodeControlServer) mustEmbedUnimplementedAgentNodeControlServer() {}
 func (UnimplementedAgentNodeControlServer) testEmbeddedByValue()                          {}
@@ -212,6 +228,24 @@ func _AgentNodeControl_SettlePlan_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentNodeControl_SettleTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SettleAgentTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentNodeControlServer).SettleTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentNodeControl_SettleTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentNodeControlServer).SettleTask(ctx, req.(*SettleAgentTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentNodeControl_ServiceDesc is the grpc.ServiceDesc for AgentNodeControl service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -234,6 +268,10 @@ var AgentNodeControl_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SettlePlan",
 			Handler:    _AgentNodeControl_SettlePlan_Handler,
+		},
+		{
+			MethodName: "SettleTask",
+			Handler:    _AgentNodeControl_SettleTask_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

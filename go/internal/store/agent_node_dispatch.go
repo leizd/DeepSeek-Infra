@@ -114,7 +114,7 @@ func agentNodeOperationID(node AgentNodeDispatch) string {
 	return "agent-node-" + hex.EncodeToString(digest[:])
 }
 
-func agentDispatchPlanNode(run agent.RunMetadata, binding AgentRunExecutionBinding, nodeID string) (agent.RunPlanNode, error) {
+func agentDispatchPlanNode(run agent.RunMetadata, binding AgentRunExecutionBinding, nodeID string, completed ...map[string]AgentTaskSettlement) (agent.RunPlanNode, error) {
 	if binding.Phase == "plan" && nodeID == "leader" {
 		return agent.RunPlanNode{ID: "leader", Task: "plan agent run", DependsOn: []string{}}, nil
 	}
@@ -123,8 +123,13 @@ func agentDispatchPlanNode(run agent.RunMetadata, binding AgentRunExecutionBindi
 			if node.ID == nodeID {
 				// The imported event projection is not effect evidence. Dependencies
 				// need verified Rust outcomes before this path may admit them.
-				if len(node.DependsOn) != 0 {
-					return agent.RunPlanNode{}, ErrAgentNodeDependencyUnverified
+				for _, dependency := range node.DependsOn {
+					if len(completed) != 1 {
+						return agent.RunPlanNode{}, ErrAgentNodeDependencyUnverified
+					}
+					if _, verified := completed[0][dependency]; !verified || run.Nodes()[dependency].State != "succeeded" {
+						return agent.RunPlanNode{}, ErrAgentNodeDependencyUnverified
+					}
 				}
 				return node, nil
 			}
@@ -207,7 +212,11 @@ func (store *Control) BeginAgentNodeDispatch(input AgentNodeDispatchRequest) (Ag
 	if !executionPhaseReady(run, binding.Phase) || executionPlanDigest(run) != binding.PlanDigest {
 		return AgentNodeDispatchResult{}, ErrActionNotClaimable
 	}
-	planNode, err := agentDispatchPlanNode(run, binding, input.NodeID)
+	completed, err := store.validatedAgentTaskSettlementsTx(tx, record)
+	if err != nil {
+		return AgentNodeDispatchResult{}, err
+	}
+	planNode, err := agentDispatchPlanNode(run, binding, input.NodeID, completed)
 	if err != nil {
 		return AgentNodeDispatchResult{}, err
 	}

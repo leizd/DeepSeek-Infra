@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
+	"math"
 	"strings"
 	"time"
 
@@ -73,6 +74,15 @@ func VerifyAgentNodeOutcome(receipt *agentv1.AgentNodeOutcomeReceipt, intent *ag
 		evidence.OutcomeLength > 1024*1024 || evidence.FleetId != binding.FleetID || evidence.Environment != binding.Environment ||
 		evidence.Fence.ActionId == "" || evidence.Fence.ExecutionEpoch == 0 {
 		return invalid()
+	}
+	// Historical task receipts may predate typed counters. Settlement separately
+	// requires them; malformed or planner-attached counters are never accepted.
+	if stats := evidence.TaskOutput; stats != nil {
+		if evidence.Phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS || len(evidence.ProviderPlan) != 0 ||
+			stats.SchemaVersion != 1 || len(stats.ProtoReflect().GetUnknown()) != 0 || stats.LatencyMs < 0 ||
+			stats.PromptTokens > math.MaxInt64 || stats.CompletionTokens > math.MaxInt64 {
+			return invalid()
+		}
 	}
 	created, err := time.Parse("2006-01-02T15:04:05Z", evidence.CreatedAt)
 	if err != nil || created.Format("2006-01-02T15:04:05Z") != evidence.CreatedAt {

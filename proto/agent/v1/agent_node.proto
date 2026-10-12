@@ -81,6 +81,7 @@ service AgentNodeControl {
   rpc GetDispatch(GetAgentNodeDispatchRequest) returns (GetAgentNodeDispatchResponse);
   rpc RecordOutcome(RecordAgentNodeOutcomeRequest) returns (RecordAgentNodeOutcomeResponse);
   rpc SettlePlan(SettleAgentPlanRequest) returns (SettleAgentPlanResponse);
+  rpc SettleTask(SettleAgentTaskRequest) returns (SettleAgentTaskResponse);
 }
 
 message ExecuteAgentPlanRequest {
@@ -127,6 +128,7 @@ message AgentNodeOutcomeEvidence {
   repeated AgentRunPlanNode provider_plan = 17;
   string fleet_id = 18;
   string environment = 19;
+  AgentTaskOutputMetadata task_output = 20;
 }
 
 // Signature covers the canonical protobuf encoding of evidence with the fixed
@@ -226,6 +228,37 @@ message SettleAgentPlanRequest {
 }
 
 message SettleAgentPlanResponse {
+  bool already_applied = 1;
+  AgentRunSnapshot run = 2;
+  string action_state = 3;
+}
+
+// Public scheduling counters are derived only from the confirmed Rust body and
+// covered by its custody signature. They contain no provider content or secrets.
+message AgentTaskOutputMetadata {
+  uint32 schema_version = 1;
+  uint64 prompt_tokens = 2;
+  uint64 completion_tokens = 3;
+  int64 latency_ms = 4;
+  bool failed = 5;
+}
+
+// Go consumes its previously independently verified receipt. The caller cannot
+// supply another body, counters, done flag or dependency-success assertion.
+message SettleAgentTaskRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  deepseek.common.v1.ActionFence fence = 4;
+  string run_id = 5;
+  string node_id = 6;
+  string owner = 7;
+  string claim_token = 8;
+  int64 expected_index = 9;
+  string source_receipt_sha256 = 10;
+}
+
+message SettleAgentTaskResponse {
   bool already_applied = 1;
   AgentRunSnapshot run = 2;
   string action_state = 3;

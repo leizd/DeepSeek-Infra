@@ -309,6 +309,9 @@ func (store *Control) AgentNodeOutcomeSnapshot(actionID, nodeID string) (Record,
 	if err := store.validateAgentPlanSettlementTx(tx, record); err != nil {
 		return record, AgentNodeDispatch{}, nil, false, err
 	}
+	if _, err := store.validatedAgentTaskSettlementsTx(tx, record); err != nil {
+		return record, AgentNodeDispatch{}, nil, false, err
+	}
 	intent, found := nodes[nodeID]
 	var receipt *agentv1.AgentNodeOutcomeReceipt
 	if stored, present := values[nodeID]; present {

@@ -117,6 +117,7 @@ fn outcome_signature_journal_is_idempotent_after_restart_and_refuses_corrupt_rec
             length: 1,
         }),
         provider_plan: vec![],
+        task_output: None,
         fleet_id: "fleet-a".into(),
         environment: "test".into(),
     };
