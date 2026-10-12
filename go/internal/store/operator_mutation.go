@@ -228,7 +228,7 @@ func replayOperatorMutationTx(tx *sql.Tx, operationID, requestDigest string) (Op
 }
 
 func insertOperatorMutationTx(tx *sql.Tx, result OperatorMutationResult, writerFence, recordedAt int64) error {
-	_, err := tx.Exec(
+	inserted, err := tx.Exec(
 		`INSERT INTO `+operatorMutationTable+`(
 			operation_id, domain, record_id, record_revision, record_state, payload_digest,
 			request_digest, action_id, execution_epoch, cutover_revision, fencing_token,
@@ -238,7 +238,13 @@ func insertOperatorMutationTx(tx *sql.Tx, result OperatorMutationResult, writerF
 		result.PayloadDigest, result.RequestDigest, result.ActionID, result.ExecutionEpoch,
 		result.CutoverRevision, result.FencingToken, writerFence, result.Actor, recordedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if count, err := inserted.RowsAffected(); err != nil || count != 1 {
+		return ErrCorruptRecord
+	}
+	return nil
 }
 
 // ReadOperatorMutation returns one journal row. A caller that lost the response to an

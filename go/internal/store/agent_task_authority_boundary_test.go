@@ -110,13 +110,16 @@ func TestTasksCompletionPrivateEdgePreservesEveryOriginalField(t *testing.T) {
 	}
 	// EXECUTING -> SUCCEEDED is normally legal. Its generic legality must not
 	// bypass the stricter completion edge when immutable history is reopened.
+	forged := taskBoundaryField(t, result.Action, "unrelated", true)
+	restoreAction := taskBoundaryActionView(t, control, forged)
 	restore := taskBoundaryHistoryView(t, control, "action", input.ActionID, result.Action.Revision, func(record *Record) {
-		*record = taskBoundaryField(t, *record, "unrelated", true)
+		*record = forged
 	})
 	if _, _, err := control.Get("action", input.ActionID); !errors.Is(err, ErrCorruptRecord) {
 		t.Fatalf("generic terminal transition bypassed completion preservation: %v", err)
 	}
 	restore()
+	restoreAction()
 	if replay, err := control.CompleteAgentTasks(input); err != nil || !replay.AlreadyApplied {
 		t.Fatalf("refusing forged history damaged the original phase: %v", err)
 	}
