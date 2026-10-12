@@ -343,7 +343,7 @@ func nativeSigningRPC(t *testing.T, control *store.Control) (agentv1.AgentRunCon
 	return agentv1.NewAgentRunControlClient(connection), "http://" + listener.Addr().String()
 }
 
-func nativeSigningClaim(t *testing.T, client agentv1.AgentRunControlClient, phase string, leaseSeconds ...int64) *agentv1.AgentRunExecutionClaim {
+func nativeSigningClaim(t *testing.T, client agentv1.AgentRunControlClient, phase string, leaseSeconds ...uint32) *agentv1.AgentRunExecutionClaim {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(controlRPCContext(t, testInternalBearer), 10*time.Second)
 	defer cancel()
