@@ -900,7 +900,7 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 		t.Fatal("producer released unresolved task resource")
 	}
 	run, found, err := control.AgentRunMetadata(claim.RunId)
-	if err != nil || !found || run.NextIndex != 4 || run.Status != "running" || run.Nodes()["coder"].State == "done" {
+	if err != nil || !found || run.NextIndex != 4 || run.Status != "running" || run.Nodes()["coder"].State == "succeeded" {
 		t.Fatal("producer fabricated Go DAG settlement")
 	}
 	nativeSigningWrite(t, filepath.Join(directory, "restart-request.json"), map[string]bool{"restart": true})
@@ -922,7 +922,21 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 	if err := control.Close(); err != nil {
 		t.Fatal(err)
 	}
-	control = nativeSigningControl(t, 600, controlDirectory)
+	// Reopen retained authority; creating fresh promotion requests would reuse
+	// historical transfer IDs with a different timestamp and replay-conflict.
+	control, err = store.OpenControl(store.OpenOptions{Path: controlDirectory, Owner: "native-task-successor", LeaseSeconds: 600,
+		AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic,
+		AgentOutcomeSignerPublicKey: ready.PublicKey, FleetID: mutationFleetID, Environment: mutationEnvironment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = control.Close() })
+	for _, domain := range []string{"agent_run", "action"} {
+		cutover, err := control.GetCutover(domain)
+		if err != nil || !store.IsDomainGoAuthoritative(cutover.State) {
+			t.Fatalf("restart lost retained %s authority: %v", domain, err)
+		}
+	}
 	_, restartOrigin := nativeSigningRPC(t, control)
 	restartConnection, err := grpc.NewClient(restartOrigin[len("http://"):], grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
