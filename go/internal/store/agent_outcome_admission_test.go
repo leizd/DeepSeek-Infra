@@ -94,23 +94,25 @@ func TestAgentNodeOutcomeTakeoverRefusesMissingAmbiguousOrCorruptAdmission(t *te
 			var statement string
 			switch change {
 			case "missing":
-				statement = "DELETE FROM action_lease_events WHERE epoch=1"
+				statement = "CREATE TEMP VIEW action_lease_events AS SELECT * FROM main.action_lease_events WHERE epoch<>1"
 			case "duplicate":
 				statement = `CREATE TEMP VIEW action_lease_events AS SELECT * FROM main.action_lease_events
 					UNION ALL SELECT * FROM main.action_lease_events WHERE epoch=1`
 			case "writer":
-				statement = "UPDATE action_lease_events SET writer_fencing_token=writer_fencing_token+1 WHERE epoch=1"
+				statement = `CREATE TEMP VIEW action_lease_events AS SELECT event_id, action_id, event_type, owner, epoch, claim_token, lease_until, claim_revision AS claim_revision, CASE WHEN epoch=1 THEN writer_fencing_token+1 ELSE writer_fencing_token END AS writer_fencing_token, recorded_at AS recorded_at, resource_keys_json AS resource_keys_json FROM main.action_lease_events`
 			case "revision":
-				statement = "UPDATE action_lease_events SET claim_revision=claim_revision+1 WHERE epoch=1"
+				statement = `CREATE TEMP VIEW action_lease_events AS SELECT event_id, action_id, event_type, owner, epoch, claim_token, lease_until, CASE WHEN epoch=1 THEN claim_revision+1 ELSE claim_revision END AS claim_revision, writer_fencing_token AS writer_fencing_token, recorded_at AS recorded_at, resource_keys_json AS resource_keys_json FROM main.action_lease_events`
 			case "time":
-				statement = "UPDATE action_lease_events SET recorded_at=recorded_at+1 WHERE epoch=1"
+				statement = `CREATE TEMP VIEW action_lease_events AS SELECT event_id, action_id, event_type, owner, epoch, claim_token, lease_until, claim_revision AS claim_revision, writer_fencing_token AS writer_fencing_token, CASE WHEN epoch=1 THEN recorded_at+1 ELSE recorded_at END AS recorded_at, resource_keys_json AS resource_keys_json FROM main.action_lease_events`
 			case "manifest":
-				statement = "UPDATE action_lease_events SET resource_keys_json='[]' WHERE epoch=1"
+				statement = `CREATE TEMP VIEW action_lease_events AS SELECT event_id, action_id, event_type, owner, epoch, claim_token, lease_until, claim_revision AS claim_revision, writer_fencing_token AS writer_fencing_token, recorded_at AS recorded_at, CASE WHEN epoch=1 THEN '[]' ELSE resource_keys_json END AS resource_keys_json FROM main.action_lease_events`
 			case "current_resource":
 				statement = "DELETE FROM action_resource_leases"
 			case "forged_signature":
 				input.Receipt.Signature[0] ^= 1
 			}
+			// Historical events remain immutable in production. A scoped read
+			// view injects corrupt observations without dropping those guards.
 			if statement != "" {
 				if _, err := control.db.Exec(statement); err != nil {
 					t.Fatal(err)
