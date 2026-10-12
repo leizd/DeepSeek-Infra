@@ -1524,7 +1524,10 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 		}
 	}
 	legal := LegalTransition(record.Domain, from, record.State)
-	if !legal && exists && write.agentTasksCompletion && nativeAgentTasksCompletionEdge(existing, record) {
+	if write.agentTasksCompletion {
+		if !exists || !nativeAgentTasksCompletionEdge(existing, record) {
+			return ErrAgentRunExecutionRequired
+		}
 		legal = true
 	}
 	if !legal && exists && write.agentTaskSettlement && nativeAgentTaskSettlementEdge(existing, record) {
@@ -1796,8 +1799,16 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 			expectedRevision = event.Revision
 		}
 		legal := LegalTransition(latest.Domain, previousState, event.State)
-		if !legal && nativeAgentTasksCompletionEdge(final, event) {
-			legal = true
+		if latest.Domain == "action" {
+			var beforeFields, afterFields map[string]json.RawMessage
+			_ = json.Unmarshal(final.Payload, &beforeFields)
+			_ = json.Unmarshal(event.Payload, &afterFields)
+			if !bytes.Equal(beforeFields[agentTasksCompletionField], afterFields[agentTasksCompletionField]) {
+				if !nativeAgentTasksCompletionEdge(final, event) {
+					return ErrCorruptRecord
+				}
+				legal = true
+			}
 		}
 		if !legal && nativeAgentTaskSettlementEdge(final, event) {
 			legal = true
