@@ -401,7 +401,7 @@ impl AuthorityStore {
                 fencing_token: token,
                 grant_digest,
                 intent_digest,
-                intent: intent.clone(),
+                intent: Box::new(intent.clone()),
             }))
         } else {
             Ok(AgentNodeEffectStart::EffectUnknown)

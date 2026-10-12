@@ -57,7 +57,7 @@ pub struct AgentNodeEffectPermit {
     pub(crate) fencing_token: i64,
     pub(crate) grant_digest: String,
     pub(crate) intent_digest: String,
-    pub(crate) intent: AgentNodeDispatchIntent,
+    pub(crate) intent: Box<AgentNodeDispatchIntent>,
 }
 
 impl std::fmt::Debug for AgentNodeEffectPermit {
