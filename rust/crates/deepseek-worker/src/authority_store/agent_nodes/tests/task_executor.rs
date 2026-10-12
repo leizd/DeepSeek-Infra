@@ -26,7 +26,10 @@ fn task_outcome_custody_attests_only_the_admitted_complete_public_projection() {
     let envelope = task_result(&fixture);
     let bytes = authority_request::canonical_json_bytes(&envelope).unwrap();
     let known = store.confirm_agent_node(&permit, &bytes, NOW).unwrap();
-    let event = deepseek_policy::agent_run_data::sanitize(&envelope["publicEvent"]);
+    let original_event = deepseek_policy::agent_run_data::sanitize(&envelope["publicEvent"]);
+    let original_public = serde_json::to_vec(&original_event).unwrap();
+    let retained: Value = serde_json::from_slice(&known.output).unwrap();
+    let event = deepseek_policy::agent_run_data::sanitize(&retained["publicEvent"]);
     let public = serde_json::to_vec(&event).unwrap();
     let reference = AgentArtifactReference {
         sha256: agent_node_effect::digest(&public),
@@ -38,6 +41,22 @@ fn task_outcome_custody_attests_only_the_admitted_complete_public_projection() {
         run_id: "run_rpc".into(),
         node_id: "coder".into(),
     };
+    assert_ne!(
+        agent_node_effect::digest(&original_public),
+        reference.sha256
+    );
+    assert!(
+        store
+            .agent_node_outcome_evidence(
+                &query,
+                AgentArtifactReference {
+                    sha256: agent_node_effect::digest(&original_public),
+                    length: original_public.len() as u64
+                },
+                &fixture.config
+            )
+            .is_err()
+    );
     let evidence = store
         .agent_node_outcome_evidence(&query, reference.clone(), &fixture.config)
         .unwrap();
