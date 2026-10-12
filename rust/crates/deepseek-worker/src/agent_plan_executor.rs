@@ -24,7 +24,7 @@ use crate::{
 };
 
 pub struct AgentPlanExecutor {
-    artifact_root: PathBuf,
+    pub(crate) artifact_root: PathBuf,
     workspace_root: PathBuf,
     upstream: UpstreamConfig,
     router: ModelRouterSettings,
@@ -223,6 +223,17 @@ impl AgentPlanExecutor {
 
 #[tonic::async_trait]
 impl AgentNodeWorker for WorkerRpcService {
+    async fn project_plan(
+        &self,
+        request: Request<
+            deepseek_protocol::generated::deepseek::agent::v1::ProjectAgentPlanRequest,
+        >,
+    ) -> Result<
+        Response<deepseek_protocol::generated::deepseek::agent::v1::AgentPlanProjectionReceipt>,
+        Status,
+    > {
+        self.project_agent_plan(request).await
+    }
     async fn execute_plan(
         &self,
         request: Request<ExecuteAgentPlanRequest>,

@@ -22,6 +22,7 @@ const (
 	AgentNodeControl_BeginDispatch_FullMethodName = "/deepseek.agent.v1.AgentNodeControl/BeginDispatch"
 	AgentNodeControl_GetDispatch_FullMethodName   = "/deepseek.agent.v1.AgentNodeControl/GetDispatch"
 	AgentNodeControl_RecordOutcome_FullMethodName = "/deepseek.agent.v1.AgentNodeControl/RecordOutcome"
+	AgentNodeControl_SettlePlan_FullMethodName    = "/deepseek.agent.v1.AgentNodeControl/SettlePlan"
 )
 
 // AgentNodeControlClient is the client API for AgentNodeControl service.
@@ -34,6 +35,7 @@ type AgentNodeControlClient interface {
 	BeginDispatch(ctx context.Context, in *BeginAgentNodeDispatchRequest, opts ...grpc.CallOption) (*BeginAgentNodeDispatchResponse, error)
 	GetDispatch(ctx context.Context, in *GetAgentNodeDispatchRequest, opts ...grpc.CallOption) (*GetAgentNodeDispatchResponse, error)
 	RecordOutcome(ctx context.Context, in *RecordAgentNodeOutcomeRequest, opts ...grpc.CallOption) (*RecordAgentNodeOutcomeResponse, error)
+	SettlePlan(ctx context.Context, in *SettleAgentPlanRequest, opts ...grpc.CallOption) (*SettleAgentPlanResponse, error)
 }
 
 type agentNodeControlClient struct {
@@ -74,6 +76,16 @@ func (c *agentNodeControlClient) RecordOutcome(ctx context.Context, in *RecordAg
 	return out, nil
 }
 
+func (c *agentNodeControlClient) SettlePlan(ctx context.Context, in *SettleAgentPlanRequest, opts ...grpc.CallOption) (*SettleAgentPlanResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SettleAgentPlanResponse)
+	err := c.cc.Invoke(ctx, AgentNodeControl_SettlePlan_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentNodeControlServer is the server API for AgentNodeControl service.
 // All implementations must embed UnimplementedAgentNodeControlServer
 // for forward compatibility.
@@ -84,6 +96,7 @@ type AgentNodeControlServer interface {
 	BeginDispatch(context.Context, *BeginAgentNodeDispatchRequest) (*BeginAgentNodeDispatchResponse, error)
 	GetDispatch(context.Context, *GetAgentNodeDispatchRequest) (*GetAgentNodeDispatchResponse, error)
 	RecordOutcome(context.Context, *RecordAgentNodeOutcomeRequest) (*RecordAgentNodeOutcomeResponse, error)
+	SettlePlan(context.Context, *SettleAgentPlanRequest) (*SettleAgentPlanResponse, error)
 	mustEmbedUnimplementedAgentNodeControlServer()
 }
 
@@ -102,6 +115,9 @@ func (UnimplementedAgentNodeControlServer) GetDispatch(context.Context, *GetAgen
 }
 func (UnimplementedAgentNodeControlServer) RecordOutcome(context.Context, *RecordAgentNodeOutcomeRequest) (*RecordAgentNodeOutcomeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RecordOutcome not implemented")
+}
+func (UnimplementedAgentNodeControlServer) SettlePlan(context.Context, *SettleAgentPlanRequest) (*SettleAgentPlanResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SettlePlan not implemented")
 }
 func (UnimplementedAgentNodeControlServer) mustEmbedUnimplementedAgentNodeControlServer() {}
 func (UnimplementedAgentNodeControlServer) testEmbeddedByValue()                          {}
@@ -178,6 +194,24 @@ func _AgentNodeControl_RecordOutcome_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentNodeControl_SettlePlan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SettleAgentPlanRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentNodeControlServer).SettlePlan(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentNodeControl_SettlePlan_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentNodeControlServer).SettlePlan(ctx, req.(*SettleAgentPlanRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentNodeControl_ServiceDesc is the grpc.ServiceDesc for AgentNodeControl service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -197,6 +231,10 @@ var AgentNodeControl_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "RecordOutcome",
 			Handler:    _AgentNodeControl_RecordOutcome_Handler,
 		},
+		{
+			MethodName: "SettlePlan",
+			Handler:    _AgentNodeControl_SettlePlan_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "agent/v1/agent_node.proto",
@@ -205,6 +243,7 @@ var AgentNodeControl_ServiceDesc = grpc.ServiceDesc{
 const (
 	AgentNodeWorker_ExecutePlan_FullMethodName = "/deepseek.agent.v1.AgentNodeWorker/ExecutePlan"
 	AgentNodeWorker_QueryEffect_FullMethodName = "/deepseek.agent.v1.AgentNodeWorker/QueryEffect"
+	AgentNodeWorker_ProjectPlan_FullMethodName = "/deepseek.agent.v1.AgentNodeWorker/ProjectPlan"
 )
 
 // AgentNodeWorkerClient is the client API for AgentNodeWorker service.
@@ -216,6 +255,7 @@ const (
 type AgentNodeWorkerClient interface {
 	ExecutePlan(ctx context.Context, in *ExecuteAgentPlanRequest, opts ...grpc.CallOption) (*AgentNodeEffectMetadata, error)
 	QueryEffect(ctx context.Context, in *QueryAgentNodeEffectRequest, opts ...grpc.CallOption) (*QueryAgentNodeEffectResponse, error)
+	ProjectPlan(ctx context.Context, in *ProjectAgentPlanRequest, opts ...grpc.CallOption) (*AgentPlanProjectionReceipt, error)
 }
 
 type agentNodeWorkerClient struct {
@@ -246,6 +286,16 @@ func (c *agentNodeWorkerClient) QueryEffect(ctx context.Context, in *QueryAgentN
 	return out, nil
 }
 
+func (c *agentNodeWorkerClient) ProjectPlan(ctx context.Context, in *ProjectAgentPlanRequest, opts ...grpc.CallOption) (*AgentPlanProjectionReceipt, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AgentPlanProjectionReceipt)
+	err := c.cc.Invoke(ctx, AgentNodeWorker_ProjectPlan_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentNodeWorkerServer is the server API for AgentNodeWorker service.
 // All implementations must embed UnimplementedAgentNodeWorkerServer
 // for forward compatibility.
@@ -255,6 +305,7 @@ func (c *agentNodeWorkerClient) QueryEffect(ctx context.Context, in *QueryAgentN
 type AgentNodeWorkerServer interface {
 	ExecutePlan(context.Context, *ExecuteAgentPlanRequest) (*AgentNodeEffectMetadata, error)
 	QueryEffect(context.Context, *QueryAgentNodeEffectRequest) (*QueryAgentNodeEffectResponse, error)
+	ProjectPlan(context.Context, *ProjectAgentPlanRequest) (*AgentPlanProjectionReceipt, error)
 	mustEmbedUnimplementedAgentNodeWorkerServer()
 }
 
@@ -270,6 +321,9 @@ func (UnimplementedAgentNodeWorkerServer) ExecutePlan(context.Context, *ExecuteA
 }
 func (UnimplementedAgentNodeWorkerServer) QueryEffect(context.Context, *QueryAgentNodeEffectRequest) (*QueryAgentNodeEffectResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method QueryEffect not implemented")
+}
+func (UnimplementedAgentNodeWorkerServer) ProjectPlan(context.Context, *ProjectAgentPlanRequest) (*AgentPlanProjectionReceipt, error) {
+	return nil, status.Error(codes.Unimplemented, "method ProjectPlan not implemented")
 }
 func (UnimplementedAgentNodeWorkerServer) mustEmbedUnimplementedAgentNodeWorkerServer() {}
 func (UnimplementedAgentNodeWorkerServer) testEmbeddedByValue()                         {}
@@ -328,6 +382,24 @@ func _AgentNodeWorker_QueryEffect_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentNodeWorker_ProjectPlan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProjectAgentPlanRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentNodeWorkerServer).ProjectPlan(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentNodeWorker_ProjectPlan_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentNodeWorkerServer).ProjectPlan(ctx, req.(*ProjectAgentPlanRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentNodeWorker_ServiceDesc is the grpc.ServiceDesc for AgentNodeWorker service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -342,6 +414,10 @@ var AgentNodeWorker_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "QueryEffect",
 			Handler:    _AgentNodeWorker_QueryEffect_Handler,
+		},
+		{
+			MethodName: "ProjectPlan",
+			Handler:    _AgentNodeWorker_ProjectPlan_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

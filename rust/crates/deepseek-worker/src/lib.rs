@@ -16,6 +16,7 @@ use sha2::Digest;
 mod agent_execution_grant;
 mod agent_node_effect;
 mod agent_plan_executor;
+mod agent_plan_projection;
 mod authority_request;
 mod authority_store;
 mod control_signer;

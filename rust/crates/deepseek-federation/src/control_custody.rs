@@ -27,6 +27,51 @@ impl std::fmt::Debug for ControlSigningKey {
 }
 
 impl ControlSigningKey {
+    pub fn sign_agent_plan_projection(
+        &self,
+        evidence: &deepseek_protocol::generated::deepseek::agent::v1::AgentPlanProjectionEvidence,
+    ) -> Result<Vec<u8>, FederationIdentityError> {
+        use prost::Message as _;
+        let digest = |s: &str| {
+            s.len() == 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        };
+        let reference = |r: Option<
+            &deepseek_protocol::generated::deepseek::agent::v1::AgentArtifactReference,
+        >| {
+            r.is_some_and(|r| digest(&r.sha256) && r.length > 0 && r.length <= 128 * 1024 * 1024)
+        };
+        if evidence.schema_version != 1
+            || !digest(&evidence.source_receipt_sha256)
+            || evidence
+                .settlement_fence
+                .as_ref()
+                .is_none_or(|f| deepseek_protocol::validate_fence(f).is_err())
+            || evidence.settlement_writer_token <= 0
+            || evidence.run_id.is_empty()
+            || evidence.metadata_epoch == 0
+            || evidence.expected_index < 0
+            || evidence.normalized_plan.is_empty()
+            || evidence.normalized_plan.len() > 32
+            || !matches!(evidence.next_status.as_str(), "running" | "awaiting_plan")
+            || !reference(evidence.plan_body.as_ref())
+            || !reference(evidence.status_body.as_ref())
+            || (evidence.planning_required && !reference(evidence.planning_body.as_ref()))
+            || (!evidence.planning_required && evidence.planning_body.is_some())
+            || self.binding["fleetId"] != evidence.fleet_id
+            || self.binding["environment"] != evidence.environment
+        {
+            return Err(error("AGENT_PLAN_PROJECTION_INVALID"));
+        }
+        let bytes = evidence.encode_to_vec();
+        if bytes.len() > 1024 * 1024 {
+            return Err(error("AGENT_PLAN_PROJECTION_INVALID"));
+        }
+        let mut message = b"deepseek-infra:agent-plan-projection-proof-v1\0".to_vec();
+        message.extend(bytes);
+        Ok(self.key.sign(&message).to_bytes().to_vec())
+    }
     pub fn public_key(&self) -> String {
         encode_b64url(self.key.verifying_key().as_bytes())
     }

@@ -39,10 +39,30 @@ func nodeDispatchError(err error) error {
 	if errors.Is(err, store.ErrAgentNodeOutcomeConflict) {
 		return status.Error(codes.AlreadyExists, err.Error())
 	}
-	if errors.Is(err, store.ErrAgentNodeDependencyUnverified) || errors.Is(err, agentproof.ErrAgentNodeOutcomeInvalid) {
+	if errors.Is(err, store.ErrAgentNodeDependencyUnverified) || errors.Is(err, agentproof.ErrAgentNodeOutcomeInvalid) || errors.Is(err, agentproof.ErrAgentPlanProjectionInvalid) {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	}
 	return executionWriteError(err)
+}
+
+func (service *agentNodeService) SettlePlan(ctx context.Context, input *agentv1.SettleAgentPlanRequest) (*agentv1.SettleAgentPlanResponse, error) {
+	if err := service.run.executionProcess(); err != nil {
+		return nil, err
+	}
+	if input == nil || input.SchemaVersion != 1 || input.Fence == nil || input.Projection == nil ||
+		len(input.ProtoReflect().GetUnknown()) != 0 || len(input.Fence.ProtoReflect().GetUnknown()) != 0 {
+		return nil, status.Error(codes.InvalidArgument, "AGENT_PLAN_PROJECTION_INVALID")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
+	input = proto.Clone(input).(*agentv1.SettleAgentPlanRequest)
+	result, err := service.run.control.SettleAgentPlan(store.AgentPlanSettlementRequest{OperationID: input.OperationId, Actor: input.Actor,
+		ActionID: input.Fence.ActionId, Epoch: input.Fence.ExecutionEpoch, RunID: input.RunId, Owner: input.Owner, ClaimToken: input.ClaimToken, Projection: input.Projection})
+	if err != nil {
+		return nil, nodeDispatchError(err)
+	}
+	return &agentv1.SettleAgentPlanResponse{AlreadyApplied: result.AlreadyApplied, Run: runProtocol(result.Run), ActionState: result.Action.State}, nil
 }
 
 func (service *agentNodeService) BeginDispatch(ctx context.Context, input *agentv1.BeginAgentNodeDispatchRequest) (*agentv1.BeginAgentNodeDispatchResponse, error) {

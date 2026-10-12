@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -1376,6 +1377,7 @@ type controlRecordWrite struct {
 	agentExecution        bool
 	agentNodeDispatch     bool
 	agentNodeOutcome      bool
+	agentPlanSettlement   bool
 	record                Record
 	table                 string
 	intentJSON            []byte
@@ -1495,7 +1497,18 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 			return err
 		}
 	}
+	if record.Domain == "action" && !write.agentPlanSettlement {
+		var beforeFields, afterFields map[string]json.RawMessage
+		_ = json.Unmarshal(existing.Payload, &beforeFields)
+		_ = json.Unmarshal(record.Payload, &afterFields)
+		if !bytes.Equal(beforeFields[agentPlanSettlementField], afterFields[agentPlanSettlementField]) {
+			return ErrAgentRunExecutionRequired
+		}
+	}
 	legal := LegalTransition(record.Domain, from, record.State)
+	if !legal && exists && write.agentPlanSettlement && nativeAgentPlanSettlementEdge(existing, record) {
+		legal = true
+	}
 	// Use the same narrow append rule for the write and its durable history.
 	if !legal && exists && (write.agentNodeDispatch || write.agentNodeOutcome) &&
 		nativeAgentMetadataHistoryEdge(existing, record) {
@@ -1759,6 +1772,9 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 			expectedRevision = event.Revision
 		}
 		legal := LegalTransition(latest.Domain, previousState, event.State)
+		if !legal && nativeAgentPlanSettlementEdge(final, event) {
+			legal = true
+		}
 		if !legal && nativeAgentMetadataHistoryEdge(final, event) {
 			legal = true
 		}

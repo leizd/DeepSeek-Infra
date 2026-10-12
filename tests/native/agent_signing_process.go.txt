@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
 	"github.com/leizd/DeepSeek-Infra/go/internal/config"
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
@@ -485,6 +486,13 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 	nodes := agentv1.NewAgentNodeControlClient(connection)
 	goOutcomePersisted, unknownOutcomeRecordingDenied := false, false
 	historicalTakeoverRetained, historicalGoRestartRetained, takeoverFreshDenied, expiredGrantDenied := false, false, false, false
+	phaseSettled, phaseReplayAfterRestart, projectionAfterRustRestart := false, false, false
+	var projectionInput *agentv1.ProjectAgentPlanRequest
+	var projectionReceipt *agentv1.AgentPlanProjectionReceipt
+	projectionHash, projectionLength := "", 0
+	var normalizedPlanBody, runStatusBody *agentv1.AgentArtifactReference
+	var normalizedPlan []*agentv1.AgentRunPlanNode
+	planNextStatus := ""
 	if scenario == "planner-success" {
 		verified, err := worker.VerifyAgentNodeEffect(result, admitted.Intent, claim.WriterFencingToken, binding)
 		if err != nil || verified.Evidence().ProviderPlan[0].Id != "coder" {
@@ -582,15 +590,53 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 			t.Fatalf("Go receipt replay failed: %v", err)
 		}
 		historicalTakeoverRetained = true
+		// Retention alone must not settle the phase or release reservations.
+		beforeSettlement, _, err := control.AgentRunMetadata(claim.RunId)
+		retainedResources, resourceErr := control.GetResourceLeases(claim.Fence.ActionId)
+		if err != nil || resourceErr != nil || beforeSettlement.NextIndex != 2 || beforeSettlement.Status != "planning" || len(retainedResources) != 1 {
+			t.Fatal("receipt ingestion fabricated phase settlement")
+		}
+		candidates := []agent.RunPlanNode{}
+		for _, node := range result.OutcomeReceipt.Evidence.ProviderPlan {
+			candidates = append(candidates, agent.RunPlanNode{ID: node.Id, Task: node.Task, DependsOn: node.DependsOn})
+		}
+		nextStatus := "running"
+		if beforeSettlement.ConfirmPlan {
+			nextStatus = "awaiting_plan"
+		}
+		projectionInput = &agentv1.ProjectAgentPlanRequest{SchemaVersion: 1, Source: query, SettlementFence: currentFence,
+			SettlementWriterToken: control.Writer().FencingToken, MetadataEpoch: claim.MetadataEpoch, ExpectedIndex: beforeSettlement.NextIndex,
+			NormalizedPlan: planProtocol(agent.NormalizeRunPlan(candidates)), NextStatus: nextStatus}
+		projectionReceipt, err = production.ProjectAgentPlan(context.Background(), projectionInput)
+		if err != nil {
+			t.Fatalf("Rust normalized body projection failed: %v", err)
+		}
+		settlement := &agentv1.SettleAgentPlanRequest{SchemaVersion: 1, OperationId: "process-plan-phase-settle", Actor: "operator:agent-test",
+			Fence: currentFence, RunId: claim.RunId, Owner: takeover.Lease.Owner, ClaimToken: takeover.Lease.ClaimToken, Projection: projectionReceipt}
+		forged := proto.Clone(settlement).(*agentv1.SettleAgentPlanRequest)
+		forged.Projection.Signature[0] ^= 1
+		if _, err := nodes.SettlePlan(controlRPCContext(t, testInternalBearer), forged); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("Go accepted an unsigned phase projection: %v", err)
+		}
+		settled, err := nodes.SettlePlan(controlRPCContext(t, testInternalBearer), settlement)
+		if err != nil || settled.AlreadyApplied || settled.ActionState != "SUCCEEDED" || settled.GetRun().GetNextIndex() != 4 || settled.GetRun().GetStatus() != nextStatus {
+			t.Fatalf("production Go phase settlement failed: %v", err)
+		}
+		phaseSettled = true
 		reopen()
+		replaySettlement, err := nodes.SettlePlan(controlRPCContext(t, testInternalBearer), settlement)
+		if err != nil || !replaySettlement.AlreadyApplied || replaySettlement.ActionState != "SUCCEEDED" || replaySettlement.GetRun().GetNextIndex() != 4 {
+			t.Fatalf("Go restart duplicated or lost phase settlement: %v", err)
+		}
+		phaseReplayAfterRestart = true
 		stored, err := nodes.GetDispatch(controlRPCContext(t, testInternalBearer), &agentv1.GetAgentNodeDispatchRequest{Fence: currentFence, RunId: claim.RunId, NodeId: "leader"})
 		if err != nil || !proto.Equal(stored.GetOutcomeReceipt(), result.OutcomeReceipt) {
 			t.Fatalf("Go history query lost receipt: %v", err)
 		}
 		run, _, err := control.AgentRunMetadata(claim.RunId)
 		resources, resourceErr := control.GetResourceLeases(claim.Fence.ActionId)
-		if err != nil || resourceErr != nil || run.NextIndex != 2 || run.Status != "planning" || len(resources) != 1 {
-			t.Fatal("receipt ingestion fabricated phase settlement")
+		if err != nil || resourceErr != nil || run.NextIndex != 4 || run.Status != nextStatus || len(resources) != 0 {
+			t.Fatal("settled phase or released resources changed after Go restart")
 		}
 		historicalGoRestartRetained = true
 		goOutcomePersisted = true
@@ -619,6 +665,19 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 			t.Fatalf("expired source grant regained execution permission: %v", err)
 		}
 		expiredGrantDenied = true
+		retainedProjection, err := production.ProjectAgentPlan(context.Background(), projectionInput)
+		if err != nil || !proto.Equal(retainedProjection, projectionReceipt) {
+			t.Fatalf("Rust restart changed derived public bodies or proof: %v", err)
+		}
+		projectionAfterRustRestart = true
+		projectionBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(projectionReceipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		projectionDigest := sha256.Sum256(projectionBytes)
+		projectionHash, projectionLength = hex.EncodeToString(projectionDigest[:]), len(projectionBytes)
+		normalizedPlanBody, runStatusBody = projectionReceipt.Evidence.PlanBody, projectionReceipt.Evidence.StatusBody
+		normalizedPlan, planNextStatus = projectionReceipt.Evidence.NormalizedPlan, projectionReceipt.Evidence.NextStatus
 	} else {
 		if _, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), &agentv1.RecordAgentNodeOutcomeRequest{SchemaVersion: 1, OperationId: "unknown-outcome-record", Actor: "operator:agent-test", Fence: claim.Fence, RunId: claim.RunId, NodeId: "leader"}); status.Code(err) != codes.InvalidArgument {
 			t.Fatalf("unknown effect was recorded: %v", err)
@@ -649,6 +708,10 @@ func TestNativeAgentPlanProcess(t *testing.T) {
 		"goOutcomePersisted": goOutcomePersisted, "unknownOutcomeRecordingDenied": unknownOutcomeRecordingDenied,
 		"historicalReceiptAfterActionTakeover": historicalTakeoverRetained, "historicalReceiptAfterGoRestart": historicalGoRestartRetained,
 		"takeoverDidNotReauthorizeProvider": takeoverFreshDenied, "expiredGrantReexecutionDenied": expiredGrantDenied,
+		"projectionReceiptSha256": projectionHash, "projectionReceiptLength": projectionLength,
+		"normalizedPlanBody": normalizedPlanBody, "runStatusBody": runStatusBody, "normalizedPlan": normalizedPlan, "planNextStatus": planNextStatus,
+		"goPlanPhaseSettlementQualified": phaseSettled && phaseReplayAfterRestart && projectionAfterRustRestart,
+		"goPlanPhaseSettledAtomically":   phaseSettled, "goPlanPhaseReplayAfterRestart": phaseReplayAfterRestart, "normalizedProjectionAfterRustRestart": projectionAfterRustRestart,
 		"goControlAuthorityAndReservation": true, "restartPreserved": true, "noDuplicateProviderSend": true,
 		"productionProviderQualified": false, "goPhaseSettlementQualified": false,
 	})

@@ -381,6 +381,16 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                             envelope["runId"] != result["runId"] or hashlib.sha256(output_bytes).hexdigest() != result["outcomeSha256"] or \
                             rows[0][3] != result["outcomeSha256"] or envelope["providerResponseSha256"] != hashlib.sha256(response_bytes).hexdigest():
                         raise ValueError("Confirmed provider bytes, immutable outcome and Rust public projection do not match")
+                    expected_plan = [{"id": node["id"], "task": node["task"], "depends_on": node.get("depends_on", [])} for node in result["normalizedPlan"]]
+                    for key, expected_fields in (("normalizedPlanBody", {"type": "agent_plan", "plan": expected_plan}),
+                                                 ("runStatusBody", {"type": "run_status", "status": result["planNextStatus"]})):
+                        reference = result[key]
+                        retained_body = db.execute("SELECT length,bytes FROM artifacts WHERE sha256=?", (reference["sha256"],)).fetchone()
+                        if not retained_body or retained_body[0] != reference["length"] or hashlib.sha256(retained_body[1]).hexdigest() != reference["sha256"]:
+                            raise ValueError("Settled planner projection lacks immutable Rust body custody")
+                        document = json.loads(retained_body[1])
+                        if any(document.get(field) != expected for field, expected in expected_fields.items()):
+                            raise ValueError("Go normalized plan/status diverges from the Rust public body")
                 elif rows[0][2:] != (None, None) or db.execute("SELECT count(*) FROM artifacts").fetchone()[0] != 1:
                     raise ValueError("An uncertain HTTP effect acquired a successful result body")
             signatures = state_root / "rust-worker/control-signatures.sqlite3"
@@ -391,12 +401,15 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
             if not result.get("productionGoNodeClient"):
                 raise ValueError("Planner probe bypassed the production Go node client")
             if scenario == "planner-success":
-                if not all(result.get(key) for key in ("historicalReceiptAfterActionTakeover", "historicalReceiptAfterGoRestart", "takeoverDidNotReauthorizeProvider", "expiredGrantReexecutionDenied")):
+                if not all(result.get(key) for key in ("historicalReceiptAfterActionTakeover", "historicalReceiptAfterGoRestart", "takeoverDidNotReauthorizeProvider", "expiredGrantReexecutionDenied", "goPlanPhaseSettledAtomically", "goPlanPhaseReplayAfterRestart", "normalizedProjectionAfterRustRestart", "goPlanPhaseSettlementQualified")):
                     raise ValueError("Historical receipt lacks real UTC takeover, Go restart or duplicate-dispatch denial")
                 receipts = [body for body in documents if hashlib.sha256(body).hexdigest() == result["outcomeReceiptSha256"]]
                 if not result.get("goOutcomePersisted") or not result.get("signedOutcomeVerified") or not result.get("signedOutcomeTamperingDenied") or len(receipts) != 1 or \
-                        len(receipts[0]) != result["outcomeReceiptLength"] or len(documents) != 3:
+                        len(receipts[0]) != result["outcomeReceiptLength"] or len(documents) != 4:
                     raise ValueError("Confirmed Rust result lacks an immutable signature verified by production Go")
+                projections = [body for body in documents if hashlib.sha256(body).hexdigest() == result["projectionReceiptSha256"]]
+                if len(projections) != 1 or len(projections[0]) != result["projectionReceiptLength"]:
+                    raise ValueError("Planner settlement lacks a unique immutable Rust projection signature")
             elif not result.get("unknownOutcomeRecordingDenied") or not result.get("unknownHasNoReceipt") or result.get("signedOutcomeVerified") or len(documents) != 2:
                 raise ValueError("Uncertain effect acquired a signature or successful Go outcome")
             result.update(outcomeSignatureJournalVerified=True, actualHTTPRequestCount=len(received), httpFenceVerified=True, bodyCustodyVerified=True,

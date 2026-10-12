@@ -7,6 +7,78 @@ use deepseek_protocol::generated::deepseek::agent::v1::{
 use prost::Message as _;
 
 #[test]
+fn plan_projection_journal_preserves_derived_signature_after_restart() {
+    use deepseek_protocol::generated::deepseek::agent::v1::{
+        AgentPlanProjectionEvidence, AgentRunPlanNode,
+    };
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("rust-worker")).unwrap();
+    let password = b"isolated-projection-password-32-bytes";
+    let bundle = create_control_signer_bundle(password, "fleet-a", "test").unwrap();
+    let public = bundle["binding"]["signerPublicKey"].as_str().unwrap();
+    let bound = String::from_utf8(canonical_json_bytes(&bundle["binding"]).unwrap()).unwrap();
+    let reopen = || ControlSigner {
+        key: load_control_signer(&bundle, password, "fleet-a", "test", public).unwrap(),
+        journal: SignatureJournal::open(root.path(), &bound).unwrap(),
+    };
+    let evidence = AgentPlanProjectionEvidence {
+        schema_version: 1,
+        source_receipt_sha256: "a".repeat(64),
+        settlement_fence: Some(ActionFence {
+            action_id: "planner".into(),
+            execution_epoch: 2,
+        }),
+        settlement_writer_token: 3,
+        run_id: "run".into(),
+        metadata_epoch: 1,
+        expected_index: 2,
+        normalized_plan: vec![AgentRunPlanNode {
+            id: "coder".into(),
+            task: "write".into(),
+            depends_on: vec![],
+        }],
+        next_status: "running".into(),
+        plan_body: Some(AgentArtifactReference {
+            sha256: "b".repeat(64),
+            length: 20,
+        }),
+        status_body: Some(AgentArtifactReference {
+            sha256: "c".repeat(64),
+            length: 30,
+        }),
+        fleet_id: "fleet-a".into(),
+        environment: "test".into(),
+        planning_body: None,
+        planning_required: false,
+    };
+    let mut signer = reopen();
+    let first = signer.sign_plan_projection(evidence.clone()).unwrap();
+    assert_eq!(first.signature.len(), 64);
+    assert_eq!(
+        first,
+        signer.sign_plan_projection(evidence.clone()).unwrap()
+    );
+    drop(signer);
+    let mut signer = reopen();
+    assert_eq!(
+        first,
+        signer.sign_plan_projection(evidence.clone()).unwrap()
+    );
+    let mut invalid = evidence.clone();
+    invalid.environment = "foreign".into();
+    assert_eq!(
+        signer.sign_plan_projection(invalid).unwrap_err().message(),
+        "AGENT_PLAN_PROJECTION_INVALID"
+    );
+    let mut invalid = evidence.clone();
+    invalid.next_status = "done".into();
+    assert_eq!(
+        signer.sign_plan_projection(invalid).unwrap_err().message(),
+        "AGENT_PLAN_PROJECTION_INVALID"
+    );
+}
+
+#[test]
 fn outcome_signature_journal_is_idempotent_after_restart_and_refuses_corrupt_receipts() {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("rust-worker")).unwrap();

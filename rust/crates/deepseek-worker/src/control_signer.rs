@@ -40,6 +40,40 @@ impl std::fmt::Debug for ControlSigner {
 }
 
 impl ControlSigner {
+    pub(crate) fn sign_plan_projection(
+        &mut self,
+        evidence: deepseek_protocol::generated::deepseek::agent::v1::AgentPlanProjectionEvidence,
+    ) -> Result<deepseek_protocol::generated::deepseek::agent::v1::AgentPlanProjectionReceipt, Status>
+    {
+        use deepseek_protocol::generated::deepseek::agent::v1::AgentPlanProjectionReceipt;
+        use prost::Message as _;
+        let payload = evidence.encode_to_vec();
+        let signature = self
+            .key
+            .sign_agent_plan_projection(&evidence)
+            .map_err(|_| Status::failed_precondition("AGENT_PLAN_PROJECTION_INVALID"))?;
+        let receipt = AgentPlanProjectionReceipt {
+            schema_version: 1,
+            evidence: Some(evidence),
+            signature,
+            signer_public_key: self.key.public_key(),
+        };
+        let bytes = receipt.encode_to_vec();
+        let mut request = b"deepseek-infra:agent-plan-projection:request\0".to_vec();
+        request.extend(&payload);
+        let request_id = format!("{:x}", Sha256::digest(&request));
+        let mut nonce = b"deepseek-infra:agent-plan-projection:nonce\0".to_vec();
+        nonce.extend(&payload);
+        let nonce = format!("{:x}", Sha256::digest(&nonce));
+        if let Some(prior) = self.journal.existing(&request_id)? {
+            if prior != bytes {
+                return Err(Status::data_loss("AGENT_PLAN_PROJECTION_CORRUPT"));
+            }
+        } else {
+            self.journal.record(&request_id, &nonce, &bytes)?;
+        }
+        Ok(receipt)
+    }
     pub(crate) fn sign_node_outcome(
         &mut self,
         evidence: deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeEvidence,

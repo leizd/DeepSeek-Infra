@@ -80,6 +80,7 @@ service AgentNodeControl {
   rpc BeginDispatch(BeginAgentNodeDispatchRequest) returns (BeginAgentNodeDispatchResponse);
   rpc GetDispatch(GetAgentNodeDispatchRequest) returns (GetAgentNodeDispatchResponse);
   rpc RecordOutcome(RecordAgentNodeOutcomeRequest) returns (RecordAgentNodeOutcomeResponse);
+  rpc SettlePlan(SettleAgentPlanRequest) returns (SettleAgentPlanResponse);
 }
 
 message ExecuteAgentPlanRequest {
@@ -155,4 +156,64 @@ message QueryAgentNodeEffectResponse {
 service AgentNodeWorker {
   rpc ExecutePlan(ExecuteAgentPlanRequest) returns (AgentNodeEffectMetadata);
   rpc QueryEffect(QueryAgentNodeEffectRequest) returns (QueryAgentNodeEffectResponse);
+  rpc ProjectPlan(ProjectAgentPlanRequest) returns (AgentPlanProjectionReceipt);
+}
+
+// Rust constructs public bodies from its own confirmed planner journal. Go owns
+// normalization and the next run status; this command sends typed metadata only.
+// Projection permits neither another provider call nor action completion.
+message ProjectAgentPlanRequest {
+  uint32 schema_version = 1;
+  QueryAgentNodeEffectRequest source = 2;
+  deepseek.common.v1.ActionFence settlement_fence = 3;
+  int64 settlement_writer_token = 4;
+  uint64 metadata_epoch = 5;
+  int64 expected_index = 6;
+  repeated AgentRunPlanNode normalized_plan = 7;
+  string next_status = 8;
+  bool planning_required = 9;
+}
+
+// Domain-separated proof binds source custody, successor authority, Go-owned
+// scheduling metadata and the two actual immutable Rust public body references.
+message AgentPlanProjectionEvidence {
+  uint32 schema_version = 1;
+  string source_receipt_sha256 = 2;
+  deepseek.common.v1.ActionFence settlement_fence = 3;
+  int64 settlement_writer_token = 4;
+  string run_id = 5;
+  uint64 metadata_epoch = 6;
+  int64 expected_index = 7;
+  repeated AgentRunPlanNode normalized_plan = 8;
+  string next_status = 9;
+  AgentArtifactReference plan_body = 10;
+  AgentArtifactReference status_body = 11;
+  string fleet_id = 12;
+  string environment = 13;
+  AgentArtifactReference planning_body = 14;
+  bool planning_required = 15;
+}
+
+message AgentPlanProjectionReceipt {
+  uint32 schema_version = 1;
+  AgentPlanProjectionEvidence evidence = 2;
+  bytes signature = 3;
+  string signer_public_key = 4;
+}
+
+message SettleAgentPlanRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  deepseek.common.v1.ActionFence fence = 4;
+  string run_id = 5;
+  string owner = 6;
+  string claim_token = 7;
+  AgentPlanProjectionReceipt projection = 8;
+}
+
+message SettleAgentPlanResponse {
+  bool already_applied = 1;
+  AgentRunSnapshot run = 2;
+  string action_state = 3;
 }
