@@ -18,7 +18,7 @@ func TestAgentStoreRejectsResolvedPythonOwnershipAndUnreadableDatabase(t *testin
 		if err := os.Symlink(python, alias); err != nil {
 			t.Fatal(err)
 		}
-		if control, err := Open(Options{Path: alias, Owner: "agent-ownership-test"}); err == nil {
+		if control, err := OpenControl(OpenOptions{Path: alias, Owner: "agent-ownership-test"}); err == nil {
 			control.Close()
 			t.Fatal("native alias acquired a Python-owned store")
 		}
@@ -29,7 +29,7 @@ func TestAgentStoreRejectsResolvedPythonOwnershipAndUnreadableDatabase(t *testin
 	})
 	t.Run("unreadable-native-database", func(t *testing.T) {
 		root := t.TempDir()
-		control, err := Open(Options{Path: root, Owner: "agent-permission-test"})
+		control, err := OpenControl(OpenOptions{Path: root, Owner: "agent-permission-test"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -44,7 +44,7 @@ func TestAgentStoreRejectsResolvedPythonOwnershipAndUnreadableDatabase(t *testin
 		if err := os.Chmod(path, 0); err != nil {
 			t.Fatal(err)
 		}
-		candidate, rejected := Open(Options{Path: root, Owner: "agent-permission-retry"})
+		candidate, rejected := OpenControl(OpenOptions{Path: root, Owner: "agent-permission-retry"})
 		if candidate != nil {
 			candidate.Close()
 		}
@@ -58,7 +58,7 @@ func TestAgentStoreRejectsResolvedPythonOwnershipAndUnreadableDatabase(t *testin
 		if err != nil || string(after) != string(before) {
 			t.Fatalf("permission failure changed retained database: %v", err)
 		}
-		candidate, err = Open(Options{Path: root, Owner: "agent-permission-recovery"})
+		candidate, err = OpenControl(OpenOptions{Path: root, Owner: "agent-permission-recovery"})
 		if err != nil {
 			t.Fatal(err)
 		}
