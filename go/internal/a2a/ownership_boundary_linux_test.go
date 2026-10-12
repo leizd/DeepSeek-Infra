@@ -11,6 +11,27 @@ import (
 )
 
 func TestA2AResolvedPythonOwnershipAndWriterPermissionFailuresPreserveData(t *testing.T) {
+	t.Run("unsearchable-native-directory", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.Chmod(root, 0); err != nil {
+			t.Fatal(err)
+		}
+		candidate, rejected := Open(root, time.Now, 30*time.Second)
+		if candidate != nil {
+			candidate.Close()
+		}
+		if err := os.Chmod(root, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if !errors.Is(rejected, os.ErrPermission) {
+			t.Fatalf("inaccessible directory acquired a native writer: %v", rejected)
+		}
+		entries, err := os.ReadDir(root)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("permission refusal wrote native state: %v", err)
+		}
+		openTestStore(t, root, time.Now)
+	})
 	t.Run("resolved-python-owner", func(t *testing.T) {
 		root := t.TempDir()
 		python := filepath.Join(root, ".a2a")

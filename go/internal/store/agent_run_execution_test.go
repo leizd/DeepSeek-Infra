@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,31 @@ import (
 	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
 )
+
+func TestAgentExecutionReplayRenewsOnlyLiveWriterDeadlineAcrossClockTick(t *testing.T) {
+	control := agentExecutionControl(t, true)
+	current := control.now()
+	control.now = func() int64 { return current }
+	request := agentExecutionRequest(t, control)
+	first, err := control.ClaimAgentRunExecution(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := countControlEvents(t, control)
+	current++
+	replayed, err := control.ClaimAgentRunExecution(request)
+	if err != nil || replayed.Mutation.Status != OperatorMutationAlreadyApplied {
+		t.Fatalf("clock tick lost original operation identity: %v", err)
+	}
+	if replayed.WriterLeaseUntil != first.WriterLeaseUntil+1 || replayed.WriterLeaseUntil <= current {
+		t.Fatal("live writer deadline did not renew across the clock tick")
+	}
+	if !reflect.DeepEqual(replayed.Admission, first.Admission) || countControlEvents(t, control) != before ||
+		replayed.Mutation.ActionID != first.Mutation.ActionID || replayed.Mutation.ExecutionEpoch != first.Mutation.ExecutionEpoch ||
+		replayed.Mutation.RequestDigest != first.Mutation.RequestDigest || replayed.Mutation.PayloadDigest != first.Mutation.PayloadDigest {
+		t.Fatal("writer renewal changed action lease, token, immutable request, history or reservations")
+	}
+}
 
 func agentExecutionControl(t *testing.T, promoteAction bool) *Control {
 	t.Helper()

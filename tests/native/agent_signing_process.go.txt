@@ -379,10 +379,22 @@ func nativeSigningClaim(t *testing.T, client agentv1.AgentRunControlClient, phas
 		t.Fatalf("actual execution claim unavailable: %v", err)
 	}
 	replay, err := client.ClaimExecution(ctx, input)
-	if err != nil || !replay.AlreadyApplied || !proto.Equal(replay.Claim, result.Claim) {
+	if err != nil || !replay.GetAlreadyApplied() || replay.GetClaim() == nil {
 		t.Fatalf("actual claim replay changed identity: %v", err)
 	}
-	return result.Claim
+	// The writer deadline is live lease metadata refreshed by Go's transaction.
+	// Action expiry, token, revision, fencing and the entire selected scope must
+	// remain identical across a replay even when real UTC crosses a second.
+	first := proto.Clone(result.Claim).(*agentv1.AgentRunExecutionClaim)
+	repeated := proto.Clone(replay.Claim).(*agentv1.AgentRunExecutionClaim)
+	if repeated.WriterLeaseUntil < first.WriterLeaseUntil || repeated.WriterLeaseUntil <= time.Now().Unix() {
+		t.Fatal("actual claim replay regressed or expired the live writer deadline")
+	}
+	repeated.WriterLeaseUntil = first.WriterLeaseUntil
+	if !proto.Equal(repeated, first) {
+		t.Fatal("actual claim replay changed immutable action or metadata scope")
+	}
+	return replay.Claim
 }
 
 // The provider is a controlled HTTP fixture. The Go store, pinned RPCs, Rust
