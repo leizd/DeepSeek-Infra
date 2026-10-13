@@ -32,7 +32,7 @@ func readAgentOutcomeAdmissionTx(tx *sql.Tx, intent AgentNodeDispatch, currentMa
 	}
 	if original.Owner == "" || original.ClaimToken == "" || original.ClaimRevision <= 0 ||
 		original.WriterFencingToken <= 0 || original.AcquiredAt < 0 ||
-		original.AcquiredAt > intent.RecordedAt || original.LeaseUntil <= intent.RecordedAt ||
+		original.AcquiredAt > intent.RecordedAt || original.LeaseUntil <= original.AcquiredAt ||
 		manifest != currentManifest {
 		return ActionLease{}, ErrActionLeaseStale
 	}
@@ -57,5 +57,40 @@ func readAgentOutcomeAdmissionTx(tx *sql.Tx, intent AgentNodeDispatch, currentMa
 		return ActionLease{}, ErrAgentRunExecutionRequired
 	}
 	original.UpdatedAt = original.AcquiredAt
+	if err := readAgentOutcomeRenewalsTx(tx, intent, &original, currentManifest); err != nil {
+		return ActionLease{}, err
+	}
+	if original.LeaseUntil <= intent.RecordedAt {
+		return ActionLease{}, ErrActionLeaseStale
+	}
 	return original, nil
+}
+
+// Reconstruct the same admitted claim's contiguous renewal history only up to
+// dispatch time. A later renewal cannot retroactively authorize a stale effect.
+// This is historical proof input, never a new execution or retry permission.
+func readAgentOutcomeRenewalsTx(tx *sql.Tx, intent AgentNodeDispatch, original *ActionLease, manifest string) error {
+	rows, err := tx.Query(`SELECT owner, claim_token, lease_until, claim_revision,
+        writer_fencing_token, recorded_at, resource_keys_json FROM action_lease_events
+        WHERE action_id=? AND epoch=? AND event_type='RENEWED' AND recorded_at<=?
+        ORDER BY event_id`, intent.ActionID, int64(intent.ExecutionEpoch), intent.RecordedAt)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var owner, token, resources string
+		var deadline, revision, writerToken, recorded int64
+		if err := rows.Scan(&owner, &token, &deadline, &revision, &writerToken, &recorded, &resources); err != nil {
+			return err
+		}
+		if owner != original.Owner || token != original.ClaimToken || revision != original.ClaimRevision ||
+			writerToken < original.WriterFencingToken || resources != manifest ||
+			recorded < original.UpdatedAt || recorded >= original.LeaseUntil ||
+			deadline < original.LeaseUntil || deadline <= recorded {
+			return ErrActionLeaseStale
+		}
+		original.LeaseUntil, original.UpdatedAt, original.WriterFencingToken = deadline, recorded, writerToken
+	}
+	return rows.Err()
 }
