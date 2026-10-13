@@ -1,0 +1,151 @@
+package api
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/leizd/DeepSeek-Infra/go/internal/config"
+)
+
+// The external Python runner only provisions isolated TLS/custody and the
+// controlled provider. Public request storage, run creation, all DAG scheduling,
+// provider effects, body projection and final settlement run in Go/Rust.
+func TestNativeAgentPublicDriverProcess(t *testing.T) {
+	directory := os.Getenv("DEEPSEEK_AGENT_SIGNING_PROBE_DIR")
+	if directory == "" || os.Getenv("DEEPSEEK_AGENT_PUBLIC_DRIVER_PROBE") != "1" {
+		t.Fatal("explicit isolated public driver configuration required")
+	}
+	for _, name := range []string{"DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE", "DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE", "DEEPSEEK_API_KEY", "DEEPSEEK_WORKER_AUTHORITY_NOW"} {
+		if _, present := os.LookupEnv(name); present {
+			t.Fatal("private Rust configuration entered the Go process", name)
+		}
+	}
+	control := nativeSigningControl(t, 600, t.TempDir())
+	_, origin := nativeSigningRPC(t, control)
+	nativeSigningWrite(t, filepath.Join(directory, "go-ready.json"), map[string]any{
+		"origin": origin, "internalBearer": testInternalBearer, "fencingToken": control.Writer().FencingToken,
+		"fleetId": mutationFleetID, "environment": mutationEnvironment})
+	var ready nativeSigningWorkerReady
+	nativeSigningRead(t, filepath.Join(directory, "worker-ready.json"), &ready)
+	nativeSigningConfigureGo(t, ready, os.Getenv("DEEPSEEK_AGENT_SIGNING_WORKER_BEARER"))
+	var public struct {
+		Origin string `json:"origin"`
+	}
+	nativeSigningRead(t, filepath.Join(directory, "public-ready.json"), &public)
+	if public.Origin == "" {
+		t.Fatal("public native edge unavailable")
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	done := StartAgentRunDriver(ctx, control, HealthFor(config.Config{Mode: config.ModeAuthoritative}))
+	defer func() {
+		stop()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			t.Error("production driver did not drain")
+		}
+	}()
+	payload := map[string]any{"payload": map[string]any{
+		"messages": []map[string]string{{"role": "user", "content": "Prepare an isolated verification plan"}},
+		"model":    "deepseek-chat", "apiKey": "request-only-credential"},
+		"agentPreset": "auto", "confirmPlan": false, "conversationId": "public-native-conversation", "messageId": "public-native-message"}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	response, err := client.Post(public.Origin+"/api/agent-runs", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal("actual native public creation", err)
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	response.Body.Close()
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("actual public creation status=%d body=%s error=%v", response.StatusCode, raw, err)
+	}
+	var created struct {
+		RunID string `json:"runId"`
+	}
+	if json.Unmarshal(raw, &created) != nil || created.RunID == "" {
+		t.Fatal("creation omitted durable identity")
+	}
+	deadline := time.Now().Add(150 * time.Second)
+	var publicRun map[string]any
+	for {
+		if time.Now().After(deadline) {
+			t.Fatalf("native DAG did not finish; last public state=%v", publicRun)
+		}
+		response, err = client.Get(public.Origin + "/api/agent-runs/" + created.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err = io.ReadAll(io.LimitReader(response.Body, 2<<20))
+		response.Body.Close()
+		if err != nil || response.StatusCode != http.StatusOK {
+			t.Fatalf("public read status=%d error=%v body=%s", response.StatusCode, err, raw)
+		}
+		var envelope struct {
+			Run map[string]any `json:"run"`
+		}
+		if json.Unmarshal(raw, &envelope) != nil || envelope.Run == nil {
+			t.Fatal("invalid native public response")
+		}
+		publicRun = envelope.Run
+		if publicRun["status"] == "done" {
+			break
+		}
+		if publicRun["status"] == "failed" || publicRun["status"] == "cancelled" {
+			t.Fatal("native run failed", publicRun["status"])
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	metadata, found, err := control.AgentRunMetadata(created.RunID)
+	if err != nil || !found || metadata.Status != "done" || metadata.NextIndex != 8 ||
+		metadata.Nodes()["coder"].State != "succeeded" || metadata.Nodes()["critic"].State != "succeeded" {
+		t.Fatal("public state differs from actual Go durable settlement", err)
+	}
+	records, err := control.ListAuthoritativeRecords("action")
+	if err != nil || len(records) != 3 {
+		t.Fatal("three durable phases missing", err)
+	}
+	for _, record := range records {
+		lease, active, err := control.GetActionLease(record.ID)
+		if err != nil || record.State != "SUCCEEDED" {
+			t.Fatal("phase not settled", err)
+		}
+		resources, err := control.GetResourceLeases(record.ID)
+		if err != nil || len(resources) != 0 {
+			t.Fatal("terminal resources not released", err)
+		}
+		if active && lease.LeaseUntil > time.Now().Unix() {
+			t.Fatal("terminal action retains a live lease")
+		}
+	}
+	if publicRun["nextIndex"] != float64(8) {
+		t.Fatal("public event cursor omitted settlement")
+	}
+	events, ok := publicRun["events"].([]any)
+	if !ok || len(events) != 8 {
+		t.Fatal("public immutable event bodies omitted")
+	}
+	serialized := string(raw)
+	if !bytes.Contains(raw, []byte("Controlled final answer")) || bytes.Contains(raw, []byte("request-only-credential")) {
+		t.Fatal("public final answer missing or private credential leaked")
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "result.json"), map[string]any{
+		"status": "PASS", "runId": created.RunID, "runStatus": metadata.Status, "nextIndex": metadata.NextIndex,
+		"durablePhases": len(records), "resourcesReleased": true, "requestSha256": metadata.Request.SHA256, "requestLength": metadata.Request.Length,
+		"publicEventCount": len(events), "finalAnswerVisible": true, "publicResponseLength": len(serialized),
+		"inputBodySeededByOfflineOracle": false, "productionProviderQualified": false, "fullMigrationQualified": false,
+		"productionRuntimeProcesses": []string{"Go", "Rust"}, "providerFixtureIsOfflineTestTool": true,
+		"publicCreationAndDAGDriverQualified": true, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})
+	fmt.Println("actual native public create / leader / dependent DAG / synthesis / final settlement PASS")
+}

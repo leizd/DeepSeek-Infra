@@ -7,7 +7,10 @@ use axum::{
 use deepseek_policy::agent_run_data::ArtifactStore;
 use deepseek_protocol::generated::deepseek::common::v1::ActionFence;
 use serde_json::{Value, json};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use tonic::{Response, Status};
 use tower::ServiceExt;
 
@@ -19,6 +22,7 @@ struct Fixture {
     snapshot: Arc<Mutex<AgentRunSnapshot>>,
     events: Arc<Mutex<Vec<AgentRunEventMetadata>>>,
     authoritative: bool,
+    mutations: Arc<AtomicBool>,
 }
 
 fn authenticate<T>(request: &tonic::Request<T>) -> Result<(), Status> {
@@ -33,8 +37,8 @@ fn authenticate<T>(request: &tonic::Request<T>) -> Result<(), Status> {
     Ok(())
 }
 
-fn validate_fence(fence: Option<&ActionFence>) -> Result<(), Status> {
-    if !fence.is_some_and(|value| value.action_id == RUN && value.execution_epoch == 2) {
+fn validate_fence(fence: Option<&ActionFence>, id: &str) -> Result<(), Status> {
+    if !fence.is_some_and(|value| value.action_id == id && value.execution_epoch == 2) {
         return Err(Status::failed_precondition("FENCE_MISMATCH"));
     }
     Ok(())
@@ -78,22 +82,72 @@ impl AgentRunControl for Fixture {
     }
     async fn append_event(
         &self,
-        _request: tonic::Request<AppendAgentRunEventRequest>,
+        request: tonic::Request<AppendAgentRunEventRequest>,
     ) -> Result<Response<AppendAgentRunEventResponse>, Status> {
-        Err(Status::unimplemented("READ_FIXTURE_HAS_NO_MUTATIONS"))
+        authenticate(&request)?;
+        if !self.mutations.load(Ordering::SeqCst) {
+            return Err(Status::unimplemented("READ_FIXTURE_HAS_NO_MUTATIONS"));
+        }
+        let input = request.into_inner();
+        validate_fence(input.fence.as_ref(), &input.run_id)?;
+        if input.schema_version != 1
+            || input.expected_index != 0
+            || input.actor != "operator:agent-web"
+            || input.operation_id != format!("{}_create", input.run_id)
+        {
+            return Err(Status::invalid_argument("CREATE_INVALID"));
+        }
+        let metadata = input
+            .create
+            .ok_or_else(|| Status::invalid_argument("CREATE_MISSING"))?;
+        let mut event = input
+            .event
+            .ok_or_else(|| Status::invalid_argument("EVENT_MISSING"))?;
+        if event.r#type != "run_status"
+            || event.status != "created"
+            || metadata.request.is_none()
+            || event.body.is_none()
+        {
+            return Err(Status::invalid_argument("CREATE_INVALID"));
+        }
+        event.index = 0;
+        event.run_id = input.run_id.clone();
+        event.created_at = "2026-10-13T00:00:00Z".into();
+        event.fence = input.fence;
+        let snapshot = AgentRunSnapshot {
+            run_id: input.run_id,
+            status: "created".into(),
+            next_index: 1,
+            preset: metadata.preset,
+            confirm_plan: metadata.confirm_plan,
+            conversation_id: metadata.conversation_id,
+            message_id: metadata.message_id,
+            request: metadata.request,
+            final_after: -1,
+            last_event: Some(event.clone()),
+            ..Default::default()
+        };
+        *self.snapshot.lock().unwrap() = snapshot.clone();
+        *self.events.lock().unwrap() = vec![event.clone()];
+        Ok(Response::new(AppendAgentRunEventResponse {
+            already_applied: false,
+            event: Some(event),
+            run: Some(snapshot),
+        }))
     }
     async fn get_run(
         &self,
         request: tonic::Request<GetAgentRunRequest>,
     ) -> Result<Response<GetAgentRunResponse>, Status> {
         authenticate(&request)?;
-        if request.get_ref().run_id != RUN {
+        let snapshot = self.snapshot.lock().unwrap().clone();
+        if request.get_ref().run_id != snapshot.run_id {
             return Err(Status::not_found("AGENT_RUN_NOT_FOUND"));
         }
-        validate_fence(request.get_ref().fence.as_ref())?;
+        validate_fence(request.get_ref().fence.as_ref(), &snapshot.run_id)?;
         Ok(Response::new(GetAgentRunResponse {
             authoritative: self.authoritative,
-            run: Some(self.snapshot.lock().unwrap().clone()),
+            run: Some(snapshot),
         }))
     }
     async fn events_after(
@@ -101,7 +155,10 @@ impl AgentRunControl for Fixture {
         request: tonic::Request<AgentRunEventsRequest>,
     ) -> Result<Response<AgentRunEventsResponse>, Status> {
         authenticate(&request)?;
-        validate_fence(request.get_ref().fence.as_ref())?;
+        validate_fence(
+            request.get_ref().fence.as_ref(),
+            &self.snapshot.lock().unwrap().run_id,
+        )?;
         let input = request.into_inner();
         Ok(Response::new(AgentRunEventsResponse {
             authoritative: self.authoritative,
@@ -214,6 +271,7 @@ async fn running_fixture_with_authority(authoritative: bool) -> RunningFixture {
         snapshot: Arc::new(Mutex::new(snapshot)),
         events: Arc::new(Mutex::new(events)),
         authoritative,
+        mutations: Arc::new(AtomicBool::new(false)),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -498,4 +556,105 @@ async fn running_stream_reads_events_committed_after_connection() {
     assert_eq!(events.len(), 2);
     assert_eq!(events[0]["index"], 5);
     assert_eq!(events[1]["type"], "done");
+}
+
+async fn creation_response(app: Router, input: &Value) -> (StatusCode, Value) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/agent-runs")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(input).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test]
+async fn public_creation_commits_go_metadata_and_rust_sanitized_body() {
+    let running = running_fixture().await;
+    running.fixture.mutations.store(true, Ordering::SeqCst);
+    let input = json!({"payload":{"messages":[{"role":"user","content":"review a function"}],"model":"deepseek-chat", "apiKey":"request-only-credential"},
+        "agentPreset":"plan", "conversationId":"conversation_1", "messageId":"message_1"});
+    let (status, body) =
+        creation_response(read_router(true, Some(running.config.clone())), &input).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let id = body["runId"].as_str().unwrap();
+    assert!(id.starts_with("run_") && id.len() == 68);
+    assert_eq!(body["run"]["runId"], id);
+    assert_eq!(body["run"]["status"], "created");
+    assert_eq!(body["run"]["nextIndex"], 1);
+    assert_eq!(body["run"]["requestMeta"]["confirmPlan"], true);
+    assert_eq!(body["run"]["requestMeta"]["model"], "deepseek-chat");
+    assert_eq!(body["run"]["events"].as_array().unwrap().len(), 1);
+    let snapshot = running.fixture.snapshot.lock().unwrap().clone();
+    assert_eq!(snapshot.conversation_id, "conversation_1");
+    assert_eq!(snapshot.message_id, "message_1");
+    let store = ArtifactStore::open_readonly(&running.config.artifacts).unwrap();
+    let body = store
+        .get(&reference(snapshot.request.as_ref()).unwrap())
+        .unwrap();
+    assert_eq!(body["payload"]["messages"], input["payload"]["messages"]);
+    assert!(body["payload"].get("apiKey").is_none());
+    assert!(!body.to_string().contains("request-only-credential"));
+    assert_eq!(snapshot.plan.len(), 0);
+    assert_eq!(snapshot.nodes.len(), 0);
+}
+
+#[tokio::test]
+async fn public_creation_refuses_invalid_input_without_body_or_go_writes() {
+    let running = running_fixture().await;
+    running.fixture.mutations.store(true, Ordering::SeqCst);
+    let valid = json!({"payload":{"messages":[{"role":"user","content":"hello"}]}});
+    for input in [
+        Value::Null,
+        json!({}),
+        json!({"payload":[]}),
+        json!({"payload":{"messages":[]}}),
+        json!({"payload":{"messages":"bad"}}),
+        json!({"payload":{"messages":[{}]},"confirmPlan":"yes"}),
+        json!({"payload":{"messages":[{}]},"agentPreset":"unknown"}),
+        json!({"payload":{"messages":[{}]},"conversationId":1}),
+        json!({"payload":{"messages":[{}]},"messageId":"line\nbreak"}),
+        json!({"payload":{"messages":[{}]},"messageId":"x".repeat(513)}),
+    ] {
+        let (status, body) =
+            creation_response(read_router(true, Some(running.config.clone())), &input).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{input}: {body}");
+        assert_eq!(body["code"], "AGENT_RUN_REQUEST_INVALID");
+        assert_eq!(running.fixture.snapshot.lock().unwrap().run_id, RUN);
+    }
+    let (status, body) = creation_response(read_router(true, None), &valid).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    let response = read_router(false, Some(running.config.clone()))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/agent-runs")
+                .body(Body::from(valid.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn public_creation_checks_control_authority_before_opening_writable_custody() {
+    let running = running_fixture_with_authority(false).await;
+    let empty = tempfile::tempdir().unwrap();
+    let mut config = running.config.clone();
+    config.artifacts = empty.path().join("unopened");
+    let input = json!({"payload":{"messages":[{"role":"user","content":"hello"}]}});
+    let (status, body) = creation_response(read_router(true, Some(config)), &input).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert!(!empty.path().join("unopened").exists());
+    assert_eq!(running.fixture.snapshot.lock().unwrap().run_id, RUN);
 }

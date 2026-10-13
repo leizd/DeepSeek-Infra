@@ -114,11 +114,15 @@ jobs:
       - name: Build the production Rust worker and custody provisioner on the cloud runner
         if: matrix.mode == 'checks'
         run: |
-          python scripts/rust_build.py --toolchain 1.85.0 -- build --locked -p deepseek-worker --bins --all-features 2>&1 | tee artifacts/rust-cloud/agent-worker-build.log
+          python scripts/rust_build.py --toolchain 1.85.0 -- build --locked -p deepseek-worker -p deepseek-gateway --bins --all-features 2>&1 | tee artifacts/rust-cloud/agent-worker-build.log
       - name: Verify real UTC Go authority and Rust custody signing over TLS and process restart
         if: matrix.mode == 'checks'
         run: |
           python scripts/verify_agent_signing_process.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-signing-process 2>&1 | tee artifacts/rust-cloud/agent-signing-process.log
+      - name: Verify actual native public creation and autonomous Go DAG settlement
+        if: matrix.mode == 'checks'
+        run: |
+          python scripts/verify_native_agent_public_driver.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-public-driver 2>&1 | tee artifacts/rust-cloud/agent-public-driver.log
       - name: Install pinned coverage tooling on the cloud runner
         if: matrix.mode == 'coverage'
         run: |

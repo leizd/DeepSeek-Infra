@@ -1,4 +1,4 @@
-//! Public reads combine authoritative Go control metadata with verified Rust bodies.
+//! Public Agent creation and reads combine Go authority with Rust body custody.
 
 use axum::{
     Json, Router,
@@ -6,7 +6,7 @@ use axum::{
     extract::{OriginalUri, Path, State},
     http::{StatusCode, Uri, header},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use deepseek_policy::agent_run_data::{
     ArtifactReference, ArtifactStore, ContentProjection, DataError,
@@ -16,7 +16,12 @@ use deepseek_protocol::generated::deepseek::{
     common::v1::ActionFence,
 };
 use serde_json::{Map, Value, json};
-use std::{path::PathBuf, time::Duration};
+use sha2::{Digest, Sha256};
+use std::{
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tonic::{
     metadata::{Ascii, MetadataValue},
     transport::Channel,
@@ -213,6 +218,12 @@ impl ReadSession {
     }
 
     async fn open(config: Option<ReadConfig>, raw: &str) -> Result<Self, ReadError> {
+        let mut session = Self::connect(config, raw).await?;
+        session.refresh().await?;
+        Ok(session)
+    }
+
+    async fn connect(config: Option<ReadConfig>, raw: &str) -> Result<Self, ReadError> {
         let id = run_id(raw)?;
         let config = config.ok_or_else(control_unavailable)?;
         if !valid_origin(&config.origin) || config.bearer.trim().len() < 32 {
@@ -249,7 +260,6 @@ impl ReadSession {
             return Err(control_unavailable());
         }
         session.epoch = authority.metadata_epoch;
-        session.refresh().await?;
         Ok(session)
     }
 
@@ -396,6 +406,8 @@ impl ReadSession {
                 "promptTokens":node.prompt_tokens,"completionTokens":node.completion_tokens,"failed":node.failed}));
         }
         let model = request
+            .get("payload")
+            .unwrap_or(&request)
             .get("model")
             .filter(|value| deepseek_policy::core_utils::python_truthy(value))
             .map(deepseek_policy::python_json::value_str)
@@ -420,6 +432,7 @@ fn read_router(enabled: bool, config: Option<ReadConfig>) -> Router {
         return Router::new();
     }
     Router::new()
+        .route("/api/agent-runs", post(create))
         .route("/api/agent-runs/:run_id", get(detail))
         .route("/api/agent-runs/:run_id/events", get(events))
         .route("/api/agent-runs/:run_id/stream", get(stream))
@@ -441,6 +454,131 @@ pub fn router() -> Router {
             }),
     });
     read_router(crate::python_is_de_authorised(), config)
+}
+
+fn invalid_request() -> ReadError {
+    ReadError {
+        status: StatusCode::BAD_REQUEST,
+        code: "AGENT_RUN_REQUEST_INVALID",
+        message: "任务请求无效",
+    }
+}
+
+// Run IDs are record identifiers, never credentials. The authority transaction
+// rejects collisions; the process/time/counter tuple avoids accidental reuse.
+fn new_run_id() -> Result<String, ReadError> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| control_unavailable())?
+        .as_nanos();
+    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let digest = Sha256::digest(format!(
+        "agent-run-v1:{now}:{}:{sequence}",
+        std::process::id()
+    ));
+    Ok(format!("run_{digest:x}"))
+}
+
+fn creation_metadata(value: &Value) -> Result<AgentRunCreateMetadata, ReadError> {
+    let object = value.as_object().ok_or_else(invalid_request)?;
+    let payload = object
+        .get("payload")
+        .and_then(Value::as_object)
+        .ok_or_else(invalid_request)?;
+    if !payload.get("messages").is_some_and(|messages| {
+        messages
+            .as_array()
+            .is_some_and(|entries| !entries.is_empty() && entries.len() <= 256)
+    }) {
+        return Err(invalid_request());
+    }
+    let preset = object
+        .get("agentPreset")
+        .map_or(Ok("full"), |v| v.as_str().ok_or_else(invalid_request))?;
+    if !matches!(
+        preset,
+        "full" | "auto" | "plan" | "code" | "research" | "reason" | "critic"
+    ) {
+        return Err(invalid_request());
+    }
+    let confirm = object
+        .get("confirmPlan")
+        .map_or(Ok(false), |v| v.as_bool().ok_or_else(invalid_request))?;
+    let identity = |key: &str| -> Result<String, ReadError> {
+        let text = object
+            .get(key)
+            .map_or(Ok(""), |v| v.as_str().ok_or_else(invalid_request))?;
+        if text.len() > 512 || text.chars().any(char::is_control) {
+            return Err(invalid_request());
+        }
+        Ok(text.to_string())
+    };
+    Ok(AgentRunCreateMetadata {
+        preset: preset.to_string(),
+        confirm_plan: confirm || preset == "plan",
+        conversation_id: identity("conversationId")?,
+        message_id: identity("messageId")?,
+        request: None,
+    })
+}
+
+async fn create(
+    State(config): State<Option<ReadConfig>>,
+    body: Bytes,
+) -> Result<Json<Value>, ReadError> {
+    if body.is_empty() || body.len() > 1024 * 1024 {
+        return Err(invalid_request());
+    }
+    let input: Value = serde_json::from_slice(&body).map_err(|_| invalid_request())?;
+    let mut metadata = creation_metadata(&input)?;
+    let id = new_run_id()?;
+    // Check the configured private control peer and actual domain authority before
+    // opening writable body custody. Go alone commits the initial run metadata.
+    let mut session = ReadSession::connect(config, &id).await?;
+    let root = session.config.artifacts.clone();
+    let (request, status) = tokio::task::spawn_blocking(move || {
+        let mut store = ArtifactStore::open_native(&root, "python_disabled").map_err(data_error)?;
+        let request = store.put(&input).map_err(data_error)?;
+        let status = store
+            .put(&json!({"type":"run_status", "status":"created"}))
+            .map_err(data_error)?;
+        Ok::<_, ReadError>((request, status))
+    })
+    .await
+    .map_err(|_| data_error(DataError::Unavailable))??;
+    metadata.request = Some(AgentArtifactReference {
+        sha256: request.sha256,
+        length: request.length,
+    });
+    let request = session.request(AppendAgentRunEventRequest {
+        schema_version: 1,
+        operation_id: format!("{id}_create"),
+        actor: "operator:agent-web".to_string(),
+        run_id: id.clone(),
+        expected_index: 0,
+        create: Some(metadata),
+        event: Some(AgentRunEventMetadata {
+            r#type: "run_status".to_string(),
+            status: "created".to_string(),
+            body: Some(AgentArtifactReference {
+                sha256: status.sha256,
+                length: status.length,
+            }),
+            ..Default::default()
+        }),
+        fence: Some(ActionFence {
+            action_id: id.clone(),
+            execution_epoch: session.epoch,
+        }),
+    });
+    session
+        .client
+        .append_event(request)
+        .await
+        .map_err(rpc_error)?;
+    session.refresh().await?;
+    Ok(Json(json!({"runId":id, "run":session.public_run().await?})))
 }
 
 async fn detail(
