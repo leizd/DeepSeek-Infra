@@ -98,8 +98,9 @@ def stop_child(process: subprocess.Popen[bytes]) -> None:
 def wait_json(path: Path, process: subprocess.Popen[bytes], timeout: int = 120) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError(f"Producer exited before {path.name}")
+        exit_code = process.poll()
+        if exit_code is not None and exit_code != 0:
+            raise RuntimeError(f"Producer failed before {path.name}")
         if path.is_file():
             if path.stat().st_size > 65536:
                 raise ValueError("Oversized process handshake")
@@ -107,6 +108,8 @@ def wait_json(path: Path, process: subprocess.Popen[bytes], timeout: int = 120) 
             if not isinstance(value, dict):
                 raise ValueError("Invalid process handshake")
             return value
+        if exit_code is not None:
+            raise RuntimeError(f"Producer exited before {path.name}")
         time.sleep(0.1)
     raise TimeoutError(f"Timed out waiting for {path.name}")
 

@@ -721,7 +721,7 @@ func TestAgentDriverCannotReuseAnAdmittedPhaseAfterPlanEdit(t *testing.T) {
 	edit := agentRPCAppend(run.NextIndex, authority.MetadataEpoch)
 	edit.Create = nil
 	edit.OperationId = "operator-plan-edit"
-	edit.Event = &agentv1.AgentRunEventMetadata{Type: "agent_plan", Body: driverFixtureReference("edited-plan"),
+	edit.Event = &agentv1.AgentRunEventMetadata{Type: "agent_plan", HasPlan: true, Body: driverFixtureReference("edited-plan"),
 		Plan: []*agentv1.AgentRunPlanNode{{Id: "researcher", Task: "changed scope"}}}
 	if _, err := driver.service.AppendEvent(context.Background(), edit); err != nil {
 		t.Fatal(err)

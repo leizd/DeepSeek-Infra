@@ -1275,7 +1275,19 @@ def test_qos_global_bucket_is_shared_across_processes(tmp_settings: Path) -> Non
     assert waits[1] >= 1.0
 
 
-def test_qos_reserves_p0_bandwidth_and_enforces_independent_target_buckets(tmp_settings: Path) -> None:
+def test_qos_reserves_p0_bandwidth_and_enforces_independent_target_buckets(tmp_settings: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # SQLite/scheduler latency must not refill the bucket between these assertions.
+    # Only the test's cooperative sleep advances time; real budget decisions stay active.
+    clock = [time.time()]
+    sleeps: list[float] = []
+
+    def advance(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    isolated_time = SimpleNamespace(time=lambda: clock[0], monotonic=lambda: clock[0], sleep=advance)
+    monkeypatch.setattr(backup_control, "time", isolated_time)
+    monkeypatch.setattr(backup_transfer_budget, "time", isolated_time)
     manager = backup_transfer_budget.TransferBudgetManager(
         global_bytes_per_second=1024 * 1024,
         reserved_recovery_bytes_per_sec=256 * 1024,
@@ -1285,11 +1297,12 @@ def test_qos_reserves_p0_bandwidth_and_enforces_independent_target_buckets(tmp_s
     manager.acquire_transfer_token("qos-p0", backup_transfer_budget.TrafficClass.P0_DISASTER_RECOVERY)
     manager.acquire_transfer_token("qos-p5", backup_transfer_budget.TrafficClass.P5_REBALANCE_DRAIN)
     assert manager.consume_bandwidth("qos-p5", 768 * 1024) == 0.0
-    started = time.monotonic()
+    started = clock[0]
     throttled = b"".join(manager.throttled_generator(iter((b"x" * (64 * 1024),)), transfer_id="qos-p5"))
-    elapsed = time.monotonic() - started
+    elapsed = clock[0] - started
     assert len(throttled) == 64 * 1024
     assert elapsed >= 0.02
+    assert sleeps and sum(sleeps) == pytest.approx(elapsed)
     assert manager.consume_bandwidth("qos-p0", 256 * 1024) == 0.0
     manager.release_transfer_token("qos-p5")
     manager.release_transfer_token("qos-p0")

@@ -153,3 +153,28 @@ def test_grant_refresh_rejects_missing_observation_false_dates_and_fabricated_cu
     result[field] = value
     with pytest.raises(ValueError):
         RUNNER.validate_agent_grant_refresh(result)
+
+
+@pytest.mark.parametrize("exit_code,body,expected", [
+    (0, '{"status":"PASS"}', "PASS"),
+    (0, None, "missing"),
+    (7, None, "failed"),
+    (7, '{"status":"PASS"}', "failed"),
+    (0, '["PASS"]', "invalid"),
+    (0, "x" * 65537, "oversized"),
+], ids=["completed", "missing", "failed-missing", "failed-with-report", "invalid", "oversized"])
+def test_process_report_survives_successful_exit_but_not_failure_or_invalid_receipt(tmp_path, exit_code, body, expected):
+    import subprocess
+    import sys
+
+    path = tmp_path / "result.json"
+    if body is not None:
+        path.write_text(body, encoding="utf-8")
+    process = subprocess.Popen([sys.executable, "-c", "import sys; sys.exit(int(sys.argv[1]))", str(exit_code)])
+    process.wait(timeout=15)
+    if expected == "PASS":
+        assert RUNNER.wait_json(path, process, timeout=1) == {"status": "PASS"}
+    else:
+        error = ValueError if expected in {"invalid", "oversized"} else RuntimeError
+        with pytest.raises(error):
+            RUNNER.wait_json(path, process, timeout=1)
