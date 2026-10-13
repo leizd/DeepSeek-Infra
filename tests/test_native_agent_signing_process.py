@@ -129,3 +129,27 @@ def test_unknown_native_family_is_denied_before_custody_or_process_creation(tmp_
     with pytest.raises(ValueError, match="Unknown producer family"):
         RUNNER.planner_process_cases(tmp_path / "producer", {}, tmp_path / "worker", tmp_path / "provisioner", tmp_path, tmp_path, "unknown")
     assert list(tmp_path.iterdir()) == []
+
+
+def grant_refresh_result():
+    return {"grantRefreshAfterExpiryQualified": True, "grantRefreshReplayed": True, "expiredTaskGrantReexecutionDenied": True,
+            "originalTaskGrantExpiresAt": "2026-10-13T02:00:00Z", "refreshedTaskGrantIssuedAt": "2026-10-13T02:00:01Z",
+            "refreshedTaskGrantExpiresAt": "2026-10-13T02:01:01Z", "refreshedTaskGrantSha256": "a" * 64, "refreshedTaskGrantLength": 1700}
+
+
+def test_real_grant_refresh_requires_expired_original_immutable_replay_and_custody():
+    RUNNER.validate_agent_grant_refresh(grant_refresh_result())
+
+
+@pytest.mark.parametrize("field,value", [
+    ("grantRefreshAfterExpiryQualified", False), ("grantRefreshReplayed", 1), ("expiredTaskGrantReexecutionDenied", False),
+    ("originalTaskGrantExpiresAt", "2026-10-13T02:02:00Z"), ("refreshedTaskGrantIssuedAt", "2026-10-13T02:00:00Z"),
+    ("refreshedTaskGrantIssuedAt", "invalidZ"), ("refreshedTaskGrantIssuedAt", None),
+    ("refreshedTaskGrantExpiresAt", "2026-10-13T02:10:01Z"), ("refreshedTaskGrantExpiresAt", "2026-10-13T02:01:01+00:00"),
+    ("refreshedTaskGrantSha256", "g" * 64), ("refreshedTaskGrantLength", True), ("refreshedTaskGrantLength", 0),
+])
+def test_grant_refresh_rejects_missing_observation_false_dates_and_fabricated_custody(field, value):
+    result = grant_refresh_result()
+    result[field] = value
+    with pytest.raises(ValueError):
+        RUNNER.validate_agent_grant_refresh(result)

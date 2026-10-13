@@ -874,6 +874,10 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 	var critic *agentv1.AgentNodeEffectMetadata
 	var dependentIntent *agentv1.AgentNodeDispatchIntent
 	var dependentQuery *agentv1.QueryAgentNodeEffectRequest
+	var dependentExecutionInput *agentv1.ExecuteAgentTaskRequest
+	refreshAfterExpiry, refreshReplayed, expiredTaskDenied := false, false, false
+	originalGrantExpiry, refreshIssuedAt, refreshExpiresAt, refreshHash := "", "", "", ""
+	refreshLength := 0
 	dependentReceiptHash, dependentReceiptLength := "", 0
 	if scenario == "task-success" || scenario == "synthesis-success" {
 		if known.State != "CONFIRMED" || !proto.Equal(known, result) {
@@ -921,8 +925,65 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 		if err != nil || !replayed.AlreadyApplied || !proto.Equal(replayed.Run, settled.Run) {
 			t.Fatalf("coder settlement replay: %v", err)
 		}
+		var refreshed *agentv1.AuthorizeAgentRunExecutionResponse
+		if scenario == "synthesis-success" {
+			var original map[string]any
+			if err := json.Unmarshal(authorized.CanonicalAuthorization, &original); err != nil {
+				t.Fatal(err)
+			}
+			originalGrantExpiry, _ = original["expiresAt"].(string)
+			expires, err := time.Parse(time.RFC3339, originalGrantExpiry)
+			if err != nil || time.Until(expires) > 80*time.Second {
+				t.Fatal("unbounded original grant expiry", err)
+			}
+			// Keep the actual Go claim/writer alive while the immutable original
+			// grant expires. A fresh signature must not reclaim/install an epoch.
+			for time.Now().UTC().Before(expires.Add(time.Second)) {
+				_, err := client.RenewExecution(controlRPCContext(t, testInternalBearer), &agentv1.RenewAgentRunExecutionRequest{
+					Fence: claim.Fence, RunId: claim.RunId, Owner: claim.Owner, ClaimToken: claim.ClaimToken, LeaseSeconds: 60})
+				if err != nil {
+					t.Fatal("live phase renewal before refresh", err)
+				}
+				time.Sleep(time.Second)
+			}
+			if _, err := production.ExecuteAgentTask(context.Background(), request); status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("expired original grant reauthorized provider: %v", err)
+			}
+			expiredTaskDenied = true
+			refreshInput := &agentv1.RefreshAgentRunAuthorizationRequest{SchemaVersion: 1, OperationId: "live-task-grant-refresh",
+				Fence: claim.Fence, RunId: claim.RunId, Owner: claim.Owner, ClaimToken: claim.ClaimToken, LeaseSeconds: 60}
+			refreshed, err = client.RefreshAuthorization(controlRPCContext(t, testInternalBearer), refreshInput)
+			if err != nil || refreshed == nil || refreshed.Claim == nil || !proto.Equal(refreshed.Claim.Fence, claim.Fence) ||
+				refreshed.Claim.Owner != claim.Owner || refreshed.Claim.ClaimToken != claim.ClaimToken || bytes.Equal(refreshed.CanonicalAuthorization, authorized.CanonicalAuthorization) {
+				t.Fatalf("actual live phase grant refresh changed authority or failed: %v", err)
+			}
+			replay, err := client.RefreshAuthorization(controlRPCContext(t, testInternalBearer), refreshInput)
+			if err != nil || !bytes.Equal(replay.CanonicalAuthorization, refreshed.CanonicalAuthorization) {
+				t.Fatalf("refresh immutable replay: %v", err)
+			}
+			refreshReplayed = true
+			var doc map[string]any
+			if err := json.Unmarshal(refreshed.CanonicalAuthorization, &doc); err != nil {
+				t.Fatal(err)
+			}
+			refreshIssuedAt, _ = doc["issuedAt"].(string)
+			refreshExpiresAt, _ = doc["expiresAt"].(string)
+			issued, issuedErr := time.Parse(time.RFC3339, refreshIssuedAt)
+			deadline, deadlineErr := time.Parse(time.RFC3339, refreshExpiresAt)
+			if issuedErr != nil || deadlineErr != nil || !issued.After(expires) || !deadline.After(issued) {
+				t.Fatal("refresh did not replace an expired grant with a new issuance")
+			}
+			digest := sha256.Sum256(refreshed.CanonicalAuthorization)
+			refreshHash, refreshLength = hex.EncodeToString(digest[:]), len(refreshed.CanonicalAuthorization)
+			refreshAfterExpiry = true
+			claim = refreshed.Claim
+		}
 		dependent := proto.Clone(request).(*agentv1.ExecuteAgentTaskRequest)
 		dependent.NodeId, dependent.OperationId = "critic", "task-dependent-dispatch"
+		if refreshed != nil {
+			dependent.Claim, dependent.SignedPhaseGrant = refreshed.Claim, refreshed.CanonicalAuthorization
+		}
+		dependentExecutionInput = proto.Clone(dependent).(*agentv1.ExecuteAgentTaskRequest)
 		critic, err = production.ExecuteAgentTask(context.Background(), dependent)
 		if err != nil || critic == nil || critic.State != "CONFIRMED" {
 			t.Fatalf("actual dependency execution: %v", err)
@@ -998,7 +1059,11 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 		t.Fatalf("Rust task restart changed custody: %v", err)
 	}
 	replayed, replayError := production.ExecuteAgentTask(context.Background(), request)
-	if scenario == "task-unknown" {
+	if scenario == "synthesis-success" {
+		if !expiredTaskDenied || status.Code(replayError) != codes.FailedPrecondition {
+			t.Fatalf("expired grant replay was accepted after restart: %v", replayError)
+		}
+	} else if scenario == "task-unknown" {
 		if status.Code(replayError) != codes.FailedPrecondition {
 			t.Fatalf("unknown task replay dispatched: %v", replayError)
 		}
@@ -1010,9 +1075,7 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 		if err != nil || !proto.Equal(retained, critic) {
 			t.Fatalf("dependent Rust restart: %v", err)
 		}
-		dependent := proto.Clone(request).(*agentv1.ExecuteAgentTaskRequest)
-		dependent.NodeId, dependent.OperationId = "critic", "task-dependent-dispatch"
-		replay, err := production.ExecuteAgentTask(context.Background(), dependent)
+		replay, err := production.ExecuteAgentTask(context.Background(), dependentExecutionInput)
 		if err != nil || !proto.Equal(replay, critic) {
 			t.Fatalf("dependent replay changed provider result: %v", err)
 		}
@@ -1256,6 +1319,10 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 		"outcomeSha256": known.OutcomeSha256, "outcomeReceiptSha256": receiptHash, "outcomeReceiptLength": receiptLength,
 		"signedOutcomeVerified": verified, "goOutcomePersisted": persisted, "rustRestartPreserved": true, "goRestartPreserved": true,
 		"unknownHasNoReceipt": known.OutcomeReceipt == nil, "duplicateProviderDispatchDenied": true, "resourcesRetained": completion == nil, "resourcesReleased": completion != nil,
+		"grantRefreshAfterExpiryQualified": refreshAfterExpiry, "grantRefreshReplayed": refreshReplayed,
+		"expiredTaskGrantReexecutionDenied": expiredTaskDenied, "originalTaskGrantExpiresAt": originalGrantExpiry,
+		"refreshedTaskGrantIssuedAt": refreshIssuedAt, "refreshedTaskGrantExpiresAt": refreshExpiresAt,
+		"refreshedTaskGrantSha256": refreshHash, "refreshedTaskGrantLength": refreshLength,
 		"productionGoNodeClient": true, "productionProviderQualified": false, "goTaskPhaseSettlementQualified": completion != nil,
 		"phaseCompletionReplayedAfterGoRestart": completion != nil, "publicRunRemainsRunning": completion != nil && !finalSettled,
 		"goTaskNodeSettlementQualified": taskSettled, "dependencyDispatchQualified": dependencyQualified,

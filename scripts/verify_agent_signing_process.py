@@ -243,6 +243,28 @@ def validate_dependent_task_request(exchange: dict[str, object], result: dict[st
         raise ValueError("Dependent HTTP exchange lacks verified scope, role policy or Rust-owned predecessor output")
 
 
+def validate_agent_grant_refresh(result: dict[str, object]) -> None:
+    from datetime import datetime
+
+    if not all(result.get(key) is True for key in ("grantRefreshAfterExpiryQualified", "grantRefreshReplayed", "expiredTaskGrantReexecutionDenied")):
+        raise ValueError("Actual expired-grant refresh and immutable replay are unproven")
+    values = []
+    for key in ("originalTaskGrantExpiresAt", "refreshedTaskGrantIssuedAt", "refreshedTaskGrantExpiresAt"):
+        value = result.get(key)
+        if not isinstance(value, str) or not value.endswith("Z"):
+            raise ValueError("Grant refresh lacks real UTC timestamps")
+        try:
+            values.append(datetime.fromisoformat(value.removesuffix("Z") + "+00:00"))
+        except ValueError as error:
+            raise ValueError("Grant refresh lacks valid UTC timestamps") from error
+    if not values[0] < values[1] < values[2] or (values[2] - values[1]).total_seconds() > 300:
+        raise ValueError("Grant refresh did not issue a new grant after original expiry")
+    digest, length = result.get("refreshedTaskGrantSha256"), result.get("refreshedTaskGrantLength")
+    if not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest) or \
+            not isinstance(length, int) or isinstance(length, bool) or length <= 0:
+        raise ValueError("Grant refresh lacks exact signed document custody")
+
+
 def validate_synthesis_request(exchange: dict[str, object], result: dict[str, object]) -> None:
     if exchange.get("actionId") != result.get("synthesisActionId") or exchange.get("actionId") == result.get("actionId") or \
             exchange.get("executionEpoch") != str(result.get("synthesisExecutionEpoch")) or \
@@ -538,13 +560,22 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                     raise ValueError("Unresolved task phase released resources or claimed completion")
                 if scenario in {"task-success", "synthesis-success"}:
                     receipts = [body for body in documents if hashlib.sha256(body).hexdigest() == result["outcomeReceiptSha256"]]
-                    if not result.get("goOutcomePersisted") or not result.get("signedOutcomeVerified") or len(documents) != (8 if scenario == "synthesis-success" else 4) or len(receipts) != 1 or len(receipts[0]) != result["outcomeReceiptLength"]:
+                    if not result.get("goOutcomePersisted") or not result.get("signedOutcomeVerified") or len(documents) != (9 if scenario == "synthesis-success" else 4) or len(receipts) != 1 or len(receipts[0]) != result["outcomeReceiptLength"]:
                         raise ValueError("Task receipt lacks actual Go verification and durable ingestion")
                     dependent_receipts = [body for body in documents if hashlib.sha256(body).hexdigest() == result["dependentReceiptSha256"]]
                     if len(dependent_receipts) != 1 or len(dependent_receipts[0]) != result["dependentReceiptLength"] or \
                             not result.get("goTaskNodeSettlementQualified") or not result.get("dependencyDispatchQualified"):
                         raise ValueError("Dependency requires independently verified Go completion and retained Rust output")
                     if scenario == "synthesis-success":
+                        validate_agent_grant_refresh(result)
+                        refreshed_grants = [body for body in documents if hashlib.sha256(body).hexdigest() == result["refreshedTaskGrantSha256"]]
+                        if len(refreshed_grants) != 1 or len(refreshed_grants[0]) != result["refreshedTaskGrantLength"]:
+                            raise ValueError("Refreshed grant lacks unique immutable Rust signature custody")
+                        refreshed_doc = json.loads(refreshed_grants[0])
+                        if refreshed_doc.get("operation") != "execute-agent-phase" or refreshed_doc.get("mode") != "authoritative" or \
+                                refreshed_doc.get("actionId") != result["actionId"] or refreshed_doc.get("executionEpoch") != result["executionEpoch"] or \
+                                refreshed_doc.get("issuedAt") != result["refreshedTaskGrantIssuedAt"] or refreshed_doc.get("expiresAt") != result["refreshedTaskGrantExpiresAt"]:
+                            raise ValueError("Refreshed grant changed action scope or retained dates")
                         synthesis_receipts = [body for body in documents if hashlib.sha256(body).hexdigest() == result["synthesisReceiptSha256"]]
                         if len(synthesis_receipts) != 1 or len(synthesis_receipts[0]) != result["synthesisReceiptLength"] or \
                                 not all(result.get(key) is True for key in ("synthesisGoProofPersisted", "synthesisRustRestartPreserved", "synthesisGoRestartPreserved", "synthesisDuplicateProviderDispatchDenied")) or \

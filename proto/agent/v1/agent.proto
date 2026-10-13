@@ -248,6 +248,19 @@ message AuthorizeAgentRunExecutionResponse {
 
 // Authenticated Go control metadata and execution admission. Rust retains bodies;
 // fenced worker execution and effect reconciliation are separate commands.
+// An explicit new signing operation for an already-installed, still-live claim.
+// Exact retries retain their original signed dates. A new operation cannot claim
+// another action, install/advance an epoch, or change the immutable run scope.
+message RefreshAgentRunAuthorizationRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  deepseek.common.v1.ActionFence fence = 3;
+  string run_id = 4;
+  string owner = 5;
+  string claim_token = 6;
+  uint32 lease_seconds = 7;
+}
+
 service AgentRunControl {
   rpc GetAuthority(AgentRunAuthorityInput) returns (AgentRunAuthorityOutput);
   rpc AppendEvent(AppendAgentRunEventRequest) returns (AppendAgentRunEventResponse);
@@ -256,4 +269,5 @@ service AgentRunControl {
   rpc ClaimExecution(ClaimAgentRunExecutionRequest) returns (ClaimAgentRunExecutionResponse);
   rpc RenewExecution(RenewAgentRunExecutionRequest) returns (RenewAgentRunExecutionResponse);
   rpc AuthorizeExecution(ClaimAgentRunExecutionRequest) returns (AuthorizeAgentRunExecutionResponse);
+  rpc RefreshAuthorization(RefreshAgentRunAuthorizationRequest) returns (AuthorizeAgentRunExecutionResponse);
 }

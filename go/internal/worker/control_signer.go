@@ -163,6 +163,24 @@ func (client *Client) AuthorizeAgentExecution(ctx context.Context, claim *agentv
 	return client.SignControl(ctx, input, binding)
 }
 
+// RefreshAgentExecution signs a new explicit issuance under the same live claim.
+// It deliberately does not install an epoch: Rust signing independently requires
+// the exact epoch already installed by the initial authoritative authorization.
+func (client *Client) RefreshAgentExecution(ctx context.Context, claim *agentv1.AgentRunExecutionClaim, requestID, nonce string, binding ControlSignerBinding) ([]byte, error) {
+	if claim == nil {
+		return nil, ErrControlSignerResponse
+	}
+	claim = proto.Clone(claim).(*agentv1.AgentRunExecutionClaim)
+	input := &actionv1.SignControlRequest{Purpose: actionv1.ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_AGENT_EXECUTION,
+		Fence: claim.Fence, RequestId: requestID, Nonce: nonce, Revision: claim.ClaimRevision,
+		FencingToken: uint64(claim.WriterFencingToken), FleetId: binding.FleetID, Environment: binding.Environment,
+		AgentIntent: claim}
+	if _, err := agentGrantIntent(input); err != nil {
+		return nil, err
+	}
+	return client.SignControl(ctx, input, binding)
+}
+
 func signerIntegerMatches(value any, expected int64) bool {
 	number, ok := value.(json.Number)
 	if !ok {

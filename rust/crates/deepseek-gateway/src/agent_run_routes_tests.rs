@@ -42,6 +42,12 @@ fn validate_fence(fence: Option<&ActionFence>) -> Result<(), Status> {
 
 #[tonic::async_trait]
 impl AgentRunControl for Fixture {
+    async fn refresh_authorization(
+        &self,
+        _request: tonic::Request<RefreshAgentRunAuthorizationRequest>,
+    ) -> Result<Response<AuthorizeAgentRunExecutionResponse>, Status> {
+        Err(Status::unimplemented("READ_FIXTURE_HAS_NO_EXECUTION"))
+    }
     async fn authorize_execution(
         &self,
         _request: tonic::Request<ClaimAgentRunExecutionRequest>,
