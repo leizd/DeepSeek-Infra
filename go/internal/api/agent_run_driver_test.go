@@ -18,6 +18,8 @@ import (
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"github.com/leizd/DeepSeek-Infra/go/internal/worker"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -176,11 +178,41 @@ func (fixture *driverFixtureWorker) ProjectAgentSynthesis(_ context.Context, inp
 	return receipt, nil
 }
 
+func driverFixtureAuthority(t *testing.T, key string) *store.Control {
+	t.Helper()
+	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "agent-driver-unit-test", LeaseSeconds: 600,
+		AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic, AgentOutcomeSignerPublicKey: key,
+		FleetID: mutationFleetID, Environment: mutationEnvironment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = control.Close() })
+	checkpoint := authorityCheckpointFixture(t)
+	if _, _, err := control.ClaimControlAuthority(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	for _, domain := range []string{"agent_run", "action"} {
+		for _, next := range []store.CutoverState{store.CutoverDualEvaluate, store.CutoverGoAuthoritative} {
+			current, err := control.GetCutover(domain)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := signedPromotionRoute(t, store.CutoverTransition{Domain: domain, To: next,
+				ExpectedRevision: current.Revision, ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken,
+				TransferID: "agent-driver-" + domain + "-" + string(next), Authority: checkpoint}, current, time.Now().UTC().Unix(), nil)
+			if _, err := control.TransitionCutover(request); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return control
+}
+
 func newDriverFixture(t *testing.T, confirm bool) (*agentRunDriver, *driverFixtureWorker, agent.RunMetadata) {
 	t.Helper()
 	private := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{31}, ed25519.SeedSize)) // offline fixture only
 	key := base64.RawURLEncoding.EncodeToString(private.Public().(ed25519.PublicKey))
-	control := agentExecutionRPCStore(t, true, key)
+	control := driverFixtureAuthority(t, key)
 	service := &agentRunService{control: control, health: HealthFor(config.Config{Mode: config.ModeAuthoritative})}
 	authority, err := service.GetAuthority(context.Background(), &agentv1.AgentRunAuthorityInput{})
 	if err != nil {
@@ -422,5 +454,26 @@ func TestAgentDriverStopsHeartbeatAndDrainsBeforeClosedStore(t *testing.T) {
 	case <-heartbeat:
 	case <-time.After(time.Second):
 		t.Fatal("heartbeat did not drain")
+	}
+}
+
+func TestAgentDriverRejectsFixedHistoricalLeaseInWallClockSignatureVerification(t *testing.T) {
+	driver, _, run := newDriverFixture(t, false)
+	private := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{31}, ed25519.SeedSize))
+	key := base64.RawURLEncoding.EncodeToString(private.Public().(ed25519.PublicKey))
+	historical := agentExecutionRPCStore(t, true, key)
+	driver.service.control = historical
+	authority, err := driver.service.GetAuthority(context.Background(), &agentv1.AgentRunAuthorityInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := agentRPCAppend(0, authority.MetadataEpoch)
+	if _, err := driver.service.AppendEvent(context.Background(), create); err != nil {
+		t.Fatal(err)
+	}
+	run = driverFixtureRun(t, driver, run.RunID)
+	err = driver.drive(context.Background(), run)
+	if status.Code(err) != codes.DataLoss || !strings.Contains(err.Error(), "AGENT_EXECUTION_GRANT_INVALID") {
+		t.Fatal("historical lease was accepted by the live signature verifier", err)
 	}
 }
