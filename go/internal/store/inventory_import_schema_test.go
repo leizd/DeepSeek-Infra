@@ -53,6 +53,7 @@ func TestV10InventoryMigrationRetainsShadowHistoryWithoutForgingAttestation(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	materializeLegacyActionLeasesFixture(t, tx)
 	for _, statement := range []string{
 		"DROP TABLE IF EXISTS control_operator_mutations",
 		"DROP TABLE IF EXISTS backup_target_health",
@@ -120,6 +121,7 @@ func TestV12ImportMigratesWithoutInventingLiveSourceBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	downgradeInventoryImportTableToV11Tx(t, tx)
+	materializeLegacyActionLeasesFixture(t, tx)
 	for _, statement := range []string{
 		`CREATE TABLE control_meta_v12_fixture (
 			singleton INTEGER PRIMARY KEY CHECK(singleton=1), runtime TEXT NOT NULL,
@@ -189,6 +191,7 @@ func TestV12PromotedImportCannotUpgradeWithoutLiveSourceBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	downgradeInventoryImportTableToV11Tx(t, tx)
+	materializeLegacyActionLeasesFixture(t, tx)
 	for _, statement := range []string{
 		`CREATE TABLE control_meta_v12_promoted_fixture (
 			singleton INTEGER PRIMARY KEY CHECK(singleton=1), runtime TEXT NOT NULL,
@@ -251,6 +254,7 @@ func TestInventorySourceBindingMigrationLateFailureRollsBackSchema(t *testing.T)
 		t.Fatal(err)
 	}
 	downgradeInventoryImportTableToV11Tx(t, tx)
+	materializeLegacyActionLeasesFixture(t, tx)
 	for _, statement := range []string{
 		`CREATE TABLE control_meta_v12_failure_fixture (
 			singleton INTEGER PRIMARY KEY CHECK(singleton=1), runtime TEXT NOT NULL,
@@ -383,6 +387,7 @@ func TestInventoryMigrationLateFailureRollsBackSchema(t *testing.T) {
 	if _, err := tx.Exec("DROP TABLE control_inventory_handbacks"); err != nil {
 		t.Fatal(err)
 	}
+	materializeLegacyActionLeasesFixture(t, tx)
 	for _, statement := range []string{
 		`CREATE TABLE control_meta_v11_failure_fixture (
 			singleton INTEGER PRIMARY KEY CHECK(singleton=1), runtime TEXT NOT NULL,

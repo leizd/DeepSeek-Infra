@@ -737,6 +737,11 @@ func (store *Control) migrateTx(tx *sql.Tx) error {
 			return err
 		}
 	}
+	if store.schema == SchemaV15 {
+		if err := store.migrateToV16Tx(tx); err != nil {
+			return err
+		}
+	}
 	return verifySchemaTx(tx, store.schema)
 }
 
@@ -1067,9 +1072,15 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 			return err
 		}
 	}
-	if schema >= SchemaV5 {
-		if err := verifyActionAdmissionSchemaTx(tx); err != nil {
+	if schema >= SchemaV16 {
+		if err := verifyActionCancellationSchemaTx(tx); err != nil {
 			return err
+		}
+	} else {
+		if schema >= SchemaV5 {
+			if err := verifyActionAdmissionSchemaTx(tx); err != nil {
+				return err
+			}
 		}
 	}
 	if schema >= SchemaV6 {

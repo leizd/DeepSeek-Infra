@@ -27,6 +27,7 @@ func materializeV13HealthMigrationSource(t *testing.T, control *Control) {
 	}
 	defer tx.Rollback()
 	dropTargetHealthFixtureTables(t, tx)
+	materializeLegacyActionLeasesFixture(t, tx)
 	for _, statement := range []string{
 		`CREATE TABLE meta_v13_fixture (
 			singleton INTEGER PRIMARY KEY CHECK(singleton=1),runtime TEXT NOT NULL,

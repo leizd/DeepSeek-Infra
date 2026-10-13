@@ -240,6 +240,7 @@ func TestV11StoreMigratesToTheHandbackSchemaWithoutInventingHistory(t *testing.T
 		t.Fatal(err)
 	}
 	downgradeInventoryImportTableToV11Tx(t, tx)
+	materializeLegacyActionLeasesFixture(t, tx)
 	for _, statement := range []string{
 		"DROP TABLE IF EXISTS control_operator_mutations",
 		"DROP TABLE IF EXISTS backup_target_health",
@@ -303,6 +304,7 @@ func TestHandbackMigrationLateFailureRollsBackSchema(t *testing.T) {
 	}
 	defer tx.Rollback()
 	downgradeInventoryImportTableToV11Tx(t, tx)
+	materializeLegacyActionLeasesFixture(t, tx)
 	for _, statement := range []string{
 		"DROP TABLE IF EXISTS backup_target_health",
 		"DROP TABLE IF EXISTS control_target_health_imports",

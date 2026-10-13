@@ -310,6 +310,7 @@ func TestV15MigrationPreservesRecordsAndVerifiesTheJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	materializeLegacyActionLeasesFixture(t, tx)
 	for _, statement := range []string{
 		"DROP TABLE control_operator_mutations",
 		`CREATE TABLE meta_v14_fixture (
