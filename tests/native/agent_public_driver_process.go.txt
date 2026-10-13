@@ -79,6 +79,7 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 	}
 	deadline := time.Now().Add(150 * time.Second)
 	var publicRun map[string]any
+	confirmed := false
 	for {
 		if time.Now().After(deadline) {
 			t.Fatalf("native DAG did not finish; last public state=%v", publicRun)
@@ -99,6 +100,35 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 			t.Fatal("invalid native public response")
 		}
 		publicRun = envelope.Run
+		if publicRun["status"] == "awaiting_plan" && !confirmed {
+			metadata, found, err := control.AgentRunMetadata(created.RunID)
+			records, recordErr := control.ListAuthoritativeRecords("action")
+			if err != nil || !found || metadata.Status != "awaiting_plan" || !metadata.ConfirmPlan ||
+				recordErr != nil || len(records) != 1 || records[0].State != "SUCCEEDED" {
+				t.Fatal("auto plan did not stop before task admission", err, recordErr)
+			}
+			// Leave a complete controller tick while confirmation is absent.
+			time.Sleep(1200 * time.Millisecond)
+			records, recordErr = control.ListAuthoritativeRecords("action")
+			if recordErr != nil || len(records) != 1 {
+				t.Fatal("tasks started without actual public confirmation", recordErr)
+			}
+			confirmedResponse, postErr := client.Post(public.Origin+"/api/agent-runs/"+created.RunID+"/plan",
+				"application/json", bytes.NewBufferString(`{"payload":{}}`))
+			if postErr != nil {
+				t.Fatal("actual public confirmation", postErr)
+			}
+			confirmedRaw, readErr := io.ReadAll(io.LimitReader(confirmedResponse.Body, 2<<20))
+			confirmedResponse.Body.Close()
+			var confirmation struct {
+				Started bool `json:"started"`
+			}
+			if readErr != nil || confirmedResponse.StatusCode != http.StatusOK ||
+				json.Unmarshal(confirmedRaw, &confirmation) != nil || !confirmation.Started {
+				t.Fatalf("public confirmation failed status=%d body=%s error=%v", confirmedResponse.StatusCode, confirmedRaw, readErr)
+			}
+			confirmed = true
+		}
 		if publicRun["status"] == "done" {
 			break
 		}
@@ -108,7 +138,7 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	metadata, found, err := control.AgentRunMetadata(created.RunID)
-	if err != nil || !found || metadata.Status != "done" || metadata.NextIndex != 8 ||
+	if err != nil || !found || !confirmed || metadata.Status != "done" || metadata.NextIndex != 9 ||
 		metadata.Nodes()["coder"].State != "succeeded" || metadata.Nodes()["critic"].State != "succeeded" {
 		t.Fatal("public state differs from actual Go durable settlement", err)
 	}
@@ -129,11 +159,11 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 			t.Fatal("terminal action retains a live lease")
 		}
 	}
-	if publicRun["nextIndex"] != float64(8) {
+	if publicRun["nextIndex"] != float64(9) {
 		t.Fatal("public event cursor omitted settlement")
 	}
 	events, ok := publicRun["events"].([]any)
-	if !ok || len(events) != 8 {
+	if !ok || len(events) != 9 {
 		t.Fatal("public immutable event bodies omitted")
 	}
 	serialized := string(raw)
@@ -146,6 +176,6 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 		"publicEventCount": len(events), "finalAnswerVisible": true, "publicResponseLength": len(serialized),
 		"inputBodySeededByOfflineOracle": false, "productionProviderQualified": false, "fullMigrationQualified": false,
 		"productionRuntimeProcesses": []string{"Go", "Rust"}, "providerFixtureIsOfflineTestTool": true,
-		"publicCreationAndDAGDriverQualified": true, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})
+		"publicCreationAndDAGDriverQualified": true, "publicPlanConfirmationQualified": true, "noTasksBeforePublicConfirmation": true, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})
 	fmt.Println("actual native public create / leader / dependent DAG / synthesis / final settlement PASS")
 }

@@ -434,6 +434,8 @@ fn read_router(enabled: bool, config: Option<ReadConfig>) -> Router {
     Router::new()
         .route("/api/agent-runs", post(create))
         .route("/api/agent-runs/:run_id", get(detail))
+        .route("/api/agent-runs/:run_id/plan", post(confirm_plan))
+        .route("/api/agent-runs/:run_id/cancel", post(cancel_run))
         .route("/api/agent-runs/:run_id/events", get(events))
         .route("/api/agent-runs/:run_id/stream", get(stream))
         .with_state(config)
@@ -516,7 +518,12 @@ fn creation_metadata(value: &Value) -> Result<AgentRunCreateMetadata, ReadError>
     };
     Ok(AgentRunCreateMetadata {
         preset: preset.to_string(),
-        confirm_plan: confirm || preset == "plan",
+        confirm_plan: confirm
+            || matches!(preset, "plan" | "auto")
+            || deepseek_policy::core_utils::latest_user_query(&Value::Object(payload.clone()))
+                .chars()
+                .count()
+                > 1800,
         conversation_id: identity("conversationId")?,
         message_id: identity("messageId")?,
         request: None,
@@ -579,6 +586,226 @@ async fn create(
         .map_err(rpc_error)?;
     session.refresh().await?;
     Ok(Json(json!({"runId":id, "run":session.public_run().await?})))
+}
+
+fn action_conflict() -> ReadError {
+    ReadError {
+        status: StatusCode::CONFLICT,
+        code: "NATIVE_AGENT_ACTION_CONFLICT",
+        message: "Agent run is not ready for this action",
+    }
+}
+
+fn operator_input(body: &Bytes) -> Result<Value, ReadError> {
+    if body.len() > 1024 * 1024 {
+        return Err(invalid_request());
+    }
+    let value = if body.is_empty() {
+        json!({})
+    } else {
+        serde_json::from_slice(body).map_err(|_| invalid_request())?
+    };
+    if !value.is_object()
+        || value
+            .get("payload")
+            .is_some_and(|payload| !payload.is_object())
+    {
+        return Err(invalid_request());
+    }
+    Ok(value)
+}
+
+fn confirmation_plan(value: &Value) -> Result<Option<Vec<AgentRunPlanNode>>, ReadError> {
+    let Some(raw) = value.get("plan") else {
+        return Ok(None);
+    };
+    let entries = raw.as_array().ok_or_else(invalid_request)?;
+    if entries.is_empty() || entries.len() > 4 {
+        return Err(invalid_request());
+    }
+    let mut plan = Vec::new();
+    let mut identifiers = std::collections::BTreeSet::new();
+    for entry in entries {
+        let id = entry
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid_request)?;
+        if !matches!(id, "researcher" | "coder" | "reasoner" | "critic")
+            || !identifiers.insert(id.to_string())
+        {
+            return Err(invalid_request());
+        }
+        let task = entry
+            .get("task")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid_request)?;
+        if task.trim().is_empty() || task.len() > 32 * 1024 {
+            return Err(invalid_request());
+        }
+        let dependencies = entry.get("dependsOn").map_or(Ok(Vec::new()), |value| {
+            let values = value.as_array().ok_or_else(invalid_request)?;
+            if values.len() > 4 {
+                return Err(invalid_request());
+            }
+            values
+                .iter()
+                .map(|v| v.as_str().map(str::to_string).ok_or_else(invalid_request))
+                .collect::<Result<Vec<_>, _>>()
+        })?;
+        plan.push(AgentRunPlanNode {
+            id: id.into(),
+            task: task.into(),
+            depends_on: dependencies,
+        });
+    }
+    let mut ready = std::collections::BTreeSet::new();
+    for _ in 0..plan.len() {
+        let prior = ready.len();
+        for node in &plan {
+            if node.depends_on.iter().all(|id| ready.contains(id)) {
+                ready.insert(node.id.clone());
+            }
+        }
+        if ready.len() == plan.len() {
+            return Ok(Some(plan));
+        }
+        if ready.len() == prior {
+            break;
+        }
+    }
+    Err(invalid_request())
+}
+
+async fn operator_event(
+    session: &mut ReadSession,
+    mut event: AgentRunEventMetadata,
+    body: Value,
+) -> Result<(), ReadError> {
+    let root = session.config.artifacts.clone();
+    let reference = tokio::task::spawn_blocking(move || {
+        ArtifactStore::open_native(&root, "python_disabled")
+            .map_err(data_error)?
+            .put(&body)
+            .map_err(data_error)
+    })
+    .await
+    .map_err(|_| data_error(DataError::Unavailable))??;
+    let operation = Sha256::digest(format!(
+        "{}:{}:{}:{}:{}",
+        session.snapshot.run_id,
+        session.epoch,
+        session.snapshot.next_index,
+        event.r#type,
+        reference.sha256
+    ));
+    event.body = Some(AgentArtifactReference {
+        sha256: reference.sha256,
+        length: reference.length,
+    });
+    let request = session.request(AppendAgentRunEventRequest {
+        schema_version: 1,
+        operation_id: format!("agent-web-{operation:x}"),
+        actor: "operator:agent-web".into(),
+        run_id: session.snapshot.run_id.clone(),
+        expected_index: session.snapshot.next_index,
+        create: None,
+        event: Some(event),
+        fence: Some(ActionFence {
+            action_id: session.snapshot.run_id.clone(),
+            execution_epoch: session.epoch,
+        }),
+    });
+    session
+        .client
+        .append_event(request)
+        .await
+        .map_err(rpc_error)?;
+    session.refresh().await
+}
+
+async fn confirm_plan(
+    State(config): State<Option<ReadConfig>>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Result<Json<Value>, ReadError> {
+    let input = operator_input(&body)?;
+    let plan = confirmation_plan(&input)?;
+    let mut session = ReadSession::open(config, &id).await?;
+    let cancelled = session
+        .events(-1)
+        .await?
+        .iter()
+        .any(|event| event.r#type == "run_status" && event.status == "cancelled");
+    if cancelled {
+        return Err(action_conflict());
+    }
+    if session.snapshot.status == "running" && plan.is_none() {
+        return Ok(Json(
+            json!({"started":false,"run":session.public_run().await?}),
+        ));
+    }
+    if session.snapshot.status != "awaiting_plan" {
+        return Err(action_conflict());
+    }
+    if let Some(plan) = plan {
+        let body = json!({"type":"agent_plan","plan":plan_value(&plan)});
+        operator_event(
+            &mut session,
+            AgentRunEventMetadata {
+                r#type: "agent_plan".into(),
+                plan,
+                ..Default::default()
+            },
+            body,
+        )
+        .await?;
+    }
+    if session.snapshot.status != "awaiting_plan" || session.snapshot.plan.is_empty() {
+        return Err(action_conflict());
+    }
+    operator_event(
+        &mut session,
+        AgentRunEventMetadata {
+            r#type: "run_status".into(),
+            status: "running".into(),
+            ..Default::default()
+        },
+        json!({"type":"run_status","status":"running"}),
+    )
+    .await?;
+    Ok(Json(
+        json!({"started":true,"run":session.public_run().await?}),
+    ))
+}
+
+async fn cancel_run(
+    State(config): State<Option<ReadConfig>>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Result<Json<Value>, ReadError> {
+    operator_input(&body)?;
+    let mut session = ReadSession::open(config, &id).await?;
+    if session.snapshot.status == "cancelled" {
+        return Ok(Json(
+            json!({"cancelled":false,"run":session.public_run().await?}),
+        ));
+    }
+    if matches!(session.snapshot.status.as_str(), "done" | "failed") {
+        return Err(action_conflict());
+    }
+    operator_event(
+        &mut session,
+        AgentRunEventMetadata {
+            r#type: "run_status".into(),
+            status: "cancelled".into(),
+            ..Default::default()
+        },
+        json!({"type":"run_status","status":"cancelled"}),
+    )
+    .await?;
+    Ok(Json(
+        json!({"cancelled":true,"run":session.public_run().await?}),
+    ))
 }
 
 async fn detail(

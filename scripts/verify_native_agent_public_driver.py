@@ -27,12 +27,13 @@ import verify_agent_signing_process as signing  # noqa: E402
 
 
 def validate_driver_result(result: dict[str, Any], exchanges: list[dict[str, Any]]) -> None:
-    if result.get("status") != "PASS" or result.get("runStatus") != "done" or result.get("nextIndex") != 8 or \
-            result.get("durablePhases") != 3 or result.get("publicEventCount") != 8 or \
+    if result.get("status") != "PASS" or result.get("runStatus") != "done" or result.get("nextIndex") != 9 or \
+            result.get("durablePhases") != 3 or result.get("publicEventCount") != 9 or \
             result.get("resourcesReleased") is not True or result.get("finalAnswerVisible") is not True or \
             result.get("inputBodySeededByOfflineOracle") is not False or \
             result.get("productionRuntimeProcesses") != ["Go", "Rust"] or \
             result.get("publicCreationAndDAGDriverQualified") is not True or \
+            result.get("publicPlanConfirmationQualified") is not True or result.get("noTasksBeforePublicConfirmation") is not True or \
             result.get("productionProviderQualified") is not False or result.get("fullMigrationQualified") is not False:
         raise ValueError("Native public driver evidence is incomplete or overclaims qualification")
     if len(exchanges) != 4:

@@ -7,9 +7,10 @@ from scripts.verify_native_agent_public_driver import validate_driver_result
 
 
 def complete_evidence():
-    result = {"status": "PASS", "runStatus": "done", "nextIndex": 8, "durablePhases": 3, "publicEventCount": 8,
+    result = {"status": "PASS", "runStatus": "done", "nextIndex": 9, "durablePhases": 3, "publicEventCount": 9,
         "resourcesReleased": True, "finalAnswerVisible": True, "inputBodySeededByOfflineOracle": False,
         "productionRuntimeProcesses": ["Go", "Rust"], "publicCreationAndDAGDriverQualified": True,
+        "publicPlanConfirmationQualified": True, "noTasksBeforePublicConfirmation": True,
         "productionProviderQualified": False, "fullMigrationQualified": False}
     exchanges = [{"actionId": action, "operationId": f"node-{index}", "executionEpoch": "1", "stream": False}
         for index, action in enumerate(["plan-action", "task-action", "task-action", "synthesis-action"])]
@@ -31,6 +32,7 @@ def test_public_driver_complete_controlled_evidence_retains_qualification_limits
     ("resourcesReleased", 1), ("finalAnswerVisible", False), ("inputBodySeededByOfflineOracle", True),
     ("productionRuntimeProcesses", ["Go", "Rust", "Python"]), ("publicCreationAndDAGDriverQualified", False),
     ("productionProviderQualified", True), ("fullMigrationQualified", True),
+    ("publicPlanConfirmationQualified", False), ("noTasksBeforePublicConfirmation", False),
 ])
 def test_public_driver_incomplete_or_overclaimed_evidence_is_refused(key, value):
     result, exchanges = complete_evidence()

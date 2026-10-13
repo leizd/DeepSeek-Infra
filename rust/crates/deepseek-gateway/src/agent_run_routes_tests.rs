@@ -90,6 +90,41 @@ impl AgentRunControl for Fixture {
         }
         let input = request.into_inner();
         validate_fence(input.fence.as_ref(), &input.run_id)?;
+        if input.create.is_none()
+            && input.schema_version == 1
+            && input.actor == "operator:agent-web"
+            && input.operation_id.starts_with("agent-web-")
+        {
+            let mut snapshot = self.snapshot.lock().unwrap();
+            if snapshot.run_id != input.run_id || snapshot.next_index != input.expected_index {
+                return Err(Status::aborted("REVISION_CONFLICT"));
+            }
+            let mut event = input
+                .event
+                .ok_or_else(|| Status::invalid_argument("EVENT_MISSING"))?;
+            if event.body.is_none() {
+                return Err(Status::invalid_argument("BODY_MISSING"));
+            }
+            match event.r#type.as_str() {
+                "run_status" if event.status == "running" || event.status == "cancelled" => {
+                    snapshot.status = event.status.clone();
+                }
+                "agent_plan" => snapshot.plan = event.plan.clone(),
+                _ => return Err(Status::invalid_argument("OPERATOR_EVENT_INVALID")),
+            }
+            event.run_id = input.run_id;
+            event.index = snapshot.next_index;
+            event.created_at = "2026-10-13T00:00:01Z".into();
+            event.fence = input.fence;
+            snapshot.next_index += 1;
+            snapshot.last_event = Some(event.clone());
+            self.events.lock().unwrap().push(event.clone());
+            return Ok(Response::new(AppendAgentRunEventResponse {
+                already_applied: false,
+                event: Some(event),
+                run: Some(snapshot.clone()),
+            }));
+        }
         if input.schema_version != 1
             || input.expected_index != 0
             || input.actor != "operator:agent-web"
@@ -657,4 +692,148 @@ async fn public_creation_checks_control_authority_before_opening_writable_custod
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert!(!empty.path().join("unopened").exists());
     assert_eq!(running.fixture.snapshot.lock().unwrap().run_id, RUN);
+}
+
+async fn operator_response(router: Router, path: &str, input: &Value) -> (StatusCode, Value) {
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(input).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[test]
+fn public_creation_preserves_auto_and_long_query_confirmation() {
+    for (preset, query, explicit, expected) in [
+        ("auto", "short".into(), false, true),
+        ("plan", "short".into(), false, true),
+        ("full", "短".repeat(1800), false, false),
+        ("code", "短".repeat(1801), false, true),
+        ("critic", "short".into(), true, true),
+        ("research", "short".into(), false, false),
+    ] {
+        let input = json!({"payload":{"messages":[{"role":"user","content":query}]},"agentPreset":preset,"confirmPlan":explicit});
+        assert_eq!(
+            creation_metadata(&input).unwrap().confirm_plan,
+            expected,
+            "{preset}"
+        );
+    }
+}
+
+#[test]
+fn confirmation_plan_refuses_invalid_or_cyclic_edits() {
+    for plan in [
+        json!([]),
+        json!([{"id":"leader","task":"x"}]),
+        json!([{"id":"coder","task":""}]),
+        json!([{"id":"coder","task":"x","dependsOn":["critic"]},{"id":"critic","task":"y","dependsOn":["coder"]}]),
+        json!([{"id":"coder","task":"x","dependsOn":["unknown"]}]),
+        json!([{"id":"coder","task":"x"},{"id":"coder","task":"y"}]),
+        json!([{"id":"critic","task":"x","dependsOn":"coder"}]),
+        json!([{"id":"coder","task":"x","dependsOn":[2]}]),
+    ] {
+        assert!(confirmation_plan(&json!({"plan":plan})).is_err());
+    }
+    assert!(confirmation_plan(&json!({})).unwrap().is_none());
+    let plan=confirmation_plan(&json!({"plan":[{"id":"critic","task":"review","dependsOn":["coder"]},{"id":"coder","task":"write"}]})).unwrap().unwrap();
+    assert_eq!(plan.len(), 2);
+}
+
+#[tokio::test]
+async fn public_plan_confirmation_uses_go_events_and_rust_custody() {
+    let running = running_fixture().await;
+    running.fixture.mutations.store(true, Ordering::SeqCst);
+    running.fixture.snapshot.lock().unwrap().status = "awaiting_plan".into();
+    let original = running.fixture.snapshot.lock().unwrap().next_index;
+    let input = json!({"payload":{},"plan":[{"id":"coder","task":"updated task","dependsOn":[]}]});
+    let (status, body) = operator_response(
+        read_router(true, Some(running.config.clone())),
+        &format!("/api/agent-runs/{RUN}/plan"),
+        &input,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["started"], true);
+    assert_eq!(body["run"]["status"], "running");
+    assert_eq!(body["run"]["nextIndex"], original + 2);
+    assert_eq!(body["run"]["plan"][0]["task"], "updated task");
+    let events = running.fixture.events.lock().unwrap().clone();
+    let store = ArtifactStore::open_readonly(&running.config.artifacts).unwrap();
+    for event in &events[events.len() - 2..] {
+        let reference = reference(event.body.as_ref()).unwrap();
+        let body = store.get(&reference).unwrap();
+        assert_eq!(body["type"], event.r#type);
+    }
+    let (status, body) = operator_response(
+        read_router(true, Some(running.config.clone())),
+        &format!("/api/agent-runs/{RUN}/plan"),
+        &json!({"payload":{}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["started"], false);
+    assert_eq!(body["run"]["nextIndex"], original + 2);
+}
+
+#[tokio::test]
+async fn public_confirmation_and_cancellation_refuse_wrong_states() {
+    let running = running_fixture().await;
+    running.fixture.mutations.store(true, Ordering::SeqCst);
+    for state in [
+        "created",
+        "planning",
+        "done",
+        "failed",
+        "cancelled",
+        "orphaned",
+    ] {
+        running.fixture.snapshot.lock().unwrap().status = state.into();
+        let (status, _) = operator_response(
+            read_router(true, Some(running.config.clone())),
+            &format!("/api/agent-runs/{RUN}/plan"),
+            &json!({"payload":{}}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{state}");
+    }
+    running.fixture.snapshot.lock().unwrap().status = "awaiting_plan".into();
+    let before = running.fixture.snapshot.lock().unwrap().next_index;
+    let (status, body) = operator_response(
+        read_router(true, Some(running.config.clone())),
+        &format!("/api/agent-runs/{RUN}/cancel"),
+        &json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["run"]["status"], "cancelled");
+    assert_eq!(body["run"]["nextIndex"], before + 1);
+    let (status, body) = operator_response(
+        read_router(true, Some(running.config.clone())),
+        &format!("/api/agent-runs/{RUN}/cancel"),
+        &json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["cancelled"], false);
+    for input in [json!([]), json!({"payload":[]}), json!({"plan":[]})] {
+        let (status, _) = operator_response(
+            read_router(true, Some(running.config.clone())),
+            &format!("/api/agent-runs/{RUN}/plan"),
+            &input,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
 }
