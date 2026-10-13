@@ -418,15 +418,19 @@ impl AgentNodeWorker for WorkerRpcService {
             }
             AgentNodeEffectStart::Started(permit) => permit,
         };
+        let service = self.clone();
+        let executor = std::sync::Arc::clone(executor);
+        let run_id = claim.run_id.clone();
+        crate::agent_task_executor::retain_admitted_agent_output(async move {
         let sent = async {
-            let deadline = self.node_send_lease(&permit).await?;
+            let deadline = service.node_send_lease(&permit).await?;
             let now = authority_request::parse_utc_z_str(&authority_request::utc_z_now().map_err(|_| unavailable())?).map_err(|_| unavailable())?;
             if deadline <= now { return Err(Status::failed_precondition("AGENT_EXECUTION_LEASE_DENIED")); }
             let envelope = if let Some(plan) = preset {
                 let label = plan["label"].as_str().ok_or_else(unavailable)?;
                 let event = json!({"type":"agent_plan","plan":plan,"text":label,"usage":{}});
                 // This is a local policy result; do not invent an upstream response.
-                json!({"runId":claim.run_id,"publicEvent":event,"planningSource":"retained-preset-policy"})
+                json!({"runId":run_id,"publicEvent":event,"planningSource":"retained-preset-policy"})
             } else {
                 let mut config = executor.upstream.clone();
                 config.timeout = config.timeout.min(Duration::from_secs((deadline - now) as u64));
@@ -435,22 +439,24 @@ impl AgentNodeWorker for WorkerRpcService {
                 let content = turn.content();
                 if content.is_empty() || !turn.tool_calls().is_empty() { return Err(Status::failed_precondition("AGENT_PLAN_RESULT_UNKNOWN")); }
                 let event = json!({"type":"agent_plan","plan":multi_agent::parse_plan_response(&content),"text":content,"usage":turn.usage});
-                json!({"runId":claim.run_id,"publicEvent":event,"providerResponseSha256":receipt})
+                json!({"runId":run_id,"publicEvent":event,"providerResponseSha256":receipt})
             };
-            self.confirm_agent_node_effect(&permit, &envelope).await
+            service.confirm_agent_node_effect(&permit, &envelope).await
         }.await;
         match sent {
-            Ok(outcome) => self
-                .publish_attested_node(executor, outcome, &claim.run_id)
-                .await
-                .map(Response::new),
+            Ok(outcome) => service
+                .publish_attested_node(&executor, outcome, &run_id)
+                .await,
             Err(error) => {
                 // Stale authority can prevent this state update; the retained
                 // reservation still cannot be fresh, and restart makes it unknown.
-                let _ = self.mark_agent_node_effect_unknown(&permit).await;
+                let _ = service.mark_agent_node_effect_unknown(&permit).await;
                 Err(error)
             }
         }
+        })
+        .await
+        .map(Response::new)
     }
 
     async fn query_effect(

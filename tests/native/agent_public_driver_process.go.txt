@@ -104,16 +104,21 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 		t.Fatal("creation omitted durable identity")
 	}
 	if os.Getenv("DEEPSEEK_TEST_AGENT_CANCEL_ACTIVE") == "1" {
+		planningCancellation := os.Getenv("DEEPSEEK_TEST_AGENT_CANCEL_ACTIVE_PLAN") == "1"
+		expectedPhases, expectedNode, cancelledPhase := 2, expectedPlan[0].ID, "tasks"
+		if planningCancellation {
+			expectedPhases, expectedNode, cancelledPhase = 1, "leader", "plan"
+		}
 		var arrived struct {
 			NodeID string `json:"nodeId"`
 		}
 		nativeSigningRead(t, filepath.Join(directory, "provider-task-arrived.json"), &arrived)
-		if arrived.NodeID != expectedPlan[0].ID {
+		if arrived.NodeID != expectedNode {
 			t.Fatal("provider did not enter the actual first task", arrived.NodeID)
 		}
 		before, present, readErr := control.AgentRunMetadata(created.RunID)
 		records, recordErr := control.ListAuthoritativeRecords("action")
-		if readErr != nil || !present || before.Status != "running" || recordErr != nil || len(records) != 2 {
+		if readErr != nil || !present || (!planningCancellation && before.Status != "running") || (planningCancellation && (len(before.Plan) != 0 || (before.Status != "created" && before.Status != "planning"))) || recordErr != nil || len(records) != expectedPhases {
 			t.Fatal("active cancellation did not observe an admitted task phase", readErr, recordErr)
 		}
 		taskAction := ""
@@ -185,7 +190,7 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 		after, present, readErr := control.AgentRunMetadata(created.RunID)
 		records, recordErr = control.ListAuthoritativeRecords("action")
 		resources, resourceErr = control.GetResourceLeases(taskAction)
-		if readErr != nil || !present || after.Status != "cancelled" || after.NextIndex != before.NextIndex+1 || recordErr != nil || len(records) != 2 ||
+		if readErr != nil || !present || after.Status != "cancelled" || after.NextIndex != before.NextIndex+1 || recordErr != nil || len(records) != expectedPhases ||
 			resourceErr != nil || len(resources) == 0 {
 			t.Fatal("active cancellation fabricated settlement or released unresolved resources", readErr, recordErr, resourceErr)
 		}
@@ -253,7 +258,7 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 		nativeSigningWrite(t, filepath.Join(directory, "result.json"), map[string]any{
 			"status": "PASS", "runId": created.RunID, "runStatus": after.Status, "beforeCancelIndex": before.NextIndex, "nextIndex": after.NextIndex,
 			"durablePhases": len(records), "publicStreamEventCount": len(streamEvents), "resourcesRetained": false, "resourcesRetainedBeforeRecovery": true, "resourcesReleased": true,
-			"cancelledDuringActualProviderRequest": true, "actualLateTaskCustodyConfirmed": true, "noDependentOrSynthesisAdmission": true,
+			"cancelledDuringActualProviderRequest": true, "actualLateTaskCustodyConfirmed": !planningCancellation, "actualLateEffectCustodyConfirmed": true, "cancelledPhase": cancelledPhase, "noTaskAdmission": planningCancellation, "noDependentOrSynthesisAdmission": true,
 			"repeatCancellationIdempotent": true, "activeCancellationSafetyQualified": true, "cancelledPhaseRecoveryQualified": true, "controllerRestartRecoveryQualified": true, "recoveryExecutionEpoch": recoveredAction.ExecutionEpoch, "originalExecutionEpoch": lease.Epoch,
 			"requestSha256": after.Request.SHA256, "requestLength": after.Request.Length, "actualPreset": after.Preset, "actualPlan": after.Plan,
 			"inputBodySeededByOfflineOracle": false, "productionProviderQualified": false, "fullMigrationQualified": false,

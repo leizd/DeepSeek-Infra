@@ -148,12 +148,9 @@ func TestCancellationRecoveryUnavailableCustodyCannotDispatchOrRelease(t *testin
 }
 
 func TestCancellationRecoveryRequiresCancelledAuthoritativeProcess(t *testing.T) {
-	for _, fault := range []string{"not-cancelled", "wrong-status", "shadow", "no-control", "cancelled-context", "plan-phase", "changed-request", "changed-run", "closed-store", "stale-cursor", "invalid-node", "missing-dispatched-node"} {
+	for _, fault := range []string{"not-cancelled", "wrong-status", "shadow", "no-control", "cancelled-context", "changed-request", "changed-run", "closed-store", "stale-cursor", "invalid-node", "missing-dispatched-node"} {
 		t.Run(fault, func(t *testing.T) {
 			phase := "tasks"
-			if fault == "plan-phase" {
-				phase = "plan"
-			}
 			driver, fixture, run, action := cancelledDriverRecoveryFixture(t, phase, 60)
 			original, calls := run, len(fixture.calls)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -270,5 +267,81 @@ func TestCancellationDuringSynthesisRetainsCancelledPublicCursor(t *testing.T) {
 	record, found, err := driver.service.control.Get("action", action)
 	if err != nil || !found || record.State != "CANCELLED_CONFIRMED" || actual.Status != "cancelled" || actual.NextIndex != run.NextIndex || len(fixture.calls) != calls {
 		t.Fatal("late synthesis overwrote public cancellation", actual, err)
+	}
+}
+
+func TestPlanCancellationSettlesOriginalCustodyWithoutPublishingPlan(t *testing.T) {
+	for _, failure := range []string{"query-error", "forged-receipt", "success"} {
+		t.Run(failure, func(t *testing.T) {
+			driver, fixture, run, action := cancelledDriverRecoveryFixture(t, "plan", 60)
+			if len(run.Plan) != 0 || len(fixture.calls) != 1 {
+				t.Fatal("plan fixture already published work")
+			}
+			if failure != "success" {
+				original := driver.service.executionSigner
+				driver.service.executionSigner = func(*store.Control) (*agentExecutionSignerSession, error) {
+					worker := &cancellationQueryWorker{driverFixtureWorker: fixture, query: func(ctx context.Context, input *agentv1.QueryAgentNodeEffectRequest) (*agentv1.AgentNodeEffectMetadata, error) {
+						if failure == "query-error" {
+							return nil, context.DeadlineExceeded
+						}
+						effect, err := fixture.QueryAgentNodeEffect(ctx, input)
+						if err != nil {
+							return nil, err
+						}
+						effect.OutcomeReceipt.Signature[0] ^= 1
+						return effect, nil
+					}}
+					return &agentExecutionSignerSession{client: worker, binding: fixture.binding}, nil
+				}
+				if err := driver.recoverCancellation(context.Background(), run); err == nil {
+					t.Fatal("unverified plan cancellation released custody")
+				}
+				assertCancellationRecoveryRetainsCustody(t, driver, fixture, run, action, 1)
+				driver.service.executionSigner = original
+			}
+			if err := driver.recoverCancellation(context.Background(), run); err != nil {
+				t.Fatal(err)
+			}
+			if err := driver.recoverCancellation(context.Background(), run); err != nil {
+				t.Fatal("plan cancellation replay failed", err)
+			}
+			actual := driverFixtureRun(t, driver, run.RunID)
+			record, found, err := driver.service.control.Get("action", action)
+			if err != nil || !found || record.State != "CANCELLED_CONFIRMED" || actual.Status != "cancelled" || actual.NextIndex != run.NextIndex || len(actual.Plan) != 0 || strings.Join(fixture.calls, ",") != "leader" {
+				t.Fatal("late planner published work or duplicated a provider", err)
+			}
+			resources, err := driver.service.control.GetResourceLeases(action)
+			if err != nil || len(resources) != 0 {
+				t.Fatal("verified plan cancellation retained resources", err)
+			}
+		})
+	}
+}
+
+func TestPlanCancellationSuccessorReconcilesOriginalEpochWithoutTaskAdmission(t *testing.T) {
+	driver, fixture, run, action := cancelledDriverRecoveryFixture(t, "plan", 3)
+	lease, found, err := driver.service.control.GetActionLease(action)
+	if err != nil || !found {
+		t.Fatal(err)
+	}
+	driver.owner = "plan-cancel-successor"
+	if err := driver.recoverCancellation(context.Background(), run); err == nil {
+		t.Fatal("successor took a live plan lease")
+	}
+	assertCancellationRecoveryRetainsCustody(t, driver, fixture, run, action, 1)
+	for time.Now().Unix() <= lease.LeaseUntil {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := driver.recoverCancellation(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	actual := driverFixtureRun(t, driver, run.RunID)
+	record, found, err := driver.service.control.Get("action", action)
+	if err != nil || !found || record.State != "CANCELLED_CONFIRMED" || record.ExecutionEpoch != uint64(lease.Epoch+1) || actual.NextIndex != run.NextIndex || len(actual.Plan) != 0 || len(fixture.calls) != 1 {
+		t.Fatal("plan takeover failed its original effect fence", err)
+	}
+	records, err := driver.service.control.ListAuthoritativeRecords("action")
+	if err != nil || len(records) != 1 {
+		t.Fatal("plan cancellation admitted task or synthesis", err)
 	}
 }

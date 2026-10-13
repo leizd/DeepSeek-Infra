@@ -233,3 +233,44 @@ def test_active_cancellation_refuses_extra_calls_and_reused_phase_fence():
     exchanges[1]["actionId"]=exchanges[0]["actionId"]
     with pytest.raises(ValueError,match="distinct durable"):
         validate_active_cancellation_result(result,exchanges,case)
+
+
+def planning_cancellation_evidence():
+    from scripts.verify_native_agent_public_driver import active_planning_cancellation_case
+    result, exchanges, _ = active_cancellation_evidence()
+    case = active_planning_cancellation_case()
+    result.update(actualPreset=case["preset"], actualPlan=None, beforeCancelIndex=1, nextIndex=2,
+                  publicStreamEventCount=2, durablePhases=1, actualLateTaskCustodyConfirmed=False,
+                  actualLateEffectCustodyConfirmed=True, noTaskAdmission=True, cancelledPhase="plan")
+    return result, exchanges[:1], case
+
+
+def test_planning_cancellation_evidence_requires_original_custody_and_no_task():
+    from scripts.verify_native_agent_public_driver import validate_active_cancellation_result
+    result, exchanges, case = planning_cancellation_evidence()
+    before = copy.deepcopy((result, exchanges, case))
+    validate_active_cancellation_result(result, exchanges, case)
+    assert (result, exchanges, case) == before
+    assert case["upstreamPlanner"] is True and case["cancelPhase"] == "plan"
+
+
+@pytest.mark.parametrize("key,value", [
+    ("actualPlan", [{"id":"coder","task":"fabricated"}]), ("durablePhases", 2),
+    ("noTaskAdmission", False), ("actualLateEffectCustodyConfirmed", False),
+    ("cancelledPhase", "tasks"), ("controllerRestartRecoveryQualified", False),
+    ("resourcesReleased", False), ("resourcesRetained", True),
+    ("recoveryExecutionEpoch", 1), ("productionProviderQualified", True),
+])
+def test_planning_cancellation_refuses_fabricated_projection_or_unproved_recovery(key, value):
+    from scripts.verify_native_agent_public_driver import validate_active_cancellation_result
+    result, exchanges, case = planning_cancellation_evidence()
+    result[key] = value
+    with pytest.raises(ValueError, match="cancellation|recovery"):
+        validate_active_cancellation_result(result, exchanges, case)
+
+
+def test_planning_cancellation_refuses_an_extra_provider_effect():
+    from scripts.verify_native_agent_public_driver import validate_active_cancellation_result
+    result, exchanges, case = planning_cancellation_evidence()
+    with pytest.raises(ValueError, match="recovery"):
+        validate_active_cancellation_result(result, exchanges * 2, case)

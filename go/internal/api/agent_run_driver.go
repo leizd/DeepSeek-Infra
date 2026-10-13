@@ -553,7 +553,7 @@ func (driver *agentRunDriver) recoverCancellation(ctx context.Context, run agent
 		if record.State == "SUCCEEDED" || record.State == "CANCELLED_CONFIRMED" {
 			continue
 		}
-		if binding.Request != run.Request || binding.Phase == "plan" {
+		if binding.Request != run.Request {
 			return errAgentDriverUnknown
 		}
 		lease, found, err := driver.service.control.GetActionLease(record.ID)
@@ -579,7 +579,9 @@ func (driver *agentRunDriver) recoverCancellation(ctx context.Context, run agent
 		nodes := &agentNodeService{run: driver.service}
 		fence := &commonv1.ActionFence{ActionId: record.ID, ExecutionEpoch: uint64(lease.Epoch)}
 		ids := make([]string, 0, len(run.Plan)+1)
-		if binding.Phase == "synthesis" {
+		if binding.Phase == "plan" {
+			ids = append(ids, "leader")
+		} else if binding.Phase == "synthesis" {
 			ids = append(ids, "synthesizer")
 		} else {
 			for _, node := range run.Plan {

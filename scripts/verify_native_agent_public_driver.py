@@ -155,20 +155,31 @@ def active_cancellation_case() -> dict[str, Any]:
             "upstreamPlanner":True,"confirmation":False,"explicitConfirmation":False}
 
 
+def active_planning_cancellation_case() -> dict[str, Any]:
+    row = next(case for case in preset_cases() if case["preset"] == "auto" and case["upstreamPlanner"])
+    return dict(row, name="auto-in-flight-plan", cancelPhase="plan")
+
+
 def validate_active_cancellation_result(result: dict[str, Any], exchanges: list[dict[str, Any]], case: dict[str, Any]) -> None:
     before,after=result.get("beforeCancelIndex"),result.get("nextIndex")
+    planning = case.get("cancelPhase") == "plan"
+    phases, requests = (1, 1) if planning else (2, 2)
+    plan_matches = result.get("actualPlan") in (None, []) if planning else result.get("actualPlan") == case["plan"]
+    custody_field = "actualLateEffectCustodyConfirmed" if planning else "actualLateTaskCustodyConfirmed"
     if result.get("status")!="PASS" or result.get("runStatus")!="cancelled" or type(before) is not int or type(after) is not int or \
-            before<1 or after!=before+1 or result.get("durablePhases")!=2 or result.get("publicStreamEventCount")!=after or result.get("actualPreset")!=case["preset"] or \
-            result.get("actualPlan")!=case["plan"] or result.get("productionRuntimeProcesses")!=["Go","Rust"] or len(exchanges)!=2 or \
-            any(result.get(k) is not True for k in ["resourcesRetainedBeforeRecovery","resourcesReleased","controllerRestartRecoveryQualified","cancelledPhaseRecoveryQualified","cancelledDuringActualProviderRequest","actualLateTaskCustodyConfirmed", \
+            before<1 or after!=before+1 or result.get("durablePhases")!=phases or result.get("publicStreamEventCount")!=after or result.get("actualPreset")!=case["preset"] or \
+            not plan_matches or result.get("productionRuntimeProcesses")!=["Go","Rust"] or len(exchanges)!=requests or \
+            any(result.get(k) is not True for k in ["resourcesRetainedBeforeRecovery","resourcesReleased","controllerRestartRecoveryQualified","cancelledPhaseRecoveryQualified","cancelledDuringActualProviderRequest",custody_field, \
                 "noDependentOrSynthesisAdmission","repeatCancellationIdempotent","activeCancellationSafetyQualified","requestBodyStoredByRust"]) or \
             any(result.get(k) is not False for k in ["resourcesRetained","inputBodySeededByOfflineOracle", \
                 "productionProviderQualified","fullMigrationQualified"]):
         raise ValueError("Active cancellation evidence lacks authoritative recovery")
+    if planning and (result.get("noTaskAdmission") is not True or result.get("cancelledPhase") != "plan"):
+        raise ValueError("Planning cancellation admitted work or omitted its original phase")
     original,recovered=result.get("originalExecutionEpoch"),result.get("recoveryExecutionEpoch")
     if type(original) is not int or type(recovered) is not int or original<1 or recovered!=original+1:
         raise ValueError("Cancelled recovery did not preserve the original fence and take over once")
-    if exchanges[0].get("actionId")==exchanges[1].get("actionId") or \
+    if (not planning and exchanges[0].get("actionId")==exchanges[1].get("actionId")) or \
             any(not item.get(k) for item in exchanges for k in ["actionId","operationId","executionEpoch"]):
         raise ValueError("Active planner/task HTTP effects lack distinct durable admission")
 
@@ -247,8 +258,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "privateReasoningInPrompt": "private-task-reasoning" in prompt,
                     "synthesisCoderInPrompt": "任务：write" in prompt, "synthesisCriticInPrompt": "任务：review" in prompt})
                 position = len(exchanges)
-                if cancel_active and position == 2:
-                    signing.write_ready(case / "provider-task-arrived.json", {"nodeId":"coder"})
+                planning_cancel = cancel_active and preset_case is not None and preset_case.get("cancelPhase") == "plan"
+                if cancel_active and position == (1 if planning_cancel else 2):
+                    signing.write_ready(case / "provider-task-arrived.json", {"nodeId":"leader" if planning_cancel else "coder"})
                     deadline = time.monotonic() + 30
                     while not (case / "provider-release.json").exists():
                         if time.monotonic() > deadline:
@@ -280,6 +292,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 environment["DEEPSEEK_TEST_AGENT_CANCEL_AFTER_PLAN"] = "1"
             if cancel_active:
                 environment["DEEPSEEK_TEST_AGENT_CANCEL_ACTIVE"] = "1"
+                if preset_case is not None and preset_case.get("cancelPhase") == "plan":
+                    environment["DEEPSEEK_TEST_AGENT_CANCEL_ACTIVE_PLAN"] = "1"
             if signing.PRIVATE_ENV & set(environment) or "DEEPSEEK_API_KEY" in environment:
                 raise ValueError("Private custody configuration entered Go")
             if preset_case is not None:
@@ -334,7 +348,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     raise ValueError("Actual public request persisted a credential")
             with sqlite3.connect((state / "rust-worker/authority.sqlite3").as_uri() + "?mode=ro", uri=True) as db:
                 rows = db.execute("SELECT operation_id,state,output,output_sha256 FROM agent_node_effects").fetchall()
-                expected_nodes = 2 if cancel_active else (1 if cancel_after_plan else (4 if preset_case is None else len(preset_case["plan"]) + 2))
+                expected_nodes = (1 if preset_case is not None and preset_case.get("cancelPhase") == "plan" else 2) if cancel_active else (1 if cancel_after_plan else (4 if preset_case is None else len(preset_case["plan"]) + 2))
                 if len(rows) != expected_nodes or any(row[1] != "CONFIRMED" or hashlib.sha256(row[2]).hexdigest() != row[3] for row in rows):
                     raise ValueError("Rust actual four-node custody is missing or corrupt")
                 leader = next((json.loads(row[2]) for row in rows if json.loads(row[2]).get("publicEvent", {}).get("type") == "agent_plan"), None)
@@ -374,7 +388,7 @@ def main() -> int:
     args = parser.parse_args()
     if args.preset_matrix or args.cancellation_matrix or args.active_cancellation_matrix:
         output = args.out.resolve()
-        cases = [active_cancellation_case()] if args.active_cancellation_matrix else (cancellation_cases() if args.cancellation_matrix else preset_cases())
+        cases = [active_cancellation_case(), active_planning_cancellation_case()] if args.active_cancellation_matrix else (cancellation_cases() if args.cancellation_matrix else preset_cases())
         results = []
         for case in cases:
             child = argparse.Namespace(**vars(args))
@@ -386,7 +400,7 @@ def main() -> int:
                             "actualHTTPRequests":report["actualHTTPRequests"],"nextIndex":report["nextIndex"],"actualPlanningSource":report["actualPlanningSource"]})
             print(json.dumps(results[-1]), flush=True)
         result = {"status":"PASS","sourceCommit":results[0]["sourceCommit"],"caseCount":len(results),"cases":results,
-                  "allInputsCreatedThroughRustHTTP":True,"cancellationWhileAwaitingPlanQualified":args.cancellation_matrix,"activeTaskCancellationQualified":False,"activeCancellationSafetyQualified":args.active_cancellation_matrix,"cancelledPhaseRecoveryQualified":args.active_cancellation_matrix,"runtimePython":False,"realProviderQualified":False,"fullMigrationQualified":False,"readiness":"NOT_READY"}
+                  "allInputsCreatedThroughRustHTTP":True,"cancellationWhileAwaitingPlanQualified":args.cancellation_matrix,"activeTaskCancellationQualified":False,"activePlanningCancellationQualified":args.active_cancellation_matrix,"activeCancellationSafetyQualified":args.active_cancellation_matrix,"cancelledPhaseRecoveryQualified":args.active_cancellation_matrix,"runtimePython":False,"realProviderQualified":False,"fullMigrationQualified":False,"readiness":"NOT_READY"}
         output.mkdir(parents=True, exist_ok=True)
         (output / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     else:

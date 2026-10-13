@@ -20,7 +20,7 @@ fn denied() -> Status {
 // Dropping a controller RPC must not drop an already admitted provider effect.
 // The task retains its original lease and provider timeout; worker shutdown or
 // panic leaves the durable intent unresolved and cannot authorize a retry.
-async fn retain_admitted_agent_output<T: Send + 'static>(
+pub(crate) async fn retain_admitted_agent_output<T: Send + 'static>(
     future: impl Future<Output = Result<T, Status>> + Send + 'static,
 ) -> Result<T, Status> {
     tokio::spawn(future)

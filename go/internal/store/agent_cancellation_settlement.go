@@ -122,7 +122,7 @@ func (store *Control) validateAgentCancellationSettlementTx(tx *sql.Tx, action R
 		return err
 	}
 	binding, err := decodeAgentExecution(action)
-	if err != nil || binding.Phase == "plan" || completion.MetadataEpoch != binding.MetadataEpoch {
+	if err != nil || completion.MetadataEpoch != binding.MetadataEpoch {
 		return ErrCorruptRecord
 	}
 	outcomes, err := store.cancelledAgentNodeOutcomes(action)
@@ -187,7 +187,7 @@ func (store *Control) SettleAgentCancellation(input SettleAgentCancellationReque
 		return SettleAgentCancellationResult{}, ErrCorruptRecord
 	}
 	binding, err := decodeAgentExecution(action)
-	if err != nil || binding.Phase == "plan" || binding.RunID != input.RunID || action.ExecutionEpoch != input.Epoch {
+	if err != nil || binding.RunID != input.RunID || action.ExecutionEpoch != input.Epoch {
 		return SettleAgentCancellationResult{}, ErrAgentRunExecutionRequired
 	}
 	run, err := store.agentExecutionRunTx(tx, binding)
