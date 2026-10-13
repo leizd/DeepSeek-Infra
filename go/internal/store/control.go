@@ -1718,6 +1718,11 @@ func (store *Control) Get(domain, id string) (Record, bool, error) {
 		if err := validateControlHistory(tx, record); err != nil {
 			return Record{}, false, err
 		}
+		if domain == "action" {
+			if err := store.validateAgentCancellationSettlementTx(tx, record); err != nil {
+				return Record{}, false, err
+			}
+		}
 	} else if err := validateNoControlHistory(tx, domain, id); err != nil {
 		return Record{}, false, err
 	}
@@ -2145,6 +2150,11 @@ func (store *Control) ExportSnapshot() (Snapshot, error) {
 		for _, record := range snapshot.Records {
 			if err := validateControlHistory(tx, record); err != nil {
 				return Snapshot{}, err
+			}
+			if record.Domain == "action" {
+				if err := store.validateAgentCancellationSettlementTx(tx, record); err != nil {
+					return Snapshot{}, err
+				}
 			}
 		}
 		if err := tx.Commit(); err != nil {

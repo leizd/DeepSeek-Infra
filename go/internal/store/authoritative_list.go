@@ -78,6 +78,11 @@ func (store *Control) listAuthoritativeRecords(domain string, withHealth bool) (
 		if err := validateControlHistory(tx, record); err != nil {
 			return nil, nil, err
 		}
+		if domain == "action" {
+			if err := store.validateAgentCancellationSettlementTx(tx, record); err != nil {
+				return nil, nil, err
+			}
+		}
 	}
 	// An event without a current row is data loss, including when the latest
 	// table is empty. Do not turn it into a valid empty policy response.
