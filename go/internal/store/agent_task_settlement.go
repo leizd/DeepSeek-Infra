@@ -340,6 +340,7 @@ func (store *Control) SettleAgentTask(input AgentTaskSettlementRequest) (AgentTa
 	if _, err := store.assertWriterTx(tx, commitNow); err != nil {
 		return AgentTaskSettlementResult{}, err
 	}
+	context.actionLeaseUntil = lease.LeaseUntil
 	if err := store.finishOperatorMutationTx(tx, context); err != nil {
 		return AgentTaskSettlementResult{}, err
 	}

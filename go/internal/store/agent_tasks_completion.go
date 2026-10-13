@@ -291,6 +291,7 @@ func (store *Control) CompleteAgentTasks(input CompleteAgentTasksRequest) (Compl
 	if _, err := store.assertWriterTx(tx, commitNow); err != nil {
 		return CompleteAgentTasksResult{}, err
 	}
+	context.actionLeaseUntil = lease.LeaseUntil
 	if err := store.finishOperatorMutationTx(tx, context); err != nil {
 		return CompleteAgentTasksResult{}, err
 	}

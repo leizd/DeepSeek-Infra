@@ -344,10 +344,11 @@ func (store *Control) commitAgentExecutionTx(tx *sql.Tx, context operatorMutatio
 	if commitNow >= result.Admission.Lease.LeaseUntil {
 		return AgentRunExecutionResult{}, ErrActionLeaseExpired
 	}
+	context.actionLeaseUntil = result.Admission.Lease.LeaseUntil
 	if err := store.finishOperatorMutationTx(tx, context); err != nil {
 		return AgentRunExecutionResult{}, err
 	}
-	result.WriterLeaseUntil = context.leaseUntil
+	result.WriterLeaseUntil = store.leaseUntil
 	return result, nil
 }
 

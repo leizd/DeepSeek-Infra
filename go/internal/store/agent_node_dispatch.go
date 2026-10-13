@@ -292,6 +292,7 @@ func (store *Control) BeginAgentNodeDispatch(input AgentNodeDispatchRequest) (Ag
 	if commitNow < context.now || commitNow >= lease.LeaseUntil {
 		return AgentNodeDispatchResult{}, ErrActionLeaseExpired
 	}
+	context.actionLeaseUntil = lease.LeaseUntil
 	if err := store.finishOperatorMutationTx(tx, context); err != nil {
 		return AgentNodeDispatchResult{}, err
 	}

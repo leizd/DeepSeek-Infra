@@ -349,6 +349,7 @@ func (store *Control) SettleAgentPlan(input AgentPlanSettlementRequest) (AgentPl
 	if _, err := store.assertWriterTx(tx, commitNow); err != nil {
 		return AgentPlanSettlementResult{}, err
 	}
+	context.actionLeaseUntil = lease.LeaseUntil
 	if err := store.finishOperatorMutationTx(tx, context); err != nil {
 		return AgentPlanSettlementResult{}, err
 	}
