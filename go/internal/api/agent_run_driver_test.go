@@ -836,7 +836,7 @@ func TestAgentDriverLostReplyQueryFailureRetainsThenReconcilesTheOriginalDispatc
 		t.Fatal(err)
 	}
 	run = driverFixtureRun(t, driver, run.RunID)
-	fixture.failAfterCoder, fixture.fail = true, "query"
+	fixture.failAfter, fixture.fail = "coder", "query"
 	if err := driver.drive(context.Background(), run); err == nil {
 		t.Fatal("lost reply and unavailable query were treated as completion")
 	}
@@ -857,6 +857,13 @@ func TestAgentDriverLostReplyQueryFailureRetainsThenReconcilesTheOriginalDispatc
 	}
 	if !retained {
 		t.Fatal("unresolved task phase released its resources")
+	}
+	if err := driver.drive(context.Background(), run); err == nil {
+		t.Fatal("unavailable query fabricated completion of the retained dispatch")
+	}
+	run = driverFixtureRun(t, driver, run.RunID)
+	if run.Status == "done" || strings.Join(fixture.calls, ",") != "leader,coder" {
+		t.Fatal("failed retained-effect query released or repeated dispatch")
 	}
 	fixture.fail = ""
 	for attempt := 0; attempt < 2; attempt++ {
