@@ -1304,9 +1304,9 @@ jobs:
   native-s3-transport:
     needs: release-version
     runs-on: ubuntu-latest
-    # The provider step now runs the Go recovery suite under the race detector, which
-    # costs several times the plain run's 63s across the three providers. The bound is
-    # raised from 20 so the race build and run are not cut off mid-suite.
+    # The provider step runs the Go recovery suite under the race detector. Measured in
+    # exact-head CI 37447970451: the instrumented build adds ~44s and the suite goes
+    # 63.01s -> 86.15s. The bound is raised from 20 so neither is cut off mid-suite.
     timeout-minutes: 40
     env:
       GOTOOLCHAIN: local
