@@ -412,6 +412,19 @@ impl deepseek_protocol::generated::deepseek::agent::v1::agent_run_control_server
     > {
         Err(tonic::Status::unimplemented("fixture"))
     }
+    async fn refresh_authorization(
+        &self,
+        _: Request<
+            deepseek_protocol::generated::deepseek::agent::v1::RefreshAgentRunAuthorizationRequest,
+        >,
+    ) -> Result<
+        tonic::Response<
+            deepseek_protocol::generated::deepseek::agent::v1::AuthorizeAgentRunExecutionResponse,
+        >,
+        tonic::Status,
+    > {
+        Err(tonic::Status::unimplemented("fixture"))
+    }
     async fn get_authority(
         &self,
         _: Request<deepseek_protocol::generated::deepseek::agent::v1::AgentRunAuthorityInput>,
