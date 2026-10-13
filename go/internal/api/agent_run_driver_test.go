@@ -764,7 +764,7 @@ func TestAgentDriverCustodyFailureKeepsAdmittedResourcesWithoutProviderDispatch(
 				driver.service.executionSigner = func(*store.Control) (*agentExecutionSignerSession, error) { return nil, nil }
 			case "closed-client":
 				driver.service.executionSigner = func(*store.Control) (*agentExecutionSignerSession, error) {
-					return &agentExecutionSignerSession{close: func() { closed++ }}, nil
+					return &agentExecutionSignerSession{close: func() error { closed++; return nil }}, nil
 				}
 			case "missing-binding":
 				t.Setenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY", "")
@@ -796,7 +796,7 @@ func TestAgentDriverColdInstallationClosesSignerAndSettlesOnlyTheActualPlanner(t
 	driver.service.executionSigner = func(control *store.Control) (*agentExecutionSignerSession, error) {
 		session, err := factory(control)
 		if session != nil {
-			session.close = func() { closed++ }
+			session.close = func() error { closed++; return nil }
 		}
 		return session, err
 	}
