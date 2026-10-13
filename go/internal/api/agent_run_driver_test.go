@@ -8,7 +8,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"log"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -89,6 +91,7 @@ func (fixture *driverFixtureWorker) execute(ctx context.Context, claim *agentv1.
 		receipt.Evidence.ProviderPlan = []*agentv1.AgentRunPlanNode{{Id: "coder", Task: "write"}, {Id: "critic", Task: "review", DependsOn: []string{"coder"}}}
 	} else {
 		receipt.Evidence.TaskOutput = &agentv1.AgentTaskOutputMetadata{SchemaVersion: 1, PromptTokens: 13, CompletionTokens: 21, LatencyMs: 120}
+		receipt.Evidence.TaskOutput.Failed = fixture.fail == "confirmed-failed-task" && id == "coder"
 	}
 	receipt.Signature = fixture.signed(receipt.Evidence, agentproof.NodeOutcomeDomain)
 	effect.OutcomeReceipt = receipt
@@ -101,6 +104,7 @@ func (fixture *driverFixtureWorker) execute(ctx context.Context, claim *agentv1.
 		effect.State = "EFFECT_UNKNOWN"
 		effect.OutcomeReceipt = nil
 	}
+	fixture.effects[intent.OperationId] = proto.Clone(effect).(*agentv1.AgentNodeEffectMetadata)
 	if fixture.fail == "nil" {
 		return nil, nil
 	}
@@ -475,5 +479,277 @@ func TestAgentDriverRejectsFixedHistoricalLeaseInWallClockSignatureVerification(
 	err = driver.drive(context.Background(), run)
 	if status.Code(err) != codes.DataLoss || !strings.Contains(err.Error(), "AGENT_EXECUTION_GRANT_INVALID") {
 		t.Fatal("historical lease was accepted by the live signature verifier", err)
+	}
+}
+
+func driverFixtureLoop(t *testing.T, driver *agentRunDriver) (context.CancelFunc, <-chan struct{}) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); driver.run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			t.Error("driver loop did not drain")
+		}
+	})
+	return cancel, done
+}
+
+func TestAgentDriverProductionLoopSchedulesAndRecoversWithoutDuplicateDispatch(t *testing.T) {
+	driver, fixture, run := newDriverFixture(t, false)
+	fixture.failAfter = "coder"
+	cancel, done := driverFixtureLoop(t, driver)
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		run = driverFixtureRun(t, driver, run.RunID)
+		if run.Status == "done" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("actual controller loop did not finish", run.Status)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if run.NextIndex != 8 || strings.Join(fixture.calls, ",") != "leader,coder,critic,synthesizer" {
+		t.Fatal("loop omitted a phase or duplicated retained custody", run.NextIndex, fixture.calls)
+	}
+	records, err := driver.service.control.ListAuthoritativeRecords("action")
+	if err != nil || len(records) != 3 {
+		t.Fatal("loop created extra phase admissions", err, len(records))
+	}
+	for _, record := range records {
+		resources, err := driver.service.control.GetResourceLeases(record.ID)
+		if err != nil || record.State != "SUCCEEDED" || len(resources) != 0 {
+			t.Fatal("loop omitted atomic terminal release", err)
+		}
+	}
+}
+
+func TestAgentDriverLoopSuppressesCredentialErrorsAndStopsCancelledWork(t *testing.T) {
+	driver, fixture, run := newDriverFixture(t, false)
+	var attempts atomic.Int64
+	secret := "offline-token-that-must-not-enter-runtime-logs"
+	driver.service.executionSigner = func(*store.Control) (*agentExecutionSignerSession, error) {
+		attempts.Add(1)
+		return nil, errors.New(secret)
+	}
+	var output bytes.Buffer
+	prior := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(prior)
+	cancel, done := driverFixtureLoop(t, driver)
+	deadline := time.Now().Add(10 * time.Second)
+	for attempts.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("controller did not retry unavailable custody")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	authority, err := driver.service.GetAuthority(context.Background(), &agentv1.AgentRunAuthorityInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := driverFixtureRun(t, driver, run.RunID)
+	input := agentRPCAppend(live.NextIndex, authority.MetadataEpoch)
+	input.OperationId = "driver-loop-cancel"
+	input.Create = nil
+	input.Event = &agentv1.AgentRunEventMetadata{Type: "run_status", Status: "cancelled", Body: driverFixtureReference("cancelled")}
+	if _, err := driver.service.AppendEvent(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	cancel()
+	<-done
+	text := output.String()
+	if strings.Contains(text, secret) || strings.Count(text, "agent driver run="+run.RunID+" waiting:") != 1 {
+		t.Fatal("controller leaked or repeated the private transport error", text)
+	}
+	records, err := driver.service.control.ListAuthoritativeRecords("action")
+	if err != nil || len(records) != 0 || len(fixture.calls) != 0 {
+		t.Fatal("unavailable/cancelled loop admitted an effect", err)
+	}
+}
+
+func TestAgentDriverLoopDrainsAfterItsAuthoritativeStoreCloses(t *testing.T) {
+	driver, fixture, _ := newDriverFixture(t, false)
+	if err := driver.service.control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cancel, done := driverFixtureLoop(t, driver)
+	time.Sleep(1200 * time.Millisecond)
+	cancel()
+	<-done
+	if len(fixture.calls) != 0 {
+		t.Fatal("closed store scheduled effects")
+	}
+}
+
+func TestAgentDriverCannotTakeAStillLiveForeignClaim(t *testing.T) {
+	driver, fixture, run := newDriverFixture(t, false)
+	phase, _, err := driver.phase(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := driver.admission(context.Background(), run, phase, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, found, err := driver.service.control.Get("action", claim.Fence.ActionId)
+	if err != nil || !found {
+		t.Fatal(err)
+	}
+	driver.owner = "other-active-runtime"
+	if _, err := driver.admission(context.Background(), run, phase, &record); err == nil {
+		t.Fatal("live foreign lease was taken")
+	}
+	lease, found, err := driver.service.control.GetActionLease(claim.Fence.ActionId)
+	if err != nil || !found || lease.Owner != claim.Owner || uint64(lease.Epoch) != claim.Fence.ExecutionEpoch || len(fixture.calls) != 0 {
+		t.Fatal("denied takeover changed the live claim", err)
+	}
+}
+
+func TestAgentDriverExpiredClaimOnlyAdmitsReconciliationWithNoFreshEffect(t *testing.T) {
+	driver, fixture, run := newDriverFixture(t, false)
+	authority, err := driver.service.GetAuthority(context.Background(), &agentv1.AgentRunAuthorityInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := executionRPCInput(authority.MetadataEpoch)
+	request.Phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN
+	request.ExpectedIndex = run.NextIndex
+	request.Owner = driver.owner
+	request.LeaseSeconds = 1
+	admitted, err := driver.service.ClaimExecution(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := admitted.Claim
+	for time.Now().Unix() <= claim.LeaseUntil {
+		time.Sleep(20 * time.Millisecond)
+	}
+	record, found, err := driver.service.control.Get("action", claim.Fence.ActionId)
+	if err != nil || !found {
+		t.Fatal(err)
+	}
+	driver.owner = "replacement-runtime"
+	recovered, err := driver.admission(context.Background(), run, agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN, &record)
+	if err != nil || !recovered.ReconciliationRequired || recovered.Fence.ExecutionEpoch <= claim.Fence.ExecutionEpoch {
+		t.Fatal("expired claim did not fence reconciliation", err)
+	}
+	current, grant, err := driver.grant(context.Background(), recovered)
+	if err != nil || current != recovered || grant != nil {
+		t.Fatal("reconciliation minted an execution permit", err)
+	}
+	_, err = driver.node(context.Background(), fixture, fixture.nodes, recovered, grant, "leader")
+	if !errors.Is(err, errAgentDriverUnknown) || len(fixture.calls) != 0 {
+		t.Fatal("missing original custody redispatched an effect", err)
+	}
+}
+
+func TestAgentDriverSignedFailedTaskBlocksItsDependentAndSynthesis(t *testing.T) {
+	driver, fixture, run := newDriverFixture(t, false)
+	if err := driver.drive(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	run = driverFixtureRun(t, driver, run.RunID)
+	fixture.fail = "confirmed-failed-task"
+	if err := driver.drive(context.Background(), run); !errors.Is(err, errAgentDriverUnknown) {
+		t.Fatal("failed task admitted downstream effects", err)
+	}
+	run = driverFixtureRun(t, driver, run.RunID)
+	if !run.Nodes()["coder"].Failed || run.Nodes()["critic"].State == "succeeded" || run.Status == "done" || strings.Join(fixture.calls, ",") != "leader,coder" {
+		t.Fatal("failed task was replaced by fabricated completion", run.Status, fixture.calls)
+	}
+}
+
+func TestAgentDriverLoopKeepsUnknownAndToolsPendingCustodyWithoutRedispatch(t *testing.T) {
+	for _, failure := range []string{"unknown", "tools"} {
+		t.Run(failure, func(t *testing.T) {
+			driver, fixture, run := newDriverFixture(t, false)
+			fixture.fail = failure
+			cancel, done := driverFixtureLoop(t, driver)
+			time.Sleep(4300 * time.Millisecond)
+			cancel()
+			<-done
+			run = driverFixtureRun(t, driver, run.RunID)
+			if run.Status == "done" || strings.Join(fixture.calls, ",") != "leader,coder" {
+				t.Fatal("uncertain custody was redispatched or fabricated completion", run.Status, fixture.calls)
+			}
+			records, err := driver.service.control.ListAuthoritativeRecords("action")
+			if err != nil || len(records) != 2 {
+				t.Fatal("uncertain phase was replaced", err)
+			}
+			for _, record := range records {
+				binding, err := store.AgentRunExecutionBindingFromRecord(record)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if binding.Phase == "tasks" {
+					resources, err := driver.service.control.GetResourceLeases(record.ID)
+					if err != nil || len(resources) == 0 || record.State == "SUCCEEDED" {
+						t.Fatal("uncertain reservation was released", err)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestAgentDriverCannotReuseAnAdmittedPhaseAfterPlanEdit(t *testing.T) {
+	driver, fixture, run := newDriverFixture(t, false)
+	if err := driver.drive(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	run = driverFixtureRun(t, driver, run.RunID)
+	phase, _, err := driver.phase(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := driver.admission(context.Background(), run, phase, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := driver.service.GetAuthority(context.Background(), &agentv1.AgentRunAuthorityInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := agentRPCAppend(run.NextIndex, authority.MetadataEpoch)
+	edit.Create = nil
+	edit.OperationId = "operator-plan-edit"
+	edit.Event = &agentv1.AgentRunEventMetadata{Type: "agent_plan", Body: driverFixtureReference("edited-plan"),
+		Plan: []*agentv1.AgentRunPlanNode{{Id: "researcher", Task: "changed scope"}}}
+	if _, err := driver.service.AppendEvent(context.Background(), edit); err != nil {
+		t.Fatal(err)
+	}
+	run = driverFixtureRun(t, driver, run.RunID)
+	if err := driver.drive(context.Background(), run); !errors.Is(err, errAgentDriverUnknown) {
+		t.Fatal("edited plan reused old admitted scope", err)
+	}
+	resources, err := driver.service.control.GetResourceLeases(claim.Fence.ActionId)
+	if err != nil || len(resources) == 0 || strings.Join(fixture.calls, ",") != "leader" {
+		t.Fatal("scope mismatch redispatched or discarded reservation", err)
+	}
+}
+
+func TestAgentDriverFreshAdmissionRefusesAnUnavailableOrShadowAuthority(t *testing.T) {
+	for _, failure := range []string{"closed", "shadow"} {
+		t.Run(failure, func(t *testing.T) {
+			driver, fixture, run := newDriverFixture(t, false)
+			if failure == "closed" {
+				if err := driver.service.control.Close(); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				driver.service.health = HealthFor(config.Config{Mode: config.ModeShadow})
+			}
+			if _, err := driver.admission(context.Background(), run, agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN, nil); err == nil || len(fixture.calls) != 0 {
+				t.Fatal("unavailable authority admitted an effect", err)
+			}
+		})
 	}
 }

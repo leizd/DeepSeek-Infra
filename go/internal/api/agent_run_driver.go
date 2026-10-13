@@ -74,46 +74,51 @@ func StartAgentRunDriver(ctx context.Context, control *store.Control, health Con
 	driver := &agentRunDriver{service: service, owner: "agent-driver-" + hex.EncodeToString(identity[:]), installed: make(map[string]bool)}
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		prior := make(map[string]string)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				records, err := control.ListAuthoritativeRecords("agent_run")
-				if err != nil {
-					continue // No domain promotion or empty-success substitution.
+		driver.run(ctx)
+	}()
+	return done
+}
+
+// run is the same private loop started by the authoritative lifecycle.
+func (driver *agentRunDriver) run(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	prior := make(map[string]string)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			records, err := driver.service.control.ListAuthoritativeRecords("agent_run")
+			if err != nil {
+				continue // No domain promotion or empty-success substitution.
+			}
+			live := make(map[string]bool)
+			for _, record := range records {
+				if ctx.Err() != nil {
+					return
 				}
-				live := make(map[string]bool)
-				for _, record := range records {
-					if ctx.Err() != nil {
-						return
-					}
-					run, found, err := control.AgentRunMetadata(record.ID)
-					if err != nil || !found || !driverRunnable(run) {
-						continue
-					}
-					live[run.RunID] = true
-					err = driver.drive(ctx, run)
-					if err == nil {
-						delete(prior, run.RunID)
-					} else if prior[run.RunID] != err.Error() {
-						// Never log bodies, grants, bearer tokens or claim tokens.
-						log.Printf("agent driver run=%s waiting: %s", run.RunID, driverErrorCode(err))
-						prior[run.RunID] = err.Error()
-					}
+				run, found, err := driver.service.control.AgentRunMetadata(record.ID)
+				if err != nil || !found || !driverRunnable(run) {
+					continue
 				}
-				for id := range prior {
-					if !live[id] {
-						delete(prior, id)
-					}
+				live[run.RunID] = true
+				err = driver.drive(ctx, run)
+				if err == nil {
+					delete(prior, run.RunID)
+				} else if prior[run.RunID] != err.Error() {
+					// Never log bodies, grants, bearer tokens or claim tokens.
+					log.Printf("agent driver run=%s waiting: %s", run.RunID, driverErrorCode(err))
+					prior[run.RunID] = err.Error()
+				}
+			}
+			for id := range prior {
+				if !live[id] {
+					delete(prior, id)
 				}
 			}
 		}
-	}()
-	return done
+	}
 }
 
 func driverErrorCode(err error) string {
