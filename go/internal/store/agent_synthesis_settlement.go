@@ -384,6 +384,7 @@ func (store *Control) SettleAgentSynthesis(input AgentSynthesisSettlementRequest
 	if _, err := store.assertWriterTx(tx, commitNow); err != nil {
 		return AgentSynthesisSettlementResult{}, err
 	}
+	context.actionLeaseUntil = lease.LeaseUntil
 	if err := store.finishOperatorMutationTx(tx, context); err != nil {
 		return AgentSynthesisSettlementResult{}, err
 	}

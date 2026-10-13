@@ -54,9 +54,10 @@ type OperatorMutationResult struct {
 // operatorMutationContext is the authority one operator write is admitted under, read
 // inside the write transaction so it cannot go stale between the check and the write.
 type operatorMutationContext struct {
-	cutover    CutoverRecord
-	leaseUntil int64
-	now        int64
+	cutover          CutoverRecord
+	leaseUntil       int64
+	now              int64
+	actionLeaseUntil int64
 }
 
 // beginOperatorMutationTx applies every gate the operator channel shares with the signed
@@ -130,13 +131,24 @@ func (store *Control) beginOperatorMutationTx(
 	return tx, operatorMutationContext{cutover: cutover, leaseUntil: leaseUntil, now: now}, nil
 }
 
-// finishOperatorMutationTx commits the transaction and refreshes the cached lease, so a
-// caller cannot leave the writer lease stale after a successful write.
+// finishOperatorMutationTx revalidates the writer and any bound action deadline
+// immediately before commit, then publishes the refreshed writer lease to this handle.
 func (store *Control) finishOperatorMutationTx(tx *sql.Tx, context operatorMutationContext) error {
+	now := store.now()
+	if now < context.now || now >= context.leaseUntil {
+		return ErrWriterFenceHeld
+	}
+	if context.actionLeaseUntil != 0 && now >= context.actionLeaseUntil {
+		return ErrActionLeaseExpired
+	}
+	leaseUntil, err := store.assertWriterTx(tx, now)
+	if err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	store.leaseUntil = context.leaseUntil
+	store.leaseUntil = leaseUntil
 	return nil
 }
 

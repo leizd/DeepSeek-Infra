@@ -271,11 +271,10 @@ func TestSynthesisSettlementRefusesInvalidEnvelopeAndChangedTerminalOperation(t 
 		"oversize-proof": func(i *AgentSynthesisSettlementRequest) {
 			i.Projection.Evidence.RunId = strings.Repeat("x", maximumPayloadBytes+1)
 		},
-		"operation":                  func(i *AgentSynthesisSettlementRequest) { i.OperationID = "" },
-		"actor":                      func(i *AgentSynthesisSettlementRequest) { i.Actor = "" },
-		"oversize-operation-payload": func(i *AgentSynthesisSettlementRequest) { i.Actor = strings.Repeat("x", maximumPayloadBytes+1) },
-		"missing-action":             func(i *AgentSynthesisSettlementRequest) { i.ActionID = "missing-action" },
-		"different-run":              func(i *AgentSynthesisSettlementRequest) { i.RunID = "other-run" },
+		"operation":      func(i *AgentSynthesisSettlementRequest) { i.OperationID = "" },
+		"actor":          func(i *AgentSynthesisSettlementRequest) { i.Actor = "" },
+		"missing-action": func(i *AgentSynthesisSettlementRequest) { i.ActionID = "missing-action" },
+		"different-run":  func(i *AgentSynthesisSettlementRequest) { i.RunID = "other-run" },
 	}
 	for name, change := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -514,7 +513,7 @@ func TestSynthesisSettlementRollsBackWhenWriterIsFencedAfterLeaseTermination(t *
 }
 
 func TestSynthesisSettlementLeaseAndWriterExpiryRollBackTheWholeTransaction(t *testing.T) {
-	for _, stage := range []string{"expired-action", "backward-time", "commit-action", "commit-writer", "finish-writer"} {
+	for _, stage := range []string{"expired-action", "backward-time", "commit-action", "commit-writer", "finish-writer", "finish-action", "finish-backward"} {
 		t.Run(stage, func(t *testing.T) {
 			control, input, _ := synthesisSettlementFixture(t, 5)
 			before := synthesisSnapshot(t, control)
@@ -534,6 +533,14 @@ func TestSynthesisSettlementLeaseAndWriterExpiryRollBackTheWholeTransaction(t *t
 				case "commit-writer":
 					if calls >= 2 {
 						return now + control.leaseSeconds
+					}
+				case "finish-action":
+					if calls >= 3 {
+						return now + 5
+					}
+				case "finish-backward":
+					if calls >= 3 {
+						return now - 1
 					}
 				case "finish-writer":
 					if calls >= 3 {
@@ -573,5 +580,26 @@ func TestSynthesisSettlementLeaseUpdateAndResourceDeleteFailuresRemainAtomic(t *
 				t.Fatal("storage failure left a partial operator receipt", err)
 			}
 		})
+	}
+}
+
+// maximumPayloadBytes bounds serialized control/proof payloads. Actor is an
+// authenticated string label with no separate schema length limit. Preserve that
+// contract and require the complete label to remain bound to the replay digest.
+func TestSynthesisActorLabelIsBoundToExactOperatorReplay(t *testing.T) {
+	control, input, _ := synthesisSettlementFixture(t)
+	input.Actor = strings.Repeat("x", maximumPayloadBytes+1)
+	result, err := control.SettleAgentSynthesis(input)
+	if err != nil || result.Run.Status != "done" {
+		t.Fatal("valid actor string was rejected", err)
+	}
+	replay, err := control.SettleAgentSynthesis(input)
+	if err != nil || !replay.AlreadyApplied {
+		t.Fatal("exact actor label did not replay", err)
+	}
+	before := synthesisSnapshot(t, control)
+	input.Actor += "changed"
+	if _, err := control.SettleAgentSynthesis(input); err == nil || synthesisSnapshot(t, control) != before {
+		t.Fatalf("changed actor label reused a terminal operation: %v", err)
 	}
 }
