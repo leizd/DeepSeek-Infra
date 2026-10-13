@@ -26,13 +26,21 @@ func synthesisProjectionSign(t *testing.T, receipt *agentv1.AgentSynthesisProjec
 	receipt.Signature = ed25519.Sign(private, append([]byte(agentproof.SynthesisProjectionDomain), payload...))
 }
 
-func synthesisSettlementFixture(t *testing.T) (*Control, AgentSynthesisSettlementRequest, ed25519.PrivateKey) {
+func synthesisSettlementFixture(t *testing.T, leaseSeconds ...int64) (*Control, AgentSynthesisSettlementRequest, ed25519.PrivateKey) {
+	t.Helper()
+	return synthesisSettlementSourceFixture(t, true, false, leaseSeconds...)
+}
+
+func synthesisSettlementSourceFixture(t *testing.T, recordSource, failed bool, leaseSeconds ...int64) (*Control, AgentSynthesisSettlementRequest, ed25519.PrivateKey) {
 	t.Helper()
 	control, complete, private := tasksCompletionSignedFixture(t, false)
 	if _, err := control.CompleteAgentTasks(complete); err != nil {
 		t.Fatal(err)
 	}
 	request := synthesisRequest(t, control)
+	if len(leaseSeconds) == 1 {
+		request.LeaseSeconds = leaseSeconds[0]
+	}
 	claim, err := control.ClaimAgentRunExecution(request)
 	if err != nil {
 		t.Fatal(err)
@@ -50,13 +58,23 @@ func synthesisSettlementFixture(t *testing.T) (*Control, AgentSynthesisSettlemen
 			MetadataIndex: intent.MetadataIndex, MetadataEpoch: intent.MetadataEpoch, WriterFencingToken: lease.WriterFencingToken,
 			CreatedAt: time.Unix(intent.RecordedAt, 0).UTC().Format(time.RFC3339), ConfirmedAt: time.Unix(intent.RecordedAt+1, 0).UTC().Format(time.RFC3339),
 			OutcomeSha256: strings.Repeat("a", 64), OutcomeLength: 52, PublicEvent: &agentv1.AgentArtifactReference{Sha256: strings.Repeat("b", 64), Length: 40},
-			TaskOutput: &agentv1.AgentTaskOutputMetadata{SchemaVersion: 1, PromptTokens: 13, CompletionTokens: 21, LatencyMs: 120},
+			TaskOutput: &agentv1.AgentTaskOutputMetadata{SchemaVersion: 1, PromptTokens: 13, CompletionTokens: 21, LatencyMs: 120, Failed: failed},
 			FleetId:    control.fleetID, Environment: control.environment}}
 	agentOutcomeSign(t, source, private)
-	recorded, err := control.RecordAgentNodeOutcome(AgentNodeOutcomeRequest{OperationID: "synthesis-source", Actor: request.Actor, ActionID: lease.ActionID,
-		Epoch: lease.Epoch, RunID: request.RunID, NodeID: "synthesizer", Receipt: source})
-	if err != nil {
-		t.Fatal(err)
+	var recorded AgentNodeOutcomeResult
+	if recordSource {
+		recorded, err = control.RecordAgentNodeOutcome(AgentNodeOutcomeRequest{OperationID: "synthesis-source", Actor: request.Actor, ActionID: lease.ActionID,
+			Epoch: lease.Epoch, RunID: request.RunID, NodeID: "synthesizer", Receipt: source})
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash := sha256.Sum256(encoded)
+		recorded.ReceiptSHA256 = hex.EncodeToString(hash[:])
 	}
 	projection := &agentv1.AgentSynthesisProjectionReceipt{SchemaVersion: 1, SignerPublicKey: control.agentOutcomeSignerKey,
 		Evidence: &agentv1.AgentSynthesisProjectionEvidence{SchemaVersion: 1, SourceReceiptSha256: recorded.ReceiptSHA256,
