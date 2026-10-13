@@ -133,6 +133,11 @@ jobs:
         timeout-minutes: 8
         run: |
           python scripts/verify_native_agent_public_driver.py --cancellation-matrix --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-cancellation-matrix 2>&1 | tee artifacts/rust-cloud/agent-cancellation-matrix.log
+      - name: Verify actual cancellation during an in-flight provider task
+        if: matrix.mode == 'checks'
+        timeout-minutes: 8
+        run: |
+          python scripts/verify_native_agent_public_driver.py --active-cancellation-matrix --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-active-cancellation 2>&1 | tee artifacts/rust-cloud/agent-active-cancellation.log
       - name: Install pinned coverage tooling on the cloud runner
         if: matrix.mode == 'coverage'
         run: |

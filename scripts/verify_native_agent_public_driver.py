@@ -149,11 +149,33 @@ def validate_cancellation_result(result: dict[str, Any], exchanges: list[dict[st
         raise ValueError("Actual planner HTTP exchange omitted its durable fence")
 
 
+def active_cancellation_case() -> dict[str, Any]:
+    return {"name":"leader-in-flight-task","preset":"leader","query":"Prepare an isolated verification plan",
+            "plan":[{"id":"coder","task":"write"},{"id":"critic","task":"review","depends_on":["coder"]}],
+            "upstreamPlanner":True,"confirmation":False,"explicitConfirmation":False}
+
+
+def validate_active_cancellation_result(result: dict[str, Any], exchanges: list[dict[str, Any]], case: dict[str, Any]) -> None:
+    before,after=result.get("beforeCancelIndex"),result.get("nextIndex")
+    if result.get("status")!="PASS" or result.get("runStatus")!="cancelled" or type(before) is not int or type(after) is not int or \
+            before<1 or after!=before+1 or result.get("durablePhases")!=2 or result.get("publicStreamEventCount")!=after or result.get("actualPreset")!=case["preset"] or \
+            result.get("actualPlan")!=case["plan"] or result.get("productionRuntimeProcesses")!=["Go","Rust"] or len(exchanges)!=2 or \
+            any(result.get(k) is not True for k in ["resourcesRetained","cancelledDuringActualProviderRequest","actualLateTaskCustodyConfirmed", \
+                "noDependentOrSynthesisAdmission","repeatCancellationIdempotent","activeCancellationSafetyQualified","requestBodyStoredByRust"]) or \
+            any(result.get(k) is not False for k in ["resourcesReleased","cancelledPhaseRecoveryQualified","inputBodySeededByOfflineOracle", \
+                "productionProviderQualified","fullMigrationQualified"]):
+        raise ValueError("Active cancellation evidence is incomplete or overclaims recovery")
+    if exchanges[0].get("actionId")==exchanges[1].get("actionId") or \
+            any(not item.get(k) for item in exchanges for k in ["actionId","operationId","executionEpoch"]):
+        raise ValueError("Active planner/task HTTP effects lack distinct durable admission")
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if os.environ.get("GITHUB_ACTIONS") != "true":
         raise RuntimeError("Native public compilation and containers are cloud-only on this host")
     preset_case = getattr(args, "preset_case", None)
     cancel_after_plan = bool(getattr(args, "cancel_after_plan", False))
+    cancel_active = bool(getattr(args, "cancel_active", False))
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=True)
     source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -222,6 +244,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "privateReasoningInPrompt": "private-task-reasoning" in prompt,
                     "synthesisCoderInPrompt": "任务：write" in prompt, "synthesisCriticInPrompt": "任务：review" in prompt})
                 position = len(exchanges)
+                if cancel_active and position == 2:
+                    signing.write_ready(case / "provider-task-arrived.json", {"nodeId":"coder"})
+                    deadline = time.monotonic() + 30
+                    while not (case / "provider-release.json").exists():
+                        if time.monotonic() > deadline:
+                            raise RuntimeError("Actual public cancellation did not release the controlled provider")
+                        time.sleep(0.05)
                 upstream = preset_case is None or preset_case["upstreamPlanner"]
                 final_position = 4 if preset_case is None else len(preset_case["plan"]) + 1 + int(upstream)
                 content = json.dumps({"agents":plan["tasks"]}) if upstream and position == 1 else ("Controlled final answer" if position == final_position else "## 摘要\nControlled public task summary")
@@ -246,6 +275,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY=binding["signerPublicKey"])
             if cancel_after_plan:
                 environment["DEEPSEEK_TEST_AGENT_CANCEL_AFTER_PLAN"] = "1"
+            if cancel_active:
+                environment["DEEPSEEK_TEST_AGENT_CANCEL_ACTIVE"] = "1"
             if signing.PRIVATE_ENV & set(environment) or "DEEPSEEK_API_KEY" in environment:
                 raise ValueError("Private custody configuration entered Go")
             if preset_case is not None:
@@ -300,7 +331,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     raise ValueError("Actual public request persisted a credential")
             with sqlite3.connect((state / "rust-worker/authority.sqlite3").as_uri() + "?mode=ro", uri=True) as db:
                 rows = db.execute("SELECT operation_id,state,output,output_sha256 FROM agent_node_effects").fetchall()
-                expected_nodes = 1 if cancel_after_plan else (4 if preset_case is None else len(preset_case["plan"]) + 2)
+                expected_nodes = 2 if cancel_active else (1 if cancel_after_plan else (4 if preset_case is None else len(preset_case["plan"]) + 2))
                 if len(rows) != expected_nodes or any(row[1] != "CONFIRMED" or hashlib.sha256(row[2]).hexdigest() != row[3] for row in rows):
                     raise ValueError("Rust actual four-node custody is missing or corrupt")
                 leader = next((json.loads(row[2]) for row in rows if json.loads(row[2]).get("publicEvent", {}).get("type") == "agent_plan"), None)
@@ -310,7 +341,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             result.update(actualHTTPRequests=len(exchanges), providerExchanges=exchanges,
                 requestBodyStoredByRust=True, bootstrapUIIsOfflineFixture=True, cloudOnlyNativeBuild=True,
                 privateCustodyVariablesExportedToGo=False, readiness="NOT_READY")
-            if cancel_after_plan:
+            if cancel_active:
+                assert preset_case is not None
+                validate_active_cancellation_result(result, exchanges, preset_case)
+            elif cancel_after_plan:
                 assert preset_case is not None
                 validate_cancellation_result(result, exchanges, preset_case)
             elif preset_case is not None:
@@ -333,21 +367,23 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--preset-matrix", action="store_true")
     mode.add_argument("--cancellation-matrix", action="store_true")
+    mode.add_argument("--active-cancellation-matrix", action="store_true")
     args = parser.parse_args()
-    if args.preset_matrix or args.cancellation_matrix:
+    if args.preset_matrix or args.cancellation_matrix or args.active_cancellation_matrix:
         output = args.out.resolve()
-        cases = cancellation_cases() if args.cancellation_matrix else preset_cases()
+        cases = [active_cancellation_case()] if args.active_cancellation_matrix else (cancellation_cases() if args.cancellation_matrix else preset_cases())
         results = []
         for case in cases:
             child = argparse.Namespace(**vars(args))
             child.out, child.preset_case = output / case["name"], case
             child.cancel_after_plan = args.cancellation_matrix
+            child.cancel_active = args.active_cancellation_matrix
             report = run(child)
             results.append({"name":case["name"],"preset":case["preset"],"status":report["status"],"sourceCommit":report["sourceCommit"],
                             "actualHTTPRequests":report["actualHTTPRequests"],"nextIndex":report["nextIndex"],"actualPlanningSource":report["actualPlanningSource"]})
             print(json.dumps(results[-1]), flush=True)
         result = {"status":"PASS","sourceCommit":results[0]["sourceCommit"],"caseCount":len(results),"cases":results,
-                  "allInputsCreatedThroughRustHTTP":True,"cancellationWhileAwaitingPlanQualified":args.cancellation_matrix,"activeTaskCancellationQualified":False,"runtimePython":False,"realProviderQualified":False,"fullMigrationQualified":False,"readiness":"NOT_READY"}
+                  "allInputsCreatedThroughRustHTTP":True,"cancellationWhileAwaitingPlanQualified":args.cancellation_matrix,"activeTaskCancellationQualified":False,"activeCancellationSafetyQualified":args.active_cancellation_matrix,"cancelledPhaseRecoveryQualified":False,"runtimePython":False,"realProviderQualified":False,"fullMigrationQualified":False,"readiness":"NOT_READY"}
         output.mkdir(parents=True, exist_ok=True)
         (output / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     else:
