@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/leizd/DeepSeek-Infra/go/internal/agentproof"
 	"net"
 	"os"
 	"path/filepath"
@@ -1044,6 +1045,11 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 	var synthesisIntent *agentv1.AgentNodeDispatchIntent
 	var synthesisClaim *agentv1.AgentRunExecutionClaim
 	synthesisReceiptHash, synthesisReceiptLength := "", 0
+	var finalProjection *agentv1.AgentSynthesisProjectionReceipt
+	var finalProjectionInput *agentv1.ProjectAgentSynthesisRequest
+	var finalSettlement *agentv1.SettleAgentSynthesisRequest
+	finalProjectionHash, finalProjectionLength := "", 0
+	finalSettled, finalReplayed := false, false
 	if scenario == "synthesis-success" {
 		synthesisAdmission := proto.Clone(admission).(*agentv1.ClaimAgentRunExecutionRequest)
 		synthesisAdmission.OperationId = "claim-synthesis-process"
@@ -1089,6 +1095,36 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 		if err != nil || recorded.ReceiptSha256 != synthesisReceiptHash {
 			t.Fatalf("actual Go synthesis proof ingestion: %v", err)
 		}
+		finalProjectionInput = &agentv1.ProjectAgentSynthesisRequest{SchemaVersion: 1,
+			Source:          &agentv1.QueryAgentNodeEffectRequest{OperationId: synthesisIntent.OperationId, Fence: synthesisClaim.Fence, RunId: claim.RunId, NodeId: "synthesizer"},
+			SettlementFence: synthesisClaim.Fence, SettlementWriterToken: control.Writer().FencingToken, MetadataEpoch: synthesisClaim.MetadataEpoch, ExpectedIndex: 6}
+		finalProjection, err = production.ProjectAgentSynthesis(context.Background(), finalProjectionInput)
+		if err != nil {
+			t.Fatalf("actual synthesis projection: %v", err)
+		}
+		expectedFinal := &agentv1.AgentSynthesisProjectionEvidence{SchemaVersion: 1, SourceReceiptSha256: synthesisReceiptHash,
+			SettlementFence: synthesisClaim.Fence, SettlementWriterToken: control.Writer().FencingToken, RunId: claim.RunId,
+			MetadataEpoch: synthesisClaim.MetadataEpoch, ExpectedIndex: 6, ContentBody: synthesis.PublicEvent, FleetId: mutationFleetID, Environment: mutationEnvironment}
+		if err := agentproof.VerifyAgentSynthesisProjection(finalProjection, expectedFinal, agentproof.Binding{PublicKey: ready.PublicKey, FleetID: mutationFleetID, Environment: mutationEnvironment}); err != nil {
+			t.Fatalf("actual synthesis projection signature: %v", err)
+		}
+		projectionBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(finalProjection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		projectionDigest := sha256.Sum256(projectionBytes)
+		finalProjectionHash, finalProjectionLength = hex.EncodeToString(projectionDigest[:]), len(projectionBytes)
+		finalSettlement = &agentv1.SettleAgentSynthesisRequest{SchemaVersion: 1, OperationId: "settle-synthesis-process", Actor: "operator:agent-test",
+			Fence: synthesisClaim.Fence, RunId: claim.RunId, Owner: synthesisClaim.Owner, ClaimToken: synthesisClaim.ClaimToken, Projection: finalProjection}
+		settled, err := nodes.SettleSynthesis(controlRPCContext(t, testInternalBearer), finalSettlement)
+		if err != nil || settled.AlreadyApplied || settled.ActionState != "SUCCEEDED" || settled.Run.Status != "done" || settled.Run.NextIndex != 8 {
+			t.Fatalf("actual atomic synthesis settlement: %v", err)
+		}
+		locks, err := control.GetResourceLeases(synthesisClaim.Fence.ActionId)
+		if err != nil || len(locks) != 0 {
+			t.Fatal("synthesis retained resources", err)
+		}
+		finalSettled = true
 		nativeSigningWrite(t, filepath.Join(directory, "synthesis-restart-request.json"), map[string]bool{"restart": true})
 		var finalReady nativeSigningWorkerReady
 		nativeSigningRead(t, filepath.Join(directory, "worker-synthesis-restarted.json"), &finalReady)
@@ -1102,9 +1138,13 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 		if err != nil || !proto.Equal(replay, synthesis) {
 			t.Fatalf("synthesis replay changed confirmed result: %v", err)
 		}
+		projectionReplay, err := production.ProjectAgentSynthesis(context.Background(), finalProjectionInput)
+		if err != nil || !proto.Equal(projectionReplay, finalProjection) {
+			t.Fatalf("Rust restart lost final projection: %v", err)
+		}
 		run, found, err := control.AgentRunMetadata(claim.RunId)
-		if err != nil || !found || run.NextIndex != 6 || run.Status != "running" {
-			t.Fatalf("proof ingestion fabricated final Go settlement: %v", err)
+		if err != nil || !found || run.NextIndex != 8 || run.Status != "done" {
+			t.Fatalf("final Go settlement did not survive Rust restart: %v", err)
 		}
 	}
 
@@ -1138,10 +1178,14 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 		!proto.Equal(retainedGo.OutcomeReceipt, known.OutcomeReceipt) {
 		t.Fatalf("Go task restart lost reservation or proof: %v", err)
 	}
+	replayCursor, replayStatus := int64(6), "running"
+	if finalSettled {
+		replayCursor, replayStatus = 8, "done"
+	}
 	if settlement != nil {
 		reopened := agentv1.NewAgentNodeControlClient(restartConnection)
 		replay, err := reopened.SettleTask(controlRPCContext(t, testInternalBearer), settlement)
-		if err != nil || !replay.AlreadyApplied || replay.Run.NextIndex != 6 {
+		if err != nil || !replay.AlreadyApplied || replay.Run.NextIndex != replayCursor || replay.Run.Status != replayStatus {
 			t.Fatalf("task settlement restart replay: %v", err)
 		}
 		retained, err := reopened.GetDispatch(controlRPCContext(t, testInternalBearer), &agentv1.GetAgentNodeDispatchRequest{Fence: claim.Fence, RunId: claim.RunId, NodeId: "critic"})
@@ -1149,7 +1193,7 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 			t.Fatalf("dependent Go restart: %v", err)
 		}
 		replayedPhase, err := reopened.CompleteTasks(controlRPCContext(t, testInternalBearer), completion)
-		if err != nil || !replayedPhase.AlreadyApplied || replayedPhase.Run.Status != "running" || replayedPhase.Run.NextIndex != 6 {
+		if err != nil || !replayedPhase.AlreadyApplied || replayedPhase.Run.Status != replayStatus || replayedPhase.Run.NextIndex != replayCursor {
 			t.Fatalf("completed task phase did not survive Go restart: %v", err)
 		}
 		locks, err := control.GetResourceLeases(claim.Fence.ActionId)
@@ -1163,11 +1207,19 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 		if err != nil || !retained.Found || !proto.Equal(retained.Intent, synthesisIntent) || !proto.Equal(retained.OutcomeReceipt, synthesis.OutcomeReceipt) {
 			t.Fatalf("Go restart lost synthesis proof: %v", err)
 		}
+		replay, err := agentv1.NewAgentNodeControlClient(restartConnection).SettleSynthesis(controlRPCContext(t, testInternalBearer), finalSettlement)
+		locks, lockErr := control.GetResourceLeases(synthesisClaim.Fence.ActionId)
+		if err != nil || lockErr != nil || !replay.AlreadyApplied || replay.ActionState != "SUCCEEDED" || replay.Run.Status != "done" || replay.Run.NextIndex != 8 || len(locks) != 0 {
+			t.Fatalf("final Go settlement restart replay: %v %v", err, lockErr)
+		}
+		finalReplayed = true
 	}
 
 	nativeSigningWrite(t, filepath.Join(directory, "process-result.json"), map[string]any{
 		"synthesisGoProofPersisted": synthesis != nil, "synthesisRustRestartPreserved": synthesis != nil, "synthesisGoRestartPreserved": synthesis != nil,
-		"synthesisDuplicateProviderDispatchDenied": synthesis != nil, "synthesisFinalRunSettlementQualified": false,
+		"synthesisDuplicateProviderDispatchDenied": synthesis != nil, "synthesisFinalRunSettlementQualified": finalSettled && finalReplayed,
+		"synthesisFinalProjection": finalProjection, "synthesisFinalDoneBody": finalProjection.GetEvidence().GetDoneBody(), "synthesisFinalProjectionSha256": finalProjectionHash, "synthesisFinalProjectionLength": finalProjectionLength,
+		"synthesisFinalNextIndex": replayCursor, "synthesisFinalStatus": replayStatus, "synthesisFinalResourcesReleased": finalSettled && finalReplayed,
 		"synthesisReceiptSha256": synthesisReceiptHash, "synthesisReceiptLength": synthesisReceiptLength,
 		"synthesisActionId": func() string {
 			if synthesisClaim != nil {
@@ -1205,7 +1257,7 @@ func TestNativeAgentTaskProcess(t *testing.T) {
 		"signedOutcomeVerified": verified, "goOutcomePersisted": persisted, "rustRestartPreserved": true, "goRestartPreserved": true,
 		"unknownHasNoReceipt": known.OutcomeReceipt == nil, "duplicateProviderDispatchDenied": true, "resourcesRetained": completion == nil, "resourcesReleased": completion != nil,
 		"productionGoNodeClient": true, "productionProviderQualified": false, "goTaskPhaseSettlementQualified": completion != nil,
-		"phaseCompletionReplayedAfterGoRestart": completion != nil, "publicRunRemainsRunning": completion != nil,
+		"phaseCompletionReplayedAfterGoRestart": completion != nil, "publicRunRemainsRunning": completion != nil && !finalSettled,
 		"goTaskNodeSettlementQualified": taskSettled, "dependencyDispatchQualified": dependencyQualified,
 		"dependentOperationId": func() string {
 			if dependentIntent != nil {

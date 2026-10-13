@@ -81,6 +81,7 @@ service AgentNodeControl {
   rpc GetDispatch(GetAgentNodeDispatchRequest) returns (GetAgentNodeDispatchResponse);
   rpc RecordOutcome(RecordAgentNodeOutcomeRequest) returns (RecordAgentNodeOutcomeResponse);
   rpc SettlePlan(SettleAgentPlanRequest) returns (SettleAgentPlanResponse);
+  rpc SettleSynthesis(SettleAgentSynthesisRequest) returns (SettleAgentSynthesisResponse);
   rpc SettleTask(SettleAgentTaskRequest) returns (SettleAgentTaskResponse);
   rpc CompleteTasks(CompleteAgentTasksRequest) returns (CompleteAgentTasksResponse);
 }
@@ -163,6 +164,7 @@ service AgentNodeWorker {
   rpc ExecuteSynthesis(ExecuteAgentTaskRequest) returns (AgentNodeEffectMetadata);
   rpc QueryEffect(QueryAgentNodeEffectRequest) returns (QueryAgentNodeEffectResponse);
   rpc ProjectPlan(ProjectAgentPlanRequest) returns (AgentPlanProjectionReceipt);
+  rpc ProjectSynthesis(ProjectAgentSynthesisRequest) returns (AgentSynthesisProjectionReceipt);
 }
 
 // The caller selects only a node ID. Task text and dependencies come from the
@@ -286,3 +288,55 @@ message CompleteAgentTasksResponse {
   AgentRunSnapshot run = 2;
   string action_state = 3;
 }
+
+
+// Derives content and done bodies from confirmed Rust custody only. This RPC
+// performs no provider I/O and cannot complete a Go run by itself.
+message ProjectAgentSynthesisRequest {
+  uint32 schema_version = 1;
+  QueryAgentNodeEffectRequest source = 2;
+  deepseek.common.v1.ActionFence settlement_fence = 3;
+  int64 settlement_writer_token = 4;
+  uint64 metadata_epoch = 5;
+  int64 expected_index = 6;
+}
+
+// Separate signature domain prevents planner proofs being reused for final answers.
+message AgentSynthesisProjectionEvidence {
+  uint32 schema_version = 1;
+  string source_receipt_sha256 = 2;
+  deepseek.common.v1.ActionFence settlement_fence = 3;
+  int64 settlement_writer_token = 4;
+  string run_id = 5;
+  uint64 metadata_epoch = 6;
+  int64 expected_index = 7;
+  AgentArtifactReference content_body = 8;
+  AgentArtifactReference done_body = 9;
+  string fleet_id = 10;
+  string environment = 11;
+}
+
+message AgentSynthesisProjectionReceipt {
+  uint32 schema_version = 1;
+  AgentSynthesisProjectionEvidence evidence = 2;
+  bytes signature = 3;
+  string signer_public_key = 4;
+}
+
+message SettleAgentSynthesisRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  deepseek.common.v1.ActionFence fence = 4;
+  string run_id = 5;
+  string owner = 6;
+  string claim_token = 7;
+  AgentSynthesisProjectionReceipt projection = 8;
+}
+
+message SettleAgentSynthesisResponse {
+  bool already_applied = 1;
+  AgentRunSnapshot run = 2;
+  string action_state = 3;
+}
+

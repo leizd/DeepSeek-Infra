@@ -156,3 +156,164 @@ fn outcome_signature_journal_is_idempotent_after_restart_and_refuses_corrupt_rec
         b"corrupted protobuf receipt"
     );
 }
+
+fn synthesis_test_custody(root: &Path) -> ControlSigner {
+    fs::create_dir_all(root.join("rust-worker")).unwrap();
+    let password = b"isolated-synthesis-password-32-bytes";
+    let bundle_path = root.join("fixture-custody.json");
+    let bundle: Value = if bundle_path.exists() {
+        serde_json::from_slice(&fs::read(&bundle_path).unwrap()).unwrap()
+    } else {
+        let bundle = create_control_signer_bundle(password, "fleet-a", "test").unwrap();
+        fs::write(&bundle_path, serde_json::to_vec(&bundle).unwrap()).unwrap();
+        bundle
+    };
+    let public = bundle["binding"]["signerPublicKey"].as_str().unwrap();
+    let binding = String::from_utf8(canonical_json_bytes(&bundle["binding"]).unwrap()).unwrap();
+    ControlSigner {
+        key: load_control_signer(&bundle, password, "fleet-a", "test", public).unwrap(),
+        journal: SignatureJournal::open(root, &binding).unwrap(),
+    }
+}
+
+#[test]
+fn synthesis_outcome_signing_requires_its_role_and_counters_and_recovers_after_restart() {
+    use deepseek_protocol::generated::deepseek::agent::v1::AgentTaskOutputMetadata;
+    let root = tempfile::tempdir().unwrap();
+    let evidence = AgentNodeOutcomeEvidence {
+        schema_version: 1,
+        fence: Some(ActionFence {
+            action_id: "synthesis".into(),
+            execution_epoch: 2,
+        }),
+        operation_id: format!("agent-node-{}", "a".repeat(64)),
+        run_id: "run".into(),
+        node_id: "synthesizer".into(),
+        phase: 3,
+        request: Some(AgentArtifactReference {
+            sha256: "b".repeat(64),
+            length: 20,
+        }),
+        plan_digest: "c".repeat(64),
+        metadata_index: 6,
+        metadata_epoch: 1,
+        writer_fencing_token: 2,
+        created_at: "2026-10-12T00:00:00Z".into(),
+        confirmed_at: "2026-10-12T00:00:01Z".into(),
+        outcome_sha256: "d".repeat(64),
+        outcome_length: 50,
+        public_event: Some(AgentArtifactReference {
+            sha256: "e".repeat(64),
+            length: 30,
+        }),
+        provider_plan: vec![],
+        task_output: Some(AgentTaskOutputMetadata {
+            schema_version: 1,
+            prompt_tokens: 3,
+            completion_tokens: 1,
+            latency_ms: 40,
+            failed: false,
+        }),
+        fleet_id: "fleet-a".into(),
+        environment: "test".into(),
+    };
+    let mut signer = synthesis_test_custody(root.path());
+    let first = signer.sign_node_outcome(evidence.clone()).unwrap();
+    assert_eq!(first.signature.len(), 64);
+    assert_eq!(first, signer.sign_node_outcome(evidence.clone()).unwrap());
+    drop(signer);
+    let mut signer = synthesis_test_custody(root.path());
+    assert_eq!(first, signer.sign_node_outcome(evidence.clone()).unwrap());
+    for case in 0..11 {
+        let mut invalid = evidence.clone();
+        match case {
+            0 => invalid.node_id = "coder".into(),
+            1 => invalid.task_output = None,
+            2 => invalid.task_output.as_mut().unwrap().schema_version = 2,
+            3 => invalid.task_output.as_mut().unwrap().prompt_tokens = u64::MAX,
+            4 => invalid.task_output.as_mut().unwrap().completion_tokens = u64::MAX,
+            5 => invalid.task_output.as_mut().unwrap().latency_ms = -1,
+            6 => invalid.task_output.as_mut().unwrap().failed = true,
+            7 => invalid.phase = 4,
+            8 => invalid.provider_plan.push(
+                deepseek_protocol::generated::deepseek::agent::v1::AgentRunPlanNode {
+                    id: "coder".into(),
+                    task: "write".into(),
+                    depends_on: vec![],
+                },
+            ),
+            9 => invalid.environment = "foreign".into(),
+            _ => invalid.fence.as_mut().unwrap().execution_epoch = 0,
+        }
+        assert_eq!(
+            signer.sign_node_outcome(invalid).unwrap_err().message(),
+            "AGENT_NODE_OUTCOME_INVALID",
+            "case {case}"
+        );
+    }
+}
+
+#[test]
+fn synthesis_final_projection_has_its_own_domain_and_retains_signature_on_restart() {
+    use deepseek_protocol::generated::deepseek::agent::v1::AgentSynthesisProjectionEvidence;
+    let root = tempfile::tempdir().unwrap();
+    let evidence = AgentSynthesisProjectionEvidence {
+        schema_version: 1,
+        source_receipt_sha256: "a".repeat(64),
+        settlement_fence: Some(ActionFence {
+            action_id: "synthesis".into(),
+            execution_epoch: 2,
+        }),
+        settlement_writer_token: 3,
+        run_id: "run".into(),
+        metadata_epoch: 1,
+        expected_index: 6,
+        content_body: Some(AgentArtifactReference {
+            sha256: "b".repeat(64),
+            length: 30,
+        }),
+        done_body: Some(AgentArtifactReference {
+            sha256: "c".repeat(64),
+            length: 15,
+        }),
+        fleet_id: "fleet-a".into(),
+        environment: "test".into(),
+    };
+    let mut signer = synthesis_test_custody(root.path());
+    let first = signer.sign_synthesis_projection(evidence.clone()).unwrap();
+    assert_eq!(first.signature.len(), 64);
+    assert_eq!(
+        first,
+        signer.sign_synthesis_projection(evidence.clone()).unwrap()
+    );
+    drop(signer);
+    let mut signer = synthesis_test_custody(root.path());
+    assert_eq!(
+        first,
+        signer.sign_synthesis_projection(evidence.clone()).unwrap()
+    );
+    for case in 0..11 {
+        let mut invalid = evidence.clone();
+        match case {
+            0 => invalid.schema_version = 0,
+            1 => invalid.source_receipt_sha256 = "bad".into(),
+            2 => invalid.settlement_fence = None,
+            3 => invalid.settlement_writer_token = 0,
+            4 => invalid.run_id.clear(),
+            5 => invalid.metadata_epoch = 0,
+            6 => invalid.expected_index = i64::MAX,
+            7 => invalid.content_body = None,
+            8 => invalid.done_body.as_mut().unwrap().length = 0,
+            9 => invalid.fleet_id = "foreign".into(),
+            _ => invalid.environment = "foreign".into(),
+        }
+        assert_eq!(
+            signer
+                .sign_synthesis_projection(invalid)
+                .unwrap_err()
+                .message(),
+            "AGENT_SYNTHESIS_PROJECTION_INVALID",
+            "case {case}"
+        );
+    }
+}

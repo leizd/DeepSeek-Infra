@@ -308,6 +308,9 @@ func (store *Control) AgentNodeOutcomeSnapshot(actionID, nodeID string) (Record,
 	if err != nil {
 		return record, AgentNodeDispatch{}, nil, false, err
 	}
+	if err := store.validateAgentSynthesisSettlementTx(tx, record); err != nil {
+		return record, AgentNodeDispatch{}, nil, false, err
+	}
 	if err := store.validateAgentPlanSettlementTx(tx, record); err != nil {
 		return record, AgentNodeDispatch{}, nil, false, err
 	}

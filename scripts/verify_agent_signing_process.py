@@ -465,7 +465,7 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                     if not body or body[0] != event_ref["length"] or hashlib.sha256(body[1]).hexdigest() != event_ref["sha256"] or \
                             json.loads(body[1]) != envelope["publicEvent"] or envelope["runId"] != result["runId"] or \
                             hashlib.sha256(output_bytes).hexdigest() != result["outcomeSha256"] or rows[0][3] != result["outcomeSha256"] or \
-                            envelope["providerResponseSha256"] != hashlib.sha256(response_bytes).hexdigest() or db.execute("SELECT count(*) FROM artifacts").fetchone()[0] != (4 if scenario == "synthesis-success" else (3 if scenario == "task-success" else 2)):
+                            envelope["providerResponseSha256"] != hashlib.sha256(response_bytes).hexdigest() or db.execute("SELECT count(*) FROM artifacts").fetchone()[0] != (5 if scenario == "synthesis-success" else (3 if scenario == "task-success" else 2)):
                         raise ValueError("Task result lacks immutable Rust custody and exact provider response binding")
                     event = envelope["publicEvent"]
                     if event["phase"] != "coder" or b"private-task-reasoning" in body[1] or b"private-fixture-path" in body[1]:
@@ -499,6 +499,10 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                                 not isinstance(synthesis_envelope["synthesisOutput"]["latencyMs"], int) or synthesis_envelope["synthesisOutput"]["latencyMs"] < 0 or \
                                 b"private-synthesis-reasoning" in synthesis_bytes or b"private-task-reasoning" in synthesis_body[1]:
                             raise ValueError("Synthesis lacks exact provider body custody and private-data filtering")
+                        done_ref = result["synthesisFinalDoneBody"]
+                        done = db.execute("SELECT length,bytes FROM artifacts WHERE sha256=?", (done_ref["sha256"],)).fetchone()
+                        if not done or done[0] != done_ref["length"] or hashlib.sha256(done[1]).hexdigest() != done_ref["sha256"] or json.loads(done[1]) != {"type": "done"}:
+                            raise ValueError("Final synthesis done body lacks exact immutable Rust custody")
                     if scenario == "task-tools" and (event["type"] != "agent_tool_request" or event.get("output") or
                             envelope["toolContinuation"]["assistant"]["reasoning_content"] != "private-task-reasoning" or
                             len(envelope["toolContinuation"]["toolCalls"]) != 1):
@@ -526,13 +530,15 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                 if not all(result.get(key) is True for key in ("rustRestartPreserved", "goRestartPreserved", "duplicateProviderDispatchDenied")):
                     raise ValueError("Task custody recovery is unproven")
                 if scenario in {"task-success", "synthesis-success"}:
-                    if not all(result.get(key) is True for key in ("goTaskPhaseSettlementQualified", "resourcesReleased", "phaseCompletionReplayedAfterGoRestart", "publicRunRemainsRunning")) or result.get("resourcesRetained"):
+                    if not all(result.get(key) is True for key in ("goTaskPhaseSettlementQualified", "resourcesReleased", "phaseCompletionReplayedAfterGoRestart")) or result.get("resourcesRetained"):
                         raise ValueError("Verified task phase completion, resource release and recovery are unproven")
+                    if result.get("publicRunRemainsRunning") is not (scenario == "task-success"):
+                        raise ValueError("The public run status contradicts its observed final settlement")
                 elif not result.get("resourcesRetained") or result.get("resourcesReleased") or result.get("goTaskPhaseSettlementQualified"):
                     raise ValueError("Unresolved task phase released resources or claimed completion")
                 if scenario in {"task-success", "synthesis-success"}:
                     receipts = [body for body in documents if hashlib.sha256(body).hexdigest() == result["outcomeReceiptSha256"]]
-                    if not result.get("goOutcomePersisted") or not result.get("signedOutcomeVerified") or len(documents) != (7 if scenario == "synthesis-success" else 4) or len(receipts) != 1 or len(receipts[0]) != result["outcomeReceiptLength"]:
+                    if not result.get("goOutcomePersisted") or not result.get("signedOutcomeVerified") or len(documents) != (8 if scenario == "synthesis-success" else 4) or len(receipts) != 1 or len(receipts[0]) != result["outcomeReceiptLength"]:
                         raise ValueError("Task receipt lacks actual Go verification and durable ingestion")
                     dependent_receipts = [body for body in documents if hashlib.sha256(body).hexdigest() == result["dependentReceiptSha256"]]
                     if len(dependent_receipts) != 1 or len(dependent_receipts[0]) != result["dependentReceiptLength"] or \
@@ -542,8 +548,13 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
                         synthesis_receipts = [body for body in documents if hashlib.sha256(body).hexdigest() == result["synthesisReceiptSha256"]]
                         if len(synthesis_receipts) != 1 or len(synthesis_receipts[0]) != result["synthesisReceiptLength"] or \
                                 not all(result.get(key) is True for key in ("synthesisGoProofPersisted", "synthesisRustRestartPreserved", "synthesisGoRestartPreserved", "synthesisDuplicateProviderDispatchDenied")) or \
-                                result.get("synthesisFinalRunSettlementQualified") is not False:
-                            raise ValueError("Synthesis signature recovery is unproven or final Go settlement was fabricated")
+                                result.get("synthesisFinalRunSettlementQualified") is not True:
+                            raise ValueError("Synthesis signature recovery or final Go settlement is unproven")
+                        final_receipts = [body for body in documents if hashlib.sha256(body).hexdigest() == result["synthesisFinalProjectionSha256"]]
+                        if len(final_receipts) != 1 or len(final_receipts[0]) != result["synthesisFinalProjectionLength"] or \
+                                result.get("synthesisFinalStatus") != "done" or result.get("synthesisFinalNextIndex") != 8 or \
+                                result.get("synthesisFinalResourcesReleased") is not True:
+                            raise ValueError("Final synthesis projection, cursor or resource release is unproven")
                 elif not result.get("unknownHasNoReceipt") or result.get("signedOutcomeVerified") or result.get("goOutcomePersisted") or len(documents) != 2:
                     raise ValueError("Incomplete task acquired a signed completion or Go receipt")
             elif not result.get("unknownOutcomeRecordingDenied") or not result.get("unknownHasNoReceipt") or result.get("signedOutcomeVerified") or len(documents) != 2:
@@ -661,7 +672,7 @@ def main() -> int:
                   "taskPhaseSettlementQualified": status == "PASS" and any(case.get("goTaskPhaseSettlementQualified") is True for case in task_results),
                   "synthesisProcessCases": synthesis_results,
                   "synthesisControlledHTTPQualified": status == "PASS" and len(synthesis_results) == 1,
-                  "synthesisFinalRunSettlementQualified": False,
+                  "synthesisFinalRunSettlementQualified": status == "PASS" and len(synthesis_results) == 1 and synthesis_results[0].get("synthesisFinalRunSettlementQualified") is True,
                   "allTaskPhasesAndDAGQualified": False,
                   "runtimePythonQualified": False, "providerEffectsQualified": False, "readiness": "NOT_READY",
                   "startedAt": started_at, "sourceUnchanged": source_inventory() == before,

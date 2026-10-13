@@ -1373,20 +1373,21 @@ func (store *Control) putLeasedControlRecord(record Record, dispatch *StorageDis
 // A prepared write owns its canonical bytes, including a dispatch's operation
 // identity. It cannot be rebound by modifying the caller's payload or intent.
 type controlRecordWrite struct {
-	agentEvent            bool
-	agentExecution        bool
-	agentNodeDispatch     bool
-	agentNodeOutcome      bool
-	agentTasksCompletion  bool
-	agentTaskSettlement   bool
-	agentPlanSettlement   bool
-	record                Record
-	table                 string
-	intentJSON            []byte
-	intentDigest          string
-	operationID           string
-	allowBoundLease       bool
-	allowImportedBaseline bool
+	agentEvent               bool
+	agentExecution           bool
+	agentNodeDispatch        bool
+	agentNodeOutcome         bool
+	agentTasksCompletion     bool
+	agentTaskSettlement      bool
+	agentPlanSettlement      bool
+	agentSynthesisSettlement bool
+	record                   Record
+	table                    string
+	intentJSON               []byte
+	intentDigest             string
+	operationID              string
+	allowBoundLease          bool
+	allowImportedBaseline    bool
 }
 
 func prepareControlRecordWrite(record Record, dispatch *StorageDispatchIntent) (controlRecordWrite, error) {
@@ -1499,6 +1500,14 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 			return err
 		}
 	}
+	if record.Domain == "action" && !write.agentSynthesisSettlement {
+		var beforeFields, afterFields map[string]json.RawMessage
+		_ = json.Unmarshal(existing.Payload, &beforeFields)
+		_ = json.Unmarshal(record.Payload, &afterFields)
+		if !bytes.Equal(beforeFields[agentSynthesisSettlementField], afterFields[agentSynthesisSettlementField]) {
+			return ErrAgentRunExecutionRequired
+		}
+	}
 	if record.Domain == "action" && !write.agentPlanSettlement {
 		var beforeFields, afterFields map[string]json.RawMessage
 		_ = json.Unmarshal(existing.Payload, &beforeFields)
@@ -1524,6 +1533,13 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 		}
 	}
 	legal := LegalTransition(record.Domain, from, record.State)
+	if write.agentSynthesisSettlement {
+		if !exists || !nativeAgentSynthesisSettlementEdge(existing, record) {
+			return ErrAgentRunExecutionRequired
+		}
+		legal = true
+	}
+
 	if write.agentTasksCompletion {
 		if !exists || !nativeAgentTasksCompletionEdge(existing, record) {
 			return ErrAgentRunExecutionRequired
@@ -1803,6 +1819,12 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 			var beforeFields, afterFields map[string]json.RawMessage
 			_ = json.Unmarshal(final.Payload, &beforeFields)
 			_ = json.Unmarshal(event.Payload, &afterFields)
+			if !bytes.Equal(beforeFields[agentSynthesisSettlementField], afterFields[agentSynthesisSettlementField]) {
+				if !nativeAgentSynthesisSettlementEdge(final, event) {
+					return ErrCorruptRecord
+				}
+				legal = true
+			}
 			if !bytes.Equal(beforeFields[agentTasksCompletionField], afterFields[agentTasksCompletionField]) {
 				if !nativeAgentTasksCompletionEdge(final, event) {
 					return ErrCorruptRecord

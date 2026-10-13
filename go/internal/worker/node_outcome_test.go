@@ -202,6 +202,10 @@ func (rpc fixtureNodeWorker) ProjectPlan(_ context.Context, _ *agentv1.ProjectAg
 	return nil, ErrInvalidWorkerResponse
 }
 
+func (rpc fixtureNodeWorker) ProjectSynthesis(_ context.Context, _ *agentv1.ProjectAgentSynthesisRequest, _ ...grpc.CallOption) (*agentv1.AgentSynthesisProjectionReceipt, error) {
+	return nil, ErrInvalidWorkerResponse
+}
+
 func (rpc fixtureNodeWorker) ExecuteTask(_ context.Context, _ *agentv1.ExecuteAgentTaskRequest, _ ...grpc.CallOption) (*agentv1.AgentNodeEffectMetadata, error) {
 	return nil, ErrInvalidWorkerResponse
 }

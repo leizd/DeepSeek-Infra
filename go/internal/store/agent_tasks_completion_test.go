@@ -1,6 +1,7 @@
 package store
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,6 +68,12 @@ func TestTasksCompletionRejectsForgedCheckpointWriterAndSettlementBindings(t *te
 
 func tasksCompletionFixture(t *testing.T, failed bool) (*Control, CompleteAgentTasksRequest) {
 	t.Helper()
+	control, input, _ := tasksCompletionSignedFixture(t, failed)
+	return control, input
+}
+
+func tasksCompletionSignedFixture(t *testing.T, failed bool) (*Control, CompleteAgentTasksRequest, ed25519.PrivateKey) {
+	t.Helper()
 	control, first, private := taskSettlementFixture(t, false)
 	if _, err := control.SettleAgentTask(first); err != nil {
 		t.Fatal(err)
@@ -96,7 +103,7 @@ func tasksCompletionFixture(t *testing.T, failed bool) (*Control, CompleteAgentT
 	if _, err := control.SettleAgentTask(second); err != nil {
 		t.Fatal(err)
 	}
-	return control, CompleteAgentTasksRequest{OperationID: "complete-agent-tasks", Actor: first.Actor, ActionID: first.ActionID, Epoch: first.Epoch, RunID: first.RunID, Owner: first.Owner, ClaimToken: first.ClaimToken, ExpectedIndex: 6}
+	return control, CompleteAgentTasksRequest{OperationID: "complete-agent-tasks", Actor: first.Actor, ActionID: first.ActionID, Epoch: first.Epoch, RunID: first.RunID, Owner: first.Owner, ClaimToken: first.ClaimToken, ExpectedIndex: 6}, private
 }
 
 func TestTasksCompletionAtomicallyTerminatesPhaseWithoutInventingFinalOutput(t *testing.T) {

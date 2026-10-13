@@ -17,6 +17,7 @@ mod agent_execution_grant;
 mod agent_node_effect;
 mod agent_plan_executor;
 mod agent_plan_projection;
+mod agent_synthesis_projection;
 mod agent_task_executor;
 mod authority_request;
 mod authority_store;

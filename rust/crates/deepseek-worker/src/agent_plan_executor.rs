@@ -277,6 +277,19 @@ impl AgentNodeWorker for WorkerRpcService {
     ) -> Result<Response<AgentNodeEffectMetadata>, Status> {
         self.execute_agent_synthesis(request).await
     }
+    async fn project_synthesis(
+        &self,
+        request: Request<
+            deepseek_protocol::generated::deepseek::agent::v1::ProjectAgentSynthesisRequest,
+        >,
+    ) -> Result<
+        Response<
+            deepseek_protocol::generated::deepseek::agent::v1::AgentSynthesisProjectionReceipt,
+        >,
+        Status,
+    > {
+        self.project_agent_synthesis(request).await
+    }
     async fn project_plan(
         &self,
         request: Request<

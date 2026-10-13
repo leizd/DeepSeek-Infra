@@ -23,6 +23,10 @@ func TestTerminalAgentRPCDenialAndCancellationCannotCreateCompletion(t *testing.
 		name string
 		call func(*agentNodeService, context.Context) error
 	}{
+		{"synthesis", func(s *agentNodeService, ctx context.Context) error {
+			_, err := s.SettleSynthesis(ctx, &agentv1.SettleAgentSynthesisRequest{SchemaVersion: 1, Fence: fence, Projection: &agentv1.AgentSynthesisProjectionReceipt{}})
+			return err
+		}},
 		{"task", func(s *agentNodeService, ctx context.Context) error {
 			_, err := s.SettleTask(ctx, &agentv1.SettleAgentTaskRequest{SchemaVersion: 1, Fence: fence})
 			return err
@@ -57,5 +61,36 @@ func TestTerminalAgentRPCDenialAndCancellationCannotCreateCompletion(t *testing.
 	after, err := control.ExportSnapshot()
 	if err != nil || after.Digest != before.Digest {
 		t.Fatalf("terminal refusal changed a durable row: %v", err)
+	}
+}
+
+func TestSynthesisRPCRejectsInvalidEnvelopeBeforeDurableMutation(t *testing.T) {
+	control := agentExecutionRPCStore(t, true)
+	service := &agentNodeService{run: &agentRunService{control: control, health: HealthFor(config.Config{Mode: config.ModeAuthoritative})}}
+	before, err := control.ExportSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []*agentv1.SettleAgentSynthesisRequest{nil, {}, {SchemaVersion: 1}, {SchemaVersion: 1, Fence: &commonv1.ActionFence{}}} {
+		if _, err := service.SettleSynthesis(context.Background(), input); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("invalid synthesis envelope: %v", err)
+		}
+	}
+	valid := &agentv1.SettleAgentSynthesisRequest{SchemaVersion: 1, Fence: &commonv1.ActionFence{ActionId: "missing", ExecutionEpoch: 1}, Projection: &agentv1.AgentSynthesisProjectionReceipt{SchemaVersion: 1}}
+	if _, err := service.SettleSynthesis(context.Background(), valid); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("missing action did not fail closed: %v", err)
+	}
+	valid.ProtoReflect().SetUnknown([]byte{0xa0, 0x06, 0x01})
+	if _, err := service.SettleSynthesis(context.Background(), valid); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("unknown envelope field accepted: %v", err)
+	}
+	valid.ProtoReflect().SetUnknown(nil)
+	valid.Fence.ProtoReflect().SetUnknown([]byte{0xa0, 0x06, 0x01})
+	if _, err := service.SettleSynthesis(context.Background(), valid); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("unknown fence field accepted: %v", err)
+	}
+	after, err := control.ExportSnapshot()
+	if err != nil || after.Digest != before.Digest {
+		t.Fatal("denial changed durable state", err)
 	}
 }
