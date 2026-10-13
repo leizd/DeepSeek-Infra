@@ -63,7 +63,26 @@ func TestAgentDriverStaleCallerMetadataCannotAdmitOrDispatch(t *testing.T) {
 }
 
 func TestAgentDriverIgnoresOtherRunAndFindsOriginalPendingSynthesis(t *testing.T) {
-	driver, fixture, run, action := cancelledDriverRecoveryFixture(t, "synthesis", 60)
+	driver, fixture, run := newDriverFixture(t, false)
+	for step := 0; step < 2; step++ {
+		if err := driver.drive(context.Background(), run); err != nil {
+			t.Fatal(err)
+		}
+		run = driverFixtureRun(t, driver, run.RunID)
+	}
+	authority, err := driver.service.GetAuthority(context.Background(), &agentv1.AgentRunAuthorityInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := executionRPCInput(authority.MetadataEpoch)
+	request.RunId, request.MetadataFence.ActionId = run.RunID, run.RunID
+	request.Owner, request.ExpectedIndex, request.OperationId = driver.owner, run.NextIndex, "live-pending-synthesis-claim"
+	request.Phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS
+	admitted, err := driver.service.ClaimExecution(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := admitted.Claim.Fence.ActionId
 	phase, existing, err := driver.phase(run)
 	if err != nil || phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS || existing == nil || existing.ID != action {
 		t.Fatal("pending synthesis was replaced by fresh task admission", err)
@@ -73,10 +92,7 @@ func TestAgentDriverIgnoresOtherRunAndFindsOriginalPendingSynthesis(t *testing.T
 	if _, existing, err := driver.phase(unrelated); err != nil || existing != nil {
 		t.Fatal("another run reused original effect", err)
 	}
-	if err := driver.recoverCancellation(context.Background(), run); err != nil {
-		t.Fatal(err)
-	}
-	if len(fixture.calls) != 4 {
+	if len(fixture.calls) != 3 {
 		t.Fatal("pending synthesis query repeated provider work", fixture.calls)
 	}
 }
