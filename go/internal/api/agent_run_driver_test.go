@@ -754,37 +754,62 @@ func TestAgentDriverFreshAdmissionRefusesAnUnavailableOrShadowAuthority(t *testi
 	}
 }
 
-func TestAgentDriverCustodyFailureKeepsAdmittedResourcesWithoutProviderDispatch(t *testing.T) {
-	for _, failure := range []string{"nil-session", "closed-client", "missing-binding"} {
-		t.Run(failure, func(t *testing.T) {
-			driver, fixture, run := newDriverFixture(t, false)
-			closed := 0
-			switch failure {
-			case "nil-session":
-				driver.service.executionSigner = func(*store.Control) (*agentExecutionSignerSession, error) { return nil, nil }
-			case "closed-client":
-				driver.service.executionSigner = func(*store.Control) (*agentExecutionSignerSession, error) {
-					return &agentExecutionSignerSession{close: func() error { closed++; return nil }}, nil
+func TestAgentDriverCustodyFailureRespectsAdmissionBoundaryWithoutProviderDispatch(t *testing.T) {
+	for _, entry := range []string{"before-admission", "admitted-grant"} {
+		for _, failure := range []string{"nil-session", "closed-client", "missing-binding"} {
+			t.Run(entry+"/"+failure, func(t *testing.T) {
+				driver, fixture, run := newDriverFixture(t, false)
+				var claim *agentv1.AgentRunExecutionClaim
+				if entry == "admitted-grant" {
+					var err error
+					claim, err = driver.admission(context.Background(), run, agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
 				}
-			case "missing-binding":
-				t.Setenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY", "")
-				driver.service.executionSigner = nil
-			}
-			if err := driver.drive(context.Background(), run); err == nil {
-				t.Fatal("accepted unavailable signer custody")
-			}
-			records, err := driver.service.control.ListAuthoritativeRecords("action")
-			if err != nil || len(records) != 1 || records[0].State == "SUCCEEDED" || len(fixture.calls) != 0 || len(driver.installed) != 0 {
-				t.Fatal("custody failure dispatched, installed or fabricated settlement", err)
-			}
-			resources, err := driver.service.control.GetResourceLeases(records[0].ID)
-			if err != nil || len(resources) == 0 {
-				t.Fatal("custody failure discarded admitted resources", err)
-			}
-			if failure == "closed-client" && closed != 1 {
-				t.Fatal("failed signer session did not close exactly once", closed)
-			}
-		})
+				closed := 0
+				switch failure {
+				case "nil-session":
+					driver.service.executionSigner = func(*store.Control) (*agentExecutionSignerSession, error) { return nil, nil }
+				case "closed-client":
+					driver.service.executionSigner = func(*store.Control) (*agentExecutionSignerSession, error) {
+						return &agentExecutionSignerSession{close: func() error { closed++; return nil }}, nil
+					}
+				case "missing-binding":
+					t.Setenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY", "")
+					driver.service.executionSigner = nil
+				}
+				var err error
+				if claim == nil {
+					err = driver.drive(context.Background(), run)
+				} else {
+					_, _, err = driver.grant(context.Background(), claim)
+				}
+				if err == nil {
+					t.Fatal("accepted unavailable signer custody")
+				}
+				records, err := driver.service.control.ListAuthoritativeRecords("action")
+				if err != nil || len(fixture.calls) != 0 || len(driver.installed) != 0 {
+					t.Fatal("custody failure dispatched or installed", err)
+				}
+				if claim == nil {
+					if len(records) != 0 {
+						t.Fatal("custody failure fabricated an admission", len(records))
+					}
+				} else {
+					if len(records) != 1 || records[0].ID != claim.Fence.ActionId || records[0].State == "SUCCEEDED" {
+						t.Fatal("custody failure fabricated settlement or lost the admitted action", records)
+					}
+					resources, err := driver.service.control.GetResourceLeases(records[0].ID)
+					if err != nil || len(resources) == 0 {
+						t.Fatal("custody failure discarded admitted resources", err)
+					}
+				}
+				if failure == "closed-client" && closed != 1 {
+					t.Fatal("failed signer session did not close exactly once", closed)
+				}
+			})
+		}
 	}
 }
 
@@ -792,11 +817,13 @@ func TestAgentDriverColdInstallationClosesSignerAndSettlesOnlyTheActualPlanner(t
 	driver, fixture, run := newDriverFixture(t, false)
 	driver.installed = nil
 	factory := driver.service.executionSigner
-	closed := 0
+	opened, closed := 0, 0
 	driver.service.executionSigner = func(control *store.Control) (*agentExecutionSignerSession, error) {
 		session, err := factory(control)
 		if session != nil {
-			session.close = func() error { closed++; return nil }
+			opened++
+			closeSession := session.close
+			session.close = func() error { closed++; return closeSession() }
 		}
 		return session, err
 	}
@@ -806,7 +833,7 @@ func TestAgentDriverColdInstallationClosesSignerAndSettlesOnlyTheActualPlanner(t
 	metadata := driverFixtureRun(t, driver, run.RunID)
 	records, err := driver.service.control.ListAuthoritativeRecords("action")
 	if err != nil || len(records) != 1 || records[0].State != "SUCCEEDED" || len(metadata.Plan) != 2 || metadata.Status == "done" ||
-		strings.Join(fixture.calls, ",") != "leader" || len(driver.installed) != 1 || closed != 1 {
+		strings.Join(fixture.calls, ",") != "leader" || len(driver.installed) != 1 || opened != 2 || closed != opened || fixture.closes != opened {
 		t.Fatal("cold controller failed real planner installation/custody release", err, closed)
 	}
 }

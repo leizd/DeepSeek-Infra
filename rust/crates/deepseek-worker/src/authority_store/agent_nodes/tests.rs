@@ -534,6 +534,50 @@ fn missing_local_record_and_replayed_go_intent_never_authorize_a_call() {
 }
 
 #[test]
+fn contended_agent_node_transaction_denies_without_record_or_duplicate_dispatch() {
+    let fixture = Fixture::new();
+    let mut worker = fixture.worker(true);
+    // Immediate timeout makes contention deterministic without sleeps or retries.
+    worker
+        .authority_store
+        .as_mut()
+        .unwrap()
+        .connection
+        .busy_timeout(std::time::Duration::ZERO)
+        .unwrap();
+    let mut blocking = fixture.database();
+    let lock = blocking
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .unwrap();
+    let error = fixture.begin(&mut worker, true).unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    assert_eq!(error.message(), "AGENT_NODE_EFFECT_DENIED");
+    assert_eq!(
+        lock.query_row("SELECT COUNT(*) FROM agent_node_effects", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    lock.rollback().unwrap();
+    assert!(matches!(
+        fixture.begin(&mut worker, true).unwrap(),
+        AgentNodeEffectStart::Started(_)
+    ));
+    assert!(matches!(
+        fixture.begin(&mut worker, true).unwrap(),
+        AgentNodeEffectStart::EffectUnknown
+    ));
+    assert_eq!(
+        fixture
+            .database()
+            .query_row("SELECT COUNT(*) FROM agent_node_effects", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
 fn independent_rust_handles_cannot_dispatch_the_same_fresh_decision_twice() {
     let fixture = Fixture::new();
     drop(fixture.worker(true));
@@ -547,6 +591,15 @@ fn independent_rust_handles_cannot_dispatch_the_same_fresh_decision_twice() {
         let barrier = barrier.clone();
         threads.push(std::thread::spawn(move || {
             let mut worker = crate::Worker::open_with_authority(config.clone(), &root).unwrap();
+            // This test proves serialization, not the production lock-wait limit.
+            // Allow bounded CI scheduling/fsync delay while keeping both real handles.
+            worker
+                .authority_store
+                .as_mut()
+                .unwrap()
+                .connection
+                .busy_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
             barrier.wait();
             worker
                 .authority_store
