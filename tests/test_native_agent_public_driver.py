@@ -138,3 +138,55 @@ def test_preset_evidence_rejects_semantic_and_provider_dispatch_changes(mutation
         report["productionProviderQualified"] = True
     with pytest.raises(ValueError):
         validate_preset_result(report, exchanges, case)
+
+
+def cancellation_evidence():
+    from scripts.verify_native_agent_public_driver import cancellation_cases
+    case = cancellation_cases()[0]
+    result = {"status":"PASS","runStatus":"cancelled","beforeCancelIndex":4,"nextIndex":5,"publicEventCount":5,"publicStreamEventCount":5,
+              "durablePhases":1,"actualPlan":case["plan"],"actualPreset":case["preset"],"actualPlanningSource":"upstream-provider",
+              "resourcesReleased":True,"noTasksAfterCancellation":True,"repeatCancellationIdempotent":True,
+              "confirmationAfterCancellationDenied":True,"planConfirmationRequired":True,"requestBodyStoredByRust":True,
+              "publicCancellationWhileAwaitingPlanQualified":True,"inputBodySeededByOfflineOracle":False,
+              "productionProviderQualified":False,"fullMigrationQualified":False,"activeTaskCancellationQualified":False,"productionRuntimeProcesses":["Go","Rust"]}
+    return result,[{"actionId":"planner-action","operationId":"leader","executionEpoch":"1"}],case
+
+
+def test_cancellation_evidence_retains_actual_scope_and_is_not_mutated():
+    from scripts.verify_native_agent_public_driver import validate_cancellation_result
+    result,exchanges,case=cancellation_evidence()
+    before=copy.deepcopy((result,exchanges,case))
+    validate_cancellation_result(result,exchanges,case)
+    assert (result,exchanges,case)==before
+
+
+def test_static_cancellation_requires_no_provider_exchange():
+    from scripts.verify_native_agent_public_driver import cancellation_cases, validate_cancellation_result
+    result,_,_=cancellation_evidence()
+    case=cancellation_cases()[1]
+    result.update(actualPlan=case["plan"],actualPreset=case["preset"],actualPlanningSource="retained-preset-policy")
+    validate_cancellation_result(result,[],case)
+
+
+@pytest.mark.parametrize("key,value",[
+    ("runStatus","done"),("nextIndex",6),("publicStreamEventCount",4),("durablePhases",2),("beforeCancelIndex",True),
+    ("noTasksAfterCancellation",False),("repeatCancellationIdempotent",False),("confirmationAfterCancellationDenied",False),
+    ("activeTaskCancellationQualified",True),("fullMigrationQualified",True),("productionProviderQualified",True),
+    ("inputBodySeededByOfflineOracle",True),("requestBodyStoredByRust",False),("actualPlan",[]),
+])
+def test_cancellation_rejects_missing_or_overclaimed_proof(key,value):
+    from scripts.verify_native_agent_public_driver import validate_cancellation_result
+    result,exchanges,case=cancellation_evidence()
+    result[key]=value
+    with pytest.raises(ValueError,match="incomplete or overclaims"):
+        validate_cancellation_result(result,exchanges,case)
+
+
+def test_cancellation_rejects_post_cancel_provider_requests_and_missing_fences():
+    from scripts.verify_native_agent_public_driver import validate_cancellation_result
+    result,exchanges,case=cancellation_evidence()
+    with pytest.raises(ValueError,match="incomplete or overclaims"):
+        validate_cancellation_result(result,exchanges*2,case)
+    exchanges[0].pop("actionId")
+    with pytest.raises(ValueError,match="durable fence"):
+        validate_cancellation_result(result,exchanges,case)

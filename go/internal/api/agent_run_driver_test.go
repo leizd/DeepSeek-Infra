@@ -903,3 +903,48 @@ func TestAgentDriverLostReplyQueryFailureRetainsThenReconcilesTheOriginalDispatc
 		t.Fatal("original custody reconciliation repeated an effect or omitted final settlement")
 	}
 }
+
+func TestAgentDriverRespectsDependenciesBeforeLexicallyEarlierReviewer(t *testing.T) {
+	driver, fixture, run := newDriverFixture(t, false)
+	if err := driver.drive(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	run = driverFixtureRun(t, driver, run.RunID)
+	authority, err := driver.service.GetAuthority(context.Background(), &agentv1.AgentRunAuthorityInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := agentRPCAppend(run.NextIndex, authority.MetadataEpoch)
+	edit.Create = nil
+	edit.OperationId = "operator-research-review-plan"
+	edit.Event = &agentv1.AgentRunEventMetadata{Type: "agent_plan", HasPlan: true, Body: driverFixtureReference("research-review-plan"),
+		Plan: []*agentv1.AgentRunPlanNode{{Id: "critic", Task: "review research", DependsOn: []string{"researcher"}}, {Id: "researcher", Task: "collect evidence"}}}
+	if _, err := driver.service.AppendEvent(context.Background(), edit); err != nil {
+		t.Fatal(err)
+	}
+	if err := driver.drive(context.Background(), driverFixtureRun(t, driver, run.RunID)); err != nil {
+		t.Fatal(err)
+	}
+	actual := driverFixtureRun(t, driver, run.RunID)
+	if strings.Join(fixture.calls, ",") != "leader,researcher,critic" || actual.Nodes()["researcher"].State != "succeeded" ||
+		actual.Nodes()["critic"].State != "succeeded" || actual.Status == "done" {
+		t.Fatal("lexical order bypassed the dependency or fabricated synthesis", fixture.calls, actual.Status)
+	}
+	records, err := driver.service.control.ListAuthoritativeRecords("action")
+	if err != nil || len(records) != 2 {
+		t.Fatal("task phase was duplicated", err)
+	}
+	for _, record := range records {
+		resources, err := driver.service.control.GetResourceLeases(record.ID)
+		if err != nil || record.State != "SUCCEEDED" || len(resources) != 0 {
+			t.Fatal("actual task settlement retained or lost resources", err)
+		}
+	}
+	if err := driver.drive(context.Background(), actual); err != nil {
+		t.Fatal(err)
+	}
+	actual = driverFixtureRun(t, driver, run.RunID)
+	if actual.Status != "done" || strings.Join(fixture.calls, ",") != "leader,researcher,critic,synthesizer" {
+		t.Fatal("reordered dependency chain did not settle exactly once", fixture.calls, actual.Status)
+	}
+}

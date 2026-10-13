@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,9 +65,12 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 	expectedPlan := []agent.RunPlanNode{{ID: "coder", Task: "write"}, {ID: "critic", Task: "review", DependsOn: []string{"coder"}}}
 	expectedConfirmation := true
 	if expected := os.Getenv("DEEPSEEK_TEST_AGENT_PLAN"); expected != "" {
-		if err := json.Unmarshal([]byte(expected), &expectedPlan); err != nil || len(expectedPlan) == 0 {
+		// A fresh slice prevents omitted dependencies inheriting the previous default node.
+		var configuredPlan []agent.RunPlanNode
+		if err := json.Unmarshal([]byte(expected), &configuredPlan); err != nil || len(configuredPlan) == 0 {
 			t.Fatal("invalid offline expected plan", err)
 		}
+		expectedPlan = configuredPlan
 		expectedConfirmation = os.Getenv("DEEPSEEK_TEST_AGENT_CONFIRMATION") == "true"
 	}
 	eventCount := 6 + len(expectedPlan)
@@ -132,6 +136,98 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 			records, recordErr = control.ListAuthoritativeRecords("action")
 			if recordErr != nil || len(records) != 1 {
 				t.Fatal("tasks started without actual public confirmation", recordErr)
+			}
+			if os.Getenv("DEEPSEEK_TEST_AGENT_CANCEL_AFTER_PLAN") == "1" {
+				beforeIndex := metadata.NextIndex
+				for attempt := 0; attempt < 2; attempt++ {
+					cancelResponse, postErr := client.Post(public.Origin+"/api/agent-runs/"+created.RunID+"/cancel", "application/json", bytes.NewBufferString(`{}`))
+					if postErr != nil {
+						t.Fatal("actual public cancellation", postErr)
+					}
+					cancelRaw, readErr := io.ReadAll(io.LimitReader(cancelResponse.Body, 2<<20))
+					cancelResponse.Body.Close()
+					var cancelled struct {
+						Cancelled bool           `json:"cancelled"`
+						Run       map[string]any `json:"run"`
+					}
+					if readErr != nil || cancelResponse.StatusCode != http.StatusOK || json.Unmarshal(cancelRaw, &cancelled) != nil ||
+						cancelled.Cancelled != (attempt == 0) || cancelled.Run["status"] != "cancelled" {
+						t.Fatalf("public cancellation failed: attempt=%d status=%d body=%s error=%v", attempt, cancelResponse.StatusCode, cancelRaw, readErr)
+					}
+				}
+				// A cancelled plan must remain terminal through the actual confirmation entry.
+				planResponse, postErr := client.Post(public.Origin+"/api/agent-runs/"+created.RunID+"/plan", "application/json", bytes.NewBufferString(`{"payload":{}}`))
+				if postErr != nil {
+					t.Fatal(postErr)
+				}
+				planResponse.Body.Close()
+				if planResponse.StatusCode != http.StatusConflict {
+					t.Fatal("cancelled plan was accepted", planResponse.StatusCode)
+				}
+				time.Sleep(1200 * time.Millisecond)
+				cancelledMetadata, present, readErr := control.AgentRunMetadata(created.RunID)
+				records, recordErr = control.ListAuthoritativeRecords("action")
+				if readErr != nil || !present || cancelledMetadata.Status != "cancelled" || cancelledMetadata.NextIndex != beforeIndex+1 ||
+					recordErr != nil || len(records) != 1 || records[0].State != "SUCCEEDED" || len(cancelledMetadata.Plan) != len(expectedPlan) {
+					t.Fatal("cancellation altered the plan or admitted tasks", readErr, recordErr)
+				}
+				resources, resourceErr := control.GetResourceLeases(records[0].ID)
+				if resourceErr != nil || len(resources) != 0 {
+					t.Fatal("planner retained terminal resources", resourceErr)
+				}
+				for _, node := range expectedPlan {
+					if cancelledMetadata.Nodes()[node.ID].State == "succeeded" || cancelledMetadata.Nodes()[node.ID].State == "failed" {
+						t.Fatal("cancelled plan fabricated a task outcome", node.ID)
+					}
+				}
+				response, err = client.Get(public.Origin + "/api/agent-runs/" + created.RunID + "/events")
+				if err != nil {
+					t.Fatal(err)
+				}
+				eventRaw, readErr := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+				response.Body.Close()
+				var eventPage struct {
+					Events []map[string]any `json:"events"`
+				}
+				if readErr != nil || response.StatusCode != http.StatusOK || json.Unmarshal(eventRaw, &eventPage) != nil ||
+					len(eventPage.Events) != int(cancelledMetadata.NextIndex) || eventPage.Events[len(eventPage.Events)-1]["status"] != "cancelled" ||
+					bytes.Contains(eventRaw, []byte("request-only-credential")) {
+					t.Fatal("public cancellation event page omitted terminal custody", readErr)
+				}
+				response, err = client.Get(public.Origin + "/api/agent-runs/" + created.RunID + "/stream")
+				if err != nil {
+					t.Fatal(err)
+				}
+				streamRaw, readErr := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+				response.Body.Close()
+				if readErr != nil || response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/x-ndjson") ||
+					bytes.Contains(streamRaw, []byte("request-only-credential")) {
+					t.Fatal("actual terminal NDJSON stream failed", readErr)
+				}
+				var streamEvents []map[string]any
+				for _, line := range strings.Split(string(streamRaw), "\n") {
+					if strings.TrimSpace(line) != "" {
+						var event map[string]any
+						if json.Unmarshal([]byte(strings.TrimSpace(line)), &event) != nil {
+							t.Fatal("invalid actual NDJSON event")
+						}
+						streamEvents = append(streamEvents, event)
+					}
+				}
+				if len(streamEvents) != len(eventPage.Events) || streamEvents[len(streamEvents)-1]["status"] != "cancelled" {
+					t.Fatal("NDJSON terminal events differ from durable page")
+				}
+				nativeSigningWrite(t, filepath.Join(directory, "result.json"), map[string]any{
+					"status": "PASS", "runId": created.RunID, "runStatus": cancelledMetadata.Status, "nextIndex": cancelledMetadata.NextIndex, "beforeCancelIndex": beforeIndex,
+					"durablePhases": len(records), "publicEventCount": len(eventPage.Events), "publicStreamEventCount": len(streamEvents),
+					"resourcesReleased": true, "noTasksAfterCancellation": true, "repeatCancellationIdempotent": true, "confirmationAfterCancellationDenied": true,
+					"requestSha256": cancelledMetadata.Request.SHA256, "requestLength": cancelledMetadata.Request.Length, "actualPreset": cancelledMetadata.Preset,
+					"actualPlan": cancelledMetadata.Plan, "planConfirmationRequired": cancelledMetadata.ConfirmPlan,
+					"inputBodySeededByOfflineOracle": false, "productionProviderQualified": false, "fullMigrationQualified": false,
+					"productionRuntimeProcesses": []string{"Go", "Rust"}, "publicCancellationWhileAwaitingPlanQualified": true,
+					"activeTaskCancellationQualified": false, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})
+				fmt.Println("actual native public cancellation / duplicate / denied confirmation / JSON events / terminal NDJSON PASS")
+				return
 			}
 			confirmedResponse, postErr := client.Post(public.Origin+"/api/agent-runs/"+created.RunID+"/plan",
 				"application/json", bytes.NewBufferString(`{"payload":{}}`))
