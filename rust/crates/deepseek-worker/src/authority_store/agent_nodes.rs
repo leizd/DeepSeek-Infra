@@ -429,6 +429,45 @@ impl AuthorityStore {
         Ok(Some(snapshot))
     }
 
+    /// Reuse only the original immutable node custody under the exact admitted
+    /// scope and signed grant. This read never renews, starts or repeats an effect.
+    pub(crate) fn retained_agent_node_start(
+        &self,
+        input: &crate::BeginAgentNodeEffect,
+        config: &WorkerAuthorityConfig,
+    ) -> Result<Option<AgentNodeEffectStart>, Status> {
+        let Some(row) = stored(&self.connection, &input.operation_id)? else {
+            return Ok(None);
+        };
+        if row.operation_id != input.operation_id
+            || row.node_id != input.node_id
+            || row.run_id != input.claim.run_id
+            || row.intent.fence.as_ref() != input.claim.fence.as_ref()
+            || row.scope_digest != claim_scope_digest(&input.claim)?
+            || row.grant_digest != agent_node_effect::digest(&input.signed_phase_grant)
+            || row.token != config.fencing_token
+            || row.intent_digest != agent_node_effect::digest(&row.intent.encode_to_vec())
+            || row.grant_digest != agent_node_effect::digest(&row.grant)
+        {
+            return Err(denied());
+        }
+        let response = BeginAgentNodeDispatchResponse {
+            fresh: false,
+            intent: Some(row.intent.clone()),
+            claim: Some(row.claim.clone()),
+        };
+        agent_node_effect::validate_scope(&response, &row.grant, config, &row.created_at)?;
+        match row.state.as_str() {
+            "CONFIRMED" => Ok(Some(AgentNodeEffectStart::Confirmed(outcome(row)?))),
+            "DISPATCHING" | "EFFECT_UNKNOWN"
+                if row.output.is_none() && row.output_digest.is_none() =>
+            {
+                Ok(Some(AgentNodeEffectStart::EffectUnknown))
+            }
+            _ => Err(denied()),
+        }
+    }
+
     pub(crate) fn begin_agent_node(
         &mut self,
         response: &BeginAgentNodeDispatchResponse,

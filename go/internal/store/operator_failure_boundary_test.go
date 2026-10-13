@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 )
@@ -117,5 +118,58 @@ func TestSynthesisSettlementRequiresCurrentActionCutoverBeforeAnyWrite(t *testin
 				t.Fatal("restored action cutover did not permit settlement", err)
 			}
 		})
+	}
+}
+
+func TestOperatorMutationExactReplayRequiresTheFinalLiveWriter(t *testing.T) {
+	control := promotedPolicyStore(t)
+	input := operatorMutation("final-replay-writer-loss", "policy_replay_final", 1)
+	if _, err := control.ApplyOperatorMutation(input); err != nil {
+		t.Fatal(err)
+	}
+	before := synthesisSnapshot(t, control)
+	original, token := control.now, control.token
+	start, calls := original(), 0
+	control.now = func() int64 {
+		calls++
+		if calls == 2 {
+			control.token++
+		}
+		return start
+	}
+	_, err := control.ApplyOperatorMutation(input)
+	control.now, control.token = original, token
+	if calls != 2 || !errors.Is(err, ErrWriterFenceHeld) || synthesisSnapshot(t, control) != before {
+		t.Fatalf("stale final writer accepted exact replay: %v", err)
+	}
+	replay, err := control.ApplyOperatorMutation(input)
+	if err != nil || replay.Status != OperatorMutationAlreadyApplied || synthesisSnapshot(t, control) != before {
+		t.Fatal("restored writer changed exact replay", err)
+	}
+}
+
+func TestSynthesisIgnoredLeaseUpdateCannotPublishTerminalEvents(t *testing.T) {
+	control, input, _ := synthesisSettlementFixture(t)
+	before := synthesisSnapshot(t, control)
+	if _, err := control.db.Exec("CREATE TEMP TRIGGER ignore_synthesis_lease BEFORE UPDATE ON action_leases BEGIN SELECT RAISE(IGNORE); END"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := control.SettleAgentSynthesis(input)
+	if _, dropErr := control.db.Exec("DROP TRIGGER temp.ignore_synthesis_lease"); dropErr != nil {
+		t.Fatal(dropErr)
+	}
+	if !errors.Is(err, ErrActionLeaseStale) || synthesisSnapshot(t, control) != before {
+		t.Fatal("ignored lease update published a terminal action, event or receipt", err)
+	}
+	if _, err := control.SettleAgentSynthesis(input); err != nil {
+		t.Fatal("ignored update poisoned valid retry", err)
+	}
+}
+
+func TestOperatorPayloadDigestRejectsMalformedOrMultipleJSONDocuments(t *testing.T) {
+	for _, raw := range []json.RawMessage{json.RawMessage("{"), json.RawMessage("{}{}")} {
+		if _, err := operatorPayloadDigest(raw); !errors.Is(err, ErrInvalidPayload) {
+			t.Fatal("invalid serialized payload acquired an operator replay digest", err)
+		}
 	}
 }

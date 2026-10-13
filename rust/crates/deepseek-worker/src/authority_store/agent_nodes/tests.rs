@@ -1056,3 +1056,153 @@ fn coherent_disk_tampering_is_rejected_before_writer_takeover_or_recovery() {
         );
     }
 }
+
+fn retained_input(fixture: &Fixture) -> crate::BeginAgentNodeEffect {
+    let intent = fixture.response.intent.as_ref().unwrap();
+    crate::BeginAgentNodeEffect {
+        claim: fixture.response.claim.as_ref().unwrap().clone(),
+        signed_phase_grant: fixture.grant.clone(),
+        operation_id: intent.operation_id.clone(),
+        actor: "rust-agent-worker".into(),
+        node_id: intent.node_id.clone(),
+    }
+}
+
+#[test]
+fn retained_node_replay_never_returns_a_second_dispatch_permit_and_survives_restart() {
+    let fixture = Fixture::new();
+    let input = retained_input(&fixture);
+    let mut worker = fixture.worker(true);
+    assert!(
+        worker
+            .authority_store
+            .as_ref()
+            .unwrap()
+            .retained_agent_node_start(&input, &fixture.config)
+            .unwrap()
+            .is_none()
+    );
+    let permit = started(fixture.begin(&mut worker, true).unwrap());
+    assert!(matches!(
+        worker
+            .authority_store
+            .as_ref()
+            .unwrap()
+            .retained_agent_node_start(&input, &fixture.config)
+            .unwrap(),
+        Some(AgentNodeEffectStart::EffectUnknown)
+    ));
+    let body = authority_request::canonical_json_bytes(
+        &json!({"publicEvent":{"type":"content","text":"retained"}}),
+    )
+    .unwrap();
+    let original = worker
+        .authority_store
+        .as_mut()
+        .unwrap()
+        .confirm_agent_node(&permit, &body, NOW)
+        .unwrap();
+    drop(worker);
+    let restarted = fixture.worker(false);
+    let before: (i64, String) = restarted
+        .authority_store
+        .as_ref()
+        .unwrap()
+        .connection
+        .query_row(
+            "SELECT COUNT(*),MAX(updated_at) FROM agent_node_effects",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let replay = restarted
+        .authority_store
+        .as_ref()
+        .unwrap()
+        .retained_agent_node_start(&input, &fixture.config)
+        .unwrap();
+    match replay {
+        Some(AgentNodeEffectStart::Confirmed(replayed)) => {
+            assert_eq!(replayed.output, original.output);
+            assert_eq!(replayed.output_sha256, original.output_sha256);
+            assert_eq!(replayed.operation_id, original.operation_id);
+            assert_eq!(replayed.fence, original.fence);
+        }
+        other => panic!("retained confirmed result did not replay: {other:?}"),
+    }
+    let after: (i64, String) = restarted
+        .authority_store
+        .as_ref()
+        .unwrap()
+        .connection
+        .query_row(
+            "SELECT COUNT(*),MAX(updated_at) FROM agent_node_effects",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn retained_node_replay_refuses_rebound_scope_or_signed_grant() {
+    let fixture = Fixture::new();
+    let mut worker = fixture.worker(true);
+    let _permit = started(fixture.begin(&mut worker, true).unwrap());
+    type Change = fn(&mut crate::BeginAgentNodeEffect);
+    let changes: [(&str, Change); 10] = [
+        ("node", |i| i.node_id = "critic".into()),
+        ("run", |i| i.claim.run_id.push_str("-other")),
+        ("action", |i| {
+            i.claim.fence.as_mut().unwrap().action_id.push_str("-other")
+        }),
+        ("epoch", |i| {
+            i.claim.fence.as_mut().unwrap().execution_epoch += 1
+        }),
+        ("plan", |i| i.claim.plan_digest = "0".repeat(64)),
+        ("request", |i| i.claim.request.as_mut().unwrap().length += 1),
+        ("owner", |i| i.claim.owner.push_str("-other")),
+        ("token", |i| i.claim.claim_token.push_str("-other")),
+        ("index", |i| i.claim.metadata_index += 1),
+        ("grant", |i| i.signed_phase_grant.push(b' ')),
+    ];
+    for (name, change) in changes {
+        let mut input = retained_input(&fixture);
+        change(&mut input);
+        assert!(
+            worker
+                .authority_store
+                .as_ref()
+                .unwrap()
+                .retained_agent_node_start(&input, &fixture.config)
+                .is_err(),
+            "rebound {name} reused node custody"
+        );
+    }
+}
+
+#[test]
+fn retained_node_replay_rechecks_pinned_writer_and_signer_realm() {
+    let fixture = Fixture::new();
+    let mut worker = fixture.worker(true);
+    let _permit = started(fixture.begin(&mut worker, true).unwrap());
+    type Change = fn(&mut WorkerAuthorityConfig);
+    let changes: [Change; 4] = [
+        |c| c.fencing_token += 1,
+        |c| c.signer_public_key = "invalid".into(),
+        |c| c.fleet_id.push_str("-other"),
+        |c| c.environment.push_str("-other"),
+    ];
+    for change in changes {
+        let mut config = fixture.config.clone();
+        change(&mut config);
+        assert!(
+            worker
+                .authority_store
+                .as_ref()
+                .unwrap()
+                .retained_agent_node_start(&retained_input(&fixture), &config)
+                .is_err()
+        );
+    }
+}

@@ -260,12 +260,13 @@ impl WorkerRpcService {
                     claim: &input.claim,
                 },
             )?;
-            worker
-                .authority_store
-                .as_ref()
-                .ok_or_else(denied)?
+            let store = worker.authority_store.as_ref().ok_or_else(denied)?;
+            store
                 .admit(input.claim.fence.as_ref().ok_or_else(denied)?)
                 .map_err(|_| denied())?;
+            if let Some(retained) = store.retained_agent_node_start(&input, &config)? {
+                return Ok(retained);
+            }
         }
         let response = control
             .begin_node_dispatch(
