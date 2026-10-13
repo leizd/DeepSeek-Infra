@@ -504,7 +504,13 @@ impl AgentNodeWorker for WorkerRpcService {
                 fence: Some(effect.fence),
                 run_id: effect.run_id,
                 node_id: effect.node_id,
-                state: effect.state,
+                // A committed dispatch without a retained result is unresolved
+                // even while its original provider future remains in flight.
+                state: if effect.state == "DISPATCHING" {
+                    "EFFECT_UNKNOWN".into()
+                } else {
+                    effect.state
+                },
                 public_event: None,
                 outcome_sha256: effect.output_sha256.unwrap_or_default(),
                 outcome_length: effect.output_length.unwrap_or(0),

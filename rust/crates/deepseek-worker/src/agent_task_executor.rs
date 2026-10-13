@@ -1,5 +1,8 @@
 //! Task text comes from Go's durable intent; result bodies stay in Rust custody.
-use std::time::{Duration, Instant};
+use std::{
+    future::Future,
+    time::{Duration, Instant},
+};
 
 use deepseek_policy::multi_agent;
 use deepseek_protocol::generated::deepseek::agent::v1::{
@@ -12,6 +15,17 @@ use crate::{AgentNodeEffectStart, BeginAgentNodeEffect, WorkerRpcService, author
 
 fn denied() -> Status {
     Status::failed_precondition("AGENT_TASK_EXECUTION_DENIED")
+}
+
+// Dropping a controller RPC must not drop an already admitted provider effect.
+// The task retains its original lease and provider timeout; worker shutdown or
+// panic leaves the durable intent unresolved and cannot authorize a retry.
+async fn retain_admitted_agent_output<T: Send + 'static>(
+    future: impl Future<Output = Result<T, Status>> + Send + 'static,
+) -> Result<T, Status> {
+    tokio::spawn(future)
+        .await
+        .map_err(|_| Status::unavailable("AGENT_TASK_RESULT_UNKNOWN"))?
 }
 
 fn valid_request(input: &ExecuteAgentTaskRequest, synthesis: bool) -> bool {
@@ -183,106 +197,107 @@ impl WorkerRpcService {
             }
             AgentNodeEffectStart::Started(permit) => permit,
         };
-        let sent = async {
-            let outputs = self
-                .worker
-                .lock()
-                .await
-                .authority_store
-                .as_ref()
-                .ok_or_else(denied)?
-                .agent_task_prior_outputs(&permit)?;
-            let intent = &permit.intent;
-            let role = intent.node_id.clone();
-            let task = intent.task.clone();
-            let model = task_model(&role);
-            let body = executor
-                .prepare_payload(
-                    intent.request.as_ref().ok_or_else(denied)?,
-                    move |payload| {
-                        if synthesis {
-                            let query = payload["messages"]
-                                .as_array()
-                                .and_then(|messages| {
-                                    messages
-                                        .iter()
-                                        .rev()
-                                        .find(|message| message["role"] == "user")
-                                })
-                                .and_then(|message| message["content"].as_str())
-                                .filter(|text| !text.trim().is_empty())
-                                .ok_or_else(denied)?;
-                            Ok(multi_agent::synthesis_payload(
-                                payload, model, query, &outputs,
-                            ))
-                        } else {
-                            multi_agent::worker_payload(payload, &role, &task, &outputs, model)
-                                .ok_or_else(denied)
-                        }
-                    },
+        let service = self.clone();
+        let executor = std::sync::Arc::clone(executor);
+        let run_id = claim.run_id.clone();
+        retain_admitted_agent_output(async move {
+            let sent = async {
+                let outputs = service
+                    .worker
+                    .lock()
+                    .await
+                    .authority_store
+                    .as_ref()
+                    .ok_or_else(denied)?
+                    .agent_task_prior_outputs(&permit)?;
+                let intent = &permit.intent;
+                let role = intent.node_id.clone();
+                let task = intent.task.clone();
+                let model = task_model(&role);
+                let body = executor
+                    .prepare_payload(
+                        intent.request.as_ref().ok_or_else(denied)?,
+                        move |payload| {
+                            if synthesis {
+                                let query = payload["messages"]
+                                    .as_array()
+                                    .and_then(|messages| {
+                                        messages
+                                            .iter()
+                                            .rev()
+                                            .find(|message| message["role"] == "user")
+                                    })
+                                    .and_then(|message| message["content"].as_str())
+                                    .filter(|text| !text.trim().is_empty())
+                                    .ok_or_else(denied)?;
+                                Ok(multi_agent::synthesis_payload(
+                                    payload, model, query, &outputs,
+                                ))
+                            } else {
+                                multi_agent::worker_payload(payload, &role, &task, &outputs, model)
+                                    .ok_or_else(denied)
+                            }
+                        },
+                    )
+                    .await?;
+                let deadline = service.node_send_lease(&permit).await?;
+                let now = authority_request::parse_utc_z_str(
+                    &authority_request::utc_z_now().map_err(|_| denied())?,
                 )
-                .await?;
-            let deadline = self.node_send_lease(&permit).await?;
-            let now = authority_request::parse_utc_z_str(
-                &authority_request::utc_z_now().map_err(|_| denied())?,
-            )
-            .map_err(|_| denied())?;
-            if deadline <= now {
-                return Err(Status::failed_precondition("AGENT_EXECUTION_LEASE_DENIED"));
-            }
-            let mut config = executor.upstream.clone();
-            config.timeout = config
-                .timeout
-                .min(Duration::from_secs((deadline - now) as u64));
-            let started = Instant::now();
-            let (turn, receipt) = deepseek_gateway::chat_execution::exchange_fenced_turn(
-                &config,
-                &body,
-                &permit.fence,
-                permit.operation_id(),
-                crate::MAX_AGENT_NODE_OUTCOME_BYTES / 2,
-            )
-            .await
-            .map_err(|_| Status::unavailable("AGENT_PROVIDER_RESULT_UNKNOWN"))?;
-            let calls = turn.tool_calls();
-            match turn.message.get("tool_calls") {
-                None | Some(Value::Null) => {}
-                Some(Value::Array(raw)) if raw.len() == calls.len() => {}
-                _ => return Err(Status::failed_precondition("AGENT_TASK_RESULT_UNKNOWN")),
-            }
-            let elapsed = started.elapsed().as_millis().min(i64::MAX as u128) as u64;
-            let envelope = if synthesis {
-                synthesis_envelope(
-                    &claim.run_id,
-                    turn.message,
-                    turn.usage,
-                    calls,
-                    &receipt,
-                    elapsed,
-                )?
-            } else {
-                task_envelope(
-                    (&claim.run_id, &intent.node_id, &intent.task),
-                    turn.message,
-                    turn.usage,
-                    calls,
-                    &receipt,
-                    elapsed,
-                )?
-            };
-            self.confirm_agent_node_effect(&permit, &envelope).await
-        }
-        .await;
-        match sent {
-            Ok(outcome) => self
-                .publish_attested_node(executor, outcome, &claim.run_id)
+                .map_err(|_| denied())?;
+                if deadline <= now {
+                    return Err(Status::failed_precondition("AGENT_EXECUTION_LEASE_DENIED"));
+                }
+                let mut config = executor.upstream.clone();
+                config.timeout = config
+                    .timeout
+                    .min(Duration::from_secs((deadline - now) as u64));
+                let started = Instant::now();
+                let (turn, receipt) = deepseek_gateway::chat_execution::exchange_fenced_turn(
+                    &config,
+                    &body,
+                    &permit.fence,
+                    permit.operation_id(),
+                    crate::MAX_AGENT_NODE_OUTCOME_BYTES / 2,
+                )
                 .await
-                .map(Response::new),
-            Err(error) => {
-                let _ = self.mark_agent_node_effect_unknown(&permit).await;
-                Err(error)
+                .map_err(|_| Status::unavailable("AGENT_PROVIDER_RESULT_UNKNOWN"))?;
+                let calls = turn.tool_calls();
+                match turn.message.get("tool_calls") {
+                    None | Some(Value::Null) => {}
+                    Some(Value::Array(raw)) if raw.len() == calls.len() => {}
+                    _ => return Err(Status::failed_precondition("AGENT_TASK_RESULT_UNKNOWN")),
+                }
+                let elapsed = started.elapsed().as_millis().min(i64::MAX as u128) as u64;
+                let envelope = if synthesis {
+                    synthesis_envelope(&run_id, turn.message, turn.usage, calls, &receipt, elapsed)?
+                } else {
+                    task_envelope(
+                        (&run_id, &intent.node_id, &intent.task),
+                        turn.message,
+                        turn.usage,
+                        calls,
+                        &receipt,
+                        elapsed,
+                    )?
+                };
+                service.confirm_agent_node_effect(&permit, &envelope).await
             }
-        }
+            .await;
+            match sent {
+                Ok(outcome) => {
+                    service
+                        .publish_attested_node(&executor, outcome, &run_id)
+                        .await
+                }
+                Err(error) => {
+                    let _ = service.mark_agent_node_effect_unknown(&permit).await;
+                    Err(error)
+                }
+            }
+        })
+        .await
+        .map(Response::new)
     }
 }
 
@@ -291,6 +306,43 @@ mod tests {
     use super::*;
     use deepseek_protocol::ActionFence;
     use deepseek_protocol::generated::deepseek::agent::v1::AgentRunExecutionClaim;
+
+    #[tokio::test]
+    async fn admitted_output_survives_a_dropped_controller_response() {
+        let (entered, arrived) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let (retained, retained_result) = tokio::sync::oneshot::channel();
+        let response = tokio::spawn(retain_admitted_agent_output(async move {
+            entered.send(()).unwrap();
+            released.await.unwrap();
+            retained.send("actual-provider-output").unwrap();
+            Ok::<_, Status>(())
+        }));
+        arrived.await.unwrap();
+        response.abort();
+        assert!(response.await.unwrap_err().is_cancelled());
+        release.send(()).unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), retained_result)
+                .await
+                .unwrap()
+                .unwrap(),
+            "actual-provider-output"
+        );
+    }
+
+    #[tokio::test]
+    async fn admitted_output_panic_is_unknown_and_cannot_report_success() {
+        let error = retain_admitted_agent_output(async {
+            panic!("offline admitted task panic");
+            #[allow(unreachable_code)]
+            Ok::<(), Status>(())
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unavailable);
+        assert_eq!(error.message(), "AGENT_TASK_RESULT_UNKNOWN");
+    }
 
     #[test]
     fn synthesis_rejects_task_claims_tools_empty_content_and_private_reasoning() {

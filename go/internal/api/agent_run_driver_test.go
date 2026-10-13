@@ -491,7 +491,7 @@ func driverFixtureLoop(t *testing.T, driver *agentRunDriver) (context.CancelFunc
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(15 * time.Second):
+		case <-time.After(30 * time.Second):
 			t.Error("driver loop did not drain")
 		}
 	})
@@ -502,7 +502,9 @@ func TestAgentDriverProductionLoopSchedulesAndRecoversWithoutDuplicateDispatch(t
 	driver, fixture, run := newDriverFixture(t, false)
 	fixture.failAfter = "coder"
 	cancel, done := driverFixtureLoop(t, driver)
-	deadline := time.Now().Add(15 * time.Second)
+	// Full cloud race instrumentation can delay the real multi-phase loop.
+	// Keep a bounded wait and all exact completion/no-redispatch assertions.
+	deadline := time.Now().Add(90 * time.Second)
 	for {
 		run = driverFixtureRun(t, driver, run.RunID)
 		if run.Status == "done" {
