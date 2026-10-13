@@ -66,3 +66,32 @@ def test_public_driver_actual_dispatch_and_dependency_boundaries(change):
         exchanges[index][field] = value
     with pytest.raises(ValueError):
         validate_driver_result(result, exchanges)
+
+
+def test_actual_public_edge_configuration_retains_only_explicit_control_and_body_custody(tmp_path):
+    from scripts.verify_native_agent_public_driver import public_edge_environment
+
+    source = {"PATH": "offline-test-path", "DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE": "private-bundle",
+        "DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE": "private-passphrase",
+        "DEEPSEEK_WORKER_TLS_KEY_FILE": "private-tls-key", "DEEPSEEK_API_KEY": "private-provider-key",
+        "DEEPSEEK_WORKER_AUTHORITY_NOW": "fake-clock", "GO_CONTROL_ADDR": "http://untrusted:80",
+        "DEEPSEEK_INTERNAL_BEARER": "untrusted", "DEEPSEEK_AGENT_ARTIFACT_DIR": "untrusted-custody"}
+    ready = {"origin": "http://127.0.0.1:18090", "internalBearer": "isolated-control-" + "x" * 32}
+    static, artifacts = tmp_path / "static/ui", tmp_path / "rust-agent-artifacts"
+    result = public_edge_environment(source, "127.0.0.1:18100", static, artifacts, ready)
+    assert result == {"PATH": "offline-test-path", "GATEWAY_BIND_ADDR": "127.0.0.1:18100",
+        "DEEPSEEK_RUNTIME_MODE": "python_disabled", "DEEPSEEK_INFRA_STATIC_DIR": static.parent.as_posix(),
+        "AUTH_DISABLED": "1", "GO_CONTROL_ADDR": ready["origin"], "DEEPSEEK_INTERNAL_BEARER": ready["internalBearer"],
+        "DEEPSEEK_AGENT_ARTIFACT_DIR": artifacts.as_posix()}
+    assert not artifacts.exists()  # Configuration itself cannot seed input custody.
+
+
+@pytest.mark.parametrize("ready", [{}, {"origin": 12, "internalBearer": "x" * 40},
+    {"origin": "http://remote:80", "internalBearer": "x" * 40},
+    {"origin": "http://127.0.0.1:18090", "internalBearer": "short"},
+    {"origin": "http://127.0.0.1:18090", "internalBearer": 12}])
+def test_public_edge_configuration_refuses_missing_actual_control_binding(tmp_path, ready):
+    from scripts.verify_native_agent_public_driver import public_edge_environment
+
+    with pytest.raises(ValueError, match="private loopback binding"):
+        public_edge_environment({}, "127.0.0.1:18100", tmp_path / "static/ui", tmp_path / "rust-agent-artifacts", ready)

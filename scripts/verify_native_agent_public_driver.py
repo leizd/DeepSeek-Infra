@@ -26,6 +26,21 @@ if str(ROOT / "scripts") not in sys.path:
 import verify_agent_signing_process as signing  # noqa: E402
 
 
+def public_edge_environment(source: dict[str, str], address: str, static: Path, artifacts: Path,
+                            ready: dict[str, Any]) -> dict[str, str]:
+    """Explicit gateway custody/control configuration after ambient identities are removed."""
+    origin, bearer = ready.get("origin"), ready.get("internalBearer")
+    if not isinstance(origin, str) or not origin.startswith("http://127.0.0.1:") or \
+            not isinstance(bearer, str) or len(bearer.strip()) < 32:
+        raise ValueError("Actual Go control readiness omitted the private loopback binding")
+    environment = signing.child_environment(source)
+    environment.update(GATEWAY_BIND_ADDR=address, DEEPSEEK_RUNTIME_MODE="python_disabled",
+        DEEPSEEK_INFRA_STATIC_DIR=static.parent.as_posix(), AUTH_DISABLED="1",
+        GO_CONTROL_ADDR=origin, DEEPSEEK_INTERNAL_BEARER=bearer,
+        DEEPSEEK_AGENT_ARTIFACT_DIR=artifacts.as_posix())
+    return environment
+
+
 def validate_driver_result(result: dict[str, Any], exchanges: list[dict[str, Any]]) -> None:
     if result.get("status") != "PASS" or result.get("runStatus") != "done" or result.get("nextIndex") != 9 or \
             result.get("durablePhases") != 3 or result.get("publicEventCount") != 9 or \
@@ -180,9 +195,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             with socket.socket() as port:
                 port.bind(("127.0.0.1", 0))
                 address = f"127.0.0.1:{port.getsockname()[1]}"
-            edge_environment = signing.child_environment(worker_environment)
-            edge_environment.update(GATEWAY_BIND_ADDR=address, DEEPSEEK_RUNTIME_MODE="python_disabled",
-                DEEPSEEK_INFRA_STATIC_DIR=static.parent.as_posix(), AUTH_DISABLED="1")
+            edge_environment = public_edge_environment(worker_environment, address, static, artifacts, ready)
             with (output / "public-driver-edge.log").open("wb") as log:
                 edge = subprocess.Popen([args.edge.resolve().as_posix()], cwd=ROOT, env=edge_environment, stdout=log, stderr=subprocess.STDOUT)
             wait_edge("http://" + address, edge)
