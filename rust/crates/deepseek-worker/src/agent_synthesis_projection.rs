@@ -23,9 +23,9 @@ fn derive_done_body(
         length: content.length,
     })?;
     if body["type"] != "content"
-        || !body["text"]
+        || body["text"]
             .as_str()
-            .is_some_and(|text| !text.trim().is_empty())
+            .is_none_or(|text| text.trim().is_empty())
         || body.as_object().is_none_or(|fields| fields.len() != 2)
     {
         return Err(DataError::Corrupt);
