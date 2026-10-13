@@ -104,6 +104,9 @@ func readAgentExecutionActionTx(tx *sql.Tx, id string) (Record, bool, error) {
 		`SELECT id, revision, execution_epoch, state, payload_json, record_digest, writer_fencing_token, updated_at FROM action_journal WHERE id=?`, id), "action")
 	if err == nil && found {
 		err = validateControlHistory(tx, record)
+		if err == nil {
+			err = store.validateAgentCancellationSettlementTx(tx, record)
+		}
 	}
 	return record, found, err
 }

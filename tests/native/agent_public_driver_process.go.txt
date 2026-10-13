@@ -143,6 +143,8 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 				t.Fatal("actual active cancellation failed", readErr)
 			}
 		}
+		// Stop this controller before releasing the provider: retained custody must survive a new controller owner.
+		stop()
 		// Only after the public cancellation has committed may the controlled provider finish.
 		nativeSigningWrite(t, filepath.Join(directory, "provider-release.json"), map[string]any{"cancelled": true})
 		session, err := configuredAgentExecutionSigner(control)
@@ -192,6 +194,39 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 				t.Fatal("cancelled task phase was fabricated as successful")
 			}
 		}
+		recoveryCtx, recoveryStop := context.WithCancel(context.Background())
+		recoveryDone := StartAgentRunDriver(recoveryCtx, control, HealthFor(config.Config{Mode: config.ModeAuthoritative}))
+		defer func() {
+			recoveryStop()
+			select {
+			case <-recoveryDone:
+			case <-time.After(15 * time.Second):
+				t.Error("recovery controller did not drain")
+			}
+		}()
+		recoveryDeadline := time.Now().Add(165 * time.Second)
+		for {
+			records, recordErr = control.ListAuthoritativeRecords("action")
+			resources, resourceErr = control.GetResourceLeases(taskAction)
+			settled := false
+			for _, record := range records {
+				if record.ID == taskAction && record.State == "CANCELLED_CONFIRMED" {
+					settled = true
+				}
+			}
+			if recordErr == nil && resourceErr == nil && len(resources) == 0 && settled {
+				break
+			}
+			if time.Now().After(recoveryDeadline) {
+				t.Fatal("new controller did not settle confirmed cancelled custody", recordErr, resourceErr)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		after, present, readErr = control.AgentRunMetadata(created.RunID)
+		recoveredAction, recovered, leaseErr := control.Get("action", taskAction)
+		if readErr != nil || !present || after.Status != "cancelled" || after.NextIndex != before.NextIndex+1 || leaseErr != nil || !recovered || recoveredAction.ExecutionEpoch <= lease.Epoch || recoveredAction.State != "CANCELLED_CONFIRMED" {
+			t.Fatal("cancelled recovery changed public state or omitted fenced takeover", readErr, leaseErr)
+		}
 		response, err = client.Get(public.Origin + "/api/agent-runs/" + created.RunID + "/stream")
 		if err != nil {
 			t.Fatal(err)
@@ -217,9 +252,9 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 		}
 		nativeSigningWrite(t, filepath.Join(directory, "result.json"), map[string]any{
 			"status": "PASS", "runId": created.RunID, "runStatus": after.Status, "beforeCancelIndex": before.NextIndex, "nextIndex": after.NextIndex,
-			"durablePhases": len(records), "publicStreamEventCount": len(streamEvents), "resourcesRetained": true, "resourcesReleased": false,
+			"durablePhases": len(records), "publicStreamEventCount": len(streamEvents), "resourcesRetained": false, "resourcesRetainedBeforeRecovery": true, "resourcesReleased": true,
 			"cancelledDuringActualProviderRequest": true, "actualLateTaskCustodyConfirmed": true, "noDependentOrSynthesisAdmission": true,
-			"repeatCancellationIdempotent": true, "activeCancellationSafetyQualified": true, "cancelledPhaseRecoveryQualified": false,
+			"repeatCancellationIdempotent": true, "activeCancellationSafetyQualified": true, "cancelledPhaseRecoveryQualified": true, "controllerRestartRecoveryQualified": true, "recoveryExecutionEpoch": recoveredAction.ExecutionEpoch, "originalExecutionEpoch": lease.Epoch,
 			"requestSha256": after.Request.SHA256, "requestLength": after.Request.Length, "actualPreset": after.Preset, "actualPlan": after.Plan,
 			"inputBodySeededByOfflineOracle": false, "productionProviderQualified": false, "fullMigrationQualified": false,
 			"productionRuntimeProcesses": []string{"Go", "Rust"}, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})

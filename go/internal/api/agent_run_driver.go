@@ -99,11 +99,15 @@ func (driver *agentRunDriver) run(ctx context.Context) {
 					return
 				}
 				run, found, err := driver.service.control.AgentRunMetadata(record.ID)
-				if err != nil || !found || !driverRunnable(run) {
+				if err != nil || !found || !driverRunnable(run) && !run.Cancelled {
 					continue
 				}
 				live[run.RunID] = true
-				err = driver.drive(ctx, run)
+				if run.Cancelled {
+					err = driver.recoverCancellation(ctx, run)
+				} else {
+					err = driver.drive(ctx, run)
+				}
 				if err == nil {
 					delete(prior, run.RunID)
 				} else if prior[run.RunID] != err.Error() {
@@ -523,4 +527,119 @@ func (driver *agentRunDriver) tasks(ctx context.Context, client agentDriverWorke
 		OperationId: driverOperation("complete-tasks:", claim.Fence.ActionId, ":", claim.Fence.ExecutionEpoch), Actor: agentDriverActor,
 		Fence: claim.Fence, RunId: run.RunID, Owner: claim.Owner, ClaimToken: claim.ClaimToken, ExpectedIndex: run.NextIndex})
 	return err
+}
+
+// Cancelled recovery observes only retained dispatches. It cannot issue a grant,
+// execute a node, project output or schedule dependencies/synthesis.
+func (driver *agentRunDriver) recoverCancellation(ctx context.Context, run agent.RunMetadata) error {
+	if !run.Cancelled || run.Status != "cancelled" {
+		return errAgentDriverUnknown
+	}
+	if err := driver.service.executionProcess(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	records, err := driver.service.control.ListAuthoritativeRecords("action")
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		binding, bindErr := store.AgentRunExecutionBindingFromRecord(record)
+		if bindErr != nil || binding.RunID != run.RunID {
+			continue
+		}
+		if record.State == "SUCCEEDED" || record.State == "CANCELLED_CONFIRMED" {
+			continue
+		}
+		if binding.Request != run.Request || binding.Phase == "plan" {
+			return errAgentDriverUnknown
+		}
+		lease, found, err := driver.service.control.GetActionLease(record.ID)
+		if err != nil || !found {
+			return errAgentDriverUnknown
+		}
+		if lease.Owner != driver.owner || lease.WriterFencingToken != driver.service.control.Writer().FencingToken {
+			_, claimErr := driver.service.control.AdmitAndClaimAction(store.AdmissionRequest{ActionID: record.ID, Owner: driver.owner, LeaseSeconds: agentDriverLease})
+			if claimErr != nil {
+				return claimErr
+			}
+			lease, found, err = driver.service.control.GetActionLease(record.ID)
+			if err != nil || !found {
+				return errAgentDriverUnknown
+			}
+		}
+		var session *agentExecutionSignerSession
+		defer func() {
+			if session != nil && session.close != nil {
+				_ = session.close()
+			}
+		}()
+		nodes := &agentNodeService{run: driver.service}
+		fence := &commonv1.ActionFence{ActionId: record.ID, ExecutionEpoch: uint64(lease.Epoch)}
+		ids := make([]string, 0, len(run.Plan)+1)
+		if binding.Phase == "synthesis" {
+			ids = append(ids, "synthesizer")
+		} else {
+			for _, node := range run.Plan {
+				ids = append(ids, node.ID)
+			}
+		}
+		for _, id := range ids {
+			dispatch, err := nodes.GetDispatch(ctx, &agentv1.GetAgentNodeDispatchRequest{Fence: fence, RunId: run.RunID, NodeId: id})
+			if err != nil {
+				return err
+			}
+			if !dispatch.Found || dispatch.OutcomeReceipt != nil {
+				continue
+			}
+			if dispatch.Intent == nil {
+				return errAgentDriverUnknown
+			}
+			if session == nil {
+				factory := driver.service.executionSigner
+				if factory == nil {
+					factory = configuredAgentExecutionSigner
+				}
+				session, err = factory(driver.service.control)
+				if err != nil {
+					return err
+				}
+				if session == nil || session.client == nil {
+					return errAgentDriverCustody
+				}
+			}
+			client, ok := session.client.(agentDriverWorker)
+			if !ok {
+				return errAgentDriverCustody
+			}
+			effect, err := client.QueryAgentNodeEffect(ctx, &agentv1.QueryAgentNodeEffectRequest{OperationId: dispatch.Intent.OperationId, Fence: dispatch.Intent.Fence, RunId: run.RunID, NodeId: id})
+			if err != nil {
+				return err
+			}
+			if effect == nil || effect.State != "CONFIRMED" || effect.OutcomeReceipt == nil {
+				return errAgentDriverUnknown
+			}
+			_, err = nodes.RecordOutcome(ctx, &agentv1.RecordAgentNodeOutcomeRequest{SchemaVersion: 1, OperationId: driverOperation("cancel-outcome:", record.ID, ":", lease.Epoch, ":", id), Actor: agentDriverActor, Fence: fence, RunId: run.RunID, NodeId: id, OutcomeReceipt: effect.OutcomeReceipt})
+			if err != nil {
+				return err
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, err = driver.service.control.SettleAgentCancellation(store.SettleAgentCancellationRequest{OperationID: driverOperation("cancel-settle:", record.ID, ":", lease.Epoch), Actor: agentDriverActor, ActionID: record.ID, Epoch: uint64(lease.Epoch), RunID: run.RunID, Owner: driver.owner, ClaimToken: lease.ClaimToken, ExpectedIndex: run.NextIndex})
+		if errors.Is(err, store.ErrActionLeaseExpired) {
+			_, claimErr := driver.service.control.AdmitAndClaimAction(store.AdmissionRequest{ActionID: record.ID, Owner: driver.owner, LeaseSeconds: agentDriverLease})
+			if claimErr != nil {
+				return claimErr
+			}
+			return errAgentDriverUnknown
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -37,7 +37,7 @@ def test_public_driver_complete_controlled_evidence_retains_qualification_limits
 def test_public_driver_incomplete_or_overclaimed_evidence_is_refused(key, value):
     result, exchanges = complete_evidence()
     result[key] = value
-    with pytest.raises(ValueError, match="incomplete or overclaims"):
+    with pytest.raises(ValueError, match="recovery|incomplete or overclaims"):
         validate_driver_result(result, exchanges)
 
 
@@ -178,14 +178,14 @@ def test_cancellation_rejects_missing_or_overclaimed_proof(key,value):
     from scripts.verify_native_agent_public_driver import validate_cancellation_result
     result,exchanges,case=cancellation_evidence()
     result[key]=value
-    with pytest.raises(ValueError,match="incomplete or overclaims"):
+    with pytest.raises(ValueError,match="recovery|incomplete or overclaims"):
         validate_cancellation_result(result,exchanges,case)
 
 
 def test_cancellation_rejects_post_cancel_provider_requests_and_missing_fences():
     from scripts.verify_native_agent_public_driver import validate_cancellation_result
     result,exchanges,case=cancellation_evidence()
-    with pytest.raises(ValueError,match="incomplete or overclaims"):
+    with pytest.raises(ValueError,match="recovery|incomplete or overclaims"):
         validate_cancellation_result(result,exchanges*2,case)
     exchanges[0].pop("actionId")
     with pytest.raises(ValueError,match="durable fence"):
@@ -196,15 +196,15 @@ def active_cancellation_evidence():
     from scripts.verify_native_agent_public_driver import active_cancellation_case
     case=active_cancellation_case()
     result={"status":"PASS","runStatus":"cancelled","beforeCancelIndex":4,"nextIndex":5,"durablePhases":2,"publicStreamEventCount":5,
-            "actualPreset":case["preset"],"actualPlan":case["plan"],"productionRuntimeProcesses":["Go","Rust"],"resourcesRetained":True,
+            "actualPreset":case["preset"],"actualPlan":case["plan"],"productionRuntimeProcesses":["Go","Rust"],"resourcesRetained":False,"resourcesRetainedBeforeRecovery":True,
             "cancelledDuringActualProviderRequest":True,"actualLateTaskCustodyConfirmed":True,"noDependentOrSynthesisAdmission":True,
             "repeatCancellationIdempotent":True,"activeCancellationSafetyQualified":True,"requestBodyStoredByRust":True,
-            "resourcesReleased":False,"cancelledPhaseRecoveryQualified":False,"inputBodySeededByOfflineOracle":False,"productionProviderQualified":False,"fullMigrationQualified":False}
+            "resourcesReleased":True,"cancelledPhaseRecoveryQualified":True,"controllerRestartRecoveryQualified":True,"originalExecutionEpoch":1,"recoveryExecutionEpoch":2,"inputBodySeededByOfflineOracle":False,"productionProviderQualified":False,"fullMigrationQualified":False}
     exchanges=[{"actionId":"plan","operationId":"leader","executionEpoch":"1"},{"actionId":"task","operationId":"coder","executionEpoch":"1"}]
     return result,exchanges,case
 
 
-def test_active_cancellation_evidence_preserves_recovery_limit():
+def test_active_cancellation_evidence_requires_authoritative_recovery():
     from scripts.verify_native_agent_public_driver import validate_active_cancellation_result
     result,exchanges,case=active_cancellation_evidence()
     before=copy.deepcopy((result,exchanges,case))
@@ -213,22 +213,22 @@ def test_active_cancellation_evidence_preserves_recovery_limit():
 
 
 @pytest.mark.parametrize("key,value",[
-    ("beforeCancelIndex",-1),("nextIndex",6),("durablePhases",3),("publicStreamEventCount",4),("resourcesRetained",False),
+    ("beforeCancelIndex",-1),("nextIndex",6),("durablePhases",3),("publicStreamEventCount",4),("resourcesRetained",True),
     ("actualLateTaskCustodyConfirmed",False),("noDependentOrSynthesisAdmission",False),("cancelledDuringActualProviderRequest",False),
-    ("resourcesReleased",True),("cancelledPhaseRecoveryQualified",True),("productionProviderQualified",True),("fullMigrationQualified",True),
+    ("resourcesReleased",False),("cancelledPhaseRecoveryQualified",False),("controllerRestartRecoveryQualified",False),("resourcesRetainedBeforeRecovery",False),("recoveryExecutionEpoch",1),("originalExecutionEpoch",0),("productionProviderQualified",True),("fullMigrationQualified",True),
 ])
 def test_active_cancellation_refuses_missing_or_false_recovery_proof(key,value):
     from scripts.verify_native_agent_public_driver import validate_active_cancellation_result
     result,exchanges,case=active_cancellation_evidence()
     result[key]=value
-    with pytest.raises(ValueError,match="incomplete or overclaims"):
+    with pytest.raises(ValueError,match="recovery|incomplete or overclaims"):
         validate_active_cancellation_result(result,exchanges,case)
 
 
 def test_active_cancellation_refuses_extra_calls_and_reused_phase_fence():
     from scripts.verify_native_agent_public_driver import validate_active_cancellation_result
     result,exchanges,case=active_cancellation_evidence()
-    with pytest.raises(ValueError,match="incomplete or overclaims"):
+    with pytest.raises(ValueError,match="recovery|incomplete or overclaims"):
         validate_active_cancellation_result(result,exchanges*2,case)
     exchanges[1]["actionId"]=exchanges[0]["actionId"]
     with pytest.raises(ValueError,match="distinct durable"):

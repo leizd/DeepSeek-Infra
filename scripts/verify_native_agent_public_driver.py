@@ -160,11 +160,14 @@ def validate_active_cancellation_result(result: dict[str, Any], exchanges: list[
     if result.get("status")!="PASS" or result.get("runStatus")!="cancelled" or type(before) is not int or type(after) is not int or \
             before<1 or after!=before+1 or result.get("durablePhases")!=2 or result.get("publicStreamEventCount")!=after or result.get("actualPreset")!=case["preset"] or \
             result.get("actualPlan")!=case["plan"] or result.get("productionRuntimeProcesses")!=["Go","Rust"] or len(exchanges)!=2 or \
-            any(result.get(k) is not True for k in ["resourcesRetained","cancelledDuringActualProviderRequest","actualLateTaskCustodyConfirmed", \
+            any(result.get(k) is not True for k in ["resourcesRetainedBeforeRecovery","resourcesReleased","controllerRestartRecoveryQualified","cancelledPhaseRecoveryQualified","cancelledDuringActualProviderRequest","actualLateTaskCustodyConfirmed", \
                 "noDependentOrSynthesisAdmission","repeatCancellationIdempotent","activeCancellationSafetyQualified","requestBodyStoredByRust"]) or \
-            any(result.get(k) is not False for k in ["resourcesReleased","cancelledPhaseRecoveryQualified","inputBodySeededByOfflineOracle", \
+            any(result.get(k) is not False for k in ["resourcesRetained","inputBodySeededByOfflineOracle", \
                 "productionProviderQualified","fullMigrationQualified"]):
-        raise ValueError("Active cancellation evidence is incomplete or overclaims recovery")
+        raise ValueError("Active cancellation evidence lacks authoritative recovery")
+    original,recovered=result.get("originalExecutionEpoch"),result.get("recoveryExecutionEpoch")
+    if type(original) is not int or type(recovered) is not int or original<1 or recovered!=original+1:
+        raise ValueError("Cancelled recovery did not preserve the original fence and take over once")
     if exchanges[0].get("actionId")==exchanges[1].get("actionId") or \
             any(not item.get(k) for item in exchanges for k in ["actionId","operationId","executionEpoch"]):
         raise ValueError("Active planner/task HTTP effects lack distinct durable admission")
@@ -315,7 +318,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     if db.execute("SELECT count(*) FROM artifacts").fetchone()[0] != 0:
                         raise ValueError("Input custody was seeded before actual public creation")
             signing.write_ready(case / "public-ready.json", {"origin": "http://" + address})
-            result = signing.wait_json(case / "result.json", producer, timeout=180)
+            result = signing.wait_json(case / "result.json", producer, timeout=360 if cancel_active else 180)
             if producer.wait(timeout=15) != 0:
                 raise RuntimeError("Actual native public driver process failed")
             if preset_case is None:
@@ -383,7 +386,7 @@ def main() -> int:
                             "actualHTTPRequests":report["actualHTTPRequests"],"nextIndex":report["nextIndex"],"actualPlanningSource":report["actualPlanningSource"]})
             print(json.dumps(results[-1]), flush=True)
         result = {"status":"PASS","sourceCommit":results[0]["sourceCommit"],"caseCount":len(results),"cases":results,
-                  "allInputsCreatedThroughRustHTTP":True,"cancellationWhileAwaitingPlanQualified":args.cancellation_matrix,"activeTaskCancellationQualified":False,"activeCancellationSafetyQualified":args.active_cancellation_matrix,"cancelledPhaseRecoveryQualified":False,"runtimePython":False,"realProviderQualified":False,"fullMigrationQualified":False,"readiness":"NOT_READY"}
+                  "allInputsCreatedThroughRustHTTP":True,"cancellationWhileAwaitingPlanQualified":args.cancellation_matrix,"activeTaskCancellationQualified":False,"activeCancellationSafetyQualified":args.active_cancellation_matrix,"cancelledPhaseRecoveryQualified":args.active_cancellation_matrix,"runtimePython":False,"realProviderQualified":False,"fullMigrationQualified":False,"readiness":"NOT_READY"}
         output.mkdir(parents=True, exist_ok=True)
         (output / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     else:

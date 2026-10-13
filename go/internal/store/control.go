@@ -1373,21 +1373,22 @@ func (store *Control) putLeasedControlRecord(record Record, dispatch *StorageDis
 // A prepared write owns its canonical bytes, including a dispatch's operation
 // identity. It cannot be rebound by modifying the caller's payload or intent.
 type controlRecordWrite struct {
-	agentEvent               bool
-	agentExecution           bool
-	agentNodeDispatch        bool
-	agentNodeOutcome         bool
-	agentTasksCompletion     bool
-	agentTaskSettlement      bool
-	agentPlanSettlement      bool
-	agentSynthesisSettlement bool
-	record                   Record
-	table                    string
-	intentJSON               []byte
-	intentDigest             string
-	operationID              string
-	allowBoundLease          bool
-	allowImportedBaseline    bool
+	agentEvent                  bool
+	agentExecution              bool
+	agentNodeDispatch           bool
+	agentNodeOutcome            bool
+	agentTasksCompletion        bool
+	agentCancellationSettlement bool
+	agentTaskSettlement         bool
+	agentPlanSettlement         bool
+	agentSynthesisSettlement    bool
+	record                      Record
+	table                       string
+	intentJSON                  []byte
+	intentDigest                string
+	operationID                 string
+	allowBoundLease             bool
+	allowImportedBaseline       bool
 }
 
 func prepareControlRecordWrite(record Record, dispatch *StorageDispatchIntent) (controlRecordWrite, error) {
@@ -1516,6 +1517,14 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 			return ErrAgentRunExecutionRequired
 		}
 	}
+	if record.Domain == "action" && !write.agentCancellationSettlement {
+		var beforeFields, afterFields map[string]json.RawMessage
+		_ = json.Unmarshal(existing.Payload, &beforeFields)
+		_ = json.Unmarshal(record.Payload, &afterFields)
+		if !bytes.Equal(beforeFields[agentCancellationSettlementField], afterFields[agentCancellationSettlementField]) {
+			return ErrAgentRunExecutionRequired
+		}
+	}
 	if record.Domain == "action" && !write.agentTasksCompletion {
 		var beforeFields, afterFields map[string]json.RawMessage
 		_ = json.Unmarshal(existing.Payload, &beforeFields)
@@ -1540,6 +1549,12 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 		legal = true
 	}
 
+	if write.agentCancellationSettlement {
+		if !exists || !nativeAgentCancellationSettlementEdge(existing, record) {
+			return ErrAgentRunExecutionRequired
+		}
+		legal = true
+	}
 	if write.agentTasksCompletion {
 		if !exists || !nativeAgentTasksCompletionEdge(existing, record) {
 			return ErrAgentRunExecutionRequired
@@ -1825,6 +1840,12 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 				}
 				legal = true
 			}
+			if !bytes.Equal(beforeFields[agentCancellationSettlementField], afterFields[agentCancellationSettlementField]) {
+				if !nativeAgentCancellationSettlementEdge(final, event) {
+					return ErrCorruptRecord
+				}
+				legal = true
+			}
 			if !bytes.Equal(beforeFields[agentTasksCompletionField], afterFields[agentTasksCompletionField]) {
 				if !nativeAgentTasksCompletionEdge(final, event) {
 					return ErrCorruptRecord
@@ -1990,7 +2011,7 @@ func secretBearingControlKey(key string) bool {
 }
 
 func knownState(domain, state string) bool {
-	if domain == "action" && (state == "RECONCILING" || verificationActionState(state)) {
+	if domain == "action" && (state == "RECONCILING" || state == "CANCELLED_CONFIRMED" || verificationActionState(state)) {
 		return true
 	}
 	edges, ok := transitions[domain]

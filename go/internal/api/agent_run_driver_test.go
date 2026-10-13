@@ -948,3 +948,66 @@ func TestAgentDriverRespectsDependenciesBeforeLexicallyEarlierReviewer(t *testin
 		t.Fatal("reordered dependency chain did not settle exactly once", fixture.calls, actual.Status)
 	}
 }
+
+func TestAgentDriverRecoversCancelledTaskCustodyWithoutRedispatch(t *testing.T) {
+	driver, fixture, run := newDriverFixture(t, false)
+	if err := driver.drive(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	run = driverFixtureRun(t, driver, run.RunID)
+	fixture.failAfter = "coder"
+	if err := driver.drive(context.Background(), run); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	run = driverFixtureRun(t, driver, run.RunID)
+	authority, err := driver.service.GetAuthority(context.Background(), &agentv1.AgentRunAuthorityInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelEvent := agentRPCAppend(run.NextIndex, authority.MetadataEpoch)
+	cancelEvent.Create = nil
+	cancelEvent.OperationId = "driver-cancel-active"
+	cancelEvent.Event = &agentv1.AgentRunEventMetadata{Type: "run_status", Status: "cancelled", Body: driverFixtureReference("cancelled")}
+	if _, err := driver.service.AppendEvent(context.Background(), cancelEvent); err != nil {
+		t.Fatal(err)
+	}
+	run = driverFixtureRun(t, driver, run.RunID)
+	index := run.NextIndex
+	fixture.fail = "query"
+	if err := driver.recoverCancellation(context.Background(), run); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("missing query fabricated settlement", err)
+	}
+	records, err := driver.service.control.ListAuthoritativeRecords("action")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if record.State != "SUCCEEDED" {
+			resources, err := driver.service.control.GetResourceLeases(record.ID)
+			if err != nil || len(resources) == 0 {
+				t.Fatal("unknown cancelled effect released resources", err)
+			}
+		}
+	}
+	fixture.fail = ""
+	if err := driver.recoverCancellation(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	if err := driver.recoverCancellation(context.Background(), run); err != nil {
+		t.Fatal("duplicate recovery", err)
+	}
+	actual := driverFixtureRun(t, driver, run.RunID)
+	if actual.Status != "cancelled" || actual.NextIndex != index || actual.Nodes()["coder"].State == "succeeded" || strings.Join(fixture.calls, ",") != "leader,coder" {
+		t.Fatal("recovery fabricated completion or redispatched", fixture.calls, actual)
+	}
+	records, err = driver.service.control.ListAuthoritativeRecords("action")
+	if err != nil || len(records) != 2 {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		resources, err := driver.service.control.GetResourceLeases(record.ID)
+		if err != nil || len(resources) != 0 || record.State != "SUCCEEDED" && record.State != "CANCELLED_CONFIRMED" {
+			t.Fatal("cancelled phase unresolved", record.State, err)
+		}
+	}
+}
