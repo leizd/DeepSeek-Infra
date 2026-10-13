@@ -500,7 +500,7 @@ fn creation_metadata(value: &Value) -> Result<AgentRunCreateMetadata, ReadError>
         .map_or(Ok("full"), |v| v.as_str().ok_or_else(invalid_request))?;
     if !matches!(
         preset,
-        "full" | "auto" | "plan" | "code" | "research" | "reason" | "critic"
+        "full" | "auto" | "plan" | "code" | "research" | "reason" | "critic" | "leader"
     ) {
         return Err(invalid_request());
     }

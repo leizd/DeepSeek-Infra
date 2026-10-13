@@ -753,3 +753,119 @@ func TestAgentDriverFreshAdmissionRefusesAnUnavailableOrShadowAuthority(t *testi
 		})
 	}
 }
+
+func TestAgentDriverCustodyFailureKeepsAdmittedResourcesWithoutProviderDispatch(t *testing.T) {
+	for _, failure := range []string{"nil-session", "closed-client", "missing-binding"} {
+		t.Run(failure, func(t *testing.T) {
+			driver, fixture, run := newDriverFixture(t, false)
+			closed := 0
+			switch failure {
+			case "nil-session":
+				driver.service.executionSigner = func(*store.Control) (*agentExecutionSignerSession, error) { return nil, nil }
+			case "closed-client":
+				driver.service.executionSigner = func(*store.Control) (*agentExecutionSignerSession, error) {
+					return &agentExecutionSignerSession{close: func() { closed++ }}, nil
+				}
+			case "missing-binding":
+				t.Setenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY", "")
+				driver.service.executionSigner = nil
+			}
+			if err := driver.drive(context.Background(), run); err == nil {
+				t.Fatal("accepted unavailable signer custody")
+			}
+			records, err := driver.service.control.ListAuthoritativeRecords("action")
+			if err != nil || len(records) != 1 || records[0].State == "SUCCEEDED" || len(fixture.calls) != 0 || len(driver.installed) != 0 {
+				t.Fatal("custody failure dispatched, installed or fabricated settlement", err)
+			}
+			resources, err := driver.service.control.GetResourceLeases(records[0].ID)
+			if err != nil || len(resources) == 0 {
+				t.Fatal("custody failure discarded admitted resources", err)
+			}
+			if failure == "closed-client" && closed != 1 {
+				t.Fatal("failed signer session did not close exactly once", closed)
+			}
+		})
+	}
+}
+
+func TestAgentDriverColdInstallationClosesSignerAndSettlesOnlyTheActualPlanner(t *testing.T) {
+	driver, fixture, run := newDriverFixture(t, false)
+	driver.installed = nil
+	factory := driver.service.executionSigner
+	closed := 0
+	driver.service.executionSigner = func(control *store.Control) (*agentExecutionSignerSession, error) {
+		session, err := factory(control)
+		if session != nil {
+			session.close = func() { closed++ }
+		}
+		return session, err
+	}
+	if err := driver.drive(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	metadata := driverFixtureRun(t, driver, run.RunID)
+	records, err := driver.service.control.ListAuthoritativeRecords("action")
+	if err != nil || len(records) != 1 || records[0].State != "SUCCEEDED" || len(metadata.Plan) != 2 || metadata.Status == "done" ||
+		strings.Join(fixture.calls, ",") != "leader" || len(driver.installed) != 1 || closed != 1 {
+		t.Fatal("cold controller failed real planner installation/custody release", err, closed)
+	}
+}
+
+func TestAgentDriverClosedAuthorityCannotRenewOrMintAnAdmittedGrant(t *testing.T) {
+	driver, fixture, run := newDriverFixture(t, false)
+	phase, _, err := driver.phase(run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := driver.admission(context.Background(), run, phase, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := driver.service.control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	renewed, grant, err := driver.grant(context.Background(), claim)
+	if err == nil || renewed != nil || len(grant) != 0 || len(driver.installed) != 0 || len(fixture.calls) != 0 {
+		t.Fatal("closed authority renewed, minted or dispatched")
+	}
+}
+
+func TestAgentDriverLostReplyQueryFailureRetainsThenReconcilesTheOriginalDispatch(t *testing.T) {
+	driver, fixture, run := newDriverFixture(t, false)
+	if err := driver.drive(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	run = driverFixtureRun(t, driver, run.RunID)
+	fixture.failAfterCoder, fixture.fail = true, "query"
+	if err := driver.drive(context.Background(), run); err == nil {
+		t.Fatal("lost reply and unavailable query were treated as completion")
+	}
+	run = driverFixtureRun(t, driver, run.RunID)
+	records, err := driver.service.control.ListAuthoritativeRecords("action")
+	if err != nil || len(records) != 2 || run.Status == "done" || strings.Join(fixture.calls, ",") != "leader,coder" {
+		t.Fatal("lost reply/query failure discarded or repeated dispatch", err)
+	}
+	retained := false
+	for _, record := range records {
+		resources, err := driver.service.control.GetResourceLeases(record.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record.State != "SUCCEEDED" && len(resources) > 0 {
+			retained = true
+		}
+	}
+	if !retained {
+		t.Fatal("unresolved task phase released its resources")
+	}
+	fixture.fail = ""
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := driver.drive(context.Background(), run); err != nil {
+			t.Fatal(err)
+		}
+		run = driverFixtureRun(t, driver, run.RunID)
+	}
+	if run.Status != "done" || strings.Join(fixture.calls, ",") != "leader,coder,critic,synthesizer" {
+		t.Fatal("original custody reconciliation repeated an effect or omitted final settlement")
+	}
+}

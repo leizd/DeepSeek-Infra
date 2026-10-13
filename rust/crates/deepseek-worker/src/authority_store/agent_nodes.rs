@@ -197,8 +197,10 @@ impl AuthorityStore {
         }
         // These are provider scheduling candidates; Go owns their normalization,
         // admission and the resulting plan/DAG. Bodies remain in the Rust store.
-        let provider_plan = event["plan"]["tasks"]
-            .as_array()
+        let provider_plan = event["plan"]
+            .get("tasks")
+            .or_else(|| event["plan"].get("agents"))
+            .and_then(serde_json::Value::as_array)
             .into_iter()
             .flatten()
             .filter_map(|task| {

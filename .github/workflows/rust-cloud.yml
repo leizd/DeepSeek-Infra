@@ -123,6 +123,10 @@ jobs:
         if: matrix.mode == 'checks'
         run: |
           python scripts/verify_native_agent_public_driver.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-public-driver 2>&1 | tee artifacts/rust-cloud/agent-public-driver.log
+      - name: Verify all retained presets through actual native public creation
+        run: |
+          set -o pipefail
+          python scripts/verify_native_agent_public_driver.py --preset-matrix --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-preset-matrix 2>&1 | tee artifacts/rust-cloud/agent-preset-matrix.log
       - name: Install pinned coverage tooling on the cloud runner
         if: matrix.mode == 'coverage'
         run: |

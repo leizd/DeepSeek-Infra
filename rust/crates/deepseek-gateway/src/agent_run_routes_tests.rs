@@ -837,3 +837,14 @@ async fn public_confirmation_and_cancellation_refuse_wrong_states() {
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 }
+
+#[test]
+fn public_creation_retains_all_explicit_agent_presets_and_confirmation_rules() {
+    for preset in [
+        "full", "code", "research", "reason", "critic", "leader", "auto", "plan",
+    ] {
+        let metadata = creation_metadata(&json!({"agentPreset":preset,"payload":{"messages":[{"role":"user","content":"inspect"}]}})).unwrap();
+        assert_eq!(metadata.preset, preset);
+        assert_eq!(metadata.confirm_plan, matches!(preset, "auto" | "plan"));
+    }
+}

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
 	"github.com/leizd/DeepSeek-Infra/go/internal/config"
 )
 
@@ -53,10 +54,29 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 			t.Error("production driver did not drain")
 		}
 	}()
+	preset, query := os.Getenv("DEEPSEEK_TEST_AGENT_PRESET"), os.Getenv("DEEPSEEK_TEST_AGENT_QUERY")
+	if preset == "" {
+		preset = "auto"
+	}
+	if query == "" {
+		query = "Prepare an isolated verification plan"
+	}
+	expectedPlan := []agent.RunPlanNode{{ID: "coder", Task: "write"}, {ID: "critic", Task: "review", DependsOn: []string{"coder"}}}
+	expectedConfirmation := true
+	if expected := os.Getenv("DEEPSEEK_TEST_AGENT_PLAN"); expected != "" {
+		if err := json.Unmarshal([]byte(expected), &expectedPlan); err != nil || len(expectedPlan) == 0 {
+			t.Fatal("invalid offline expected plan", err)
+		}
+		expectedConfirmation = os.Getenv("DEEPSEEK_TEST_AGENT_CONFIRMATION") == "true"
+	}
+	eventCount := 6 + len(expectedPlan)
+	if expectedConfirmation {
+		eventCount++
+	}
 	payload := map[string]any{"payload": map[string]any{
-		"messages": []map[string]string{{"role": "user", "content": "Prepare an isolated verification plan"}},
+		"messages": []map[string]string{{"role": "user", "content": query}},
 		"model":    "deepseek-chat", "apiKey": "request-only-credential"},
-		"agentPreset": "auto", "confirmPlan": false, "conversationId": "public-native-conversation", "messageId": "public-native-message"}
+		"agentPreset": preset, "confirmPlan": os.Getenv("DEEPSEEK_TEST_AGENT_EXPLICIT_CONFIRMATION") == "true", "conversationId": "public-native-conversation", "messageId": "public-native-message"}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -138,9 +158,19 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	metadata, found, err := control.AgentRunMetadata(created.RunID)
-	if err != nil || !found || !confirmed || metadata.Status != "done" || metadata.NextIndex != 9 ||
-		metadata.Nodes()["coder"].State != "succeeded" || metadata.Nodes()["critic"].State != "succeeded" {
+	if err != nil || !found || (expectedConfirmation && !confirmed) || metadata.ConfirmPlan != expectedConfirmation || metadata.Preset != preset ||
+		metadata.Status != "done" || metadata.NextIndex != int64(eventCount) {
 		t.Fatal("public state differs from actual Go durable settlement", err)
+	}
+	if len(metadata.Plan) != len(expectedPlan) {
+		t.Fatal("preset changed task cardinality")
+	}
+	for index, expected := range expectedPlan {
+		actual := metadata.Plan[index]
+		if actual.ID != expected.ID || actual.Task != expected.Task || fmt.Sprint(actual.DependsOn) != fmt.Sprint(expected.DependsOn) ||
+			metadata.Nodes()[expected.ID].State != "succeeded" {
+			t.Fatal("preset changed actual normalized task/dependency settlement", actual, expected)
+		}
 	}
 	records, err := control.ListAuthoritativeRecords("action")
 	if err != nil || len(records) != 3 {
@@ -159,11 +189,11 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 			t.Fatal("terminal action retains a live lease")
 		}
 	}
-	if publicRun["nextIndex"] != float64(9) {
+	if publicRun["nextIndex"] != float64(eventCount) {
 		t.Fatal("public event cursor omitted settlement")
 	}
 	events, ok := publicRun["events"].([]any)
-	if !ok || len(events) != 9 {
+	if !ok || len(events) != eventCount {
 		t.Fatal("public immutable event bodies omitted")
 	}
 	serialized := string(raw)
@@ -176,6 +206,7 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 		"publicEventCount": len(events), "finalAnswerVisible": true, "publicResponseLength": len(serialized),
 		"inputBodySeededByOfflineOracle": false, "productionProviderQualified": false, "fullMigrationQualified": false,
 		"productionRuntimeProcesses": []string{"Go", "Rust"}, "providerFixtureIsOfflineTestTool": true,
-		"publicCreationAndDAGDriverQualified": true, "publicPlanConfirmationQualified": true, "noTasksBeforePublicConfirmation": true, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})
+		"publicCreationAndDAGDriverQualified": true, "publicPlanConfirmationQualified": expectedConfirmation && confirmed, "noTasksBeforePublicConfirmation": expectedConfirmation && confirmed,
+		"planConfirmationRequired": metadata.ConfirmPlan, "actualPreset": metadata.Preset, "actualPlan": metadata.Plan, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})
 	fmt.Println("actual native public create / leader / dependent DAG / synthesis / final settlement PASS")
 }

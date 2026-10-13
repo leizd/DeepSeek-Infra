@@ -133,6 +133,42 @@ impl WorkerRpcService {
 }
 
 impl AgentPlanExecutor {
+    async fn prepare_preset(
+        &self,
+        request: &ExecuteAgentPlanRequest,
+    ) -> Result<Option<Value>, Status> {
+        let reference = request
+            .claim
+            .as_ref()
+            .and_then(|claim| claim.request.as_ref())
+            .ok_or_else(unavailable)?;
+        let reference = ArtifactReference {
+            sha256: reference.sha256.clone(),
+            length: reference.length,
+        };
+        let root = self.artifact_root.clone();
+        tokio::task::spawn_blocking(move || {
+            let body = ArtifactStore::open_readonly(&root)
+                .and_then(|store| store.get(&reference))
+                .map_err(|_| Status::failed_precondition("AGENT_REQUEST_ARTIFACT_DENIED"))?;
+            let payload = body
+                .get("payload")
+                .or_else(|| body.get("requestPayload"))
+                .unwrap_or(&body);
+            if !payload.is_object() {
+                return Err(Status::invalid_argument("AGENT_REQUEST_INVALID"));
+            }
+            let preset = body.get("agentPreset").map_or(Ok("full"), |value| {
+                value
+                    .as_str()
+                    .ok_or_else(|| Status::invalid_argument("AGENT_REQUEST_INVALID"))
+            })?;
+            Ok(multi_agent::preset_plan(payload, preset))
+        })
+        .await
+        .map_err(|_| unavailable())?
+    }
+
     async fn prepare(&self, request: &ExecuteAgentPlanRequest) -> Result<Value, Status> {
         let reference = request
             .claim
@@ -355,7 +391,12 @@ impl AgentNodeWorker for WorkerRpcService {
         }
         // Resolve/validate the immutable Rust body before spending the sole Go
         // reservation. Neither the RPC caller nor Go supplies a replacement body.
-        let body = executor.prepare(&input).await?;
+        let preset = executor.prepare_preset(&input).await?;
+        let body = if preset.is_none() {
+            Some(executor.prepare(&input).await?)
+        } else {
+            None
+        };
         let mut begin = Request::new(BeginAgentNodeEffect {
             claim: claim.clone(),
             signed_phase_grant: input.signed_phase_grant,
@@ -381,14 +422,21 @@ impl AgentNodeWorker for WorkerRpcService {
             let deadline = self.node_send_lease(&permit).await?;
             let now = authority_request::parse_utc_z_str(&authority_request::utc_z_now().map_err(|_| unavailable())?).map_err(|_| unavailable())?;
             if deadline <= now { return Err(Status::failed_precondition("AGENT_EXECUTION_LEASE_DENIED")); }
-            let mut config = executor.upstream.clone();
-            config.timeout = config.timeout.min(Duration::from_secs((deadline - now) as u64));
-            let (turn, receipt) = deepseek_gateway::chat_execution::exchange_fenced_turn(&config, &body, &permit.fence,
-                permit.operation_id(), crate::MAX_AGENT_NODE_OUTCOME_BYTES / 2).await.map_err(|_| Status::unavailable("AGENT_PROVIDER_RESULT_UNKNOWN"))?;
-            let content = turn.content();
-            if content.is_empty() || !turn.tool_calls().is_empty() { return Err(Status::failed_precondition("AGENT_PLAN_RESULT_UNKNOWN")); }
-            let event = json!({"type":"agent_plan","plan":multi_agent::parse_plan_response(&content),"text":content,"usage":turn.usage});
-            let envelope = json!({"runId":claim.run_id,"publicEvent":event,"providerResponseSha256":receipt});
+            let envelope = if let Some(plan) = preset {
+                let label = plan["label"].as_str().ok_or_else(unavailable)?;
+                let event = json!({"type":"agent_plan","plan":plan,"text":label,"usage":{}});
+                // This is a local policy result; do not invent an upstream response.
+                json!({"runId":claim.run_id,"publicEvent":event,"planningSource":"retained-preset-policy"})
+            } else {
+                let mut config = executor.upstream.clone();
+                config.timeout = config.timeout.min(Duration::from_secs((deadline - now) as u64));
+                let (turn, receipt) = deepseek_gateway::chat_execution::exchange_fenced_turn(&config, body.as_ref().ok_or_else(unavailable)?, &permit.fence,
+                    permit.operation_id(), crate::MAX_AGENT_NODE_OUTCOME_BYTES / 2).await.map_err(|_| Status::unavailable("AGENT_PROVIDER_RESULT_UNKNOWN"))?;
+                let content = turn.content();
+                if content.is_empty() || !turn.tool_calls().is_empty() { return Err(Status::failed_precondition("AGENT_PLAN_RESULT_UNKNOWN")); }
+                let event = json!({"type":"agent_plan","plan":multi_agent::parse_plan_response(&content),"text":content,"usage":turn.usage});
+                json!({"runId":claim.run_id,"publicEvent":event,"providerResponseSha256":receipt})
+            };
             self.confirm_agent_node_effect(&permit, &envelope).await
         }.await;
         match sent {
@@ -547,6 +595,45 @@ mod tests {
                 .prepare(&ExecuteAgentPlanRequest::default())
                 .await
                 .is_err()
+        );
+        assert!(!root.path().join(".budget").exists());
+        assert!(!root.path().join("rust-worker").exists());
+    }
+
+    #[tokio::test]
+    async fn static_presets_read_bound_rust_input_without_provider_or_budget_access() {
+        let root = tempfile::tempdir().unwrap();
+        let executor = executor(root.path());
+        for preset in ["full", "code", "research", "reason", "critic"] {
+            let input = request(
+                root.path(),
+                &json!({"agentPreset":preset,"payload":{"messages":[{"role":"user","content":"inspect"}]}}),
+            );
+            let plan = executor.prepare_preset(&input).await.unwrap().unwrap();
+            assert!(
+                plan["agents"]
+                    .as_array()
+                    .is_some_and(|nodes| !nodes.is_empty())
+            );
+            assert!(!plan.to_string().contains("fixture-provider-secret"));
+        }
+        let input = request(
+            root.path(),
+            &json!({"agentPreset":"leader","payload":{"messages":[{"role":"user","content":"inspect"}]}}),
+        );
+        assert!(executor.prepare_preset(&input).await.unwrap().is_none());
+        let input = request(
+            root.path(),
+            &json!({"agentPreset":"auto","payload":{"messages":[{"role":"user","content":"代码"}]}}),
+        );
+        assert_eq!(
+            executor.prepare_preset(&input).await.unwrap().unwrap()["agents"][0]["id"],
+            "coder"
+        );
+        let input = request(root.path(), &json!({"agentPreset":"full","payload":[]}));
+        assert_eq!(
+            executor.prepare_preset(&input).await.unwrap_err().message(),
+            "AGENT_REQUEST_INVALID"
         );
         assert!(!root.path().join(".budget").exists());
         assert!(!root.path().join("rust-worker").exists());

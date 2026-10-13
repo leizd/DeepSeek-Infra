@@ -80,9 +80,54 @@ def wait_edge(origin: str, process: subprocess.Popen[bytes]) -> None:
     raise TimeoutError("Native public edge did not become reachable")
 
 
+def preset_cases() -> list[dict[str, Any]]:
+    fixture = json.loads((ROOT / "rust/crates/deepseek-policy/tests/fixtures/agent_preset_plan.json").read_text(encoding="utf-8"))
+    rows = fixture["cases"]
+    choices = [("full", "inspect"), ("code", "inspect"), ("research", "inspect"), ("reason", "inspect"), ("critic", "inspect"),
+               ("auto", "BUG in class C"), ("auto", "最新资料"), ("auto", "复杂权衡"), ("auto", "字" * 501),
+               ("auto", "代码和今天新闻"), ("leader", "inspect")]
+    result = []
+    for index, (preset, query) in enumerate(choices):
+        row = next(value for value in rows if value["preset"] == preset and value["payload"]["messages"][0]["content"] == query)
+        upstream = row["expected"] is None
+        plan = [{"id":"coder","task":"write"},{"id":"critic","task":"review","depends_on":["coder"]}] if upstream else row["expected"]["agents"]
+        result.append({"name":f"{index:02d}-{preset}", "preset":preset, "query":query, "plan":plan,
+                       "upstreamPlanner":upstream, "confirmation":preset == "auto", "explicitConfirmation":False})
+    for suffix, query, explicit in [("long", "字" * 1801, False), ("explicit", "inspect", True)]:
+        result.append({"name":"full-" + suffix,"preset":"full","query":query,"plan":result[0]["plan"],
+                       "upstreamPlanner":False,"confirmation":True,"explicitConfirmation":explicit})
+    return result
+
+
+def validate_preset_result(result: dict[str, Any], exchanges: list[dict[str, Any]], case: dict[str, Any]) -> None:
+    count, confirm, planner = len(case["plan"]), case["confirmation"], case["upstreamPlanner"]
+    event_count, requests = 6 + count + int(confirm), count + 1 + int(planner)
+    expected_source = "upstream-provider" if planner else "retained-preset-policy"
+    actual_plan = [{"id":node.get("id"),"task":node.get("task"),"depends_on":node.get("depends_on", [])} for node in result.get("actualPlan", [])]
+    expected_plan = [{"id":node["id"],"task":node["task"],"depends_on":node.get("depends_on", [])} for node in case["plan"]]
+    if result.get("status") != "PASS" or result.get("runStatus") != "done" or result.get("durablePhases") != 3 or \
+            result.get("nextIndex") != event_count or result.get("publicEventCount") != event_count or actual_plan != expected_plan or \
+            result.get("actualPreset") != case["preset"] or result.get("actualPlanningSource") != expected_source or \
+            result.get("planConfirmationRequired") is not confirm or result.get("publicPlanConfirmationQualified") is not confirm or \
+            result.get("noTasksBeforePublicConfirmation") is not confirm or result.get("resourcesReleased") is not True or \
+            result.get("finalAnswerVisible") is not True or result.get("inputBodySeededByOfflineOracle") is not False or \
+            result.get("requestBodyStoredByRust") is not True or result.get("productionRuntimeProcesses") != ["Go", "Rust"] or \
+            result.get("productionProviderQualified") is not False or result.get("fullMigrationQualified") is not False or len(exchanges) != requests:
+        raise ValueError("Preset process evidence differs from retained behavior or overclaims qualification")
+    actions, operations = [row.get("actionId") for row in exchanges], [row.get("operationId") for row in exchanges]
+    task_actions = actions[int(planner):-1]
+    if any(not isinstance(value, str) or not value for value in actions + operations) or len(set(operations)) != requests or \
+            len(set(task_actions)) != 1 or len(set(actions)) != 2 + int(planner) or \
+            any(row.get("executionEpoch") != "1" or row.get("stream") is not False or row.get("privateReasoningInPrompt") for row in exchanges):
+        raise ValueError("Preset provider calls lack distinct nodes, shared task phase or privacy fences")
+    if any(not exchanges[index + int(planner)].get("predecessorSummaryInPrompt") for index, node in enumerate(case["plan"]) if node.get("depends_on")):
+        raise ValueError("Preset dependency summaries are absent from actual provider prompts")
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if os.environ.get("GITHUB_ACTIONS") != "true":
         raise RuntimeError("Native public compilation and containers are cloud-only on this host")
+    preset_case = getattr(args, "preset_case", None)
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=True)
     source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -151,7 +196,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "privateReasoningInPrompt": "private-task-reasoning" in prompt,
                     "synthesisCoderInPrompt": "任务：write" in prompt, "synthesisCriticInPrompt": "任务：review" in prompt})
                 position = len(exchanges)
-                content = json.dumps(plan) if position == 1 else ("Controlled final answer" if position == 4 else "## 摘要\nControlled public task summary")
+                upstream = preset_case is None or preset_case["upstreamPlanner"]
+                final_position = 4 if preset_case is None else len(preset_case["plan"]) + 1 + int(upstream)
+                content = json.dumps({"agents":plan["tasks"]}) if upstream and position == 1 else ("Controlled final answer" if position == final_position else "## 摘要\nControlled public task summary")
                 reply = json.dumps({"id": f"public-agent-{position}", "model": "deepseek-v4-pro",
                     "choices": [{"message": {"role": "assistant", "content": content, "reasoning_content": "private-task-reasoning"}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}, separators=(",", ":")).encode()
@@ -173,6 +220,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY=binding["signerPublicKey"])
             if signing.PRIVATE_ENV & set(environment) or "DEEPSEEK_API_KEY" in environment:
                 raise ValueError("Private custody configuration entered Go")
+            if preset_case is not None:
+                environment.update(DEEPSEEK_TEST_AGENT_PRESET=preset_case["preset"], DEEPSEEK_TEST_AGENT_QUERY=preset_case["query"],
+                    DEEPSEEK_TEST_AGENT_PLAN=json.dumps(preset_case["plan"], ensure_ascii=False),
+                    DEEPSEEK_TEST_AGENT_CONFIRMATION=str(preset_case["confirmation"]).lower(),
+                    DEEPSEEK_TEST_AGENT_EXPLICIT_CONFIRMATION=str(preset_case["explicitConfirmation"]).lower())
             with (output / "public-driver-go.log").open("wb") as log:
                 producer = subprocess.Popen([binary.as_posix(), "-test.run=^TestNativeAgentPublicDriverProcess$", "-test.v", "-test.timeout=4m"],
                     cwd=ROOT / "go/internal/api", env=environment, stdout=log, stderr=subprocess.STDOUT)
@@ -207,7 +259,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             result = signing.wait_json(case / "result.json", producer, timeout=180)
             if producer.wait(timeout=15) != 0:
                 raise RuntimeError("Actual native public driver process failed")
-            validate_driver_result(result, exchanges)
+            if preset_case is None:
+                validate_driver_result(result, exchanges)
             if result.get("sourceCommit") != source_commit:
                 raise ValueError("Go process source revision differs")
             with sqlite3.connect((artifacts / "objects-v1.sqlite").as_uri() + "?mode=ro", uri=True) as db:
@@ -219,11 +272,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     raise ValueError("Actual public request persisted a credential")
             with sqlite3.connect((state / "rust-worker/authority.sqlite3").as_uri() + "?mode=ro", uri=True) as db:
                 rows = db.execute("SELECT operation_id,state,output,output_sha256 FROM agent_node_effects").fetchall()
-                if len(rows) != 4 or any(row[1] != "CONFIRMED" or hashlib.sha256(row[2]).hexdigest() != row[3] for row in rows):
+                expected_nodes = 4 if preset_case is None else len(preset_case["plan"]) + 2
+                if len(rows) != expected_nodes or any(row[1] != "CONFIRMED" or hashlib.sha256(row[2]).hexdigest() != row[3] for row in rows):
                     raise ValueError("Rust actual four-node custody is missing or corrupt")
+                leader = next((json.loads(row[2]) for row in rows if json.loads(row[2]).get("publicEvent", {}).get("type") == "agent_plan"), None)
+                if leader is None:
+                    raise ValueError("Rust retained planning outcome is missing")
+                result["actualPlanningSource"] = "retained-preset-policy" if leader.get("planningSource") == "retained-preset-policy" else "upstream-provider"
             result.update(actualHTTPRequests=len(exchanges), providerExchanges=exchanges,
                 requestBodyStoredByRust=True, bootstrapUIIsOfflineFixture=True, cloudOnlyNativeBuild=True,
                 privateCustodyVariablesExportedToGo=False, readiness="NOT_READY")
+            if preset_case is not None:
+                validate_preset_result(result, exchanges, preset_case)
             (output / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             return result
         finally:
@@ -239,8 +299,26 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["worker", "edge", "provisioner", "go-cache", "out"]:
         parser.add_argument("--" + name, type=Path, required=True)
-    result = run(parser.parse_args())
-    print(json.dumps({key: result[key] for key in ["status", "sourceCommit", "actualHTTPRequests", "runStatus", "nextIndex", "readiness"]}))
+    parser.add_argument("--preset-matrix", action="store_true")
+    args = parser.parse_args()
+    if args.preset_matrix:
+        output = args.out.resolve()
+        cases = preset_cases()
+        results = []
+        for case in cases:
+            child = argparse.Namespace(**vars(args))
+            child.out, child.preset_case = output / case["name"], case
+            report = run(child)
+            results.append({"name":case["name"],"preset":case["preset"],"status":report["status"],"sourceCommit":report["sourceCommit"],
+                            "actualHTTPRequests":report["actualHTTPRequests"],"nextIndex":report["nextIndex"],"actualPlanningSource":report["actualPlanningSource"]})
+            print(json.dumps(results[-1]), flush=True)
+        result = {"status":"PASS","sourceCommit":results[0]["sourceCommit"],"caseCount":len(results),"cases":results,
+                  "allInputsCreatedThroughRustHTTP":True,"runtimePython":False,"realProviderQualified":False,"fullMigrationQualified":False,"readiness":"NOT_READY"}
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    else:
+        result = run(args)
+        print(json.dumps({key: result[key] for key in ["status", "sourceCommit", "actualHTTPRequests", "runStatus", "nextIndex", "readiness"]}))
     return 0
 
 

@@ -83,6 +83,81 @@ fn history(payload: &Value) -> Vec<Value> {
         .collect()
 }
 
+/// The retained preset/auto fast paths produce planning candidates in Rust.
+/// Go still owns normalization, admission, scheduling and plan confirmation.
+pub fn preset_plan(payload: &Value, preset: &str) -> Option<Value> {
+    let preset = preset.trim().to_lowercase();
+    let mut selected = preset.as_str();
+    if selected == "leader" {
+        return None;
+    }
+    if selected == "auto" {
+        let query = crate::core_utils::latest_user_query(payload).to_lowercase();
+        let code = [
+            "```", "bug", "报错", "代码", "实现", "接口", "项目", "函数", "class ",
+        ]
+        .iter()
+        .any(|s| query.contains(s));
+        let research = [
+            "最新", "新闻", "搜索", "资料", "来源", "网页", "引用", "今天",
+        ]
+        .iter()
+        .any(|s| query.contains(s));
+        let reason = query.chars().count() > 500
+            || ["方案", "架构", "权衡", "复杂", "规划"]
+                .iter()
+                .any(|s| query.contains(s));
+        if usize::from(code) + usize::from(research) + usize::from(reason) != 1 {
+            return None;
+        }
+        selected = if code {
+            "code"
+        } else if research {
+            "research"
+        } else {
+            "reason"
+        };
+    }
+    let (agents, label) = match selected {
+        "code" => (
+            json!([
+                {"id":"coder","task":"检查代码、实现路径和工程风险"},
+                {"id":"reasoner","task":"分析边界条件和架构取舍"},
+                {"id":"critic","task":"复核漏洞、遗漏和反例","depends_on":["coder","reasoner"]}
+            ]),
+            "自动启用 Coder + Reasoner + Critic",
+        ),
+        "research" => (
+            json!([
+                {"id":"researcher","task":"检索资料、事实和来源"},
+                {"id":"critic","task":"复核来源可靠性和不确定点","depends_on":["researcher"]}
+            ]),
+            "自动启用 Researcher + Critic",
+        ),
+        "reason" => (
+            json!([
+                {"id":"reasoner","task":"梳理推理链路、边界条件和方案权衡"},
+                {"id":"critic","task":"检查风险、遗漏和反例","depends_on":["reasoner"]}
+            ]),
+            "自动启用 Reasoner + Critic",
+        ),
+        "critic" => (
+            json!([{"id":"critic","task":"审查现有想法的风险、漏洞和遗漏"}]),
+            "仅启用 Critic",
+        ),
+        _ => (
+            json!([
+                {"id":"researcher","task":"核查事实、背景和可能需要搜索的信息"},
+                {"id":"coder","task":"分析代码、架构、实现路径和工程风险","depends_on":["researcher"]},
+                {"id":"reasoner","task":"梳理推理链路、边界条件和可执行方案","depends_on":["researcher"]},
+                {"id":"critic","task":"检查方案风险、遗漏和反例","depends_on":["researcher","coder","reasoner"]}
+            ]),
+            "完整 4-Agent",
+        ),
+    };
+    Some(json!({"agents":agents,"label":label}))
+}
+
 pub fn planner_payload(payload: &Value, model: &str) -> Value {
     let mut result = base_payload(payload);
     result["model"] = json!(model);

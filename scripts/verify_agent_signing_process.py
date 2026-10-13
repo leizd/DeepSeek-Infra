@@ -314,7 +314,7 @@ def planner_process_cases(binary: Path, go_environment: dict[str, str], worker: 
         case.mkdir()
         artifact_root = case / "rust-artifacts"
         artifact_root.mkdir(mode=0o700)
-        request_body = {"requestPayload": {"messages": [{"role": "user", "content": "Prepare an isolated verification plan"}]}}
+        request_body = {"agentPreset": "leader", "requestPayload": {"messages": [{"role": "user", "content": "Prepare an isolated verification plan"}]}}
         request_bytes = json.dumps(request_body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
         reference = {"sha256": hashlib.sha256(request_bytes).hexdigest(), "length": len(request_bytes)}
         reference_file = case / "artifact-reference.json"
