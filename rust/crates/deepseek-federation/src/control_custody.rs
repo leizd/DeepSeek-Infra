@@ -146,7 +146,7 @@ impl ControlSigningKey {
             || !hex(&evidence.operation_id[11..])
             || evidence.run_id.is_empty()
             || evidence.node_id.is_empty()
-            || !matches!(evidence.phase, 1 | 2 | 3)
+            || !matches!(evidence.phase, 1..=3)
             || (evidence.phase == 3
                 && (evidence.node_id != "synthesizer"
                     || !evidence.provider_plan.is_empty()
