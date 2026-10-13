@@ -436,10 +436,24 @@ impl AuthorityStore {
         input: &crate::BeginAgentNodeEffect,
         config: &WorkerAuthorityConfig,
     ) -> Result<Option<AgentNodeEffectStart>, Status> {
-        let Some(row) = stored(&self.connection, &input.operation_id)? else {
+        if input.operation_id.is_empty() || input.actor.is_empty() || input.node_id.is_empty() {
+            return Err(denied());
+        }
+        let fence = input.claim.fence.as_ref().ok_or_else(denied)?;
+        let epoch = i64::try_from(fence.execution_epoch).map_err(|_| denied())?;
+        // The caller's command ID indexes Go's operator receipt. Rust custody
+        // uses Go's independently derived agent-node ID, unique per fence/node.
+        let operation: Option<String> = self.connection.query_row(
+            "SELECT operation_id FROM agent_node_effects WHERE action_id=?1 AND epoch=?2 AND node_id=?3",
+            params![fence.action_id, epoch, input.node_id], |row| row.get(0),
+        ).optional().map_err(|_| denied())?;
+        let Some(operation) = operation else {
             return Ok(None);
         };
-        if row.operation_id != input.operation_id
+        let row = stored(&self.connection, &operation)?.ok_or_else(denied)?;
+        if row.operation_id != operation
+            || row.action_id != fence.action_id
+            || row.epoch != fence.execution_epoch
             || row.node_id != input.node_id
             || row.run_id != input.claim.run_id
             || row.intent.fence.as_ref() != input.claim.fence.as_ref()

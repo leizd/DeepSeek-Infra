@@ -1062,7 +1062,7 @@ fn retained_input(fixture: &Fixture) -> crate::BeginAgentNodeEffect {
     crate::BeginAgentNodeEffect {
         claim: fixture.response.claim.as_ref().unwrap().clone(),
         signed_phase_grant: fixture.grant.clone(),
-        operation_id: intent.operation_id.clone(),
+        operation_id: "process-dispatch-command".into(),
         actor: "rust-agent-worker".into(),
         node_id: intent.node_id.clone(),
     }
@@ -1072,6 +1072,10 @@ fn retained_input(fixture: &Fixture) -> crate::BeginAgentNodeEffect {
 fn retained_node_replay_never_returns_a_second_dispatch_permit_and_survives_restart() {
     let fixture = Fixture::new();
     let input = retained_input(&fixture);
+    assert_ne!(
+        input.operation_id,
+        fixture.response.intent.as_ref().unwrap().operation_id
+    );
     let mut worker = fixture.worker(true);
     assert!(
         worker
@@ -1175,7 +1179,7 @@ fn retained_node_replay_refuses_rebound_scope_or_signed_grant() {
                 .as_ref()
                 .unwrap()
                 .retained_agent_node_start(&input, &fixture.config)
-                .is_err(),
+                .map_or(true, |retained| retained.is_none()),
             "rebound {name} reused node custody"
         );
     }
@@ -1205,4 +1209,48 @@ fn retained_node_replay_rechecks_pinned_writer_and_signer_realm() {
                 .is_err()
         );
     }
+}
+
+#[test]
+fn retained_node_new_command_id_cannot_restart_an_uncertain_effect() {
+    let fixture = Fixture::new();
+    let mut worker = fixture.worker(true);
+    let _permit = started(fixture.begin(&mut worker, true).unwrap());
+    let mut input = retained_input(&fixture);
+    input.operation_id = "different-process-dispatch-command".into();
+    assert!(matches!(
+        worker
+            .authority_store
+            .as_ref()
+            .unwrap()
+            .retained_agent_node_start(&input, &fixture.config)
+            .unwrap(),
+        Some(AgentNodeEffectStart::EffectUnknown)
+    ));
+    for empty_actor in [false, true] {
+        let mut malformed = retained_input(&fixture);
+        if empty_actor {
+            malformed.actor.clear();
+        } else {
+            malformed.operation_id.clear();
+        }
+        assert!(
+            worker
+                .authority_store
+                .as_ref()
+                .unwrap()
+                .retained_agent_node_start(&malformed, &fixture.config)
+                .is_err()
+        );
+    }
+    let count: i64 = worker
+        .authority_store
+        .as_ref()
+        .unwrap()
+        .connection
+        .query_row("SELECT COUNT(*) FROM agent_node_effects", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(count, 1);
 }
