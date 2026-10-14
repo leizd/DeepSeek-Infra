@@ -43,7 +43,8 @@ func TestNativeAgentDaemonPublicProcess(t *testing.T) {
 		return
 	}
 	var input struct {
-		RunID string `json:"runId"`
+		RunID   string `json:"runId"`
+		Browser bool   `json:"browser"`
 	}
 	nativeSigningRead(t, filepath.Join(directory, "daemon-inspect-input.json"), &input)
 	control, err := store.OpenControl(store.OpenOptions{Path: controlPath, Owner: "offline-daemon-output-validation",
@@ -55,7 +56,11 @@ func TestNativeAgentDaemonPublicProcess(t *testing.T) {
 	}
 	defer control.Close()
 	metadata, found, err := control.AgentRunMetadata(input.RunID)
-	if err != nil || !found || metadata.Status != "done" || metadata.NextIndex != 9 || !metadata.ConfirmPlan || metadata.Preset != "auto" {
+	expectedIndex, expectedConfirmation := int64(9), true
+	if input.Browser {
+		expectedIndex, expectedConfirmation = 8, false
+	}
+	if err != nil || !found || metadata.Status != "done" || metadata.NextIndex != expectedIndex || metadata.ConfirmPlan != expectedConfirmation || metadata.Preset != "auto" {
 		t.Fatal("actual daemon final metadata is incomplete", err)
 	}
 	expected := []agent.RunPlanNode{{ID: "coder", Task: "write"}, {ID: "critic", Task: "review", DependsOn: []string{"coder"}}}
@@ -84,7 +89,7 @@ func TestNativeAgentDaemonPublicProcess(t *testing.T) {
 		"status": "PASS", "runId": metadata.RunID, "runStatus": metadata.Status, "nextIndex": metadata.NextIndex,
 		"durablePhases": len(records), "resourcesReleased": true, "requestSha256": metadata.Request.SHA256,
 		"requestLength": metadata.Request.Length, "actualPreset": metadata.Preset, "actualPlan": metadata.Plan,
-		"runtimeRevision": metadata.RuntimeVersion(),
-		"metadataSchemaVersion": metadata.SchemaVersion,
+		"runtimeRevision":                 metadata.RuntimeVersion(),
+		"metadataSchemaVersion":           metadata.SchemaVersion,
 		"independentlyValidatedByGoStore": true, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})
 }

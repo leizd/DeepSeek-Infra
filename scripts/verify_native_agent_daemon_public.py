@@ -216,6 +216,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("Daemon cloud source revision differs")
     exchanges: list[dict[str, Any]] = []
     runtime_update = bool(getattr(args, "runtime_update", False))
+    browser_mode = bool(getattr(args, "browser", False))
+    if browser_mode and runtime_update:
+        raise ValueError("Browser creation and restarted runtime revision are separate acceptance cases")
     plan = {"agents": [{"role": "coder", "task": "write", "dependsOn": []},
                         {"role": "critic", "task": "review", "dependsOn": ["coder"]}]}
     with tempfile.TemporaryDirectory(prefix="native-daemon-agent-") as temporary:
@@ -273,7 +276,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     return
                 body = json.loads(self.rfile.read(length))
                 prompt = json.dumps(body, ensure_ascii=False)
+                kind = "title" if browser_mode and not self.headers.get("X-DeepSeek-Action-Id") else "agent"
                 exchanges.append({"actionId": self.headers.get("X-DeepSeek-Action-Id"),
+                    "kind": kind,
                     "executionEpoch": self.headers.get("X-DeepSeek-Execution-Epoch"),
                     "operationId": self.headers.get("X-DeepSeek-Node-Operation-Id"), "stream": body.get("stream"),
                     "requestCredentialUsed": self.headers.get("Authorization") == "Bearer " +
@@ -287,6 +292,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "synthesisCoderInPrompt": "write" in prompt, "synthesisCriticInPrompt": "review" in prompt})
                 position = len(exchanges)
                 content = json.dumps(plan) if position == 1 else ("Controlled final answer" if position == 4 else "## 摘要\nControlled public task summary")
+                if kind == "title":
+                    content = "Native browser conversation"
                 reply = json.dumps({"id": f"daemon-agent-{position}", "model": "deepseek-v4-pro",
                     "choices": [{"message": {"role": "assistant", "content": content,
                     "reasoning_content": "private-task-reasoning"}, "finish_reason": "stop"}],
@@ -341,10 +348,37 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             edge_env = public.public_edge_environment(private_environment, address, ROOT / "static/ui", artifacts,
                                                       {"origin": control_origin, "internalBearer": seed["internalBearer"]},
                 public.credential_worker_transport(target, ca, bearer))
+            if browser_mode:
+                edge_env["DEEPSEEK_API_URL"] = f"http://127.0.0.1:{provider.server_port}/chat"
             with (output / "daemon-public-edge.log").open("wb") as log:
                 edge = subprocess.Popen([args.edge.resolve().as_posix()], cwd=ROOT, env=edge_env, stdout=log, stderr=subprocess.STDOUT)
             public.wait_edge(origin, edge)
             index_sha, asset_count = serve_built_frontend(origin)
+            if browser_mode:
+                import verify_native_agent_browser as browser
+
+                observed = browser.run_browser_agent(origin, output)
+                run_id = observed["createdRunId"]
+                final = request_json(origin, "/api/agent-runs/" + run_id)["run"]
+                if final.get("status") != "done" or "Controlled final answer" not in str(final.get("finalAnswer", "")):
+                    raise ValueError("Browser final answer differs from the native run projection")
+                stop_daemon(daemon)
+                signing.write_ready(case / "daemon-inspect-input.json", {"runId": run_id, "browser": True})
+                fixture_environment["DEEPSEEK_TEST_AGENT_DAEMON_STAGE"] = "inspect"
+                signing.record_command(fixture_command, ROOT / "go/internal/api", fixture_environment, output,
+                                       "daemon-browser-independent-inspection", timeout=150)
+                result = json.loads((case / "daemon-inspected.json").read_text(encoding="utf-8"))
+                result.update(browser=observed, actualDaemonCLIQualified=True, builtFrontendAssetsServed=True,
+                    frontendIndexSha256=index_sha, frontendAssetCount=asset_count,
+                    inputBodySeededByOfflineOracle=False, pythonMutatingPublicRequests=0,
+                    productionRuntimeProcesses=["Go", "Rust"], privateCustodyVariablesExportedToGo=False,
+                    productionProviderQualified=False, fullMigrationQualified=False,
+                    cloudOnlyNativeBuild=True, providerExchanges=exchanges, readiness="NOT_READY")
+                result.update(browser.inspect_browser_custody(artifacts, state))
+                browser.validate_browser_result(result, exchanges)
+                result["controlledNativeBrowserQualified"] = True
+                (output / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                return result
             created = request_json(origin, "/api/agent-runs", {"payload": {"messages": [{"role": "user", "content": "Prepare an isolated verification plan"}],
                 "model": "deepseek-chat", "apiKey": "request-only-credential", "tavilyApiKey": "request-only-search-credential"}, "agentPreset": "auto", "confirmPlan": True})
             run_id = created.get("runId")
@@ -467,8 +501,9 @@ def main() -> int:
     for name in ["worker", "edge", "provisioner", "go-cache", "out"]:
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--runtime-update", action="store_true")
+    parser.add_argument("--browser", action="store_true")
     result = run(parser.parse_args())
-    print(json.dumps({key: result[key] for key in ["status", "sourceCommit", "actualDaemonCLIQualified", "actualDaemonProcessRestartQualified", "builtFrontendAssetsServed", "readiness"]}))
+    print(json.dumps({key: result[key] for key in ["status", "sourceCommit", "actualDaemonCLIQualified", "actualDaemonProcessRestartQualified", "builtFrontendAssetsServed", "controlledNativeBrowserQualified", "readiness"] if key in result}))
     return 0
 
 
