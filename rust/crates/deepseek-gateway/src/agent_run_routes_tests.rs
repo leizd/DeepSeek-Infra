@@ -108,6 +108,19 @@ impl AgentRunControl for Fixture {
             if event.body.is_none() {
                 return Err(Status::invalid_argument("BODY_MISSING"));
             }
+            if let Some(update) = input.runtime_update {
+                if snapshot.status != "awaiting_plan"
+                    || event.r#type != "run_status"
+                    || event.status != "running"
+                    || update.expected_runtime_revision != snapshot.runtime_revision
+                    || update.expected_request != snapshot.request
+                    || update.request.is_none()
+                {
+                    return Err(Status::aborted("RUNTIME_REVISION_CONFLICT"));
+                }
+                snapshot.request = update.request;
+                snapshot.runtime_revision += 1;
+            }
             match event.r#type.as_str() {
                 "run_status" if event.status == "running" || event.status == "cancelled" => {
                     snapshot.status = event.status.clone();
@@ -163,6 +176,7 @@ impl AgentRunControl for Fixture {
             request: metadata.request,
             final_after: -1,
             last_event: Some(event.clone()),
+            runtime_revision: 1,
             ..Default::default()
         };
         *self.snapshot.lock().unwrap() = snapshot.clone();
@@ -286,6 +300,7 @@ async fn running_fixture_with_authority(authoritative: bool) -> RunningFixture {
         status: "done".into(),
         next_index: events.len() as i64,
         preset: "full".into(),
+        runtime_revision: 1,
         request: Some(AgentArtifactReference {
             sha256: request.sha256,
             length: request.length,
@@ -808,6 +823,196 @@ async fn public_plan_confirmation_uses_go_events_and_rust_custody() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["started"], false);
     assert_eq!(body["run"]["nextIndex"], original + 2);
+}
+
+#[tokio::test]
+async fn public_plan_confirmation_merges_runtime_values_and_commits_the_new_reference() {
+    let running = running_fixture().await;
+    running.fixture.mutations.store(true, Ordering::SeqCst);
+    let original_body = json!({"payload":{"messages":[{"role":"user","content":"retained query"}],
+        "model":"deepseek-chat","temperature":0.2},"agentPreset":"full","confirmPlan":true});
+    let original_request = ArtifactStore::open_native(&running.config.artifacts, "python_disabled")
+        .unwrap()
+        .put(&original_body)
+        .unwrap();
+    {
+        let mut snapshot = running.fixture.snapshot.lock().unwrap();
+        snapshot.status = "awaiting_plan".into();
+        snapshot.request = Some(AgentArtifactReference {
+            sha256: original_request.sha256.clone(),
+            length: original_request.length,
+        });
+    }
+    let original_index = running.fixture.snapshot.lock().unwrap().next_index;
+    let (status, body) = operator_response(
+        read_router(true, Some(running.config.clone())),
+        &format!("/api/agent-runs/{RUN}/plan"),
+        &json!({"payload":{"model":"deepseek-reasoner","temperature":0.7}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["started"], true);
+    let snapshot = running.fixture.snapshot.lock().unwrap().clone();
+    assert_eq!(snapshot.runtime_revision, 2);
+    assert_eq!(snapshot.next_index, original_index + 1);
+    let current = reference(snapshot.request.as_ref()).unwrap();
+    assert_ne!(current, original_request);
+    let store = ArtifactStore::open_readonly(&running.config.artifacts).unwrap();
+    let request = store.get(&current).unwrap();
+    assert_eq!(request["payload"]["model"], "deepseek-reasoner");
+    assert_eq!(request["payload"]["temperature"], 0.7);
+    assert_eq!(
+        request["payload"]["messages"],
+        original_body["payload"]["messages"]
+    );
+    assert_eq!(store.get(&original_request).unwrap(), original_body);
+    let (status, body) = operator_response(
+        read_router(true, Some(running.config.clone())),
+        &format!("/api/agent-runs/{RUN}/plan"),
+        &json!({"payload":{"model":"different-model"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["started"], false);
+    assert_eq!(
+        running
+            .fixture
+            .snapshot
+            .lock()
+            .unwrap()
+            .request
+            .as_ref()
+            .unwrap()
+            .sha256,
+        current.sha256
+    );
+}
+
+#[tokio::test]
+async fn runtime_updates_retain_legacy_flat_request_contents() {
+    let running = running_fixture().await;
+    let original = json!({"messages":[{"role":"user","content":"retained legacy query"}],"model":"deepseek-chat"});
+    let previous = ArtifactStore::open_native(&running.config.artifacts, "python_disabled")
+        .unwrap()
+        .put(&original)
+        .unwrap();
+    {
+        let mut snapshot = running.fixture.snapshot.lock().unwrap();
+        snapshot.status = "awaiting_plan".into();
+        snapshot.request = Some(AgentArtifactReference {
+            sha256: previous.sha256.clone(),
+            length: previous.length,
+        });
+    }
+    let session = ReadSession::open(Some(running.config.clone()), RUN)
+        .await
+        .unwrap();
+    let update =
+        prepare_runtime_update(&session, &json!({"payload":{"model":"deepseek-reasoner"}}))
+            .await
+            .unwrap()
+            .unwrap();
+    let store = ArtifactStore::open_readonly(&running.config.artifacts).unwrap();
+    let current = store
+        .get(&reference(update.request.as_ref()).unwrap())
+        .unwrap();
+    assert_eq!(current["payload"]["messages"], original["messages"]);
+    assert_eq!(current["payload"]["model"], "deepseek-reasoner");
+    assert_eq!(store.get(&previous).unwrap(), original);
+}
+
+#[test]
+fn runtime_credentials_keep_the_original_input_bounds_and_clear_semantics() {
+    for value in [
+        json!(1),
+        json!([]),
+        json!("invalid\nfixture"),
+        json!("x".repeat(4097)),
+    ] {
+        assert!(request_credential(&json!({"apiKey":value}), "apiKey").is_err());
+    }
+    for value in [Value::Null, json!(""), json!("   ")] {
+        assert!(
+            request_credential(&json!({"apiKey":value}), "apiKey")
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert_eq!(
+        request_credential(&json!({"apiKey":"  bounded-fixture  "}), "apiKey")
+            .unwrap()
+            .unwrap()
+            .as_str(),
+        "bounded-fixture"
+    );
+}
+
+#[tokio::test]
+async fn separate_preparations_do_not_rebind_an_orphaned_credential_scope() {
+    let running = running_fixture().await;
+    let original = json!({"payload":{"messages":[{"role":"user","content":"retained query"}]},"agentPreset":"full"});
+    let reference = ArtifactStore::open_native(&running.config.artifacts, "python_disabled")
+        .unwrap()
+        .put(&original)
+        .unwrap();
+    {
+        let mut snapshot = running.fixture.snapshot.lock().unwrap();
+        snapshot.status = "awaiting_plan".into();
+        snapshot.request = Some(AgentArtifactReference {
+            sha256: reference.sha256,
+            length: reference.length,
+        });
+    }
+    let before = running.fixture.snapshot.lock().unwrap().clone();
+    let session = ReadSession::open(Some(running.config.clone()), RUN)
+        .await
+        .unwrap();
+    let input = json!({"payload":{"model":"deepseek-chat"}});
+    let first = prepare_runtime_update(&session, &input)
+        .await
+        .unwrap()
+        .unwrap();
+    let second = prepare_runtime_update(&session, &input)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.expected_request, second.expected_request);
+    assert_eq!(
+        first.expected_runtime_revision,
+        second.expected_runtime_revision
+    );
+    assert_ne!(first.request, second.request);
+    assert_eq!(*running.fixture.snapshot.lock().unwrap(), before);
+}
+
+#[tokio::test]
+async fn runtime_confirmation_refuses_old_peers_and_reserved_input_before_go_writes() {
+    let running = running_fixture().await;
+    running.fixture.mutations.store(true, Ordering::SeqCst);
+    {
+        let mut snapshot = running.fixture.snapshot.lock().unwrap();
+        snapshot.status = "awaiting_plan".into();
+        snapshot.runtime_revision = 0;
+    }
+    let before = running.fixture.snapshot.lock().unwrap().clone();
+    let (status, _) = operator_response(
+        read_router(true, Some(running.config.clone())),
+        &format!("/api/agent-runs/{RUN}/plan"),
+        &json!({"payload":{"model":"deepseek-chat"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(*running.fixture.snapshot.lock().unwrap(), before);
+    running.fixture.snapshot.lock().unwrap().runtime_revision = 1;
+    let before = running.fixture.snapshot.lock().unwrap().clone();
+    let (status, _) = operator_response(
+        read_router(true, Some(running.config.clone())),
+        &format!("/api/agent-runs/{RUN}/plan"),
+        &json!({"payload":{"nested":{"_nativeProviderCredentials":{}}}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(*running.fixture.snapshot.lock().unwrap(), before);
 }
 
 #[tokio::test]

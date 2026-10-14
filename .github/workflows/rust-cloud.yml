@@ -143,6 +143,11 @@ jobs:
         timeout-minutes: 8
         run: |
           python scripts/verify_native_agent_daemon_public.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-daemon-public 2>&1 | tee artifacts/rust-cloud/agent-daemon-public.log
+      - name: Verify actual runtime payload and credential revision after daemon restart
+        if: matrix.mode == 'checks'
+        timeout-minutes: 8
+        run: |
+          python scripts/verify_native_agent_daemon_public.py --runtime-update --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-runtime-update 2>&1 | tee artifacts/rust-cloud/agent-runtime-update.log
       - name: Install pinned coverage tooling on the cloud runner
         if: matrix.mode == 'coverage'
         run: |

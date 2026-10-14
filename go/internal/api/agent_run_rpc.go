@@ -92,6 +92,10 @@ func (service *agentRunService) AppendEvent(_ context.Context, input *agentv1.Ap
 		mutation.Create = &agent.RunMetadata{Preset: input.Create.Preset, ConfirmPlan: input.Create.ConfirmPlan,
 			ConversationID: input.Create.ConversationId, MessageID: input.Create.MessageId, Request: artifactMetadata(input.Create.Request)}
 	}
+	if input.RuntimeUpdate != nil {
+		mutation.RuntimeUpdate = &store.AgentRunRuntimeUpdate{ExpectedRevision: input.RuntimeUpdate.ExpectedRuntimeRevision,
+			ExpectedRequest: artifactMetadata(input.RuntimeUpdate.ExpectedRequest), Request: artifactMetadata(input.RuntimeUpdate.Request)}
+	}
 	result, err := service.control.AppendAgentRunEvent(mutation)
 	if err != nil {
 		return nil, agentMetadataWriteError(err)
@@ -188,7 +192,7 @@ func eventProtocol(event agent.RunEvent) *agentv1.AgentRunEventMetadata {
 func runProtocol(run agent.RunMetadata) *agentv1.AgentRunSnapshot {
 	output := &agentv1.AgentRunSnapshot{RunId: run.RunID, Status: run.Status, NextIndex: run.NextIndex, Preset: run.Preset,
 		ConfirmPlan: run.ConfirmPlan, ConversationId: run.ConversationID, MessageId: run.MessageID, Request: artifactProtocol(run.Request),
-		Plan: planProtocol(run.Plan), FinalAfter: run.FinalAfter, LastEvent: eventProtocol(run.LastEvent)}
+		Plan: planProtocol(run.Plan), FinalAfter: run.FinalAfter, LastEvent: eventProtocol(run.LastEvent), RuntimeRevision: run.RuntimeVersion()}
 	nodes := run.Nodes()
 	ids := make([]string, 0, len(nodes))
 	for id := range nodes {

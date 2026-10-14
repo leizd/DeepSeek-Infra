@@ -32,6 +32,7 @@ type AgentRunEventMutation struct {
 	ExpectedIndex int64                         `json:"expectedIndex"`
 	Fence         *internalprotocol.ActionFence `json:"fence"`
 	Create        *agent.RunMetadata            `json:"create,omitempty"`
+	RuntimeUpdate *AgentRunRuntimeUpdate        `json:"runtimeUpdate,omitempty"`
 	Event         agent.RunEvent                `json:"event"`
 }
 
@@ -55,7 +56,7 @@ func decodeAgentMetadata(record Record) (agent.RunMetadata, error) {
 		run.NextIndex != record.Revision || run.LastEvent.Index != record.Revision-1 ||
 		run.LastEvent.RunID != record.ID || run.LastEvent.ActionID != record.ID ||
 		run.LastEvent.ExecutionEpoch != record.ExecutionEpoch || !validAgentArtifact(run.Request) ||
-		!validAgentArtifact(run.LastEvent.Body) || run.BaseNodes == nil {
+		!validAgentArtifact(run.LastEvent.Body) || run.BaseNodes == nil || run.RuntimeRevision > math.MaxInt64 {
 		return run, ErrAgentRunMetadataInvalid
 	}
 	return run, nil
@@ -167,7 +168,7 @@ func (store *Control) AppendAgentRunEvent(input AgentRunEventMutation) (AgentRun
 		}
 	}
 	if !found {
-		if mutation.Create == nil || mutation.Event.Type != "run_status" || mutation.Event.Status != "created" || !validAgentArtifact(mutation.Create.Request) {
+		if mutation.Create == nil || mutation.RuntimeUpdate != nil || mutation.Event.Type != "run_status" || mutation.Event.Status != "created" || !validAgentArtifact(mutation.Create.Request) {
 			return AgentRunEventResult{}, ErrAgentRunMetadataInvalid
 		}
 		create := mutation.Create
@@ -176,6 +177,9 @@ func (store *Control) AppendAgentRunEvent(input AgentRunEventMutation) (AgentRun
 			Plan: []agent.RunPlanNode{}, BaseNodes: map[string]agent.RunNode{}, FinalAfter: -1}
 	} else if mutation.Create != nil {
 		return AgentRunEventResult{}, ErrAgentRunMetadataInvalid
+	}
+	if err := applyAgentRuntimeUpdateTx(tx, &run, mutation); err != nil {
+		return AgentRunEventResult{}, err
 	}
 	event := mutation.Event
 	event.RunID, event.Index, event.CreatedAt = mutation.RunID, mutation.ExpectedIndex, time.Unix(context.now, 0).UTC().Format(time.RFC3339)

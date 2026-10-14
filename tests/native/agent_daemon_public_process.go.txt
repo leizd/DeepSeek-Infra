@@ -84,5 +84,6 @@ func TestNativeAgentDaemonPublicProcess(t *testing.T) {
 		"status": "PASS", "runId": metadata.RunID, "runStatus": metadata.Status, "nextIndex": metadata.NextIndex,
 		"durablePhases": len(records), "resourcesReleased": true, "requestSha256": metadata.Request.SHA256,
 		"requestLength": metadata.Request.Length, "actualPreset": metadata.Preset, "actualPlan": metadata.Plan,
+		"runtimeRevision": metadata.RuntimeVersion(),
 		"independentlyValidatedByGoStore": true, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})
 }

@@ -29,6 +29,39 @@ if str(ROOT / "scripts") not in sys.path:
 import verify_agent_signing_process as signing  # noqa: E402
 import verify_native_agent_public_driver as public  # noqa: E402
 
+RUNTIME_QUERY = "Apply the runtime revision to this retained write and review plan"
+RUNTIME_CREDENTIAL = "runtime-revision-api-fixture"
+
+
+def runtime_request_binding(control_path: Path, artifact_root: Path, run_id: str) -> dict[str, Any]:
+    """Inspect isolated outputs read-only; this never creates runtime state."""
+    with sqlite3.connect((control_path / "control.sqlite3").as_uri() + "?mode=ro", uri=True) as database:
+        row = database.execute("SELECT payload_json FROM agent_runs WHERE id=?", (run_id,)).fetchone()
+    if not row:
+        raise ValueError("Actual daemon runtime metadata is missing")
+    metadata = json.loads(row[0])
+    reference = metadata["requestRef"]
+    with sqlite3.connect((artifact_root / "objects-v1.sqlite").as_uri() + "?mode=ro", uri=True) as database:
+        row = database.execute("SELECT length,bytes FROM artifacts WHERE sha256=?", (reference["sha256"],)).fetchone()
+    if not row or row[0] != reference["length"] or hashlib.sha256(row[1]).hexdigest() != reference["sha256"]:
+        raise ValueError("Actual daemon runtime request binding differs")
+    return {"revision": metadata.get("runtimeRevision", 0) or 1, "reference": reference, "bytes": row[1]}
+
+
+def validate_runtime_update_result(result: dict[str, Any], exchanges: list[dict[str, Any]]) -> None:
+    validate_daemon_result(result, exchanges)
+    flags = ["runtimePayloadUpdatedAfterRestart", "currentRequestRevisionBoundByGo", "originalRuntimeRequestRetained",
+             "originalCredentialCiphertextRetained", "updatedContextReachedEveryRemainingPhase"]
+    if any(result.get(key) is not True for key in flags) or result.get("runtimeRevision") != 2 or \
+            result.get("initialRuntimeRevision") != 1 or result.get("encryptedCredentialObjectCount") != 2 or \
+            result.get("initialRequestSha256") == result.get("requestSha256") or \
+            len(str(result.get("initialRequestSha256", ""))) != 64:
+        raise ValueError("Actual daemon runtime update evidence is incomplete")
+    if len(exchanges) != 4 or exchanges[0].get("runtimeContextUsed") is not False or \
+            any(row.get("runtimeContextUsed") is not True or row.get("requestCredentialUsed") is not True for row in exchanges[1:]) or \
+            any(row.get("credentialInProviderBody") is not False for row in exchanges):
+        raise ValueError("Runtime changes did not reach the actual retained provider phases safely")
+
 
 def daemon_environment(source: dict[str, str], seed: dict[str, Any], address: str,
                        target: str, ca: Path, bearer: str, expiry: str, public_key: str) -> dict[str, str]:
@@ -182,6 +215,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if revision != os.environ.get("GITHUB_SHA"):
         raise ValueError("Daemon cloud source revision differs")
     exchanges: list[dict[str, Any]] = []
+    runtime_update = bool(getattr(args, "runtime_update", False))
     plan = {"agents": [{"role": "coder", "task": "write", "dependsOn": []},
                         {"role": "critic", "task": "review", "dependsOn": ["coder"]}]}
     with tempfile.TemporaryDirectory(prefix="native-daemon-agent-") as temporary:
@@ -242,7 +276,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 exchanges.append({"actionId": self.headers.get("X-DeepSeek-Action-Id"),
                     "executionEpoch": self.headers.get("X-DeepSeek-Execution-Epoch"),
                     "operationId": self.headers.get("X-DeepSeek-Node-Operation-Id"), "stream": body.get("stream"),
-                    "requestCredentialUsed": self.headers.get("Authorization") == "Bearer request-only-credential",
+                    "requestCredentialUsed": self.headers.get("Authorization") == "Bearer " +
+                        (RUNTIME_CREDENTIAL if runtime_update and exchanges else "request-only-credential"),
+                    "runtimeContextUsed": RUNTIME_QUERY in prompt,
+                    "credentialInProviderBody": any(value in prompt for value in
+                        ["request-only-credential", "request-only-search-credential", RUNTIME_CREDENTIAL]),
                     "selectedTaskInPrompt": "write" in prompt, "dependentTaskInPrompt": "review" in prompt,
                     "predecessorSummaryInPrompt": "Controlled public task summary" in prompt,
                     "privateReasoningInPrompt": "private-task-reasoning" in prompt,
@@ -323,6 +361,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             time.sleep(1.2)
             if len(exchanges) != 1:
                 raise ValueError("Actual daemon dispatched tasks without confirmation")
+            initial_runtime = runtime_request_binding(Path(seed["controlPath"]), artifacts, run_id)
+            initial_ciphertexts = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                                   for p in (artifacts / "agent-provider-credentials-v1").glob("*.json")}
             stop_daemon(daemon)
             signing.stop_child(worker)
             daemon = start_daemon("daemon-after-restart")
@@ -336,7 +377,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             time.sleep(1.2)
             if len(exchanges) != 1:
                 raise ValueError("Restart dispatched tasks without public confirmation")
-            confirmation = request_json(origin, "/api/agent-runs/" + run_id + "/plan", {"payload": {}})
+            runtime_payload = {"messages": [{"role": "user", "content": RUNTIME_QUERY}], "apiKey": RUNTIME_CREDENTIAL} if runtime_update else {}
+            confirmation = request_json(origin, "/api/agent-runs/" + run_id + "/plan", {"payload": runtime_payload})
             if confirmation.get("started") is not True:
                 raise ValueError("Actual daemon public plan confirmation failed")
             deadline = time.monotonic() + 120
@@ -363,7 +405,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             result = json.loads((case / "daemon-inspected.json").read_text(encoding="utf-8"))
             with sqlite3.connect((artifacts / "objects-v1.sqlite").as_uri() + "?mode=ro", uri=True) as database:
                 row = database.execute("SELECT length,bytes FROM artifacts WHERE sha256=?", (result["requestSha256"],)).fetchone()
-                if not row or row[0] != result["requestLength"] or hashlib.sha256(row[1]).hexdigest() != result["requestSha256"] or b"request-only-credential" in row[1]:
+                if not row or row[0] != result["requestLength"] or hashlib.sha256(row[1]).hexdigest() != result["requestSha256"] or \
+                        any(value in row[1] for value in [b"request-only-credential", b"request-only-search-credential", RUNTIME_CREDENTIAL.encode()]):
                     raise ValueError("Actual daemon Rust request custody differs or leaks a credential")
             with sqlite3.connect((state / "rust-worker/authority.sqlite3").as_uri() + "?mode=ro", uri=True) as database:
                 rows = database.execute("SELECT state,output,output_sha256 FROM agent_node_effects").fetchall()
@@ -384,13 +427,30 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if not exchanges or not all(value.get("requestCredentialUsed") is True for value in exchanges):
                 raise ValueError("Actual provider did not use the request credential across restart")
             sealed = list((artifacts / "agent-provider-credentials-v1").glob("*.json"))
-            if len(sealed) != 1 or any(secret in sealed[0].read_bytes() for secret in
-                    (b"request-only-credential", b"request-only-search-credential")):
+            if len(sealed) != (2 if runtime_update else 1) or any(secret in p.read_bytes() for p in sealed for secret in
+                    (b"request-only-credential", b"request-only-search-credential", RUNTIME_CREDENTIAL.encode())):
                 raise ValueError("Actual request credential ciphertext custody differs")
             result.update(requestCredentialOverrideQualified=True, credentialCustodyReopenedAcrossWorkerRestart=True,
                 encryptedCredentialObjectCount=len(sealed), requestSearchCredentialEncrypted=True,
                 workerRestartWithoutServerProviderCredential=True)
             validate_daemon_result(result, exchanges)
+            if runtime_update:
+                current_runtime = runtime_request_binding(Path(seed["controlPath"]), artifacts, run_id)
+                with sqlite3.connect((artifacts / "objects-v1.sqlite").as_uri() + "?mode=ro", uri=True) as database:
+                    retained = database.execute("SELECT bytes FROM artifacts WHERE sha256=?", (initial_runtime["reference"]["sha256"],)).fetchone()
+                original_retained = bool(retained and retained[0] == initial_runtime["bytes"])
+                ciphertext_retained = len(initial_ciphertexts) == 1 and all(
+                    hashlib.sha256((artifacts / "agent-provider-credentials-v1" / name).read_bytes()).hexdigest() == digest
+                    for name, digest in initial_ciphertexts.items())
+                current_body = json.loads(current_runtime["bytes"])
+                if current_body["payload"]["messages"] != runtime_payload["messages"] or current_runtime["revision"] != 2 or \
+                        result["requestSha256"] != current_runtime["reference"]["sha256"]:
+                    raise ValueError("Updated runtime request differs from the actual Go metadata binding")
+                result.update(runtimePayloadUpdatedAfterRestart=True, currentRequestRevisionBoundByGo=True,
+                    initialRuntimeRevision=initial_runtime["revision"], initialRequestSha256=initial_runtime["reference"]["sha256"],
+                    originalRuntimeRequestRetained=original_retained, originalCredentialCiphertextRetained=ciphertext_retained,
+                    updatedContextReachedEveryRemainingPhase=all(row["runtimeContextUsed"] for row in exchanges[1:]))
+                validate_runtime_update_result(result, exchanges)
             (output / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             return result
         finally:
@@ -406,6 +466,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["worker", "edge", "provisioner", "go-cache", "out"]:
         parser.add_argument("--" + name, required=True, type=Path)
+    parser.add_argument("--runtime-update", action="store_true")
     result = run(parser.parse_args())
     print(json.dumps({key: result[key] for key in ["status", "sourceCommit", "actualDaemonCLIQualified", "actualDaemonProcessRestartQualified", "builtFrontendAssetsServed", "readiness"]}))
     return 0
