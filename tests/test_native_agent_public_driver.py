@@ -103,6 +103,23 @@ def test_credential_transport_is_explicit_and_ambient_configuration_cannot_overr
     assert not any(key.startswith("DEEPSEEK_AGENT_CREDENTIAL_") for key in stripped)
 
 
+@pytest.mark.parametrize("target", ["127.0.0.1:1", "127.0.0.1:50052", "127.0.0.1:65535"])
+def test_worker_listen_target_becomes_a_tls_origin_for_public_credential_custody(tmp_path, target):
+    from scripts.verify_native_agent_public_driver import credential_worker_transport, public_edge_environment
+
+    ca = tmp_path / "ca.pem"
+    bearer = "isolated-worker-" + "y" * 32
+    transport = credential_worker_transport(target, ca, bearer)
+    ready = {"origin": "http://127.0.0.1:18090", "internalBearer": "isolated-control-" + "x" * 32}
+    environment = public_edge_environment({}, "127.0.0.1:18100", tmp_path / "static/ui", tmp_path / "artifacts", ready, transport)
+
+    assert transport == {"ORIGIN": "https://" + target, "CA_FILE": ca.as_posix(), "SERVER_NAME": "localhost", "BEARER": bearer}
+    assert environment["DEEPSEEK_AGENT_CREDENTIAL_WORKER_ORIGIN"] == "https://" + target
+    assert environment["DEEPSEEK_AGENT_CREDENTIAL_WORKER_CA_FILE"] == ca.as_posix()
+    assert environment["DEEPSEEK_AGENT_CREDENTIAL_WORKER_SERVER_NAME"] == "localhost"
+    assert not ca.exists()  # Assembling transport configuration creates no private material.
+
+
 @pytest.mark.parametrize("mutation", ["remote", "relative-ca", "missing-field", "short-bearer"])
 def test_invalid_credential_transport_is_rejected_before_starting_a_process(tmp_path, mutation):
     from scripts.verify_native_agent_public_driver import public_edge_environment

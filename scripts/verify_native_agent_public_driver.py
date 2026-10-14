@@ -26,6 +26,11 @@ if str(ROOT / "scripts") not in sys.path:
 import verify_agent_signing_process as signing  # noqa: E402
 
 
+def credential_worker_transport(target: str, ca_file: Path, bearer: str) -> dict[str, str]:
+    """Adapt the worker's socket target to the gateway's HTTPS origin contract."""
+    return {"ORIGIN": "https://" + target, "CA_FILE": ca_file.as_posix(), "SERVER_NAME": "localhost", "BEARER": bearer}
+
+
 def public_edge_environment(source: dict[str, str], address: str, static: Path, artifacts: Path,
                             ready: dict[str, Any], credential_worker: dict[str, str] | None = None) -> dict[str, str]:
     """Explicit gateway custody/control configuration after ambient identities are removed."""
@@ -331,7 +336,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 port.bind(("127.0.0.1", 0))
                 address = f"127.0.0.1:{port.getsockname()[1]}"
             edge_environment = public_edge_environment(worker_environment, address, static, artifacts, ready,
-                {"ORIGIN": target, "CA_FILE": ca.as_posix(), "SERVER_NAME": "localhost", "BEARER": bearer})
+                credential_worker_transport(target, ca, bearer))
             with (output / "public-driver-edge.log").open("wb") as log:
                 edge = subprocess.Popen([args.edge.resolve().as_posix()], cwd=ROOT, env=edge_environment, stdout=log, stderr=subprocess.STDOUT)
             wait_edge("http://" + address, edge)
