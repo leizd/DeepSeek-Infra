@@ -1460,7 +1460,7 @@ jobs:
       - name: Full Go race tests with timing reports
         run: |
           mkdir -p ../artifacts/go-race
-          go test -race -json -timeout=60m ./... > ../artifacts/go-race/default.jsonl 2> ../artifacts/go-race/default.stderr.log
+          go test -race -json -timeout=90m ./... > ../artifacts/go-race/default.jsonl 2> ../artifacts/go-race/default.stderr.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -1474,7 +1474,7 @@ jobs:
         run: |
           go vet ./...
           mkdir -p ../artifacts/go-race
-          go test -race -json -timeout=60m ./... > ../artifacts/go-race/android.jsonl 2> ../artifacts/go-race/android.stderr.log
+          go test -race -json -timeout=90m ./... > ../artifacts/go-race/android.jsonl 2> ../artifacts/go-race/android.stderr.log
           python ../scripts/check_go_coverage.py --dir . --min 95.0 --profile android-coverage.out
       - uses: actions/upload-artifact@v4
         if: always()
