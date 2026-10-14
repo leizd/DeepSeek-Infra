@@ -667,6 +667,7 @@ dependencies = [
  "deepseek-storage",
  "ed25519-dalek",
  "getrandom 0.2.17",
+ "hkdf",
  "prost",
  "serde",
  "serde_json",

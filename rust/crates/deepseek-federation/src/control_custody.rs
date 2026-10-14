@@ -27,6 +27,26 @@ impl std::fmt::Debug for ControlSigningKey {
 }
 
 impl ControlSigningKey {
+    /// Provider credentials remain in Rust. A distinct HKDF domain derives the
+    /// encryption key; neither the signing seed nor this key is returned.
+    pub fn seal_agent_credentials(
+        &self,
+        scope: &crate::AgentCredentialScope,
+        credentials: &crate::AgentProviderCredentials,
+    ) -> Result<crate::SealedAgentCredentials, FederationIdentityError> {
+        let seed = Zeroizing::new(self.key.to_bytes());
+        crate::agent_credentials::seal(&seed, &self.public_key(), &self.binding, scope, credentials)
+    }
+
+    pub fn open_agent_credentials(
+        &self,
+        scope: &crate::AgentCredentialScope,
+        sealed: &crate::SealedAgentCredentials,
+    ) -> Result<crate::AgentProviderCredentials, FederationIdentityError> {
+        let seed = Zeroizing::new(self.key.to_bytes());
+        crate::agent_credentials::open(&seed, &self.public_key(), &self.binding, scope, sealed)
+    }
+
     pub fn sign_agent_synthesis_projection(
         &self,
         evidence: &deepseek_protocol::generated::deepseek::agent::v1::AgentSynthesisProjectionEvidence,
