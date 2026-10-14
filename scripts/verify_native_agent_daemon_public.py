@@ -167,6 +167,12 @@ def serve_built_frontend(origin: str) -> tuple[str, int]:
     return hashlib.sha256(received).hexdigest(), len(set(references))
 
 
+def validate_final_events(event_page: dict[str, Any], stream: list[dict[str, Any]]) -> None:
+    if len(stream) != 9 or event_page.get("events") != stream or stream[-1].get("type") != "done" or \
+            "request-only-credential" in json.dumps(stream):
+        raise ValueError("Actual daemon NDJSON and durable terminal event page differ")
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if os.environ.get("GITHUB_ACTIONS") != "true":
         raise RuntimeError("Native daemon compilation is cloud-only on this host")
@@ -345,9 +351,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     raise ValueError("Actual daemon terminal stream is not NDJSON")
                 stream = [json.loads(line) for line in response.read(2 * 1024**2 + 1).splitlines() if line.strip()]
             event_page = request_json(origin, "/api/agent-runs/" + run_id + "/events")
-            if len(stream) != 9 or event_page.get("events") != stream or stream[-1].get("status") != "done" or \
-                    b"request-only-credential" in json.dumps(stream).encode():
-                raise ValueError("Actual daemon NDJSON and durable event page differ")
+            validate_final_events(event_page, stream)
             stop_daemon(daemon)
             signing.write_ready(case / "daemon-inspect-input.json", {"runId": run_id})
             fixture_environment["DEEPSEEK_TEST_AGENT_DAEMON_STAGE"] = "inspect"

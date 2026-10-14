@@ -131,3 +131,26 @@ def test_serves_real_ui_prefix_and_refuses_wrong_build_bytes(tmp_path: Path, mon
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("fault", [None, "status-only", "missing-terminal", "different-page", "private-key"])
+def test_terminal_ndjson_uses_retained_done_type_and_exact_event_page(fault: str | None) -> None:
+    events: list[dict[str, Any]] = [{"type": "agent", "index": i} for i in range(8)] + [{"type": "done", "index": 8}]
+    page = {"events": deepcopy(events)}
+    if fault == "status-only":
+        events[-1] = {"type": "run_status", "status": "done", "index": 8}
+        page["events"] = deepcopy(events)
+    elif fault == "missing-terminal":
+        events.pop()
+        page["events"] = deepcopy(events)
+    elif fault == "different-page":
+        page["events"][0]["index"] = 7
+    elif fault == "private-key":
+        events[-1]["private"] = "request-only-credential"
+        page["events"] = deepcopy(events)
+    if fault:
+        with pytest.raises(ValueError):
+            daemon.validate_final_events(page, events)
+    else:
+        daemon.validate_final_events(page, events)
+        assert "status" not in events[-1]
