@@ -14,6 +14,9 @@ use std::sync::{
 use tonic::{Response, Status};
 use tower::ServiceExt;
 
+#[path = "agent_credential_peer_fixture.rs"]
+mod credential_peer;
+
 const RUN: &str = "run_native_data_fixture";
 const BEARER: &str = "agent-data-rpc-fixture-bearer-0000000000";
 
@@ -325,6 +328,7 @@ async fn running_fixture_with_authority(authoritative: bool) -> RunningFixture {
         origin,
         bearer: BEARER.into(),
         artifacts: directory.path().to_path_buf(),
+        credentials: None,
     };
     RunningFixture {
         directory,
@@ -614,7 +618,9 @@ async fn creation_response(app: Router, input: &Value) -> (StatusCode, Value) {
 
 #[tokio::test]
 async fn public_creation_commits_go_metadata_and_rust_sanitized_body() {
-    let running = running_fixture().await;
+    let mut running = running_fixture().await;
+    let custody = credential_peer::Peer::start(running.directory.path()).await;
+    running.config.credentials = Some(custody.config.clone());
     running.fixture.mutations.store(true, Ordering::SeqCst);
     let input = json!({"payload":{"messages":[{"role":"user","content":"review a function"}],"model":"deepseek-chat", "apiKey":"request-only-credential"},
         "agentPreset":"plan", "conversationId":"conversation_1", "messageId":"message_1"});
@@ -639,8 +645,25 @@ async fn public_creation_commits_go_metadata_and_rust_sanitized_body() {
     assert_eq!(body["payload"]["messages"], input["payload"]["messages"]);
     assert!(body["payload"].get("apiKey").is_none());
     assert!(!body.to_string().contains("request-only-credential"));
+    assert!(
+        body.get(crate::agent_credential_client::PRIVATE_FIELD)
+            .is_some()
+    );
+    assert_eq!(custody.accepted.load(Ordering::SeqCst), 1);
     assert_eq!(snapshot.plan.len(), 0);
     assert_eq!(snapshot.nodes.len(), 0);
+}
+
+#[tokio::test]
+async fn public_creation_with_credentials_requires_private_peer_before_go_metadata_write() {
+    let running = running_fixture().await;
+    running.fixture.mutations.store(true, Ordering::SeqCst);
+    let before = running.fixture.snapshot.lock().unwrap().clone();
+    let input = json!({"payload":{"messages":[{"role":"user","content":"inspect"}],"apiKey":"request-only-credential"}});
+    let (status, _) =
+        creation_response(read_router(true, Some(running.config.clone())), &input).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(*running.fixture.snapshot.lock().unwrap(), before);
 }
 
 #[tokio::test]

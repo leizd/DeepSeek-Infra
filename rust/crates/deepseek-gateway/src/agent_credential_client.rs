@@ -15,6 +15,27 @@ use tonic::{
 
 pub(crate) const PRIVATE_FIELD: &str = "_nativeProviderCredentials";
 
+#[derive(Clone)]
+pub(crate) struct WorkerConfig {
+    pub(crate) origin: String,
+    pub(crate) ca_file: std::path::PathBuf,
+    pub(crate) server_name: String,
+    pub(crate) bearer: zeroize::Zeroizing<String>,
+}
+
+impl WorkerConfig {
+    pub(crate) fn from_env() -> Option<Self> {
+        Some(Self {
+            origin: std::env::var("DEEPSEEK_AGENT_CREDENTIAL_WORKER_ORIGIN").ok()?,
+            ca_file: std::env::var_os("DEEPSEEK_AGENT_CREDENTIAL_WORKER_CA_FILE")?.into(),
+            server_name: std::env::var("DEEPSEEK_AGENT_CREDENTIAL_WORKER_SERVER_NAME").ok()?,
+            bearer: zeroize::Zeroizing::new(
+                std::env::var("DEEPSEEK_AGENT_CREDENTIAL_WORKER_BEARER").ok()?,
+            ),
+        })
+    }
+}
+
 pub(crate) fn has_reserved_field(value: &Value) -> bool {
     match value {
         Value::Object(values) => {
@@ -26,13 +47,14 @@ pub(crate) fn has_reserved_field(value: &Value) -> bool {
 }
 
 pub(crate) async fn prepare(
+    config: &WorkerConfig,
     run_id: &str,
     epoch: u64,
     reference: &ArtifactReference,
     api_key: Option<&str>,
     tavily_api_key: Option<&str>,
 ) -> Result<Value, ()> {
-    let origin = std::env::var("DEEPSEEK_AGENT_CREDENTIAL_WORKER_ORIGIN").map_err(|_| ())?;
+    let origin = &config.origin;
     let address: SocketAddr = origin
         .strip_prefix("https://")
         .ok_or(())?
@@ -41,30 +63,26 @@ pub(crate) async fn prepare(
     if !address.ip().is_loopback() || address.port() == 0 {
         return Err(());
     }
-    let ca_path = std::env::var_os("DEEPSEEK_AGENT_CREDENTIAL_WORKER_CA_FILE").ok_or(())?;
-    let ca_path = std::path::PathBuf::from(ca_path);
-    if !ca_path.is_absolute() || std::fs::metadata(&ca_path).map_err(|_| ())?.len() > 128 * 1024 {
+    let ca_path = &config.ca_file;
+    if !ca_path.is_absolute() || std::fs::metadata(ca_path).map_err(|_| ())?.len() > 128 * 1024 {
         return Err(());
     }
     let ca = std::fs::read(ca_path).map_err(|_| ())?;
-    let server_name =
-        std::env::var("DEEPSEEK_AGENT_CREDENTIAL_WORKER_SERVER_NAME").map_err(|_| ())?;
+    let server_name = &config.server_name;
     if server_name.is_empty()
         || server_name.len() > 253
         || server_name.chars().any(char::is_control)
     {
         return Err(());
     }
-    let bearer = zeroize::Zeroizing::new(
-        std::env::var("DEEPSEEK_AGENT_CREDENTIAL_WORKER_BEARER").map_err(|_| ())?,
-    );
+    let bearer = &config.bearer;
     if !(32..=4096).contains(&bearer.len()) || !bearer.bytes().all(|b| b.is_ascii_graphic()) {
         return Err(());
     }
     let tls = ClientTlsConfig::new()
         .ca_certificate(Certificate::from_pem(ca))
-        .domain_name(server_name);
-    let channel = Endpoint::from_shared(origin)
+        .domain_name(server_name.clone());
+    let channel = Endpoint::from_shared(origin.clone())
         .map_err(|_| ())?
         .connect_timeout(Duration::from_secs(3))
         .timeout(Duration::from_secs(10))

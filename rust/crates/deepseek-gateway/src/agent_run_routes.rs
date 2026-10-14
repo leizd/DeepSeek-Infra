@@ -32,6 +32,7 @@ struct ReadConfig {
     origin: String,
     bearer: String,
     artifacts: PathBuf,
+    credentials: Option<crate::agent_credential_client::WorkerConfig>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -448,6 +449,7 @@ pub fn router() -> Router {
     let config = origin.map(|origin| ReadConfig {
         origin,
         bearer: std::env::var(crate::backup_mirror_routes::INTERNAL_BEARER_ENV).unwrap_or_default(),
+        credentials: crate::agent_credential_client::WorkerConfig::from_env(),
         artifacts: std::env::var_os("DEEPSEEK_AGENT_ARTIFACT_DIR")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
@@ -574,6 +576,11 @@ async fn create(
     .map_err(|_| data_error(DataError::Unavailable))??;
     let request = if api_key.is_some() || tavily_api_key.is_some() {
         let private = crate::agent_credential_client::prepare(
+            session
+                .config
+                .credentials
+                .as_ref()
+                .ok_or_else(control_unavailable)?,
             &id,
             session.epoch,
             &request,

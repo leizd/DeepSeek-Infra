@@ -33,6 +33,7 @@ reqwest = { version = "=0.12.28", default-features = false, features = ["rustls-
 rusqlite = { workspace = true }
 
 [dev-dependencies]
+rcgen = "=0.13.2"
 deepseek-browser = { path = "../deepseek-browser" }
 rusqlite = { workspace = true }
 tempfile = "3.27.0"
