@@ -158,6 +158,9 @@ message QueryAgentNodeEffectResponse {
 // Actual planner I/O and outcome custody are in the production Rust worker.
 // A known result is not Go phase settlement; independent proof is required.
 service AgentNodeWorker {
+  // Private Rust-to-Rust custody preparation only. No provider effect is admitted.
+  // Credentials must never be forwarded to the Go control plane or public events.
+  rpc PrepareCredentials(PrepareAgentCredentialsRequest) returns (PrepareAgentCredentialsResponse);
   rpc ExecutePlan(ExecuteAgentPlanRequest) returns (AgentNodeEffectMetadata);
   rpc ExecuteTask(ExecuteAgentTaskRequest) returns (AgentNodeEffectMetadata);
   // Only synthesis-phase claims with the Go-selected synthesizer node are valid.
@@ -165,6 +168,37 @@ service AgentNodeWorker {
   rpc QueryEffect(QueryAgentNodeEffectRequest) returns (QueryAgentNodeEffectResponse);
   rpc ProjectPlan(ProjectAgentPlanRequest) returns (AgentPlanProjectionReceipt);
   rpc ProjectSynthesis(ProjectAgentSynthesisRequest) returns (AgentSynthesisProjectionReceipt);
+}
+
+message PrepareAgentCredentialsRequest {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string run_id = 3;
+  AgentArtifactReference request = 4;
+  uint64 runtime_revision = 5;
+  string api_key = 6;
+  string tavily_api_key = 7;
+}
+
+message AgentCredentialScope {
+  string fleet_id = 1;
+  string environment = 2;
+  string run_id = 3;
+  uint64 metadata_epoch = 4;
+  uint64 runtime_revision = 5;
+  string request_sha256 = 6;
+  uint64 request_length = 7;
+}
+
+message AgentCredentialObjectReference {
+  string id = 1;
+  string sha256 = 2;
+  uint64 length = 3;
+}
+
+message PrepareAgentCredentialsResponse {
+  AgentCredentialScope scope = 1;
+  AgentCredentialObjectReference object = 2;
 }
 
 // The caller selects only a node ID. Task text and dependencies come from the

@@ -50,6 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_build::configure()
         .build_client(true)
         .build_server(true)
+        .skip_debug(".deepseek.agent.v1.PrepareAgentCredentialsRequest")
         .message_attribute(".", "#[derive(Eq)]")
         .enum_attribute(".deepseek.platform.v1.DocumentChunk.part", "#[derive(Eq)]")
         .compile_fds(descriptors)?;

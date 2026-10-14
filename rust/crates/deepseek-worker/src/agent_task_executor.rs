@@ -156,7 +156,7 @@ impl WorkerRpcService {
         if self.control_signer.is_none() {
             return Err(denied());
         }
-        let executor = self.agent_plan_executor.as_ref().ok_or_else(denied)?;
+
         let claim = input.claim.as_ref().ok_or_else(denied)?;
         {
             let worker = self.worker.lock().await;
@@ -177,6 +177,12 @@ impl WorkerRpcService {
                 .admit(claim.fence.as_ref().ok_or_else(denied)?)
                 .map_err(|_| denied())?;
         }
+        let selected = self.agent_executor_for_claim(claim).await?;
+        let executor = &selected;
+        executor
+            .upstream
+            .validate()
+            .map_err(|_| Status::failed_precondition("AGENT_PROVIDER_CREDENTIAL_MISSING"))?;
         let mut begin = Request::new(BeginAgentNodeEffect {
             claim: claim.clone(),
             signed_phase_grant: input.signed_phase_grant,

@@ -355,12 +355,13 @@ var AgentNodeControl_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	AgentNodeWorker_ExecutePlan_FullMethodName      = "/deepseek.agent.v1.AgentNodeWorker/ExecutePlan"
-	AgentNodeWorker_ExecuteTask_FullMethodName      = "/deepseek.agent.v1.AgentNodeWorker/ExecuteTask"
-	AgentNodeWorker_ExecuteSynthesis_FullMethodName = "/deepseek.agent.v1.AgentNodeWorker/ExecuteSynthesis"
-	AgentNodeWorker_QueryEffect_FullMethodName      = "/deepseek.agent.v1.AgentNodeWorker/QueryEffect"
-	AgentNodeWorker_ProjectPlan_FullMethodName      = "/deepseek.agent.v1.AgentNodeWorker/ProjectPlan"
-	AgentNodeWorker_ProjectSynthesis_FullMethodName = "/deepseek.agent.v1.AgentNodeWorker/ProjectSynthesis"
+	AgentNodeWorker_PrepareCredentials_FullMethodName = "/deepseek.agent.v1.AgentNodeWorker/PrepareCredentials"
+	AgentNodeWorker_ExecutePlan_FullMethodName        = "/deepseek.agent.v1.AgentNodeWorker/ExecutePlan"
+	AgentNodeWorker_ExecuteTask_FullMethodName        = "/deepseek.agent.v1.AgentNodeWorker/ExecuteTask"
+	AgentNodeWorker_ExecuteSynthesis_FullMethodName   = "/deepseek.agent.v1.AgentNodeWorker/ExecuteSynthesis"
+	AgentNodeWorker_QueryEffect_FullMethodName        = "/deepseek.agent.v1.AgentNodeWorker/QueryEffect"
+	AgentNodeWorker_ProjectPlan_FullMethodName        = "/deepseek.agent.v1.AgentNodeWorker/ProjectPlan"
+	AgentNodeWorker_ProjectSynthesis_FullMethodName   = "/deepseek.agent.v1.AgentNodeWorker/ProjectSynthesis"
 )
 
 // AgentNodeWorkerClient is the client API for AgentNodeWorker service.
@@ -370,6 +371,9 @@ const (
 // Actual planner I/O and outcome custody are in the production Rust worker.
 // A known result is not Go phase settlement; independent proof is required.
 type AgentNodeWorkerClient interface {
+	// Private Rust-to-Rust custody preparation only. No provider effect is admitted.
+	// Credentials must never be forwarded to the Go control plane or public events.
+	PrepareCredentials(ctx context.Context, in *PrepareAgentCredentialsRequest, opts ...grpc.CallOption) (*PrepareAgentCredentialsResponse, error)
 	ExecutePlan(ctx context.Context, in *ExecuteAgentPlanRequest, opts ...grpc.CallOption) (*AgentNodeEffectMetadata, error)
 	ExecuteTask(ctx context.Context, in *ExecuteAgentTaskRequest, opts ...grpc.CallOption) (*AgentNodeEffectMetadata, error)
 	// Only synthesis-phase claims with the Go-selected synthesizer node are valid.
@@ -385,6 +389,16 @@ type agentNodeWorkerClient struct {
 
 func NewAgentNodeWorkerClient(cc grpc.ClientConnInterface) AgentNodeWorkerClient {
 	return &agentNodeWorkerClient{cc}
+}
+
+func (c *agentNodeWorkerClient) PrepareCredentials(ctx context.Context, in *PrepareAgentCredentialsRequest, opts ...grpc.CallOption) (*PrepareAgentCredentialsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PrepareAgentCredentialsResponse)
+	err := c.cc.Invoke(ctx, AgentNodeWorker_PrepareCredentials_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *agentNodeWorkerClient) ExecutePlan(ctx context.Context, in *ExecuteAgentPlanRequest, opts ...grpc.CallOption) (*AgentNodeEffectMetadata, error) {
@@ -454,6 +468,9 @@ func (c *agentNodeWorkerClient) ProjectSynthesis(ctx context.Context, in *Projec
 // Actual planner I/O and outcome custody are in the production Rust worker.
 // A known result is not Go phase settlement; independent proof is required.
 type AgentNodeWorkerServer interface {
+	// Private Rust-to-Rust custody preparation only. No provider effect is admitted.
+	// Credentials must never be forwarded to the Go control plane or public events.
+	PrepareCredentials(context.Context, *PrepareAgentCredentialsRequest) (*PrepareAgentCredentialsResponse, error)
 	ExecutePlan(context.Context, *ExecuteAgentPlanRequest) (*AgentNodeEffectMetadata, error)
 	ExecuteTask(context.Context, *ExecuteAgentTaskRequest) (*AgentNodeEffectMetadata, error)
 	// Only synthesis-phase claims with the Go-selected synthesizer node are valid.
@@ -471,6 +488,9 @@ type AgentNodeWorkerServer interface {
 // pointer dereference when methods are called.
 type UnimplementedAgentNodeWorkerServer struct{}
 
+func (UnimplementedAgentNodeWorkerServer) PrepareCredentials(context.Context, *PrepareAgentCredentialsRequest) (*PrepareAgentCredentialsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PrepareCredentials not implemented")
+}
 func (UnimplementedAgentNodeWorkerServer) ExecutePlan(context.Context, *ExecuteAgentPlanRequest) (*AgentNodeEffectMetadata, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExecutePlan not implemented")
 }
@@ -508,6 +528,24 @@ func RegisterAgentNodeWorkerServer(s grpc.ServiceRegistrar, srv AgentNodeWorkerS
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&AgentNodeWorker_ServiceDesc, srv)
+}
+
+func _AgentNodeWorker_PrepareCredentials_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareAgentCredentialsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentNodeWorkerServer).PrepareCredentials(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentNodeWorker_PrepareCredentials_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentNodeWorkerServer).PrepareCredentials(ctx, req.(*PrepareAgentCredentialsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _AgentNodeWorker_ExecutePlan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -625,6 +663,10 @@ var AgentNodeWorker_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "deepseek.agent.v1.AgentNodeWorker",
 	HandlerType: (*AgentNodeWorkerServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "PrepareCredentials",
+			Handler:    _AgentNodeWorker_PrepareCredentials_Handler,
+		},
 		{
 			MethodName: "ExecutePlan",
 			Handler:    _AgentNodeWorker_ExecutePlan_Handler,

@@ -40,6 +40,40 @@ impl std::fmt::Debug for ControlSigner {
 }
 
 impl ControlSigner {
+    pub(crate) fn prepare_agent_credentials(
+        &self,
+        root: &Path,
+        scope: &deepseek_federation::AgentCredentialScope,
+        credentials: &deepseek_federation::AgentProviderCredentials,
+    ) -> Result<deepseek_federation::AgentCredentialObject, Status> {
+        deepseek_federation::AgentCredentialVault::open(root)
+            .and_then(|vault| vault.put(&self.key, scope, credentials))
+            .map_err(|_| Status::failed_precondition("AGENT_CREDENTIAL_CUSTODY_DENIED"))
+    }
+
+    pub(crate) fn open_agent_credentials(
+        &self,
+        root: &Path,
+        scope: &deepseek_federation::AgentCredentialScope,
+        object: &deepseek_federation::AgentCredentialObject,
+    ) -> Result<deepseek_federation::AgentProviderCredentials, Status> {
+        deepseek_federation::AgentCredentialVault::open(root)
+            .and_then(|vault| vault.get(&self.key, scope, object))
+            .map_err(|_| Status::failed_precondition("AGENT_CREDENTIAL_CUSTODY_DENIED"))
+    }
+
+    pub(crate) fn agent_credential_binding(&self) -> Result<(String, String), Status> {
+        let binding = self.key.binding();
+        let fleet = binding["fleetId"].as_str();
+        let environment = binding["environment"].as_str();
+        match (fleet, environment) {
+            (Some(fleet), Some(environment)) => Ok((fleet.into(), environment.into())),
+            _ => Err(Status::failed_precondition(
+                "AGENT_CREDENTIAL_CUSTODY_DENIED",
+            )),
+        }
+    }
+
     pub(crate) fn sign_synthesis_projection(
         &mut self,
         evidence: deepseek_protocol::generated::deepseek::agent::v1::AgentSynthesisProjectionEvidence,

@@ -82,14 +82,45 @@ impl ChatExecutionError {
     }
 }
 
-/// Upstream origin and credential. Both come from the server environment, never
-/// from the client request: `request_preparation` rejects any client-supplied
-/// `api_key`/`apikey`/`authorization` field outright.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Operator-selected upstream origin with the resolved request or server credential.
+#[derive(Clone, PartialEq, Eq)]
 pub struct UpstreamConfig {
     pub url: String,
     pub api_key: String,
     pub timeout: Duration,
+}
+
+#[cfg(test)]
+mod upstream_credential_tests {
+    use super::*;
+
+    #[test]
+    fn configuration_allows_origin_validation_before_request_credentials_are_resolved() {
+        let mut config = UpstreamConfig {
+            url: "http://127.0.0.1:9/chat".into(),
+            api_key: String::new(),
+            timeout: Duration::from_secs(1),
+        };
+        assert!(config.validate_origin().is_ok());
+        assert!(matches!(
+            config.validate(),
+            Err(ChatExecutionError::MissingUpstreamCredential)
+        ));
+        config.api_key = "isolated-request-fixture".into();
+        assert!(config.validate().is_ok());
+        assert!(!format!("{config:?}").contains("isolated-request-fixture"));
+        config.url = "https://username:password@example.test/chat".into();
+        assert!(config.validate_origin().is_err());
+        assert!(!format!("{config:?}").contains("password"));
+    }
+}
+
+impl std::fmt::Debug for UpstreamConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpstreamConfig")
+            .field("timeout", &self.timeout)
+            .finish_non_exhaustive()
+    }
 }
 
 impl UpstreamConfig {
@@ -118,6 +149,10 @@ impl UpstreamConfig {
         if self.api_key.is_empty() {
             return Err(ChatExecutionError::MissingUpstreamCredential);
         }
+        self.validate_origin()
+    }
+
+    pub fn validate_origin(&self) -> Result<reqwest::Url, ChatExecutionError> {
         let parsed =
             reqwest::Url::parse(&self.url).map_err(|_| ChatExecutionError::InvalidUpstreamUrl)?;
         // An operator may point this at a self-hosted compatible endpoint, but

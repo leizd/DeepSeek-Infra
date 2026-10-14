@@ -27,17 +27,24 @@ import verify_agent_signing_process as signing  # noqa: E402
 
 
 def public_edge_environment(source: dict[str, str], address: str, static: Path, artifacts: Path,
-                            ready: dict[str, Any]) -> dict[str, str]:
+                            ready: dict[str, Any], credential_worker: dict[str, str] | None = None) -> dict[str, str]:
     """Explicit gateway custody/control configuration after ambient identities are removed."""
     origin, bearer = ready.get("origin"), ready.get("internalBearer")
     if not isinstance(origin, str) or not origin.startswith("http://127.0.0.1:") or \
             not isinstance(bearer, str) or len(bearer.strip()) < 32:
         raise ValueError("Actual Go control readiness omitted the private loopback binding")
-    environment = signing.child_environment(source)
+    environment = {key: value for key, value in signing.child_environment(source).items()
+                   if not key.startswith("DEEPSEEK_AGENT_CREDENTIAL_")}
     environment.update(GATEWAY_BIND_ADDR=address, DEEPSEEK_RUNTIME_MODE="python_disabled",
         DEEPSEEK_INFRA_STATIC_DIR=static.parent.as_posix(), AUTH_DISABLED="1",
         GO_CONTROL_ADDR=origin, DEEPSEEK_INTERNAL_BEARER=bearer,
         DEEPSEEK_AGENT_ARTIFACT_DIR=artifacts.as_posix())
+    if credential_worker is not None:
+        expected = {"ORIGIN", "CA_FILE", "SERVER_NAME", "BEARER"}
+        if set(credential_worker) != expected or not credential_worker["ORIGIN"].startswith("https://127.0.0.1:") or \
+                not Path(credential_worker["CA_FILE"]).is_absolute() or len(credential_worker["BEARER"]) < 32:
+            raise ValueError("Explicit private Rust credential custody transport is invalid")
+        environment.update({"DEEPSEEK_AGENT_CREDENTIAL_WORKER_" + key: value for key, value in credential_worker.items()})
     return environment
 
 
@@ -323,7 +330,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             with socket.socket() as port:
                 port.bind(("127.0.0.1", 0))
                 address = f"127.0.0.1:{port.getsockname()[1]}"
-            edge_environment = public_edge_environment(worker_environment, address, static, artifacts, ready)
+            edge_environment = public_edge_environment(worker_environment, address, static, artifacts, ready,
+                {"ORIGIN": target, "CA_FILE": ca.as_posix(), "SERVER_NAME": "localhost", "BEARER": bearer})
             with (output / "public-driver-edge.log").open("wb") as log:
                 edge = subprocess.Popen([args.edge.resolve().as_posix()], cwd=ROOT, env=edge_environment, stdout=log, stderr=subprocess.STDOUT)
             wait_edge("http://" + address, edge)

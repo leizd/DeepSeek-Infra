@@ -27,11 +27,11 @@
     },
     {
       "path": "go/internal/protocol/agentv1/agent_node.pb.go",
-      "sha256": "a90f35f43fb18dbdc29f832e60cb6c62da7b4382f10904ddaff28e95e2bba41d"
+      "sha256": "2d5e88b484f9a0785bd344648218c4b48b04d868a3f86531fcd863d516dd049d"
     },
     {
       "path": "go/internal/protocol/agentv1/agent_node_grpc.pb.go",
-      "sha256": "b0db0fa96b309d69e8e3e2401794cc7f7164945bb6afb7d59128ad29e26940ac"
+      "sha256": "ae4af7a9ef4850ff0466861197633fbeb0052a72bdc38f2b76e0954b00979fe5"
     },
     {
       "path": "go/internal/protocol/browserv1/browser.pb.go",
@@ -75,7 +75,7 @@
     },
     {
       "path": "proto/generated/descriptor.pb",
-      "sha256": "8fdc55f1c5db841389dbbf735bf8169643d8a2262397110742e85d7b715aa3fa"
+      "sha256": "807b46474840b925d2e61cd4e6b56c694bce5ce46375212721e5278f77628ac8"
     }
   ],
   "schema_version": 1,
@@ -94,7 +94,7 @@
     },
     {
       "path": "proto/agent/v1/agent_node.proto",
-      "sha256": "605609c5b269c7a5907048b03b869f2726f2d445e08c47c416389a1e8af41934"
+      "sha256": "c3afbe9295741f93b8c7e06d02679d38b7d1ab91f3695aceb30803c2ff71cc73"
     },
     {
       "path": "proto/browser/v1/browser.proto",

@@ -21,6 +21,7 @@ pub mod a2a_control;
 pub mod a2a_hub;
 pub mod a2a_runner;
 pub mod a2a_stream;
+mod agent_credential_client;
 mod agent_run_routes;
 mod artifact_preview_routes;
 pub mod assembly_env;

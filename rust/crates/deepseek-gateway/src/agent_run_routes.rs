@@ -539,14 +539,32 @@ async fn create(
     }
     let input: Value = serde_json::from_slice(&body).map_err(|_| invalid_request())?;
     let mut metadata = creation_metadata(&input)?;
+    if crate::agent_credential_client::has_reserved_field(&input) {
+        return Err(invalid_request());
+    }
+    let credential = |name: &str| -> Result<Option<String>, ReadError> {
+        match input["payload"].get(name) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(value))
+                if value.len() <= 4096 && !value.chars().any(char::is_control) =>
+            {
+                Ok((!value.trim().is_empty()).then(|| value.trim().to_string()))
+            }
+            _ => Err(invalid_request()),
+        }
+    };
+    let api_key = credential("apiKey")?.map(zeroize::Zeroizing::new);
+    let tavily_api_key = credential("tavilyApiKey")?.map(zeroize::Zeroizing::new);
+    let mut sanitized = deepseek_policy::agent_run_data::sanitize(&input);
     let id = new_run_id()?;
     // Check the configured private control peer and actual domain authority before
     // opening writable body custody. Go alone commits the initial run metadata.
     let mut session = ReadSession::connect(config, &id).await?;
     let root = session.config.artifacts.clone();
+    let base = sanitized.clone();
     let (request, status) = tokio::task::spawn_blocking(move || {
         let mut store = ArtifactStore::open_native(&root, "python_disabled").map_err(data_error)?;
-        let request = store.put(&input).map_err(data_error)?;
+        let request = store.put(&base).map_err(data_error)?;
         let status = store
             .put(&json!({"type":"run_status", "status":"created"}))
             .map_err(data_error)?;
@@ -554,6 +572,34 @@ async fn create(
     })
     .await
     .map_err(|_| data_error(DataError::Unavailable))??;
+    let request = if api_key.is_some() || tavily_api_key.is_some() {
+        let private = crate::agent_credential_client::prepare(
+            &id,
+            session.epoch,
+            &request,
+            api_key.as_ref().map(|value| value.as_str()),
+            tavily_api_key.as_ref().map(|value| value.as_str()),
+        )
+        .await
+        .map_err(|_| control_unavailable())?;
+        sanitized
+            .as_object_mut()
+            .ok_or_else(invalid_request)?
+            .insert(
+                crate::agent_credential_client::PRIVATE_FIELD.into(),
+                private,
+            );
+        let root = session.config.artifacts.clone();
+        tokio::task::spawn_blocking(move || {
+            ArtifactStore::open_native(&root, "python_disabled")
+                .and_then(|mut store| store.put(&sanitized))
+                .map_err(data_error)
+        })
+        .await
+        .map_err(|_| data_error(DataError::Unavailable))??
+    } else {
+        request
+    };
     metadata.request = Some(AgentArtifactReference {
         sha256: request.sha256,
         length: request.length,

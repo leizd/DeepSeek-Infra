@@ -23,6 +23,7 @@ use crate::{
     QueryAgentNodeEffect, WorkerRpcService, authority_request,
 };
 
+#[derive(Clone)]
 pub struct AgentPlanExecutor {
     pub(crate) artifact_root: PathBuf,
     pub(crate) workspace_root: PathBuf,
@@ -61,7 +62,7 @@ pub fn load_agent_plan_executor_from_env() -> Result<Option<AgentPlanExecutor>, 
         return Err(unavailable());
     }
     let upstream = UpstreamConfig::from_env();
-    upstream.validate().map_err(|_| unavailable())?;
+    upstream.validate_origin().map_err(|_| unavailable())?;
     Ok(Some(AgentPlanExecutor {
         artifact_root,
         workspace_root,
@@ -297,6 +298,19 @@ impl AgentPlanExecutor {
 
 #[tonic::async_trait]
 impl AgentNodeWorker for WorkerRpcService {
+    async fn prepare_credentials(
+        &self,
+        request: Request<
+            deepseek_protocol::generated::deepseek::agent::v1::PrepareAgentCredentialsRequest,
+        >,
+    ) -> Result<
+        Response<
+            deepseek_protocol::generated::deepseek::agent::v1::PrepareAgentCredentialsResponse,
+        >,
+        Status,
+    > {
+        self.prepare_agent_provider_credentials(request).await
+    }
     async fn execute_task(
         &self,
         request: Request<
@@ -351,7 +365,7 @@ impl AgentNodeWorker for WorkerRpcService {
         if self.control_signer.is_none() {
             return Err(unavailable());
         }
-        let executor = self.agent_plan_executor.as_ref().ok_or_else(unavailable)?;
+
         let metadata = request.metadata().clone();
         let input = request.into_inner();
         let claim = input
@@ -391,8 +405,14 @@ impl AgentNodeWorker for WorkerRpcService {
         }
         // Resolve/validate the immutable Rust body before spending the sole Go
         // reservation. Neither the RPC caller nor Go supplies a replacement body.
+        let selected = self.agent_executor_for_claim(claim).await?;
+        let executor = &selected;
         let preset = executor.prepare_preset(&input).await?;
         let body = if preset.is_none() {
+            executor
+                .upstream
+                .validate()
+                .map_err(|_| Status::failed_precondition("AGENT_PROVIDER_CREDENTIAL_MISSING"))?;
             Some(executor.prepare(&input).await?)
         } else {
             None

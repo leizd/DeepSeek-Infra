@@ -86,6 +86,42 @@ def test_actual_public_edge_configuration_retains_only_explicit_control_and_body
     assert not artifacts.exists()  # Configuration itself cannot seed input custody.
 
 
+def test_credential_transport_is_explicit_and_ambient_configuration_cannot_override_it(tmp_path):
+    from scripts.verify_native_agent_public_driver import public_edge_environment
+
+    ready = {"origin": "http://127.0.0.1:18090", "internalBearer": "isolated-control-" + "x" * 32}
+    source = {"DEEPSEEK_AGENT_CREDENTIAL_WORKER_ORIGIN": "https://untrusted.example:443",
+              "DEEPSEEK_AGENT_CREDENTIAL_WORKER_BEARER": "ambient-fixture",
+              "DEEPSEEK_WORKER_TLS_KEY_FILE": "private-key", "DEEPSEEK_API_KEY": "private-provider"}
+    transport = {"ORIGIN": "https://127.0.0.1:18091", "CA_FILE": (tmp_path / "ca.pem").as_posix(),
+                 "SERVER_NAME": "localhost", "BEARER": "isolated-worker-" + "y" * 32}
+    result = public_edge_environment(source, "127.0.0.1:18100", tmp_path / "static/ui", tmp_path / "artifacts", ready, transport)
+    assert result["DEEPSEEK_AGENT_CREDENTIAL_WORKER_ORIGIN"] == transport["ORIGIN"]
+    assert result["DEEPSEEK_AGENT_CREDENTIAL_WORKER_BEARER"] == transport["BEARER"]
+    assert "DEEPSEEK_WORKER_TLS_KEY_FILE" not in result and "DEEPSEEK_API_KEY" not in result
+    stripped = public_edge_environment(source, "127.0.0.1:18100", tmp_path / "static/ui", tmp_path / "artifacts", ready)
+    assert not any(key.startswith("DEEPSEEK_AGENT_CREDENTIAL_") for key in stripped)
+
+
+@pytest.mark.parametrize("mutation", ["remote", "relative-ca", "missing-field", "short-bearer"])
+def test_invalid_credential_transport_is_rejected_before_starting_a_process(tmp_path, mutation):
+    from scripts.verify_native_agent_public_driver import public_edge_environment
+
+    ready = {"origin": "http://127.0.0.1:18090", "internalBearer": "isolated-control-" + "x" * 32}
+    transport = {"ORIGIN": "https://127.0.0.1:18091", "CA_FILE": (tmp_path / "ca.pem").as_posix(),
+                 "SERVER_NAME": "localhost", "BEARER": "isolated-worker-" + "y" * 32}
+    if mutation == "remote":
+        transport["ORIGIN"] = "https://untrusted.example:443"
+    elif mutation == "relative-ca":
+        transport["CA_FILE"] = "relative.pem"
+    elif mutation == "missing-field":
+        transport.pop("SERVER_NAME")
+    else:
+        transport["BEARER"] = "short-fixture"
+    with pytest.raises(ValueError, match="credential custody transport"):
+        public_edge_environment({}, "127.0.0.1:18100", tmp_path / "static/ui", tmp_path / "artifacts", ready, transport)
+
+
 @pytest.mark.parametrize("ready", [{}, {"origin": 12, "internalBearer": "x" * 40},
     {"origin": "http://remote:80", "internalBearer": "x" * 40},
     {"origin": "http://127.0.0.1:18090", "internalBearer": "short"},

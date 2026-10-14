@@ -242,6 +242,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 exchanges.append({"actionId": self.headers.get("X-DeepSeek-Action-Id"),
                     "executionEpoch": self.headers.get("X-DeepSeek-Execution-Epoch"),
                     "operationId": self.headers.get("X-DeepSeek-Node-Operation-Id"), "stream": body.get("stream"),
+                    "requestCredentialUsed": self.headers.get("Authorization") == "Bearer request-only-credential",
                     "selectedTaskInPrompt": "write" in prompt, "dependentTaskInPrompt": "review" in prompt,
                     "predecessorSummaryInPrompt": "Controlled public task summary" in prompt,
                     "privateReasoningInPrompt": "private-task-reasoning" in prompt,
@@ -290,6 +291,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     DEEPSEEK_INTERNAL_BEARER=seed["internalBearer"], DEEPSEEK_AGENT_ARTIFACT_DIR=artifacts.as_posix(),
                     DEEPSEEK_INFRA_ROOT=case.as_posix(), DEEPSEEK_AGENT_DATA_MODE="python_disabled",
                     DEEPSEEK_API_URL=f"http://127.0.0.1:{provider.server_port}/chat", DEEPSEEK_API_KEY="isolated-fixture-credential")
+                if label == "worker-after-restart":
+                    environment.pop("DEEPSEEK_API_KEY", None)
                 return start_bound_worker(args.worker.resolve(), environment, target_address, ca, output / (label + ".log"))
 
             daemon = start_daemon("daemon-before-restart")
@@ -298,13 +301,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             address = origin_address()
             origin = "http://" + address
             edge_env = public.public_edge_environment(private_environment, address, ROOT / "static/ui", artifacts,
-                                                      {"origin": control_origin, "internalBearer": seed["internalBearer"]})
+                                                      {"origin": control_origin, "internalBearer": seed["internalBearer"]},
+                {"ORIGIN": target, "CA_FILE": ca.as_posix(), "SERVER_NAME": "localhost", "BEARER": bearer})
             with (output / "daemon-public-edge.log").open("wb") as log:
                 edge = subprocess.Popen([args.edge.resolve().as_posix()], cwd=ROOT, env=edge_env, stdout=log, stderr=subprocess.STDOUT)
             public.wait_edge(origin, edge)
             index_sha, asset_count = serve_built_frontend(origin)
             created = request_json(origin, "/api/agent-runs", {"payload": {"messages": [{"role": "user", "content": "Prepare an isolated verification plan"}],
-                "model": "deepseek-chat", "apiKey": "request-only-credential"}, "agentPreset": "auto", "confirmPlan": True})
+                "model": "deepseek-chat", "apiKey": "request-only-credential", "tavilyApiKey": "request-only-search-credential"}, "agentPreset": "auto", "confirmPlan": True})
             run_id = created.get("runId")
             if not isinstance(run_id, str) or not run_id:
                 raise ValueError("Actual daemon public creation omitted run identity")
@@ -377,6 +381,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 inputBodySeededByOfflineOracle=False, productionRuntimeProcesses=["Go", "Rust"],
                 productionProviderQualified=False, fullMigrationQualified=False, actualHTTPRequests=len(exchanges),
                 providerExchanges=exchanges, cloudOnlyNativeBuild=True, privateCustodyVariablesExportedToGo=False, readiness="NOT_READY")
+            if not exchanges or not all(value.get("requestCredentialUsed") is True for value in exchanges):
+                raise ValueError("Actual provider did not use the request credential across restart")
+            sealed = list((artifacts / "agent-provider-credentials-v1").glob("*.json"))
+            if len(sealed) != 1 or any(secret in sealed[0].read_bytes() for secret in
+                    (b"request-only-credential", b"request-only-search-credential")):
+                raise ValueError("Actual request credential ciphertext custody differs")
+            result.update(requestCredentialOverrideQualified=True, credentialCustodyReopenedAcrossWorkerRestart=True,
+                encryptedCredentialObjectCount=len(sealed), requestSearchCredentialEncrypted=True,
+                workerRestartWithoutServerProviderCredential=True)
             validate_daemon_result(result, exchanges)
             (output / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             return result

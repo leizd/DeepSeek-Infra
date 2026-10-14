@@ -80,6 +80,27 @@ impl std::fmt::Debug for AgentExecutionControl {
     }
 }
 impl AgentExecutionControl {
+    pub(crate) async fn metadata_epoch(&self) -> Result<u64, Status> {
+        use deepseek_protocol::generated::deepseek::agent::v1::AgentRunAuthorityInput;
+        let channel = self.endpoint.connect().await.map_err(|_| unavailable())?;
+        let mut client = AgentRunControlClient::new(channel).max_decoding_message_size(64 * 1024);
+        let mut request = Request::new(AgentRunAuthorityInput {});
+        request
+            .metadata_mut()
+            .insert("authorization", self.authorization.clone());
+        let authority = client
+            .get_authority(request)
+            .await
+            .map_err(|_| unavailable())?
+            .into_inner();
+        if !authority.authoritative || authority.metadata_epoch == 0 {
+            return Err(Status::failed_precondition(
+                "AGENT_METADATA_AUTHORITY_DENIED",
+            ));
+        }
+        Ok(authority.metadata_epoch)
+    }
+
     pub fn new(origin: &str, bearer: &str) -> Result<Self, Status> {
         let address = origin
             .strip_prefix("http://")
