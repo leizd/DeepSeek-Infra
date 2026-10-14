@@ -153,11 +153,11 @@ def serve_built_frontend(origin: str) -> tuple[str, int]:
         received = response.read(2 * 1024**2 + 1)
     if received != index.read_bytes():
         raise ValueError("Native gateway did not serve the actual built frontend")
-    references = re.findall(r'(?:src|href)=["\'](/assets/[^"\']+)["\']', received.decode("utf-8"))
+    references = re.findall(r'(?:src|href)=["\'](/ui/assets/[^"\']+)["\']', received.decode("utf-8"))
     if not references or not any(path.endswith(".js") for path in references):
         raise ValueError("Actual frontend omits its bundled application")
     for reference in set(references):
-        path = (directory / urlparse(reference).path.lstrip("/")).resolve()
+        path = (directory / urlparse(reference).path.removeprefix("/ui/")).resolve()
         if not path.is_relative_to(directory.resolve()) or not path.is_file():
             raise ValueError("Built frontend asset path is invalid")
         with urlopen(origin + reference, timeout=15) as response:

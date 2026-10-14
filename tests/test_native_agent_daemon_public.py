@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import threading
 from typing import Any
 
 import pytest
@@ -74,3 +77,57 @@ def test_daemon_receives_only_public_worker_configuration(tmp_path: Path) -> Non
     assert "GH_TOKEN" not in environment
     assert "DEEPSEEKD_SHADOW_STORE" not in environment
     assert "DEEPSEEKD_MUTATION_SIGNER_KEY" not in environment
+
+
+@pytest.mark.parametrize("fault", [None, "wrong-index", "wrong-script", "missing-script", "escaping-asset"])
+def test_serves_real_ui_prefix_and_refuses_wrong_build_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str | None) -> None:
+    directory = tmp_path / "static/ui"
+    assets = directory / "assets"
+    assets.mkdir(parents=True)
+    script, style = b"globalThis.nativeBuild = true;", b"body { color: black; }"
+    (assets / "app.js").write_bytes(script)
+    (assets / "app.css").write_bytes(style)
+    script_tag = '<script type="module" src="/ui/assets/app.js"></script>'
+    if fault == "missing-script":
+        script_tag = ""
+    if fault == "escaping-asset":
+        script_tag = '<script type="module" src="/ui/assets/../../../outside.js"></script>'
+    index = ('<!doctype html>' + script_tag + '<link rel="stylesheet" href="/ui/assets/app.css">').encode()
+    (directory / "index.html").write_bytes(index)
+    responses = {"/": b"wrong build" if fault == "wrong-index" else index,
+                 "/ui/assets/app.js": b"wrong script" if fault == "wrong-script" else script,
+                 "/ui/assets/app.css": style}
+    requested: list[str] = []
+
+    class Assets(BaseHTTPRequestHandler):
+        def log_message(self, *values: Any) -> None:
+            pass
+
+        def do_GET(self) -> None:
+            requested.append(self.path)
+            if self.path not in responses:
+                self.send_error(404)
+                return
+            data = responses[self.path]
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Assets)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setattr(daemon, "ROOT", tmp_path)
+    try:
+        origin = f"http://127.0.0.1:{server.server_port}"
+        if fault:
+            with pytest.raises(ValueError):
+                daemon.serve_built_frontend(origin)
+        else:
+            assert daemon.serve_built_frontend(origin) == (hashlib.sha256(index).hexdigest(), 2)
+            assert set(requested) == {"/", "/ui/assets/app.js", "/ui/assets/app.css"}
+        assert not any("outside.js" in path for path in requested)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
