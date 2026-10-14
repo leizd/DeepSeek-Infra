@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, OpenFlags, Row, params};
 use serde_json::{Map, Value, json};
 
 use crate::budget_manager::SPEND_TABLE;
@@ -172,6 +172,25 @@ impl BudgetStore {
     }
 
     /// Mirrors the `SELECT` in `daily_spend`.
+    /// This reader neither creates a database nor runs schema/journal pragmas.
+    /// Native executors must not become writers of the retained budget store.
+    pub fn read_spend_row_readonly(&self, scope: &str, day: &str) -> Result<Option<Value>, String> {
+        let connection =
+            Connection::open_with_flags(&self.budget_db, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(|error| error.to_string())?;
+        let mut statement = connection
+            .prepare(SELECT_ROW)
+            .map_err(|error| error.to_string())?;
+        let mut rows = statement
+            .query(params![scope, day])
+            .map_err(|error| error.to_string())?;
+        match rows.next().map_err(|error| error.to_string())? {
+            Some(row) => Ok(Some(row_to_value(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Mirrors the `SELECT` in `daily_spend`.
     pub fn read_spend_row(&self, scope: &str, day: &str) -> Result<Option<Value>, String> {
         let _guard = self
             .lock
@@ -277,6 +296,52 @@ mod tests {
             Some(NORMALISED_SCHEMA)
         );
         assert_eq!(store.table(), "budget_daily");
+    }
+
+    #[test]
+    fn readonly_budget_neither_creates_missing_state_nor_migrates_foreign_schema() {
+        let scratch = Scratch::new("readonly");
+        let store = scratch.store();
+        assert!(
+            store
+                .read_spend_row_readonly("global", "2026-09-18")
+                .is_err()
+        );
+        assert!(!scratch.root.join("budget").exists());
+        std::fs::create_dir_all(scratch.root.join("budget")).unwrap();
+        let db = scratch.root.join("budget/budget.db");
+        let connection = Connection::open(&db).unwrap();
+        connection
+            .execute("CREATE TABLE foreign_state (value TEXT)", [])
+            .unwrap();
+        drop(connection);
+        let bytes = std::fs::read(&db).unwrap();
+        assert!(
+            store
+                .read_spend_row_readonly("global", "2026-09-18")
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&db).unwrap(), bytes);
+        assert!(!scratch.root.join("budget/budget.db-wal").exists());
+        let connection = Connection::open(&db).unwrap();
+        initialize_schema(&connection).unwrap();
+        connection.execute("INSERT INTO budget_daily(scope,day,prompt_tokens,updated_at) VALUES ('global','2026-09-18',15,'2026-09-18T00:00:00Z')", []).unwrap();
+        drop(connection);
+        let bytes = std::fs::read(&db).unwrap();
+        assert_eq!(
+            store
+                .read_spend_row_readonly("global", "2026-09-18")
+                .unwrap()
+                .unwrap()["prompt_tokens"],
+            15
+        );
+        assert!(
+            store
+                .read_spend_row_readonly("missing", "2026-09-18")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(std::fs::read(&db).unwrap(), bytes);
     }
 
     #[test]

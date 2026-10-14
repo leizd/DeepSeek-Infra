@@ -45,6 +45,10 @@ fn fail_before(
     e
 }
 pub fn prepare(r: &Registry, id: &str, input: &Value, options: &Value) -> Result<Run> {
+    {
+        let _guard =
+            crate::mutation_gate::mutation_scope(None, &r.root).map_err(super::mutation_error)?;
+    }
     let skill = r.get(id, false)?;
     let offline = boolean(options, "offline", false);
     let persist = boolean(options, "persist", true);

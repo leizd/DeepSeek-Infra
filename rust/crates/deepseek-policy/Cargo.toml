@@ -8,6 +8,10 @@ rust-version.workspace = true
 
 [dependencies]
 deepseek-core = { path = "../deepseek-core" }
+deepseek-protocol = { path = "../deepseek-protocol" }
+futures-util.workspace = true
+tokio.workspace = true
+tonic.workspace = true
 # The sealed frontend mirror seals each generation with the same streaming age
 # implementation the production `backup-crypto` CLI runs, and proves the result with
 # the same decrypt round trip. Linking the library is what keeps the two from

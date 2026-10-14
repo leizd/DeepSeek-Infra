@@ -70,12 +70,13 @@ func Start(ctx context.Context, cfg config.Config) (*Server, error) {
 		// it without an authenticated internal control plane, so a process can
 		// never authorize a promotion over an unauthenticated channel.
 		control, err = store.OpenControl(store.OpenOptions{
-			Path:                     storeDir,
-			Owner:                    owner,
-			AuthorizeCutover:         cfg.ControlAuthority,
-			PromotionSignerPublicKey: cfg.PromotionSignerPublicKey,
-			FleetID:                  cfg.FleetID,
-			Environment:              cfg.Environment,
+			Path:                        storeDir,
+			Owner:                       owner,
+			AuthorizeCutover:            cfg.ControlAuthority,
+			PromotionSignerPublicKey:    cfg.PromotionSignerPublicKey,
+			AgentOutcomeSignerPublicKey: cfg.AgentOutcomeSignerPublicKey,
+			FleetID:                     cfg.FleetID,
+			Environment:                 cfg.Environment,
 		})
 		if err != nil {
 			_ = listener.Close()
@@ -115,6 +116,7 @@ func serve(ctx context.Context, cfg config.Config, listener net.Listener, contro
 		ShadowStore:        cfg.Mode == config.ModeShadow && control != nil,
 	})
 	rpc := api.NewControlRPC(control, cfg.InternalAPIBearer, api.HealthFor(cfg))
+	agentDone := api.StartAgentRunDriver(runCtx, control, api.HealthFor(cfg))
 	protocols := new(http.Protocols)
 	protocols.SetHTTP1(true)
 	protocols.SetUnencryptedHTTP2(true)
@@ -126,7 +128,7 @@ func serve(ctx context.Context, cfg config.Config, listener net.Listener, contro
 		mux.ServeHTTP(writer, request)
 	})
 	server := &http.Server{Handler: handler, Protocols: protocols, BaseContext: func(net.Listener) context.Context { return runCtx }}
-	runtime := &Server{address: listener.Addr().String(), done: make(chan error, 1), stopRPC: rpc.Stop}
+	runtime := &Server{address: listener.Addr().String(), done: make(chan error, 1), stopRPC: rpc.Stop, agentDone: agentDone}
 	served := make(chan error, 1)
 	go func() {
 		served <- server.Serve(listener)

@@ -158,10 +158,9 @@ def test_every_skill_registry_write_path_is_denied_once_python_is_de_authorized(
     those sinks (the record, its history revision, its security review) and a gate at the route would
     have missed the two that the route never names.
 
-    The run log and the eval-case file share `.skills/` and the eval-case file is deliberately
-    **not** gated: Rust's `Registry` writes none of it, so denying it would take away a store nobody
-    has taken over — the other half of ADR-0049's "a cutover gate that has not passed leaves the
-    prior owner authoritative; it does not permit dual writers".
+    The run log, catalog and eval-case child stores share the declared skills store.
+    Their write chokepoints now use the same scope; the companion regression
+    exercises them after handover and checks that all child-store bytes are retained.
 
     That sentence cuts both ways, so the default mode leaving every path working is asserted here
     too: a gate that fired early would be a regression, not caution.
@@ -230,4 +229,36 @@ def test_every_skill_registry_write_path_is_denied_once_python_is_de_authorized(
     assert catalog_manifest.read_text(encoding="utf-8") == catalog_written
     assert run_log.read_text(encoding="utf-8") == run_log_written
     assert case_file.read_text(encoding="utf-8") == case_file_written
-    assert case_file.read_text(encoding="utf-8") == case_file_written
+    with pytest.raises(PythonWriterMechanicallyDeniedError):
+        catalog.catalog_refresh()
+
+
+def test_skill_child_store_writes_are_denied_after_native_handover(
+    tmp_settings: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from deepseek_infra.infra.native_runtime.authority import PythonWriterMechanicallyDeniedError
+    from deepseek_infra.infra.skills import analytics, catalog, eval as skill_eval
+
+    skill = registry.create_custom_skill(_skill("skill_children_332"))
+    run_id = "run_children_332"
+    analytics.append_run({"skillRunId": run_id, "skillId": skill["skillId"]})
+    case_id = "case_children_332"
+    skill_eval.save_eval_case({"caseId": case_id, "skillId": skill["skillId"], "input": {}})
+    catalog.catalog_refresh()
+    before = {str(p.relative_to(registry.SKILLS_DIR)): p.read_bytes()
+              for p in registry.SKILLS_DIR.rglob("*") if p.is_file()}
+    monkeypatch.setenv("DEEPSEEK_RUNTIME_MODE", "python_disabled")
+    for write in (
+        lambda: analytics.append_run({"skillRunId": "run_denied_332", "skillId": skill["skillId"]}),
+        lambda: analytics.delete_run(run_id),
+        lambda: analytics.cleanup_runs(keep_recent=0),
+        lambda: analytics.redact_run(run_id),
+        lambda: catalog.catalog_refresh(),
+        lambda: skill_eval.save_eval_case({"caseId": "case_denied_332", "skillId": skill["skillId"]}),
+        lambda: skill_eval.delete_eval_case(case_id),
+    ):
+        with pytest.raises(PythonWriterMechanicallyDeniedError):
+            write()
+    after = {str(p.relative_to(registry.SKILLS_DIR)): p.read_bytes()
+             for p in registry.SKILLS_DIR.rglob("*") if p.is_file()}
+    assert after == before

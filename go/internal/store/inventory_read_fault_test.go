@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	modernsqlite "modernc.org/sqlite"
+	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
 )
 
 var errInventoryReadInterrupted = errors.New("inventory database read interrupted")
@@ -48,19 +48,62 @@ func (conn inventoryFaultConnection) QueryContext(ctx context.Context, query str
 	if conn.fault.armed && strings.Contains(query, conn.fault.query) && !conn.fault.commit {
 		if conn.fault.skip > 0 {
 			conn.fault.skip--
-			return conn.Conn.(driver.QueryerContext).QueryContext(ctx, query, args)
+			return conn.queryUnderlying(ctx, query, args)
 		}
 		conn.fault.armed, conn.fault.injected = false, true
 		if !conn.fault.cursor && !conn.fault.malformed {
 			return nil, errInventoryReadInterrupted
 		}
-		rows, err := conn.Conn.(driver.QueryerContext).QueryContext(ctx, query, args)
+		rows, err := conn.queryUnderlying(ctx, query, args)
 		if err != nil {
 			return nil, err
 		}
 		return inventoryFaultRows{Rows: rows, malformed: conn.fault.malformed}, nil
 	}
-	return conn.Conn.(driver.QueryerContext).QueryContext(ctx, query, args)
+	return conn.queryUnderlying(ctx, query, args)
+}
+
+// QueryerContext is optional: the Android SQLite driver queries prepared
+// statements. Keep the same fault, cursor and recovery assertions on that real
+// transport, with the statement alive until the underlying rows are closed.
+func (conn inventoryFaultConnection) queryUnderlying(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if queryer, ok := conn.Conn.(driver.QueryerContext); ok {
+		return queryer.QueryContext(ctx, query, args)
+	}
+	var statement driver.Stmt
+	var err error
+	if preparer, ok := conn.Conn.(driver.ConnPrepareContext); ok {
+		statement, err = preparer.PrepareContext(ctx, query)
+	} else {
+		statement, err = conn.Conn.Prepare(query)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var rows driver.Rows
+	if queryer, ok := statement.(driver.StmtQueryContext); ok {
+		rows, err = queryer.QueryContext(ctx, args)
+	} else {
+		values := make([]driver.Value, len(args))
+		for i, argument := range args {
+			values[i] = argument.Value
+		}
+		rows, err = statement.Query(values)
+	}
+	if err != nil {
+		_ = statement.Close()
+		return nil, err
+	}
+	return inventoryPreparedRows{Rows: rows, statement: statement}, nil
+}
+
+type inventoryPreparedRows struct {
+	driver.Rows
+	statement driver.Stmt
+}
+
+func (rows inventoryPreparedRows) Close() error {
+	return errors.Join(rows.Rows.Close(), rows.statement.Close())
 }
 
 func TestAuthoritativeTargetLastReadMustSucceedAfterSchemaValidation(t *testing.T) {
@@ -136,7 +179,7 @@ func (rows inventoryFaultRows) Next(values []driver.Value) error {
 
 func installInventoryReadFault(t *testing.T, control *Control, fault *inventoryReadFault) {
 	t.Helper()
-	connector, err := modernsqlite.NewConnector(controlDatabaseDSN(control.DatabasePath()))
+	connector, err := sqlitedb.NewConnector(controlDatabaseDSN(control.DatabasePath()))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,9 +13,10 @@ import (
 // Server is a running control listener. Done delivers one terminal error (nil on
 // normal cancellation) after the HTTP server and its owned store have closed.
 type Server struct {
-	address string
-	done    chan error
-	stopRPC func()
+	address   string
+	done      chan error
+	stopRPC   func()
+	agentDone <-chan struct{}
 }
 
 func (runtime *Server) Addr() string       { return runtime.address }
@@ -85,6 +86,9 @@ monitor:
 	}
 	if renewal != nil {
 		<-renewal
+	}
+	if runtime.agentDone != nil {
+		<-runtime.agentDone
 	}
 	if control != nil {
 		terminal = errors.Join(terminal, control.Close())

@@ -7,6 +7,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+zeroize = "=1.9.0"
 deepseek-core = { path = "../deepseek-core" }
 deepseek-mcp = { path = "../deepseek-mcp" }
 deepseek-policy = { path = "../deepseek-policy" }
@@ -15,6 +16,7 @@ deepseek-protocol = { path = "../deepseek-protocol" }
 tonic = { workspace = true, features = ["tls"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2.workspace = true
 tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "signal", "sync"] }
 axum = { workspace = true }
 async-stream = "0.3"
@@ -31,6 +33,8 @@ reqwest = { version = "=0.12.28", default-features = false, features = ["rustls-
 rusqlite = { workspace = true }
 
 [dev-dependencies]
+rcgen = "=0.13.2"
+deepseek-browser = { path = "../deepseek-browser" }
 rusqlite = { workspace = true }
 tempfile = "3.27.0"
 tokio = { workspace = true }

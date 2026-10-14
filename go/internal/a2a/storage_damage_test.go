@@ -1,9 +1,10 @@
 package a2a
 
 import (
-	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,20 +24,21 @@ func TestDamagedLaterSQLitePageRollsBackAllRecoveryAndReleasesWriter(t *testing.
 			t.Fatal(err)
 		}
 	}
-	var page, pageSize int64
+	var rootPage, pageSize int64
 	if err = s.db.QueryRow("PRAGMA page_size").Scan(&pageSize); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.db.QueryRow("SELECT pageno FROM dbstat WHERE name='tasks' AND pagetype='leaf' ORDER BY pageno DESC LIMIT 1").Scan(&page); err != nil {
+	if err = s.db.QueryRow("SELECT rootpage FROM sqlite_schema WHERE name='tasks'").Scan(&rootPage); err != nil {
 		t.Fatal(err)
-	}
-	if page <= 1 {
-		t.Fatal("fixture did not span multiple data pages")
 	}
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "a2a.sqlite3")
+	page := lastTableLeafPage(t, path, rootPage, pageSize)
+	if page <= 1 || page == rootPage {
+		t.Fatal("fixture did not span multiple data pages")
+	}
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +60,7 @@ func TestDamagedLaterSQLitePageRollsBackAllRecoveryAndReleasesWriter(t *testing.
 		_ = reopened.Close()
 		t.Fatal("damaged data page accepted")
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sqlitedb.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,6 +91,44 @@ func TestDamagedLaterSQLitePageRollsBackAllRecoveryAndReleasesWriter(t *testing.
 	}
 }
 
+// Walk the actual table B-tree after checkpoint/close. This preserves fault
+// injection on a later data page without requiring an engine's optional dbstat
+// extension. Layout: https://sqlite.org/fileformat2.html#b_tree_pages
+func lastTableLeafPage(t *testing.T, path string, page, pageSize int64) int64 {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	visited := map[int64]bool{}
+	for {
+		if page <= 1 || pageSize < 512 || page > info.Size()/pageSize || visited[page] {
+			t.Fatalf("invalid fixture B-tree page: %d", page)
+		}
+		visited[page] = true
+		var header [12]byte
+		if _, err := file.ReadAt(header[:], (page-1)*pageSize); err != nil {
+			t.Fatal(err)
+		}
+		switch header[0] {
+		case 0x0d:
+			if binary.BigEndian.Uint16(header[3:5]) == 0 {
+				t.Fatal("fixture leaf has no records to damage")
+			}
+			return page
+		case 0x05:
+			page = int64(binary.BigEndian.Uint32(header[8:12]))
+		default:
+			t.Fatalf("unexpected fixture table page type: %x", header[0])
+		}
+	}
+}
+
 func TestExternalSQLiteLocksCannotPartiallyInitializeOrRecover(t *testing.T) {
 	for _, existing := range []bool{false, true} {
 		t.Run(map[bool]string{false: "journal-switch", true: "recovery"}[existing], func(t *testing.T) {
@@ -103,7 +143,7 @@ func TestExternalSQLiteLocksCannotPartiallyInitializeOrRecover(t *testing.T) {
 				taskID = task.ID
 				_ = s.Close()
 			}
-			db, err := sql.Open("sqlite", filepath.Join(root, "a2a.sqlite3"))
+			db, err := sqlitedb.Open(filepath.Join(root, "a2a.sqlite3"))
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -99,8 +99,16 @@ fn spawn(root: &Path, port: u16, endpoint: &str, identity: &Identity) -> Process
         .unwrap_or_else(|| env!("CARGO_BIN_EXE_deepseek-worker").into());
     let mut child = Command::new(executable);
     child.env_clear();
-    // OS loader paths only; no credentials or authority clock are inherited.
-    for name in ["PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP"] {
+    // Loader paths and offline coverage output only; no credentials or
+    // authority clock are inherited. Keep profiles outside the source tree.
+    for name in [
+        "PATH",
+        "SYSTEMROOT",
+        "WINDIR",
+        "TEMP",
+        "TMP",
+        "LLVM_PROFILE_FILE",
+    ] {
         if let Some(value) = std::env::var_os(name) {
             child.env(name, value);
         }

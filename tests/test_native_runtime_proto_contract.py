@@ -43,11 +43,31 @@ def test_proto_sources_are_proto3_with_unspecified_zero_enums() -> None:
         "deepseek.evidence.v1",
         "deepseek.agent.v1",
         "deepseek.browser.v1",
+        "deepseek.platform.v1",
     }
     checked = check_descriptor()
     assert DESCRIPTOR_PATH.is_file()
     assert BINARY_DESCRIPTOR_PATH.is_file()
     assert checked["syntax"] == "proto3"
+
+
+def test_platform_decoder_has_only_streamed_value_operations() -> None:
+    descriptors, _ = _binary_contract()
+    platform = next(item for item in descriptors.file if item.package == "deepseek.platform.v1")
+    assert platform.name == "platform/v1/ocr.proto"
+    assert len(platform.service) == 1
+    methods = platform.service[0].method
+    assert [item.name for item in methods] == ["RecognizeImage", "RecognizePdf", "RenderPdfPage"]
+    assert all(item.client_streaming and not item.server_streaming for item in methods)
+    assert all(item.input_type == ".deepseek.platform.v1.DocumentChunk" for item in methods)
+    assert [item.output_type for item in methods] == [
+        ".deepseek.platform.v1.RecognizedDocument", ".deepseek.platform.v1.RecognizedDocument",
+        ".deepseek.platform.v1.RenderedPdfPage",
+    ]
+    header = next(item for item in platform.message_type if item.name == "DocumentHeader")
+    assert [(item.name, item.number) for item in header.field] == [
+        ("source_bytes", 1), ("source_sha256", 2), ("page_index", 3), ("scale_milli", 4),
+    ]
 
 
 def test_action_fence_and_unknown_effect_are_foundational() -> None:

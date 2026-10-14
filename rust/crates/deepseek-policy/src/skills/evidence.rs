@@ -14,8 +14,8 @@ pub fn register(r: &Registry, file: &Value, source: &Value, tool: &str) -> Resul
         "filename":if truth(file,"filename") {text(file,"filename")} else {path.file_name().unwrap().to_string_lossy().into()},
         "downloadUrl":if truth(file,"downloadUrl") {text(file,"downloadUrl")} else {generated_files::download_url(&id)},
         "type":path.extension().unwrap_or_default().to_string_lossy().to_lowercase(),"tool":tool,"createdAt":r.now(),"source":source});
-    let _guard = crate::mutation_gate::mutation_scope(None, &r.root)
-        .map_err(|e| super::error(e.to_string(), 409))?;
+    let _guard =
+        crate::mutation_gate::mutation_scope(None, &r.root).map_err(super::mutation_error)?;
     let index = generated_files::generated_dir(&r.root).join("artifacts.json");
     let mut artifacts: Vec<_> = read_json(&index)
         .as_array()
@@ -33,8 +33,8 @@ pub fn markdown(r: &Registry, title: &str, content: &str, source: &Value) -> Res
     if content.trim().is_empty() {
         return Ok(None);
     }
-    let _guard = crate::mutation_gate::mutation_scope(None, &r.root)
-        .map_err(|e| super::error(e.to_string(), 409))?;
+    let _guard =
+        crate::mutation_gate::mutation_scope(None, &r.root).map_err(super::mutation_error)?;
     let file = generated_files::store_generated_file(
         if title.is_empty() {
             "skill-output"

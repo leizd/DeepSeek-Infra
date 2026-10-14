@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -26,6 +27,8 @@ const (
 type Process struct {
 	Name string
 	Path string
+	// Env, when non-nil, isolates platform UI glue from control/provider secrets.
+	Env []string
 }
 
 // Plan is the process tree a production launch starts.
@@ -39,6 +42,12 @@ type Plan struct {
 // under binDir (or PATH) and builds the authoritative environment. A missing
 // binary is an error. There is no Python or Node fallback.
 func ProductionPlan(binDir, dataRoot, staticDir string) (Plan, error) {
+	return ProductionPlanWithAddress(binDir, dataRoot, staticDir, os.Getenv("GATEWAY_BIND_ADDR"))
+}
+
+// ProductionPlanWithAddress applies a parsed launch address without changing
+// the parent process environment or another concurrent native plan.
+func ProductionPlanWithAddress(binDir, dataRoot, staticDir, address string) (Plan, error) {
 	if strings.TrimSpace(dataRoot) == "" {
 		return Plan{}, errors.New("data root is required")
 	}
@@ -63,7 +72,7 @@ func ProductionPlan(binDir, dataRoot, staticDir string) (Plan, error) {
 		processes = append(processes, Process{Name: name, Path: path})
 	}
 	controlListen := "127.0.0.1:8090"
-	gatewayBind, gatewayURL, err := gatewayAddress(os.Getenv("GATEWAY_BIND_ADDR"))
+	gatewayBind, gatewayURL, err := gatewayAddress(address)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -143,6 +152,13 @@ func productionEnv(dataRoot, staticDir, controlListen, gatewayBind string) []str
 	for _, key := range order {
 		env = append(env, key+"="+values[key])
 	}
+	// COM, WinRT and WebView2 expand these OS directories. Missing SystemDrive
+	// makes system caches appear under a literal relative %SystemDrive% path.
+	for _, key := range platformRootKeys {
+		if value, exists := os.LookupEnv(key); exists {
+			env = append(env, key+"="+value)
+		}
+	}
 	// Operator configuration is not a runtime implementation. Forward it so the
 	// public listener can authenticate and reach the model provider. Interpreter
 	// paths stay out: PATH was already filtered above.
@@ -170,6 +186,7 @@ var operatorConfigKeys = []string{
 	"DEEPSEEK_API_KEY",
 	"DEEPSEEK_DEFAULT_MODEL",
 	"TAVILY_API_KEY",
+	"OCR_MODE",
 	"DEEPSEEK_APP_VERSION",
 	"AUTH_ALLOWED_HOSTS",
 	"DEEPSEEK_API_URL",
@@ -219,6 +236,12 @@ var operatorConfigKeys = []string{
 	"DEEPSEEK_WORKER_SERVICE_ROLE",
 }
 
+var platformRootKeys = []string{
+	"APPDATA", "LOCALAPPDATA", "USERPROFILE", "SYSTEMDRIVE", "PROGRAMDATA",
+	"ALLUSERSPROFILE", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432",
+	"COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)", "COMMONPROGRAMW6432",
+}
+
 func filteredPath(raw string) string {
 	parts := filepath.SplitList(raw)
 	kept := make([]string, 0, len(parts))
@@ -259,7 +282,18 @@ func resolveBinary(binDir, name string) (string, error) {
 // Run starts every process and stops the whole tree when ctx is cancelled or
 // any child exits. Children are not restarted: a lost child is not treated as
 // an unapplied effect that should be launched again.
+type supervisorFence interface {
+	attributes() *syscall.SysProcAttr
+	prepare(Process, []string) (fencedProcess, error)
+	admit(int) error
+	close()
+}
+
 func Run(ctx context.Context, processes []Process, env []string, output io.Writer) error {
+	return runWithFence(ctx, processes, env, output, func() (supervisorFence, error) { return newProcessFence() })
+}
+
+func runWithFence(ctx context.Context, processes []Process, env []string, output io.Writer, createFence func() (supervisorFence, error)) error {
 	if len(processes) == 0 {
 		return errors.New("no production processes")
 	}
@@ -268,45 +302,84 @@ func Run(ctx context.Context, processes []Process, env []string, output io.Write
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	fence, err := createFence()
+	if err != nil {
+		return fmt.Errorf("create native process fence: %w", err)
+	}
+	defer fence.close()
 	commands := make([]*exec.Cmd, 0, len(processes))
 	for _, process := range processes {
 		if legacyCommand(process.Path) {
+			cancel()
+			waitAll(commands)
 			return fmt.Errorf("refusing legacy runtime: %s", process.Path)
 		}
 		cmd := exec.CommandContext(ctx, process.Path)
+		cmd.SysProcAttr = fence.attributes()
 		cmd.Env = env
+		if process.Env != nil {
+			cmd.Env = process.Env
+		}
 		cmd.Stdout = output
 		cmd.Stderr = output
+		prepared, err := fence.prepare(process, cmd.Env)
+		if err != nil {
+			cancel()
+			waitAll(commands)
+			return fmt.Errorf("start %s: %w", process.Name, err)
+		}
+		cmd.Path, cmd.Args, cmd.Env, cmd.ExtraFiles = prepared.path, prepared.args, prepared.env, prepared.files
+		if prepared.cancel != nil {
+			cmd.Cancel = prepared.cancel
+		}
 		if err := cmd.Start(); err != nil {
 			cancel()
 			waitAll(commands)
 			return fmt.Errorf("start %s: %w", process.Name, err)
 		}
 		commands = append(commands, cmd)
+		if err := fence.admit(cmd.Process.Pid); err != nil {
+			cancel()
+			waitAll(commands)
+			return fmt.Errorf("fence %s: %w", process.Name, err)
+		}
 	}
-	errorsCh := make(chan error, len(commands))
-	for _, cmd := range commands {
-		go func(cmd *exec.Cmd) {
-			errorsCh <- cmd.Wait()
-		}(cmd)
+	errorsCh := make(chan processExit, len(commands))
+	for index, cmd := range commands {
+		go func(index int, cmd *exec.Cmd) {
+			errorsCh <- processExit{name: processes[index].Name, err: cmd.Wait()}
+		}(index, cmd)
 	}
 	select {
 	case <-ctx.Done():
 		cancel()
 		waitCount(errorsCh, len(commands))
 		return nil
-	case err := <-errorsCh:
+	case result := <-errorsCh:
 		parentDone := ctx.Err() != nil
 		cancel()
 		waitCount(errorsCh, len(commands)-1)
 		if parentDone {
 			return nil
 		}
-		if err == nil {
+		if result.err == nil && result.name == "deepseek-desktop" {
+			return nil
+		}
+		if result.err == nil {
 			return errors.New("production process exited")
 		}
-		return err
+		return result.err
 	}
+}
+
+// fencedProcess contains only OS launch parameters, never control messages or
+// business state. On Linux its anonymous pipe is retained only by this root.
+type fencedProcess struct {
+	path   string
+	args   []string
+	env    []string
+	files  []*os.File
+	cancel func() error
 }
 
 func legacyCommand(path string) bool {
@@ -327,7 +400,12 @@ func waitAll(commands []*exec.Cmd) {
 	}
 }
 
-func waitCount(errorsCh <-chan error, count int) {
+type processExit struct {
+	name string
+	err  error
+}
+
+func waitCount(errorsCh <-chan processExit, count int) {
 	timeout := time.After(5 * time.Second)
 	for count > 0 {
 		select {

@@ -1,0 +1,1349 @@
+// Offline integration fixture compiled as an overlay in the real API package.
+// Administrative promotions use existing test keys; the Rust custody key is
+// created separately by the production Rust provisioning executable.
+package api
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"github.com/leizd/DeepSeek-Infra/go/internal/agentproof"
+	"net"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
+	"github.com/leizd/DeepSeek-Infra/go/internal/config"
+	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
+	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+	"github.com/leizd/DeepSeek-Infra/go/internal/worker"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+)
+
+func nativeSigningControl(t *testing.T, writerSeconds int64, existingPath ...string) *store.Control {
+	t.Helper()
+	path := t.TempDir()
+	if len(existingPath) == 1 {
+		path = existingPath[0]
+	}
+	control, err := store.OpenControl(store.OpenOptions{
+		Path: path, Owner: "native-agent-signing-probe", LeaseSeconds: writerSeconds,
+		AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic,
+		AgentOutcomeSignerPublicKey: os.Getenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY"),
+		FleetID:                     mutationFleetID, Environment: mutationEnvironment,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = control.Close() })
+	checkpoint := authorityCheckpointFixture(t)
+	if _, _, err := control.ClaimControlAuthority(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	for _, domain := range []string{"agent_run", "action"} {
+		for _, next := range []store.CutoverState{store.CutoverDualEvaluate, store.CutoverGoAuthoritative} {
+			current, err := control.GetCutover(domain)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := signedPromotionRoute(t, store.CutoverTransition{
+				Domain: domain, To: next, ExpectedRevision: current.Revision,
+				ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken,
+				TransferID: "native-signing-" + domain + "-" + string(next), Authority: checkpoint,
+			}, current, time.Now().UTC().Unix(), nil)
+			if _, err := control.TransitionCutover(request); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return control
+}
+
+func nativeSigningWrite(t *testing.T, path string, value any) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err == nil {
+		err = os.WriteFile(path+".tmp", raw, 0600)
+	}
+	if err == nil {
+		err = os.Rename(path+".tmp", path)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func nativeSigningRead(t *testing.T, path string, value any) {
+	t.Helper()
+	deadline := time.Now().Add(120 * time.Second)
+	for time.Now().Before(deadline) {
+		raw, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		if err != nil || json.Unmarshal(raw, value) != nil {
+			t.Fatalf("invalid process handshake: %s", filepath.Base(path))
+		}
+		return
+	}
+	t.Fatalf("process handshake timed out: %s", filepath.Base(path))
+}
+
+type nativeSigningWorkerReady struct {
+	Target, TrustRootFile, PublicKey, ExpiresAt string
+}
+
+func nativeSigningWorker(t *testing.T, ready nativeSigningWorkerReady, bearer, hostname string) *worker.Client {
+	t.Helper()
+	host, _, err := net.SplitHostPort(ready.Target)
+	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
+		t.Fatal("worker probe must stay on numeric loopback")
+	}
+	expiry, err := time.Parse("2006-01-02T15:04:05Z", ready.ExpiresAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := worker.DialTLS(worker.TLSDialConfig{Target: ready.Target, TrustRootFile: ready.TrustRootFile,
+		ServerName: hostname, BearerToken: bearer, ExpiresAt: expiry})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+func nativeSigningConfigureGo(t *testing.T, ready nativeSigningWorkerReady, bearer string) {
+	t.Helper()
+	// Go receives public identity and authenticated client configuration only.
+	t.Setenv(worker.EnvWorkerTarget, ready.Target)
+	t.Setenv(worker.EnvWorkerTLSCAFile, ready.TrustRootFile)
+	t.Setenv(worker.EnvWorkerTLSServerName, "localhost")
+	t.Setenv(worker.EnvWorkerServiceBearer, bearer)
+	t.Setenv(worker.EnvWorkerServiceBearerExpires, ready.ExpiresAt)
+	t.Setenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY", ready.PublicKey)
+	t.Setenv("DEEPSEEK_WORKER_AUTHORITY_FLEET_ID", mutationFleetID)
+	t.Setenv("DEEPSEEK_WORKER_AUTHORITY_ENVIRONMENT", mutationEnvironment)
+}
+
+func nativeSigningID(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func TestNativeAgentSigningProcess(t *testing.T) {
+	directory, scenario := os.Getenv("DEEPSEEK_AGENT_SIGNING_PROBE_DIR"), os.Getenv("DEEPSEEK_AGENT_SIGNING_PROBE_CASE")
+	if directory == "" || (scenario != "plan" && scenario != "tasks" && scenario != "writer-expiry") {
+		t.Fatal("explicit isolated process configuration is required")
+	}
+	for _, name := range []string{"DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE", "DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE",
+		"DEEPSEEK_WORKER_TLS_KEY_FILE", "DEEPSEEK_WORKER_TLS_CERT_FILE", "DEEPSEEK_WORKER_AUTHORITY_NOW"} {
+		if _, exists := os.LookupEnv(name); exists {
+			t.Fatal("private custody or controlled clock configuration entered the Go environment")
+		}
+	}
+	writerSeconds := int64(600)
+	if scenario == "writer-expiry" {
+		writerSeconds = 60
+	}
+	control := nativeSigningControl(t, writerSeconds)
+	client, origin := nativeSigningRPC(t, control)
+	phase := scenario
+	if phase == "writer-expiry" {
+		phase = "plan"
+	}
+	claim := nativeSigningClaim(t, client, phase)
+	nativeSigningWrite(t, filepath.Join(directory, "go-ready.json"), map[string]any{
+		"origin": origin, "internalBearer": testInternalBearer, "fencingToken": control.Writer().FencingToken,
+		"fleetId": mutationFleetID, "environment": mutationEnvironment,
+	})
+	var ready nativeSigningWorkerReady
+	nativeSigningRead(t, filepath.Join(directory, "worker-ready.json"), &ready)
+	bearer := os.Getenv("DEEPSEEK_AGENT_SIGNING_WORKER_BEARER")
+	rust := nativeSigningWorker(t, ready, bearer, "localhost")
+	binding := worker.ControlSignerBinding{PublicKey: ready.PublicKey, FleetID: mutationFleetID, Environment: mutationEnvironment}
+	input := &actionv1.SignControlRequest{Purpose: actionv1.ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_AGENT_EXECUTION,
+		Fence: claim.Fence, Revision: claim.ClaimRevision, FencingToken: uint64(claim.WriterFencingToken),
+		FleetId: mutationFleetID, Environment: mutationEnvironment, AgentIntent: claim,
+		RequestId: nativeSigningID(scenario + "-grant"), Nonce: nativeSigningID(scenario + "-nonce")}
+	call := func(operation func(context.Context) error) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		return operation(ctx)
+	}
+	if err := call(func(ctx context.Context) error { _, err := rust.SignControl(ctx, input, binding); return err }); status.Code(err) != codes.FailedPrecondition {
+		t.Fatal("an uninstalled execution epoch received a Rust grant")
+	}
+	for _, credentials := range []struct {
+		token, hostname string
+		code            codes.Code
+	}{{bearer + "-wrong", "localhost", codes.Unauthenticated}, {bearer, "wrong-hostname.invalid", codes.Unavailable}} {
+		unauthorized := nativeSigningWorker(t, ready, credentials.token, credentials.hostname)
+		if err := call(func(ctx context.Context) error {
+			_, err := unauthorized.AuthorizeAgentExecution(ctx, claim, input.RequestId, input.Nonce, binding)
+			return err
+		}); status.Code(err) != credentials.code {
+			t.Fatal("Rust signing accepted an invalid bearer or TLS hostname")
+		}
+	}
+	nativeSigningConfigureGo(t, ready, bearer)
+	admission := executionRPCInput(claim.MetadataEpoch)
+	admission.Phase, admission.ExpectedIndex, admission.LeaseSeconds = claim.Phase, claim.MetadataIndex, 300
+	authorize := func() (*agentv1.AuthorizeAgentRunExecutionResponse, error) {
+		ctx, cancel := context.WithTimeout(controlRPCContext(t, testInternalBearer), 8*time.Second)
+		defer cancel()
+		return client.AuthorizeExecution(ctx, admission)
+	}
+	response, err := authorize()
+	if err != nil || response.GetClaim() == nil || !response.AlreadyApplied ||
+		response.SignerPublicKey != binding.PublicKey || response.FleetId != binding.FleetID || response.Environment != binding.Environment {
+		t.Fatalf("actual Go authorization RPC to Rust custody failed: %v", err)
+	}
+	grant, claim := response.CanonicalAuthorization, response.Claim
+	input.AgentIntent, input.Fence = claim, claim.Fence
+	if replay, err := authorize(); err != nil || !replay.AlreadyApplied || !bytes.Equal(grant, replay.CanonicalAuthorization) {
+		t.Fatalf("Go authorization replay changed its immutable grant: %v", err)
+	}
+	var document struct {
+		ActionID       string `json:"actionId"`
+		ExecutionEpoch uint64 `json:"executionEpoch"`
+		ExpiresAt      string `json:"expiresAt"`
+		RequestID      string `json:"requestId"`
+		Nonce          string `json:"nonce"`
+		Payload        struct {
+			LeaseUntil       int64 `json:"leaseUntil"`
+			WriterLeaseUntil int64 `json:"writerLeaseUntil"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal(grant, &document) != nil || document.ActionID != claim.Fence.ActionId || document.ExecutionEpoch != claim.Fence.ExecutionEpoch ||
+		document.RequestID == "" || document.Nonce == "" {
+		t.Fatal("signed grant does not bind the actual Go execution")
+	}
+	input.RequestId, input.Nonce = document.RequestID, document.Nonce
+	expires, err := time.Parse("2006-01-02T15:04:05Z", document.ExpiresAt)
+	if err != nil || !expires.After(time.Now()) || expires.Unix() > document.Payload.LeaseUntil || expires.Unix() > document.Payload.WriterLeaseUntil {
+		t.Fatal("Rust grant outlives its actual Go action or writer lease")
+	}
+	rebindingDenied := 0
+	for _, mutate := range []func(*agentv1.AgentRunExecutionClaim){
+		func(c *agentv1.AgentRunExecutionClaim) { c.Owner += "-foreign" },
+		func(c *agentv1.AgentRunExecutionClaim) { c.ClaimToken += "-foreign" },
+		func(c *agentv1.AgentRunExecutionClaim) { c.Request.Sha256 = nativeSigningID("foreign-request") },
+		func(c *agentv1.AgentRunExecutionClaim) { c.PlanDigest = nativeSigningID("foreign-plan") },
+		func(c *agentv1.AgentRunExecutionClaim) { c.MetadataEpoch++ },
+		func(c *agentv1.AgentRunExecutionClaim) { c.Fence.ExecutionEpoch++ },
+	} {
+		changed := proto.Clone(claim).(*agentv1.AgentRunExecutionClaim)
+		mutate(changed)
+		if err := call(func(ctx context.Context) error {
+			_, err := rust.AuthorizeAgentExecution(ctx, changed, input.RequestId, input.Nonce, binding)
+			return err
+		}); status.Code(err) != codes.FailedPrecondition {
+			t.Fatal("Rust issued a grant for a rebound live execution identity")
+		}
+		rebindingDenied++
+	}
+	generic := proto.Clone(input).(*actionv1.SignControlRequest)
+	generic.Purpose, generic.AgentIntent = actionv1.ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_INSTALL_EPOCH, nil
+	generic.RequestId, generic.Nonce = nativeSigningID(scenario+"-generic"), nativeSigningID(scenario+"-generic-nonce")
+	if err := call(func(ctx context.Context) error { _, err := rust.SignControl(ctx, generic, binding); return err }); status.Code(err) != codes.FailedPrecondition {
+		t.Fatal("generic epoch signing bypassed live Agent authority")
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "restart-request.json"), map[string]bool{"restart": true})
+	var restarted nativeSigningWorkerReady
+	nativeSigningRead(t, filepath.Join(directory, "worker-restarted.json"), &restarted)
+	if restarted.PublicKey != ready.PublicKey {
+		t.Fatal("Rust restart changed its custody identity")
+	}
+	resumed := nativeSigningWorker(t, restarted, bearer, "localhost")
+	nativeSigningConfigureGo(t, restarted, bearer)
+	if replay, err := authorize(); err != nil || !replay.AlreadyApplied || !bytes.Equal(grant, replay.CanonicalAuthorization) {
+		t.Fatalf("Go authorization after Rust restart changed its immutable grant: %v", err)
+	}
+	if err := call(func(ctx context.Context) error {
+		replayed, err := resumed.AuthorizeAgentExecution(ctx, claim, input.RequestId, input.Nonce, binding)
+		if err == nil && !bytes.Equal(grant, replayed) {
+			return errors.New("Rust restart changed or extended the original grant")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if scenario == "writer-expiry" {
+		// Signing and replay renew the Go writer. The immutable grant retains
+		// its earlier deadline, so wait for the latest actual writer lease.
+		writerDeadline := control.Writer().LeaseUntil
+		if writerDeadline < document.Payload.WriterLeaseUntil || document.Payload.LeaseUntil <= writerDeadline {
+			t.Fatal("writer must expire while the action remains live")
+		}
+		time.Sleep(time.Until(time.Unix(writerDeadline, 0).Add(100 * time.Millisecond)))
+		if control.Writer().LeaseUntil != writerDeadline || time.Now().Unix() < writerDeadline {
+			t.Fatal("the actual writer lease did not expire without another renewal")
+		}
+		if time.Now().Unix() >= document.Payload.LeaseUntil {
+			t.Fatal("action expired before writer-expiry check")
+		}
+	} else {
+		cancel := agentRPCAppend(claim.MetadataIndex, claim.MetadataEpoch)
+		cancel.Event.Status = "cancelled"
+		if _, err := client.AppendEvent(controlRPCContext(t, testInternalBearer), cancel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := authorize(); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("Go terminal authorization denial: code=%s error=%v", status.Code(err), err)
+	}
+	forgedLiveDates := proto.Clone(claim).(*agentv1.AgentRunExecutionClaim)
+	forgedLiveDates.LeaseUntil, forgedLiveDates.WriterLeaseUntil = time.Now().Unix()+300, time.Now().Unix()+300
+	if err := call(func(ctx context.Context) error {
+		_, err := resumed.AuthorizeAgentExecution(ctx, forgedLiveDates, input.RequestId, input.Nonce, binding)
+		return err
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("terminal signing denial: got code=%s want=%s error=%v", status.Code(err), codes.FailedPrecondition, err)
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "process-result.json"), map[string]any{
+		"scenario": scenario, "status": "PASS", "realUTC": true, "grantSha256": nativeSigningID(string(grant)),
+		"expiresAt": document.ExpiresAt, "actionLeaseUntil": document.Payload.LeaseUntil, "writerLeaseUntil": document.Payload.WriterLeaseUntil,
+		"executionEpoch": claim.Fence.ExecutionEpoch, "metadataEpoch": claim.MetadataEpoch, "restartPreservedCanonicalGrant": true,
+		"rebindingDenied": rebindingDenied, "tlsHostnameAndBearerDenied": true, "uninstalledEpochDenied": true, "genericEpochBypassDenied": true,
+		"terminalScopeSigningDenied": true, "providerEffectsQualified": false,
+		"goControlAuthorizationRPC": true, "goControlAuthorizationReplayPreserved": true, "goControlTerminalDenial": true,
+	})
+}
+
+func nativeSigningRPC(t *testing.T, control *store.Control) (agentv1.AgentRunControlClient, string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewControlRPC(control, testInternalBearer, HealthFor(config.Config{Mode: config.ModeAuthoritative}))
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	connection, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		server.Stop()
+		<-done
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close(); server.Stop(); <-done })
+	return agentv1.NewAgentRunControlClient(connection), "http://" + listener.Addr().String()
+}
+
+func nativeSigningClaim(t *testing.T, client agentv1.AgentRunControlClient, phase string, leaseSeconds ...uint32) *agentv1.AgentRunExecutionClaim {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(controlRPCContext(t, testInternalBearer), 10*time.Second)
+	defer cancel()
+	authority, err := client.GetAuthority(ctx, &agentv1.AgentRunAuthorityInput{})
+	if err != nil || !authority.GetAuthoritative() {
+		t.Fatalf("actual metadata authority unavailable: %v", err)
+	}
+	input := executionRPCInput(authority.MetadataEpoch)
+	input.ExpectedIndex, input.LeaseSeconds = 2, 300
+	if len(leaseSeconds) == 1 {
+		input.LeaseSeconds = leaseSeconds[0]
+	}
+	input.Phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN
+	if phase == "tasks" {
+		input.MetadataFence.ExecutionEpoch = seedAgentExecutionRPC(t, client)
+		input.Phase, input.ExpectedIndex = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS, 4
+	} else {
+		for index := int64(0); index < 2; index++ {
+			input := agentRPCAppend(index, authority.MetadataEpoch)
+			if referenceFile := os.Getenv("DEEPSEEK_AGENT_PLANNER_ARTIFACT_REFERENCE_FILE"); index == 0 && referenceFile != "" {
+				var reference agentv1.AgentArtifactReference
+				nativeSigningRead(t, referenceFile, &reference)
+				input.Create.Request = &reference
+			}
+			if _, err := client.AppendEvent(ctx, input); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	result, err := client.ClaimExecution(ctx, input)
+	if err != nil || result.GetClaim() == nil {
+		t.Fatalf("actual execution claim unavailable: %v", err)
+	}
+	replay, err := client.ClaimExecution(ctx, input)
+	if err != nil || !replay.GetAlreadyApplied() || replay.GetClaim() == nil {
+		t.Fatalf("actual claim replay changed identity: %v", err)
+	}
+	// The writer deadline is live lease metadata refreshed by Go's transaction.
+	// Action expiry, token, revision, fencing and the entire selected scope must
+	// remain identical across a replay even when real UTC crosses a second.
+	first := proto.Clone(result.Claim).(*agentv1.AgentRunExecutionClaim)
+	repeated := proto.Clone(replay.Claim).(*agentv1.AgentRunExecutionClaim)
+	if repeated.WriterLeaseUntil < first.WriterLeaseUntil || repeated.WriterLeaseUntil <= time.Now().Unix() {
+		t.Fatal("actual claim replay regressed or expired the live writer deadline")
+	}
+	repeated.WriterLeaseUntil = first.WriterLeaseUntil
+	if !proto.Equal(repeated, first) {
+		t.Fatal("actual claim replay changed immutable action or metadata scope")
+	}
+	return replay.Claim
+}
+
+// The provider is a controlled HTTP fixture. The Go store, pinned RPCs, Rust
+// signer, installed fence, journal and production worker executable are real.
+func TestNativeAgentPlanProcess(t *testing.T) {
+	directory, scenario := os.Getenv("DEEPSEEK_AGENT_SIGNING_PROBE_DIR"), os.Getenv("DEEPSEEK_AGENT_SIGNING_PROBE_CASE")
+	if directory == "" || (scenario != "planner-success" && scenario != "planner-unknown") ||
+		os.Getenv("DEEPSEEK_AGENT_PLANNER_ARTIFACT_REFERENCE_FILE") == "" {
+		t.Fatal("explicit isolated planner process configuration is required")
+	}
+	for name := range map[string]bool{"DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE": true, "DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE": true,
+		"DEEPSEEK_API_KEY": true, "DEEPSEEK_WORKER_AUTHORITY_NOW": true} {
+		if _, present := os.LookupEnv(name); present {
+			t.Fatal("private runtime configuration entered the Go process")
+		}
+	}
+	controlDirectory := t.TempDir()
+	control := nativeSigningControl(t, 600, controlDirectory)
+	client, origin := nativeSigningRPC(t, control)
+	claim := nativeSigningClaim(t, client, "plan", 30)
+	nativeSigningWrite(t, filepath.Join(directory, "go-ready.json"), map[string]any{
+		"origin": origin, "internalBearer": testInternalBearer, "fencingToken": control.Writer().FencingToken,
+		"fleetId": mutationFleetID, "environment": mutationEnvironment,
+	})
+	var ready nativeSigningWorkerReady
+	nativeSigningRead(t, filepath.Join(directory, "worker-ready.json"), &ready)
+	bearer := os.Getenv("DEEPSEEK_AGENT_SIGNING_WORKER_BEARER")
+	nativeSigningConfigureGo(t, ready, bearer)
+	admission := executionRPCInput(claim.MetadataEpoch)
+	admission.ExpectedIndex, admission.Phase, admission.LeaseSeconds = claim.MetadataIndex, claim.Phase, 30
+	ctx, cancel := context.WithTimeout(controlRPCContext(t, testInternalBearer), 10*time.Second)
+	authorized, err := client.AuthorizeExecution(ctx, admission)
+	cancel()
+	if err != nil || authorized.GetClaim() == nil || len(authorized.CanonicalAuthorization) == 0 {
+		t.Fatalf("actual Go planner authority failed: %v", err)
+	}
+	claim = authorized.Claim
+	request := &agentv1.ExecuteAgentPlanRequest{SchemaVersion: 1, OperationId: "planner-process-dispatch", Actor: "rust-agent-worker",
+		Claim: claim, SignedPhaseGrant: authorized.CanonicalAuthorization, Fence: claim.Fence}
+	newClient := func(target nativeSigningWorkerReady) agentv1.AgentNodeWorkerClient {
+		ca, err := os.ReadFile(target.TrustRootFile)
+		roots := x509.NewCertPool()
+		if err != nil || !roots.AppendCertsFromPEM(ca) {
+			t.Fatal("planner TLS roots unavailable")
+		}
+		connection, err := grpc.NewClient(target.Target, grpc.WithTransportCredentials(credentials.NewTLS(
+			&tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS12})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = connection.Close() })
+		return agentv1.NewAgentNodeWorkerClient(connection)
+	}
+	rpc := newClient(ready)
+	call := func(rpc agentv1.AgentNodeWorkerClient, token string, input *agentv1.ExecuteAgentPlanRequest) (*agentv1.AgentNodeEffectMetadata, error) {
+		ctx, cancel := context.WithTimeout(metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token), 10*time.Second)
+		defer cancel()
+		return rpc.ExecutePlan(ctx, input)
+	}
+	if _, err := call(rpc, bearer+"-wrong", request); status.Code(err) != codes.Unauthenticated {
+		t.Fatal("planner accepted an invalid bearer")
+	}
+	changed := proto.Clone(request).(*agentv1.ExecuteAgentPlanRequest)
+	changed.Claim.RunId = "foreign-run"
+	if _, err := call(rpc, bearer, changed); err == nil {
+		t.Fatal("planner accepted a rebound claim")
+	}
+	query := &agentv1.QueryAgentNodeEffectRequest{Fence: claim.Fence, RunId: claim.RunId, NodeId: "leader"}
+	production := nativeSigningWorker(t, ready, bearer, "localhost")
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+	result, executeError := production.ExecuteAgentPlan(ctx, request)
+	cancel()
+	if scenario == "planner-success" {
+		if executeError != nil || result.GetState() != "CONFIRMED" || result.GetPublicEvent().GetLength() == 0 ||
+			len(result.GetPublicEvent().GetSha256()) != 64 || result.GetFence().GetExecutionEpoch() != claim.Fence.ExecutionEpoch ||
+			result.GetFence().GetActionId() != claim.Fence.ActionId || len(result.GetOutcomeSha256()) != 64 {
+			t.Fatalf("planner outcome unavailable: %v", executeError)
+		}
+		query.OperationId = result.OperationId
+	} else {
+		if status.Code(executeError) != codes.Unavailable {
+			t.Fatalf("uncertain provider response admitted: %v", executeError)
+		}
+	}
+	// Read the immutable Go reservation after dispatch; this never spends Fresh.
+	connection, err := grpc.NewClient(origin[len("http://"):], grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	ctx, cancel = context.WithTimeout(controlRPCContext(t, testInternalBearer), 5*time.Second)
+	admitted, err := agentv1.NewAgentNodeControlClient(connection).GetDispatch(ctx, &agentv1.GetAgentNodeDispatchRequest{
+		Fence: claim.Fence, RunId: claim.RunId, NodeId: "leader"})
+	cancel()
+	if err != nil || !admitted.Found || admitted.Intent == nil {
+		t.Fatalf("Go reservation missing: %v", err)
+	}
+	query.OperationId = admitted.Intent.OperationId
+	binding := worker.ControlSignerBinding{PublicKey: ready.PublicKey, FleetID: mutationFleetID, Environment: mutationEnvironment}
+	receiptHash, receiptLength := "", 0
+	nodes := agentv1.NewAgentNodeControlClient(connection)
+	goOutcomePersisted, unknownOutcomeRecordingDenied := false, false
+	historicalTakeoverRetained, historicalGoRestartRetained, takeoverFreshDenied, expiredGrantDenied := false, false, false, false
+	phaseSettled, phaseReplayAfterRestart, projectionAfterRustRestart := false, false, false
+	var projectionInput *agentv1.ProjectAgentPlanRequest
+	var projectionReceipt *agentv1.AgentPlanProjectionReceipt
+	projectionHash, projectionLength := "", 0
+	var normalizedPlanBody, runStatusBody *agentv1.AgentArtifactReference
+	var normalizedPlan []*agentv1.AgentRunPlanNode
+	planNextStatus := ""
+	if scenario == "planner-success" {
+		verified, err := worker.VerifyAgentNodeEffect(result, admitted.Intent, claim.WriterFencingToken, binding)
+		if err != nil || verified.Evidence().ProviderPlan[0].Id != "coder" {
+			t.Fatalf("production Go receipt verification failed: %v", err)
+		}
+		for _, alter := range []func(*agentv1.AgentNodeEffectMetadata){
+			func(x *agentv1.AgentNodeEffectMetadata) { x.OutcomeReceipt.Signature[0] ^= 1 },
+			func(x *agentv1.AgentNodeEffectMetadata) { x.PublicEvent.Length++ },
+			func(x *agentv1.AgentNodeEffectMetadata) { x.OutcomeReceipt.Evidence.Fence.ExecutionEpoch++ },
+		} {
+			tampered := proto.Clone(result).(*agentv1.AgentNodeEffectMetadata)
+			alter(tampered)
+			if _, err := worker.VerifyAgentNodeEffect(tampered, admitted.Intent, claim.WriterFencingToken, binding); !errors.Is(err, worker.ErrAgentNodeOutcomeInvalid) {
+				t.Fatalf("production Go accepted a forged result: %v", err)
+			}
+		}
+		raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(result.OutcomeReceipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		receiptHash, receiptLength = hex.EncodeToString(digest[:]), len(raw)
+		consume := &agentv1.RecordAgentNodeOutcomeRequest{SchemaVersion: 1, OperationId: "process-plan-outcome-record",
+			Actor: "operator:agent-test", Fence: claim.Fence, RunId: claim.RunId, NodeId: "leader", OutcomeReceipt: result.OutcomeReceipt}
+		for _, alter := range []func(*agentv1.RecordAgentNodeOutcomeRequest){
+			func(x *agentv1.RecordAgentNodeOutcomeRequest) { x.OutcomeReceipt.Signature[0] ^= 1 },
+			func(x *agentv1.RecordAgentNodeOutcomeRequest) { x.OutcomeReceipt.Evidence.WriterFencingToken++ },
+		} {
+			forged := proto.Clone(consume).(*agentv1.RecordAgentNodeOutcomeRequest)
+			alter(forged)
+			if _, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), forged); status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("Go persisted a forged Rust receipt: %v", err)
+			}
+		}
+		if replay, err := production.ExecuteAgentPlan(context.Background(), request); err != nil || !proto.Equal(replay, result) {
+			t.Fatalf("live grant replay changed immutable evidence: %v", err)
+		}
+		// Let the actual UTC action lease expire. No clock override or direct
+		// lease-table editing is used by the process recovery probe.
+		originalLease, found, err := control.GetActionLease(claim.Fence.ActionId)
+		if err != nil || !found {
+			t.Fatal(err)
+		}
+		wait := time.Until(time.Unix(originalLease.LeaseUntil+1, 0))
+		if wait > 65*time.Second {
+			t.Fatal("planner recovery wait exceeded its bounded UTC lease")
+		}
+		if wait > 0 {
+			time.Sleep(wait)
+		}
+		reopen := func() {
+			if err := control.Close(); err != nil {
+				t.Fatal(err)
+			}
+			next, err := store.OpenControl(store.OpenOptions{Path: controlDirectory, Owner: "native-planner-successor", LeaseSeconds: 600,
+				AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic, AgentOutcomeSignerPublicKey: ready.PublicKey,
+				FleetID: mutationFleetID, Environment: mutationEnvironment})
+			if err != nil {
+				t.Fatal(err)
+			}
+			control = next
+			t.Cleanup(func() { _ = next.Close() })
+			_, nextOrigin := nativeSigningRPC(t, next)
+			nextConnection, err := grpc.NewClient(nextOrigin[len("http://"):], grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = nextConnection.Close() })
+			nodes = agentv1.NewAgentNodeControlClient(nextConnection)
+		}
+		reopen()
+		takeover, err := control.AdmitAndClaimAction(store.AdmissionRequest{ActionID: claim.Fence.ActionId, Owner: "planner-successor-worker", LeaseSeconds: 60})
+		if err != nil || takeover.Record.State != "RECONCILING" || takeover.Lease.Epoch != claim.Fence.ExecutionEpoch+1 ||
+			takeover.Lease.WriterFencingToken <= claim.WriterFencingToken {
+			t.Fatalf("real Go takeover lost original effect authority: %v", err)
+		}
+		if _, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), consume); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("stale Go request fence retained mutation rights: %v", err)
+		}
+		currentFence := &commonv1.ActionFence{ActionId: claim.Fence.ActionId, ExecutionEpoch: takeover.Lease.Epoch}
+		consume.Fence = currentFence
+		fresh, err := nodes.BeginDispatch(controlRPCContext(t, testInternalBearer), &agentv1.BeginAgentNodeDispatchRequest{SchemaVersion: 1,
+			OperationId: "planner-takeover-redispatch", Actor: "operator:agent-test", Fence: currentFence, RunId: claim.RunId,
+			NodeId: "leader", Owner: takeover.Lease.Owner, ClaimToken: takeover.Lease.ClaimToken})
+		if err == nil || fresh.GetFresh() {
+			t.Fatal("Go takeover authorized another provider request")
+		}
+		takeoverFreshDenied = true
+		first, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), consume)
+		if err != nil || first.AlreadyRecorded || first.ReceiptSha256 != receiptHash {
+			t.Fatalf("Go receipt persistence failed: %v", err)
+		}
+		replay, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), consume)
+		if err != nil || !replay.AlreadyRecorded || replay.ReceiptSha256 != receiptHash {
+			t.Fatalf("Go receipt replay failed: %v", err)
+		}
+		historicalTakeoverRetained = true
+		// Retention alone must not settle the phase or release reservations.
+		beforeSettlement, _, err := control.AgentRunMetadata(claim.RunId)
+		retainedResources, resourceErr := control.GetResourceLeases(claim.Fence.ActionId)
+		if err != nil || resourceErr != nil || beforeSettlement.NextIndex != 2 || beforeSettlement.Status != "planning" || len(retainedResources) != 1 {
+			t.Fatal("receipt ingestion fabricated phase settlement")
+		}
+		candidates := []agent.RunPlanNode{}
+		for _, node := range result.OutcomeReceipt.Evidence.ProviderPlan {
+			candidates = append(candidates, agent.RunPlanNode{ID: node.Id, Task: node.Task, DependsOn: node.DependsOn})
+		}
+		nextStatus := "running"
+		if beforeSettlement.ConfirmPlan {
+			nextStatus = "awaiting_plan"
+		}
+		projectionInput = &agentv1.ProjectAgentPlanRequest{SchemaVersion: 1, Source: query, SettlementFence: currentFence,
+			SettlementWriterToken: control.Writer().FencingToken, MetadataEpoch: claim.MetadataEpoch, ExpectedIndex: beforeSettlement.NextIndex,
+			NormalizedPlan: planProtocol(agent.NormalizeRunPlan(candidates)), NextStatus: nextStatus}
+		projectionReceipt, err = production.ProjectAgentPlan(context.Background(), projectionInput)
+		if err != nil {
+			t.Fatalf("Rust normalized body projection failed: %v", err)
+		}
+		settlement := &agentv1.SettleAgentPlanRequest{SchemaVersion: 1, OperationId: "process-plan-phase-settle", Actor: "operator:agent-test",
+			Fence: currentFence, RunId: claim.RunId, Owner: takeover.Lease.Owner, ClaimToken: takeover.Lease.ClaimToken, Projection: projectionReceipt}
+		forged := proto.Clone(settlement).(*agentv1.SettleAgentPlanRequest)
+		forged.Projection.Signature[0] ^= 1
+		if _, err := nodes.SettlePlan(controlRPCContext(t, testInternalBearer), forged); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("Go accepted an unsigned phase projection: %v", err)
+		}
+		settled, err := nodes.SettlePlan(controlRPCContext(t, testInternalBearer), settlement)
+		if err != nil || settled.AlreadyApplied || settled.ActionState != "SUCCEEDED" || settled.GetRun().GetNextIndex() != 4 || settled.GetRun().GetStatus() != nextStatus {
+			t.Fatalf("production Go phase settlement failed: %v", err)
+		}
+		phaseSettled = true
+		reopen()
+		replaySettlement, err := nodes.SettlePlan(controlRPCContext(t, testInternalBearer), settlement)
+		if err != nil || !replaySettlement.AlreadyApplied || replaySettlement.ActionState != "SUCCEEDED" || replaySettlement.GetRun().GetNextIndex() != 4 {
+			t.Fatalf("Go restart duplicated or lost phase settlement: %v", err)
+		}
+		phaseReplayAfterRestart = true
+		stored, err := nodes.GetDispatch(controlRPCContext(t, testInternalBearer), &agentv1.GetAgentNodeDispatchRequest{Fence: currentFence, RunId: claim.RunId, NodeId: "leader"})
+		if err != nil || !proto.Equal(stored.GetOutcomeReceipt(), result.OutcomeReceipt) {
+			t.Fatalf("Go history query lost receipt: %v", err)
+		}
+		run, _, err := control.AgentRunMetadata(claim.RunId)
+		resources, resourceErr := control.GetResourceLeases(claim.Fence.ActionId)
+		if err != nil || resourceErr != nil || run.NextIndex != 4 || run.Status != nextStatus || len(resources) != 0 {
+			t.Fatal("settled phase or released resources changed after Go restart")
+		}
+		historicalGoRestartRetained = true
+		goOutcomePersisted = true
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "restart-request.json"), map[string]bool{"restart": true})
+	var restarted nativeSigningWorkerReady
+	nativeSigningRead(t, filepath.Join(directory, "worker-restarted.json"), &restarted)
+	production = nativeSigningWorker(t, restarted, bearer, "localhost")
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+	retained, err := production.QueryAgentNodeEffect(ctx, query)
+	cancel()
+	if err != nil || retained == nil {
+		t.Fatalf("historical Rust node proof missing after restart: %v", err)
+	}
+	if scenario == "planner-success" {
+		if !proto.Equal(result, retained) {
+			t.Fatal("restart changed the confirmed planner projection")
+		}
+		if _, err := worker.VerifyAgentNodeEffect(retained, admitted.Intent, claim.WriterFencingToken, binding); err != nil {
+			t.Fatal(err)
+		}
+		_, err = production.ExecuteAgentPlan(context.Background(), request)
+		var rpcFailure interface{ GRPCStatus() *status.Status }
+		if status.Code(err) != codes.FailedPrecondition || !errors.As(err, &rpcFailure) || rpcFailure.GRPCStatus() == nil ||
+			rpcFailure.GRPCStatus().Code() != codes.FailedPrecondition || rpcFailure.GRPCStatus().Message() != "AGENT_EXECUTION_GRANT_INVALID" {
+			t.Fatalf("expired source grant regained execution permission: %v", err)
+		}
+		expiredGrantDenied = true
+		retainedProjection, err := production.ProjectAgentPlan(context.Background(), projectionInput)
+		if err != nil || !proto.Equal(retainedProjection, projectionReceipt) {
+			t.Fatalf("Rust restart changed derived public bodies or proof: %v", err)
+		}
+		projectionAfterRustRestart = true
+		projectionBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(projectionReceipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		projectionDigest := sha256.Sum256(projectionBytes)
+		projectionHash, projectionLength = hex.EncodeToString(projectionDigest[:]), len(projectionBytes)
+		normalizedPlanBody, runStatusBody = projectionReceipt.Evidence.PlanBody, projectionReceipt.Evidence.StatusBody
+		normalizedPlan, planNextStatus = projectionReceipt.Evidence.NormalizedPlan, projectionReceipt.Evidence.NextStatus
+	} else {
+		if _, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), &agentv1.RecordAgentNodeOutcomeRequest{SchemaVersion: 1, OperationId: "unknown-outcome-record", Actor: "operator:agent-test", Fence: claim.Fence, RunId: claim.RunId, NodeId: "leader"}); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("unknown effect was recorded: %v", err)
+		}
+		stored, err := nodes.GetDispatch(controlRPCContext(t, testInternalBearer), &agentv1.GetAgentNodeDispatchRequest{Fence: claim.Fence, RunId: claim.RunId, NodeId: "leader"})
+		if err != nil || stored.GetOutcomeReceipt() != nil {
+			t.Fatal("unknown effect gained durable receipt")
+		}
+		unknownOutcomeRecordingDenied = true
+		if retained.State != "EFFECT_UNKNOWN" || retained.PublicEvent != nil || retained.OutcomeReceipt != nil {
+			t.Fatal("unknown effect was promoted to success")
+		}
+		_, err = production.ExecuteAgentPlan(context.Background(), request)
+		var rpcFailure interface{ GRPCStatus() *status.Status }
+		if status.Code(err) != codes.FailedPrecondition || !errors.As(err, &rpcFailure) || rpcFailure.GRPCStatus() == nil ||
+			rpcFailure.GRPCStatus().Code() != codes.FailedPrecondition || rpcFailure.GRPCStatus().Message() != "EFFECT_UNKNOWN" {
+			t.Fatalf("unknown effect received a fresh dispatch: %v", err)
+		}
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "process-result.json"), map[string]any{
+		"status": "PASS", "scenario": scenario, "operationId": query.OperationId, "actionId": claim.Fence.ActionId,
+		"executionEpoch": claim.Fence.ExecutionEpoch, "runId": claim.RunId, "state": retained.State,
+		"publicEvent": retained.PublicEvent, "outcomeSha256": retained.OutcomeSha256,
+		"outcomeLength": retained.OutcomeLength, "realUTC": true, "authenticatedProductionRPC": true,
+		"productionGoNodeClient": true, "signedOutcomeVerified": scenario == "planner-success", "signedOutcomeTamperingDenied": scenario == "planner-success",
+		"unknownHasNoReceipt":  scenario == "planner-unknown" && retained.OutcomeReceipt == nil,
+		"outcomeReceiptSha256": receiptHash, "outcomeReceiptLength": receiptLength,
+		"goOutcomePersisted": goOutcomePersisted, "unknownOutcomeRecordingDenied": unknownOutcomeRecordingDenied,
+		"historicalReceiptAfterActionTakeover": historicalTakeoverRetained, "historicalReceiptAfterGoRestart": historicalGoRestartRetained,
+		"takeoverDidNotReauthorizeProvider": takeoverFreshDenied, "expiredGrantReexecutionDenied": expiredGrantDenied,
+		"projectionReceiptSha256": projectionHash, "projectionReceiptLength": projectionLength,
+		"normalizedPlanBody": normalizedPlanBody, "runStatusBody": runStatusBody, "normalizedPlan": normalizedPlan, "planNextStatus": planNextStatus,
+		"goPlanPhaseSettlementQualified": phaseSettled && phaseReplayAfterRestart && projectionAfterRustRestart,
+		"goPlanPhaseSettledAtomically":   phaseSettled, "goPlanPhaseReplayAfterRestart": phaseReplayAfterRestart, "normalizedProjectionAfterRustRestart": projectionAfterRustRestart,
+		"goControlAuthorityAndReservation": true, "restartPreserved": true, "noDuplicateProviderSend": true,
+		"productionProviderQualified": false, "goPhaseSettlementQualified": false,
+	})
+}
+
+func TestNativeAgentSigningProducer(t *testing.T) {
+	for _, phase := range []string{"plan", "tasks"} {
+		t.Run(phase, func(t *testing.T) {
+			control := nativeSigningControl(t, 600)
+			client, _ := nativeSigningRPC(t, control)
+			claim := nativeSigningClaim(t, client, phase)
+			if claim.Fence == nil || claim.Fence.ExecutionEpoch == 0 ||
+				claim.LeaseUntil <= time.Now().UTC().Unix() || claim.WriterLeaseUntil != control.Writer().LeaseUntil ||
+				claim.WriterFencingToken != control.Writer().FencingToken {
+				t.Fatal("producer returned an expired or unbound claim")
+			}
+			t.Logf("realUTC=true phase=%s executionEpoch=%d metadataEpoch=%d", phase, claim.Fence.ExecutionEpoch, claim.MetadataEpoch)
+		})
+	}
+	t.Run("writer-expiry", func(t *testing.T) {
+		control := nativeSigningControl(t, 5)
+		client, _ := nativeSigningRPC(t, control)
+		claim := nativeSigningClaim(t, client, "plan")
+		before := control.Writer().LeaseUntil
+		time.Sleep(1100 * time.Millisecond)
+		ctx, cancel := context.WithTimeout(controlRPCContext(t, testInternalBearer), 8*time.Second)
+		defer cancel()
+		input := &agentv1.RenewAgentRunExecutionRequest{Fence: claim.Fence, RunId: claim.RunId,
+			Owner: claim.Owner, ClaimToken: claim.ClaimToken, LeaseSeconds: 60}
+		renewed, err := client.RenewExecution(ctx, input)
+		writerDeadline := control.Writer().LeaseUntil
+		if err != nil || renewed.GetClaim() == nil || writerDeadline <= before ||
+			renewed.Claim.WriterLeaseUntil != writerDeadline || renewed.Claim.LeaseUntil <= writerDeadline {
+			t.Fatalf("actual writer renewal did not advance its deadline while action remained live: %v", err)
+		}
+		time.Sleep(time.Until(time.Unix(writerDeadline, 0).Add(100 * time.Millisecond)))
+		if control.Writer().LeaseUntil != writerDeadline || time.Now().Unix() >= renewed.Claim.LeaseUntil {
+			t.Fatal("writer-expiry observation moved its deadline or expired the action")
+		}
+		ctx, cancel = context.WithTimeout(controlRPCContext(t, testInternalBearer), 8*time.Second)
+		defer cancel()
+		if _, err := client.RenewExecution(ctx, input); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("expired actual writer was renewed: code=%s error=%v", status.Code(err), err)
+		}
+		t.Logf("realUTC=true writerDeadlineAdvanced=true before=%d after=%d expiredWriterDenied=true", before, writerDeadline)
+	})
+}
+
+// This fixture exercises the real task producer without a scheduler shortcut,
+// local clock override, shared body store, or fabricated task settlement.
+func TestNativeAgentTaskProcess(t *testing.T) {
+	directory, scenario := os.Getenv("DEEPSEEK_AGENT_SIGNING_PROBE_DIR"), os.Getenv("DEEPSEEK_AGENT_SIGNING_PROBE_CASE")
+	if directory == "" || (scenario != "task-success" && scenario != "task-tools" && scenario != "task-unknown" && scenario != "synthesis-success") {
+		t.Fatal("explicit isolated task process configuration is required")
+	}
+	for _, name := range []string{"DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE", "DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE", "DEEPSEEK_API_KEY", "DEEPSEEK_WORKER_AUTHORITY_NOW"} {
+		if _, present := os.LookupEnv(name); present {
+			t.Fatal("private runtime configuration entered Go")
+		}
+	}
+	controlDirectory := t.TempDir()
+	control := nativeSigningControl(t, 600, controlDirectory)
+	client, origin := nativeSigningRPC(t, control)
+	authority, err := client.GetAuthority(controlRPCContext(t, testInternalBearer), &agentv1.AgentRunAuthorityInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reference agentv1.AgentArtifactReference
+	nativeSigningRead(t, os.Getenv("DEEPSEEK_AGENT_PLANNER_ARTIFACT_REFERENCE_FILE"), &reference)
+	for index := int64(0); index < 4; index++ {
+		input := agentRPCAppend(index, authority.MetadataEpoch)
+		if index == 0 {
+			input.Create.Request = &reference
+		}
+		if index == 2 {
+			input.Event.Type = "agent_plan"
+			input.Event.Status = ""
+			input.Event.HasPlan = true
+			input.Event.Plan = []*agentv1.AgentRunPlanNode{{Id: "coder", Task: "write"}}
+			if scenario == "task-success" || scenario == "synthesis-success" {
+				input.Event.Plan = append(input.Event.Plan, &agentv1.AgentRunPlanNode{Id: "critic", Task: "review", DependsOn: []string{"coder"}})
+			}
+		}
+		if index == 3 {
+			input.Event.Status = "running"
+		}
+		if _, err := client.AppendEvent(controlRPCContext(t, testInternalBearer), input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	admission := executionRPCInput(authority.MetadataEpoch)
+	claimed, err := client.ClaimExecution(controlRPCContext(t, testInternalBearer), admission)
+	if err != nil || claimed.GetClaim() == nil {
+		t.Fatalf("actual task claim: %v", err)
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "go-ready.json"), map[string]any{
+		"origin": origin, "internalBearer": testInternalBearer, "fencingToken": control.Writer().FencingToken,
+		"fleetId": mutationFleetID, "environment": mutationEnvironment})
+	var ready nativeSigningWorkerReady
+	nativeSigningRead(t, filepath.Join(directory, "worker-ready.json"), &ready)
+	bearer := os.Getenv("DEEPSEEK_AGENT_SIGNING_WORKER_BEARER")
+	nativeSigningConfigureGo(t, ready, bearer)
+	authorized, err := client.AuthorizeExecution(controlRPCContext(t, testInternalBearer), admission)
+	if err != nil || authorized.GetClaim() == nil || len(authorized.CanonicalAuthorization) == 0 {
+		t.Fatalf("actual task authorization: %v", err)
+	}
+	claim := authorized.Claim
+	request := &agentv1.ExecuteAgentTaskRequest{SchemaVersion: 1, OperationId: "task-process-dispatch", Actor: "rust-agent-worker",
+		Claim: claim, SignedPhaseGrant: authorized.CanonicalAuthorization, Fence: claim.Fence, NodeId: "coder"}
+	production := nativeSigningWorker(t, ready, bearer, "localhost")
+	changed := proto.Clone(request).(*agentv1.ExecuteAgentTaskRequest)
+	changed.NodeId = "leader"
+	if _, err := production.ExecuteAgentTask(context.Background(), changed); err == nil {
+		t.Fatal("task accepted planner role")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	result, executeError := production.ExecuteAgentTask(ctx, request)
+	cancel()
+	if scenario == "task-unknown" {
+		if status.Code(executeError) != codes.Unavailable {
+			t.Fatalf("uncertain task result: %v", executeError)
+		}
+	} else if executeError != nil || result == nil {
+		t.Fatalf("task result: %v", executeError)
+	}
+	connection, err := grpc.NewClient(origin[len("http://"):], grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	nodes := agentv1.NewAgentNodeControlClient(connection)
+	admitted, err := nodes.GetDispatch(controlRPCContext(t, testInternalBearer), &agentv1.GetAgentNodeDispatchRequest{
+		Fence: claim.Fence, RunId: claim.RunId, NodeId: "coder"})
+	if err != nil || !admitted.Found || admitted.Intent == nil || admitted.Intent.Task != "write" {
+		t.Fatalf("Go-owned task reservation: %v", err)
+	}
+	query := &agentv1.QueryAgentNodeEffectRequest{OperationId: admitted.Intent.OperationId, Fence: claim.Fence, RunId: claim.RunId, NodeId: "coder"}
+	known, err := production.QueryAgentNodeEffect(context.Background(), query)
+	if err != nil || known == nil {
+		t.Fatalf("task journal query: %v", err)
+	}
+	binding := worker.ControlSignerBinding{PublicKey: ready.PublicKey, FleetID: mutationFleetID, Environment: mutationEnvironment}
+	receiptHash, receiptLength := "", 0
+	verified, persisted := false, false
+	taskSettled, dependencyQualified := false, false
+	var settlement *agentv1.SettleAgentTaskRequest
+	var critic *agentv1.AgentNodeEffectMetadata
+	var dependentIntent *agentv1.AgentNodeDispatchIntent
+	var dependentQuery *agentv1.QueryAgentNodeEffectRequest
+	var dependentExecutionInput *agentv1.ExecuteAgentTaskRequest
+	refreshAfterExpiry, refreshReplayed, expiredTaskDenied := false, false, false
+	originalGrantExpiry, refreshIssuedAt, refreshExpiresAt, refreshHash := "", "", "", ""
+	refreshLength := 0
+	dependentReceiptHash, dependentReceiptLength := "", 0
+	if scenario == "task-success" || scenario == "synthesis-success" {
+		if known.State != "CONFIRMED" || !proto.Equal(known, result) {
+			t.Fatal("task lost complete outcome")
+		}
+		proof, err := worker.VerifyAgentNodeEffect(known, admitted.Intent, claim.WriterFencingToken, binding)
+		if err != nil || len(proof.Evidence().ProviderPlan) != 0 {
+			t.Fatalf("actual task custody verification: %v", err)
+		}
+		verified = true
+		forged := proto.Clone(known).(*agentv1.AgentNodeEffectMetadata)
+		forged.OutcomeReceipt.Signature[0] ^= 1
+		if _, err := worker.VerifyAgentNodeEffect(forged, admitted.Intent, claim.WriterFencingToken, binding); !errors.Is(err, worker.ErrAgentNodeOutcomeInvalid) {
+			t.Fatal("task accepted forged proof")
+		}
+		raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(known.OutcomeReceipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		receiptHash, receiptLength = hex.EncodeToString(digest[:]), len(raw)
+		record := &agentv1.RecordAgentNodeOutcomeRequest{SchemaVersion: 1, OperationId: "task-outcome-record", Actor: "operator:agent-test",
+			Fence: claim.Fence, RunId: claim.RunId, NodeId: "coder", OutcomeReceipt: known.OutcomeReceipt}
+		first, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), record)
+		if err != nil || first.AlreadyRecorded {
+			t.Fatalf("actual task Go ingestion: %v", err)
+		}
+		replay, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), record)
+		if err != nil || !replay.AlreadyRecorded || replay.ReceiptSha256 != first.ReceiptSha256 {
+			t.Fatal("Go outcome replay changed proof")
+		}
+		persisted = true
+		blocked := &agentv1.BeginAgentNodeDispatchRequest{SchemaVersion: 1, OperationId: "dependent-before-settlement", Actor: "operator:agent-test",
+			Fence: claim.Fence, RunId: claim.RunId, NodeId: "critic", Owner: claim.Owner, ClaimToken: claim.ClaimToken}
+		if _, err := nodes.BeginDispatch(controlRPCContext(t, testInternalBearer), blocked); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("recorded receipt alone admitted dependency: %v", err)
+		}
+		settlement = &agentv1.SettleAgentTaskRequest{SchemaVersion: 1, OperationId: "task-settle-coder", Actor: "operator:agent-test", Fence: claim.Fence,
+			RunId: claim.RunId, NodeId: "coder", Owner: claim.Owner, ClaimToken: claim.ClaimToken, ExpectedIndex: 4, SourceReceiptSha256: receiptHash}
+		settled, err := nodes.SettleTask(controlRPCContext(t, testInternalBearer), settlement)
+		if err != nil || settled.AlreadyApplied || settled.ActionState != "EXECUTING" || settled.Run.NextIndex != 5 {
+			t.Fatalf("actual coder settlement: %v", err)
+		}
+		replayed, err := nodes.SettleTask(controlRPCContext(t, testInternalBearer), settlement)
+		if err != nil || !replayed.AlreadyApplied || !proto.Equal(replayed.Run, settled.Run) {
+			t.Fatalf("coder settlement replay: %v", err)
+		}
+		var refreshed *agentv1.AuthorizeAgentRunExecutionResponse
+		if scenario == "synthesis-success" {
+			var original map[string]any
+			if err := json.Unmarshal(authorized.CanonicalAuthorization, &original); err != nil {
+				t.Fatal(err)
+			}
+			originalGrantExpiry, _ = original["expiresAt"].(string)
+			expires, err := time.Parse(time.RFC3339, originalGrantExpiry)
+			if err != nil || time.Until(expires) > 80*time.Second {
+				t.Fatal("unbounded original grant expiry", err)
+			}
+			// Keep the actual Go claim/writer alive while the immutable original
+			// grant expires. A fresh signature must not reclaim/install an epoch.
+			for time.Now().UTC().Before(expires.Add(time.Second)) {
+				_, err := client.RenewExecution(controlRPCContext(t, testInternalBearer), &agentv1.RenewAgentRunExecutionRequest{
+					Fence: claim.Fence, RunId: claim.RunId, Owner: claim.Owner, ClaimToken: claim.ClaimToken, LeaseSeconds: 60})
+				if err != nil {
+					t.Fatal("live phase renewal before refresh", err)
+				}
+				time.Sleep(time.Second)
+			}
+			if _, err := production.ExecuteAgentTask(context.Background(), request); status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("expired original grant reauthorized provider: %v", err)
+			}
+			expiredTaskDenied = true
+			refreshInput := &agentv1.RefreshAgentRunAuthorizationRequest{SchemaVersion: 1, OperationId: "live-task-grant-refresh",
+				Fence: claim.Fence, RunId: claim.RunId, Owner: claim.Owner, ClaimToken: claim.ClaimToken, LeaseSeconds: 60}
+			refreshed, err = client.RefreshAuthorization(controlRPCContext(t, testInternalBearer), refreshInput)
+			if err != nil || refreshed == nil || refreshed.Claim == nil || !proto.Equal(refreshed.Claim.Fence, claim.Fence) ||
+				refreshed.Claim.Owner != claim.Owner || refreshed.Claim.ClaimToken != claim.ClaimToken || bytes.Equal(refreshed.CanonicalAuthorization, authorized.CanonicalAuthorization) {
+				t.Fatalf("actual live phase grant refresh changed authority or failed: %v", err)
+			}
+			replay, err := client.RefreshAuthorization(controlRPCContext(t, testInternalBearer), refreshInput)
+			if err != nil || !bytes.Equal(replay.CanonicalAuthorization, refreshed.CanonicalAuthorization) {
+				t.Fatalf("refresh immutable replay: %v", err)
+			}
+			refreshReplayed = true
+			var doc map[string]any
+			if err := json.Unmarshal(refreshed.CanonicalAuthorization, &doc); err != nil {
+				t.Fatal(err)
+			}
+			refreshIssuedAt, _ = doc["issuedAt"].(string)
+			refreshExpiresAt, _ = doc["expiresAt"].(string)
+			issued, issuedErr := time.Parse(time.RFC3339, refreshIssuedAt)
+			deadline, deadlineErr := time.Parse(time.RFC3339, refreshExpiresAt)
+			if issuedErr != nil || deadlineErr != nil || !issued.After(expires) || !deadline.After(issued) {
+				t.Fatal("refresh did not replace an expired grant with a new issuance")
+			}
+			digest := sha256.Sum256(refreshed.CanonicalAuthorization)
+			refreshHash, refreshLength = hex.EncodeToString(digest[:]), len(refreshed.CanonicalAuthorization)
+			refreshAfterExpiry = true
+			claim = refreshed.Claim
+		}
+		dependent := proto.Clone(request).(*agentv1.ExecuteAgentTaskRequest)
+		dependent.NodeId, dependent.OperationId = "critic", "task-dependent-dispatch"
+		if refreshed != nil {
+			dependent.Claim, dependent.SignedPhaseGrant = refreshed.Claim, refreshed.CanonicalAuthorization
+		}
+		dependentExecutionInput = proto.Clone(dependent).(*agentv1.ExecuteAgentTaskRequest)
+		critic, err = production.ExecuteAgentTask(context.Background(), dependent)
+		if err != nil || critic == nil || critic.State != "CONFIRMED" {
+			t.Fatalf("actual dependency execution: %v", err)
+		}
+		retained, err := nodes.GetDispatch(controlRPCContext(t, testInternalBearer), &agentv1.GetAgentNodeDispatchRequest{Fence: claim.Fence, RunId: claim.RunId, NodeId: "critic"})
+		if err != nil || !retained.Found || retained.Intent.Task != "review" || len(retained.Intent.DependsOn) != 1 || retained.Intent.DependsOn[0] != "coder" {
+			t.Fatalf("dependent Go scope: %v", err)
+		}
+		dependentIntent = retained.Intent
+		proof, err = worker.VerifyAgentNodeEffect(critic, dependentIntent, claim.WriterFencingToken, binding)
+		if err != nil || proof.Evidence().TaskOutput == nil || proof.Evidence().TaskOutput.PromptTokens != 3 || proof.Evidence().TaskOutput.CompletionTokens != 1 {
+			t.Fatalf("dependent Rust custody counters: %v", err)
+		}
+		raw, err = proto.MarshalOptions{Deterministic: true}.Marshal(critic.OutcomeReceipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest = sha256.Sum256(raw)
+		dependentReceiptHash, dependentReceiptLength = hex.EncodeToString(digest[:]), len(raw)
+		recorded, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), &agentv1.RecordAgentNodeOutcomeRequest{SchemaVersion: 1, OperationId: "dependent-outcome-record", Actor: "operator:agent-test", Fence: claim.Fence, RunId: claim.RunId, NodeId: "critic", OutcomeReceipt: critic.OutcomeReceipt})
+		if err != nil || recorded.ReceiptSha256 != dependentReceiptHash {
+			t.Fatalf("dependent result ingestion: %v", err)
+		}
+		second := proto.Clone(settlement).(*agentv1.SettleAgentTaskRequest)
+		second.OperationId, second.NodeId, second.ExpectedIndex, second.SourceReceiptSha256 = "task-settle-critic", "critic", 5, dependentReceiptHash
+		completed, err := nodes.SettleTask(controlRPCContext(t, testInternalBearer), second)
+		if err != nil || completed.AlreadyApplied || completed.ActionState != "EXECUTING" || completed.Run.NextIndex != 6 {
+			t.Fatalf("dependent settlement: %v", err)
+		}
+		dependentQuery = &agentv1.QueryAgentNodeEffectRequest{OperationId: dependentIntent.OperationId, Fence: claim.Fence, RunId: claim.RunId, NodeId: "critic"}
+		taskSettled, dependencyQualified = true, true
+	} else {
+		expected := "AWAITING_TOOLS"
+		if scenario == "task-unknown" {
+			expected = "EFFECT_UNKNOWN"
+		}
+		if known.State != expected || known.OutcomeReceipt != nil {
+			t.Fatal("incomplete task acquired completion proof")
+		}
+		if _, err := worker.VerifyAgentNodeEffect(known, admitted.Intent, claim.WriterFencingToken, binding); !errors.Is(err, worker.ErrAgentNodeOutcomeInvalid) {
+			t.Fatal("incomplete task verified")
+		}
+	}
+	if resources, err := control.GetResourceLeases(claim.Fence.ActionId); err != nil || len(resources) != 1 {
+		t.Fatal("producer released unresolved task resource")
+	}
+	run, found, err := control.AgentRunMetadata(claim.RunId)
+	expectedCursor := int64(4)
+	if scenario == "task-success" || scenario == "synthesis-success" {
+		expectedCursor = 6
+	}
+	if err != nil || !found || run.NextIndex != expectedCursor || run.Status != "running" {
+		t.Fatal("task run cursor/status mismatch")
+	}
+	if scenario == "task-success" || scenario == "synthesis-success" {
+		for _, node := range []string{"coder", "critic"} {
+			output := run.Nodes()[node]
+			if output.State != "succeeded" || output.PromptTokens != 3 || output.CompletionTokens != 1 || output.LatencyMS == nil {
+				t.Fatal("settled task counters/progress missing")
+			}
+		}
+	} else if run.Nodes()["coder"].State == "succeeded" {
+		t.Fatal("incomplete task acquired Go completion")
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "restart-request.json"), map[string]bool{"restart": true})
+	var restarted nativeSigningWorkerReady
+	nativeSigningRead(t, filepath.Join(directory, "worker-restarted.json"), &restarted)
+	// Rebind the Go signer before admitting a new phase after the worker restart.
+	nativeSigningConfigureGo(t, restarted, bearer)
+	production = nativeSigningWorker(t, restarted, bearer, "localhost")
+	retained, err := production.QueryAgentNodeEffect(context.Background(), query)
+	if err != nil || !proto.Equal(retained, known) {
+		t.Fatalf("Rust task restart changed custody: %v", err)
+	}
+	replayed, replayError := production.ExecuteAgentTask(context.Background(), request)
+	if scenario == "synthesis-success" {
+		if !expiredTaskDenied || status.Code(replayError) != codes.FailedPrecondition {
+			t.Fatalf("expired grant replay was accepted after restart: %v", replayError)
+		}
+	} else if scenario == "task-unknown" {
+		if status.Code(replayError) != codes.FailedPrecondition {
+			t.Fatalf("unknown task replay dispatched: %v", replayError)
+		}
+	} else if replayError != nil || !proto.Equal(replayed, known) {
+		t.Fatalf("task replay changed retained provider result: %v", replayError)
+	}
+	if critic != nil {
+		retained, err := production.QueryAgentNodeEffect(context.Background(), dependentQuery)
+		if err != nil || !proto.Equal(retained, critic) {
+			t.Fatalf("dependent Rust restart: %v", err)
+		}
+		replay, err := production.ExecuteAgentTask(context.Background(), dependentExecutionInput)
+		if err != nil || !proto.Equal(replay, critic) {
+			t.Fatalf("dependent replay changed provider result: %v", err)
+		}
+	}
+	var completion *agentv1.CompleteAgentTasksRequest
+	if settlement != nil {
+		completion = &agentv1.CompleteAgentTasksRequest{SchemaVersion: 1, OperationId: "complete-task-phase", Actor: "operator:agent-test",
+			Fence: claim.Fence, RunId: claim.RunId, Owner: claim.Owner, ClaimToken: claim.ClaimToken, ExpectedIndex: 6}
+		finished, err := nodes.CompleteTasks(controlRPCContext(t, testInternalBearer), completion)
+		if err != nil || finished.AlreadyApplied || finished.ActionState != "SUCCEEDED" || finished.Run.Status != "running" || finished.Run.NextIndex != 6 {
+			t.Fatalf("actual task phase completion: %v", err)
+		}
+		replay, err := nodes.CompleteTasks(controlRPCContext(t, testInternalBearer), completion)
+		if err != nil || !replay.AlreadyApplied || !proto.Equal(replay.Run, finished.Run) {
+			t.Fatalf("task phase response loss duplicated completion: %v", err)
+		}
+		locks, err := control.GetResourceLeases(claim.Fence.ActionId)
+		if err != nil || len(locks) != 0 {
+			t.Fatal("completed task phase retained resources")
+		}
+	} else {
+		incomplete := &agentv1.CompleteAgentTasksRequest{SchemaVersion: 1, OperationId: "complete-unresolved-task-phase", Actor: "operator:agent-test",
+			Fence: claim.Fence, RunId: claim.RunId, Owner: claim.Owner, ClaimToken: claim.ClaimToken, ExpectedIndex: 4}
+		if _, err := nodes.CompleteTasks(controlRPCContext(t, testInternalBearer), incomplete); err == nil {
+			t.Fatal("unresolved task completed its phase")
+		}
+	}
+
+	var synthesis *agentv1.AgentNodeEffectMetadata
+	var synthesisIntent *agentv1.AgentNodeDispatchIntent
+	var synthesisClaim *agentv1.AgentRunExecutionClaim
+	synthesisReceiptHash, synthesisReceiptLength := "", 0
+	var finalProjection *agentv1.AgentSynthesisProjectionReceipt
+	var finalProjectionInput *agentv1.ProjectAgentSynthesisRequest
+	var finalSettlement *agentv1.SettleAgentSynthesisRequest
+	finalProjectionHash, finalProjectionLength := "", 0
+	finalSettled, finalReplayed := false, false
+	if scenario == "synthesis-success" {
+		synthesisAdmission := proto.Clone(admission).(*agentv1.ClaimAgentRunExecutionRequest)
+		synthesisAdmission.OperationId = "claim-synthesis-process"
+		synthesisAdmission.Phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS
+		synthesisAdmission.ExpectedIndex = 6
+		signed, err := client.AuthorizeExecution(controlRPCContext(t, testInternalBearer), synthesisAdmission)
+		if err != nil || signed.GetClaim() == nil || len(signed.CanonicalAuthorization) == 0 {
+			t.Fatalf("actual synthesis authorization: %v", err)
+		}
+		synthesisClaim = signed.Claim
+		if synthesisClaim.Fence.ActionId == claim.Fence.ActionId || synthesisClaim.Phase != synthesisAdmission.Phase || synthesisClaim.MetadataIndex != 6 {
+			t.Fatal("synthesis reused a task admission")
+		}
+		synthesisInput := &agentv1.ExecuteAgentTaskRequest{SchemaVersion: 1, OperationId: "synthesis-process-dispatch", Actor: "rust-agent-worker",
+			Claim: synthesisClaim, SignedPhaseGrant: signed.CanonicalAuthorization, Fence: synthesisClaim.Fence, NodeId: "synthesizer"}
+		wrong := proto.Clone(synthesisInput).(*agentv1.ExecuteAgentTaskRequest)
+		wrong.Claim.Phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS
+		if _, err := production.ExecuteAgentSynthesis(context.Background(), wrong); err == nil {
+			t.Fatal("task phase entered synthesis RPC")
+		}
+		synthesis, err = production.ExecuteAgentSynthesis(context.Background(), synthesisInput)
+		if err != nil || synthesis == nil || synthesis.State != "CONFIRMED" {
+			t.Fatalf("actual synthesis exchange: %v", err)
+		}
+		selected, err := nodes.GetDispatch(controlRPCContext(t, testInternalBearer), &agentv1.GetAgentNodeDispatchRequest{Fence: synthesisClaim.Fence, RunId: claim.RunId, NodeId: "synthesizer"})
+		if err != nil || !selected.Found || selected.Intent == nil || selected.Intent.Phase != synthesisClaim.Phase || len(selected.Intent.DependsOn) != 2 ||
+			selected.Intent.DependsOn[0] != "coder" || selected.Intent.DependsOn[1] != "critic" {
+			t.Fatalf("synthesis did not select all completed tasks: %v", err)
+		}
+		synthesisIntent = selected.Intent
+		proof, err := worker.VerifyAgentNodeEffect(synthesis, synthesisIntent, synthesisClaim.WriterFencingToken, binding)
+		if err != nil || proof.Evidence().TaskOutput == nil || proof.Evidence().TaskOutput.PromptTokens != 3 || proof.Evidence().TaskOutput.CompletionTokens != 1 {
+			t.Fatalf("signed synthesis counters: %v", err)
+		}
+		raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(synthesis.OutcomeReceipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(raw)
+		synthesisReceiptHash, synthesisReceiptLength = hex.EncodeToString(digest[:]), len(raw)
+		recorded, err := nodes.RecordOutcome(controlRPCContext(t, testInternalBearer), &agentv1.RecordAgentNodeOutcomeRequest{SchemaVersion: 1, OperationId: "synthesis-outcome-record",
+			Actor: "operator:agent-test", Fence: synthesisClaim.Fence, RunId: claim.RunId, NodeId: "synthesizer", OutcomeReceipt: synthesis.OutcomeReceipt})
+		if err != nil || recorded.ReceiptSha256 != synthesisReceiptHash {
+			t.Fatalf("actual Go synthesis proof ingestion: %v", err)
+		}
+		finalProjectionInput = &agentv1.ProjectAgentSynthesisRequest{SchemaVersion: 1,
+			Source:          &agentv1.QueryAgentNodeEffectRequest{OperationId: synthesisIntent.OperationId, Fence: synthesisClaim.Fence, RunId: claim.RunId, NodeId: "synthesizer"},
+			SettlementFence: synthesisClaim.Fence, SettlementWriterToken: control.Writer().FencingToken, MetadataEpoch: synthesisClaim.MetadataEpoch, ExpectedIndex: 6}
+		finalProjection, err = production.ProjectAgentSynthesis(context.Background(), finalProjectionInput)
+		if err != nil {
+			t.Fatalf("actual synthesis projection: %v", err)
+		}
+		expectedFinal := &agentv1.AgentSynthesisProjectionEvidence{SchemaVersion: 1, SourceReceiptSha256: synthesisReceiptHash,
+			SettlementFence: synthesisClaim.Fence, SettlementWriterToken: control.Writer().FencingToken, RunId: claim.RunId,
+			MetadataEpoch: synthesisClaim.MetadataEpoch, ExpectedIndex: 6, ContentBody: synthesis.PublicEvent, FleetId: mutationFleetID, Environment: mutationEnvironment}
+		if err := agentproof.VerifyAgentSynthesisProjection(finalProjection, expectedFinal, agentproof.Binding{PublicKey: ready.PublicKey, FleetID: mutationFleetID, Environment: mutationEnvironment}); err != nil {
+			t.Fatalf("actual synthesis projection signature: %v", err)
+		}
+		projectionBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(finalProjection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		projectionDigest := sha256.Sum256(projectionBytes)
+		finalProjectionHash, finalProjectionLength = hex.EncodeToString(projectionDigest[:]), len(projectionBytes)
+		finalSettlement = &agentv1.SettleAgentSynthesisRequest{SchemaVersion: 1, OperationId: "settle-synthesis-process", Actor: "operator:agent-test",
+			Fence: synthesisClaim.Fence, RunId: claim.RunId, Owner: synthesisClaim.Owner, ClaimToken: synthesisClaim.ClaimToken, Projection: finalProjection}
+		settled, err := nodes.SettleSynthesis(controlRPCContext(t, testInternalBearer), finalSettlement)
+		if err != nil || settled.AlreadyApplied || settled.ActionState != "SUCCEEDED" || settled.Run.Status != "done" || settled.Run.NextIndex != 8 {
+			t.Fatalf("actual atomic synthesis settlement: %v", err)
+		}
+		locks, err := control.GetResourceLeases(synthesisClaim.Fence.ActionId)
+		if err != nil || len(locks) != 0 {
+			t.Fatal("synthesis retained resources", err)
+		}
+		finalSettled = true
+		nativeSigningWrite(t, filepath.Join(directory, "synthesis-restart-request.json"), map[string]bool{"restart": true})
+		var finalReady nativeSigningWorkerReady
+		nativeSigningRead(t, filepath.Join(directory, "worker-synthesis-restarted.json"), &finalReady)
+		production = nativeSigningWorker(t, finalReady, bearer, "localhost")
+		query := &agentv1.QueryAgentNodeEffectRequest{OperationId: synthesisIntent.OperationId, Fence: synthesisClaim.Fence, RunId: claim.RunId, NodeId: "synthesizer"}
+		retained, err := production.QueryAgentNodeEffect(context.Background(), query)
+		if err != nil || !proto.Equal(retained, synthesis) {
+			t.Fatalf("synthesis restart lost custody: %v", err)
+		}
+		replay, err := production.ExecuteAgentSynthesis(context.Background(), synthesisInput)
+		if err != nil || !proto.Equal(replay, synthesis) {
+			t.Fatalf("synthesis replay changed confirmed result: %v", err)
+		}
+		projectionReplay, err := production.ProjectAgentSynthesis(context.Background(), finalProjectionInput)
+		if err != nil || !proto.Equal(projectionReplay, finalProjection) {
+			t.Fatalf("Rust restart lost final projection: %v", err)
+		}
+		run, found, err := control.AgentRunMetadata(claim.RunId)
+		if err != nil || !found || run.NextIndex != 8 || run.Status != "done" {
+			t.Fatalf("final Go settlement did not survive Rust restart: %v", err)
+		}
+	}
+
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Reopen retained authority; creating fresh promotion requests would reuse
+	// historical transfer IDs with a different timestamp and replay-conflict.
+	control, err = store.OpenControl(store.OpenOptions{Path: controlDirectory, Owner: "native-task-successor", LeaseSeconds: 600,
+		AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic,
+		AgentOutcomeSignerPublicKey: ready.PublicKey, FleetID: mutationFleetID, Environment: mutationEnvironment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = control.Close() })
+	for _, domain := range []string{"agent_run", "action"} {
+		cutover, err := control.GetCutover(domain)
+		if err != nil || !store.IsDomainGoAuthoritative(cutover.State) {
+			t.Fatalf("restart lost retained %s authority: %v", domain, err)
+		}
+	}
+	_, restartOrigin := nativeSigningRPC(t, control)
+	restartConnection, err := grpc.NewClient(restartOrigin[len("http://"):], grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = restartConnection.Close() })
+	retainedGo, err := agentv1.NewAgentNodeControlClient(restartConnection).GetDispatch(controlRPCContext(t, testInternalBearer),
+		&agentv1.GetAgentNodeDispatchRequest{Fence: claim.Fence, RunId: claim.RunId, NodeId: "coder"})
+	if err != nil || !retainedGo.Found || !proto.Equal(retainedGo.Intent, admitted.Intent) ||
+		!proto.Equal(retainedGo.OutcomeReceipt, known.OutcomeReceipt) {
+		t.Fatalf("Go task restart lost reservation or proof: %v", err)
+	}
+	replayCursor, replayStatus := int64(6), "running"
+	if finalSettled {
+		replayCursor, replayStatus = 8, "done"
+	}
+	if settlement != nil {
+		reopened := agentv1.NewAgentNodeControlClient(restartConnection)
+		replay, err := reopened.SettleTask(controlRPCContext(t, testInternalBearer), settlement)
+		if err != nil || !replay.AlreadyApplied || replay.Run.NextIndex != replayCursor || replay.Run.Status != replayStatus {
+			t.Fatalf("task settlement restart replay: %v", err)
+		}
+		retained, err := reopened.GetDispatch(controlRPCContext(t, testInternalBearer), &agentv1.GetAgentNodeDispatchRequest{Fence: claim.Fence, RunId: claim.RunId, NodeId: "critic"})
+		if err != nil || !retained.Found || !proto.Equal(retained.Intent, dependentIntent) || !proto.Equal(retained.OutcomeReceipt, critic.OutcomeReceipt) {
+			t.Fatalf("dependent Go restart: %v", err)
+		}
+		replayedPhase, err := reopened.CompleteTasks(controlRPCContext(t, testInternalBearer), completion)
+		if err != nil || !replayedPhase.AlreadyApplied || replayedPhase.Run.Status != replayStatus || replayedPhase.Run.NextIndex != replayCursor {
+			t.Fatalf("completed task phase did not survive Go restart: %v", err)
+		}
+		locks, err := control.GetResourceLeases(claim.Fence.ActionId)
+		if err != nil || len(locks) != 0 {
+			t.Fatal("restart restored completed phase resources")
+		}
+	}
+	if synthesis != nil {
+		retained, err := agentv1.NewAgentNodeControlClient(restartConnection).GetDispatch(controlRPCContext(t, testInternalBearer),
+			&agentv1.GetAgentNodeDispatchRequest{Fence: synthesisClaim.Fence, RunId: claim.RunId, NodeId: "synthesizer"})
+		if err != nil || !retained.Found || !proto.Equal(retained.Intent, synthesisIntent) || !proto.Equal(retained.OutcomeReceipt, synthesis.OutcomeReceipt) {
+			t.Fatalf("Go restart lost synthesis proof: %v", err)
+		}
+		replay, err := agentv1.NewAgentNodeControlClient(restartConnection).SettleSynthesis(controlRPCContext(t, testInternalBearer), finalSettlement)
+		locks, lockErr := control.GetResourceLeases(synthesisClaim.Fence.ActionId)
+		if err != nil || lockErr != nil || !replay.AlreadyApplied || replay.ActionState != "SUCCEEDED" || replay.Run.Status != "done" || replay.Run.NextIndex != 8 || len(locks) != 0 {
+			t.Fatalf("final Go settlement restart replay: %v %v", err, lockErr)
+		}
+		finalReplayed = true
+	}
+
+	nativeSigningWrite(t, filepath.Join(directory, "process-result.json"), map[string]any{
+		"synthesisGoProofPersisted": synthesis != nil, "synthesisRustRestartPreserved": synthesis != nil, "synthesisGoRestartPreserved": synthesis != nil,
+		"synthesisDuplicateProviderDispatchDenied": synthesis != nil, "synthesisFinalRunSettlementQualified": finalSettled && finalReplayed,
+		"synthesisFinalProjection": finalProjection, "synthesisFinalDoneBody": finalProjection.GetEvidence().GetDoneBody(), "synthesisFinalProjectionSha256": finalProjectionHash, "synthesisFinalProjectionLength": finalProjectionLength,
+		"synthesisFinalNextIndex": replayCursor, "synthesisFinalStatus": replayStatus, "synthesisFinalResourcesReleased": finalSettled && finalReplayed,
+		"synthesisReceiptSha256": synthesisReceiptHash, "synthesisReceiptLength": synthesisReceiptLength,
+		"synthesisActionId": func() string {
+			if synthesisClaim != nil {
+				return synthesisClaim.Fence.ActionId
+			}
+			return ""
+		}(),
+		"synthesisExecutionEpoch": func() uint64 {
+			if synthesisClaim != nil {
+				return synthesisClaim.Fence.ExecutionEpoch
+			}
+			return 0
+		}(),
+		"synthesisOperationId": func() string {
+			if synthesis != nil {
+				return synthesis.OperationId
+			}
+			return ""
+		}(),
+		"synthesisPublicEvent": func() *agentv1.AgentArtifactReference {
+			if synthesis != nil {
+				return synthesis.PublicEvent
+			}
+			return nil
+		}(),
+		"synthesisOutcomeSha256": func() string {
+			if synthesis != nil {
+				return synthesis.OutcomeSha256
+			}
+			return ""
+		}(),
+		"status": "PASS", "scenario": scenario, "runId": claim.RunId, "actionId": claim.Fence.ActionId, "executionEpoch": claim.Fence.ExecutionEpoch,
+		"operationId": admitted.Intent.OperationId, "state": known.State, "publicEvent": known.PublicEvent,
+		"outcomeSha256": known.OutcomeSha256, "outcomeReceiptSha256": receiptHash, "outcomeReceiptLength": receiptLength,
+		"signedOutcomeVerified": verified, "goOutcomePersisted": persisted, "rustRestartPreserved": true, "goRestartPreserved": true,
+		"unknownHasNoReceipt": known.OutcomeReceipt == nil, "duplicateProviderDispatchDenied": true, "resourcesRetained": completion == nil, "resourcesReleased": completion != nil,
+		"grantRefreshAfterExpiryQualified": refreshAfterExpiry, "grantRefreshReplayed": refreshReplayed,
+		"expiredTaskGrantReexecutionDenied": expiredTaskDenied, "originalTaskGrantExpiresAt": originalGrantExpiry,
+		"refreshedTaskGrantIssuedAt": refreshIssuedAt, "refreshedTaskGrantExpiresAt": refreshExpiresAt,
+		"refreshedTaskGrantSha256": refreshHash, "refreshedTaskGrantLength": refreshLength,
+		"productionGoNodeClient": true, "productionProviderQualified": false, "goTaskPhaseSettlementQualified": completion != nil,
+		"phaseCompletionReplayedAfterGoRestart": completion != nil, "publicRunRemainsRunning": completion != nil && !finalSettled,
+		"goTaskNodeSettlementQualified": taskSettled, "dependencyDispatchQualified": dependencyQualified,
+		"dependentOperationId": func() string {
+			if dependentIntent != nil {
+				return dependentIntent.OperationId
+			}
+			return ""
+		}(),
+		"dependentPublicEvent": func() *agentv1.AgentArtifactReference {
+			if critic != nil {
+				return critic.PublicEvent
+			}
+			return nil
+		}(),
+		"dependentOutcomeSha256": func() string {
+			if critic != nil {
+				return critic.OutcomeSha256
+			}
+			return ""
+		}(),
+		"dependentReceiptSha256": dependentReceiptHash, "dependentReceiptLength": dependentReceiptLength,
+	})
+}

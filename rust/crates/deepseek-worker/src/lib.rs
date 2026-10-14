@@ -13,6 +13,13 @@ use deepseek_transfer::{TransferRequest, plan as plan_transfer};
 #[cfg(feature = "s3")]
 use sha2::Digest;
 
+mod agent_execution_grant;
+mod agent_node_effect;
+mod agent_plan_executor;
+mod agent_plan_projection;
+mod agent_provider_credentials;
+mod agent_synthesis_projection;
+mod agent_task_executor;
 mod authority_request;
 mod authority_store;
 mod control_signer;
@@ -24,6 +31,15 @@ mod service;
 mod signature_journal;
 mod storage_transport;
 mod transport;
+pub use agent_execution_grant::{
+    AGENT_EXECUTION_GRANT_SCHEMA, AgentExecutionControl, AgentExecutionGrantContext,
+    load_agent_execution_control_from_env, verify_agent_execution_grant,
+};
+pub use agent_node_effect::{
+    AgentNodeEffectOutcome, AgentNodeEffectPermit, AgentNodeEffectSnapshot, AgentNodeEffectStart,
+    BeginAgentNodeEffect, MAX_AGENT_NODE_OUTCOME_BYTES, QueryAgentNodeEffect,
+};
+pub use agent_plan_executor::{AgentPlanExecutor, load_agent_plan_executor_from_env};
 pub use control_signer::{ControlSigner, load_control_signer_from_env};
 
 pub use authority_request::{

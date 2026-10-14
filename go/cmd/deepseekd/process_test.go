@@ -4,9 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
 	"io"
 	"net"
 	"net/http"
@@ -51,25 +51,31 @@ func TestDeepseekdKilledProcessPreservesAcknowledgedStateAndWriterFence(t *testi
 	if token != before.Writer.FencingToken || leaseUntil <= time.Now().Unix() {
 		t.Fatalf("idle child did not retain a durable live fence: token=%d lease=%d", token, leaseUntil)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	premature := exec.CommandContext(ctx, binary)
-	premature.Env = processEnvironment(stateRoot, "premature-successor")
-	output, err := premature.CombinedOutput()
-	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) || !bytes.Contains(output, []byte(store.ErrWriterFenceHeld.Error())) {
-		t.Fatalf("successor bypassed the killed owner's live lease: %v %s", err, output)
-	}
-	// Wait for real wall-clock expiry of the last persisted renewal. Reading
-	// it after kill avoids a snapshot-versus-final-heartbeat timing race.
+	// The real successor stays alive, without serving, while the old durable
+	// lease remains live. It must neither clear the fence nor require a manual
+	// restart after expiry. The same process performs the normal claim later.
 	remaining := time.Until(time.Unix(leaseUntil, 0))
 	if remaining > 35*time.Second {
 		t.Fatalf("unexpected writer lease horizon: %v", remaining)
 	}
-	if remaining > 0 {
-		time.Sleep(remaining + 100*time.Millisecond)
+	second := spawnDeepseekd(t, binary, stateRoot, "process-second")
+	if remaining > 4*time.Second {
+		select {
+		case line := <-second.ready:
+			t.Fatalf("successor served before lease expiry: %q", line)
+		case <-second.done:
+			t.Fatalf("successor exited instead of waiting: %v %s", second.waitErr, second.stderr.String())
+		case <-time.After(2 * time.Second):
+		}
+		stillToken, stillLease := persistedProcessLease(t, stateRoot)
+		if stillToken != token || stillLease != leaseUntil {
+			t.Fatal("waiting successor changed the live writer fence")
+		}
 	}
-	second := startDeepseekd(t, binary, stateRoot, "process-second")
+	second.awaitReady(t, remaining+10*time.Second)
+	if time.Now().Unix() < leaseUntil {
+		t.Fatal("successor admitted before persisted expiry")
+	}
 	after := processSnapshot(t, client, second.address)
 	if after.Writer.OwnerInstanceID != "process-second" || after.Writer.FencingToken != token+1 {
 		t.Fatalf("successor did not advance the durable fence: %+v", after.Writer)
@@ -101,7 +107,7 @@ func TestDeepseekdProcessStopsAdmissionAndExitsOnBlockedRenewal(t *testing.T) {
 	client := processInternalClient(3 * time.Second)
 	defer client.CloseIdleConnections()
 	before := processSnapshot(t, client, child.address)
-	blocker, err := sql.Open("sqlite", filepath.Join(stateRoot, store.ControlDatabaseFilename))
+	blocker, err := sqlitedb.Open(filepath.Join(stateRoot, store.ControlDatabaseFilename))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,9 +183,17 @@ type deepseekdProcess struct {
 	waitErr error
 	stderr  bytes.Buffer
 	address string
+	ready   chan string
 }
 
 func startDeepseekd(t *testing.T, binary, stateRoot, owner string) *deepseekdProcess {
+	t.Helper()
+	child := spawnDeepseekd(t, binary, stateRoot, owner)
+	child.awaitReady(t, 20*time.Second)
+	return child
+}
+
+func spawnDeepseekd(t *testing.T, binary, stateRoot, owner string) *deepseekdProcess {
 	t.Helper()
 	child := &deepseekdProcess{command: exec.Command(binary), done: make(chan struct{})}
 	child.command.Env = processEnvironment(stateRoot, owner)
@@ -193,17 +207,22 @@ func startDeepseekd(t *testing.T, binary, stateRoot, owner string) *deepseekdPro
 	}
 	go func() { child.waitErr = child.command.Wait(); close(child.done) }()
 	t.Cleanup(func() { child.killAndWait(t) })
-	ready := make(chan string, 1)
+	child.ready = make(chan string, 1)
 	go func() {
 		scanner := bufio.NewScanner(io.LimitReader(stdout, 64<<10))
 		if scanner.Scan() {
-			ready <- scanner.Text()
+			child.ready <- scanner.Text()
 		} else {
-			ready <- ""
+			child.ready <- ""
 		}
 	}()
+	return child
+}
+
+func (child *deepseekdProcess) awaitReady(t *testing.T, limit time.Duration) {
+	t.Helper()
 	select {
-	case line := <-ready:
+	case line := <-child.ready:
 		parts := strings.Fields(line)
 		if len(parts) < 5 || strings.Join(parts[:3], " ") != "deepseekd listening on" {
 			t.Fatalf("invalid child startup line: %q", line)
@@ -211,10 +230,9 @@ func startDeepseekd(t *testing.T, binary, stateRoot, owner string) *deepseekdPro
 		child.address = parts[3]
 	case <-child.done:
 		t.Fatalf("deepseekd failed before listening: %v %s", child.waitErr, child.stderr.String())
-	case <-time.After(20 * time.Second):
+	case <-time.After(limit):
 		t.Fatal("deepseekd did not report its listener")
 	}
-	return child
 }
 
 func processEnvironment(stateRoot, owner string) []string {
@@ -296,7 +314,7 @@ func persistedProcessLease(t *testing.T, stateRoot string) (int64, int64) {
 		path = "/" + path
 	}
 	location := &url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}
-	database, err := sql.Open("sqlite", location.String())
+	database, err := sqlitedb.Open(location.String())
 	if err != nil {
 		t.Fatal(err)
 	}

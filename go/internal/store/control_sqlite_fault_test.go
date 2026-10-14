@@ -1,7 +1,6 @@
 package store
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"math"
@@ -10,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
 	"github.com/leizd/DeepSeek-Infra/go/pkg/protocol"
-	modernsqlite "modernc.org/sqlite"
 )
 
 type failingScanner struct {
@@ -61,11 +60,11 @@ func TestControlOpenAndConnectionFailuresAreClosed(t *testing.T) {
 	t.Run("empty sqlite header resumes initialization", func(t *testing.T) {
 		root := t.TempDir()
 		path := filepath.Join(root, ControlDatabaseFilename)
-		connector, err := modernsqlite.NewConnector(controlDatabaseDSN(path))
+		db, err := sqlitedb.Open(controlDatabaseDSN(path))
 		if err != nil {
 			t.Fatal(err)
 		}
-		db := sql.OpenDB(connector)
+
 		if err := db.Ping(); err != nil {
 			t.Fatal(err)
 		}

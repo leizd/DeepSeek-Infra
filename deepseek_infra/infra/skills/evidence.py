@@ -15,6 +15,7 @@ from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision
 from deepseek_infra.core.config import APP_VERSION, GENERATED_DIR
 from deepseek_infra.core.utils import utc_now_iso
 from deepseek_infra.infra.tool_runtime.generated_files import resolve_generated_file, store_generated_file
+from deepseek_infra.infra.workspace import mutation_gate
 
 ARTIFACT_INDEX_NAME = "artifacts.json"
 FILE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -34,8 +35,12 @@ def load_artifact_index() -> list[dict[str, Any]]:
 
 
 def save_artifact_index(items: list[dict[str, Any]]) -> None:
-    GENERATED_DIR.mkdir(parents=True, exist_ok=True)
-    artifact_index_path().write_text(json.dumps(items[-1000:], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
+
+    assert_python_writer_allowed("generated_files_store")
+    with mutation_gate.mutation_scope(root=mutation_gate.workspace_root_for_path(GENERATED_DIR)):
+        GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+        artifact_index_path().write_text(json.dumps(items[-1000:], ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def register_generated_artifact(
@@ -49,27 +54,28 @@ def register_generated_artifact(
     file_id = str(file_result.get("fileId") or "").strip()
     if not FILE_ID_RE.fullmatch(file_id):
         return None
-    path = resolve_generated_file(file_id)
-    artifact_type = path.suffix.lower().lstrip(".") if path is not None else str(file_result.get("format") or "").lower()
-    artifact = {
-        "artifactId": f"art-{file_id[:16]}",
-        "fileId": file_id,
-        "filename": str(file_result.get("filename") or (path.name if path else file_id)),
-        "downloadUrl": str(file_result.get("downloadUrl") or f"/api/download?id={file_id}"),
-        "type": artifact_type,
-        "tool": tool,
-        "createdAt": utc_now_iso(),
-        "source": {
-            "type": "skill_run",
-            "skillId": skill_id,
-            "skillRunId": skill_run_id,
-            "projectId": project_id,
-        },
-    }
-    items = [item for item in load_artifact_index() if item.get("artifactId") != artifact["artifactId"]]
-    items.append(artifact)
-    save_artifact_index(items)
-    return artifact
+    with mutation_gate.mutation_scope(root=mutation_gate.workspace_root_for_path(GENERATED_DIR)):
+        path = resolve_generated_file(file_id)
+        artifact_type = path.suffix.lower().lstrip(".") if path is not None else str(file_result.get("format") or "").lower()
+        artifact = {
+            "artifactId": f"art-{file_id[:16]}",
+            "fileId": file_id,
+            "filename": str(file_result.get("filename") or (path.name if path else file_id)),
+            "downloadUrl": str(file_result.get("downloadUrl") or f"/api/download?id={file_id}"),
+            "type": artifact_type,
+            "tool": tool,
+            "createdAt": utc_now_iso(),
+            "source": {
+                "type": "skill_run",
+                "skillId": skill_id,
+                "skillRunId": skill_run_id,
+                "projectId": project_id,
+            },
+        }
+        items = [item for item in load_artifact_index() if item.get("artifactId") != artifact["artifactId"]]
+        items.append(artifact)
+        save_artifact_index(items)
+        return artifact
 
 
 def save_markdown_artifact(
@@ -84,11 +90,12 @@ def save_markdown_artifact(
     if not text:
         return None
 
-    def writer(path: Path) -> None:
-        path.write_text(text + "\n", encoding="utf-8")
+    with mutation_gate.mutation_scope(root=mutation_gate.workspace_root_for_path(GENERATED_DIR)):
+        def writer(path: Path) -> None:
+            path.write_text(text + "\n", encoding="utf-8")
 
-    result = store_generated_file(title or "skill-output", "md", writer)
-    return register_generated_artifact(result, skill_id=skill_id, skill_run_id=skill_run_id, project_id=project_id, tool="skill_markdown")
+        result = store_generated_file(title or "skill-output", "md", writer)
+        return register_generated_artifact(result, skill_id=skill_id, skill_run_id=skill_run_id, project_id=project_id, tool="skill_markdown")
 
 
 def artifacts_for_project(project_id: str) -> list[dict[str, Any]]:

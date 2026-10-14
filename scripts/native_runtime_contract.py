@@ -789,7 +789,7 @@ def validate_toolchain_consumers() -> None:
     required_go_mod = (
         r"(?m)^go 1\.27$",
         r"(?m)^toolchain go1\.27\.1$",
-        r"(?m)^\s*google\.golang\.org/grpc v1\.83\.0$",
+        r"(?m)^\s*google\.golang\.org/grpc v1\.83\.2$",
         r"(?m)^\s*google\.golang\.org/protobuf v1\.36\.11$",
     )
     if any(re.search(pattern, go_mod) is None for pattern in required_go_mod):
@@ -839,7 +839,7 @@ def validate_toolchain_consumers() -> None:
     except (SyntaxError, ValueError, TypeError) as error:
         raise ContractError("Rust coverage test inventory must be a literal locked command") from error
     expected_inventory = [
-        "cargo", "llvm-cov", "--locked", "--manifest-path", "rust/Cargo.toml",
+        "cargo", "llvm-cov", "--locked", "--profile", "coverage", "--manifest-path", "rust/Cargo.toml",
         "--workspace", "--all-features", "--no-report", "--", "--list", "--format", "terse",
     ]
     if rust_coverage.count('"--locked"') < 4 or inventory != expected_inventory:

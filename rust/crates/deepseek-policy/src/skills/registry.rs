@@ -30,7 +30,7 @@ impl crate::entropy::Entropy for Registry {
 impl Registry {
     pub fn mutation(&self) -> Result<crate::mutation_gate::MutationScope> {
         crate::mutation_gate::mutation_scope(None, self.data.parent().unwrap_or(&self.root))
-            .map_err(|e| error(e.to_string(), 409))
+            .map_err(super::mutation_error)
     }
     pub fn create(&self, config: &Value, overwrite: bool) -> Result<Value> {
         let mut skill = schema::validate_skill(config)?;
@@ -304,9 +304,7 @@ impl Registry {
         crate::core_utils::utc_now_iso(seconds)
     }
     pub fn write_json(&self, path: &Path, value: &Value) -> Result<()> {
-        let _guard =
-            crate::mutation_gate::mutation_scope(None, self.data.parent().unwrap_or(&self.root))
-                .map_err(|e| error(e.to_string(), 409))?;
+        let _guard = self.mutation()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| error(e.to_string(), 500))?;
         }
@@ -317,9 +315,7 @@ impl Registry {
     }
     pub fn append_json(&self, path: &Path, value: &Value) -> Result<()> {
         use std::io::Write;
-        let _guard =
-            crate::mutation_gate::mutation_scope(None, self.data.parent().unwrap_or(&self.root))
-                .map_err(|e| error(e.to_string(), 409))?;
+        let _guard = self.mutation()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| error(e.to_string(), 500))?;
         }

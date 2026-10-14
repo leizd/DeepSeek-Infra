@@ -187,11 +187,8 @@ fn scalar_str(value: &Value) -> String {
 /// any container holding a string. Measured against the oracle, which is why
 /// [`python_repr`] exists.
 ///
-/// Known bounded limitation: a dict's **key order** here is `serde_json`'s sorted
-/// order, because this workspace compiles `serde_json` without `preserve_order`.
-/// Python dicts iterate in insertion order. That is the same limitation already
-/// recorded for the ordered-JSON renderer, and it only shows up for a dict that
-/// reaches a `str()` call.
+/// Dicts follow insertion order, enabled by the workspace's `preserve_order`
+/// feature. Contract encoders sort explicitly where their bytes require it.
 pub fn value_str(value: &Value) -> String {
     match value {
         Value::Null => "None".to_string(),
@@ -481,9 +478,8 @@ impl OrderedJson {
     /// The plain `Value` view of this tree, for callers that must hand the same data to a
     /// `Value`-shaped consumer **and** keep the ordered tree.
     ///
-    /// The order does not survive the conversion — a `Map` is sorted here and
-    /// insertion-ordered in some builds — so this is a one-way door: whatever needs the
-    /// bytes keeps the tree.
+    /// Keep this tree for byte rendering: a plain `Value` can collapse duplicate
+    /// keys and its iteration order depends on the consumer's map features.
     pub fn to_value(&self) -> Value {
         match self {
             OrderedJson::Scalar(value) => value.clone(),
@@ -541,8 +537,7 @@ impl OrderedJson {
 
 /// `json.loads` for the one property this crate depends on: **object key order**.
 ///
-/// `serde_json`'s `Value` cannot carry it (`Map` is a `BTreeMap` here, and workspace
-/// feature unification could silently make it an `IndexMap` — see the module note), so
+/// This tree preserves order independently of the `Value` map features, so
 /// the structure is assembled here while the **leaves** are decoded by `serde_json`
 /// itself: strings through `from_str::<String>` and numbers through
 /// `from_str::<Number>`, so escape handling and number typing follow the same rules as

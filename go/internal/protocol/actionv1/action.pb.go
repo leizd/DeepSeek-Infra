@@ -7,6 +7,7 @@
 package actionv1
 
 import (
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -244,9 +245,11 @@ func (StorageConditionType) EnumDescriptor() ([]byte, []int) {
 type ControlSigningPurpose int32
 
 const (
-	ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_UNSPECIFIED   ControlSigningPurpose = 0
-	ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_INSTALL_EPOCH ControlSigningPurpose = 1
-	ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_STORAGE_PUT   ControlSigningPurpose = 2
+	ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_UNSPECIFIED         ControlSigningPurpose = 0
+	ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_INSTALL_EPOCH       ControlSigningPurpose = 1
+	ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_STORAGE_PUT         ControlSigningPurpose = 2
+	ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_AGENT_EXECUTION     ControlSigningPurpose = 3
+	ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_AGENT_INSTALL_EPOCH ControlSigningPurpose = 4
 )
 
 // Enum value maps for ControlSigningPurpose.
@@ -255,11 +258,15 @@ var (
 		0: "CONTROL_SIGNING_PURPOSE_UNSPECIFIED",
 		1: "CONTROL_SIGNING_PURPOSE_INSTALL_EPOCH",
 		2: "CONTROL_SIGNING_PURPOSE_STORAGE_PUT",
+		3: "CONTROL_SIGNING_PURPOSE_AGENT_EXECUTION",
+		4: "CONTROL_SIGNING_PURPOSE_AGENT_INSTALL_EPOCH",
 	}
 	ControlSigningPurpose_value = map[string]int32{
-		"CONTROL_SIGNING_PURPOSE_UNSPECIFIED":   0,
-		"CONTROL_SIGNING_PURPOSE_INSTALL_EPOCH": 1,
-		"CONTROL_SIGNING_PURPOSE_STORAGE_PUT":   2,
+		"CONTROL_SIGNING_PURPOSE_UNSPECIFIED":         0,
+		"CONTROL_SIGNING_PURPOSE_INSTALL_EPOCH":       1,
+		"CONTROL_SIGNING_PURPOSE_STORAGE_PUT":         2,
+		"CONTROL_SIGNING_PURPOSE_AGENT_EXECUTION":     3,
+		"CONTROL_SIGNING_PURPOSE_AGENT_INSTALL_EPOCH": 4,
 	}
 )
 
@@ -1040,6 +1047,9 @@ type SignControlRequest struct {
 	ExpiresAt    string                 `protobuf:"bytes,10,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	// For STORAGE_PUT only. Payload and canonical_authorization must be empty.
 	StorageIntent *StorageMutationRequest `protobuf:"bytes,11,opt,name=storage_intent,json=storageIntent,proto3" json:"storage_intent,omitempty"`
+	// For AGENT_EXECUTION or AGENT_INSTALL_EPOCH. Rust renews the claim with Go;
+	// caller-provided lease dates are never treated as authority.
+	AgentIntent   *agentv1.AgentRunExecutionClaim `protobuf:"bytes,12,opt,name=agent_intent,json=agentIntent,proto3" json:"agent_intent,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1151,6 +1161,13 @@ func (x *SignControlRequest) GetStorageIntent() *StorageMutationRequest {
 	return nil
 }
 
+func (x *SignControlRequest) GetAgentIntent() *agentv1.AgentRunExecutionClaim {
+	if x != nil {
+		return x.AgentIntent
+	}
+	return nil
+}
+
 type SignControlResponse struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	Fence             *commonv1.ActionFence  `protobuf:"bytes,1,opt,name=fence,proto3" json:"fence,omitempty"`
@@ -1223,7 +1240,7 @@ var File_action_v1_action_proto protoreflect.FileDescriptor
 
 const file_action_v1_action_proto_rawDesc = "" +
 	"\n" +
-	"\x16action/v1/action.proto\x12\x12deepseek.action.v1\x1a\x16common/v1/common.proto\"\xa0\x01\n" +
+	"\x16action/v1/action.proto\x12\x12deepseek.action.v1\x1a\x16common/v1/common.proto\x1a\x14agent/v1/agent.proto\"\xa0\x01\n" +
 	"\x13AdmitCommandRequest\x123\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1f.deepseek.action.v1.CommandKindR\x04kind\x125\n" +
 	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12\x1d\n" +
@@ -1284,7 +1301,7 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\x05error\x18\b \x01(\v2\x1f.deepseek.common.v1.ErrorDetailR\x05error\"u\n" +
 	"\x19QueryStorageEffectRequest\x125\n" +
 	"\x05fence\x18\x01 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12!\n" +
-	"\foperation_id\x18\x02 \x01(\tR\voperationId\"\xd2\x03\n" +
+	"\foperation_id\x18\x02 \x01(\tR\voperationId\"\xa0\x04\n" +
 	"\x12SignControlRequest\x12C\n" +
 	"\apurpose\x18\x01 \x01(\x0e2).deepseek.action.v1.ControlSigningPurposeR\apurpose\x125\n" +
 	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12\x1d\n" +
@@ -1299,7 +1316,8 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\n" +
 	"expires_at\x18\n" +
 	" \x01(\tR\texpiresAt\x12Q\n" +
-	"\x0estorage_intent\x18\v \x01(\v2*.deepseek.action.v1.StorageMutationRequestR\rstorageIntent\"\xcb\x01\n" +
+	"\x0estorage_intent\x18\v \x01(\v2*.deepseek.action.v1.StorageMutationRequestR\rstorageIntent\x12L\n" +
+	"\fagent_intent\x18\f \x01(\v2).deepseek.agent.v1.AgentRunExecutionClaimR\vagentIntent\"\xcb\x01\n" +
 	"\x13SignControlResponse\x125\n" +
 	"\x05fence\x18\x01 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12-\n" +
 	"\x12canonical_document\x18\x02 \x01(\fR\x11canonicalDocument\x12*\n" +
@@ -1327,11 +1345,13 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\x14StorageConditionType\x12&\n" +
 	"\"STORAGE_CONDITION_TYPE_UNSPECIFIED\x10\x00\x12&\n" +
 	"\"STORAGE_CONDITION_TYPE_CREATE_ONLY\x10\x01\x12#\n" +
-	"\x1fSTORAGE_CONDITION_TYPE_IF_MATCH\x10\x02*\x94\x01\n" +
+	"\x1fSTORAGE_CONDITION_TYPE_IF_MATCH\x10\x02*\xf2\x01\n" +
 	"\x15ControlSigningPurpose\x12'\n" +
 	"#CONTROL_SIGNING_PURPOSE_UNSPECIFIED\x10\x00\x12)\n" +
 	"%CONTROL_SIGNING_PURPOSE_INSTALL_EPOCH\x10\x01\x12'\n" +
-	"#CONTROL_SIGNING_PURPOSE_STORAGE_PUT\x10\x022\xb4\x04\n" +
+	"#CONTROL_SIGNING_PURPOSE_STORAGE_PUT\x10\x02\x12+\n" +
+	"'CONTROL_SIGNING_PURPOSE_AGENT_EXECUTION\x10\x03\x12/\n" +
+	"+CONTROL_SIGNING_PURPOSE_AGENT_INSTALL_EPOCH\x10\x042\xb4\x04\n" +
 	"\x06Worker\x12a\n" +
 	"\fAdmitCommand\x12'.deepseek.action.v1.AdmitCommandRequest\x1a(.deepseek.action.v1.AdmitCommandResponse\x12W\n" +
 	"\vQueryEffect\x12&.deepseek.action.v1.QueryEffectRequest\x1a .deepseek.action.v1.EffectResult\x12\x88\x01\n" +
@@ -1376,6 +1396,7 @@ var file_action_v1_action_proto_goTypes = []any{
 	(*commonv1.ActionFence)(nil),              // 17: deepseek.common.v1.ActionFence
 	(commonv1.EffectState)(0),                 // 18: deepseek.common.v1.EffectState
 	(*commonv1.ErrorDetail)(nil),              // 19: deepseek.common.v1.ErrorDetail
+	(*agentv1.AgentRunExecutionClaim)(nil),    // 20: deepseek.agent.v1.AgentRunExecutionClaim
 }
 var file_action_v1_action_proto_depIdxs = []int32{
 	0,  // 0: deepseek.action.v1.AdmitCommandRequest.kind:type_name -> deepseek.action.v1.CommandKind
@@ -1402,24 +1423,25 @@ var file_action_v1_action_proto_depIdxs = []int32{
 	4,  // 21: deepseek.action.v1.SignControlRequest.purpose:type_name -> deepseek.action.v1.ControlSigningPurpose
 	17, // 22: deepseek.action.v1.SignControlRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	12, // 23: deepseek.action.v1.SignControlRequest.storage_intent:type_name -> deepseek.action.v1.StorageMutationRequest
-	17, // 24: deepseek.action.v1.SignControlResponse.fence:type_name -> deepseek.common.v1.ActionFence
-	5,  // 25: deepseek.action.v1.Worker.AdmitCommand:input_type -> deepseek.action.v1.AdmitCommandRequest
-	7,  // 26: deepseek.action.v1.Worker.QueryEffect:input_type -> deepseek.action.v1.QueryEffectRequest
-	9,  // 27: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:input_type -> deepseek.action.v1.InstallAuthoritativeEpochRequest
-	12, // 28: deepseek.action.v1.Worker.ExecuteStorageMutation:input_type -> deepseek.action.v1.StorageMutationRequest
-	14, // 29: deepseek.action.v1.Worker.QueryStorageEffect:input_type -> deepseek.action.v1.QueryStorageEffectRequest
-	15, // 30: deepseek.action.v1.ControlSigner.SignControl:input_type -> deepseek.action.v1.SignControlRequest
-	6,  // 31: deepseek.action.v1.Worker.AdmitCommand:output_type -> deepseek.action.v1.AdmitCommandResponse
-	8,  // 32: deepseek.action.v1.Worker.QueryEffect:output_type -> deepseek.action.v1.EffectResult
-	10, // 33: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:output_type -> deepseek.action.v1.InstallAuthoritativeEpochResponse
-	13, // 34: deepseek.action.v1.Worker.ExecuteStorageMutation:output_type -> deepseek.action.v1.StorageMutationResponse
-	13, // 35: deepseek.action.v1.Worker.QueryStorageEffect:output_type -> deepseek.action.v1.StorageMutationResponse
-	16, // 36: deepseek.action.v1.ControlSigner.SignControl:output_type -> deepseek.action.v1.SignControlResponse
-	31, // [31:37] is the sub-list for method output_type
-	25, // [25:31] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	20, // 24: deepseek.action.v1.SignControlRequest.agent_intent:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
+	17, // 25: deepseek.action.v1.SignControlResponse.fence:type_name -> deepseek.common.v1.ActionFence
+	5,  // 26: deepseek.action.v1.Worker.AdmitCommand:input_type -> deepseek.action.v1.AdmitCommandRequest
+	7,  // 27: deepseek.action.v1.Worker.QueryEffect:input_type -> deepseek.action.v1.QueryEffectRequest
+	9,  // 28: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:input_type -> deepseek.action.v1.InstallAuthoritativeEpochRequest
+	12, // 29: deepseek.action.v1.Worker.ExecuteStorageMutation:input_type -> deepseek.action.v1.StorageMutationRequest
+	14, // 30: deepseek.action.v1.Worker.QueryStorageEffect:input_type -> deepseek.action.v1.QueryStorageEffectRequest
+	15, // 31: deepseek.action.v1.ControlSigner.SignControl:input_type -> deepseek.action.v1.SignControlRequest
+	6,  // 32: deepseek.action.v1.Worker.AdmitCommand:output_type -> deepseek.action.v1.AdmitCommandResponse
+	8,  // 33: deepseek.action.v1.Worker.QueryEffect:output_type -> deepseek.action.v1.EffectResult
+	10, // 34: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:output_type -> deepseek.action.v1.InstallAuthoritativeEpochResponse
+	13, // 35: deepseek.action.v1.Worker.ExecuteStorageMutation:output_type -> deepseek.action.v1.StorageMutationResponse
+	13, // 36: deepseek.action.v1.Worker.QueryStorageEffect:output_type -> deepseek.action.v1.StorageMutationResponse
+	16, // 37: deepseek.action.v1.ControlSigner.SignControl:output_type -> deepseek.action.v1.SignControlResponse
+	32, // [32:38] is the sub-list for method output_type
+	26, // [26:32] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_action_v1_action_proto_init() }

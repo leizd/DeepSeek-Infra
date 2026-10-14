@@ -8,17 +8,19 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterator
 
 from deepseek_infra.core.config import TRACE_DB, TRACE_DIR, TRACE_ENABLED, TRACE_INPUT_CHARS, TRACE_LIST_LIMIT, TRACE_OUTPUT_CHARS
+from deepseek_infra.infra.workspace import mutation_gate
 
 logger = logging.getLogger("deepseek_infra.observability")
 
 TRACE_RUNS_TABLE = "trace_runs"
 TRACE_SPANS_TABLE = "trace_spans"
-SENSITIVE_KEYS = {"apiKey", "api_key", "authorization", "tavilyApiKey", "token", "auth_token"}
+SENSITIVE_KEYS = {"apikey", "api_key", "authorization", "tavilyapikey", "token", "auth_token"}
 
 _db_lock = threading.RLock()
 _last_error = ""
@@ -101,7 +103,7 @@ def ensure_run(trace_id: str, *, kind: str, title: str = "", metadata: dict[str,
         return
     started_epoch = time.time()
     try:
-        with _db_lock, connect_db() as conn:
+        with _database() as conn:
             initialize_schema(conn)
             conn.execute(
                 f"""
@@ -152,7 +154,7 @@ def finish_trace(trace_id: str, *, status: str = "completed", metadata: dict[str
         return
     completed_epoch = time.time()
     try:
-        with _db_lock, connect_db() as conn:
+        with _database() as conn:
             initialize_schema(conn)
             row = conn.execute(
                 f"SELECT started_epoch, metadata FROM {TRACE_RUNS_TABLE} WHERE trace_id = ?",
@@ -209,7 +211,7 @@ def record_span(
     usage_data = usage if isinstance(usage, dict) else {}
     diagnostics_data = diagnostics if isinstance(diagnostics, dict) else {}
     try:
-        with _db_lock, connect_db() as conn:
+        with _database() as conn:
             initialize_schema(conn)
             conn.execute(
                 f"""
@@ -261,7 +263,7 @@ def trace_status() -> dict[str, Any]:
     if not TRACE_ENABLED:
         return {"enabled": False, "databasePath": str(TRACE_DB), "traceCount": 0, "spanCount": 0, "lastError": _last_error}
     try:
-        with _db_lock, connect_db() as conn:
+        with _database() as conn:
             initialize_schema(conn)
             trace_count = int(conn.execute(f"SELECT COUNT(*) FROM {TRACE_RUNS_TABLE}").fetchone()[0])
             span_count = int(conn.execute(f"SELECT COUNT(*) FROM {TRACE_SPANS_TABLE}").fetchone()[0])
@@ -318,7 +320,7 @@ def metrics_snapshot() -> dict[str, Any]:
     if not TRACE_ENABLED:
         return snapshot
     try:
-        with _db_lock, connect_db() as conn:
+        with _database() as conn:
             initialize_schema(conn)
             snapshot["runs_total"] = int(conn.execute(f"SELECT COUNT(*) FROM {TRACE_RUNS_TABLE}").fetchone()[0])
             snapshot["runs_by_kind"] = {
@@ -383,7 +385,7 @@ def list_traces(limit: int | None = None) -> list[dict[str, Any]]:
         return []
     safe_limit = max(1, min(int(limit or TRACE_LIST_LIMIT), 1_000))
     try:
-        with _db_lock, connect_db() as conn:
+        with _database() as conn:
             initialize_schema(conn)
             rows = conn.execute(
                 f"""
@@ -406,7 +408,7 @@ def get_trace(trace_id: str) -> dict[str, Any] | None:
     if not TRACE_ENABLED or not trace_id:
         return None
     try:
-        with _db_lock, connect_db() as conn:
+        with _database() as conn:
             initialize_schema(conn)
             run = conn.execute(f"SELECT * FROM {TRACE_RUNS_TABLE} WHERE trace_id = ?", (trace_id,)).fetchone()
             if run is None:
@@ -478,16 +480,41 @@ def summarize_spans(spans: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+@contextmanager
+def _database() -> Iterator[sqlite3.Connection]:
+    # Acquire the workspace gate before the database lock: callers may already
+    # hold the workspace gate while recording a run. Close after commit/rollback.
+    with mutation_gate.mutation_scope(root=mutation_gate.workspace_root_for_path(TRACE_DIR)):
+        with _db_lock, closing(connect_db()) as conn, conn:
+            yield conn
+
+
 def connect_db() -> sqlite3.Connection:
-    TRACE_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(TRACE_DB)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    return conn
+    from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
+
+    assert_python_writer_allowed("observability_trace_store")
+    with mutation_gate.mutation_scope(root=mutation_gate.workspace_root_for_path(TRACE_DIR)):
+        TRACE_DIR.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(TRACE_DB)
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+        except Exception:
+            conn.close()
+            raise
+        return conn
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
+    from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
+
+    assert_python_writer_allowed("observability_trace_store")
+    with mutation_gate.mutation_scope(root=mutation_gate.workspace_root_for_path(TRACE_DIR)):
+        _initialize_schema(conn)
+
+
+def _initialize_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {TRACE_RUNS_TABLE} (

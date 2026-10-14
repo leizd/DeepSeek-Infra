@@ -420,12 +420,11 @@ pub fn rollback(
         r,
         &current,
         pack,
-        // Lower-case `rollback` in the middle of the sentence, which is how the oracle writes it
-        // (`f"Pack rollback checkpoint before {version}"`).
-        &format!(
-            "{}rollback checkpoint before {version}",
-            if pack { "Pack " } else { "" }
-        ),
+        &if pack {
+            format!("Pack rollback checkpoint before {version}")
+        } else {
+            format!("Rollback checkpoint before {version}")
+        },
         "rollback_checkpoint",
     )?;
     let mut restored = clean(&target[if pack { "pack" } else { "skill" }], pack)?;

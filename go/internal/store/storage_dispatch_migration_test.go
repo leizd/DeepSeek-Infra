@@ -1,12 +1,11 @@
 package store
 
 import (
-	"database/sql"
 	"errors"
 	"strings"
 	"testing"
 
-	modernsqlite "modernc.org/sqlite"
+	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
 )
 
 // Construct the historical shape only in a new isolated test database. This is
@@ -77,11 +76,11 @@ func TestStorageDispatchV3UpgradePreservesHistoryAndFailedClaim(t *testing.T) {
 	}}); !errors.Is(err, ErrWriterFenceHeld) {
 		t.Fatalf("late migration failure: %v", err)
 	}
-	connector, err := modernsqlite.NewConnector(controlDatabaseDSN(databasePath))
+	db, err := sqlitedb.Open(controlDatabaseDSN(databasePath))
 	if err != nil {
 		t.Fatal(err)
 	}
-	db := sql.OpenDB(connector)
+
 	t.Cleanup(func() { _ = db.Close() })
 	var version, objects, events int
 	var token, lease int64

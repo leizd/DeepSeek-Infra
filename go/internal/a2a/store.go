@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -149,7 +150,7 @@ func Open(root string, now func() time.Time, lease time.Duration) (*Store, error
 	}
 	path := fileURLPath(filepath.ToSlash(filepath.Join(root, "a2a.sqlite3")))
 	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "_pragma=busy_timeout(5000)"}).String()
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sqlitedb.Open(dsn)
 	if err != nil {
 		_ = writer.Close()
 		return nil, err

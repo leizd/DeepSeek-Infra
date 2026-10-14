@@ -26,7 +26,88 @@ Baseline: branch `codex/native-a2a-stream-continuation`, HEAD `05067a89`.
 The pre-existing dirty memory-probe/CI/documentation changes are preserved.
 Before implementation, `deepseek-policy --lib` passes 529 tests.
 
-## Status
+## Integration preview — 2026-10-07
+
+The review source retains primary `707a0528`'s real offline report, difference and
+upgrade engine with the task's four-store pre-execution fencing. The actual Rust
+gateway passes 133 read, 49 mutation/recovery and 20 run HTTP oracle cases, with
+zero differences. Unicode/whitespace/underscore limits reuse the complete bounded
+Python-compatible parser, including Arabic `keepRecent` without accidental
+deletion. Catalog install/uninstall mutate project bindings and obey that owner's
+denial code. Restore fences, recovery, durable IDs/artifacts/traces and the valid-key
+online 501 branch are checked on isolated stores.
+
+Actual React create/edit/disable/reload retains the native saved state without
+captured console errors. The actual Study Tutor Golden report executes one case,
+`study-os-scheduling`, and reports PASS/100 with a persisted run. That case is
+also asserted by the updated Android instrumentation source, which compiles but
+needs a rebuilt, source-bound APK and actual app run after integration.
+
+Online provider exchange and `media_example` ingestion remain missing. These
+reports do not prove all-action/corpus/platform acceptance or production ownership.
+The preview has no actual Git root and its receipts remain `releaseQualified=false`.
+Full check provenance and remaining whole-product gates are in
+[`continuation.md`](continuation.md#integration-preview--2026-10-07).
+No branch has been merged or released; the checkpoint below is historical.
+
+## Pre-integration task checkpoint — 2026-10-06
+
+Branch `codex/native-runtime-completion`, base `2d7038d86ecabe3e4c74a84a855f9cb3e6f6b722`.
+The native authenticated edge now fully serves **46 of 52 actions**. In addition to the
+historical 22 below, this work wires security summary, all seven catalog actions,
+all seven run-analytics actions, version and pack-version lists, migration plans,
+configuration dry runs, evaluation-case list/save/delete and skill/pack rollback.
+`run` and `/api/skills/{skill_id}/run` now execute the actual offline runner. The
+online branch, `eval_report`, `diff_versions`, `diff_pack_versions`, `upgrade_pack`
+and `eval_upgrade_gate` remain explicit 501s.
+Native evaluation reports must execute real skills before version score gates can
+be connected. No ownership cutover or release readiness is claimed.
+
+Locally verified behavior:
+
+- The actual native gateway process matches the isolated Python route oracle in
+  **133 read cases**, with no differences and no file mutations
+  (`skills_read_routes_e2e.py`, `artifacts/native-20261006-skills-read-routes-e2e.json`).
+- **49 HTTP mutation/recovery cases** use separate temporary Python and Rust roots:
+  catalog installation/uninstallation/cache refresh, run deletion/cleanup/redaction,
+  configuration previews, evaluation-case normalization/overwrite/delete, skill/pack
+  rollback, restored project bindings, verified revision digests, and reload
+  after process restart. Replies and persisted logical state match. Python-owned mode
+  rejects all ten tested child-store mutation actions without changing stored data. A restore
+  fence returns 423 with unchanged data; releasing it allows a new saved case
+  (`skills_mutation_routes_e2e.py`, `artifacts/native-20261006-skills-mutation-routes-e2e.json`).
+- **20 real offline HTTP cases** match responses and logical files/SQLite state:
+  action/path entry, aliases, project context, schema/security failures, persistence
+  options, restart and restore fencing. The native process produces three Markdown
+  files, five persistent completed runs and nine traces. Online execution remains
+  refused without writes (`skills_run_routes_e2e.py`,
+  `artifacts/native-20261006-skills-run-routes-e2e.json`).
+- Trace and generated-file ownership are declared separately, with current production
+  ownership still Python. Their Python writers now obey restore fencing, close SQLite
+  connections and reject native handover; the runner checks fencing even with
+  `persist=False`. Native dictionaries preserve input order, canonical hash encoders
+  still sort explicitly, and both runtimes redact credential fields in run summaries.
+- The Python skills suites pass, including the isolated child-store writer-denial
+  regression. `skill_store_scope()` now covers the run log, catalog cache and evaluation
+  cases as well as registry/history/security. Native catalog install/uninstall and pack
+  binding hold the workspace lock across the complete read/modify/write operation.
+- The production-router test verifies successful operations, ownership refusals,
+  restore fencing and restart persistence. GNU Rust 1.85.0 workspace baseline: 1138
+  tests pass; current gateway route test, fmt and all-target/all-feature clippy pass.
+  The Windows byte-canonical tool catalog has a narrow LF checkout rule, preserving
+  the frozen Git blob. Linux Go 1.27.1 full `-race ./...` passes.
+- Native launch-token cookie authentication matches the legacy handler in 42 actual
+  HTTP GET/HEAD cases. Real React UI creation/edit/disable/reload/re-enable passed,
+  with no console warnings/errors (`artifacts/native-20261006-browser-auth-e2e.json`,
+  `artifacts/native-20261006-skills-browser.jpg`).
+
+The evidence is local and dirty-tree-bound, with `releaseQualified: false`.
+Server-wide ownership, online runner/report/version completion, desktop/Android packages,
+provider recovery, 95% native coverage, security/fuzz/performance and exact-new-commit
+CI/Evidence Assembly remain whole-product acceptance requirements. Readiness remains
+`NOT_READY`. The older measurements below are preserved as history.
+
+## Historical checkpoint — 2026-09-22
 
 ### Wired on the native edge
 

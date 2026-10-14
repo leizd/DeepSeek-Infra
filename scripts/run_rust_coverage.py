@@ -17,18 +17,21 @@ if str(ROOT) not in sys.path:
 
 from deepseek_infra.core.config import APP_VERSION  # noqa: E402
 from deepseek_infra.infra.diagnostics.evidence_revision import evidence_revision  # noqa: E402
+from scripts.rust_build import cache_environment, run_guarded  # noqa: E402
 
 GENERATED_PROTO_COVERAGE_OMIT = (
     r"[/\\]target[/\\].*[/\\]build[/\\]deepseek-protocol-[^/\\]+[/\\]out[/\\]deepseek\.[^/\\]+\.v1\.rs$"
 )
 
 TEST_INVENTORY_COMMAND = [
-    "cargo", "llvm-cov", "--locked", "--manifest-path", "rust/Cargo.toml",
+    "cargo", "llvm-cov", "--locked", "--profile", "coverage", "--manifest-path", "rust/Cargo.toml",
     "--workspace", "--all-features", "--no-report", "--", "--list", "--format", "terse",
 ]
 
 
 def _run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
+    if command[:1] == ["cargo"]:
+        return run_guarded(command, cwd=ROOT, env=cache_environment(ROOT), capture_output=capture, text=True)
     return subprocess.run(
         command,
         cwd=ROOT,
@@ -136,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
         "cargo",
         "llvm-cov",
         "--locked",
+        "--profile",
+        "coverage",
         "--manifest-path",
         "rust/Cargo.toml",
         "--workspace",
@@ -161,6 +166,8 @@ def main(argv: list[str] | None = None) -> int:
         "llvm-cov",
         "report",
         "--locked",
+        "--profile",
+        "coverage",
         "--manifest-path",
         "rust/Cargo.toml",
         "--ignore-filename-regex",

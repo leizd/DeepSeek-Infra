@@ -170,7 +170,7 @@ func TestRunChildExitStopsAllSiblingListeners(t *testing.T) {
 					}
 				}
 			}()
-			processes := []Process{{Name: "control", Path: os.Args[0]}, {Name: "worker", Path: os.Args[0]}, {Name: "gateway", Path: os.Args[0]}}
+			processes := []Process{{Name: "deepseekd", Path: os.Args[0]}, {Name: "deepseek-worker", Path: os.Args[0]}, {Name: "deepseek-gateway", Path: os.Args[0]}}
 			env := append(os.Environ(), "DEEPSEEK_LAUNCH_HELPER=1", "DEEPSEEK_LAUNCH_READY_DIR="+readyDir, "DEEPSEEK_LAUNCH_EXIT_DIR="+exitDir)
 			go func() { done <- Run(ctx, processes, env, nil) }()
 			listeners := readLaunchListeners(t, readyDir, len(processes))
@@ -217,9 +217,9 @@ func TestRunStartFailureAndEmptyPlanAreErrors(t *testing.T) {
 	if err := Run(context.Background(), nil, nil, io.Discard); err == nil || err.Error() != "no production processes" {
 		t.Fatalf("empty plan: %v", err)
 	}
-	processes := []Process{{Name: "control", Path: os.Args[0]}, {Name: "missing-worker", Path: filepath.Join(t.TempDir(), "missing-worker")}}
+	processes := []Process{{Name: "deepseekd", Path: os.Args[0]}, {Name: "deepseek-worker", Path: filepath.Join(t.TempDir(), "missing-worker")}}
 	err := Run(context.Background(), processes, append(os.Environ(), "DEEPSEEK_LAUNCH_HELPER=1"), io.Discard)
-	if err == nil || !strings.Contains(err.Error(), "start missing-worker:") {
+	if err == nil || !strings.Contains(err.Error(), "start deepseek-worker:") {
 		t.Fatalf("failed native start was hidden: %v", err)
 	}
 }

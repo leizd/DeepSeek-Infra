@@ -525,6 +525,7 @@ pub fn install(
     approved: bool,
     dry_run: bool,
 ) -> Result<Value> {
+    let _guard = if dry_run { None } else { Some(r.mutation()?) };
     let item = get(r, id)?;
     let project = project.trim();
     if project.is_empty() {
@@ -568,6 +569,7 @@ pub fn install(
     )
 }
 pub fn uninstall(r: &Registry, id: &str, project: &str) -> Result<Value> {
+    let _guard = r.mutation()?;
     let item = get(r, id)?;
     let project = project.trim();
     if project.is_empty() {

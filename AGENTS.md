@@ -71,14 +71,29 @@ pytest -m "not integration and not slow" -p no:cacheprovider
 pytest tests/test_mcp.py -v -p no:cacheprovider
 ```
 
-### Native Changes Local Verification
+### Native Verification
 
-Run the matching local command before touching native directories:
+On the current disk-constrained Windows host, the user has moved Rust, Go and
+Docker compilation, tests and verification containers to GitHub Actions. Use the
+reviewed uploaded snapshot on `codex/rust-cloud/20261010` and dispatch `ci.yml`
+for Go/Docker gates; `rust-cloud.yml` is the bounded Rust workflow. Do not start
+local Go/Cargo builds, Go tests, Docker image builds or verification stacks as a
+fallback. Formatting, source/type checks, codegen with installed tools and report
+collection may remain local. Verify the cloud run's exact revision, required jobs
+and original coverage floors, and download only reports, never compiler caches,
+Docker images or volumes. See `docs/NATIVE_CLOUD_VERIFICATION.md`.
+
+Uncommitted executable changes require a reviewed snapshot and the user's
+specific upload authorization before cloud qualification; never silently test an
+older remote revision. Existing local cache/data cleanup is a separate operation.
+
+The commands below describe the matching gates for other hosts, or local native
+verification explicitly requested by the user:
 
 ```bash
 # Rust workspace lint & tests (when touching rust/):
-cargo check --workspace --manifest-path rust/Cargo.toml
-cargo test --workspace --manifest-path rust/Cargo.toml
+python scripts/rust_build.py -- check --workspace --locked
+python scripts/rust_build.py -- test --workspace --locked
 
 # Go control-plane lint, race & tests (when touching go/):
 cd go && go test -race ./... && cd ..
@@ -92,6 +107,20 @@ python scripts/check_release_version.py
 # Frontend typecheck & bundle (ONLY when touching frontend/):
 npm run check --prefix frontend   # = typecheck + vitest + vite build + bundle check
 ```
+
+Use `scripts/rust_build.py` for local Cargo builds and tests. It selects a shared,
+compressed cache, requires 2 GiB free before compilation, and checks a 1 GiB
+reserve during execution. Cargo profile settings also reduce default dev/test
+output size. Large full-workspace or coverage verification on this host uses
+bounded RAM storage with swap disabled; persist logs and reports, then release
+the intermediate artifacts. See `docs/RUST_BUILD_DISK_POLICY.md` for commands,
+the separate diagnostic profile, and verified capacity limits.
+
+Persist local cache locations with `python scripts/rust_build.py
+--configure-cache-root <absolute-path> --cargo-home <absolute-dependency-cache>`.
+The user settings are shared by worktrees, terminals and packaging entry points;
+explicit CLI paths and environment variables retain precedence. Do not create a
+fresh Cargo output directory for every test run or persist container cache archives.
 
 ### Full Release Gate (Preflight & CI, provisions 5 MinIO instances, >=95.0% coverage)
 

@@ -33,8 +33,8 @@ public final class AndroidOcrBridge {
     private static TextRecognizer recognizer;
 
     /**
-     * Stage timings for the most recent call on the calling thread. Python reads
-     * them through {@link #takeLastTimingsJson()} right after invoking
+     * Stage timings for the most recent call on the calling thread. Platform callers
+     * read them through {@link #takeLastTimingsJson()} right after invoking
      * {@link #recognizeImage(byte[])} or {@link #recognizePdf(byte[])}, which is
      * what separates image decode, PDF page rendering, and ML Kit inference from
      * one another. Byte marshalling across JNI happens before this class runs and

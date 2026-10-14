@@ -1,4 +1,4 @@
-//! Rust-only durable epoch installation. No domain rows or provider effects live here.
+//! Rust-owned durable epoch admission and immutable storage/Agent node effect journals.
 use std::{collections::HashSet, fs, io::Read as _, path::Path, time::Duration};
 
 use deepseek_protocol::{ActionFence, AdmitError, admit_command, validate_fence};
@@ -6,6 +6,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, pa
 use serde_json::Value;
 
 use crate::{AuthorityRequestContext, AuthorityRequestError, WorkerAuthority, authority_request};
+mod agent_nodes;
 mod grants;
 #[cfg(feature = "s3")]
 use crate::{StorageEffectBinding, StorageEffectRecord, StorageEffectState, WorkerStorageError};
@@ -162,6 +163,21 @@ impl AuthorityStore {
                 .pragma_update(None, "user_version", 4)
                 .map_err(|_| error())?;
         }
+        if schema_version < 5 {
+            for sql in agent_nodes::SCHEMA_V5 {
+                transaction.execute(sql, []).map_err(|_| error())?;
+            }
+            transaction
+                .pragma_update(None, "user_version", 5)
+                .map_err(|_| error())?;
+        }
+        if schema_version < 6 {
+            agent_nodes::migrate_v6(&transaction)?;
+            transaction
+                .pragma_update(None, "user_version", 6)
+                .map_err(|_| error())?;
+        }
+        validate_schema(&transaction, false)?;
         let (signer, fleet, environment, token): (String, String, String, i64) = transaction
             .query_row(
                 "SELECT signer,fleet,environment,fencing_token FROM worker_authority WHERE id=1",
@@ -186,6 +202,7 @@ impl AuthorityStore {
             ));
         }
         validate_journal(&transaction, authority, token)?;
+        agent_nodes::validate_journal(&transaction, authority, token)?;
         if token < authority.fencing_token {
             transaction
                 .execute(
@@ -204,6 +221,7 @@ impl AuthorityStore {
                 params![now],
             )
             .map_err(|_| error())?;
+        transaction.execute("UPDATE agent_node_effects SET state='EFFECT_UNKNOWN',updated_at=?1 WHERE state='DISPATCHING'", params![now]).map_err(|_| error())?;
         transaction.commit().map_err(|_| error())?;
         Ok(Self {
             connection,
@@ -776,8 +794,13 @@ fn validate_schema(
     if version >= 4 {
         expected.extend(grants::SCHEMA_V4.iter().map(|sql| sql.to_string()));
     }
+    if version == 5 {
+        expected.extend(agent_nodes::SCHEMA_V5.iter().map(|sql| sql.to_string()));
+    } else if version >= 6 {
+        expected.extend(agent_nodes::schema_v6());
+    }
     expected.sort();
-    if !matches!(version, 1..=4) || application != APPLICATION_ID || actual != expected {
+    if !matches!(version, 1..=6) || application != APPLICATION_ID || actual != expected {
         return Err(error());
     }
     Ok(version as u8)

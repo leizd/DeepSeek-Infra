@@ -20,6 +20,7 @@ func prepareReconciliationV5Fixture(t *testing.T, control *Control) {
 		singleton INTEGER PRIMARY KEY CHECK(singleton=1), runtime TEXT NOT NULL,
 		mode TEXT NOT NULL, schema_version INTEGER NOT NULL CHECK(schema_version BETWEEN 0 AND 5),
 		unique_writer TEXT NOT NULL) STRICT`
+	materializeLegacyActionLeasesFixture(t, tx)
 	for _, statement := range []string{
 		"DROP TABLE IF EXISTS control_operator_mutations",
 		"DROP TABLE IF EXISTS backup_target_health",

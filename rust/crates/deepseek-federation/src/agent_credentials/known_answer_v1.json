@@ -1,0 +1,15 @@
+{
+  "ciphertext": "0JFYzi7ZG-b-UZGhpR5QRkjfg2ehW2ry7zmTZ-laxOfN6A7AM-NaZJd-WCq1qqj0llsRBjM-NB-zUErApfSUDWW4pSv3Dk9Moe9R_iSMjD1C-zbhDDwIOaE",
+  "nonce": "AwMDAwMDAwMDAwMD",
+  "schema": "native-agent-provider-credentials-v1",
+  "scope": {
+    "environment": "production",
+    "fleetId": "fleet-a",
+    "metadataEpoch": 3,
+    "requestLength": 120,
+    "requestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "runId": "run_fixture",
+    "runtimeRevision": 1
+  },
+  "signerPublicKey": "fixture-public-key"
+}

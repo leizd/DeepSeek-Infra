@@ -1,5 +1,5 @@
 use crate::{
-    Worker, WorkerAuthorityConfig, WorkerRpcService,
+    Worker, WorkerAuthorityConfig, WorkerRpcService, agent_execution_grant,
     authority_request::{self, canonical_json_bytes},
     operation_grant,
     signature_journal::SignatureJournal,
@@ -27,11 +27,158 @@ pub struct ControlSigner {
     key: ControlSigningKey,
     journal: SignatureJournal,
 }
+
+#[cfg(test)]
+#[path = "node_outcome_signer_tests.rs"]
+mod node_outcome_tests;
 impl std::fmt::Debug for ControlSigner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ControlSigner")
             .field("public_key", &self.key.public_key())
             .finish()
+    }
+}
+
+impl ControlSigner {
+    pub(crate) fn prepare_agent_credentials(
+        &self,
+        root: &Path,
+        scope: &deepseek_federation::AgentCredentialScope,
+        credentials: &deepseek_federation::AgentProviderCredentials,
+    ) -> Result<deepseek_federation::AgentCredentialObject, Status> {
+        deepseek_federation::AgentCredentialVault::open(root)
+            .and_then(|vault| vault.put(&self.key, scope, credentials))
+            .map_err(|_| Status::failed_precondition("AGENT_CREDENTIAL_CUSTODY_DENIED"))
+    }
+
+    pub(crate) fn open_agent_credentials(
+        &self,
+        root: &Path,
+        scope: &deepseek_federation::AgentCredentialScope,
+        object: &deepseek_federation::AgentCredentialObject,
+    ) -> Result<deepseek_federation::AgentProviderCredentials, Status> {
+        deepseek_federation::AgentCredentialVault::open(root)
+            .and_then(|vault| vault.get(&self.key, scope, object))
+            .map_err(|_| Status::failed_precondition("AGENT_CREDENTIAL_CUSTODY_DENIED"))
+    }
+
+    pub(crate) fn agent_credential_binding(&self) -> Result<(String, String), Status> {
+        let binding = self.key.binding();
+        let fleet = binding["fleetId"].as_str();
+        let environment = binding["environment"].as_str();
+        match (fleet, environment) {
+            (Some(fleet), Some(environment)) => Ok((fleet.into(), environment.into())),
+            _ => Err(Status::failed_precondition(
+                "AGENT_CREDENTIAL_CUSTODY_DENIED",
+            )),
+        }
+    }
+
+    pub(crate) fn sign_synthesis_projection(
+        &mut self,
+        evidence: deepseek_protocol::generated::deepseek::agent::v1::AgentSynthesisProjectionEvidence,
+    ) -> Result<
+        deepseek_protocol::generated::deepseek::agent::v1::AgentSynthesisProjectionReceipt,
+        Status,
+    > {
+        use deepseek_protocol::generated::deepseek::agent::v1::AgentSynthesisProjectionReceipt;
+        use prost::Message as _;
+        let payload = evidence.encode_to_vec();
+        let signature = self
+            .key
+            .sign_agent_synthesis_projection(&evidence)
+            .map_err(|_| Status::failed_precondition("AGENT_SYNTHESIS_PROJECTION_INVALID"))?;
+        let receipt = AgentSynthesisProjectionReceipt {
+            schema_version: 1,
+            evidence: Some(evidence),
+            signature,
+            signer_public_key: self.key.public_key(),
+        };
+        let bytes = receipt.encode_to_vec();
+        let mut request = b"deepseek-infra:agent-synthesis-projection:request\0".to_vec();
+        request.extend(&payload);
+        let request_id = format!("{:x}", Sha256::digest(&request));
+        let mut nonce = b"deepseek-infra:agent-synthesis-projection:nonce\0".to_vec();
+        nonce.extend(&payload);
+        let nonce = format!("{:x}", Sha256::digest(&nonce));
+        if let Some(prior) = self.journal.existing(&request_id)? {
+            if prior != bytes {
+                return Err(Status::data_loss("AGENT_SYNTHESIS_PROJECTION_CORRUPT"));
+            }
+        } else {
+            self.journal.record(&request_id, &nonce, &bytes)?;
+        }
+        Ok(receipt)
+    }
+    pub(crate) fn sign_plan_projection(
+        &mut self,
+        evidence: deepseek_protocol::generated::deepseek::agent::v1::AgentPlanProjectionEvidence,
+    ) -> Result<deepseek_protocol::generated::deepseek::agent::v1::AgentPlanProjectionReceipt, Status>
+    {
+        use deepseek_protocol::generated::deepseek::agent::v1::AgentPlanProjectionReceipt;
+        use prost::Message as _;
+        let payload = evidence.encode_to_vec();
+        let signature = self
+            .key
+            .sign_agent_plan_projection(&evidence)
+            .map_err(|_| Status::failed_precondition("AGENT_PLAN_PROJECTION_INVALID"))?;
+        let receipt = AgentPlanProjectionReceipt {
+            schema_version: 1,
+            evidence: Some(evidence),
+            signature,
+            signer_public_key: self.key.public_key(),
+        };
+        let bytes = receipt.encode_to_vec();
+        let mut request = b"deepseek-infra:agent-plan-projection:request\0".to_vec();
+        request.extend(&payload);
+        let request_id = format!("{:x}", Sha256::digest(&request));
+        let mut nonce = b"deepseek-infra:agent-plan-projection:nonce\0".to_vec();
+        nonce.extend(&payload);
+        let nonce = format!("{:x}", Sha256::digest(&nonce));
+        if let Some(prior) = self.journal.existing(&request_id)? {
+            if prior != bytes {
+                return Err(Status::data_loss("AGENT_PLAN_PROJECTION_CORRUPT"));
+            }
+        } else {
+            self.journal.record(&request_id, &nonce, &bytes)?;
+        }
+        Ok(receipt)
+    }
+    pub(crate) fn sign_node_outcome(
+        &mut self,
+        evidence: deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeEvidence,
+    ) -> Result<deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeReceipt, Status>
+    {
+        use deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeReceipt;
+        use prost::Message as _;
+        let payload = evidence.encode_to_vec();
+        let signature = self
+            .key
+            .sign_agent_node_outcome(&evidence)
+            .map_err(|_| Status::failed_precondition("AGENT_NODE_OUTCOME_INVALID"))?;
+        let receipt = AgentNodeOutcomeReceipt {
+            schema_version: 1,
+            evidence: Some(evidence),
+            signature,
+            signer_public_key: self.key.public_key(),
+        };
+        let bytes = receipt.encode_to_vec();
+        let mut identity = b"deepseek-infra:agent-node-outcome-receipt-v1:request\0".to_vec();
+        identity.extend(&payload);
+        let request_id = format!("{:x}", Sha256::digest(&identity));
+        let mut nonce = b"deepseek-infra:agent-node-outcome-receipt-v1:nonce\0".to_vec();
+        nonce.extend(&payload);
+        let nonce = format!("{:x}", Sha256::digest(&nonce));
+        if let Some(prior) = self.journal.existing(&request_id)? {
+            if prior != bytes {
+                return Err(Status::failed_precondition(
+                    "AGENT_NODE_OUTCOME_RECEIPT_CORRUPT",
+                ));
+            }
+        } else {
+            self.journal.record(&request_id, &nonce, &bytes)?;
+        }
+        Ok(receipt)
     }
 }
 fn invalid() -> io::Error {
@@ -115,7 +262,57 @@ impl ControlSigner {
         &mut self,
         mut input: SignControlRequest,
         worker: &Worker,
+        live_agent_claim: Option<
+            &deepseek_protocol::generated::deepseek::agent::v1::AgentRunExecutionClaim,
+        >,
     ) -> Result<SignControlResponse, Status> {
+        if input.purpose == ControlSigningPurpose::AgentExecution as i32 {
+            return self.sign_agent(input, worker, live_agent_claim.ok_or_else(request_error)?);
+        }
+        let agent_install = input.purpose == ControlSigningPurpose::AgentInstallEpoch as i32;
+        if agent_install {
+            let claim = live_agent_claim.ok_or_else(request_error)?;
+            let now = authority_request::utc_z_now().map_err(|_| request_error())?;
+            let seconds = authority_request::parse_utc_z_str(&now).map_err(|_| request_error())?;
+            agent_execution_grant::validate_epoch_claim(claim, seconds)?;
+            if input.agent_intent.is_none()
+                || input.storage_intent.is_some()
+                || input.fence.as_ref() != claim.fence.as_ref()
+                || input.revision != claim.claim_revision
+                || input.fencing_token > i64::MAX as u64
+                || input.fencing_token as i64 != claim.writer_fencing_token
+            {
+                return Err(request_error());
+            }
+            // The existing frozen authority-request schema is preserved. Only
+            // this typed issuance path may sign an Agent epoch, after Go renewal.
+            input.purpose = ControlSigningPurpose::InstallEpoch as i32;
+            input.agent_intent = None;
+            if input.issued_at.is_empty()
+                && input.expires_at.is_empty()
+                && self.journal.existing(&input.request_id)?.is_none()
+            {
+                input.issued_at = now;
+                input.expires_at = authority_request::format_utc_z(
+                    (seconds + 300)
+                        .min(claim.lease_until)
+                        .min(claim.writer_lease_until),
+                )
+                .map_err(|_| request_error())?;
+            }
+        } else if input.agent_intent.is_some() || live_agent_claim.is_some() {
+            return Err(request_error());
+        }
+        if !agent_install
+            && input
+                .fence
+                .as_ref()
+                .is_some_and(|fence| fence.action_id.starts_with("agent-exec-"))
+        {
+            return Err(Status::failed_precondition(
+                "AGENT_EPOCH_AUTHORITY_REQUIRED",
+            ));
+        }
         // Automatic timestamps retain the original receipt on an exact retry.
         // An expired receipt is refused; retry never silently extends authority.
         if input.issued_at.is_empty() && input.expires_at.is_empty() {
@@ -133,6 +330,14 @@ impl ControlSigner {
                     .map_err(|_| request_error())?;
                 input.expires_at =
                     authority_request::format_utc_z(seconds + 300).map_err(|_| request_error())?;
+            }
+        }
+        if agent_install {
+            let claim = live_agent_claim.ok_or_else(request_error)?;
+            let expiry = authority_request::parse_utc_z_str(&input.expires_at)
+                .map_err(|_| request_error())?;
+            if expiry > claim.lease_until || expiry > claim.writer_lease_until {
+                return Err(Status::failed_precondition("AGENT_EPOCH_LEASE_EXCEEDED"));
             }
         }
         let fence = input.fence.as_ref().ok_or_else(request_error)?;
@@ -266,6 +471,96 @@ impl ControlSigner {
             signer_key_id: authority.signer_key_id.clone(),
         })
     }
+
+    fn sign_agent(
+        &mut self,
+        mut input: SignControlRequest,
+        worker: &Worker,
+        claim: &deepseek_protocol::generated::deepseek::agent::v1::AgentRunExecutionClaim,
+    ) -> Result<SignControlResponse, Status> {
+        let now = authority_request::utc_z_now().map_err(|_| request_error())?;
+        let seconds = authority_request::parse_utc_z_str(&now).map_err(|_| request_error())?;
+        agent_execution_grant::validate_claim(claim, seconds)?;
+        let fence = input.fence.as_ref().ok_or_else(request_error)?;
+        worker
+            .admit(fence)
+            .map_err(|e| Status::failed_precondition(e.code()))?;
+        let authority = worker.authority.as_ref().ok_or_else(request_error)?;
+        if claim.fence.as_ref() != Some(fence)
+            || input.storage_intent.is_some()
+            || input.revision != claim.claim_revision
+            || input.fencing_token > i64::MAX as u64
+            || input.fencing_token as i64 != claim.writer_fencing_token
+            || input.fencing_token as i64 != authority.fencing_token
+            || input.fleet_id != authority.fleet_id
+            || input.environment != authority.environment
+            || self.key.public_key() != authority.signer_public_key
+        {
+            return Err(request_error());
+        }
+        let config = WorkerAuthorityConfig {
+            signer_public_key: authority.signer_public_key.clone(),
+            fleet_id: authority.fleet_id.clone(),
+            environment: authority.environment.clone(),
+            fencing_token: authority.fencing_token,
+            now: None,
+        };
+        let context = crate::AgentExecutionGrantContext {
+            now: &now,
+            authority: &config,
+            claim,
+        };
+        // Exact retries retain the original dates and receipt. Revalidate the
+        // current Go lease first; neither a retry nor a renewal extends a grant.
+        if let Some(raw) = self.journal.existing(&input.request_id)? {
+            let prior = crate::verify_agent_execution_grant(&raw, &context)?;
+            if prior["nonce"] != input.nonce
+                || (!input.issued_at.is_empty() && prior["issuedAt"] != input.issued_at)
+                || (!input.expires_at.is_empty() && prior["expiresAt"] != input.expires_at)
+            {
+                return Err(request_error());
+            }
+            return Ok(SignControlResponse {
+                fence: input.fence,
+                canonical_document: raw,
+                signer_public_key: authority.signer_public_key.clone(),
+                signer_key_id: authority.signer_key_id.clone(),
+            });
+        }
+        if input.issued_at.is_empty() && input.expires_at.is_empty() {
+            input.issued_at = now.clone();
+            input.expires_at = authority_request::format_utc_z(
+                (seconds + 300)
+                    .min(claim.lease_until)
+                    .min(claim.writer_lease_until),
+            )
+            .map_err(|_| request_error())?;
+        }
+        let payload = agent_execution_grant::claim_payload(claim)?;
+        let mut document = json!({"schema":crate::AGENT_EXECUTION_GRANT_SCHEMA,"schemaVersion":1,
+            "domain":"action","operation":"execute-agent-phase","runtime":"go","mode":"authoritative",
+            "fleetId":input.fleet_id,"environment":input.environment,"role":"control-plane",
+            "fencingToken":input.fencing_token,"actionId":fence.action_id,"executionEpoch":fence.execution_epoch,
+            "revision":input.revision,"issuedAt":input.issued_at,"expiresAt":input.expires_at,
+            "requestId":input.request_id,"nonce":input.nonce,"payload":payload,
+            "signerKeyId":authority.signer_key_id,"signatureAlgorithm":"Ed25519"});
+        document["payloadDigest"] = digest(&document["payload"])?.into();
+        document["digest"] = digest(&document)?.into();
+        document["signature"] = self
+            .key
+            .sign_control_document(&document)
+            .map_err(|_| request_error())?
+            .into();
+        let raw = canonical_json_bytes(&document).map_err(|_| request_error())?;
+        crate::verify_agent_execution_grant(&raw, &context)?;
+        self.journal.record(&input.request_id, &input.nonce, &raw)?;
+        Ok(SignControlResponse {
+            fence: input.fence,
+            canonical_document: raw,
+            signer_public_key: authority.signer_public_key.clone(),
+            signer_key_id: authority.signer_key_id.clone(),
+        })
+    }
 }
 
 #[tonic::async_trait]
@@ -285,8 +580,36 @@ impl SignerRpc for WorkerRpcService {
             .control_signer
             .as_ref()
             .ok_or_else(|| Status::unavailable("CONTROL_SIGNER_UNAVAILABLE"))?;
+        let input = request.into_inner();
+        let agent_install = input.purpose == ControlSigningPurpose::AgentInstallEpoch as i32;
+        let live_claim = if input.purpose == ControlSigningPurpose::AgentExecution as i32
+            || agent_install
+        {
+            let control = self
+                .agent_execution_control
+                .as_ref()
+                .ok_or_else(|| Status::unavailable("AGENT_EXECUTION_CONTROL_UNAVAILABLE"))?;
+            let intent = input.agent_intent.as_ref().ok_or_else(request_error)?;
+            if input.storage_intent.is_some() || input.fence.as_ref() != intent.fence.as_ref() {
+                return Err(request_error());
+            }
+            let now = authority_request::utc_z_now().map_err(|_| request_error())?;
+            let seconds = authority_request::parse_utc_z_str(&now).map_err(|_| request_error())?;
+            if agent_install {
+                agent_execution_grant::validate_epoch_claim(intent, seconds)?;
+            } else {
+                agent_execution_grant::validate_claim(intent, seconds)?;
+            }
+            Some(control.renew(intent).await?)
+        } else {
+            None
+        };
         let worker = self.worker.lock().await;
         let mut signer = signer.lock().await;
-        Ok(Response::new(signer.sign(request.into_inner(), &worker)?))
+        Ok(Response::new(signer.sign(
+            input,
+            &worker,
+            live_claim.as_ref(),
+        )?))
     }
 }

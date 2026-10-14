@@ -4,7 +4,6 @@ package api
 
 import (
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"io/fs"
@@ -17,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 )
 
@@ -152,7 +152,7 @@ func processControlWriter(t *testing.T, directory string) (int64, int64) {
 	query := origin.Query()
 	query.Set("mode", "ro")
 	origin.RawQuery = query.Encode()
-	database, err := sql.Open("sqlite", origin.String())
+	database, err := sqlitedb.Open(origin.String())
 	if err != nil {
 		t.Fatal(err)
 	}

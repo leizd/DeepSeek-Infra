@@ -13,7 +13,7 @@ import (
 	"time"
 
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
-	modernsqlite "modernc.org/sqlite"
+	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
 )
 
 func TestAcceptMutationJournalsProposedWithoutProductionApply(t *testing.T) {
@@ -334,11 +334,11 @@ func TestControlMigratesFromV2ToOperationJournal(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	connector, err := modernsqlite.NewConnector(controlDatabaseDSN(databasePath))
+	db, err := sqlitedb.Open(controlDatabaseDSN(databasePath))
 	if err != nil {
 		t.Fatal(err)
 	}
-	db := sql.OpenDB(connector)
+
 	for _, statement := range []string{
 		"DROP TABLE IF EXISTS control_operator_mutations",
 		"DROP TABLE IF EXISTS backup_target_health",

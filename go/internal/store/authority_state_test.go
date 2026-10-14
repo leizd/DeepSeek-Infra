@@ -298,6 +298,7 @@ func prepareAuthorityV7Fixture(t *testing.T, control *Control) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
+	materializeLegacyActionLeasesFixture(t, tx)
 	for _, statement := range []string{
 		"DROP TABLE IF EXISTS control_operator_mutations",
 		"DROP TABLE IF EXISTS backup_target_health",

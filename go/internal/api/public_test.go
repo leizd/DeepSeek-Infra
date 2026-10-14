@@ -52,6 +52,25 @@ func TestPublicConfigReadsEnvFlags(t *testing.T) {
 	}
 }
 
+func TestPublicOCRConfigurationReflectsLaunchEnvironment(t *testing.T) {
+	t.Setenv("OCR_ENABLED", "1")
+	got := publicConfig(PublicView{})
+	ocr, ok := got["ocr"].(map[string]any)
+	if !ok || ocr["enabled"] != true || ocr["mode"] != "balanced" || ocr["localOnly"] != false {
+		t.Fatal("native launch OCR setting is missing from the retained config API")
+	}
+	for _, mode := range []string{"fast", "balanced", "quality", "invalid"} {
+		t.Setenv("OCR_MODE", mode)
+		wanted := mode
+		if mode == "invalid" {
+			wanted = "balanced"
+		}
+		if got := publicConfig(PublicView{})["ocr"].(map[string]any)["mode"]; got != wanted {
+			t.Fatal("OCR mode does not retain the config choices", got)
+		}
+	}
+}
+
 func TestEnvBoolUnknownIsOff(t *testing.T) {
 	t.Setenv("MCP_ENABLED", "nope")
 	if envBool("MCP_ENABLED", true) {

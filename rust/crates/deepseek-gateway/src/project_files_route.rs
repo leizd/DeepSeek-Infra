@@ -63,8 +63,12 @@ pub(crate) async fn api_project_files(
     }
     let root = root();
     let project_id = query.project_id;
+    let control = deepseek_policy::extraction_control::FileProcessingControl::default();
+    let _cancel_on_drop = control.cancel_on_drop();
     match tokio::task::spawn_blocking(move || {
-        projects::add_project_files(&project_id, &files, ocr_enabled, &root, &SystemEntropy)
+        control.run(|| {
+            projects::add_project_files(&project_id, &files, ocr_enabled, &root, &SystemEntropy)
+        })
     })
     .await
     {

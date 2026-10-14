@@ -15,6 +15,10 @@ use deepseek_policy::entropy::{Entropy, SystemEntropy};
 use deepseek_policy::tool_policy::capability_tools;
 
 pub const A2A_PROTOCOL_VERSION: &str = "0.3.0";
+// Unit tests of both the hub and HTTP router share this process-global queue.
+#[cfg(test)]
+pub(crate) static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
@@ -635,8 +639,6 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-
     #[test]
     fn message_coercion_matches_python_oracle() {
         let cases: Vec<Value> =
@@ -684,7 +686,7 @@ mod tests {
 
     #[test]
     fn message_send_runs_injected_runner() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = TEST_LOCK.blocking_lock();
         reset_a2a_for_tests();
         set_task_runner(Arc::new(|_agent, text| Ok(format!("echo:{text}"))));
         let response = handle_a2a_message(
@@ -706,7 +708,7 @@ mod tests {
 
     #[test]
     fn empty_message_is_invalid_params() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = TEST_LOCK.blocking_lock();
         reset_a2a_for_tests();
         let response = handle_a2a_message(
             &json!({
@@ -723,7 +725,7 @@ mod tests {
 
     #[test]
     fn message_send_without_runner_queues_native_work() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = TEST_LOCK.blocking_lock();
         reset_a2a_for_tests();
         let response = handle_a2a_message(
             &json!({
@@ -744,7 +746,7 @@ mod tests {
 
     #[test]
     fn queued_cancellation_skips_execution_and_terminal_results_cannot_be_replaced() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = TEST_LOCK.blocking_lock();
         reset_a2a_for_tests();
         let task = submit_message(
             &json!({"message":{"parts":[{"kind":"text","text":"cancel"}]}}),
@@ -764,7 +766,7 @@ mod tests {
 
     #[test]
     fn terminal_streams_match_python_oracle_for_all_resume_cursors() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = TEST_LOCK.blocking_lock();
         reset_a2a_for_tests();
         let cases: Vec<Value> =
             serde_json::from_str(include_str!("../tests/fixtures/a2a_stream_oracle.json")).unwrap();

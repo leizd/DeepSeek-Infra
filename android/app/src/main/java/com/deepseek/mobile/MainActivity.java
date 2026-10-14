@@ -23,23 +23,22 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.io.File;
-
 public class MainActivity extends Activity {
     private static final String TAG = "DeepSeekMobile";
     private static final int FILE_CHOOSER_REQUEST = 5010;
-    private static final int SERVER_PORT = 8000;
 
     private FrameLayout root;
     private WebView webView;
     private ProgressBar progressBar;
     private ValueCallback<Uri[]> filePathCallback;
+    private NativeRuntime nativeRuntime;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         buildLayout();
         configureWebView();
+        nativeRuntime = new NativeRuntime(getApplicationContext());
         startNativeServer();
     }
 
@@ -114,53 +113,29 @@ public class MainActivity extends Activity {
 
     private void startNativeServer() {
         new Thread(() -> {
-            String runtimeStatus = "native runtime not started";
+            String dependencyProbe = "not run";
             try {
                 AndroidOcrBridge.initialize(getApplicationContext());
-                File binary = nativeGatewayBinary();
-                if (binary == null) {
-                    throw new IllegalStateException("native gateway binary is not packaged");
-                }
-                ProcessBuilder builder = new ProcessBuilder(binary.getAbsolutePath());
-                builder.environment().put("GATEWAY_BIND_ADDR", "127.0.0.1:" + SERVER_PORT);
-                builder.environment().put("DEEPSEEK_INFRA_ROOT", getFilesDir().getAbsolutePath());
-                builder.environment().put("DEEPSEEK_INFRA_STATIC_DIR", new File(getFilesDir(), "static").getAbsolutePath());
-                builder.environment().put("DEEPSEEK_RUNTIME_MODE", "python_disabled");
-                builder.redirectErrorStream(true);
-                builder.start();
-                runtimeStatus = binary.getName();
-                String url = "http://127.0.0.1:" + SERVER_PORT + "/";
+                String url = nativeRuntime.start();
+                dependencyProbe = nativeRuntime.dependencyProbe();
+                Log.i(TAG, "Native dependency probe: " + dependencyProbe);
                 runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) {
+                        return;
+                    }
                     progressBar.setVisibility(ProgressBar.GONE);
                     webView.loadUrl(url);
                 });
             } catch (Exception exc) {
-                String finalStatus = runtimeStatus;
-                Log.e(TAG, "Startup failed: " + finalStatus, exc);
-                runOnUiThread(() -> showStartupError(exc, finalStatus));
+                String finalDependencyProbe = dependencyProbe;
+                Log.e(TAG, "Startup failed after dependency probe: " + finalDependencyProbe, exc);
+                runOnUiThread(() -> {
+                    if (!isFinishing() && !isDestroyed()) {
+                        showStartupError(exc, finalDependencyProbe);
+                    }
+                });
             }
         }, "deepseek-native-start").start();
-    }
-
-    private File nativeGatewayBinary() {
-        String[] names = new String[] {"libdeepseek_gateway.so", "deepseek-gateway", "deepseek-gateway.exe"};
-        File[] roots = new File[] {
-            new File(getApplicationInfo().nativeLibraryDir),
-            getFilesDir(),
-            new File(getApplicationInfo().dataDir, "bin")
-        };
-        for (File root : roots) {
-            if (root == null) {
-                continue;
-            }
-            for (String name : names) {
-                File candidate = new File(root, name);
-                if (candidate.isFile() && candidate.canExecute()) {
-                    return candidate;
-                }
-            }
-        }
-        return null;
     }
 
     private boolean isLocalAppUrl(Uri uri) {
@@ -258,7 +233,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         if (isFinishing()) {
-            stopPythonServer();
+            nativeRuntime.stop();
         }
         if (webView != null) {
             webView.destroy();
@@ -266,12 +241,4 @@ public class MainActivity extends Activity {
         super.onDestroy();
     }
 
-    private void stopPythonServer() {
-        try {
-            if (Python.isStarted()) {
-                Python.getInstance().getModule("deepseek_infra.android_entry").callAttr("stop");
-            }
-        } catch (Exception ignored) {
-        }
-    }
 }

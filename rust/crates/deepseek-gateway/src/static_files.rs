@@ -175,8 +175,17 @@ fn method_not_allowed() -> Response {
     response
 }
 
-fn apply_frontend_headers(path: &str, response: &mut Response) {
+pub(crate) fn apply_frontend_headers(path: &str, response: &mut Response) {
     let headers = response.headers_mut();
+    if headers
+        .get(header::CONTENT_TYPE)
+        .is_some_and(|value| value == "text/html")
+    {
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/html; charset=utf-8"),
+        );
+    }
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),

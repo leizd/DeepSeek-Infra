@@ -899,6 +899,7 @@ pub fn add_project_files(
         fields.insert("documents".to_string(), Value::Array(documents));
         fields.insert("updatedAt".to_string(), json!(now));
     }
+    crate::extraction_control::check()?;
     write_project(root, &project, entropy)?;
     Ok(added)
 }

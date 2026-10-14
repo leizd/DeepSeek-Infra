@@ -124,9 +124,16 @@ def test_build_packaging_and_ci_include_the_react_frontend() -> None:
     assert "validate_multipart_build_environment()" in exe
     assert "ignoreExitValue false" in android
     assert "ignoreExitValue true" not in android
-    assert 'commandLine npmCmd, "run", "build", "--prefix", "frontend"' in android
-    assert "preBuild.dependsOn buildReactFrontend" in android
-    assert "DEEPSEEK_BUILD_PYTHON" not in android
+    # Python is an offline build tool; the Android runtime remains native.
+    assert 'commandLine pythonCmd, "scripts/build_frontend.py"' in android
+    frontend_builder = read("scripts/build_frontend.py")
+    assert 'subprocess.run([npm, "run", "build"], cwd=frontend, check=True)' in frontend_builder
+    assert "frontend build did not produce static/ui/index.html" in frontend_builder
+    assert 'tasks.register("buildNativeRuntime", Exec)' in android
+    assert 'dependsOn("buildReactFrontend")' in android
+    assert "preBuild.dependsOn buildNativeRuntime" in android
+    assert '"scripts/build_android_native.py"' in android
+    assert "DEEPSEEK_BUILD_PYTHON" in android
     assert "buildPython" not in android
     assert "com.chaquo.python" not in android
     assert "build_frontend.py" in smoke_release

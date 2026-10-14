@@ -13,6 +13,8 @@ s3 = ["deepseek-storage/s3", "dep:bytes"]
 s3-e2e = ["s3", "deepseek-storage/s3-e2e"]
 
 [dependencies]
+deepseek-gateway = { path = "../deepseek-gateway" }
+deepseek-policy = { path = "../deepseek-policy" }
 deepseek-protocol = { path = "../deepseek-protocol" }
 deepseek-storage = { path = "../deepseek-storage" }
 deepseek-transfer = { path = "../deepseek-transfer" }
@@ -25,6 +27,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
 rusqlite.workspace = true
+prost.workspace = true
 tokio.workspace = true
 tonic = { workspace = true, features = ["tls"] }
 rustls-pemfile = "2"

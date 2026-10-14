@@ -7,7 +7,7 @@
 //!
 //! # The branches this route does **not** serve, and why they are refused
 //!
-//! The oracle's `stream_deepseek` is the union of several producers, and three of them
+//! The oracle's `stream_deepseek` is the union of several producers, and two of them
 //! have no native implementation yet. A request that needs one is refused with a
 //! structured error **before** any upstream call, rather than being served by a thinner
 //! path that would look like success:
@@ -15,16 +15,10 @@
 //! | branch | predicate | why it is refused |
 //! |---|---|---|
 //! | agent mode | `payload.agentMode is true` | `stream_multi_agent` is a separate producer with its own event vocabulary (`agent`, `agent_delta`, `run_status`, `agent_plan`, …) |
-//! | cascade | `model_router_cascade_requested(payload)` | draft → gate → refine is a non-streaming producer replayed as events; the native cascade path is not wired |
 //! | edge inference | `edge_route_for_payload(payload).use_edge` | the edge **routing** half of `edge_inference` is not ported (only its query-shape patterns are) |
 //!
-//! Search prefetch is a fourth: `forced_search_mode(payload)` is checked, and a payload
-//! that asks for it is refused. That check is **structurally reachable here** even
-//! though it is not on `/v1/chat/completions` — the OpenAI facade never forwards
-//! `searchMode`, but `/api/chat` takes the internal payload, so `searchMode` arrives
-//! intact and the oracle's prefetch branch would run. Refusing it is the honest
-//! answer; silently skipping the prefetch would answer a different question than the
-//! user asked.
+//! Forced search uses the retained native prefetch algorithm, emits live progress,
+//! hardens external context and seeds the same request's tool-search state.
 //!
 //! # What it does serve
 //!
@@ -49,16 +43,18 @@ use deepseek_policy::chat_stream_events::{
 };
 use deepseek_policy::context_taint::ContextTaintSettings;
 use deepseek_policy::model_router::ModelRouterSettings;
-use deepseek_policy::request_messages::{validate_deepseek_payload, validate_request_messages};
+use deepseek_policy::request_messages::{
+    ValidatedPayload, validate_deepseek_payload, validate_request_messages,
+};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 
 use crate::assembly_env::NativeAssembly;
 use crate::chat_execution::{self, UpstreamConfig};
 use crate::chat_stream::{UpstreamDelta, decode_event};
-use crate::chat_tool_loop::ToolRoundExecutor;
+use crate::chat_tool_loop::{SuggestionCallback, ToolRoundExecutor};
 use crate::may_write_native_store;
-use crate::request_assembly::{PreparedDeepSeekRequest, build_deepseek_request};
+use crate::request_assembly::build_deepseek_request;
 use crate::tool_rounds::{MAX_TOOL_ROUNDS, RoundDecision, decide_round};
 
 /// The code carried when a request needs a branch this route does not serve.
@@ -123,20 +119,26 @@ pub async fn api_chat(
     );
     let payload = Value::Object(payload);
 
-    if let Some(refusal) = refuse_unported_branch(&payload) {
-        return app_error(refusal);
-    }
-
-    let router = ModelRouterSettings::default();
+    let router = ModelRouterSettings::from_env();
     let validated = match validate_deepseek_payload(&payload, &state.api_key_fallback, &router) {
         Ok(validated) => validated,
         Err(error) => return app_error(error),
     };
     let streaming =
         deepseek_policy::core_utils::python_truthy(payload.get("stream").unwrap_or(&Value::Null));
+    let prefetch = payload.get("searchEnabled") == Some(&Value::Bool(true))
+        && deepseek_policy::search::forced_search_mode(&payload);
+    let query = deepseek_policy::core_utils::latest_user_query(&payload);
+    if prefetch && query.is_empty() {
+        return app_error(AppError {
+            message: "Search query is empty".into(),
+            code: codes::INVALID_PAYLOAD,
+            status: 400,
+        });
+    }
 
     let assembly = match NativeAssembly::from_env() {
-        Ok(assembly) => assembly,
+        Ok(assembly) => assembly.with_router_settings(router.clone()),
         Err(error) => return app_error(error),
     };
     // A `rag_vec` table would change which memories this turn retrieves, and this
@@ -159,8 +161,8 @@ pub async fn api_chat(
 
     let root = assembly.root().to_path_buf();
     let owns_memory_store = may_write_native_store("memory_store");
-    let (prepared, consulted_file_index) =
-        assembly.with_env(|env| -> Result<PreparedDeepSeekRequest, AppError> {
+    let (memory_state, consulted_file_index) =
+        assembly.with_env(|env| -> Result<Value, AppError> {
             validate_request_messages(&payload, &validated.messages, env.expander)?;
             let latest_query = deepseek_policy::core_utils::latest_user_query(&payload);
             if !owns_memory_store
@@ -203,14 +205,81 @@ pub async fn api_chat(
                     Some(borrowed),
                 )
             };
-            build_deepseek_request(
-                &payload,
-                streaming,
-                Some(&memory_state),
-                Some(&validated),
-                env,
-            )
+            Ok(memory_state)
         });
+    if consulted_file_index {
+        return app_error(deepseek_policy::file_store::vector_index_not_ready());
+    }
+    let memory_state = match memory_state {
+        Ok(memory_state) => memory_state,
+        Err(error) => return app_error(error),
+    };
+    let mut config = UpstreamConfig::from_env();
+    let executor = ToolRoundExecutor::from_env();
+    if let Some(provider) = executor.search_provider() {
+        provider.set_turn_query(query.clone());
+    }
+    if streaming && payload.get("agentMode") == Some(&Value::Bool(true)) {
+        return crate::chat_multi_agent::response(
+            SearchChatTurn {
+                payload,
+                validated,
+                memory_state,
+                assembly,
+                streaming,
+            },
+            executor,
+            config,
+            query,
+            router,
+        )
+        .await;
+    }
+    if !streaming || deepseek_policy::model_router::cascade_requested(&payload, &router) {
+        let turn = SearchChatTurn {
+            payload,
+            validated,
+            memory_state,
+            assembly,
+            streaming,
+        };
+        if streaming {
+            return crate::chat_cascade::stream_response(
+                turn, executor, query, config, prefetch, router,
+            );
+        }
+        return match crate::chat_cascade::complete(
+            turn, &executor, query, config, prefetch, &router,
+        )
+        .await
+        {
+            Ok(answer) => Json(answer).into_response(),
+            Err(error) => app_error(error),
+        };
+    }
+    if prefetch {
+        return prefetched_ndjson_response(
+            SearchChatTurn {
+                payload,
+                validated,
+                memory_state,
+                assembly,
+                streaming,
+            },
+            executor,
+            query,
+            config,
+        );
+    }
+    let (prepared, consulted_file_index) = assembly.with_env(|env| {
+        build_deepseek_request(
+            &payload,
+            streaming,
+            Some(&memory_state),
+            Some(&validated),
+            env,
+        )
+    });
     if consulted_file_index {
         return app_error(deepseek_policy::file_store::vector_index_not_ready());
     }
@@ -218,8 +287,6 @@ pub async fn api_chat(
         Ok(prepared) => prepared,
         Err(error) => return app_error(error),
     };
-
-    let mut config = UpstreamConfig::from_env();
     if !prepared.api_key.is_empty() {
         config.api_key = prepared.api_key.clone();
     }
@@ -235,42 +302,253 @@ pub async fn api_chat(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let executor = ToolRoundExecutor::from_env();
-    ndjson_response(config, prepared.body, executor, upstream, &model)
+    ndjson_response(config, prepared.body, executor, upstream, &model, None)
 }
 
-/// The refusal for a branch this route does not serve, or `None` when it serves it.
-fn refuse_unported_branch(payload: &Value) -> Option<AppError> {
-    if payload
-        .get("agentMode")
-        .is_some_and(|value| matches!(value, Value::Bool(true)))
+/// Captured request context shared by complete cloud stages and stream producers.
+#[derive(Clone)]
+pub(crate) struct SearchChatTurn {
+    pub payload: Value,
+    pub validated: ValidatedPayload,
+    pub memory_state: Value,
+    pub assembly: NativeAssembly,
+    pub(crate) streaming: bool,
+}
+
+pub(crate) async fn complete_nonstream(
+    mut turn: SearchChatTurn,
+    executor: &ToolRoundExecutor,
+    query: String,
+    mut config: UpstreamConfig,
+    prefetch: bool,
+) -> Result<Value, AppError> {
+    if prefetch {
+        let Some(provider) = executor.search_provider() else {
+            return Err(AppError {
+                message: "Search workspace is unavailable".into(),
+                code: codes::INTERNAL,
+                status: 500,
+            });
+        };
+        let search =
+            match tokio::task::spawn_blocking(move || provider.prefetch(&query, &mut |_| {})).await
+            {
+                Ok(Ok(search)) => search,
+                Ok(Err(error)) => return Err(error),
+                Err(_) => {
+                    return Err(AppError {
+                        message: "Search execution failed".into(),
+                        code: codes::INTERNAL,
+                        status: 500,
+                    });
+                }
+            };
+        set_search_context(&mut turn.payload, &search);
+    }
+    let (prepared, consulted) = turn.assembly.with_env(|env| {
+        build_deepseek_request(
+            &turn.payload,
+            false,
+            Some(&turn.memory_state),
+            Some(&turn.validated),
+            env,
+        )
+    });
+    if consulted {
+        return Err(deepseek_policy::file_store::vector_index_not_ready());
+    }
+    let prepared = prepared?;
+    if !prepared.api_key.is_empty() {
+        config.api_key = prepared.api_key.clone();
+    }
+    let completed =
+        match crate::chat_tool_loop::execute_chat_turn(&config, &prepared.body, executor).await {
+            Ok(completed) => completed,
+            Err(error) => return Err(execution_app_error(error)),
+        };
+    let search = executor
+        .search_provider()
+        .and_then(|provider| provider.latest());
+    let diagnostics = deepseek_policy::chat_diagnostics::diagnostics_with_usage(
+        &deepseek_policy::chat_diagnostics::diagnostics_with_search(
+            &deepseek_policy::chat_diagnostics::diagnostics_with_tools(
+                &prepared.diagnostics,
+                completed.tool_call_count,
+                &completed.tool_names,
+            ),
+            search.as_ref(),
+        ),
+        &completed.usage,
+    );
+    let mut answer = json!({
+        "id": completed.turn.id,
+        "model": completed.turn.model,
+        "content": completed.turn.content(),
+        "reasoning": completed.turn.reasoning_content(),
+        "usage": completed.usage,
+        "diagnostics": diagnostics,
+    });
+    if search.is_some() {
+        answer["search"] = deepseek_policy::search::search_for_client(search.as_ref());
+    }
+    if !completed.memory_suggestions.is_empty() {
+        answer["memorySuggestions"] = json!(completed.memory_suggestions);
+    }
+    Ok(answer)
+}
+
+fn set_search_context(payload: &mut Value, search: &Value) {
+    if search
+        .get("results")
+        .and_then(Value::as_array)
+        .is_some_and(|results| !results.is_empty())
     {
-        return Some(AppError {
-            message: "agentMode is not served by the native /api/chat route yet.".to_string(),
-            code: CHAT_BRANCH_NOT_READY,
-            status: 501,
-        });
+        payload["searchContext"] = json!(deepseek_policy::context_taint::harden_search_context(
+            &deepseek_policy::search::format_search_context(search),
+            &ContextTaintSettings::from_env()
+        ));
+    } else if search.get("status").and_then(Value::as_str) == Some("error") {
+        payload["searchContext"] = json!(deepseek_policy::search::format_search_failure_context(
+            search
+        ));
     }
-    let router = ModelRouterSettings::default();
-    if deepseek_policy::model_router::cascade_requested(payload, &router) {
-        return Some(AppError {
-            message: "The model-router cascade is not served by the native /api/chat route yet."
-                .to_string(),
-            code: CHAT_BRANCH_NOT_READY,
-            status: 501,
+}
+
+fn prefetched_ndjson_response(
+    mut turn: SearchChatTurn,
+    executor: ToolRoundExecutor,
+    query: String,
+    mut config: UpstreamConfig,
+) -> Response {
+    let body_stream = async_stream::stream! {
+        if let Some(first) = deepseek_policy::search::search_queries_for(&query).first() {
+            yield Ok::<Bytes, std::io::Error>(Bytes::from(encode_stream_event(&ChatEvent::SystemNote {
+                text: format!("已为本轮预取搜索结果。第一轮方向：{first}\n后续如需补充，会通过搜索工具继续查询。\n\n"),
+            })));
+        }
+        let Some(provider) = executor.search_provider() else {
+            yield Ok(Bytes::from(encode_stream_event(&ChatEvent::Error {
+                error: "Search workspace is unavailable".into(), code: codes::INTERNAL.into(),
+            })));
+            return;
+        };
+        let (sender, mut progress) = tokio::sync::mpsc::channel::<Value>(8);
+        let job = tokio::task::spawn_blocking(move || {
+            provider.prefetch(&query, &mut |event| { let _ = sender.blocking_send(event.clone()); })
         });
-    }
-    if deepseek_policy::search::forced_search_mode(payload) {
-        return Some(AppError {
-            message: "A forced search mode is not served by the native /api/chat route yet."
-                .to_string(),
-            code: CHAT_BRANCH_NOT_READY,
-            status: 501,
+        while let Some(data) = progress.recv().await {
+            yield Ok(Bytes::from(encode_stream_event(&ChatEvent::Search {
+                search: deepseek_policy::search::search_for_client(Some(&data)),
+            })));
+        }
+        let search = match job.await {
+            Ok(Ok(data)) => data,
+            failure => {
+                let (error, code) = match failure {
+                    Ok(Err(error)) => (error.message, error.code),
+                    _ => ("Search execution failed".into(), codes::INTERNAL),
+                };
+                yield Ok(Bytes::from(encode_stream_event(&ChatEvent::Error { error, code: code.into() })));
+                return;
+            }
+        };
+        let has_results = search.get("results").and_then(Value::as_array).is_some_and(|results| !results.is_empty());
+        if has_results {
+            let cached = deepseek_policy::core_utils::python_truthy(search.get("cached").unwrap_or(&Value::Null));
+            yield Ok(Bytes::from(encode_stream_event(&ChatEvent::SystemNote {
+                text: if cached { "已命中本地搜索缓存。我会复用已缓存的搜索来源继续回答。\n\n" }
+                    else { "搜索预取已完成。我会结合来源继续推理；如信息不足，可再通过搜索工具补充。\n\n" }.into(),
+            })));
+            set_search_context(&mut turn.payload, &search);
+        } else if search.get("status").and_then(Value::as_str) == Some("error") {
+            let detail = search.get("rounds").and_then(Value::as_array).into_iter().flatten()
+                .filter_map(|round| round.get("error").and_then(Value::as_str)).find(|error| !error.is_empty())
+                .unwrap_or("未知错误");
+            yield Ok(Bytes::from(encode_stream_event(&ChatEvent::SystemNote {
+                text: format!("预取搜索失败：{detail}\n我会继续基于已有上下文回答；如有需要可再次通过搜索工具尝试。\n\n"),
+            })));
+            set_search_context(&mut turn.payload, &search);
+        }
+        let (prepared, consulted) = turn.assembly.with_env(|env| {
+            build_deepseek_request(&turn.payload, turn.streaming, Some(&turn.memory_state), Some(&turn.validated), env)
         });
+        let prepared = if consulted { Err(deepseek_policy::file_store::vector_index_not_ready()) } else { prepared };
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                yield Ok(Bytes::from(encode_stream_event(&ChatEvent::Error { error: error.message, code: error.code.into() })));
+                return;
+            }
+        };
+        if !prepared.api_key.is_empty() { config.api_key = prepared.api_key.clone(); }
+        let upstream = match chat_execution::open_chat_stream(&config, &prepared.body).await {
+            Ok(upstream) => upstream,
+            Err(error) => {
+                let message = match &error {
+                    chat_execution::ChatExecutionError::UpstreamStatus { status } =>
+                        format!("upstream completion failed with status {status}"),
+                    other => other.code().to_ascii_lowercase().replace('_', " "),
+                };
+                yield Ok(Bytes::from(encode_stream_event(&ChatEvent::Error { error: message, code: error.code().into() })));
+                return;
+            }
+        };
+        let model = prepared.body.get("model").and_then(Value::as_str).unwrap_or_default().to_string();
+        let response = ndjson_response(config, prepared.body, executor, upstream, &model, Some(search));
+        let mut stream = response.into_body().into_data_stream();
+        while let Some(chunk) = stream.next().await {
+            yield chunk.map_err(std::io::Error::other);
+        }
+    };
+    (
+        [
+            (header::CONTENT_TYPE, STREAM_MEDIA_TYPE),
+            (header::CACHE_CONTROL, "no-cache"),
+            (header::HeaderName::from_static("x-accel-buffering"), "no"),
+        ],
+        Body::from_stream(body_stream),
+    )
+        .into_response()
+}
+
+pub(crate) async fn stream_prepared_turn(
+    turn: SearchChatTurn,
+    executor: ToolRoundExecutor,
+    mut config: UpstreamConfig,
+    max_tool_rounds: usize,
+) -> Result<Response, AppError> {
+    let (prepared, consulted) = turn.assembly.with_env(|env| {
+        build_deepseek_request(
+            &turn.payload,
+            true,
+            Some(&turn.memory_state),
+            Some(&turn.validated),
+            env,
+        )
+    });
+    if consulted {
+        return Err(deepseek_policy::file_store::vector_index_not_ready());
     }
-    let taint = ContextTaintSettings::from_env();
-    let _ = taint;
-    None
+    let prepared = prepared?;
+    config.api_key = prepared.api_key;
+    let upstream = chat_execution::open_chat_stream(&config, &prepared.body)
+        .await
+        .map_err(execution_app_error)?;
+    let model = prepared
+        .body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    Ok(ndjson_response_with_limit(
+        config,
+        prepared.body,
+        executor,
+        upstream,
+        &model,
+        None,
+        max_tool_rounds,
+    ))
 }
 
 /// The NDJSON response: `application/x-ndjson`, one event per line.
@@ -280,11 +558,36 @@ fn ndjson_response(
     executor: ToolRoundExecutor,
     upstream: reqwest::Response,
     model: &str,
+    initial_search: Option<Value>,
+) -> Response {
+    ndjson_response_with_limit(
+        config,
+        prepared,
+        executor,
+        upstream,
+        model,
+        initial_search,
+        MAX_TOOL_ROUNDS,
+    )
+}
+
+fn ndjson_response_with_limit(
+    config: UpstreamConfig,
+    prepared: Value,
+    executor: ToolRoundExecutor,
+    upstream: reqwest::Response,
+    model: &str,
+    initial_search: Option<Value>,
+    max_tool_rounds: usize,
 ) -> Response {
     let model = model.to_string();
     let body_stream = async_stream::stream! {
         let mut accumulator = ChatStreamAccumulator::new();
         accumulator.observe_model(Some(&json!(model)));
+        let mut latest_search = initial_search;
+        if latest_search.is_some() {
+            accumulator.observe_search(deepseek_policy::search::search_for_client(latest_search.as_ref()));
+        }
         let mut body = prepared;
         let mut current = upstream;
         // Set once an `error` line has gone out: the oracle `return`s from there, so
@@ -295,7 +598,7 @@ fn ndjson_response(
         let mut seen_tool_names: Vec<String> = Vec::new();
         let suggestions: Arc<std::sync::Mutex<Vec<Value>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
-        let on_suggestion: &'static (dyn Fn(&Value) + Send + Sync) = Box::leak(Box::new({
+        let on_suggestion: SuggestionCallback = Arc::new({
             let suggestions = suggestions.clone();
             move |suggestion: &Value| {
                 suggestions
@@ -303,9 +606,9 @@ fn ndjson_response(
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push(suggestion.clone());
             }
-        }));
+        });
 
-        for tool_round in 0..(MAX_TOOL_ROUNDS + 2) {
+        for tool_round in 0..(max_tool_rounds + 2) {
             let mut calls = StreamToolCalls::new();
             let mut round_content = String::new();
             let mut round_reasoning = String::new();
@@ -384,7 +687,7 @@ fn ndjson_response(
             let _ = round_usage;
 
             let finalized = finalized_stream_tool_calls(&calls);
-            match decide_round(finalized.len(), tool_round, MAX_TOOL_ROUNDS) {
+            match decide_round(finalized.len(), tool_round, max_tool_rounds) {
                 RoundDecision::Finish => break,
                 RoundDecision::ForceFinalAnswer => {
                     seen_tool_names.extend(crate::tool_rounds::tool_names(&finalized));
@@ -408,8 +711,15 @@ fn ndjson_response(
                         ),
                     })));
                     let results = executor
-                        .run_round_with_suggestions(finalized.clone(), Some(on_suggestion))
+                        .run_round_with_suggestions(finalized.clone(), Some(on_suggestion.clone()))
                         .await;
+                    let current_search = executor.search_provider().and_then(|provider| provider.latest());
+                    if current_search.is_some() && current_search != latest_search {
+                        latest_search = current_search;
+                        let search = deepseek_policy::search::search_for_client(latest_search.as_ref());
+                        accumulator.observe_search(search.clone());
+                        yield Ok(Bytes::from(encode_stream_event(&ChatEvent::Search { search })));
+                    }
                     // A suggestion built during the round is emitted as its own event,
                     // which is what `emit_memory_suggestion` does before the exchange is
                     // appended. The guard is dropped before the first `yield`, because a
@@ -471,7 +781,7 @@ fn ndjson_response(
                         tool_call_count,
                         &seen_tool_names,
                     ),
-                    None,
+                    latest_search.as_ref(),
                 ),
                 &accumulator.usage(),
             );
@@ -502,16 +812,19 @@ fn app_error(error: AppError) -> Response {
 /// A native execution failure, with the status distinguishing local misconfiguration
 /// from upstream trouble.
 fn execution_error(error: chat_execution::ChatExecutionError) -> Response {
-    let status = StatusCode::from_u16(error.status()).unwrap_or(StatusCode::BAD_GATEWAY);
+    app_error(execution_app_error(error))
+}
+
+pub(crate) fn execution_app_error(error: chat_execution::ChatExecutionError) -> AppError {
     let message = match &error {
         chat_execution::ChatExecutionError::UpstreamStatus { status } => {
             format!("upstream completion failed with status {status}")
         }
         other => other.code().to_ascii_lowercase().replace('_', " "),
     };
-    (
-        status,
-        Json(json!({"error": message, "code": error.code()})),
-    )
-        .into_response()
+    AppError {
+        message,
+        code: error.code(),
+        status: error.status(),
+    }
 }

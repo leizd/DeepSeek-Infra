@@ -58,9 +58,21 @@ pub async fn api_file_text(
         Ok(length) => length,
         Err(error) => return app_error(error),
     };
-    match parse_and_extract(&state.root, content_type, content_length, &body) {
-        Ok(value) => Json(value).into_response(),
-        Err(error) => app_error(error),
+    let content_type = content_type.to_string();
+    let control = deepseek_policy::extraction_control::FileProcessingControl::default();
+    let _cancel_on_drop = control.cancel_on_drop();
+    match tokio::task::spawn_blocking(move || {
+        control.run(|| parse_and_extract(&state.root, &content_type, content_length, &body))
+    })
+    .await
+    {
+        Ok(Ok(value)) => Json(value).into_response(),
+        Ok(Err(error)) => app_error(error),
+        Err(_) => app_error(AppError {
+            message: "File extraction failed".to_string(),
+            code: codes::INTERNAL,
+            status: 500,
+        }),
     }
 }
 

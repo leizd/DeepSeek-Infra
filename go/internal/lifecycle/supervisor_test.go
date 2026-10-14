@@ -3,8 +3,8 @@ package lifecycle
 import (
 	"bufio"
 	"context"
-	"database/sql"
 	"errors"
+	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
 	"io"
 	"net"
 	"net/http"
@@ -136,7 +136,7 @@ func TestRenewalWatchdogClosesListenerWhileSQLiteWriterIsLocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blocker, err := sql.Open("sqlite", control.DatabasePath())
+	blocker, err := sqlitedb.Open(control.DatabasePath())
 	if err != nil {
 		_ = control.Close()
 		t.Fatal(err)

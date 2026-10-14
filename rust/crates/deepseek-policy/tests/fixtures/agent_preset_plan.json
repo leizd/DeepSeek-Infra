@@ -1,0 +1,576 @@
+{
+  "source": "offline retained Python plan_for_preset and auto_signal_categories",
+  "cases": [
+    {
+      "preset": "full",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "inspect"
+          }
+        ]
+      },
+      "expected": {
+        "agents": [
+          {
+            "id": "researcher",
+            "task": "核查事实、背景和可能需要搜索的信息"
+          },
+          {
+            "id": "coder",
+            "task": "分析代码、架构、实现路径和工程风险",
+            "depends_on": [
+              "researcher"
+            ]
+          },
+          {
+            "id": "reasoner",
+            "task": "梳理推理链路、边界条件和可执行方案",
+            "depends_on": [
+              "researcher"
+            ]
+          },
+          {
+            "id": "critic",
+            "task": "检查方案风险、遗漏和反例",
+            "depends_on": [
+              "researcher",
+              "coder",
+              "reasoner"
+            ]
+          }
+        ],
+        "label": "完整 4-Agent"
+      }
+    },
+    {
+      "preset": "code",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "inspect"
+          }
+        ]
+      },
+      "expected": {
+        "agents": [
+          {
+            "id": "coder",
+            "task": "检查代码、实现路径和工程风险"
+          },
+          {
+            "id": "reasoner",
+            "task": "分析边界条件和架构取舍"
+          },
+          {
+            "id": "critic",
+            "task": "复核漏洞、遗漏和反例",
+            "depends_on": [
+              "coder",
+              "reasoner"
+            ]
+          }
+        ],
+        "label": "自动启用 Coder + Reasoner + Critic"
+      }
+    },
+    {
+      "preset": "research",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "inspect"
+          }
+        ]
+      },
+      "expected": {
+        "agents": [
+          {
+            "id": "researcher",
+            "task": "检索资料、事实和来源"
+          },
+          {
+            "id": "critic",
+            "task": "复核来源可靠性和不确定点",
+            "depends_on": [
+              "researcher"
+            ]
+          }
+        ],
+        "label": "自动启用 Researcher + Critic"
+      }
+    },
+    {
+      "preset": "reason",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "inspect"
+          }
+        ]
+      },
+      "expected": {
+        "agents": [
+          {
+            "id": "reasoner",
+            "task": "梳理推理链路、边界条件和方案权衡"
+          },
+          {
+            "id": "critic",
+            "task": "检查风险、遗漏和反例",
+            "depends_on": [
+              "reasoner"
+            ]
+          }
+        ],
+        "label": "自动启用 Reasoner + Critic"
+      }
+    },
+    {
+      "preset": "critic",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "inspect"
+          }
+        ]
+      },
+      "expected": {
+        "agents": [
+          {
+            "id": "critic",
+            "task": "审查现有想法的风险、漏洞和遗漏"
+          }
+        ],
+        "label": "仅启用 Critic"
+      }
+    },
+    {
+      "preset": "leader",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "inspect"
+          }
+        ]
+      },
+      "expected": null
+    },
+    {
+      "preset": "unknown",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "inspect"
+          }
+        ]
+      },
+      "expected": {
+        "agents": [
+          {
+            "id": "researcher",
+            "task": "核查事实、背景和可能需要搜索的信息"
+          },
+          {
+            "id": "coder",
+            "task": "分析代码、架构、实现路径和工程风险",
+            "depends_on": [
+              "researcher"
+            ]
+          },
+          {
+            "id": "reasoner",
+            "task": "梳理推理链路、边界条件和可执行方案",
+            "depends_on": [
+              "researcher"
+            ]
+          },
+          {
+            "id": "critic",
+            "task": "检查方案风险、遗漏和反例",
+            "depends_on": [
+              "researcher",
+              "coder",
+              "reasoner"
+            ]
+          }
+        ],
+        "label": "完整 4-Agent"
+      }
+    },
+    {
+      "preset": " CODE ",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "inspect"
+          }
+        ]
+      },
+      "expected": {
+        "agents": [
+          {
+            "id": "coder",
+            "task": "检查代码、实现路径和工程风险"
+          },
+          {
+            "id": "reasoner",
+            "task": "分析边界条件和架构取舍"
+          },
+          {
+            "id": "critic",
+            "task": "复核漏洞、遗漏和反例",
+            "depends_on": [
+              "coder",
+              "reasoner"
+            ]
+          }
+        ],
+        "label": "自动启用 Coder + Reasoner + Critic"
+      }
+    },
+    {
+      "preset": "auto",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "inspect"
+          }
+        ]
+      },
+      "expected": null
+    },
+    {
+      "preset": "auto",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "BUG in class C"
+          }
+        ]
+      },
+      "expected": {
+        "agents": [
+          {
+            "id": "coder",
+            "task": "检查代码、实现路径和工程风险"
+          },
+          {
+            "id": "reasoner",
+            "task": "分析边界条件和架构取舍"
+          },
+          {
+            "id": "critic",
+            "task": "复核漏洞、遗漏和反例",
+            "depends_on": [
+              "coder",
+              "reasoner"
+            ]
+          }
+        ],
+        "label": "自动启用 Coder + Reasoner + Critic"
+      }
+    },
+    {
+      "preset": "auto",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "最新资料"
+          }
+        ]
+      },
+      "expected": {
+        "agents": [
+          {
+            "id": "researcher",
+            "task": "检索资料、事实和来源"
+          },
+          {
+            "id": "critic",
+            "task": "复核来源可靠性和不确定点",
+            "depends_on": [
+              "researcher"
+            ]
+          }
+        ],
+        "label": "自动启用 Researcher + Critic"
+      }
+    },
+    {
+      "preset": "auto",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "复杂权衡"
+          }
+        ]
+      },
+      "expected": {
+        "agents": [
+          {
+            "id": "reasoner",
+            "task": "梳理推理链路、边界条件和方案权衡"
+          },
+          {
+            "id": "critic",
+            "task": "检查风险、遗漏和反例",
+            "depends_on": [
+              "reasoner"
+            ]
+          }
+        ],
+        "label": "自动启用 Reasoner + Critic"
+      }
+    },
+    {
+      "preset": "auto",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "项目架构"
+          }
+        ]
+      },
+      "expected": null
+    },
+    {
+      "preset": "auto",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "代码和今天新闻"
+          }
+        ]
+      },
+      "expected": null
+    },
+    {
+      "preset": "auto",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字"
+          }
+        ]
+      },
+      "expected": null
+    },
+    {
+      "preset": "auto",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字"
+          }
+        ]
+      },
+      "expected": {
+        "agents": [
+          {
+            "id": "reasoner",
+            "task": "梳理推理链路、边界条件和方案权衡"
+          },
+          {
+            "id": "critic",
+            "task": "检查风险、遗漏和反例",
+            "depends_on": [
+              "reasoner"
+            ]
+          }
+        ],
+        "label": "自动启用 Reasoner + Critic"
+      }
+    },
+    {
+      "preset": "auto",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "代码字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字"
+          }
+        ]
+      },
+      "expected": null
+    },
+    {
+      "preset": "auto",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "新闻字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字"
+          }
+        ]
+      },
+      "expected": null
+    },
+    {
+      "preset": "auto",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "MiXeD BuG"
+          }
+        ]
+      },
+      "expected": {
+        "agents": [
+          {
+            "id": "coder",
+            "task": "检查代码、实现路径和工程风险"
+          },
+          {
+            "id": "reasoner",
+            "task": "分析边界条件和架构取舍"
+          },
+          {
+            "id": "critic",
+            "task": "复核漏洞、遗漏和反例",
+            "depends_on": [
+              "coder",
+              "reasoner"
+            ]
+          }
+        ],
+        "label": "自动启用 Coder + Reasoner + Critic"
+      }
+    },
+    {
+      "preset": "auto",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "函数"
+          }
+        ]
+      },
+      "expected": {
+        "agents": [
+          {
+            "id": "coder",
+            "task": "检查代码、实现路径和工程风险"
+          },
+          {
+            "id": "reasoner",
+            "task": "分析边界条件和架构取舍"
+          },
+          {
+            "id": "critic",
+            "task": "复核漏洞、遗漏和反例",
+            "depends_on": [
+              "coder",
+              "reasoner"
+            ]
+          }
+        ],
+        "label": "自动启用 Coder + Reasoner + Critic"
+      }
+    },
+    {
+      "preset": "auto",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "```"
+          }
+        ]
+      },
+      "expected": {
+        "agents": [
+          {
+            "id": "coder",
+            "task": "检查代码、实现路径和工程风险"
+          },
+          {
+            "id": "reasoner",
+            "task": "分析边界条件和架构取舍"
+          },
+          {
+            "id": "critic",
+            "task": "复核漏洞、遗漏和反例",
+            "depends_on": [
+              "coder",
+              "reasoner"
+            ]
+          }
+        ],
+        "label": "自动启用 Coder + Reasoner + Critic"
+      }
+    },
+    {
+      "preset": "auto",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "引用"
+          }
+        ]
+      },
+      "expected": {
+        "agents": [
+          {
+            "id": "researcher",
+            "task": "检索资料、事实和来源"
+          },
+          {
+            "id": "critic",
+            "task": "复核来源可靠性和不确定点",
+            "depends_on": [
+              "researcher"
+            ]
+          }
+        ],
+        "label": "自动启用 Researcher + Critic"
+      }
+    },
+    {
+      "preset": "auto",
+      "payload": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "规划"
+          }
+        ]
+      },
+      "expected": {
+        "agents": [
+          {
+            "id": "reasoner",
+            "task": "梳理推理链路、边界条件和方案权衡"
+          },
+          {
+            "id": "critic",
+            "task": "检查风险、遗漏和反例",
+            "depends_on": [
+              "reasoner"
+            ]
+          }
+        ],
+        "label": "自动启用 Reasoner + Critic"
+      }
+    }
+  ]
+}

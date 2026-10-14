@@ -1,0 +1,88 @@
+package api
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+)
+
+// This fixture only initializes signed empty ownership and validates settled
+// output after deepseekd exits. It never schedules an Agent or executes a node.
+func TestNativeAgentDaemonPublicProcess(t *testing.T) {
+	directory := os.Getenv("DEEPSEEK_AGENT_SIGNING_PROBE_DIR")
+	stage := os.Getenv("DEEPSEEK_TEST_AGENT_DAEMON_STAGE")
+	if directory == "" || (stage != "seed" && stage != "inspect") {
+		t.Fatal("explicit isolated daemon stage required")
+	}
+	for _, name := range []string{"DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE", "DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE", "DEEPSEEK_API_KEY", "DEEPSEEK_WORKER_AUTHORITY_NOW"} {
+		if _, exists := os.LookupEnv(name); exists {
+			t.Fatal("private Rust configuration entered offline Go fixture", name)
+		}
+	}
+	controlPath := filepath.Join(directory, "go-control")
+	if stage == "seed" {
+		control := nativeSigningControl(t, 30, controlPath)
+		for _, domain := range []string{"agent_run", "action"} {
+			rows, err := control.ListAuthoritativeRecords(domain)
+			if err != nil || len(rows) != 0 {
+				t.Fatal("ownership fixture seeded application input", domain, err)
+			}
+		}
+		if err := control.Close(); err != nil {
+			t.Fatal(err)
+		}
+		nativeSigningWrite(t, filepath.Join(directory, "daemon-seed.json"), map[string]any{
+			"controlPath": controlPath, "internalBearer": testInternalBearer,
+			"promotionPublicKey": promotionRoutePublic, "fleetId": mutationFleetID,
+			"environment": mutationEnvironment, "emptyApplicationRecords": true})
+		return
+	}
+	var input struct {
+		RunID string `json:"runId"`
+	}
+	nativeSigningRead(t, filepath.Join(directory, "daemon-inspect-input.json"), &input)
+	control, err := store.OpenControl(store.OpenOptions{Path: controlPath, Owner: "offline-daemon-output-validation",
+		PromotionSignerPublicKey:    promotionRoutePublic,
+		AgentOutcomeSignerPublicKey: os.Getenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY"),
+		FleetID:                     mutationFleetID, Environment: mutationEnvironment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	metadata, found, err := control.AgentRunMetadata(input.RunID)
+	if err != nil || !found || metadata.Status != "done" || metadata.NextIndex != 9 || !metadata.ConfirmPlan || metadata.Preset != "auto" {
+		t.Fatal("actual daemon final metadata is incomplete", err)
+	}
+	expected := []agent.RunPlanNode{{ID: "coder", Task: "write"}, {ID: "critic", Task: "review", DependsOn: []string{"coder"}}}
+	if len(metadata.Plan) != len(expected) {
+		t.Fatal("actual daemon changed task cardinality")
+	}
+	for i, node := range expected {
+		actual, _ := json.Marshal(metadata.Plan[i])
+		want, _ := json.Marshal(node)
+		if string(actual) != string(want) || metadata.Nodes()[node.ID].State != "succeeded" {
+			t.Fatal("actual daemon task or dependency settlement differs")
+		}
+	}
+	records, err := control.ListAuthoritativeRecords("action")
+	if err != nil || len(records) != 3 {
+		t.Fatal("actual daemon durable phases missing", err)
+	}
+	for _, record := range records {
+		lease, active, leaseErr := control.GetActionLease(record.ID)
+		resources, resourceErr := control.GetResourceLeases(record.ID)
+		if record.State != "SUCCEEDED" || leaseErr != nil || resourceErr != nil || len(resources) != 0 || (active && lease.LeaseUntil > time.Now().Unix()) {
+			t.Fatal("actual daemon terminal proof or resource release differs", leaseErr, resourceErr)
+		}
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "daemon-inspected.json"), map[string]any{
+		"status": "PASS", "runId": metadata.RunID, "runStatus": metadata.Status, "nextIndex": metadata.NextIndex,
+		"durablePhases": len(records), "resourcesReleased": true, "requestSha256": metadata.Request.SHA256,
+		"requestLength": metadata.Request.Length, "actualPreset": metadata.Preset, "actualPlan": metadata.Plan,
+		"independentlyValidatedByGoStore": true, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})
+}

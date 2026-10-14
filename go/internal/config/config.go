@@ -41,6 +41,8 @@ type Config struct {
 	// PromotionSignerPublicKey is a separate deployment trust root for signed
 	// domain ownership transitions. An absent key disables promotions.
 	PromotionSignerPublicKey string
+	// Historical outcome proof uses the separately configured Rust custody public key.
+	AgentOutcomeSignerPublicKey string
 	// FleetID and Environment are the identity the signer must have bound into
 	// the request.
 	FleetID     string
@@ -58,10 +60,11 @@ func Load() (Config, error) {
 		ControlAuthority:   boolOr("DEEPSEEKD_CONTROL_AUTHORITY"),
 		// The signer key is the one setting whose *absence* is meaningful, so it is
 		// taken verbatim rather than defaulted.
-		MutationSignerPublicKey:  strings.TrimSpace(os.Getenv("DEEPSEEKD_MUTATION_SIGNER_KEY")),
-		PromotionSignerPublicKey: strings.TrimSpace(os.Getenv("DEEPSEEKD_PROMOTION_SIGNER_KEY")),
-		FleetID:                  valueOr("DEEPSEEKD_FLEET_ID", "fleet-a"),
-		Environment:              valueOr("DEEPSEEKD_ENVIRONMENT", "production"),
+		MutationSignerPublicKey:     strings.TrimSpace(os.Getenv("DEEPSEEKD_MUTATION_SIGNER_KEY")),
+		PromotionSignerPublicKey:    strings.TrimSpace(os.Getenv("DEEPSEEKD_PROMOTION_SIGNER_KEY")),
+		AgentOutcomeSignerPublicKey: strings.TrimSpace(os.Getenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY")),
+		FleetID:                     valueOr("DEEPSEEKD_FLEET_ID", "fleet-a"),
+		Environment:                 valueOr("DEEPSEEKD_ENVIRONMENT", "production"),
 	}
 	switch cfg.Mode {
 	case ModeShadow:

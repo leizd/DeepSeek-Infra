@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -16,8 +17,8 @@ import (
 	"time"
 
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
+	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
 	"github.com/leizd/DeepSeek-Infra/go/pkg/protocol"
-	modernsqlite "modernc.org/sqlite"
 )
 
 const (
@@ -54,8 +55,10 @@ type OpenOptions struct {
 	// separately signed, per-domain ownership transition. Empty refuses every
 	// promotion, even when AuthorizeCutover is enabled.
 	PromotionSignerPublicKey string
-	FleetID                  string
-	Environment              string
+	// AgentOutcomeSignerPublicKey pins Rust historical outcome custody. Empty refuses ingestion.
+	AgentOutcomeSignerPublicKey string
+	FleetID                     string
+	Environment                 string
 }
 
 type Record struct {
@@ -85,22 +88,23 @@ type Snapshot struct {
 }
 
 type Control struct {
-	mu                  sync.Mutex
-	path                string
-	databasePath        string
-	owner               string
-	token               int64
-	leaseUntil          int64
-	leaseSeconds        int64
-	now                 func() int64
-	schema              int
-	db                  *sql.DB
-	closed              bool
-	admissionFaultStage string
-	authorizeCutover    bool
-	promotionSignerKey  string
-	fleetID             string
-	environment         string
+	mu                    sync.Mutex
+	path                  string
+	databasePath          string
+	owner                 string
+	token                 int64
+	leaseUntil            int64
+	leaseSeconds          int64
+	now                   func() int64
+	schema                int
+	db                    *sql.DB
+	closed                bool
+	admissionFaultStage   string
+	authorizeCutover      bool
+	promotionSignerKey    string
+	agentOutcomeSignerKey string
+	fleetID               string
+	environment           string
 }
 
 type rowScanner interface {
@@ -168,11 +172,10 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 		}
 	}
 
-	connector, err := modernsqlite.NewConnector(controlDatabaseDSN(databasePath))
+	db, err := sqlitedb.Open(controlDatabaseDSN(databasePath))
 	if err != nil {
 		return nil, err
 	}
-	db := sql.OpenDB(connector)
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(0)
@@ -194,16 +197,17 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 		leaseSeconds = 30
 	}
 	store := &Control{
-		path:               resolved,
-		databasePath:       databasePath,
-		owner:              opts.Owner,
-		leaseSeconds:       leaseSeconds,
-		now:                nowFn,
-		db:                 db,
-		authorizeCutover:   opts.AuthorizeCutover,
-		promotionSignerKey: opts.PromotionSignerPublicKey,
-		fleetID:            opts.FleetID,
-		environment:        opts.Environment,
+		path:                  resolved,
+		databasePath:          databasePath,
+		owner:                 opts.Owner,
+		leaseSeconds:          leaseSeconds,
+		now:                   nowFn,
+		db:                    db,
+		authorizeCutover:      opts.AuthorizeCutover,
+		promotionSignerKey:    opts.PromotionSignerPublicKey,
+		agentOutcomeSignerKey: opts.AgentOutcomeSignerPublicKey,
+		fleetID:               opts.FleetID,
+		environment:           opts.Environment,
 	}
 	if err := store.bootstrapAndClaim(databaseExisted); err != nil {
 		_ = db.Close()
@@ -259,11 +263,10 @@ func controlDatabaseURLForOS(databasePath string, query url.Values, goos string)
 func validateExistingControlMarker(databasePath string) (bool, error) {
 	// Identity checks stay on a read-only connection so a foreign database cannot
 	// be mutated by WAL or writer-lease side effects before it is rejected.
-	connector, err := modernsqlite.NewConnector(readOnlyControlDatabaseDSN(databasePath))
+	db, err := sqlitedb.Open(readOnlyControlDatabaseDSN(databasePath))
 	if err != nil {
 		return false, err
 	}
-	db := sql.OpenDB(connector)
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	var objectCount int
@@ -734,6 +737,11 @@ func (store *Control) migrateTx(tx *sql.Tx) error {
 			return err
 		}
 	}
+	if store.schema == SchemaV15 {
+		if err := store.migrateToV16Tx(tx); err != nil {
+			return err
+		}
+	}
 	return verifySchemaTx(tx, store.schema)
 }
 
@@ -1064,9 +1072,15 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 			return err
 		}
 	}
-	if schema >= SchemaV5 {
-		if err := verifyActionAdmissionSchemaTx(tx); err != nil {
+	if schema >= SchemaV16 {
+		if err := verifyActionCancellationSchemaTx(tx); err != nil {
 			return err
+		}
+	} else {
+		if schema >= SchemaV5 {
+			if err := verifyActionAdmissionSchemaTx(tx); err != nil {
+				return err
+			}
 		}
 	}
 	if schema >= SchemaV6 {
@@ -1370,13 +1384,22 @@ func (store *Control) putLeasedControlRecord(record Record, dispatch *StorageDis
 // A prepared write owns its canonical bytes, including a dispatch's operation
 // identity. It cannot be rebound by modifying the caller's payload or intent.
 type controlRecordWrite struct {
-	record                Record
-	table                 string
-	intentJSON            []byte
-	intentDigest          string
-	operationID           string
-	allowBoundLease       bool
-	allowImportedBaseline bool
+	agentEvent                  bool
+	agentExecution              bool
+	agentNodeDispatch           bool
+	agentNodeOutcome            bool
+	agentTasksCompletion        bool
+	agentCancellationSettlement bool
+	agentTaskSettlement         bool
+	agentPlanSettlement         bool
+	agentSynthesisSettlement    bool
+	record                      Record
+	table                       string
+	intentJSON                  []byte
+	intentDigest                string
+	operationID                 string
+	allowBoundLease             bool
+	allowImportedBaseline       bool
 }
 
 func prepareControlRecordWrite(record Record, dispatch *StorageDispatchIntent) (controlRecordWrite, error) {
@@ -1443,6 +1466,31 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 	} else if err := validateNoControlHistory(tx, record.Domain, record.ID); err != nil {
 		return err
 	}
+	if record.Domain == "agent_run" && !write.agentEvent &&
+		(nativeAgentMetadata(record.Payload) || exists && nativeAgentMetadata(existing.Payload)) {
+		return ErrAgentRunEventRequired
+	}
+	if record.Domain == "action" && !write.agentExecution &&
+		(nativeAgentExecution(record.Payload) || exists && nativeAgentExecution(existing.Payload)) {
+		if !exists || !write.allowBoundLease || !sameAgentExecutionIntent(existing, record) {
+			return ErrAgentRunExecutionRequired
+		}
+	}
+	if record.Domain == "action" && !write.agentNodeDispatch &&
+		(nativeAgentNodeDispatches(record.Payload) || exists && nativeAgentNodeDispatches(existing.Payload)) {
+		if !exists || !sameAgentNodeDispatches(existing, record) ||
+			record.State == "SUCCEEDED" || record.State == "FAILED_BEFORE_EFFECT" {
+			// Keeping an unresolved intent in the payload does not turn a
+			// generic completion into independent Rust effect verification.
+			return ErrAgentNodeDispatchRequired
+		}
+	}
+	if record.Domain == "action" && !write.agentNodeOutcome &&
+		(nativeAgentNodeOutcomes(record.Payload) || exists && nativeAgentNodeOutcomes(existing.Payload)) {
+		if !exists || !sameAgentNodeOutcomes(existing, record) {
+			return ErrAgentNodeOutcomeRequired
+		}
+	}
 	from := ""
 	if exists {
 		from = existing.State
@@ -1464,7 +1512,77 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 			return err
 		}
 	}
+	if record.Domain == "action" && !write.agentSynthesisSettlement {
+		var beforeFields, afterFields map[string]json.RawMessage
+		_ = json.Unmarshal(existing.Payload, &beforeFields)
+		_ = json.Unmarshal(record.Payload, &afterFields)
+		if !bytes.Equal(beforeFields[agentSynthesisSettlementField], afterFields[agentSynthesisSettlementField]) {
+			return ErrAgentRunExecutionRequired
+		}
+	}
+	if record.Domain == "action" && !write.agentPlanSettlement {
+		var beforeFields, afterFields map[string]json.RawMessage
+		_ = json.Unmarshal(existing.Payload, &beforeFields)
+		_ = json.Unmarshal(record.Payload, &afterFields)
+		if !bytes.Equal(beforeFields[agentPlanSettlementField], afterFields[agentPlanSettlementField]) {
+			return ErrAgentRunExecutionRequired
+		}
+	}
+	if record.Domain == "action" && !write.agentCancellationSettlement {
+		var beforeFields, afterFields map[string]json.RawMessage
+		_ = json.Unmarshal(existing.Payload, &beforeFields)
+		_ = json.Unmarshal(record.Payload, &afterFields)
+		if !bytes.Equal(beforeFields[agentCancellationSettlementField], afterFields[agentCancellationSettlementField]) {
+			return ErrAgentRunExecutionRequired
+		}
+	}
+	if record.Domain == "action" && !write.agentTasksCompletion {
+		var beforeFields, afterFields map[string]json.RawMessage
+		_ = json.Unmarshal(existing.Payload, &beforeFields)
+		_ = json.Unmarshal(record.Payload, &afterFields)
+		if !bytes.Equal(beforeFields[agentTasksCompletionField], afterFields[agentTasksCompletionField]) {
+			return ErrAgentRunExecutionRequired
+		}
+	}
+	if record.Domain == "action" && !write.agentTaskSettlement {
+		var beforeFields, afterFields map[string]json.RawMessage
+		_ = json.Unmarshal(existing.Payload, &beforeFields)
+		_ = json.Unmarshal(record.Payload, &afterFields)
+		if !bytes.Equal(beforeFields[agentTaskSettlementField], afterFields[agentTaskSettlementField]) {
+			return ErrAgentRunExecutionRequired
+		}
+	}
 	legal := LegalTransition(record.Domain, from, record.State)
+	if write.agentSynthesisSettlement {
+		if !exists || !nativeAgentSynthesisSettlementEdge(existing, record) {
+			return ErrAgentRunExecutionRequired
+		}
+		legal = true
+	}
+
+	if write.agentCancellationSettlement {
+		if !exists || !nativeAgentCancellationSettlementEdge(existing, record) {
+			return ErrAgentRunExecutionRequired
+		}
+		legal = true
+	}
+	if write.agentTasksCompletion {
+		if !exists || !nativeAgentTasksCompletionEdge(existing, record) {
+			return ErrAgentRunExecutionRequired
+		}
+		legal = true
+	}
+	if !legal && exists && write.agentTaskSettlement && nativeAgentTaskSettlementEdge(existing, record) {
+		legal = true
+	}
+	if !legal && exists && write.agentPlanSettlement && nativeAgentPlanSettlementEdge(existing, record) {
+		legal = true
+	}
+	// Use the same narrow append rule for the write and its durable history.
+	if !legal && exists && (write.agentNodeDispatch || write.agentNodeOutcome) &&
+		nativeAgentMetadataHistoryEdge(existing, record) {
+		legal = true
+	}
 	if !legal && write.allowBoundLease && record.Domain == "action" {
 		legal = (store.schema >= SchemaV6 && reconciliationTransition(from, record.State, existing.ExecutionEpoch, record.ExecutionEpoch)) ||
 			(store.schema >= SchemaV7 && verificationTransition(from, record.State, existing.ExecutionEpoch, record.ExecutionEpoch))
@@ -1611,6 +1729,11 @@ func (store *Control) Get(domain, id string) (Record, bool, error) {
 		if err := validateControlHistory(tx, record); err != nil {
 			return Record{}, false, err
 		}
+		if domain == "action" {
+			if err := store.validateAgentCancellationSettlementTx(tx, record); err != nil {
+				return Record{}, false, err
+			}
+		}
 	} else if err := validateNoControlHistory(tx, domain, id); err != nil {
 		return Record{}, false, err
 	}
@@ -1723,6 +1846,38 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 			expectedRevision = event.Revision
 		}
 		legal := LegalTransition(latest.Domain, previousState, event.State)
+		if latest.Domain == "action" {
+			var beforeFields, afterFields map[string]json.RawMessage
+			_ = json.Unmarshal(final.Payload, &beforeFields)
+			_ = json.Unmarshal(event.Payload, &afterFields)
+			if !bytes.Equal(beforeFields[agentSynthesisSettlementField], afterFields[agentSynthesisSettlementField]) {
+				if !nativeAgentSynthesisSettlementEdge(final, event) {
+					return ErrCorruptRecord
+				}
+				legal = true
+			}
+			if !bytes.Equal(beforeFields[agentCancellationSettlementField], afterFields[agentCancellationSettlementField]) {
+				if !nativeAgentCancellationSettlementEdge(final, event) {
+					return ErrCorruptRecord
+				}
+				legal = true
+			}
+			if !bytes.Equal(beforeFields[agentTasksCompletionField], afterFields[agentTasksCompletionField]) {
+				if !nativeAgentTasksCompletionEdge(final, event) {
+					return ErrCorruptRecord
+				}
+				legal = true
+			}
+		}
+		if !legal && nativeAgentTaskSettlementEdge(final, event) {
+			legal = true
+		}
+		if !legal && nativeAgentPlanSettlementEdge(final, event) {
+			legal = true
+		}
+		if !legal && nativeAgentMetadataHistoryEdge(final, event) {
+			legal = true
+		}
 		versionedEdge := (eventID > reconciliationBoundary && reconciliationTransition(previousState, event.State, previousEpoch, event.ExecutionEpoch)) ||
 			(eventID > verificationBoundary && verificationTransition(previousState, event.State, previousEpoch, event.ExecutionEpoch))
 		if !legal && latest.Domain == "action" && versionedEdge {
@@ -1872,7 +2027,7 @@ func secretBearingControlKey(key string) bool {
 }
 
 func knownState(domain, state string) bool {
-	if domain == "action" && (state == "RECONCILING" || verificationActionState(state)) {
+	if domain == "action" && (state == "RECONCILING" || state == "CANCELLED_CONFIRMED" || verificationActionState(state)) {
 		return true
 	}
 	edges, ok := transitions[domain]
@@ -2006,6 +2161,11 @@ func (store *Control) ExportSnapshot() (Snapshot, error) {
 		for _, record := range snapshot.Records {
 			if err := validateControlHistory(tx, record); err != nil {
 				return Snapshot{}, err
+			}
+			if record.Domain == "action" {
+				if err := store.validateAgentCancellationSettlementTx(tx, record); err != nil {
+					return Snapshot{}, err
+				}
 			}
 		}
 		if err := tx.Commit(); err != nil {

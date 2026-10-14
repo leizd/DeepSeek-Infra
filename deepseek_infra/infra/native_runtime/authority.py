@@ -87,6 +87,8 @@ RUST_DATA_DOMAINS = frozenset(
         # The scheduler only *reads* it (`backup_scheduled` → `mirror_files`), which stays
         # allowed: this gate denies mutations, not reads.
         "frontend_mirror_store",
+        "observability_trace_store",
+        "generated_files_store",
     }
 )
 

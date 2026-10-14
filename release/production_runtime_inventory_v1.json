@@ -235,6 +235,8 @@
   ],
   "ownership_domains_current_owner_python": [
     "a2a_task_lifecycle",
+    "observability_trace_store",
+    "generated_files_store",
     "fastcdc_chunk_pipeline",
     "age_crypto",
     "s3_minio_streaming",

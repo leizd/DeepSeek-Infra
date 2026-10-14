@@ -1,9 +1,9 @@
 package a2a
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,7 +136,7 @@ func TestCorruptTaskMakesRecoveryAtomicAndFailsClosed(t *testing.T) {
 				}
 				t.Fatalf("corrupt store accepted: %v", err)
 			}
-			db, err := sql.Open("sqlite", filepath.Join(root, "a2a.sqlite3"))
+			db, err := sqlitedb.Open(filepath.Join(root, "a2a.sqlite3"))
 			if err != nil {
 				t.Fatal(err)
 			}

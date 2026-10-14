@@ -1,0 +1,57 @@
+# Rust、Go 和 Docker 云端验证
+
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+本任务在 GitHub Actions 上编译、测试 Rust/Go，以及构建、启动 Docker 验证容器。
+本机保留源码、已安装的工具和小型报告。日常源码修改、格式和类型检查仍可在本机完成。
+
+Go 与 Docker 使用已有的 `.github/workflows/ci.yml`。它包含 Go 格式、vet、测试、
+race、默认与 Android 变体的原有 95% 覆盖率门槛，以及实际 Go/Rust 进程边界。
+Docker 作业构建生产、Rust 和 MCP 镜像，验证 Compose、实际容器与五实例 MinIO 测试。
+Rust 使用已有的 `rust-cloud.yml`，保留完整工作区检查和原有 80% 覆盖率门槛。
+
+专用分支不会自动触发主 CI；在已经审阅、授权上传的快照上手动启动：
+
+```powershell
+gh workflow run ci.yml --repo leizd/DeepSeek-Infra --ref codex/rust-cloud/20261010
+gh run list --repo leizd/DeepSeek-Infra --workflow ci.yml --branch codex/rust-cloud/20261010 --limit 3 --json databaseId,headSha,status,conclusion,url
+gh run watch <run-id> --repo leizd/DeepSeek-Infra --exit-status --interval 60
+```
+
+云端运行使用远端提交。未上传的修改必须先冻结、审阅并取得具体上传授权；
+核对运行的 `headSha` 与该快照一致，再把通过的结果用于当前源码。
+保留失败作业和精确提交证据；Go/Docker 的通过不能替代其他发布门槛。
+
+2026-10-11 已授权的 Go 到期测试修复已上传为
+`9dd2ea89eecc19b93b2afbd69b412b61d85601a7`，树为
+`a5dbe4d362b30f2c0e785843499e27b952c3fd24`。
+[Go/Docker 云端运行 38101509722](https://github.com/leizd/DeepSeek-Infra/actions/runs/38101509722)
+在该精确提交上完成，14 项 Go/Docker 作业全部通过，包括默认和 Android 的
+普通测试、race、Android 兼容 SQLite 检查及实际原生进程边界。默认覆盖率为
+10277/10816 = 95.016642%，Android 为 10103/10626 = 95.078110%，
+两者均达到原有 95% 门槛。只取回 1,259,118 字节报告，源码匹配与结果记录于
+`artifacts/native-20261011-go-docker-cloud-retry/cloud-evidence.json`。
+整条 CI 仍有 6 项其他失败；先前运行 `38098810886` 的 race 失败记录保留。
+
+编译缓存、下载的依赖、Docker 镜像层和验证卷位于云端 Runner。
+没有配置持久化云端缓存的作业会在 Runner 结束时释放临时产物。
+收集时只下载覆盖率文件、作业状态和小型证据；不下载 Go/Cargo 缓存、镜像归档或卷。
+用户已经授权清理迁移后不再需要的本机缓存。2026-10-11 清理了两个专用 Go 缓存目录、
+1354 个项目归档、43 个停止的任务容器、14 个任务镜像和 64 个选定构建记录，
+清空两个任务编译缓存卷；没有执行 system/volume prune。
+全部 25 个卷对象和 23 个保留卷内容均已校验保留，3574 个源码文件及 Git 状态一致。
+标准离线压缩后，观察到 C: 新增约 1.7 GiB、D: 新增约 73.6 GiB 可用空间。
+34 个项目归档（约 18.3 MiB）的补充删除被自动审批拒绝，保留精确名单；
+21 个引用相关的任务构建记录也保留，避免影响其他缓存依赖。
+Docker 已恢复关闭状态。详见 `artifacts/native-20261011-go-docker-cloud/cleanup-summary.json`。
+云端运行不会自动移动用户的旧数据，也不需要取回编译缓存或镜像。
+
+执行位置与原始证据记录在
+`artifacts/native-20261011-go-docker-cloud/{policy.json,dispatch.json}`。
+全项目迁移继续保留 `NOT_READY`，直到实际工作负载、恢复、平台和发布证据全部满足要求。
+
+依据：[GitHub Go 验证文档](https://docs.github.com/en/actions/tutorials/build-and-test-code/go)，
+[GitHub 依赖缓存文档](https://docs.github.com/en/actions/concepts/workflows-and-actions/dependency-caching)，
+[Docker 的 GitHub Actions 指南](https://docs.docker.com/guides/gha/)。

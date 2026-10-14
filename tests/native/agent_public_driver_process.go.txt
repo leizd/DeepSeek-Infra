@@ -1,0 +1,472 @@
+package api
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
+	"github.com/leizd/DeepSeek-Infra/go/internal/config"
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
+	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+)
+
+// The external Python runner only provisions isolated TLS/custody and the
+// controlled provider. Public request storage, run creation, all DAG scheduling,
+// provider effects, body projection and final settlement run in Go/Rust.
+func TestNativeAgentPublicDriverProcess(t *testing.T) {
+	directory := os.Getenv("DEEPSEEK_AGENT_SIGNING_PROBE_DIR")
+	if directory == "" || os.Getenv("DEEPSEEK_AGENT_PUBLIC_DRIVER_PROBE") != "1" {
+		t.Fatal("explicit isolated public driver configuration required")
+	}
+	for _, name := range []string{"DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE", "DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE", "DEEPSEEK_API_KEY", "DEEPSEEK_WORKER_AUTHORITY_NOW"} {
+		if _, present := os.LookupEnv(name); present {
+			t.Fatal("private Rust configuration entered the Go process", name)
+		}
+	}
+	control := nativeSigningControl(t, 600, t.TempDir())
+	_, origin := nativeSigningRPC(t, control)
+	nativeSigningWrite(t, filepath.Join(directory, "go-ready.json"), map[string]any{
+		"origin": origin, "internalBearer": testInternalBearer, "fencingToken": control.Writer().FencingToken,
+		"fleetId": mutationFleetID, "environment": mutationEnvironment})
+	var ready nativeSigningWorkerReady
+	nativeSigningRead(t, filepath.Join(directory, "worker-ready.json"), &ready)
+	nativeSigningConfigureGo(t, ready, os.Getenv("DEEPSEEK_AGENT_SIGNING_WORKER_BEARER"))
+	var public struct {
+		Origin string `json:"origin"`
+	}
+	nativeSigningRead(t, filepath.Join(directory, "public-ready.json"), &public)
+	if public.Origin == "" {
+		t.Fatal("public native edge unavailable")
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	done := StartAgentRunDriver(ctx, control, HealthFor(config.Config{Mode: config.ModeAuthoritative}))
+	defer func() {
+		stop()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			t.Error("production driver did not drain")
+		}
+	}()
+	preset, query := os.Getenv("DEEPSEEK_TEST_AGENT_PRESET"), os.Getenv("DEEPSEEK_TEST_AGENT_QUERY")
+	if preset == "" {
+		preset = "auto"
+	}
+	if query == "" {
+		query = "Prepare an isolated verification plan"
+	}
+	expectedPlan := []agent.RunPlanNode{{ID: "coder", Task: "write"}, {ID: "critic", Task: "review", DependsOn: []string{"coder"}}}
+	expectedConfirmation := true
+	if expected := os.Getenv("DEEPSEEK_TEST_AGENT_PLAN"); expected != "" {
+		// A fresh slice prevents omitted dependencies inheriting the previous default node.
+		var configuredPlan []agent.RunPlanNode
+		if err := json.Unmarshal([]byte(expected), &configuredPlan); err != nil || len(configuredPlan) == 0 {
+			t.Fatal("invalid offline expected plan", err)
+		}
+		expectedPlan = configuredPlan
+		expectedConfirmation = os.Getenv("DEEPSEEK_TEST_AGENT_CONFIRMATION") == "true"
+	}
+	eventCount := 6 + len(expectedPlan)
+	if expectedConfirmation {
+		eventCount++
+	}
+	payload := map[string]any{"payload": map[string]any{
+		"messages": []map[string]string{{"role": "user", "content": query}},
+		"model":    "deepseek-chat", "apiKey": "request-only-credential"},
+		"agentPreset": preset, "confirmPlan": os.Getenv("DEEPSEEK_TEST_AGENT_EXPLICIT_CONFIRMATION") == "true", "conversationId": "public-native-conversation", "messageId": "public-native-message"}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	response, err := client.Post(public.Origin+"/api/agent-runs", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal("actual native public creation", err)
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	response.Body.Close()
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("actual public creation status=%d body=%s error=%v", response.StatusCode, raw, err)
+	}
+	var created struct {
+		RunID string `json:"runId"`
+	}
+	if json.Unmarshal(raw, &created) != nil || created.RunID == "" {
+		t.Fatal("creation omitted durable identity")
+	}
+	if os.Getenv("DEEPSEEK_TEST_AGENT_CANCEL_ACTIVE") == "1" {
+		planningCancellation := os.Getenv("DEEPSEEK_TEST_AGENT_CANCEL_ACTIVE_PLAN") == "1"
+		expectedPhases, expectedNode, cancelledPhase := 2, expectedPlan[0].ID, "tasks"
+		if planningCancellation {
+			expectedPhases, expectedNode, cancelledPhase = 1, "leader", "plan"
+		}
+		var arrived struct {
+			NodeID string `json:"nodeId"`
+		}
+		nativeSigningRead(t, filepath.Join(directory, "provider-task-arrived.json"), &arrived)
+		if arrived.NodeID != expectedNode {
+			t.Fatal("provider did not enter the actual first task", arrived.NodeID)
+		}
+		before, present, readErr := control.AgentRunMetadata(created.RunID)
+		records, recordErr := control.ListAuthoritativeRecords("action")
+		if readErr != nil || !present || (!planningCancellation && before.Status != "running") || (planningCancellation && (len(before.Plan) != 0 || (before.Status != "created" && before.Status != "planning"))) || recordErr != nil || len(records) != expectedPhases {
+			t.Fatal("active cancellation did not observe an admitted task phase", readErr, recordErr)
+		}
+		taskAction := ""
+		for _, record := range records {
+			if record.State != "SUCCEEDED" {
+				taskAction = record.ID
+			}
+		}
+		lease, leased, leaseErr := control.GetActionLease(taskAction)
+		resources, resourceErr := control.GetResourceLeases(taskAction)
+		if taskAction == "" || leaseErr != nil || !leased || resourceErr != nil || len(resources) == 0 {
+			t.Fatal("actual task has no live admission/resources", leaseErr, resourceErr)
+		}
+		for attempt := 0; attempt < 2; attempt++ {
+			cancelResponse, postErr := client.Post(public.Origin+"/api/agent-runs/"+created.RunID+"/cancel", "application/json", bytes.NewBufferString(`{}`))
+			if postErr != nil {
+				t.Fatal(postErr)
+			}
+			cancelRaw, readErr := io.ReadAll(io.LimitReader(cancelResponse.Body, 2<<20))
+			cancelResponse.Body.Close()
+			var cancelled struct {
+				Cancelled bool           `json:"cancelled"`
+				Run       map[string]any `json:"run"`
+			}
+			if readErr != nil || cancelResponse.StatusCode != http.StatusOK || json.Unmarshal(cancelRaw, &cancelled) != nil ||
+				cancelled.Cancelled != (attempt == 0) || cancelled.Run["status"] != "cancelled" {
+				t.Fatal("actual active cancellation failed", readErr)
+			}
+		}
+		// Stop this controller before releasing the provider: retained custody must survive a new controller owner.
+		stop()
+		// Only after the public cancellation has committed may the controlled provider finish.
+		nativeSigningWrite(t, filepath.Join(directory, "provider-release.json"), map[string]any{"cancelled": true})
+		session, err := configuredAgentExecutionSigner(control)
+		if err != nil || session == nil || session.client == nil {
+			t.Fatal("actual worker query unavailable", err)
+		}
+		defer session.close()
+		worker, ok := session.client.(agentDriverWorker)
+		if !ok {
+			t.Fatal("configured production worker lacks actual node custody query")
+		}
+		service := &agentRunService{control: control, health: HealthFor(config.Config{Mode: config.ModeAuthoritative})}
+		nodes := &agentNodeService{run: service}
+		fence := &commonv1.ActionFence{ActionId: taskAction, ExecutionEpoch: uint64(lease.Epoch)}
+		dispatch, err := nodes.GetDispatch(context.Background(), &agentv1.GetAgentNodeDispatchRequest{Fence: fence, RunId: created.RunID, NodeId: arrived.NodeID})
+		if err != nil || !dispatch.Found || dispatch.Intent == nil {
+			t.Fatal("actual in-flight dispatch missing", err)
+		}
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			effect, queryErr := worker.QueryAgentNodeEffect(context.Background(), &agentv1.QueryAgentNodeEffectRequest{
+				OperationId: dispatch.Intent.OperationId, Fence: fence, RunId: created.RunID, NodeId: arrived.NodeID})
+			if queryErr == nil && effect != nil && effect.State == "CONFIRMED" && effect.OutcomeReceipt != nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("actual late provider effect custody was not confirmed", queryErr)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		// Drain the real controller, then observe a stable terminal public cursor.
+		stop()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			t.Fatal("cancelled controller did not drain")
+		}
+		after, present, readErr := control.AgentRunMetadata(created.RunID)
+		records, recordErr = control.ListAuthoritativeRecords("action")
+		resources, resourceErr = control.GetResourceLeases(taskAction)
+		if readErr != nil || !present || after.Status != "cancelled" || after.NextIndex != before.NextIndex+1 || recordErr != nil || len(records) != expectedPhases ||
+			resourceErr != nil || len(resources) == 0 {
+			t.Fatal("active cancellation fabricated settlement or released unresolved resources", readErr, recordErr, resourceErr)
+		}
+		for _, record := range records {
+			if record.ID == taskAction && record.State == "SUCCEEDED" {
+				t.Fatal("cancelled task phase was fabricated as successful")
+			}
+		}
+		recoveryCtx, recoveryStop := context.WithCancel(context.Background())
+		recoveryDone := StartAgentRunDriver(recoveryCtx, control, HealthFor(config.Config{Mode: config.ModeAuthoritative}))
+		defer func() {
+			recoveryStop()
+			select {
+			case <-recoveryDone:
+			case <-time.After(15 * time.Second):
+				t.Error("recovery controller did not drain")
+			}
+		}()
+		recoveryDeadline := time.Now().Add(165 * time.Second)
+		for {
+			records, recordErr = control.ListAuthoritativeRecords("action")
+			resources, resourceErr = control.GetResourceLeases(taskAction)
+			settled := false
+			for _, record := range records {
+				if record.ID == taskAction && record.State == "CANCELLED_CONFIRMED" {
+					settled = true
+				}
+			}
+			if recordErr == nil && resourceErr == nil && len(resources) == 0 && settled {
+				break
+			}
+			if time.Now().After(recoveryDeadline) {
+				t.Fatal("new controller did not settle confirmed cancelled custody", recordErr, resourceErr)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		after, present, readErr = control.AgentRunMetadata(created.RunID)
+		recoveredAction, recovered, leaseErr := control.Get("action", taskAction)
+		if readErr != nil || !present || after.Status != "cancelled" || after.NextIndex != before.NextIndex+1 || leaseErr != nil || !recovered || recoveredAction.ExecutionEpoch <= lease.Epoch || recoveredAction.State != "CANCELLED_CONFIRMED" {
+			t.Fatal("cancelled recovery changed public state or omitted fenced takeover", readErr, leaseErr)
+		}
+		response, err = client.Get(public.Origin + "/api/agent-runs/" + created.RunID + "/stream")
+		if err != nil {
+			t.Fatal(err)
+		}
+		streamRaw, readErr := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+		response.Body.Close()
+		if readErr != nil || response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/x-ndjson") ||
+			bytes.Contains(streamRaw, []byte("request-only-credential")) {
+			t.Fatal("active cancellation stream unavailable or leaked credentials", readErr)
+		}
+		var streamEvents []map[string]any
+		for _, line := range strings.Split(string(streamRaw), "\n") {
+			if strings.TrimSpace(line) != "" {
+				var event map[string]any
+				if json.Unmarshal([]byte(line), &event) != nil {
+					t.Fatal("invalid actual active cancellation stream")
+				}
+				streamEvents = append(streamEvents, event)
+			}
+		}
+		if len(streamEvents) != int(after.NextIndex) || streamEvents[len(streamEvents)-1]["status"] != "cancelled" {
+			t.Fatal("late provider response changed terminal public stream")
+		}
+		nativeSigningWrite(t, filepath.Join(directory, "result.json"), map[string]any{
+			"status": "PASS", "runId": created.RunID, "runStatus": after.Status, "beforeCancelIndex": before.NextIndex, "nextIndex": after.NextIndex,
+			"durablePhases": len(records), "publicStreamEventCount": len(streamEvents), "resourcesRetained": false, "resourcesRetainedBeforeRecovery": true, "resourcesReleased": true,
+			"cancelledDuringActualProviderRequest": true, "actualLateTaskCustodyConfirmed": !planningCancellation, "actualLateEffectCustodyConfirmed": true, "cancelledPhase": cancelledPhase, "noTaskAdmission": planningCancellation, "noDependentOrSynthesisAdmission": true,
+			"repeatCancellationIdempotent": true, "activeCancellationSafetyQualified": true, "cancelledPhaseRecoveryQualified": true, "controllerRestartRecoveryQualified": true, "recoveryExecutionEpoch": recoveredAction.ExecutionEpoch, "originalExecutionEpoch": lease.Epoch,
+			"requestSha256": after.Request.SHA256, "requestLength": after.Request.Length, "actualPreset": after.Preset, "actualPlan": after.Plan,
+			"inputBodySeededByOfflineOracle": false, "productionProviderQualified": false, "fullMigrationQualified": false,
+			"productionRuntimeProcesses": []string{"Go", "Rust"}, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})
+		return
+	}
+	deadline := time.Now().Add(150 * time.Second)
+	var publicRun map[string]any
+	confirmed := false
+	for {
+		if time.Now().After(deadline) {
+			t.Fatalf("native DAG did not finish; last public state=%v", publicRun)
+		}
+		response, err = client.Get(public.Origin + "/api/agent-runs/" + created.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err = io.ReadAll(io.LimitReader(response.Body, 2<<20))
+		response.Body.Close()
+		if err != nil || response.StatusCode != http.StatusOK {
+			t.Fatalf("public read status=%d error=%v body=%s", response.StatusCode, err, raw)
+		}
+		var envelope struct {
+			Run map[string]any `json:"run"`
+		}
+		if json.Unmarshal(raw, &envelope) != nil || envelope.Run == nil {
+			t.Fatal("invalid native public response")
+		}
+		publicRun = envelope.Run
+		if publicRun["status"] == "awaiting_plan" && !confirmed {
+			metadata, found, err := control.AgentRunMetadata(created.RunID)
+			records, recordErr := control.ListAuthoritativeRecords("action")
+			if err != nil || !found || metadata.Status != "awaiting_plan" || !metadata.ConfirmPlan ||
+				recordErr != nil || len(records) != 1 || records[0].State != "SUCCEEDED" {
+				t.Fatal("auto plan did not stop before task admission", err, recordErr)
+			}
+			// Leave a complete controller tick while confirmation is absent.
+			time.Sleep(1200 * time.Millisecond)
+			records, recordErr = control.ListAuthoritativeRecords("action")
+			if recordErr != nil || len(records) != 1 {
+				t.Fatal("tasks started without actual public confirmation", recordErr)
+			}
+			if os.Getenv("DEEPSEEK_TEST_AGENT_CANCEL_AFTER_PLAN") == "1" {
+				beforeIndex := metadata.NextIndex
+				for attempt := 0; attempt < 2; attempt++ {
+					cancelResponse, postErr := client.Post(public.Origin+"/api/agent-runs/"+created.RunID+"/cancel", "application/json", bytes.NewBufferString(`{}`))
+					if postErr != nil {
+						t.Fatal("actual public cancellation", postErr)
+					}
+					cancelRaw, readErr := io.ReadAll(io.LimitReader(cancelResponse.Body, 2<<20))
+					cancelResponse.Body.Close()
+					var cancelled struct {
+						Cancelled bool           `json:"cancelled"`
+						Run       map[string]any `json:"run"`
+					}
+					if readErr != nil || cancelResponse.StatusCode != http.StatusOK || json.Unmarshal(cancelRaw, &cancelled) != nil ||
+						cancelled.Cancelled != (attempt == 0) || cancelled.Run["status"] != "cancelled" {
+						t.Fatalf("public cancellation failed: attempt=%d status=%d body=%s error=%v", attempt, cancelResponse.StatusCode, cancelRaw, readErr)
+					}
+				}
+				// A cancelled plan must remain terminal through the actual confirmation entry.
+				planResponse, postErr := client.Post(public.Origin+"/api/agent-runs/"+created.RunID+"/plan", "application/json", bytes.NewBufferString(`{"payload":{}}`))
+				if postErr != nil {
+					t.Fatal(postErr)
+				}
+				planResponse.Body.Close()
+				if planResponse.StatusCode != http.StatusConflict {
+					t.Fatal("cancelled plan was accepted", planResponse.StatusCode)
+				}
+				time.Sleep(1200 * time.Millisecond)
+				cancelledMetadata, present, readErr := control.AgentRunMetadata(created.RunID)
+				records, recordErr = control.ListAuthoritativeRecords("action")
+				if readErr != nil || !present || cancelledMetadata.Status != "cancelled" || cancelledMetadata.NextIndex != beforeIndex+1 ||
+					recordErr != nil || len(records) != 1 || records[0].State != "SUCCEEDED" || len(cancelledMetadata.Plan) != len(expectedPlan) {
+					t.Fatal("cancellation altered the plan or admitted tasks", readErr, recordErr)
+				}
+				resources, resourceErr := control.GetResourceLeases(records[0].ID)
+				if resourceErr != nil || len(resources) != 0 {
+					t.Fatal("planner retained terminal resources", resourceErr)
+				}
+				for _, node := range expectedPlan {
+					if cancelledMetadata.Nodes()[node.ID].State == "succeeded" || cancelledMetadata.Nodes()[node.ID].State == "failed" {
+						t.Fatal("cancelled plan fabricated a task outcome", node.ID)
+					}
+				}
+				response, err = client.Get(public.Origin + "/api/agent-runs/" + created.RunID + "/events")
+				if err != nil {
+					t.Fatal(err)
+				}
+				eventRaw, readErr := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+				response.Body.Close()
+				var eventPage struct {
+					Events []map[string]any `json:"events"`
+				}
+				if readErr != nil || response.StatusCode != http.StatusOK || json.Unmarshal(eventRaw, &eventPage) != nil ||
+					len(eventPage.Events) != int(cancelledMetadata.NextIndex) || eventPage.Events[len(eventPage.Events)-1]["status"] != "cancelled" ||
+					bytes.Contains(eventRaw, []byte("request-only-credential")) {
+					t.Fatal("public cancellation event page omitted terminal custody", readErr)
+				}
+				response, err = client.Get(public.Origin + "/api/agent-runs/" + created.RunID + "/stream")
+				if err != nil {
+					t.Fatal(err)
+				}
+				streamRaw, readErr := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+				response.Body.Close()
+				if readErr != nil || response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/x-ndjson") ||
+					bytes.Contains(streamRaw, []byte("request-only-credential")) {
+					t.Fatal("actual terminal NDJSON stream failed", readErr)
+				}
+				var streamEvents []map[string]any
+				for _, line := range strings.Split(string(streamRaw), "\n") {
+					if strings.TrimSpace(line) != "" {
+						var event map[string]any
+						if json.Unmarshal([]byte(strings.TrimSpace(line)), &event) != nil {
+							t.Fatal("invalid actual NDJSON event")
+						}
+						streamEvents = append(streamEvents, event)
+					}
+				}
+				if len(streamEvents) != len(eventPage.Events) || streamEvents[len(streamEvents)-1]["status"] != "cancelled" {
+					t.Fatal("NDJSON terminal events differ from durable page")
+				}
+				nativeSigningWrite(t, filepath.Join(directory, "result.json"), map[string]any{
+					"status": "PASS", "runId": created.RunID, "runStatus": cancelledMetadata.Status, "nextIndex": cancelledMetadata.NextIndex, "beforeCancelIndex": beforeIndex,
+					"durablePhases": len(records), "publicEventCount": len(eventPage.Events), "publicStreamEventCount": len(streamEvents),
+					"resourcesReleased": true, "noTasksAfterCancellation": true, "repeatCancellationIdempotent": true, "confirmationAfterCancellationDenied": true,
+					"requestSha256": cancelledMetadata.Request.SHA256, "requestLength": cancelledMetadata.Request.Length, "actualPreset": cancelledMetadata.Preset,
+					"actualPlan": cancelledMetadata.Plan, "planConfirmationRequired": cancelledMetadata.ConfirmPlan,
+					"inputBodySeededByOfflineOracle": false, "productionProviderQualified": false, "fullMigrationQualified": false,
+					"productionRuntimeProcesses": []string{"Go", "Rust"}, "publicCancellationWhileAwaitingPlanQualified": true,
+					"activeTaskCancellationQualified": false, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})
+				fmt.Println("actual native public cancellation / duplicate / denied confirmation / JSON events / terminal NDJSON PASS")
+				return
+			}
+			confirmedResponse, postErr := client.Post(public.Origin+"/api/agent-runs/"+created.RunID+"/plan",
+				"application/json", bytes.NewBufferString(`{"payload":{}}`))
+			if postErr != nil {
+				t.Fatal("actual public confirmation", postErr)
+			}
+			confirmedRaw, readErr := io.ReadAll(io.LimitReader(confirmedResponse.Body, 2<<20))
+			confirmedResponse.Body.Close()
+			var confirmation struct {
+				Started bool `json:"started"`
+			}
+			if readErr != nil || confirmedResponse.StatusCode != http.StatusOK ||
+				json.Unmarshal(confirmedRaw, &confirmation) != nil || !confirmation.Started {
+				t.Fatalf("public confirmation failed status=%d body=%s error=%v", confirmedResponse.StatusCode, confirmedRaw, readErr)
+			}
+			confirmed = true
+		}
+		if publicRun["status"] == "done" {
+			break
+		}
+		if publicRun["status"] == "failed" || publicRun["status"] == "cancelled" {
+			t.Fatal("native run failed", publicRun["status"])
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	metadata, found, err := control.AgentRunMetadata(created.RunID)
+	if err != nil || !found || (expectedConfirmation && !confirmed) || metadata.ConfirmPlan != expectedConfirmation || metadata.Preset != preset ||
+		metadata.Status != "done" || metadata.NextIndex != int64(eventCount) {
+		t.Fatal("public state differs from actual Go durable settlement", err)
+	}
+	if len(metadata.Plan) != len(expectedPlan) {
+		t.Fatal("preset changed task cardinality")
+	}
+	for index, expected := range expectedPlan {
+		actual := metadata.Plan[index]
+		if actual.ID != expected.ID || actual.Task != expected.Task || fmt.Sprint(actual.DependsOn) != fmt.Sprint(expected.DependsOn) ||
+			metadata.Nodes()[expected.ID].State != "succeeded" {
+			t.Fatal("preset changed actual normalized task/dependency settlement", actual, expected)
+		}
+	}
+	records, err := control.ListAuthoritativeRecords("action")
+	if err != nil || len(records) != 3 {
+		t.Fatal("three durable phases missing", err)
+	}
+	for _, record := range records {
+		lease, active, err := control.GetActionLease(record.ID)
+		if err != nil || record.State != "SUCCEEDED" {
+			t.Fatal("phase not settled", err)
+		}
+		resources, err := control.GetResourceLeases(record.ID)
+		if err != nil || len(resources) != 0 {
+			t.Fatal("terminal resources not released", err)
+		}
+		if active && lease.LeaseUntil > time.Now().Unix() {
+			t.Fatal("terminal action retains a live lease")
+		}
+	}
+	if publicRun["nextIndex"] != float64(eventCount) {
+		t.Fatal("public event cursor omitted settlement")
+	}
+	events, ok := publicRun["events"].([]any)
+	if !ok || len(events) != eventCount {
+		t.Fatal("public immutable event bodies omitted")
+	}
+	serialized := string(raw)
+	if !bytes.Contains(raw, []byte("Controlled final answer")) || bytes.Contains(raw, []byte("request-only-credential")) {
+		t.Fatal("public final answer missing or private credential leaked")
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "result.json"), map[string]any{
+		"status": "PASS", "runId": created.RunID, "runStatus": metadata.Status, "nextIndex": metadata.NextIndex,
+		"durablePhases": len(records), "resourcesReleased": true, "requestSha256": metadata.Request.SHA256, "requestLength": metadata.Request.Length,
+		"publicEventCount": len(events), "finalAnswerVisible": true, "publicResponseLength": len(serialized),
+		"inputBodySeededByOfflineOracle": false, "productionProviderQualified": false, "fullMigrationQualified": false,
+		"productionRuntimeProcesses": []string{"Go", "Rust"}, "providerFixtureIsOfflineTestTool": true,
+		"publicCreationAndDAGDriverQualified": true, "publicPlanConfirmationQualified": expectedConfirmation && confirmed, "noTasksBeforePublicConfirmation": expectedConfirmation && confirmed,
+		"planConfirmationRequired": metadata.ConfirmPlan, "actualPreset": metadata.Preset, "actualPlan": metadata.Plan, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})
+	fmt.Println("actual native public create / leader / dependent DAG / synthesis / final settlement PASS")
+}

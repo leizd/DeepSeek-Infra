@@ -20,8 +20,15 @@ def test_native_contract_check_passes() -> None:
     report = check_all()
     assert report["ok"] is True
     assert report["go"] == "1.27.1"
-    assert report["proto_files"] == 9
-    assert report["generated_outputs"] == 14
+    # Include browser, platform OCR and typed Agent node dispatch contracts.
+    assert report["proto_files"] == 11
+    assert (ROOT / "proto/browser/v1/browser.proto").is_file()
+    assert (ROOT / "proto/platform/v1/ocr.proto").is_file()
+    assert (ROOT / "proto/agent/v1/agent_node.proto").is_file()
+    # Agent run and node services each retain their generated gRPC binding.
+    assert report["generated_outputs"] == 19
+    assert (ROOT / "go/internal/protocol/agentv1/agent_grpc.pb.go").is_file()
+    assert (ROOT / "go/internal/protocol/agentv1/agent_node_grpc.pb.go").is_file()
 
 
 def test_go_shadow_process_cannot_mutate() -> None:
@@ -70,7 +77,18 @@ def test_ci_has_native_go_and_protocol_gates() -> None:
     assert (ROOT / "go/pkg/protocol/canonical.go").is_file()
     assert (ROOT / "scripts/native_codegen.py").is_file()
     assert (ROOT / "scripts/check_native_contract_parity.py").is_file()
-    assert re.search(r"go test -race(?: -timeout=30m)? \./\.\.\.", workflow)
+    native_go = yaml.safe_load(workflow)["jobs"]["native-go"]
+    race_commands = [
+        line.strip()
+        for step in native_go["steps"]
+        for line in step.get("run", "").splitlines()
+        if line.strip().startswith("go test -race ")
+    ]
+    assert len(race_commands) == 2
+    for command in race_commands:
+        assert re.fullmatch(r"go test -race(?: -json)? -timeout=(?:30|60)m \./\.\.\.(?: > \S+ 2> \S+)?", command)
+    android = next(step for step in native_go["steps"] if step.get("name") == "Android Go SQLite compatibility checks")
+    assert android["env"]["GOFLAGS"] == "-tags=deepseek_android"
     assert "scripts/check_go_coverage.py" in workflow
 
 
