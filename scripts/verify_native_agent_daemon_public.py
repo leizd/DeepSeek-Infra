@@ -52,7 +52,7 @@ def validate_runtime_update_result(result: dict[str, Any], exchanges: list[dict[
     validate_daemon_result(result, exchanges)
     flags = ["runtimePayloadUpdatedAfterRestart", "currentRequestRevisionBoundByGo", "originalRuntimeRequestRetained",
              "originalCredentialCiphertextRetained", "updatedContextReachedEveryRemainingPhase"]
-    if any(result.get(key) is not True for key in flags) or result.get("runtimeRevision") != 2 or \
+    if any(result.get(key) is not True for key in flags) or result.get("runtimeRevision") != 2 or result.get("metadataSchemaVersion") != 2 or \
             result.get("initialRuntimeRevision") != 1 or result.get("encryptedCredentialObjectCount") != 2 or \
             result.get("initialRequestSha256") == result.get("requestSha256") or \
             len(str(result.get("initialRequestSha256", ""))) != 64:

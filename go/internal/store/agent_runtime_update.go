@@ -45,6 +45,9 @@ func applyAgentRuntimeUpdateTx(tx *sql.Tx, run *agent.RunMetadata, mutation Agen
 		return ErrAgentRunExecutionRequired
 	}
 	run.Request = update.Request
+	// Older Go readers reject schema2 rather than decoding this field away and
+	// later persisting a v1 record with a silently reset runtime revision.
+	run.SchemaVersion = 2
 	run.RuntimeRevision = current + 1
 	return nil
 }

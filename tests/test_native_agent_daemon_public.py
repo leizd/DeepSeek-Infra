@@ -41,7 +41,7 @@ def runtime_update_fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     result, calls = daemon_fixture()
     result.update(runtimePayloadUpdatedAfterRestart=True, currentRequestRevisionBoundByGo=True,
         originalRuntimeRequestRetained=True, originalCredentialCiphertextRetained=True,
-        updatedContextReachedEveryRemainingPhase=True, runtimeRevision=2, initialRuntimeRevision=1,
+        updatedContextReachedEveryRemainingPhase=True, runtimeRevision=2, metadataSchemaVersion=2, initialRuntimeRevision=1,
         encryptedCredentialObjectCount=2, initialRequestSha256="a" * 64, requestSha256="b" * 64)
     for index, call in enumerate(calls):
         call.update(runtimeContextUsed=index != 0, requestCredentialUsed=True, credentialInProviderBody=False)
@@ -54,11 +54,11 @@ def test_accepts_actual_runtime_revision_without_full_migration_claim() -> None:
 
 @pytest.mark.parametrize("mutation", ["runtimePayloadUpdatedAfterRestart", "currentRequestRevisionBoundByGo",
     "originalRuntimeRequestRetained", "originalCredentialCiphertextRetained", "updatedContextReachedEveryRemainingPhase",
-    "runtimeRevision", "initialRuntimeRevision", "encryptedCredentialObjectCount", "same-request", "missing-old-hash",
+    "runtimeRevision", "metadataSchemaVersion", "initialRuntimeRevision", "encryptedCredentialObjectCount", "same-request", "missing-old-hash",
     "planner-context", "task-context", "task-key", "body-leak"])
 def test_runtime_revision_evidence_refuses_missing_or_inconsistent_proofs(mutation: str) -> None:
     result, calls = runtime_update_fixture()
-    if mutation in {"runtimeRevision", "initialRuntimeRevision", "encryptedCredentialObjectCount"}:
+    if mutation in {"runtimeRevision", "metadataSchemaVersion", "initialRuntimeRevision", "encryptedCredentialObjectCount"}:
         result[mutation] = 0
     elif mutation == "same-request":
         result["initialRequestSha256"] = result["requestSha256"]

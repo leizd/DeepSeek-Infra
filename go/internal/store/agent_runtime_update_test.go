@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -63,7 +65,7 @@ func TestAgentRuntimeUpdateCommitsRequestRevisionAndConfirmationTogether(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Run.RuntimeRevision != 2 || result.Run.RuntimeVersion() != 2 || result.Run.Request != input.RuntimeUpdate.Request ||
+	if result.Run.SchemaVersion != 2 || result.Run.RuntimeRevision != 2 || result.Run.RuntimeVersion() != 2 || result.Run.Request != input.RuntimeUpdate.Request ||
 		result.Run.Status != "running" || result.Run.NextIndex != 5 {
 		t.Fatalf("runtime update was not part of confirmation: %+v", result.Run)
 	}
@@ -233,5 +235,56 @@ func TestAgentRuntimeUpdateConcurrentPreparationsCommitOneReference(t *testing.T
 	if err != nil || succeeded != 1 || conflicted != 1 || current.RuntimeVersion() != 2 || current.Request != winner ||
 		current.NextIndex != 5 || countControlEvents(t, control) != before+1 {
 		t.Fatalf("concurrent preparations: %+v %v", current, err)
+	}
+}
+
+func TestAgentRuntimeMetadataSchemaRejectsMissingOrInconsistentRevisions(t *testing.T) {
+	control, input := runtimeUpdateFixture(t, false)
+	if _, err := control.AppendAgentRunEvent(input); err != nil {
+		t.Fatal(err)
+	}
+	record, found, err := control.Get("agent_run", input.RunID)
+	if err != nil || !found {
+		t.Fatal(err)
+	}
+	current, err := decodeAgentMetadata(record)
+	if err != nil || current.SchemaVersion != 2 || current.RuntimeVersion() != 2 {
+		t.Fatalf("schema2 metadata: %+v %v", current, err)
+	}
+	for _, change := range [][2]uint64{{1, 2}, {2, 0}, {2, 1}, {3, 2}} {
+		changed := current
+		changed.SchemaVersion, changed.RuntimeRevision = uint32(change[0]), change[1]
+		payload, err := json.Marshal(changed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		copy := record
+		copy.Payload = payload
+		if _, err := decodeAgentMetadata(copy); !errors.Is(err, ErrAgentRunMetadataInvalid) {
+			t.Fatalf("schema/revision %v accepted: %v", change, err)
+		}
+	}
+}
+
+func TestAgentRuntimeUpdateFailsClosedWhenReservationReadCannotComplete(t *testing.T) {
+	control, input := runtimeUpdateFixture(t, false)
+	before, _, err := control.AgentRunMetadata(input.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := before
+	tx, err := control.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyAgentRuntimeUpdateTx(tx, &current, input); !errors.Is(err, sql.ErrTxDone) {
+		t.Fatalf("unreadable reservations were treated as absent: %v", err)
+	}
+	after, _, err := control.AgentRunMetadata(input.RunID)
+	if err != nil || !reflect.DeepEqual(current, before) || !reflect.DeepEqual(after, before) {
+		t.Fatalf("failed reservation read changed runtime: %+v %v", after, err)
 	}
 }

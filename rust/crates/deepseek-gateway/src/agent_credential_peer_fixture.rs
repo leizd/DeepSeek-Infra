@@ -181,11 +181,15 @@ async fn credential_transport_refuses_foreign_hostname_and_bearer() {
         assert!(
             crate::agent_credential_client::prepare(
                 &config,
-                "run-fixture",
-                1,
-                &reference,
-                Some("request-only-credential"),
-                None
+                crate::agent_credential_client::Preparation {
+                    run_id: "run-fixture",
+                    epoch: 1,
+                    reference: &reference,
+                    runtime_revision: 1,
+                    api_key: Some("request-only-credential"),
+                    tavily_api_key: None,
+                    runtime_update: None,
+                },
             )
             .await
             .is_err()
