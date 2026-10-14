@@ -9,10 +9,7 @@ impl Scratch {
     fn new() -> Self {
         let mut nonce = [0u8; 16];
         getrandom::getrandom(&mut nonce).unwrap();
-        let name = nonce
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let name = format!("{:032x}", u128::from_be_bytes(nonce));
         let root = std::env::temp_dir().join(format!("native-agent-credential-test-{name}"));
         std::fs::create_dir(&root).unwrap();
         Self(root)
