@@ -159,7 +159,11 @@ fn semantic_value(component: &str, value: &Value) -> Value {
 }
 
 fn output_hash(component: &str, value: &Value) -> String {
-    let encoded = serde_json::to_vec(&semantic_value(component, value)).unwrap_or_default();
+    // The workspace preserves map insertion order. Python's benchmark hashes
+    // sorted JSON, so normalize every object before comparing semantic hashes.
+    let mut semantic = semantic_value(component, value);
+    semantic.sort_all_objects();
+    let encoded = serde_json::to_vec(&semantic).unwrap_or_default();
     let digest = Blake2s256::digest(encoded);
     let mut rendered = String::with_capacity(digest.len() * 2);
     for byte in digest {
@@ -233,4 +237,46 @@ fn main() {
         }))
         .expect("benchmark result must serialize")
     );
+}
+
+#[cfg(test)]
+mod semantic_hash_tests {
+    use super::*;
+
+    #[test]
+    fn object_order_matches_the_python_semantic_digest() {
+        let first: Value = serde_json::from_str(
+            r#"{"ok":true,"request":{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}]}}"#,
+        )
+        .unwrap();
+        let reordered: Value = serde_json::from_str(
+            r#"{"request":{"messages":[{"content":"hello","role":"user"}],"model":"deepseek-v4-pro"},"ok":true}"#,
+        )
+        .unwrap();
+        let digest = output_hash("gateway_prepare", &first);
+        // Public Python sorted-JSON/BLAKE2s fixture digest; not a credential.
+        assert_eq!(
+            digest,
+            "910163f57b02a655f1a5efa8d2d5209a46f94b48f3dc62306b403a64bef5c6f9" // pragma: allowlist secret
+        );
+        assert_eq!(digest, output_hash("gateway_prepare", &reordered));
+    }
+
+    #[test]
+    fn request_values_and_array_order_remain_distinct() {
+        let request = json!({"ok": true, "request": {"messages": [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "reply"}
+        ]}});
+        let digest = output_hash("gateway_prepare", &request);
+        let mut changed = request.clone();
+        changed["request"]["messages"][0]["content"] = json!("changed");
+        assert_ne!(digest, output_hash("gateway_prepare", &changed));
+        let mut reversed = request;
+        reversed["request"]["messages"]
+            .as_array_mut()
+            .unwrap()
+            .reverse();
+        assert_ne!(digest, output_hash("gateway_prepare", &reversed));
+    }
 }

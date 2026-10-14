@@ -21,6 +21,8 @@ pub mod a2a_control;
 pub mod a2a_hub;
 pub mod a2a_runner;
 pub mod a2a_stream;
+mod agent_credential_client;
+mod agent_run_routes;
 mod artifact_preview_routes;
 pub mod assembly_env;
 mod auth;
@@ -33,7 +35,9 @@ mod backup_replication_routes;
 mod backup_retirement_routes;
 mod backup_run_routes;
 pub mod browser_engine_client;
+mod chat_cascade;
 pub mod chat_execution;
+mod chat_multi_agent;
 pub mod chat_ndjson;
 pub mod chat_stream;
 pub mod chat_tool_loop;
@@ -195,6 +199,7 @@ fn create_routes() -> Router {
         .merge(media_segment_routes::router())
         .merge(resilience_federation_routes::router())
         .merge(artifact_preview_routes::router())
+        .merge(agent_run_routes::router())
         .merge(scheduler_routes::router())
         .merge(edge_status_routes::router())
         .merge(rust_status_routes::router())
@@ -637,9 +642,26 @@ async fn api_config() -> Json<serde_json::Value> {
             "requestMaxBytes": deepseek_policy::file_upload::MAX_UPLOAD_BYTES,
             "maxFiles": 20,
         },
+        "ocr": public_ocr_config(
+            &std::env::var("OCR_ENABLED").unwrap_or_default(),
+            &std::env::var("OCR_MODE").unwrap_or_default(),
+        ),
         "mcp": {"enabled": true, "protocolVersion": "2025-06-18", "endpoint": "/mcp"},
         "a2a": {"enabled": true, "protocolVersion": "0.3.0", "endpoint": "/a2a"},
     }))
+}
+
+fn public_ocr_config(enabled: &str, mode: &str) -> Value {
+    let enabled = matches!(
+        enabled.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    );
+    let normalized = mode.trim().to_ascii_lowercase();
+    let mode = match normalized.as_str() {
+        "fast" | "quality" => normalized.as_str(),
+        _ => "balanced",
+    };
+    json!({"enabled": enabled, "mode": mode, "localOnly": false})
 }
 
 async fn models() -> (StatusCode, Json<serde_json::Value>) {
@@ -689,7 +711,7 @@ const MEMORY_VECTOR_INDEX_NOT_REPRODUCIBLE: &str = "NATIVE_MEMORY_VECTOR_INDEX_N
 ///    4.9.4. A store that is **not** here stays refused whatever the mode says — setting the mode alone
 ///    must not be able to enable a store nobody declared — which is why the list is the second
 ///    condition rather than a detail of the first. A test pins it as a subset of the contract's.
-pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 5] = [
+pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 7] = [
     "memory_store",
     "reminders_store",
     "project_metadata_store",
@@ -698,6 +720,8 @@ pub(crate) const DECLARED_NATIVE_DATA_DOMAINS: [&str; 5] = [
     // of age ciphertext plus the `HEAD.json` pointer. Same rule as the others — declared
     // python -> rust at 4.9.4, and only `python_disabled` lets this process write it.
     "frontend_mirror_store",
+    "observability_trace_store",
+    "generated_files_store",
 ];
 
 /// Whether this process may write the store `domain` names.
@@ -1735,6 +1759,7 @@ mod tests {
 
     #[tokio::test]
     async fn unimplemented_public_routes_never_claim_native_success() {
+        let _a2a = crate::a2a_hub::TEST_LOCK.lock().await;
         let app = create_app();
         let (card_status, card_body) =
             send_request(app.clone(), "GET", "/.well-known/agent-card.json", None).await;
@@ -2115,5 +2140,37 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let response: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(response["code"], "invalid_metadata");
+    }
+}
+
+#[cfg(test)]
+mod public_ocr_config_tests {
+    use super::*;
+
+    #[test]
+    fn public_ocr_retains_modes_defaults_and_environment_bool_semantics() {
+        for (enabled, expected) in [
+            ("1", true),
+            (" TRUE ", true),
+            ("yes", true),
+            ("on", true),
+            ("0", false),
+            ("false", false),
+            ("", false),
+            ("invalid", false),
+        ] {
+            for (mode, wanted) in [
+                ("fast", "fast"),
+                (" quality ", "quality"),
+                ("BALANCED", "balanced"),
+                ("invalid", "balanced"),
+                ("", "balanced"),
+            ] {
+                assert_eq!(
+                    public_ocr_config(enabled, mode),
+                    json!({"enabled":expected,"mode":wanted,"localOnly":false})
+                );
+            }
+        }
     }
 }

@@ -31,6 +31,7 @@
 
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use deepseek_policy::browser_engine::{
     BrowserEngine, EngineAction, EngineDownload, EngineError, EngineFence, EngineLink,
@@ -74,56 +75,62 @@ impl GrpcBrowserEngine {
     /// which the policy crate reports as `playwright_available() == false` and
     /// serves with the static controller.
     ///
-    /// Refuses to run inside an async context: this method blocks on its own runtime,
-    /// and `Runtime::block_on` panics when called from a thread that already has one.
-    /// The browser branch runs under `spawn_blocking`, which has no runtime handle, so
-    /// the legitimate call sites are unaffected — a caller that is inside a runtime is
-    /// asking for the engine from a place where it cannot be built.
+    /// The worker owns runtime construction, connection and the initial probe.
+    /// Chat assembly may call this from an async context without nesting runtimes
+    /// or silently disabling an existing sidecar. Initialisation is bounded;
+    /// action deadlines and the caller's fences retain their existing semantics.
     pub fn connect(addr: &str) -> Option<Arc<Self>> {
-        if tokio::runtime::Handle::try_current().is_ok() {
-            eprintln!(
-                "deepseek-gateway: refusing to connect to the browser engine from inside \
-                 an async runtime; construct it at startup instead"
-            );
-            return None;
-        }
-        let endpoint = tonic::transport::Endpoint::from_shared(addr.to_string()).ok()?;
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .ok()?;
-        let channel = runtime.block_on(endpoint.connect()).ok()?;
-        let mut client = BrowserEngineClient::new(channel);
-
-        // Probe once, on this thread, before the worker starts: a status the gateway
-        // reports must be a status it measured.
-        let probe = runtime.block_on(client.status(StatusRequest {
-            fence: Some(proto_fence(&EngineFence::for_request("engine-status", 1))),
-        }));
-        let status = match probe {
-            Ok(response) => {
-                let response = response.into_inner();
-                EngineStatus {
-                    available: response.available,
-                    engine_kind: response.engine_kind,
-                    chromium_revision: response.chromium_revision,
-                    reason: response.reason,
-                }
-            }
-            Err(status) => EngineStatus {
-                available: false,
-                engine_kind: String::new(),
-                chromium_revision: String::new(),
-                reason: format!("the browser engine refused Status: {}", status.message()),
-            },
-        };
-
+        let endpoint = tonic::transport::Endpoint::from_shared(addr.to_string())
+            .ok()?
+            .connect_timeout(Duration::from_secs(2));
+        let (initialised, status_receiver) = std::sync::mpsc::sync_channel(1);
         let (sender, receiver) = std::sync::mpsc::channel::<Job>();
         let handle = std::thread::Builder::new()
             .name("deepseek-browser-engine".to_string())
             .spawn(move || {
-                let mut runtime = runtime;
-                let mut client = client;
+                let Ok(mut runtime) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                else {
+                    return;
+                };
+                let Ok(channel) = runtime.block_on(endpoint.connect()) else {
+                    return;
+                };
+                let mut client = BrowserEngineClient::new(channel);
+                // Publish only the status measured over the actual RPC. A deadline
+                // is unavailable, never an inferred successful browser launch.
+                let probe = runtime.block_on(async {
+                    tokio::time::timeout(
+                        Duration::from_secs(2),
+                        client.status(StatusRequest {
+                            fence: Some(proto_fence(&EngineFence::for_request("engine-status", 1))),
+                        }),
+                    )
+                    .await
+                });
+                let status = match probe {
+                    Ok(Ok(response)) => {
+                        let response = response.into_inner();
+                        EngineStatus {
+                            available: response.available,
+                            engine_kind: response.engine_kind,
+                            chromium_revision: response.chromium_revision,
+                            reason: response.reason,
+                        }
+                    }
+                    Ok(Err(status)) => EngineStatus {
+                        reason: format!("the browser engine refused Status: {}", status.message()),
+                        ..Default::default()
+                    },
+                    Err(_) => EngineStatus {
+                        reason: "the browser engine Status probe timed out".to_string(),
+                        ..Default::default()
+                    },
+                };
+                if initialised.send(status).is_err() {
+                    return;
+                }
                 // The receiver ends when the sender is dropped, which is when this
                 // process stops holding the engine.
                 while let Ok(job) = receiver.recv() {
@@ -134,6 +141,7 @@ impl GrpcBrowserEngine {
                 }
             })
             .ok()?;
+        let status = status_receiver.recv_timeout(Duration::from_secs(5)).ok()?;
         // The thread is detached on purpose: it owns no state a caller can observe
         // except through the channel, and it exits when that channel closes.
         drop(handle);

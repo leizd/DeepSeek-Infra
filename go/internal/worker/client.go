@@ -27,6 +27,7 @@ type Client struct {
 	tlsSecured     bool
 	bearerAttached bool
 	signer         actionv1.ControlSignerClient
+	nodes          agentNodeClient
 }
 
 func New(rpc actionv1.WorkerClient) *Client {

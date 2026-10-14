@@ -13,9 +13,10 @@ import (
 // Server is a running control listener. Done delivers one terminal error (nil on
 // normal cancellation) after the HTTP server and its owned store have closed.
 type Server struct {
-	address string
-	done    chan error
-	stopRPC func()
+	address   string
+	done      chan error
+	stopRPC   func()
+	agentDone <-chan struct{}
 }
 
 func (runtime *Server) Addr() string       { return runtime.address }
@@ -30,6 +31,7 @@ func (runtime *Server) supervise(ctx context.Context, cancel context.CancelFunc,
 	}
 	var renewal <-chan error
 	var renewalDeadline <-chan struct{}
+	var renewCtx context.Context
 	cancelRenewal := func() {}
 	var terminal error
 	serveFinished := false
@@ -46,16 +48,25 @@ monitor:
 			if renewal != nil {
 				continue
 			}
-			renewCtx, stop := context.WithTimeout(ctx, 5*time.Second)
+			var stop context.CancelFunc
+			renewCtx, stop = context.WithTimeout(ctx, 5*time.Second)
 			cancelRenewal = stop
 			results := make(chan error, 1)
 			renewal, renewalDeadline = results, renewCtx.Done()
 			go func() { results <- control.RenewWriter(renewCtx) }()
 		case err := <-renewal:
+			// A renewal abandoned when its own budget expired reports that
+			// deadline, not the driver error the deadline's interruption
+			// produced. Read the context before cancelling it: cancelling
+			// would make every renewal error look expired.
+			expired := renewCtx != nil && renewCtx.Err() != nil
 			cancelRenewal()
-			renewal, renewalDeadline = nil, nil
+			renewal, renewalDeadline, renewCtx = nil, nil, nil
 			if err != nil {
 				if ctx.Err() == nil {
+					if expired {
+						err = context.DeadlineExceeded
+					}
 					terminal = fmt.Errorf("control writer renewal: %w", err)
 				}
 				break monitor
@@ -85,6 +96,9 @@ monitor:
 	}
 	if renewal != nil {
 		<-renewal
+	}
+	if runtime.agentDone != nil {
+		<-runtime.agentDone
 	}
 	if control != nil {
 		terminal = errors.Join(terminal, control.Close())

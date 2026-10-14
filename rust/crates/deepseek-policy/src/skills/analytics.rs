@@ -44,6 +44,56 @@ pub fn safe_int(value: &Value, default: i64) -> i64 {
         .unwrap_or(default)
         .max(0)
 }
+
+/// The route's `int(str(raw))` followed by its 0..1000 clamp. Decimal blocks
+/// match the reference runtime's Unicode 15.1 data; numeric symbols such as
+/// superscripts are not decimal digits. Saturation preserves large valid ints.
+pub fn request_limit(raw: &str, default: usize) -> usize {
+    const DECIMAL_ZEROS: &[u32] = &[
+        0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66,
+        0xde6, 0xe50, 0xed0, 0xf20, 0x1040, 0x1090, 0x17e0, 0x1810, 0x1946, 0x19d0, 0x1a80, 0x1a90,
+        0x1b50, 0x1bb0, 0x1c40, 0x1c50, 0xa620, 0xa8d0, 0xa900, 0xa9d0, 0xa9f0, 0xaa50, 0xabf0,
+        0xff10, 0x104a0, 0x10d30, 0x11066, 0x110f0, 0x11136, 0x111d0, 0x112f0, 0x11450, 0x114d0,
+        0x11650, 0x116c0, 0x11730, 0x118e0, 0x11950, 0x11c50, 0x11d50, 0x11da0, 0x11f50, 0x16a60,
+        0x16ac0, 0x16b50, 0x1d7ce, 0x1d7d8, 0x1d7e2, 0x1d7ec, 0x1d7f6, 0x1e140, 0x1e2f0, 0x1e4f0,
+        0x1e950, 0x1fbf0,
+    ];
+    let raw = raw.trim();
+    let negative = raw.starts_with('-');
+    let digits = raw.strip_prefix(['+', '-']).unwrap_or(raw);
+    let mut value = 0usize;
+    let mut previous_digit = false;
+    let mut digit_count = 0usize;
+    for c in digits.chars() {
+        if c == '_' && previous_digit {
+            previous_digit = false;
+            continue;
+        }
+        let digit = if c.is_ascii_digit() {
+            Some(c as u32 - '0' as u32)
+        } else {
+            let point = c as u32;
+            DECIMAL_ZEROS
+                .iter()
+                .find_map(|zero| (point >= *zero && point < zero + 10).then(|| point - zero))
+        };
+        let Some(digit) = digit else { return default };
+        digit_count += 1;
+        // Python's default decimal-conversion bound applies before the clamp.
+        if digit_count > 4300 {
+            return default;
+        }
+        value = (value * 10 + digit as usize).min(1000);
+        previous_digit = true;
+    }
+    if !previous_digit {
+        default
+    } else if negative {
+        0
+    } else {
+        value
+    }
+}
 fn unique(value: &Value) -> Vec<String> {
     let mut out = Vec::new();
     for s in strings(value) {
@@ -263,11 +313,15 @@ pub fn summarize(value: &Value) -> String {
                 v.iter()
                     .take(8)
                     .map(|(k, v)| {
-                        let v = match v {
-                            Value::String(s) => s.chars().take(80).collect(),
-                            Value::Array(v) => format!("{} items", v.len()),
-                            Value::Object(v) => format!("{} fields", v.len()),
-                            _ => crate::python_json::value_str(v),
+                        let v = if super::trace::sensitive_key(k) {
+                            "[redacted]".into()
+                        } else {
+                            match v {
+                                Value::String(s) => s.chars().take(80).collect(),
+                                Value::Array(v) => format!("{} items", v.len()),
+                                Value::Object(v) => format!("{} fields", v.len()),
+                                _ => crate::python_json::value_str(v),
+                            }
                         };
                         format!("{k}={v}")
                     })

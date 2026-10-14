@@ -1,0 +1,943 @@
+{
+  "oracle": {
+    "path": "deepseek_infra/infra/tool_runtime/search.py",
+    "function": "search_for_client",
+    "sourceSha256": "8ebe386bd466ee25c3b1bfe807ce8d7477da84869fbd98d5d29f2f518d2f085f",
+    "functionSha256": "27f99a03355188501303a426278ceec3b14540dbc3c64936d13ae6997f7bb05a"
+  },
+  "cases": [
+    {
+      "input": null,
+      "expected": null
+    },
+    {
+      "input": {},
+      "expected": null
+    },
+    {
+      "input": {
+        "query": "missing fields"
+      },
+      "expected": {
+        "status": "done",
+        "query": "missing fields",
+        "reason": "",
+        "answer": "",
+        "cached": false,
+        "results": [],
+        "rounds": [],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "status": "done",
+        "query": "中文搜索",
+        "reason": "owned reason",
+        "answer": "owned answer",
+        "cached": false,
+        "api_key": "fake-provider-private-field",
+        "results": [
+          {
+            "title": "source",
+            "url": "https://example.invalid/source",
+            "content": "evidence",
+            "round": 2,
+            "favicon": null,
+            "cite": "[^W2]",
+            "citation_id": "W2",
+            "score": 1,
+            "provider_private": "drop"
+          }
+        ],
+        "rounds": [
+          {
+            "round": 2,
+            "query": "中文搜索",
+            "status": "done",
+            "answer": "owned round",
+            "error": "",
+            "retried": false,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [
+              {
+                "title": "source",
+                "url": "https://example.invalid/source",
+                "content": "evidence",
+                "cite": "[^W2]",
+                "citation_id": "W2"
+              }
+            ],
+            "response_time": 0.25
+          }
+        ],
+        "response_time": 0.25
+      },
+      "expected": {
+        "status": "done",
+        "query": "中文搜索",
+        "reason": "owned reason",
+        "answer": "owned answer",
+        "cached": false,
+        "results": [
+          {
+            "title": "source",
+            "url": "https://example.invalid/source",
+            "content": "evidence",
+            "favicon": null,
+            "round": 2,
+            "cite": "[^W2]",
+            "citation_id": "W2"
+          }
+        ],
+        "rounds": [
+          {
+            "round": 2,
+            "status": "done",
+            "query": "中文搜索",
+            "answer": "owned round",
+            "error": "",
+            "retried": false,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [
+              {
+                "title": "source",
+                "url": "https://example.invalid/source",
+                "content": "evidence",
+                "favicon": null,
+                "cite": "[^W2]",
+                "citation_id": "W2"
+              }
+            ],
+            "response_time": 0.25
+          }
+        ],
+        "response_time": 0.25
+      }
+    },
+    {
+      "input": {
+        "status": null,
+        "rounds": [
+          {
+            "status": null,
+            "results": [
+              {}
+            ]
+          }
+        ],
+        "results": [
+          {}
+        ]
+      },
+      "expected": {
+        "status": "done",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": false,
+        "results": [
+          {
+            "title": "",
+            "url": "",
+            "content": "",
+            "favicon": null,
+            "round": null,
+            "cite": "",
+            "citation_id": ""
+          }
+        ],
+        "rounds": [
+          {
+            "round": null,
+            "status": "done",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": false,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [
+              {
+                "title": "",
+                "url": "",
+                "content": "",
+                "favicon": null,
+                "cite": "",
+                "citation_id": ""
+              }
+            ],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "status": false,
+        "rounds": [
+          {
+            "status": false,
+            "results": [
+              {}
+            ]
+          }
+        ],
+        "results": [
+          {}
+        ]
+      },
+      "expected": {
+        "status": "done",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": false,
+        "results": [
+          {
+            "title": "",
+            "url": "",
+            "content": "",
+            "favicon": null,
+            "round": null,
+            "cite": "",
+            "citation_id": ""
+          }
+        ],
+        "rounds": [
+          {
+            "round": null,
+            "status": "done",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": false,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [
+              {
+                "title": "",
+                "url": "",
+                "content": "",
+                "favicon": null,
+                "cite": "",
+                "citation_id": ""
+              }
+            ],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "status": 0,
+        "rounds": [
+          {
+            "status": 0,
+            "results": [
+              {}
+            ]
+          }
+        ],
+        "results": [
+          {}
+        ]
+      },
+      "expected": {
+        "status": "done",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": false,
+        "results": [
+          {
+            "title": "",
+            "url": "",
+            "content": "",
+            "favicon": null,
+            "round": null,
+            "cite": "",
+            "citation_id": ""
+          }
+        ],
+        "rounds": [
+          {
+            "round": null,
+            "status": "done",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": false,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [
+              {
+                "title": "",
+                "url": "",
+                "content": "",
+                "favicon": null,
+                "cite": "",
+                "citation_id": ""
+              }
+            ],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "status": "",
+        "rounds": [
+          {
+            "status": "",
+            "results": [
+              {}
+            ]
+          }
+        ],
+        "results": [
+          {}
+        ]
+      },
+      "expected": {
+        "status": "done",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": false,
+        "results": [
+          {
+            "title": "",
+            "url": "",
+            "content": "",
+            "favicon": null,
+            "round": null,
+            "cite": "",
+            "citation_id": ""
+          }
+        ],
+        "rounds": [
+          {
+            "round": null,
+            "status": "done",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": false,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [
+              {
+                "title": "",
+                "url": "",
+                "content": "",
+                "favicon": null,
+                "cite": "",
+                "citation_id": ""
+              }
+            ],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "status": [],
+        "rounds": [
+          {
+            "status": [],
+            "results": [
+              {}
+            ]
+          }
+        ],
+        "results": [
+          {}
+        ]
+      },
+      "expected": {
+        "status": "done",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": false,
+        "results": [
+          {
+            "title": "",
+            "url": "",
+            "content": "",
+            "favicon": null,
+            "round": null,
+            "cite": "",
+            "citation_id": ""
+          }
+        ],
+        "rounds": [
+          {
+            "round": null,
+            "status": "done",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": false,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [
+              {
+                "title": "",
+                "url": "",
+                "content": "",
+                "favicon": null,
+                "cite": "",
+                "citation_id": ""
+              }
+            ],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "status": {},
+        "rounds": [
+          {
+            "status": {},
+            "results": [
+              {}
+            ]
+          }
+        ],
+        "results": [
+          {}
+        ]
+      },
+      "expected": {
+        "status": "done",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": false,
+        "results": [
+          {
+            "title": "",
+            "url": "",
+            "content": "",
+            "favicon": null,
+            "round": null,
+            "cite": "",
+            "citation_id": ""
+          }
+        ],
+        "rounds": [
+          {
+            "round": null,
+            "status": "done",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": false,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [
+              {
+                "title": "",
+                "url": "",
+                "content": "",
+                "favicon": null,
+                "cite": "",
+                "citation_id": ""
+              }
+            ],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "status": "searching",
+        "rounds": [
+          {
+            "status": "searching",
+            "results": [
+              {}
+            ]
+          }
+        ],
+        "results": [
+          {}
+        ]
+      },
+      "expected": {
+        "status": "searching",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": false,
+        "results": [
+          {
+            "title": "",
+            "url": "",
+            "content": "",
+            "favicon": null,
+            "round": null,
+            "cite": "",
+            "citation_id": ""
+          }
+        ],
+        "rounds": [
+          {
+            "round": null,
+            "status": "searching",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": false,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [
+              {
+                "title": "",
+                "url": "",
+                "content": "",
+                "favicon": null,
+                "cite": "",
+                "citation_id": ""
+              }
+            ],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "status": "error",
+        "rounds": [
+          {
+            "status": "error",
+            "results": [
+              {}
+            ]
+          }
+        ],
+        "results": [
+          {}
+        ]
+      },
+      "expected": {
+        "status": "error",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": false,
+        "results": [
+          {
+            "title": "",
+            "url": "",
+            "content": "",
+            "favicon": null,
+            "round": null,
+            "cite": "",
+            "citation_id": ""
+          }
+        ],
+        "rounds": [
+          {
+            "round": null,
+            "status": "error",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": false,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [
+              {
+                "title": "",
+                "url": "",
+                "content": "",
+                "favicon": null,
+                "cite": "",
+                "citation_id": ""
+              }
+            ],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "cached": null,
+        "rounds": [
+          {
+            "retried": null
+          }
+        ]
+      },
+      "expected": {
+        "status": "done",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": false,
+        "results": [],
+        "rounds": [
+          {
+            "round": null,
+            "status": "done",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": false,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "cached": false,
+        "rounds": [
+          {
+            "retried": false
+          }
+        ]
+      },
+      "expected": {
+        "status": "done",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": false,
+        "results": [],
+        "rounds": [
+          {
+            "round": null,
+            "status": "done",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": false,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "cached": 0,
+        "rounds": [
+          {
+            "retried": 0
+          }
+        ]
+      },
+      "expected": {
+        "status": "done",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": false,
+        "results": [],
+        "rounds": [
+          {
+            "round": null,
+            "status": "done",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": false,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "cached": "",
+        "rounds": [
+          {
+            "retried": ""
+          }
+        ]
+      },
+      "expected": {
+        "status": "done",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": false,
+        "results": [],
+        "rounds": [
+          {
+            "round": null,
+            "status": "done",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": false,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "cached": [],
+        "rounds": [
+          {
+            "retried": []
+          }
+        ]
+      },
+      "expected": {
+        "status": "done",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": false,
+        "results": [],
+        "rounds": [
+          {
+            "round": null,
+            "status": "done",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": false,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "cached": {},
+        "rounds": [
+          {
+            "retried": {}
+          }
+        ]
+      },
+      "expected": {
+        "status": "done",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": false,
+        "results": [],
+        "rounds": [
+          {
+            "round": null,
+            "status": "done",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": false,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "cached": 1,
+        "rounds": [
+          {
+            "retried": 1
+          }
+        ]
+      },
+      "expected": {
+        "status": "done",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": true,
+        "results": [],
+        "rounds": [
+          {
+            "round": null,
+            "status": "done",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": true,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "cached": "yes",
+        "rounds": [
+          {
+            "retried": "yes"
+          }
+        ]
+      },
+      "expected": {
+        "status": "done",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": true,
+        "results": [],
+        "rounds": [
+          {
+            "round": null,
+            "status": "done",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": true,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "cached": [
+          0
+        ],
+        "rounds": [
+          {
+            "retried": [
+              0
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "status": "done",
+        "query": "",
+        "reason": "",
+        "answer": "",
+        "cached": true,
+        "results": [],
+        "rounds": [
+          {
+            "round": null,
+            "status": "done",
+            "query": "",
+            "answer": "",
+            "error": "",
+            "retried": true,
+            "retryQuery": "",
+            "retryError": "",
+            "results": [],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    },
+    {
+      "input": {
+        "query": null,
+        "answer": null,
+        "reason": null,
+        "results": [
+          {
+            "title": null,
+            "url": null,
+            "content": null,
+            "cite": null,
+            "citation_id": null
+          }
+        ],
+        "rounds": [
+          {
+            "query": null,
+            "error": null,
+            "retryQuery": null,
+            "retryError": null
+          }
+        ]
+      },
+      "expected": {
+        "status": "done",
+        "query": null,
+        "reason": null,
+        "answer": null,
+        "cached": false,
+        "results": [
+          {
+            "title": null,
+            "url": null,
+            "content": null,
+            "favicon": null,
+            "round": null,
+            "cite": null,
+            "citation_id": null
+          }
+        ],
+        "rounds": [
+          {
+            "round": null,
+            "status": "done",
+            "query": null,
+            "answer": "",
+            "error": null,
+            "retried": false,
+            "retryQuery": null,
+            "retryError": null,
+            "results": [],
+            "response_time": null
+          }
+        ],
+        "response_time": null
+      }
+    }
+  ]
+}

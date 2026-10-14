@@ -27,6 +27,112 @@ impl std::fmt::Debug for ControlSigningKey {
 }
 
 impl ControlSigningKey {
+    /// Provider credentials remain in Rust. A distinct HKDF domain derives the
+    /// encryption key; neither the signing seed nor this key is returned.
+    pub fn seal_agent_credentials(
+        &self,
+        scope: &crate::AgentCredentialScope,
+        credentials: &crate::AgentProviderCredentials,
+    ) -> Result<crate::SealedAgentCredentials, FederationIdentityError> {
+        let seed = Zeroizing::new(self.key.to_bytes());
+        crate::agent_credentials::seal(&seed, &self.public_key(), &self.binding, scope, credentials)
+    }
+
+    pub fn open_agent_credentials(
+        &self,
+        scope: &crate::AgentCredentialScope,
+        sealed: &crate::SealedAgentCredentials,
+    ) -> Result<crate::AgentProviderCredentials, FederationIdentityError> {
+        let seed = Zeroizing::new(self.key.to_bytes());
+        crate::agent_credentials::open(&seed, &self.public_key(), &self.binding, scope, sealed)
+    }
+
+    pub fn sign_agent_synthesis_projection(
+        &self,
+        evidence: &deepseek_protocol::generated::deepseek::agent::v1::AgentSynthesisProjectionEvidence,
+    ) -> Result<Vec<u8>, FederationIdentityError> {
+        use prost::Message as _;
+        let digest = |s: &str| {
+            s.len() == 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        };
+        let reference = |r: Option<
+            &deepseek_protocol::generated::deepseek::agent::v1::AgentArtifactReference,
+        >| {
+            r.is_some_and(|r| digest(&r.sha256) && r.length > 0 && r.length <= 128 * 1024 * 1024)
+        };
+        if evidence.schema_version != 1
+            || !digest(&evidence.source_receipt_sha256)
+            || evidence
+                .settlement_fence
+                .as_ref()
+                .is_none_or(|f| deepseek_protocol::validate_fence(f).is_err())
+            || evidence.settlement_writer_token <= 0
+            || evidence.run_id.is_empty()
+            || evidence.metadata_epoch == 0
+            || evidence.expected_index < 0
+            || evidence.expected_index > i64::MAX - 2
+            || !reference(evidence.content_body.as_ref())
+            || !reference(evidence.done_body.as_ref())
+            || self.binding["fleetId"] != evidence.fleet_id
+            || self.binding["environment"] != evidence.environment
+        {
+            return Err(error("AGENT_SYNTHESIS_PROJECTION_INVALID"));
+        }
+        let bytes = evidence.encode_to_vec();
+        if bytes.len() > 1024 * 1024 {
+            return Err(error("AGENT_SYNTHESIS_PROJECTION_INVALID"));
+        }
+        let mut message = b"deepseek-infra:agent-synthesis-projection-proof-v1\0".to_vec();
+        message.extend(bytes);
+        Ok(self.key.sign(&message).to_bytes().to_vec())
+    }
+    pub fn sign_agent_plan_projection(
+        &self,
+        evidence: &deepseek_protocol::generated::deepseek::agent::v1::AgentPlanProjectionEvidence,
+    ) -> Result<Vec<u8>, FederationIdentityError> {
+        use prost::Message as _;
+        let digest = |s: &str| {
+            s.len() == 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        };
+        let reference = |r: Option<
+            &deepseek_protocol::generated::deepseek::agent::v1::AgentArtifactReference,
+        >| {
+            r.is_some_and(|r| digest(&r.sha256) && r.length > 0 && r.length <= 128 * 1024 * 1024)
+        };
+        if evidence.schema_version != 1
+            || !digest(&evidence.source_receipt_sha256)
+            || evidence
+                .settlement_fence
+                .as_ref()
+                .is_none_or(|f| deepseek_protocol::validate_fence(f).is_err())
+            || evidence.settlement_writer_token <= 0
+            || evidence.run_id.is_empty()
+            || evidence.metadata_epoch == 0
+            || evidence.expected_index < 0
+            || evidence.normalized_plan.is_empty()
+            || evidence.normalized_plan.len() > 32
+            || !matches!(evidence.next_status.as_str(), "running" | "awaiting_plan")
+            || !reference(evidence.plan_body.as_ref())
+            || !reference(evidence.status_body.as_ref())
+            || (evidence.planning_required && !reference(evidence.planning_body.as_ref()))
+            || (!evidence.planning_required && evidence.planning_body.is_some())
+            || self.binding["fleetId"] != evidence.fleet_id
+            || self.binding["environment"] != evidence.environment
+        {
+            return Err(error("AGENT_PLAN_PROJECTION_INVALID"));
+        }
+        let bytes = evidence.encode_to_vec();
+        if bytes.len() > 1024 * 1024 {
+            return Err(error("AGENT_PLAN_PROJECTION_INVALID"));
+        }
+        let mut message = b"deepseek-infra:agent-plan-projection-proof-v1\0".to_vec();
+        message.extend(bytes);
+        Ok(self.key.sign(&message).to_bytes().to_vec())
+    }
     pub fn public_key(&self) -> String {
         encode_b64url(self.key.verifying_key().as_bytes())
     }
@@ -34,8 +140,71 @@ impl ControlSigningKey {
         &self.binding
     }
 
+    /// A distinct typed purpose. Neither arbitrary bytes nor a caller-selected
+    /// signature domain can reach this API or the control-signing RPC.
+    pub fn sign_agent_node_outcome(
+        &self,
+        evidence: &deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeEvidence,
+    ) -> Result<Vec<u8>, FederationIdentityError> {
+        use prost::Message as _;
+        let invalid = || error("AGENT_NODE_OUTCOME_INVALID");
+        let hex = |s: &str| {
+            s.len() == 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        };
+        let reference = |r: Option<
+            &deepseek_protocol::generated::deepseek::agent::v1::AgentArtifactReference,
+        >| {
+            r.is_some_and(|r| hex(&r.sha256) && r.length > 0 && r.length <= 128 * 1024 * 1024)
+        };
+        let fence = evidence.fence.as_ref().ok_or_else(invalid)?;
+        if evidence.schema_version != 1
+            || deepseek_protocol::validate_fence(fence).is_err()
+            || evidence.operation_id.len() != 75
+            || !evidence.operation_id.starts_with("agent-node-")
+            || !hex(&evidence.operation_id[11..])
+            || evidence.run_id.is_empty()
+            || evidence.node_id.is_empty()
+            || !matches!(evidence.phase, 1..=3)
+            || (evidence.phase == 3
+                && (evidence.node_id != "synthesizer"
+                    || !evidence.provider_plan.is_empty()
+                    || evidence.task_output.as_ref().is_none_or(|stats| {
+                        stats.schema_version != 1
+                            || stats.failed
+                            || stats.prompt_tokens > i64::MAX as u64
+                            || stats.completion_tokens > i64::MAX as u64
+                            || stats.latency_ms < 0
+                    })))
+            || (evidence.phase == 1 && evidence.node_id != "leader")
+            || !reference(evidence.request.as_ref())
+            || !reference(evidence.public_event.as_ref())
+            || !hex(&evidence.plan_digest)
+            || evidence.metadata_index < 0
+            || evidence.metadata_epoch == 0
+            || evidence.writer_fencing_token <= 0
+            || evidence.created_at.is_empty()
+            || evidence.confirmed_at.is_empty()
+            || !hex(&evidence.outcome_sha256)
+            || evidence.outcome_length == 0
+            || evidence.outcome_length > 1024 * 1024
+            || self.binding["fleetId"] != evidence.fleet_id
+            || self.binding["environment"] != evidence.environment
+        {
+            return Err(invalid());
+        }
+        let bytes = evidence.encode_to_vec();
+        if bytes.len() > 1024 * 1024 {
+            return Err(invalid());
+        }
+        let mut message = b"deepseek-infra:agent-node-outcome-proof-v1\0".to_vec();
+        message.extend(bytes);
+        Ok(self.key.sign(&message).to_bytes().to_vec())
+    }
+
     // No arbitrary-byte signing API. Callers still validate the complete document
-    // before issuance; these two domain separators cannot be selected over RPC.
+    // before issuance; the domain separator cannot be selected over RPC.
     pub fn sign_control_document(
         &self,
         document: &Value,
@@ -45,6 +214,9 @@ impl ControlSigningKey {
             "control-authority-request-v1" => b"deepseek-infra:control-authority-request-v1\0",
             "control-storage-operation-grant-v1" => {
                 b"deepseek-infra:control-storage-operation-grant-v1\0"
+            }
+            "control-agent-execution-grant-v1" => {
+                b"deepseek-infra:control-agent-execution-grant-v1\0"
             }
             _ => return Err(error("CONTROL_SIGNER_PURPOSE_INVALID")),
         };

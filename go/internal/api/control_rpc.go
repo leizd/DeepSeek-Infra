@@ -7,7 +7,9 @@ import (
 	"errors"
 	"net"
 
+	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
 	"github.com/leizd/DeepSeek-Infra/go/internal/config"
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	controlv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/controlv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/shadow"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
@@ -47,8 +49,10 @@ func HealthFor(cfg config.Config) ControlPlaneHealth {
 }
 
 // NewControlRPC shares deepseekd's existing listener and control store. Its
-// protobuf service only reads state; all RPCs require a loopback peer and the
-// same configured internal bearer as /internal/*. An absent bearer denies all.
+// control service reads state; Agent metadata writes additionally require the
+// authoritative process mode and the store's live transactional domain fence.
+// All RPCs require a loopback peer and the same configured internal bearer as
+// /internal/*. An absent bearer denies all.
 func NewControlRPC(control *store.Control, bearer string, health ControlPlaneHealth) *grpc.Server {
 	server := grpc.NewServer(grpc.MaxRecvMsgSize(1<<20), grpc.MaxSendMsgSize(1<<20),
 		grpc.UnaryInterceptor(func(ctx context.Context, request any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
@@ -72,6 +76,10 @@ func NewControlRPC(control *store.Control, bearer string, health ControlPlaneHea
 		health = ShadowHealth()
 	}
 	controlv1.RegisterControlPlaneServer(server, &controlReadService{control: control, health: health})
+	agentv1.RegisterAgentChatSchedulerServer(server, &agentChatService{health: health, limits: agent.ChatLimitsFromEnv()})
+	agentRun := &agentRunService{control: control, health: health}
+	agentv1.RegisterAgentRunControlServer(server, agentRun)
+	agentv1.RegisterAgentNodeControlServer(server, &agentNodeService{run: agentRun})
 	return server
 }
 

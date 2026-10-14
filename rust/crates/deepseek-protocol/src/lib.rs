@@ -13,6 +13,29 @@ pub mod generated {
         pub mod agent {
             pub mod v1 {
                 tonic::include_proto!("deepseek.agent.v1");
+
+                impl std::fmt::Debug for PrepareAgentCredentialsRequest {
+                    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        f.debug_struct("PrepareAgentCredentialsRequest")
+                            .field("schema_version", &self.schema_version)
+                            .field("run_id", &self.run_id)
+                            .field("runtime_revision", &self.runtime_revision)
+                            .finish_non_exhaustive()
+                    }
+                }
+
+                #[cfg(test)]
+                #[test]
+                fn credential_request_debug_redacts_both_provider_secrets() {
+                    let request = PrepareAgentCredentialsRequest {
+                        api_key: "isolated-api-fixture".into(),
+                        tavily_api_key: "isolated-search-fixture".into(),
+                        ..Default::default()
+                    };
+                    let debug = format!("{request:?}");
+                    assert!(!debug.contains("isolated-api-fixture"));
+                    assert!(!debug.contains("isolated-search-fixture"));
+                }
             }
         }
         pub mod browser {
@@ -38,6 +61,11 @@ pub mod generated {
         pub mod storage {
             pub mod v1 {
                 tonic::include_proto!("deepseek.storage.v1");
+            }
+        }
+        pub mod platform {
+            pub mod v1 {
+                tonic::include_proto!("deepseek.platform.v1");
             }
         }
     }

@@ -3,6 +3,7 @@ syntax = "proto3";
 package deepseek.action.v1;
 
 import "common/v1/common.proto";
+import "agent/v1/agent.proto";
 
 option go_package = "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1;actionv1";
 
@@ -128,6 +129,8 @@ enum ControlSigningPurpose {
   CONTROL_SIGNING_PURPOSE_UNSPECIFIED = 0;
   CONTROL_SIGNING_PURPOSE_INSTALL_EPOCH = 1;
   CONTROL_SIGNING_PURPOSE_STORAGE_PUT = 2;
+  CONTROL_SIGNING_PURPOSE_AGENT_EXECUTION = 3;
+  CONTROL_SIGNING_PURPOSE_AGENT_INSTALL_EPOCH = 4;
 }
 
 message SignControlRequest {
@@ -143,6 +146,9 @@ message SignControlRequest {
   string expires_at = 10;
   // For STORAGE_PUT only. Payload and canonical_authorization must be empty.
   StorageMutationRequest storage_intent = 11;
+  // For AGENT_EXECUTION or AGENT_INSTALL_EPOCH. Rust renews the claim with Go;
+  // caller-provided lease dates are never treated as authority.
+  deepseek.agent.v1.AgentRunExecutionClaim agent_intent = 12;
 }
 
 message SignControlResponse {

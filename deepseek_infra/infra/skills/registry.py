@@ -247,11 +247,9 @@ def skill_store_scope() -> AbstractContextManager[None]:
     `eval.delete_eval_case`.
 
     It covers `.skills/custom`, `.skills/packs`, `.skills/disabled.json`, `.skills/history`,
-    `.skills/security`, `.skills/catalog`, `.skills/runs` and `.skills/eval_cases.jsonl` — every
-    child store under `.skills/`. The catalog, the run log and the case file each joined the set
-    when Rust started writing them (`catalog::refresh`, the offline `run` and the run-analytics
-    writers, `skills::eval`); a store Rust writes is one Python must stop writing, or the handover is
-    the dual write ADR-0049 forbids.
+    `.skills/security`, the run log (`.skills/runs`), the catalog (`.skills/catalog`)
+    and the eval-case file (`.skills/eval_cases.jsonl`). Child-store writers use this
+    scope too, so the declared store cannot have a second Python writer after cutover.
     """
     from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 

@@ -10,8 +10,8 @@ pub fn binding(r: &Registry, id: &str) -> Result<Value> {
     projects::normalize_project_skills(require(r, id)?.get("skills"))
 }
 pub fn set_binding(r: &Registry, id: &str, desired: &Value) -> Result<Value> {
-    let _guard = crate::mutation_gate::mutation_scope(None, &r.root)
-        .map_err(|e| super::error(e.to_string(), 409))?;
+    let _guard =
+        crate::mutation_gate::mutation_scope(None, &r.root).map_err(super::mutation_error)?;
     let mut project = require(r, id)?;
     let previous = projects::normalize_project_skills(project.get("skills"))?;
     let mut value = desired.clone();
@@ -29,6 +29,7 @@ pub fn set_binding(r: &Registry, id: &str, desired: &Value) -> Result<Value> {
     Ok(normalized)
 }
 pub fn enable_pack(r: &Registry, project: &str, id: &str, version: &str) -> Result<Value> {
+    let _guard = r.mutation()?;
     let pack = r.get_pack(id)?;
     let resolved: Vec<_> = pack["skills"]
         .as_array()
@@ -66,8 +67,8 @@ pub fn enable_pack(r: &Registry, project: &str, id: &str, version: &str) -> Resu
     set_binding(r, project, &value)
 }
 pub fn append_run(r: &Registry, id: &str, run: &Value) -> Result<Value> {
-    let _guard = crate::mutation_gate::mutation_scope(None, &r.root)
-        .map_err(|e| super::error(e.to_string(), 409))?;
+    let _guard =
+        crate::mutation_gate::mutation_scope(None, &r.root).map_err(super::mutation_error)?;
     let mut project = require(r, id)?;
     let run = projects::normalize_skill_run(run.as_object().unwrap(), r)?;
     let mut runs = projects::normalize_skill_runs(project.get("skillRuns"), r)?;
@@ -104,8 +105,8 @@ pub fn save_item(
     content: &str,
     source: &Value,
 ) -> Result<Value> {
-    let _guard = crate::mutation_gate::mutation_scope(None, &r.root)
-        .map_err(|e| super::error(e.to_string(), 409))?;
+    let _guard =
+        crate::mutation_gate::mutation_scope(None, &r.root).map_err(super::mutation_error)?;
     let mut project = require(r, id)?;
     let now = r.now_millis();
     let item = json!({"id":format!("saved-{}",r.new_id()?),"title":if title.is_empty() {"Skill output"} else {title}.chars().take(160).collect::<String>(),"kind":"skill_output",
@@ -119,8 +120,8 @@ pub fn save_item(
     Ok(item)
 }
 pub fn link_artifact(r: &Registry, id: &str, artifact: &Value) -> Result<()> {
-    let _guard = crate::mutation_gate::mutation_scope(None, &r.root)
-        .map_err(|e| super::error(e.to_string(), 409))?;
+    let _guard =
+        crate::mutation_gate::mutation_scope(None, &r.root).map_err(super::mutation_error)?;
     let mut project = require(r, id)?;
     let normalized = projects::normalize_project_artifacts(Some(&json!([artifact])));
     if let Some(value) = normalized.first() {

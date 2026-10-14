@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	modernsqlite "modernc.org/sqlite"
+	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
 )
 
 // projectionFixtureDirs names the checked-in projection bytes for each domain.
@@ -83,7 +83,7 @@ func copiedPythonSourceFixture(t *testing.T, domain string) (string, []byte) {
 
 func openPythonSourceFixtureWriter(t *testing.T, path string) *sql.DB {
 	t.Helper()
-	connector, err := modernsqlite.NewConnector(controlDatabaseURL(path, hardenedControlQuery()))
+	connector, err := sqlitedb.NewConnector(controlDatabaseURL(path, hardenedControlQuery()))
 	if err != nil {
 		t.Fatal(err)
 	}

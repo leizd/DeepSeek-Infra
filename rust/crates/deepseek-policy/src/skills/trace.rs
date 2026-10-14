@@ -39,6 +39,17 @@ fn clip(value: &str, limit: usize) -> String {
         )
     }
 }
+pub(super) fn sensitive_key(key: &str) -> bool {
+    [
+        "apikey",
+        "api_key",
+        "authorization",
+        "tavilyapikey",
+        "token",
+        "auth_token",
+    ]
+    .contains(&key.to_lowercase().as_str())
+}
 fn sanitize(value: &Value, limit: usize) -> Value {
     match value {
         Value::Object(map) => Value::Object(
@@ -46,16 +57,7 @@ fn sanitize(value: &Value, limit: usize) -> Value {
                 .map(|(k, v)| {
                     (
                         k.clone(),
-                        if [
-                            "apikey",
-                            "api_key",
-                            "authorization",
-                            "tavilyapikey",
-                            "token",
-                            "auth_token",
-                        ]
-                        .contains(&k.to_lowercase().as_str())
-                        {
+                        if sensitive_key(k) {
                             json!("[redacted]")
                         } else {
                             sanitize(v, limit)
@@ -92,8 +94,8 @@ impl Trace {
         {
             return Ok(trace);
         }
-        let _guard = crate::mutation_gate::mutation_scope(None, &r.root)
-            .map_err(|e| error(e.to_string(), 409))?;
+        let _guard =
+            crate::mutation_gate::mutation_scope(None, &r.root).map_err(super::mutation_error)?;
         trace.id = r.new_file_id()?;
         trace.span = r.new_file_id()?;
         let meta = json!({"skillId":skill["skillId"],"skillRunId":run["skillRunId"],"skillVersion":skill["version"],"projectId":run["projectId"],"offline":offline});
@@ -115,8 +117,8 @@ impl Trace {
         if self.id.is_empty() {
             return Ok(());
         }
-        let _guard = crate::mutation_gate::mutation_scope(None, &r.root)
-            .map_err(|e| error(e.to_string(), 409))?;
+        let _guard =
+            crate::mutation_gate::mutation_scope(None, &r.root).map_err(super::mutation_error)?;
         let mut conn = db(r)?;
         let tx = conn.transaction().map_err(sql_error)?;
         let end = r.now_millis();

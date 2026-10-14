@@ -8,7 +8,16 @@ fn incomplete_storage_configuration_exits_without_creating_state_or_disclosing_s
     let state = root.path().join("must-not-be-created");
     let mut command = Command::new(env!("CARGO_BIN_EXE_deepseek-worker"));
     command.env_clear();
-    for name in ["PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP"] {
+    // Preserve only loader paths and the offline instrumentation destination.
+    // Dropping LLVM_PROFILE_FILE makes an instrumented child write into source.
+    for name in [
+        "PATH",
+        "SYSTEMROOT",
+        "WINDIR",
+        "TEMP",
+        "TMP",
+        "LLVM_PROFILE_FILE",
+    ] {
         if let Some(value) = std::env::var_os(name) {
             command.env(name, value);
         }

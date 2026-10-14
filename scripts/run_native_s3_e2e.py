@@ -18,8 +18,10 @@ import boto3
 from botocore.config import Config
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 from real_storage_environment import ENDPOINT_NAMES, RealStorageEnvironment  # noqa: E402
+from scripts.rust_build import cache_environment, run_guarded  # noqa: E402
 
 
 def main() -> int:
@@ -27,6 +29,7 @@ def main() -> int:
     parser.add_argument("--toolchain", help="rustup toolchain override (without the leading +)")
     options = parser.parse_args()
     cargo = ["cargo", *([f"+{options.toolchain}"] if options.toolchain else [])]
+    build_env = cache_environment(ROOT, toolchain=options.toolchain or "current")
     command1 = [*cargo, "test", "--locked", "-p", "deepseek-storage", "--features", "s3-e2e", "--test", "s3_provider"]
     command2 = [*cargo, "test", "--locked", "-p", "deepseek-worker", "--features", "s3-e2e", "--test", "authorized_storage_provider"]
     command3 = [
@@ -37,10 +40,11 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="deepseek-native-s3-") as directory:
         # Keep the actual default production binary separate from test features.
         # Build before provisioning: provider lifetime is bounded by the tests.
-        subprocess.run([*cargo, "build", "--locked", "-p", "deepseek-worker"], cwd=ROOT / "rust", check=True, timeout=1200)
+        run_guarded([*cargo, "build", "--locked", "-p", "deepseek-worker"], cwd=ROOT / "rust",
+                    env=build_env, check=True, timeout=1200)
         metadata = json.loads(subprocess.run(
             [*cargo, "metadata", "--locked", "--no-deps", "--format-version=1"],
-            cwd=ROOT / "rust", check=True, capture_output=True, text=True, timeout=60,
+            cwd=ROOT / "rust", env=build_env, check=True, capture_output=True, text=True, timeout=60,
         ).stdout)
         suffix = ".exe" if os.name == "nt" else ""
         build_directory = Path(metadata["target_directory"]) / "debug"
@@ -67,14 +71,14 @@ def main() -> int:
                 ).stdout.strip(),
                 "scope": "isolated provider qualification; default binary built without test features",
             }), flush=True)
-            subprocess.run([*command1, "--no-run"], cwd=ROOT / "rust", check=True, timeout=1200)
-            subprocess.run([*command2, "--no-run"], cwd=ROOT / "rust", check=True, timeout=1200)
+            run_guarded([*command1, "--no-run"], cwd=ROOT / "rust", env=build_env, check=True, timeout=1200)
+            run_guarded([*command2, "--no-run"], cwd=ROOT / "rust", env=build_env, check=True, timeout=1200)
             harness = RealStorageEnvironment.acquire(ROOT, Path(directory))
         except BaseException:
             binary_directory.cleanup()
             raise
         try:
-            environment = {**os.environ, **harness.values}
+            environment = {**build_env, **harness.values}
             environment["DEEPSEEK_TEST_RUST_WORKER_BINARY"] = str(binary)
             endpoints = [environment[name] for name in ENDPOINT_NAMES[:3]]
             bucket = f"native-s3-{uuid.uuid4().hex}"
@@ -96,13 +100,13 @@ def main() -> int:
             for variable in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
                 environment[variable] = "http://127.0.0.1:1"
             environment["NO_PROXY"] = environment["no_proxy"] = ""
-            code1 = subprocess.run(
+            code1 = run_guarded(
                 [*command1, "--", "--nocapture"], cwd=ROOT / "rust", env=environment,
                 check=False, timeout=300,
             ).returncode
             if code1 != 0:
                 return code1
-            code2 = subprocess.run(
+            code2 = run_guarded(
                 [*command2, "--", "--nocapture"], cwd=ROOT / "rust", env=environment,
                 check=False, timeout=300,
             ).returncode

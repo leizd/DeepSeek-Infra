@@ -52,6 +52,8 @@ async fn production_listener_serves_health_config_and_mcp() {
     unsafe {
         std::env::set_var("AUTH_TOKEN", TOKEN);
         std::env::set_var("DEEPSEEK_API_KEY", "sk-production-contract");
+        std::env::set_var("OCR_ENABLED", "1");
+        std::env::set_var("OCR_MODE", "quality");
     }
     let app = production_app();
 
@@ -83,6 +85,9 @@ async fn production_listener_serves_health_config_and_mcp() {
         assert!(config.get(field).is_some(), "missing {field}: {config}");
     }
     assert_eq!(config["hasServerKey"], true);
+    assert_eq!(config["ocr"]["enabled"], true);
+    assert_eq!(config["ocr"]["mode"], "quality");
+    assert_eq!(config["ocr"]["localOnly"], false);
     assert_eq!(config["models"][0], "deepseek-v4-pro");
     assert_eq!(config["models"][1], "deepseek-v4-flash");
     assert_eq!(config["modelRoutes"]["fast"], "deepseek-v4-flash");

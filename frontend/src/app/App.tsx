@@ -14,6 +14,8 @@ const TracePage = lazy(() =>
   })),
 );
 
+const LauncherPage = lazy(() => import("../features/launcher/LauncherPage").then((module) => ({ default: module.LauncherPage })));
+
 function RouteBoundary({ children }: { children: ReactNode }) {
   const location = useLocation();
   return <RouteErrorBoundary key={location.pathname}>{children}</RouteErrorBoundary>;
@@ -40,6 +42,10 @@ function TraceRoute() {
 }
 
 export function App() {
+	const location = useLocation();
+	if (location.pathname === "/launcher" || location.pathname === "/launcher/") {
+		return <RouteBoundary><Suspense fallback={<RouteLoading label="正在读取启动器…" />}><LauncherPage /></Suspense></RouteBoundary>;
+	}
   return (
     <>
       <BuildUpdateBanner />

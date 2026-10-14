@@ -14,6 +14,7 @@ from deepseek_infra.core.config import AGENT_RUNS_DIR, AGENT_RUNTIME_AUTO_RESUME
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.core.utils import latest_user_query, normalize_model_name
 from deepseek_infra.infra.workspace import mutation_gate
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
 from deepseek_infra.infra.gateway.deepseek_client import RequestCancelled, SearchBudget, validate_deepseek_payload
 from deepseek_infra.infra.agent_runtime.agent_state import (
     completed_node_ids,
@@ -164,7 +165,6 @@ def create_run(
         "events": [],
     }
     with _RUN_LOCK:
-        AGENT_RUNS_DIR.mkdir(parents=True, exist_ok=True)
         write_run(run)
     return public_run(run)
 
@@ -183,6 +183,7 @@ def load_run(run_id: str) -> dict[str, Any]:
 
 
 def write_run(run: dict[str, Any]) -> None:
+    assert_python_writer_allowed("agent_run")
     with mutation_gate.mutation_scope(root=AGENT_RUNS_DIR.parent):
         AGENT_RUNS_DIR.mkdir(parents=True, exist_ok=True)
         path = run_path(str(run.get("runId") or ""))
@@ -712,6 +713,7 @@ def resume_orphaned_runs() -> int:
     """
     if not AGENT_RUNTIME_AUTO_RESUME:
         return 0
+    assert_python_writer_allowed("agent_run")
     count = 0
     if not AGENT_RUNS_DIR.exists():
         return count

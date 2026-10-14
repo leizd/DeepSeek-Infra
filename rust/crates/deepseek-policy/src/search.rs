@@ -1196,6 +1196,75 @@ where
     Ok(result)
 }
 
+/// Browser projection of normalized provider data. Provider-only fields and
+/// credentials never enter the search events or the terminal chat envelope.
+pub fn search_for_client(search_data: Option<&Value>) -> Value {
+    let Some(data) = search_data.filter(|data| python_truthy(data)) else {
+        return Value::Null;
+    };
+    fn field(data: &Value, key: &str, fallback: Value) -> Value {
+        data.get(key).cloned().unwrap_or(fallback)
+    }
+    fn status(data: &Value) -> Value {
+        let value = field(data, "status", json!("done"));
+        if python_truthy(&value) {
+            value
+        } else {
+            json!("done")
+        }
+    }
+    fn results(data: &Value, include_round: bool) -> Vec<Value> {
+        data.get("results")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|result| {
+                let mut item = json!({
+                    "title": field(result, "title", json!("")),
+                    "url": field(result, "url", json!("")),
+                    "content": field(result, "content", json!("")),
+                    "favicon": field(result, "favicon", Value::Null),
+                    "cite": field(result, "cite", json!("")),
+                    "citation_id": field(result, "citation_id", json!("")),
+                });
+                if include_round {
+                    item["round"] = field(result, "round", Value::Null);
+                }
+                item
+            })
+            .collect()
+    }
+    let rounds: Vec<Value> = data
+        .get("rounds")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|round| {
+            json!({
+                "round": field(round, "round", Value::Null),
+                "status": status(round),
+                "query": field(round, "query", json!("")),
+                "answer": field(round, "answer", json!("")),
+                "error": field(round, "error", json!("")),
+                "retried": python_truthy(round.get("retried").unwrap_or(&Value::Null)),
+                "retryQuery": field(round, "retryQuery", json!("")),
+                "retryError": field(round, "retryError", json!("")),
+                "results": results(round, false),
+                "response_time": field(round, "response_time", Value::Null),
+            })
+        })
+        .collect();
+    json!({
+        "status": status(data),
+        "query": field(data, "query", json!("")),
+        "reason": field(data, "reason", json!("")),
+        "answer": field(data, "answer", json!("")),
+        "cached": python_truthy(data.get("cached").unwrap_or(&Value::Null)),
+        "results": results(data, true), "rounds": rounds,
+        "response_time": field(data, "response_time", Value::Null),
+    })
+}
+
 /// Mirrors `search_mode` (`gateway/deepseek_client.py`): the payload's mode,
 /// trimmed and lowercased, defaulting to `auto` — via an **`or`** on the raw
 /// value, so every falsy spelling (missing, `null`, `""`, `false`, `0`, `0.0`)

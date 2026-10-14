@@ -434,8 +434,8 @@ pub fn normalize_extracted_text(value: &str) -> String {
 /// [`FILE_PAGE_TEXT_CHARS`].
 ///
 /// A non-object entry is skipped, a page number that is not a positive integer is
-/// skipped, and a page whose text normalizes to nothing is skipped — so an entry that
-/// survives is guaranteed to have both a page and text.
+/// skipped. Empty text is skipped unless the native decoder explicitly records a
+/// page with no extracted text; that marker prevents borrowing another page's text.
 pub fn normalized_page_texts(value: Option<&Value>) -> Vec<Value> {
     let Some(Value::Array(items)) = value else {
         return Vec::new();
@@ -449,11 +449,17 @@ pub fn normalized_page_texts(value: Option<&Value>) -> Vec<Value> {
             continue;
         };
         let text = normalize_extracted_text(&crate::core_utils::text_or_empty(object.get("text")));
-        if page <= 0 || text.is_empty() {
+        let known_empty =
+            object.get("blank").and_then(Value::as_bool) == Some(true) && text.is_empty();
+        if page <= 0 || (text.is_empty() && !known_empty) {
             continue;
         }
         let capped: String = text.chars().take(FILE_PAGE_TEXT_CHARS).collect();
-        pages.push(json!({"page": page, "text": capped}));
+        if known_empty {
+            pages.push(json!({"page": page, "text": "", "blank": true}));
+        } else {
+            pages.push(json!({"page": page, "text": capped}));
+        }
     }
     pages
 }
@@ -541,7 +547,11 @@ pub fn file_page_text(
     let page_count = page_count.max(1);
     let requested_page = requested_page.min(page_count);
     let mut page_text = page_text_for_index(&page_texts, requested_page);
-    if page_text.is_empty() {
+    let known_empty = page_texts.iter().any(|item| {
+        python_page_number(item.get("page")) == Some(requested_page)
+            && item.get("blank").and_then(Value::as_bool) == Some(true)
+    });
+    if page_text.is_empty() && !known_empty {
         page_text = page_text_from_cached_chunks(&cached, requested_page, page_count);
     }
     let capped: String = page_text.chars().take(FILE_PAGE_TEXT_CHARS).collect();
@@ -1016,6 +1026,40 @@ mod tests {
         // non-object entry never become pages. Two survive, and there is no third.
         assert!(normalized_page_texts(None).is_empty());
         assert!(normalized_page_texts(Some(&json!("not a list"))).is_empty());
+    }
+
+    #[test]
+    fn blank_pdf_page_does_not_borrow_text_from_other_pages() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = file_cache_dir(root.path());
+        std::fs::create_dir_all(&directory).unwrap();
+        let file_id = "0123456789abcdef0123456789abcdef";
+        let pages = json!([
+            {"page": 1, "text": "first page"},
+            {"page": 2, "text": "", "blank": true},
+            {"page": 3, "text": "third page"},
+        ]);
+        assert_eq!(normalized_page_texts(Some(&pages)).len(), 3);
+        std::fs::write(
+            directory.join(format!("{file_id}.json")),
+            json!({
+                "name": "scanned.pdf", "kind": "pdf", "pageCount": 3,
+                "pageTexts": pages, "chunks": [{"text": "first page third page"}],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let page = file_page_text(
+            root.path(),
+            file_id,
+            None,
+            Some(&json!(2)),
+            &FileCache::new(),
+        )
+        .unwrap();
+        assert_eq!(page["page"]["text"], "");
+        assert_eq!(page["page"]["hasText"], false);
+        assert_eq!(page["page"]["pageCount"], 3);
     }
 
     #[test]

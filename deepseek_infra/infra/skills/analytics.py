@@ -12,6 +12,7 @@ from typing import Any
 from deepseek_infra.core.errors import AppError, ErrorCode
 from deepseek_infra.core.utils import utc_now_iso
 from deepseek_infra.infra.skills import registry
+from deepseek_infra.infra.observability.observability import SENSITIVE_KEYS
 
 RUN_SCHEMA_VERSION = "skill-run.v1"
 DEFAULT_RETENTION = 500
@@ -338,7 +339,8 @@ def summarize_payload(value: Any, *, limit: int = SUMMARY_LIMIT) -> str:
     elif isinstance(value, dict):
         parts = []
         for key, item in list(value.items())[:8]:
-            parts.append(f"{key}={_short_value(item)}")
+            rendered = "[redacted]" if str(key).lower() in SENSITIVE_KEYS else _short_value(item)
+            parts.append(f"{key}={rendered}")
         text = ", ".join(parts) if parts else "{}"
     elif isinstance(value, list):
         text = f"{len(value)} items"

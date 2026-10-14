@@ -2,10 +2,16 @@ use deepseek_protocol::{
     ActionFence, AdmitError, CommandKind, admit_command, is_federation_command, validate_fence,
 };
 
+mod agent_credential_vault;
+mod agent_credentials;
 pub mod attestation;
 mod canonical;
 mod control_custody;
 mod custody;
+pub use agent_credential_vault::{AgentCredentialObject, AgentCredentialVault};
+pub use agent_credentials::{
+    AgentCredentialScope, AgentProviderCredentials, SealedAgentCredentials,
+};
 pub use control_custody::{ControlSigningKey, create_control_signer_bundle, load_control_signer};
 mod identity;
 pub use attestation::{

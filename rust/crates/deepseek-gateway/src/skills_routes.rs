@@ -116,10 +116,9 @@ pub const ACTION_NOT_READY: &str = "NATIVE_SKILLS_ACTION_NOT_READY";
 /// `run`, `dry_run` and the run/catalog/versioning blocks are phases 3-5, and phase 6 registers
 /// every action. An action that is neither here nor implemented still gets the oracle's 400, so
 /// unknown input keeps parity with Python.
-/// Nothing is outstanding: all 52 `action == …` branches in `deepseek_infra/web/routes/skills.py`
-/// are served. The list stays so a later surface can add to it, and `not_ready_error` stays for the
-/// same reason.
-pub const ACTION_NOT_MIGRATED: [&str; 0] = [];
+/// Offline runs and evaluation are implemented. The online branch of `run` still needs the
+/// native provider exchange; registering its action or passing offline tests does not complete it.
+pub const ACTION_NOT_MIGRATED: [&str; 1] = ["run"];
 
 /// The refusal both the action dispatch and `/api/skills/{skill_id}/run` answer with.
 pub fn not_ready_error(action: &str) -> deepseek_policy::app_error::AppError {
@@ -225,6 +224,32 @@ fn dispatch(registry: Registry, payload: Value) -> Response {
                 status: 409,
             });
         }
+        // A run or evaluation can append traces and artifacts before returning an error.
+        // Check all owners before preparation so a partial handover cannot cause partial effects.
+        let executes = matches!(
+            action.as_str(),
+            "run"
+                | "eval_report"
+                | "eval_upgrade_gate"
+                | "upgrade_pack"
+                | "diff_versions"
+                | "diff_pack_versions"
+        );
+        if executes
+            && [
+                "observability_trace_store",
+                "generated_files_store",
+                "project_metadata_store",
+            ]
+            .iter()
+            .any(|domain| !crate::may_write_native_store(domain))
+        {
+            return Err(deepseek_policy::app_error::AppError {
+                message: "The skills store is still written by the Python runtime, so this gateway refuses to mutate it.".into(),
+                code: "NATIVE_SKILLS_WRITE_NOT_OWNED",
+                status: 409,
+            });
+        }
         execute(&registry, &payload, &action)
     })();
     match result {
@@ -305,10 +330,6 @@ fn execute(registry: &Registry, payload: &Value, action: &str) -> skills::Result
         // The security overview and the version family. `security_summary` and the five reads answer
         // whatever owns the stores; `rollback_skill` / `rollback_pack` write the item, its history
         // revision and possibly a project binding, so they carry the skills-store gate.
-        //
-        // `upgrade_pack` and `eval_upgrade_gate` are **not** here: both embed the oracle's
-        // `evalAwareUpgradeGate`, which is built from `skills.eval.build_skill_eval_report`, and that
-        // engine is not ported — see `ACTION_NOT_MIGRATED`.
         "security_summary" => {
             let scope = skills::text(payload, "scope");
             security::summary(
@@ -324,9 +345,6 @@ fn execute(registry: &Registry, payload: &Value, action: &str) -> skills::Result
             "ok": true,
             "versions": versioning::list(registry, &id(payload, "skillId")?, false)?,
         })),
-        // `diff_versions` / `diff_pack_versions` are **not** here: their `evalScoreDiff` comes from
-        // the same eval engine, so wiring them with a placeholder would answer differently from the
-        // oracle. Both are in `ACTION_NOT_MIGRATED` for the same reason as `upgrade_pack`.
         "rollback_skill" => versioning::rollback(
             registry,
             &id(payload, "skillId")?,
@@ -358,7 +376,7 @@ fn execute(registry: &Registry, payload: &Value, action: &str) -> skills::Result
         ),
         // The eval **case store**. `list_eval_cases` reads the golden corpus and
         // `.skills/eval_cases.jsonl`; the other two write that file, so they carry the skills-store
-        // gate. `eval_report` is not here — it needs the report engine (see `ACTION_NOT_MIGRATED`).
+        // gate. `eval_report` below also executes the corpus and writes its run results.
         "list_eval_cases" => Ok(json!({"ok": true, "cases": eval::cases(registry)})),
         "create_eval_case" => Ok(json!({
             "ok": true,
@@ -582,13 +600,11 @@ fn run_input(payload: &Value) -> Value {
 /// `int("5.0")` and `int("True")` both raise in Python, so a JSON float or a boolean takes the
 /// default rather than truncating.
 fn limit_of(payload: &Value, key: &str, default: i64) -> usize {
-    let value = match payload.get(key) {
-        Some(Value::Number(number)) => number.as_i64().unwrap_or(default),
-        Some(Value::String(text)) => text.parse::<i64>().unwrap_or(default),
-        Some(Value::Null) | None => default,
-        _ => default,
-    };
-    value.clamp(0, 1000) as usize
+    let raw = payload
+        .get(key)
+        .map(deepseek_policy::python_json::value_str)
+        .unwrap_or_default();
+    analytics::request_limit(&raw, default.clamp(0, 1000) as usize)
 }
 fn run_limit(payload: &Value) -> usize {
     limit_of(payload, "limit", 50)

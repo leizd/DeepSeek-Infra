@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::app_error::{AppError, codes};
+use crate::platform_ocr::PlatformOcr;
+use serde_json::{Value, json};
 
 const IMAGE_UNAVAILABLE: &str = "No OCR engine is available. Set DEEPSEEK_API_KEY for DeepSeek OCR, or install requirements-ocr.txt and Tesseract to use the local fallback for image text.";
 const PDF_UNAVAILABLE: &str = "No OCR engine is available. Set DEEPSEEK_API_KEY for DeepSeek OCR, or install requirements-ocr.txt and Tesseract to use the local fallback for scanned PDFs.";
@@ -18,10 +20,59 @@ const IMAGE_EMPTY: &str = "OCR did not recognize any text in image.";
 const PDF_EMPTY: &str = "OCR did not recognize any text.";
 
 pub fn ocr_image(data: &[u8]) -> Result<String, AppError> {
+    if let Some(platform) = PlatformOcr::from_env()? {
+        let document = platform.recognize(data, false)?;
+        return platform_page_text(&document.pages[0], IMAGE_EMPTY);
+    }
     recognize(data, IMAGE_EMPTY, IMAGE_UNAVAILABLE)
 }
 
-pub fn ocr_pdf(data: &[u8]) -> Result<String, AppError> {
+pub fn ocr_pdf_document(data: &[u8]) -> Result<(String, Vec<Value>), AppError> {
+    if let Some(platform) = PlatformOcr::from_env()? {
+        let document = platform.recognize(data, true)?;
+        let mut blocks = Vec::new();
+        let mut page_texts = Vec::new();
+        for page in document.pages {
+            match platform_page_text(&page, PDF_EMPTY) {
+                Ok(text) => {
+                    blocks.push(format!("[PDF 第 {} 页 (OCR)]\n{text}", page.page_index));
+                    page_texts.push(json!({"page": page.page_index, "text": text}));
+                }
+                Err(error) if error.code == codes::OCR_EMPTY => {
+                    page_texts.push(json!({"page": page.page_index, "text": "", "blank": true}));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        if blocks.is_empty() {
+            return Err(empty_error(PDF_EMPTY));
+        }
+        return Ok((blocks.join("\n\n"), page_texts));
+    }
+    let text = host_ocr_pdf(data)?;
+    Ok((text.clone(), vec![json!({"page": 1, "text": text})]))
+}
+
+fn platform_page_text(
+    page: &deepseek_protocol::generated::deepseek::platform::v1::OcrPage,
+    empty_message: &str,
+) -> Result<String, AppError> {
+    let mut best = String::new();
+    let mut score = -1;
+    let mut empty = false;
+    if !page.blank {
+        for candidate in &page.candidates {
+            consider(&mut best, &mut score, &mut empty, &candidate.text);
+        }
+    }
+    if best.is_empty() {
+        Err(empty_error(empty_message))
+    } else {
+        Ok(best)
+    }
+}
+
+fn host_ocr_pdf(data: &[u8]) -> Result<String, AppError> {
     let pages = render_pdf_pages(data)?;
     let mut blocks = Vec::new();
     let mut saw_empty = false;

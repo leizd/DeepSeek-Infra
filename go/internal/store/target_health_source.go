@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	modernsqlite "modernc.org/sqlite"
+	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
 )
 
 var targetHealthSourceFenceObjects = func() map[string]string {
@@ -50,7 +50,7 @@ func attestTargetHealthSource(path string, manifest pythonInventoryExport) error
 	query := hardenedControlQuery()
 	query.Set("mode", "ro")
 	query.Set("_query_only", "1")
-	connector, err := modernsqlite.NewConnector(controlDatabaseURL(path, query))
+	connector, err := sqlitedb.NewConnector(controlDatabaseURL(path, query))
 	if err != nil {
 		return fmt.Errorf("%w: scheduler source: %v", ErrPythonSourceFenceInvalid, err)
 	}

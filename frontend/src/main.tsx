@@ -25,7 +25,7 @@ createRoot(root).render(
 
 startPageLifecyclePersistence({ windowValue: window, documentValue: document });
 
-if (import.meta.env.PROD && "serviceWorker" in navigator) {
+if (import.meta.env.PROD && "serviceWorker" in navigator && !window.location.pathname.startsWith("/launcher")) {
   window.addEventListener("load", () => {
     void startWorkspaceServiceWorkerRuntime({
       container: navigator.serviceWorker,

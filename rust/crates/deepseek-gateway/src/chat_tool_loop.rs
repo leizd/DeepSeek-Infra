@@ -141,16 +141,53 @@ impl WorkspaceBundle {
 /// the server environment. The policy is shared across the request's rounds and
 /// calls — its counters accumulate exactly as the oracle's single `tool_policy`
 /// object does across its loop.
+#[derive(Clone)]
 pub struct ToolRoundExecutor {
     workspace: Option<Arc<WorkspaceBundle>>,
     policy: Option<Arc<Mutex<ToolPolicy>>>,
+    search_provider: Option<SearchProvider>,
     /// The browser engine, when this deployment has one. `None` is the documented
     /// static-controller fallback, not a failure: `browser_*` still runs the safety
     /// gate and the session registry, and only the controller changes.
     browser_engine: Option<Arc<dyn deepseek_policy::browser_engine::BrowserEngine>>,
 }
 
+pub type SuggestionCallback = Arc<dyn Fn(&Value) + Send + Sync>;
+
 impl ToolRoundExecutor {
+    /// A role's grant is enforced even when the ordinary global policy is off.
+    /// Search state is shared across retries and revision, so the researcher's
+    /// retained 15-search allowance is never renewed by restarting a worker.
+    pub(crate) fn for_agent(&self, role: &str) -> Self {
+        let config = ToolPolicyConfig {
+            capability: role.into(),
+            allowed_tools: Some(
+                deepseek_policy::tool_policy::capability_tools(role)
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            ),
+            enabled: true,
+            secrets: ["DEEPSEEK_API_KEY", "AUTH_TOKEN"]
+                .into_iter()
+                .filter_map(|key| std::env::var(key).ok())
+                .filter(|value| !value.is_empty())
+                .collect(),
+            ..ToolPolicyConfig::default()
+        };
+        Self {
+            workspace: self.workspace.clone(),
+            policy: Some(Arc::new(Mutex::new(ToolPolicy::new(config)))),
+            search_provider: self.search_provider.as_ref().map(SearchProvider::for_agent),
+            browser_engine: self.browser_engine.clone(),
+        }
+    }
+
+    /// Shared provider state for prefetch and the request's subsequent tool rounds.
+    pub fn search_provider(&self) -> Option<SearchProvider> {
+        self.search_provider.clone()
+    }
+
     /// Build one from injected parts. `None` workspace/policy are the honest
     /// states: data branches then report "not enabled for this request" and
     /// calls run ungated, both mirroring the oracle's disabled paths.
@@ -164,9 +201,13 @@ impl ToolRoundExecutor {
         policy: Option<ToolPolicy>,
         browser_engine: Option<Arc<dyn deepseek_policy::browser_engine::BrowserEngine>>,
     ) -> Self {
+        let search_provider = workspace
+            .as_ref()
+            .map(|bundle| SearchProvider::from_env(bundle.root().to_path_buf()));
         Self {
             workspace: workspace.map(Arc::new),
             policy: policy.map(|policy| Arc::new(Mutex::new(policy))),
+            search_provider,
             browser_engine,
         }
     }
@@ -196,11 +237,7 @@ impl ToolRoundExecutor {
     /// returning the envelope (success, denial, or unsupported).
     pub fn execute_call_sync(&self, name: &str, arguments: &Value) -> Value {
         let view = self.workspace.as_deref().map(|bundle| bundle.view());
-        let callback = self
-            .workspace
-            .as_deref()
-            .map(|bundle| SearchProvider::from_env(bundle.root().to_path_buf()))
-            .map(SearchProvider::callback);
+        let callback = self.search_provider.clone().map(SearchProvider::callback);
         let timeout_seconds = timeout_from_env();
         let now_epoch = fetch_url::system_now();
         let dns = fetch_url::system_dns;
@@ -259,11 +296,12 @@ impl ToolRoundExecutor {
     pub async fn run_round_with_suggestions(
         &self,
         tool_calls: Vec<Value>,
-        on_memory_suggestion: Option<&'static (dyn Fn(&Value) + Send + Sync)>,
+        on_memory_suggestion: Option<SuggestionCallback>,
     ) -> Vec<Value> {
         let workspace = self.workspace.clone();
         let policy = self.policy.clone();
         let engine = self.browser_engine.clone();
+        let search_provider = self.search_provider.clone();
         // The JoinError fallback needs the selected calls too, so the truncation
         // is computed once here and a copy is kept for it (it only runs when the
         // blocking task died, which is not the hot path).
@@ -276,7 +314,7 @@ impl ToolRoundExecutor {
         let joined = tokio::task::spawn_blocking(move || {
             let view = workspace
                 .as_deref()
-                .map(|bundle| bundle.view_with(on_memory_suggestion));
+                .map(|bundle| bundle.view_with(on_memory_suggestion.as_deref()));
             // The web-search provider is per request, like the executor: its memo and
             // turn counter are the oracle's closure variables, so one callback must
             // live across every round of this request.
@@ -286,10 +324,7 @@ impl ToolRoundExecutor {
             // `search_tavily` raise the missing-key error, so an unconfigured
             // deployment gets a precise "not configured" failure rather than the
             // executor's generic "not enabled for this request".
-            let callback = workspace
-                .as_deref()
-                .map(|bundle| SearchProvider::from_env(bundle.root().to_path_buf()))
-                .map(SearchProvider::callback);
+            let callback = search_provider.map(SearchProvider::callback);
             let timeout_seconds = timeout_from_env();
             let now_epoch = fetch_url::system_now();
             let dns = fetch_url::system_dns;
@@ -432,25 +467,71 @@ pub async fn execute_chat_with_tool_rounds(
     prepared: &Value,
     executor: &ToolRoundExecutor,
 ) -> Result<ChatCompletionResult, ChatExecutionError> {
+    let completed = execute_chat_turn(config, prepared, executor).await?;
+    final_answer(&completed.turn, &completed.usage)
+}
+
+/// The product JSON route retains reasoning, raw accumulated usage and tool
+/// suggestions, which the OpenAI envelope does not expose.
+pub(crate) struct CompletedToolTurn {
+    pub turn: UpstreamTurn,
+    pub usage: Value,
+    pub tool_call_count: usize,
+    pub tool_names: Vec<String>,
+    pub memory_suggestions: Vec<Value>,
+}
+
+pub(crate) async fn execute_chat_turn(
+    config: &UpstreamConfig,
+    prepared: &Value,
+    executor: &ToolRoundExecutor,
+) -> Result<CompletedToolTurn, ChatExecutionError> {
+    execute_chat_turn_with_limit(config, prepared, executor, tool_rounds::MAX_TOOL_ROUNDS).await
+}
+
+/// A zero limit forces an unexpected tool-call turn to a final answer without
+/// executing any calls, retaining the judge's `max_tool_rounds=0` behavior.
+pub(crate) async fn execute_chat_turn_with_limit(
+    config: &UpstreamConfig,
+    prepared: &Value,
+    executor: &ToolRoundExecutor,
+    max_tool_rounds: usize,
+) -> Result<CompletedToolTurn, ChatExecutionError> {
     let mut body = prepared.clone();
     let mut usage_totals = Value::Object(serde_json::Map::new());
     let mut last_turn: Option<UpstreamTurn> = None;
-    for tool_round in 0..(tool_rounds::MAX_TOOL_ROUNDS + 2) {
+    let mut tool_call_count = 0;
+    let mut tool_names = Vec::new();
+    let suggestions: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let on_suggestion: SuggestionCallback = Arc::new({
+        let suggestions = suggestions.clone();
+        move |suggestion| {
+            suggestions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(suggestion.clone());
+        }
+    });
+    for tool_round in 0..(max_tool_rounds + 2) {
         let turn = exchange_turn(config, &body).await?;
         usage_totals = merge_usage_totals(&usage_totals, &turn.usage);
         let calls = turn.tool_calls();
         let content = turn.content();
         let reasoning = turn.reasoning_content();
-        let decision =
-            tool_rounds::decide_round(calls.len(), tool_round, tool_rounds::MAX_TOOL_ROUNDS);
+        let decision = tool_rounds::decide_round(calls.len(), tool_round, max_tool_rounds);
         last_turn = Some(turn);
         match decision {
             RoundDecision::Finish => break,
             RoundDecision::ForceFinalAnswer => {
+                tool_names.extend(tool_rounds::tool_names(&calls));
                 body = tool_rounds::force_final_answer_without_tools(&body);
             }
             RoundDecision::Continue => {
-                let results = executor.run_round(calls.clone()).await;
+                tool_call_count += calls.len();
+                tool_names.extend(tool_rounds::tool_names(&calls));
+                let results = executor
+                    .run_round_with_suggestions(calls.clone(), Some(on_suggestion.clone()))
+                    .await;
                 body = tool_rounds::append_tool_exchange(
                     &body, &content, &reasoning, &calls, &results,
                 );
@@ -458,7 +539,17 @@ pub async fn execute_chat_with_tool_rounds(
         }
     }
     let turn = last_turn.ok_or(ChatExecutionError::NoAnswer)?;
-    final_answer(&turn, &usage_totals)
+    let memory_suggestions = suggestions
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    Ok(CompletedToolTurn {
+        turn,
+        usage: usage_totals,
+        tool_call_count,
+        tool_names,
+        memory_suggestions,
+    })
 }
 
 #[cfg(test)]

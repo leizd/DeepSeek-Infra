@@ -244,6 +244,19 @@ pub fn render_pdf_page_png(data: &[u8], page: i64, scale: f64) -> Result<PagePng
         });
     }
     let rendered = page.clamp(1, page_count);
+    if let Some(platform) = crate::platform_ocr::PlatformOcr::from_env()? {
+        let image = platform.render(data, rendered as u32, scale)?;
+        if i64::from(image.total_pages) != page_count {
+            return Err(render_unavailable(
+                "Android PDF page count differs from the source",
+            ));
+        }
+        return Ok(PagePng {
+            bytes: image.png,
+            page: rendered,
+            page_count,
+        });
+    }
     let Some(pdftoppm) = which("pdftoppm") else {
         return Err(render_unavailable("pdftoppm was not found"));
     };

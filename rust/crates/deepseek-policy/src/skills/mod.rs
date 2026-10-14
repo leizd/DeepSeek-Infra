@@ -19,6 +19,13 @@ use crate::core_utils::{python_truthy, text_or_empty};
 use serde_json::Value;
 
 pub type Result<T> = std::result::Result<T, AppError>;
+pub(crate) fn mutation_error(error: crate::mutation_gate::GateError) -> AppError {
+    AppError {
+        message: error.message,
+        code: error.code.unwrap_or("internal"),
+        status: error.status.unwrap_or(500),
+    }
+}
 pub fn text(value: &Value, key: &str) -> String {
     text_or_empty(value.get(key))
 }

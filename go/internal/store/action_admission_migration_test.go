@@ -1,11 +1,10 @@
 package store
 
 import (
-	"database/sql"
 	"errors"
 	"testing"
 
-	modernsqlite "modernc.org/sqlite"
+	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
 )
 
 func prepareActionV4Fixture(t *testing.T, control *Control) {
@@ -82,11 +81,11 @@ func TestActionAdmissionV4UpgradePreservesHistoryAndRollsBackOnFailure(t *testin
 	}
 
 	// Verify database is still V4 and no partial V5 objects exist
-	connector, err := modernsqlite.NewConnector(controlDatabaseDSN(databasePath))
+	db, err := sqlitedb.Open(controlDatabaseDSN(databasePath))
 	if err != nil {
 		t.Fatal(err)
 	}
-	db := sql.OpenDB(connector)
+
 	t.Cleanup(func() { _ = db.Close() })
 
 	var version, objects, events int

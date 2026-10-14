@@ -7,12 +7,13 @@
 //!
 //! # What is faithful, and what is not
 //!
-//! The five settings structs carry the oracle's own defaults and are used as such. The
+//! Routing settings honor the environment; the other settings use the oracle's defaults. The
 //! ledger is a real `BudgetStore` over `<root>/.budget`, the file cache and index are the
 //! real `FileStore`, and the clock is the OS zone through
 //! [`crate::local_clock::system_local_now`].
 //!
-//! **Recorded gap:** the *env readers* for those settings are not ported. The oracle
+//! Routing settings honor their environment overrides. **Recorded gap:**
+//! the remaining settings' env readers are not ported. The oracle
 //! reads them from `config.settings`, so a deployment that overrides e.g.
 //! `CONTEXT_WINDOW_MESSAGES` or `LOCAL_RAG_BM25_K1` would get the oracle's default here
 //! rather than its own value. Until those readers land, this assembly is exact for a
@@ -63,7 +64,7 @@ use crate::request_assembly::AssemblyEnv;
 pub const ROOT_ENV: &str = "DEEPSEEK_INFRA_ROOT";
 
 /// The settings and store paths the assembly binds for a request.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NativeAssembly {
     root: PathBuf,
     router: ModelRouterSettings,
@@ -75,6 +76,7 @@ pub struct NativeAssembly {
     projects_dir: PathBuf,
     budget_dir: PathBuf,
     budget_db: PathBuf,
+    readonly_budget: bool,
 }
 
 impl NativeAssembly {
@@ -90,7 +92,7 @@ impl NativeAssembly {
                 code: codes::INTERNAL,
                 status: 500,
             })?;
-        Ok(Self::with_root(root))
+        Ok(Self::with_root(root).with_router_settings(ModelRouterSettings::from_env()))
     }
 
     /// Bind the assembly to an explicit root — what the tests use, and what a caller that
@@ -107,11 +109,24 @@ impl NativeAssembly {
             taint: ContextTaintSettings::default(),
             context_manager: ContextManagerSettings::default(),
             engine: ContextEngineSettings::default(),
+            readonly_budget: false,
         }
+    }
+
+    /// Use the same captured routing configuration for validation and assembly.
+    pub fn with_router_settings(mut self, router: ModelRouterSettings) -> Self {
+        self.router = router;
+        self
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Bind reads to an existing budget database without schema/pragma writes.
+    pub fn with_readonly_budget(mut self) -> Self {
+        self.readonly_budget = true;
+        self
     }
 
     /// Run `f` against an [`AssemblyEnv`] bound to this assembly.
@@ -151,8 +166,20 @@ impl NativeAssembly {
 
         let today_string = today(now_epoch_seconds());
         let now_iso = utc_now_iso(now_epoch_seconds());
-        let read_spend_row = |scope: &str, day: &str| budget_store.read_spend_row(scope, day);
-        let write_spend_row = |row: &Value| budget_store.write_spend_row(row);
+        let read_spend_row = |scope: &str, day: &str| {
+            if self.readonly_budget {
+                budget_store.read_spend_row_readonly(scope, day)
+            } else {
+                budget_store.read_spend_row(scope, day)
+            }
+        };
+        let write_spend_row = |row: &Value| {
+            if self.readonly_budget {
+                Err("BUDGET_WRITER_DENIED".into())
+            } else {
+                budget_store.write_spend_row(row)
+            }
+        };
         let ledger = LedgerDeps {
             database_present: budget_store.database_present(),
             database_path: budget_store.database_path(),

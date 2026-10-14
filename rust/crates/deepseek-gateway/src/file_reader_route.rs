@@ -176,15 +176,19 @@ pub async fn api_file_page_image(
         query.page
     });
     let scale = Value::String(query.scale);
+    let control = deepseek_policy::extraction_control::FileProcessingControl::default();
+    let _cancel_on_drop = control.cancel_on_drop();
     let rendered = tokio::task::spawn_blocking(move || {
-        deepseek_policy::pdf_page::file_page_image(
-            &state.root,
-            &query.file_id,
-            project.as_deref(),
-            Some(&page),
-            Some(&scale),
-            &state.cache,
-        )
+        control.run(|| {
+            deepseek_policy::pdf_page::file_page_image(
+                &state.root,
+                &query.file_id,
+                project.as_deref(),
+                Some(&page),
+                Some(&scale),
+                &state.cache,
+            )
+        })
     })
     .await;
     match rendered {

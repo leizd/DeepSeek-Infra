@@ -99,3 +99,19 @@ func TestLoadPinsPromotionSignerToDeploymentConfiguration(t *testing.T) {
 func (cfg Config) MutationAuthorityExpected() string {
 	return MutationAuthority
 }
+
+func TestLoadPinsAgentOutcomeCustodyKey(t *testing.T) {
+	t.Setenv("DEEPSEEKD_MODE", ModeShadow)
+	t.Setenv("DEEPSEEKD_PRODUCTION_STORE", "")
+	t.Setenv("DEEPSEEKD_SHADOW_STORE", "")
+	t.Setenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY", " public-outcome-custody-key ")
+	cfg, err := Load()
+	if err != nil || cfg.AgentOutcomeSignerPublicKey != "public-outcome-custody-key" {
+		t.Fatalf("deployment outcome key was not pinned: %v", err)
+	}
+	t.Setenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY", "")
+	cfg, err = Load()
+	if err != nil || cfg.AgentOutcomeSignerPublicKey != "" {
+		t.Fatal("absent outcome trust was defaulted")
+	}
+}

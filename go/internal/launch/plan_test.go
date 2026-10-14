@@ -11,9 +11,11 @@ import (
 	"time"
 )
 
+var launchTestHelper = runLaunchHelper
+
 func TestMain(m *testing.M) {
 	if os.Getenv("DEEPSEEK_LAUNCH_HELPER") == "1" {
-		os.Exit(runLaunchHelper())
+		os.Exit(launchTestHelper())
 	}
 	os.Exit(m.Run())
 }

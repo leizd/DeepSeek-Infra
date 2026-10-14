@@ -5,13 +5,17 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
-import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts.rust_build import cache_environment, run_guarded  # noqa: E402
 
 
 def build_backup_crypto(root: Path = ROOT, *, release: bool = True) -> Path:
+    root = root.resolve()
     executable = "backup-crypto.exe" if os.name == "nt" else "backup-crypto"
     command = [
         "cargo",
@@ -26,13 +30,15 @@ def build_backup_crypto(root: Path = ROOT, *, release: bool = True) -> Path:
     ]
     if release:
         command.append("--release")
-    subprocess.run(command, cwd=root, check=True)
-    source = root / "rust" / "target" / ("release" if release else "debug") / executable
+    environment = cache_environment(root)
+    run_guarded(command, cwd=root / "rust", env=environment, check=True)
+    target_dir = Path(environment["CARGO_TARGET_DIR"])
+    source = target_dir / ("release" if release else "debug") / executable
     target = root / "bin" / executable
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
     chunk_executable = "deepseek-backup.exe" if os.name == "nt" else "deepseek-backup"
-    shutil.copy2(root / "rust" / "target" / ("release" if release else "debug") / chunk_executable, root / "bin" / chunk_executable)
+    shutil.copy2(target_dir / ("release" if release else "debug") / chunk_executable, root / "bin" / chunk_executable)
     return target
 
 

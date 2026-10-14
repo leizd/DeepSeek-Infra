@@ -22,6 +22,8 @@ from typing import Any, Callable
 
 from deepseek_infra.core.config import GENERATED_DIR
 from deepseek_infra.core.errors import AppError, ErrorCode
+from deepseek_infra.infra.native_runtime.authority import assert_python_writer_allowed
+from deepseek_infra.infra.workspace import mutation_gate
 
 GENERATED_FILE_MAX_AGE_SECONDS = 6 * 3600  # 生成文件保留 6 小时后清理
 
@@ -57,32 +59,36 @@ def store_generated_file(title: str, ext: str, writer: Callable[[Path], None]) -
     normalized_ext = str(ext or "").strip().lower().lstrip(".")
     if normalized_ext not in GENERATED_MEDIA_TYPES:
         raise AppError(f"不支持的生成文件类型：{ext}", code=ErrorCode.INVALID_PAYLOAD)
-    GENERATED_DIR.mkdir(parents=True, exist_ok=True)
-    cleanup_generated_files()
-    file_id = secrets.token_hex(16)
-    writer(GENERATED_DIR / f"{file_id}.{normalized_ext}")
-    return {
-        "fileId": file_id,
-        "filename": f"{_safe_filename(title)}.{normalized_ext}",
-        "downloadUrl": download_url(file_id),
-    }
+    assert_python_writer_allowed("generated_files_store")
+    with mutation_gate.mutation_scope(root=mutation_gate.workspace_root_for_path(GENERATED_DIR)):
+        GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+        cleanup_generated_files()
+        file_id = secrets.token_hex(16)
+        writer(GENERATED_DIR / f"{file_id}.{normalized_ext}")
+        return {
+            "fileId": file_id,
+            "filename": f"{_safe_filename(title)}.{normalized_ext}",
+            "downloadUrl": download_url(file_id),
+        }
 
 
 def cleanup_generated_files() -> None:
     """删除过期的生成文件。任何 IO 异常都静默吞掉，不影响主流程。"""
-    try:
-        if not GENERATED_DIR.exists():
-            return
-        now = time.time()
-        for ext in GENERATED_MEDIA_TYPES:
-            for path in GENERATED_DIR.glob(f"*.{ext}"):
-                try:
-                    if now - path.stat().st_mtime > GENERATED_FILE_MAX_AGE_SECONDS:
-                        path.unlink(missing_ok=True)
-                except OSError:
-                    continue
-    except OSError:
-        pass
+    assert_python_writer_allowed("generated_files_store")
+    with mutation_gate.mutation_scope(root=mutation_gate.workspace_root_for_path(GENERATED_DIR)):
+        try:
+            if not GENERATED_DIR.exists():
+                return
+            now = time.time()
+            for ext in GENERATED_MEDIA_TYPES:
+                for path in GENERATED_DIR.glob(f"*.{ext}"):
+                    try:
+                        if now - path.stat().st_mtime > GENERATED_FILE_MAX_AGE_SECONDS:
+                            path.unlink(missing_ok=True)
+                    except OSError:
+                        continue
+        except OSError:
+            pass
 
 
 def resolve_generated_file(file_id: str) -> Path | None:
@@ -112,12 +118,14 @@ def save_generated_file_to_downloads(file_id: str, filename: str = "", *, downlo
     if source is None:
         raise AppError("文件不存在或已过期", code=ErrorCode.NOT_FOUND, status=404)
 
-    ext = source.suffix.lower().lstrip(".")
-    target_dir = downloads_dir or _downloads_dir()
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = _unique_download_path(target_dir, _download_filename(filename, ext))
-    shutil.copy2(source, target)
-    return {"ok": True, "filename": target.name, "path": str(target), "downloadUrl": download_url(file_id)}
+    assert_python_writer_allowed("generated_files_store")
+    with mutation_gate.mutation_scope(root=mutation_gate.workspace_root_for_path(GENERATED_DIR)):
+        ext = source.suffix.lower().lstrip(".")
+        target_dir = downloads_dir or _downloads_dir()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = _unique_download_path(target_dir, _download_filename(filename, ext))
+        shutil.copy2(source, target)
+        return {"ok": True, "filename": target.name, "path": str(target), "downloadUrl": download_url(file_id)}
 
 
 def _downloads_dir() -> Path:

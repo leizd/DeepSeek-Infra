@@ -1,0 +1,376 @@
+syntax = "proto3";
+
+package deepseek.agent.v1;
+
+import "agent/v1/agent.proto";
+import "common/v1/common.proto";
+
+option go_package = "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1;agentv1";
+
+// A Go-owned reservation is not a provider receipt. Its fence and immutable
+// task come from the admitted run, rather than the dispatch caller.
+message AgentNodeDispatchIntent {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  deepseek.common.v1.ActionFence fence = 3;
+  string run_id = 4;
+  string node_id = 5;
+  AgentRunExecutionPhase phase = 6;
+  string task = 7;
+  repeated string depends_on = 8;
+  AgentArtifactReference request = 9;
+  string plan_digest = 10;
+  int64 metadata_index = 11;
+  uint64 metadata_epoch = 12;
+  string state = 13;
+  int64 recorded_at = 14;
+}
+
+message BeginAgentNodeDispatchRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  deepseek.common.v1.ActionFence fence = 4;
+  string run_id = 5;
+  string node_id = 6;
+  string owner = 7;
+  string claim_token = 8;
+}
+
+message BeginAgentNodeDispatchResponse {
+  // Only the first committed reservation can be fresh. A lost response, a new
+  // operation ID or a takeover must never authorize a second provider call.
+  bool fresh = 1;
+  AgentNodeDispatchIntent intent = 2;
+  AgentRunExecutionClaim claim = 3;
+}
+
+message GetAgentNodeDispatchRequest {
+  deepseek.common.v1.ActionFence fence = 1;
+  string run_id = 2;
+  string node_id = 3;
+}
+
+message GetAgentNodeDispatchResponse {
+  // Absence is not a NOT_APPLIED remote effect proof or a dispatch permission.
+  bool found = 1;
+  AgentNodeDispatchIntent intent = 2;
+  AgentNodeOutcomeReceipt outcome_receipt = 3;
+}
+
+// A recorded proof never grants dispatch, marks a phase complete, or releases locks.
+message RecordAgentNodeOutcomeRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  deepseek.common.v1.ActionFence fence = 4;
+  string run_id = 5;
+  string node_id = 6;
+  AgentNodeOutcomeReceipt outcome_receipt = 7;
+}
+
+message RecordAgentNodeOutcomeResponse {
+  bool already_recorded = 1;
+  string receipt_sha256 = 2;
+}
+
+// Reuses deepseekd's authenticated control listener, writer and action leases.
+// Rust owns a separate effect journal, provider execution and outcome proof.
+service AgentNodeControl {
+  rpc BeginDispatch(BeginAgentNodeDispatchRequest) returns (BeginAgentNodeDispatchResponse);
+  rpc GetDispatch(GetAgentNodeDispatchRequest) returns (GetAgentNodeDispatchResponse);
+  rpc RecordOutcome(RecordAgentNodeOutcomeRequest) returns (RecordAgentNodeOutcomeResponse);
+  rpc SettlePlan(SettleAgentPlanRequest) returns (SettleAgentPlanResponse);
+  rpc SettleSynthesis(SettleAgentSynthesisRequest) returns (SettleAgentSynthesisResponse);
+  rpc SettleTask(SettleAgentTaskRequest) returns (SettleAgentTaskResponse);
+  rpc CompleteTasks(CompleteAgentTasksRequest) returns (CompleteAgentTasksResponse);
+}
+
+message ExecuteAgentPlanRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  AgentRunExecutionClaim claim = 4;
+  bytes signed_phase_grant = 5;
+  deepseek.common.v1.ActionFence fence = 6;
+}
+
+message AgentNodeEffectMetadata {
+  string operation_id = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string run_id = 3;
+  string node_id = 4;
+  string state = 5;
+  // Scheduling references only; request/response bodies never enter Go.
+  AgentArtifactReference public_event = 6;
+  string outcome_sha256 = 7;
+  uint64 outcome_length = 8;
+  AgentNodeOutcomeReceipt outcome_receipt = 9;
+}
+
+// This signed payload is constructed from a confirmed Rust journal row. It is
+// historical effect evidence, not permission to dispatch or a Go status flag.
+message AgentNodeOutcomeEvidence {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string operation_id = 3;
+  string run_id = 4;
+  string node_id = 5;
+  AgentRunExecutionPhase phase = 6;
+  AgentArtifactReference request = 7;
+  string plan_digest = 8;
+  int64 metadata_index = 9;
+  uint64 metadata_epoch = 10;
+  int64 writer_fencing_token = 11;
+  string created_at = 12;
+  string confirmed_at = 13;
+  string outcome_sha256 = 14;
+  uint64 outcome_length = 15;
+  AgentArtifactReference public_event = 16;
+  repeated AgentRunPlanNode provider_plan = 17;
+  string fleet_id = 18;
+  string environment = 19;
+  AgentTaskOutputMetadata task_output = 20;
+}
+
+// Signature covers the canonical protobuf encoding of evidence with the fixed
+// deepseek-infra:agent-node-outcome-proof-v1 domain. Private keys stay in Rust.
+message AgentNodeOutcomeReceipt {
+  uint32 schema_version = 1;
+  AgentNodeOutcomeEvidence evidence = 2;
+  bytes signature = 3;
+  string signer_public_key = 4;
+}
+
+message QueryAgentNodeEffectRequest {
+  string operation_id = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string run_id = 3;
+  string node_id = 4;
+}
+
+message QueryAgentNodeEffectResponse {
+  // Absence never authorizes another provider request.
+  bool found = 1;
+  AgentNodeEffectMetadata effect = 2;
+}
+
+// Actual planner I/O and outcome custody are in the production Rust worker.
+// A known result is not Go phase settlement; independent proof is required.
+service AgentNodeWorker {
+  // Private Rust-to-Rust custody preparation only. No provider effect is admitted.
+  // Credentials must never be forwarded to the Go control plane or public events.
+  rpc PrepareCredentials(PrepareAgentCredentialsRequest) returns (PrepareAgentCredentialsResponse);
+  rpc ExecutePlan(ExecuteAgentPlanRequest) returns (AgentNodeEffectMetadata);
+  rpc ExecuteTask(ExecuteAgentTaskRequest) returns (AgentNodeEffectMetadata);
+  // Only synthesis-phase claims with the Go-selected synthesizer node are valid.
+  rpc ExecuteSynthesis(ExecuteAgentTaskRequest) returns (AgentNodeEffectMetadata);
+  rpc QueryEffect(QueryAgentNodeEffectRequest) returns (QueryAgentNodeEffectResponse);
+  rpc ProjectPlan(ProjectAgentPlanRequest) returns (AgentPlanProjectionReceipt);
+  rpc ProjectSynthesis(ProjectAgentSynthesisRequest) returns (AgentSynthesisProjectionReceipt);
+}
+
+message PrepareAgentCredentialsRequest {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string run_id = 3;
+  AgentArtifactReference request = 4;
+  uint64 runtime_revision = 5;
+  string api_key = 6;
+  string tavily_api_key = 7;
+}
+
+message AgentCredentialScope {
+  string fleet_id = 1;
+  string environment = 2;
+  string run_id = 3;
+  uint64 metadata_epoch = 4;
+  uint64 runtime_revision = 5;
+  string request_sha256 = 6;
+  uint64 request_length = 7;
+}
+
+message AgentCredentialObjectReference {
+  string id = 1;
+  string sha256 = 2;
+  uint64 length = 3;
+}
+
+message PrepareAgentCredentialsResponse {
+  AgentCredentialScope scope = 1;
+  AgentCredentialObjectReference object = 2;
+}
+
+// The caller selects only a node ID. Task text and dependencies come from the
+// worker's authenticated Go reservation; Rust reads all bodies from own custody.
+message ExecuteAgentTaskRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  AgentRunExecutionClaim claim = 4;
+  bytes signed_phase_grant = 5;
+  deepseek.common.v1.ActionFence fence = 6;
+  string node_id = 7;
+}
+
+// Rust constructs public bodies from its own confirmed planner journal. Go owns
+// normalization and the next run status; this command sends typed metadata only.
+// Projection permits neither another provider call nor action completion.
+message ProjectAgentPlanRequest {
+  uint32 schema_version = 1;
+  QueryAgentNodeEffectRequest source = 2;
+  deepseek.common.v1.ActionFence settlement_fence = 3;
+  int64 settlement_writer_token = 4;
+  uint64 metadata_epoch = 5;
+  int64 expected_index = 6;
+  repeated AgentRunPlanNode normalized_plan = 7;
+  string next_status = 8;
+  bool planning_required = 9;
+}
+
+// Domain-separated proof binds source custody, successor authority, Go-owned
+// scheduling metadata and the two actual immutable Rust public body references.
+message AgentPlanProjectionEvidence {
+  uint32 schema_version = 1;
+  string source_receipt_sha256 = 2;
+  deepseek.common.v1.ActionFence settlement_fence = 3;
+  int64 settlement_writer_token = 4;
+  string run_id = 5;
+  uint64 metadata_epoch = 6;
+  int64 expected_index = 7;
+  repeated AgentRunPlanNode normalized_plan = 8;
+  string next_status = 9;
+  AgentArtifactReference plan_body = 10;
+  AgentArtifactReference status_body = 11;
+  string fleet_id = 12;
+  string environment = 13;
+  AgentArtifactReference planning_body = 14;
+  bool planning_required = 15;
+}
+
+message AgentPlanProjectionReceipt {
+  uint32 schema_version = 1;
+  AgentPlanProjectionEvidence evidence = 2;
+  bytes signature = 3;
+  string signer_public_key = 4;
+}
+
+message SettleAgentPlanRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  deepseek.common.v1.ActionFence fence = 4;
+  string run_id = 5;
+  string owner = 6;
+  string claim_token = 7;
+  AgentPlanProjectionReceipt projection = 8;
+}
+
+message SettleAgentPlanResponse {
+  bool already_applied = 1;
+  AgentRunSnapshot run = 2;
+  string action_state = 3;
+}
+
+// Public scheduling counters are derived only from the confirmed Rust body and
+// covered by its custody signature. Synthesis also uses these output counters;
+// its distinct phase cannot settle a task. No provider content or secrets cross Go.
+message AgentTaskOutputMetadata {
+  uint32 schema_version = 1;
+  uint64 prompt_tokens = 2;
+  uint64 completion_tokens = 3;
+  int64 latency_ms = 4;
+  bool failed = 5;
+}
+
+// Go consumes its previously independently verified receipt. The caller cannot
+// supply another body, counters, done flag or dependency-success assertion.
+message SettleAgentTaskRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  deepseek.common.v1.ActionFence fence = 4;
+  string run_id = 5;
+  string node_id = 6;
+  string owner = 7;
+  string claim_token = 8;
+  int64 expected_index = 9;
+  string source_receipt_sha256 = 10;
+}
+
+message SettleAgentTaskResponse {
+  bool already_applied = 1;
+  AgentRunSnapshot run = 2;
+  string action_state = 3;
+}
+
+// Go derives completion from all retained signed task settlements. This ends the
+// task phase and releases its resource; it does not finish or synthesize the run.
+message CompleteAgentTasksRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  deepseek.common.v1.ActionFence fence = 4;
+  string run_id = 5;
+  string owner = 6;
+  string claim_token = 7;
+  int64 expected_index = 8;
+}
+
+message CompleteAgentTasksResponse {
+  bool already_applied = 1;
+  AgentRunSnapshot run = 2;
+  string action_state = 3;
+}
+
+
+// Derives content and done bodies from confirmed Rust custody only. This RPC
+// performs no provider I/O and cannot complete a Go run by itself.
+message ProjectAgentSynthesisRequest {
+  uint32 schema_version = 1;
+  QueryAgentNodeEffectRequest source = 2;
+  deepseek.common.v1.ActionFence settlement_fence = 3;
+  int64 settlement_writer_token = 4;
+  uint64 metadata_epoch = 5;
+  int64 expected_index = 6;
+}
+
+// Separate signature domain prevents planner proofs being reused for final answers.
+message AgentSynthesisProjectionEvidence {
+  uint32 schema_version = 1;
+  string source_receipt_sha256 = 2;
+  deepseek.common.v1.ActionFence settlement_fence = 3;
+  int64 settlement_writer_token = 4;
+  string run_id = 5;
+  uint64 metadata_epoch = 6;
+  int64 expected_index = 7;
+  AgentArtifactReference content_body = 8;
+  AgentArtifactReference done_body = 9;
+  string fleet_id = 10;
+  string environment = 11;
+}
+
+message AgentSynthesisProjectionReceipt {
+  uint32 schema_version = 1;
+  AgentSynthesisProjectionEvidence evidence = 2;
+  bytes signature = 3;
+  string signer_public_key = 4;
+}
+
+message SettleAgentSynthesisRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  deepseek.common.v1.ActionFence fence = 4;
+  string run_id = 5;
+  string owner = 6;
+  string claim_token = 7;
+  AgentSynthesisProjectionReceipt projection = 8;
+}
+
+message SettleAgentSynthesisResponse {
+  bool already_applied = 1;
+  AgentRunSnapshot run = 2;
+  string action_state = 3;
+}
+

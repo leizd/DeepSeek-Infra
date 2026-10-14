@@ -12,6 +12,7 @@ import (
 	"time"
 
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -147,6 +148,7 @@ func DialTLS(cfg TLSDialConfig) (*Client, error) {
 	return &Client{
 		rpc:            actionv1.NewWorkerClient(connection),
 		signer:         actionv1.NewControlSignerClient(connection),
+		nodes:          agentv1.NewAgentNodeWorkerClient(connection),
 		connection:     connection,
 		tlsSecured:     true,
 		bearerAttached: true,

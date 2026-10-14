@@ -27,7 +27,7 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	runtime, err := lifecycle.Start(ctx, cfg)
+	runtime, err := lifecycle.StartWithWriterWait(ctx, cfg, lifecycle.DefaultStartupWait)
 	if err != nil {
 		return err
 	}

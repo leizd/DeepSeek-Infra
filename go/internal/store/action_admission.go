@@ -196,15 +196,6 @@ func (store *Control) AdmitAndClaimAction(req AdmissionRequest) (AdmissionResult
 	if !ValidRecordID(req.ActionID) {
 		return AdmissionResult{}, ErrEmptyRecordID
 	}
-	owner := strings.TrimSpace(req.Owner)
-	if owner == "" {
-		owner = store.owner
-	}
-	leaseSeconds := req.LeaseSeconds
-	if leaseSeconds <= 0 {
-		leaseSeconds = 60
-	}
-
 	tx, err := store.db.Begin()
 	if err != nil {
 		return AdmissionResult{}, err
@@ -221,6 +212,28 @@ func (store *Control) AdmitAndClaimAction(req AdmissionRequest) (AdmissionResult
 	}
 	if err := verifySchemaTx(tx, store.schema); err != nil {
 		return AdmissionResult{}, err
+	}
+	result, err := store.admitAndClaimActionTx(tx, req, now, writerLeaseUntil)
+	if err != nil {
+		return AdmissionResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AdmissionResult{}, err
+	}
+	store.leaseUntil = writerLeaseUntil
+	return result, nil
+}
+
+// The caller holds store.mu and owns the writer/schema check and commit. This
+// lets a native Agent binding, action, admission and receipt share one transaction.
+func (store *Control) admitAndClaimActionTx(tx *sql.Tx, req AdmissionRequest, now, writerLeaseUntil int64) (AdmissionResult, error) {
+	owner := strings.TrimSpace(req.Owner)
+	if owner == "" {
+		owner = store.owner
+	}
+	leaseSeconds := req.LeaseSeconds
+	if leaseSeconds <= 0 {
+		leaseSeconds = 60
 	}
 
 	// 1. Fetch action record from action_journal
@@ -244,6 +257,10 @@ func (store *Control) AdmitAndClaimAction(req AdmissionRequest) (AdmissionResult
 
 	if !isFreshClaim && !isTakeover {
 		return AdmissionResult{}, ErrActionNotClaimable
+	}
+	agentResources, err := store.agentExecutionAdmissionTx(tx, existing, isTakeover)
+	if err != nil {
+		return AdmissionResult{}, err
 	}
 
 	var nextEpoch uint64
@@ -318,6 +335,7 @@ func (store *Control) AdmitAndClaimAction(req AdmissionRequest) (AdmissionResult
 	// Explicit resources may add scope, never replace reservations derived from
 	// the persisted action. Otherwise a caller could omit a conflicting target.
 	keys := append(deriveResourceKeys(payloadMeta), req.ResourceKeys...)
+	keys = append(keys, agentResources...)
 	keys = append(keys, priorKeys...)
 	for _, k := range keys {
 		if len(k) == 0 || len(k) > 1024 || strings.ContainsRune(k, 0) || !utf8.ValidString(k) {
@@ -470,12 +488,6 @@ func (store *Control) AdmitAndClaimAction(req AdmissionRequest) (AdmissionResult
 	if store.admissionFaultStage == "at_commit" {
 		return AdmissionResult{}, errInjectedAdmissionFault
 	}
-
-	// 10. Commit transaction
-	if err := tx.Commit(); err != nil {
-		return AdmissionResult{}, err
-	}
-	store.leaseUntil = writerLeaseUntil
 
 	lease := ActionLease{
 		ActionID:           req.ActionID,
@@ -749,6 +761,9 @@ func (store *Control) RenewActionLease(renewal ActionLeaseRenewal) (ActionLease,
 	}
 	if !activeLeasedActionState(action.State) || action.ExecutionEpoch != renewal.Epoch {
 		return ActionLease{}, ErrActionLeaseStale
+	}
+	if err := store.agentExecutionRenewalTx(tx, action); err != nil {
+		return ActionLease{}, err
 	}
 	lease := ActionLease{ActionID: renewal.ActionID, Owner: owner, Epoch: epoch, ClaimToken: claimToken,
 		LeaseUntil: leaseUntil, AcquiredAt: acquiredAt, UpdatedAt: updatedAt, ClaimRevision: claimRevision, WriterFencingToken: writerToken}

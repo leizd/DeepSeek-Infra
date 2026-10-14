@@ -38,15 +38,15 @@
 //! not own. Recording them as "not ported" would have implied a missing refusal where the
 //! reference implementation is silent.
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use deepseek_policy::search::{
-    SEARCH_CACHE_MAX_AGE_SECONDS, Transport, TransportOutcome, compact_search_tool_result,
-    load_search_cache, normalize_search_query_text, save_search_cache, search_round_status,
-    search_tavily_with_retry,
+    SEARCH_CACHE_MAX_AGE_SECONDS, Transport, TransportOutcome, aggregate_search_rounds,
+    compact_search_tool_result, load_search_cache, normalize_search_query_text, save_search_cache,
+    search_multiple, search_round_status, search_tavily_with_retry,
 };
 use deepseek_policy::tool_dispatch::ToolFailure;
 use serde_json::{Value, json};
@@ -62,6 +62,7 @@ pub const TAVILY_TIMEOUT_SECONDS: u64 = deepseek_policy::search::TAVILY_TIMEOUT_
 ///
 /// The key is never read from the request: `request_preparation` rejects
 /// client-supplied credential fields, and this follows that contract.
+#[derive(Clone)]
 pub struct TavilyConfig {
     pub url: String,
     pub api_key: String,
@@ -159,16 +160,28 @@ struct SearchState {
     counter: i64,
     citation_offset: i64,
     tool_results: BTreeMap<String, Value>,
+    base_query: String,
+    rounds: BTreeMap<i64, Value>,
+    latest: Option<Value>,
 }
 
 /// The web-search provider for one request.
+#[derive(Clone)]
 pub struct SearchProvider {
     config: TavilyConfig,
     root: PathBuf,
     turn_limit: i64,
+    state: Arc<Mutex<SearchState>>,
 }
 
 impl SearchProvider {
+    pub(crate) fn for_agent(&self) -> Self {
+        Self {
+            turn_limit: 15,
+            ..self.clone()
+        }
+    }
+
     /// Reads the config from the environment and takes the workspace root, which is
     /// also where the search cache lives (`<root>/.search-cache`).
     pub fn from_env(root: PathBuf) -> Self {
@@ -181,11 +194,100 @@ impl SearchProvider {
             config: TavilyConfig::from_env(),
             root,
             turn_limit: turn_limit.max(1),
+            state: Arc::new(Mutex::new(SearchState::default())),
         }
     }
 
     pub fn is_configured(&self) -> bool {
         self.config.is_configured()
+    }
+
+    pub(crate) fn budget_used(&self) -> i64 {
+        self.state
+            .lock()
+            .map(|state| state.counter.min(self.turn_limit))
+            .unwrap_or(0)
+    }
+
+    /// Run the retained prefetch algorithm on a blocking thread. Progress is
+    /// published as rounds finish; the caller owns its bounded stream channel.
+    pub fn prefetch(
+        &self,
+        query: &str,
+        progress: &mut dyn FnMut(&Value),
+    ) -> Result<Value, deepseek_policy::app_error::AppError> {
+        let transport = tavily_transport(self.config.timeout);
+        let url = self.config.url.clone();
+        let configured = move |_default_url: &str, body: &[u8], headers: &[(&str, &str)]| {
+            transport(&url, body, headers)
+        };
+        let result = search_multiple(
+            query,
+            &self.config.api_key,
+            &configured,
+            &self.root,
+            now_epoch(),
+            progress,
+        )?;
+        self.seed(query, &result);
+        Ok(result)
+    }
+
+    /// Seed the same memo, turn budget and citation sequence used by later tools.
+    fn seed(&self, query: &str, initial: &Value) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *state = SearchState {
+            base_query: query.to_string(),
+            latest: Some(initial.clone()),
+            ..SearchState::default()
+        };
+        for round in initial
+            .get("rounds")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let index = round.get("round").and_then(Value::as_i64).unwrap_or(0);
+            if index <= 0 {
+                continue;
+            }
+            state.rounds.insert(index, round.clone());
+            state.counter = state.counter.max(index);
+            let key = normalize_search_query_text(
+                round
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+            .to_lowercase();
+            if !key.is_empty() {
+                let compact = compact_search_tool_result(round, "general", state.citation_offset);
+                state.citation_offset += compact
+                    .get("results")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    .unwrap_or(0) as i64;
+                state.tool_results.insert(key, compact);
+            }
+        }
+    }
+
+    pub fn latest(&self) -> Option<Value> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .latest
+            .clone()
+    }
+
+    pub fn set_turn_query(&self, query: String) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .base_query = query;
     }
 
     /// The `ExecutorContext.web_search` callback.
@@ -195,16 +297,25 @@ impl SearchProvider {
     /// turn; and `limit_result` itself increments the counter, so hitting the limit
     /// still advances the round numbering.
     pub fn callback(self) -> impl Fn(&str, &str) -> Result<Value, ToolFailure> {
-        let transport = tavily_transport(self.config.timeout);
-        let TavilyConfig { api_key, .. } = self.config;
+        let provider_transport = tavily_transport(self.config.timeout);
+        let TavilyConfig { api_key, url, .. } = self.config;
+        // The policy's default endpoint remains frozen; the runtime transport
+        // applies the operator's endpoint just as settings.tavily_url did.
+        let transport = move |_default_url: &str, body: &[u8], headers: &[(&str, &str)]| {
+            provider_transport(&url, body, headers)
+        };
         let root = self.root;
         let turn_limit = self.turn_limit;
-        let state = RefCell::new(SearchState::default());
+        // Callback transport instances may run on different blocking threads.
+        // The memo, budget and citation sequence belong to the whole request.
+        let state = self.state;
 
         move |query: &str, intent: &str| {
             let cleaned = normalize_search_query_text(query);
             let key = cleaned.to_lowercase();
-            let mut state = state.borrow_mut();
+            let mut state = state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
 
             if !key.is_empty() {
                 if let Some(memo) = state.tool_results.get(&key) {
@@ -222,7 +333,7 @@ impl SearchProvider {
             let round_index = state.counter;
             let citation_offset = state.citation_offset;
 
-            let result = match search_single_round(
+            let (result, round) = match search_single_round(
                 &cleaned,
                 intent,
                 round_index,
@@ -233,12 +344,11 @@ impl SearchProvider {
             ) {
                 Ok(value) => value,
                 Err(error) => {
-                    let failed = compact_search_tool_result(
-                        &search_round_status(&cleaned, round_index, "error", &error.message),
-                        intent,
-                        citation_offset,
-                    );
-                    return Ok(failed);
+                    let round = search_round_status(&cleaned, round_index, "error", &error.message);
+                    (
+                        compact_search_tool_result(&round, intent, citation_offset),
+                        round,
+                    )
                 }
             };
 
@@ -248,12 +358,21 @@ impl SearchProvider {
                 .map(|items| items.len() as i64)
                 .unwrap_or(0);
             state.citation_offset += count;
+            record_round(&mut state, round);
             if !key.is_empty() {
                 state.tool_results.insert(key, result.clone());
             }
             Ok(result)
         }
     }
+}
+
+fn record_round(state: &mut SearchState, round: Value) {
+    if let Some(index) = round.get("round").and_then(Value::as_i64) {
+        state.rounds.insert(index, round);
+    }
+    let rounds: Vec<Value> = state.rounds.values().cloned().collect();
+    state.latest = Some(aggregate_search_rounds(&state.base_query, &rounds, None));
 }
 
 /// Mirrors `limit_result`: a search that was refused for budget, which is reported as
@@ -273,7 +392,9 @@ fn limit_result(query: &str, intent: &str, state: &mut SearchState) -> Value {
         "retryError": "",
         "cached": false,
     });
-    compact_search_tool_result(&round, intent, state.citation_offset)
+    let compact = compact_search_tool_result(&round, intent, state.citation_offset);
+    record_round(state, round);
+    compact
 }
 
 /// Mirrors `search_single_round`: the cache, then the retrying search, then the cache
@@ -287,13 +408,13 @@ fn search_single_round(
     api_key: &str,
     root: &std::path::Path,
     transport: &Transport,
-) -> Result<Value, deepseek_policy::app_error::AppError> {
+) -> Result<(Value, Value), deepseek_policy::app_error::AppError> {
     if cleaned.is_empty() {
-        return Ok(compact_search_tool_result(
-            &json!({"ok": false, "error": "Empty query", "query": "", "round": round_index,
-                    "intent": intent, "results": []}),
-            intent,
-            citation_offset,
+        let round = json!({"ok": false, "error": "Empty query", "query": "", "round": round_index,
+                          "intent": intent, "results": []});
+        return Ok((
+            compact_search_tool_result(&round, intent, citation_offset),
+            round,
         ));
     }
 
@@ -308,10 +429,9 @@ fn search_single_round(
             let mut round_data = cached;
             round_data["round"] = json!(round_index);
             round_data["status"] = json!("done");
-            return Ok(compact_search_tool_result(
-                &round_data,
-                intent,
-                citation_offset,
+            return Ok((
+                compact_search_tool_result(&round_data, intent, citation_offset),
+                round_data,
             ));
         }
     }
@@ -331,10 +451,9 @@ fn search_single_round(
         cache_result(root, cleaned, &round_data, now);
     }
 
-    Ok(compact_search_tool_result(
-        &round_data,
-        intent,
-        citation_offset,
+    Ok((
+        compact_search_tool_result(&round_data, intent, citation_offset),
+        round_data,
     ))
 }
 
@@ -363,4 +482,94 @@ pub const CACHE_MAX_AGE_SECONDS: i64 = SEARCH_CACHE_MAX_AGE_SECONDS;
 /// a skip.
 pub fn disabled_failure() -> ToolFailure {
     ToolFailure::app("web_search", "web_search is not enabled for this request")
+}
+
+#[cfg(test)]
+mod configured_endpoint_tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    #[test]
+    fn native_search_callback_uses_configured_endpoint_and_provider_key() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/owned-search", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let server = thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            let (mut connection, _) = loop {
+                match listener.accept() {
+                    Ok(value) => break value,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && std::time::Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(5))
+                    }
+                    Err(error) => {
+                        panic!("configured search endpoint did not receive a request: {error}")
+                    }
+                }
+            };
+            connection
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = Vec::new();
+            let (headers, body_start, length) = loop {
+                let mut buffer = [0; 1024];
+                let n = connection.read(&mut buffer).unwrap();
+                assert!(n > 0, "native search request ended before headers");
+                request.extend_from_slice(&buffer[..n]);
+                if let Some(index) = request.windows(4).position(|p| p == b"\r\n\r\n") {
+                    let headers = String::from_utf8(request[..index].to_vec())
+                        .unwrap()
+                        .to_ascii_lowercase();
+                    let length = headers
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: "))
+                        .unwrap()
+                        .parse::<usize>()
+                        .unwrap();
+                    break (headers, index + 4, length);
+                }
+            };
+            while request.len() < body_start + length {
+                let mut buffer = [0; 1024];
+                let n = connection.read(&mut buffer).unwrap();
+                assert!(n > 0);
+                request.extend_from_slice(&buffer[..n]);
+            }
+            assert!(headers.starts_with("post /owned-search http/1.1\r\n"));
+            assert!(headers.contains("authorization: bearer tv-owned-search-fixture"));
+            let body: Value =
+                serde_json::from_slice(&request[body_start..body_start + length]).unwrap();
+            assert_eq!(body["query"], "configured native search");
+            let response = r#"{"query":"configured native search","results":[{"title":"Owned search","url":"https://example.invalid/owned","content":"configured native search result","score":1}]}"#;
+            write!(connection, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", response.len(), response).unwrap();
+        });
+        let root = tempfile::tempdir().unwrap();
+        let callback = SearchProvider {
+            config: TavilyConfig {
+                url: endpoint,
+                api_key: "tv-owned-search-fixture".into(),
+                timeout: Duration::from_secs(1),
+            },
+            root: root.path().into(),
+            turn_limit: 15,
+            state: Arc::default(),
+        }
+        .callback();
+        let result = callback("configured native search", "general").unwrap();
+        server.join().unwrap();
+        assert_eq!(result["status"], "done");
+        assert!(
+            result["results"]
+                .as_array()
+                .is_some_and(|rows| !rows.is_empty())
+        );
+        assert!(!result.to_string().contains("tv-owned-search-fixture"));
+    }
 }

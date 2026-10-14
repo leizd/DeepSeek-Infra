@@ -60,7 +60,8 @@ const (
 	SchemaV13      = 13
 	SchemaV14      = 14
 	SchemaV15      = 15
-	CurrentSchema  = SchemaV15
+	SchemaV16      = 16
+	CurrentSchema  = SchemaV16
 )
 
 var controlTableNames = [...]string{
@@ -176,8 +177,8 @@ var transitions = map[string]map[string][]string{
 		// stores disabled policies routinely — and it is *rewritten in place* by an
 		// update that does not touch `enabled` (a schedule or recipient edit). Without the
 		// self-transitions, every such update would be refused as an illegal state move
-		// even though the state did not move. The rest of the domains keep the strict
-		// "a write is a state change" rule.
+		// even though the state did not move. Agent runs also persist snapshots without
+		// changing status; other domains keep the strict state-change rule.
 		//
 		// `DELETED` is the terminal tombstone a delete writes. The row is **kept**: the
 		// control event journal is append-only and immutable, and a record whose events
@@ -248,10 +249,19 @@ var transitions = map[string]map[string][]string{
 		"DUE":    {"BACKTESTED"},
 	},
 	"agent_run": {
-		"":         {"created"},
-		"created":  {"planning", "cancelled"},
-		"planning": {"running", "cancelled"},
-		"running":  {"done", "failed", "cancelled"},
+		// Event cursors and derived snapshots may advance without changing status.
+		// Restart checkpoints only interrupt active work: pending plan approval is
+		// retained. Resume and selective rerun reopen terminal runs. These metadata
+		// transitions never claim an action lease or advance its execution epoch.
+		"":              {"created"},
+		"created":       {"created", "planning", "failed", "cancelled", "orphaned"},
+		"planning":      {"planning", "awaiting_plan", "running", "failed", "cancelled", "orphaned"},
+		"awaiting_plan": {"awaiting_plan", "running", "failed", "cancelled"},
+		"running":       {"running", "done", "failed", "cancelled", "orphaned"},
+		"orphaned":      {"orphaned", "running", "failed", "cancelled"},
+		"failed":        {"failed", "running"},
+		"cancelled":     {"cancelled", "running", "failed"},
+		"done":          {"done", "running", "failed"},
 	},
 }
 

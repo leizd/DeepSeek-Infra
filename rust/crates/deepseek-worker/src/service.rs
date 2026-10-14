@@ -217,6 +217,8 @@ pub struct WorkerRpcService {
     pub(crate) worker: Arc<Mutex<Worker>>,
     pub(crate) authenticator: Arc<dyn TransportAuthenticator>,
     pub(crate) control_signer: Option<Arc<Mutex<crate::ControlSigner>>>,
+    pub(crate) agent_execution_control: Option<crate::AgentExecutionControl>,
+    pub(crate) agent_plan_executor: Option<Arc<crate::AgentPlanExecutor>>,
     #[cfg(feature = "s3")]
     transport: Option<Arc<deepseek_storage::s3::S3Transport>>,
 }
@@ -235,6 +237,8 @@ impl WorkerRpcService {
             worker: Arc::new(Mutex::new(worker)),
             authenticator: Arc::new(ProductionFailClosedAuthenticator),
             control_signer: None,
+            agent_execution_control: None,
+            agent_plan_executor: None,
             #[cfg(feature = "s3")]
             transport: None,
         }
@@ -248,6 +252,8 @@ impl WorkerRpcService {
             worker: Arc::new(Mutex::new(worker)),
             authenticator,
             control_signer: None,
+            agent_execution_control: None,
+            agent_plan_executor: None,
             #[cfg(feature = "s3")]
             transport: None,
         }
@@ -261,6 +267,11 @@ impl WorkerRpcService {
 
     pub fn with_control_signer(mut self, signer: crate::ControlSigner) -> Self {
         self.control_signer = Some(Arc::new(Mutex::new(signer)));
+        self
+    }
+
+    pub fn with_agent_execution_control(mut self, control: crate::AgentExecutionControl) -> Self {
+        self.agent_execution_control = Some(control);
         self
     }
 

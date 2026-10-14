@@ -478,6 +478,65 @@ def _native_supervisor_contract(path: Path, root: Path, text: str) -> bool:
             and "return true" in legacy.group(1) and 'runtimeMode = "python_disabled"' in text)
 
 
+def _native_linux_guardian_contract(path: Path, root: Path, text: str) -> bool:
+    """A same-binary guardian admits the same four native targets only."""
+    if path.relative_to(root).as_posix() != "go/internal/launch/guardian_linux.go":
+        return False
+    calls = re.findall(r"exec\.Command(?:Context)?\s*\(([^)]*)\)", text)
+    if [re.sub(r"\s+", "", call) for call in calls] != ["process.Path"]:
+        return False
+    guard = text.find("if !guardianProcessAllowed(process)")
+    spawn = text.find("exec.Command(process.Path)")
+    fence = root / "go/internal/launch/process_fence_linux.go"
+    plan = root / "go/internal/launch/plan.go"
+    if not 0 <= guard < spawn or not fence.is_file() or not plan.is_file():
+        return False
+    fence_text = fence.read_text(encoding="utf-8")
+    cases = re.search(r"case ([^:]+):", fence_text)
+    names = re.findall(r'"([^"]+)"', cases.group(1)) if cases else []
+    if names != ["deepseekd", "deepseek-worker", "deepseek-gateway", "deepseek-desktop"]:
+        return False
+    plan_text = plan.read_text(encoding="utf-8")
+    return (_native_supervisor_contract(plan, root, plan_text)
+            and "fence.prepare(process, cmd.Env)" in plan_text
+            and 'guardianArgument = "--deepseek-internal-guardian-v1"' in fence_text
+            and "filepath.IsAbs(process.Path) && !legacyCommand(process.Path)" in fence_text
+            and all(token in text for token in [
+                'os.NewFile(3, "native-root-lifetime")', "unix.CloseOnExec(int(pipe.Fd()))",
+                "unix.PR_SET_CHILD_SUBREAPER", "unix.PidfdOpen", "unix.PidfdSendSignal",
+                "if guardianChild(pid)", "killOwnedChildren()", "Setsid: true",
+            ]))
+
+
+def _native_browser_hook_contract(path: Path, root: Path, text: str) -> bool:
+    """Permit only the retained Android ACTION_VIEW helper, not business exec."""
+    if path.relative_to(root).as_posix() != "go/internal/desktop/browser_termux.go":
+        return False
+    calls = re.findall(r"exec\.Command(?:Context)?\s*\(([^)]*)\)", text)
+    if [re.sub(r"\s+", "", call) for call in calls] != ["ctx,path,raw"]:
+        return False
+    if re.findall(r'exec\.LookPath\("([^"]+)"\)', text) != ["termux-open-url"]:
+        return False
+    guard = text.find("if err := validateBrowserURL(raw); err != nil")
+    spawn = text.find("exec.CommandContext(ctx, path, raw)")
+    keys = re.search(r"for _, key := range \[\]string\{([^}]+)\}", text)
+    allowed = ["PATH", "HOME", "PREFIX", "TMPDIR", "LANG", "LC_ALL", "TERMUX_VERSION", "TERMUX__USER_ID",
+               "ANDROID_ROOT", "ANDROID_DATA", "ANDROID_ART_ROOT", "ANDROID_I18N_ROOT", "ANDROID_TZDATA_ROOT",
+               "BOOTCLASSPATH", "DEX2OATBOOTCLASSPATH", "SYSTEMSERVERCLASSPATH"]
+    validator = path.with_name("browser.go")
+    if not validator.is_file():
+        return False
+    validation = validator.read_text(encoding="utf-8")
+    return (0 <= guard < spawn
+            and "context.WithTimeout(ctx, 5*time.Second)" in text
+            and "cmd.Env = termuxBrowserEnvironment()" in text
+            and keys is not None and re.findall(r'"([^"]+)"', keys.group(1)) == allowed
+            and not re.search(r"cmd\.(?:Args|Path|ExtraFiles)\s*=", text)
+            and all(token in validation for token in ['u.Scheme != "http"', 'u.Scheme != "https"', "u.User != nil",
+                                                     "net.ParseIP(u.Hostname())", "url.ParseQuery(u.RawQuery)",
+                                                     "number < 1 || number > 65535", "strings.ContainsAny(raw"]))
+
+
 def check_process_tree_isolation(root: Path) -> GateCheckResult:
     # 1. Audit Rust crates for forbidden process invocations
     rust_root = root / "rust" / "crates"
@@ -504,13 +563,17 @@ def check_process_tree_isolation(root: Path) -> GateCheckResult:
     go_root = root / "go"
     go_violations: list[str] = []
     native_supervisors = 0
+    browser_handlers = 0
     for go_file in go_root.rglob("*.go"):
         if "_test.go" in go_file.name:
             continue
         text = go_file.read_text(encoding="utf-8")
         if '"os/exec"' in text:
-            if _native_supervisor_contract(go_file, root, text):
+            if (_native_supervisor_contract(go_file, root, text)
+                    or _native_linux_guardian_contract(go_file, root, text)):
                 native_supervisors += 1
+            elif _native_browser_hook_contract(go_file, root, text):
+                browser_handlers += 1
             else:
                 go_violations.append(f"{go_file.relative_to(root)} imports os/exec outside the bounded native supervisor")
 
@@ -530,6 +593,8 @@ def check_process_tree_isolation(root: Path) -> GateCheckResult:
             "go_production_packages_checked": True,
             "external_executors_detected": 0,
             "native_supervisors_checked": native_supervisors,
+            "platform_browser_handlers_checked": browser_handlers,
+            "external_executor_scope": "forbidden business/interpreter executors; platform browser hooks counted separately",
             "scope": "source_contract",
         },
     )

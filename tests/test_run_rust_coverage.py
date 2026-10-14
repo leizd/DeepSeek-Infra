@@ -70,6 +70,7 @@ def test_test_inventory_reuses_coverage_builds_without_cleaning_or_running_tests
     command = calls[0]
     assert command[:2] == ["cargo", "llvm-cov"]
     assert {"--locked", "--workspace", "--all-features", "--no-report"}.issubset(command)
+    assert command[command.index("--profile") + 1] == "coverage"
     assert command[command.index("--") + 1:] == ["--list", "--format", "terse"]
 
 
@@ -98,6 +99,22 @@ def test_native_contract_rejects_incomplete_or_unlocked_coverage_inventory(
     def altered_inventory(path: Path, *args: Any, **kwargs: Any) -> str:
         source = original_read_text(path, *args, **kwargs)
         return source.replace(f'"{removed_flag}",', "", 1) if path == coverage_source else source
+
+    monkeypatch.setattr(Path, "read_text", altered_inventory)
+    with pytest.raises(ContractError, match="consume Cargo.lock"):
+        validate_toolchain_consumers()
+
+
+@pytest.mark.parametrize("profile", ["dev", "release", "diagnostic"])
+def test_native_contract_rejects_inventory_using_a_different_profile(
+    monkeypatch: pytest.MonkeyPatch, profile: str,
+) -> None:
+    coverage_source = Path(run_rust_coverage.__file__)
+    original_read_text = Path.read_text
+
+    def altered_inventory(path: Path, *args: Any, **kwargs: Any) -> str:
+        source = original_read_text(path, *args, **kwargs)
+        return source.replace('"coverage",', f'"{profile}",', 1) if path == coverage_source else source
 
     monkeypatch.setattr(Path, "read_text", altered_inventory)
     with pytest.raises(ContractError, match="consume Cargo.lock"):

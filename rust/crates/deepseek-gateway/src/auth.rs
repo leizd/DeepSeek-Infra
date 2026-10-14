@@ -1,10 +1,127 @@
 use axum::{
     extract::Request,
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Json, Response},
 };
 use serde_json::json;
+
+fn query_value(query: Option<&str>, name: &str) -> String {
+    let decode = |value: &str| {
+        percent_encoding::percent_decode_str(&value.replace('+', " "))
+            .decode_utf8_lossy()
+            .into_owned()
+    };
+    query
+        .unwrap_or_default()
+        .split('&')
+        .filter_map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (decode(key) == name).then(|| decode(value))
+        })
+        .last()
+        .unwrap_or_default()
+}
+
+fn legal_cookie_char(value: char) -> bool {
+    value.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~:".contains(value)
+}
+fn auth_cookie_header(token: &str) -> String {
+    let value = if !token.is_empty() && token.chars().all(legal_cookie_char) {
+        token.to_owned()
+    } else {
+        let mut value = String::from("\"");
+        for ch in token.chars() {
+            match ch {
+                '\\' => value.push_str("\\\\"),
+                '"' => value.push_str("\\\""),
+                ',' => value.push_str("\\054"),
+                ';' => value.push_str("\\073"),
+                ' '..='~' => value.push(ch),
+                ch if (ch as u32) <= 255 => value.push_str(&format!("\\{:03o}", ch as u32)),
+                ch => value.push(ch),
+            }
+        }
+        value.push('"');
+        value
+    };
+    format!("auth_token={value}; HttpOnly; Max-Age=2592000; Path=/; SameSite=Strict")
+}
+fn cookie_value(raw: &str) -> String {
+    let Some(quoted) = raw.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
+        return raw.to_string();
+    };
+    let mut chars = quoted.chars().peekable();
+    let mut result = String::new();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            result.push(ch);
+            continue;
+        }
+        let Some(next) = chars.next() else {
+            result.push('\\');
+            break;
+        };
+        if matches!(next, '0'..='3') {
+            let mut lookahead = chars.clone();
+            if let (Some(second @ '0'..='7'), Some(third @ '0'..='7')) =
+                (lookahead.next(), lookahead.next())
+            {
+                let code = (next as u32 - '0' as u32) * 64
+                    + (second as u32 - '0' as u32) * 8
+                    + third as u32
+                    - '0' as u32;
+                result.push(char::from_u32(code).unwrap());
+                chars = lookahead;
+                continue;
+            }
+        }
+        result.push(next);
+    }
+    result
+}
+fn cookie_token(raw: &str) -> String {
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut start = 0;
+    let mut parts = Vec::new();
+    for (offset, ch) in raw.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            ';' if !quoted => {
+                parts.push(&raw[start..offset]);
+                start = offset + 1;
+            }
+            _ => (),
+        }
+    }
+    if quoted {
+        return String::new();
+    }
+    parts.push(&raw[start..]);
+    let mut token = String::new();
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let Some((name, value)) = part.split_once('=') else {
+            return String::new();
+        };
+        if !name.trim().chars().all(legal_cookie_char) {
+            return String::new();
+        }
+        if name.trim() == "auth_token" {
+            token = cookie_value(value.trim());
+        }
+    }
+    token
+}
 
 fn env_truthy(name: &str) -> bool {
     matches!(
@@ -47,6 +164,11 @@ fn requires_auth(path: &str) -> bool {
         || path == "/a2a"
 }
 
+fn browser_response(path: &str, mut response: Response) -> Response {
+    crate::static_files::apply_frontend_headers(path, &mut response);
+    response
+}
+
 fn token_from_headers(headers: &HeaderMap) -> String {
     if let Some(value) = headers
         .get(header::AUTHORIZATION)
@@ -66,12 +188,7 @@ fn token_from_headers(headers: &HeaderMap) -> String {
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok())
     {
-        for part in cookie.split(';') {
-            let part = part.trim();
-            if let Some(rest) = part.strip_prefix("auth_token=") {
-                return rest.to_string();
-            }
-        }
+        return cookie_token(cookie);
     }
     String::new()
 }
@@ -131,6 +248,51 @@ pub async fn require_production_auth(
     if !auth.enabled {
         return next.run(request).await;
     }
+    // The launch URL is an existing public interface: browser navigation exchanges
+    // its token for an HttpOnly cookie; desktop WebViews load the document directly.
+    if matches!(*request.method(), Method::GET | Method::HEAD)
+        && matches!(request.uri().path(), "/" | "/ui" | "/ui/")
+    {
+        let token = query_value(request.uri().query(), "token");
+        if !token.is_empty() {
+            let path = request.uri().path().to_owned();
+            if !tokens_match(&token, &auth.token) {
+                return browser_response(
+                    &path,
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({"error":"Auth required","code":"unauthorized"})),
+                    )
+                        .into_response(),
+                );
+            }
+            let cookie = match HeaderValue::from_str(&auth_cookie_header(&auth.token)) {
+                Ok(value) => value,
+                Err(_) => return browser_response(&path, (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error":"Invalid authentication configuration","code":"internal"})),
+                )
+                    .into_response()),
+            };
+            let desktop = query_value(request.uri().query(), "desktop");
+            let mut response = if deepseek_policy::core_utils::web_truthy(Some(&json!(desktop))) {
+                next.run(request).await
+            } else {
+                let location = if request.uri().path().starts_with("/ui") {
+                    "/ui/"
+                } else {
+                    "/"
+                };
+                let mut response = StatusCode::FOUND.into_response();
+                response
+                    .headers_mut()
+                    .insert(header::LOCATION, HeaderValue::from_static(location));
+                response
+            };
+            response.headers_mut().insert(header::SET_COOKIE, cookie);
+            return browser_response(&path, response);
+        }
+    }
     if !requires_auth(request.uri().path()) {
         return next.run(request).await;
     }
@@ -154,11 +316,13 @@ pub async fn require_production_auth(
         return next.run(request).await;
     }
     if !tokens_match(&provided, expected) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": {"code": "UNAUTHORIZED", "message": "Auth required"}})),
-        )
-            .into_response();
+        let path = request.uri().path();
+        let error = if path == "/api/skills" || path.starts_with("/api/skills/") {
+            json!({"error":"Auth required","code":"unauthorized"})
+        } else {
+            json!({"error": {"code": "UNAUTHORIZED", "message": "Auth required"}})
+        };
+        return (StatusCode::UNAUTHORIZED, Json(error)).into_response();
     }
     next.run(request).await
 }

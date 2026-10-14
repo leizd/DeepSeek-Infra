@@ -72,6 +72,93 @@ pub struct ModelRouterSettings {
     pub model_aliases: Vec<(String, String)>,
 }
 
+impl ModelRouterSettings {
+    /// Retained `config.ModelRouterSettings` environment contract. Injection lets
+    /// callers and tests capture one configuration without changing process state.
+    pub fn from_environment(get: impl Fn(&str) -> Option<String>) -> Self {
+        let boolean = |name: &str, default: bool| {
+            get(name)
+                .filter(|v| !v.trim().is_empty())
+                .map_or(default, |v| {
+                    matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on"
+                    )
+                })
+        };
+        let integer = |name: &str, default: i64| {
+            get(name)
+                .and_then(|v| v.trim().parse::<i64>().ok())
+                .unwrap_or(default)
+        };
+        let threshold = get("MODEL_ROUTER_JUDGE_THRESHOLD")
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .unwrap_or(0.6);
+        Self {
+            enabled: boolean("MODEL_ROUTER_ENABLED", true),
+            cascade_enabled: boolean("MODEL_ROUTER_CASCADE_ENABLED", true),
+            judge_enabled: boolean("MODEL_ROUTER_JUDGE_ENABLED", false),
+            // Python's max(0, NaN) is 0, while ordinary values are clamped.
+            judge_threshold: if threshold.is_nan() {
+                0.0
+            } else {
+                threshold.clamp(0.0, 1.0)
+            },
+            cascade_min_chars: integer("MODEL_ROUTER_CASCADE_MIN_CHARS", 80).clamp(1, 5000),
+            cost_budget_tokens: integer("MODEL_ROUTER_COST_BUDGET_TOKENS", 0).max(0),
+            draft_model: get("MODEL_ROUTER_DRAFT_MODEL")
+                .unwrap_or_else(|| "deepseek-v4-flash".into()),
+            refine_model: get("MODEL_ROUTER_REFINE_MODEL")
+                .unwrap_or_else(|| "deepseek-v4-pro".into()),
+            judge_model: get("MODEL_ROUTER_JUDGE_MODEL")
+                .unwrap_or_else(|| "deepseek-v4-flash".into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn from_env() -> Self {
+        Self::from_environment(|name| std::env::var(name).ok())
+    }
+}
+
+/// The judge's response is advisory. An absent/unparseable score preserves the
+/// draft, and a valid score is bounded to 0..1, as in `_parse_judge_score`.
+pub fn parse_judge_score(text: &str) -> f64 {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    let pattern = PATTERN.get_or_init(|| Regex::new(r"\d?\.\d+|[01](?:\.0+)?").unwrap());
+    pattern
+        .find(text)
+        .and_then(|m| {
+            // Python float accepts Unicode decimal digits too. These are the same
+            // Unicode 15.1 decimal blocks retained by skills request parsing.
+            const ZEROS: &[u32] = &[
+                0x30, 0x660, 0x6f0, 0x7c0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6,
+                0xd66, 0xde6, 0xe50, 0xed0, 0xf20, 0x1040, 0x1090, 0x17e0, 0x1810, 0x1946, 0x19d0,
+                0x1a80, 0x1a90, 0x1b50, 0x1bb0, 0x1c40, 0x1c50, 0xa620, 0xa8d0, 0xa900, 0xa9d0,
+                0xa9f0, 0xaa50, 0xabf0, 0xff10, 0x104a0, 0x10d30, 0x11066, 0x110f0, 0x11136,
+                0x111d0, 0x112f0, 0x11450, 0x114d0, 0x11650, 0x116c0, 0x11730, 0x118e0, 0x11950,
+                0x11c50, 0x11d50, 0x11da0, 0x11f50, 0x16a60, 0x16ac0, 0x16b50, 0x1d7ce, 0x1d7d8,
+                0x1d7e2, 0x1d7ec, 0x1d7f6, 0x1e140, 0x1e2f0, 0x1e4f0, 0x1e950, 0x1fbf0,
+            ];
+            m.as_str()
+                .chars()
+                .map(|c| {
+                    ZEROS
+                        .iter()
+                        .find_map(|z| {
+                            let point = c as u32;
+                            (point >= *z && point < z + 10)
+                                .then(|| char::from_digit(point - z, 10).unwrap())
+                        })
+                        .unwrap_or(c)
+                })
+                .collect::<String>()
+                .parse::<f64>()
+                .ok()
+        })
+        .map_or(1.0, |score| score.clamp(0.0, 1.0))
+}
+
 impl Default for ModelRouterSettings {
     fn default() -> Self {
         let aliases = [
@@ -432,6 +519,65 @@ fn text_or_empty(value: Option<&Value>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn router_environment_retains_switches_models_and_clamped_thresholds() {
+        assert_eq!(
+            ModelRouterSettings::from_environment(|_| None),
+            ModelRouterSettings::default()
+        );
+        let settings = ModelRouterSettings::from_environment(|name| match name {
+            "MODEL_ROUTER_ENABLED" => Some(" ".into()),
+            "MODEL_ROUTER_CASCADE_ENABLED" => Some("no".into()),
+            "MODEL_ROUTER_JUDGE_ENABLED" => Some(" YES ".into()),
+            "MODEL_ROUTER_JUDGE_THRESHOLD" => Some("1.5".into()),
+            "MODEL_ROUTER_CASCADE_MIN_CHARS" => Some("9000".into()),
+            "MODEL_ROUTER_COST_BUDGET_TOKENS" => Some("-4".into()),
+            "MODEL_ROUTER_DRAFT_MODEL" => Some("ollama/local".into()),
+            "MODEL_ROUTER_REFINE_MODEL" => Some("v4pro".into()),
+            "MODEL_ROUTER_JUDGE_MODEL" => Some("flash".into()),
+            _ => None,
+        });
+        assert!(settings.enabled && settings.judge_enabled);
+        assert!(!settings.cascade_enabled);
+        assert_eq!(settings.judge_threshold, 1.0);
+        assert_eq!(settings.cascade_min_chars, 5000);
+        assert_eq!(settings.cost_budget_tokens, 0);
+        assert_eq!(settings.draft_model, "ollama/local");
+        assert_eq!(settings.refine_model, "v4pro");
+        assert_eq!(settings.judge_model, "flash");
+        let invalid = ModelRouterSettings::from_environment(|_| Some("invalid".into()));
+        assert_eq!(invalid.judge_threshold, 0.6);
+        assert_eq!(invalid.cascade_min_chars, 80);
+        for (raw, expected) in [("NaN", 0.0), ("-inf", 0.0), ("inf", 1.0)] {
+            assert_eq!(
+                ModelRouterSettings::from_environment(|name| (name
+                    == "MODEL_ROUTER_JUDGE_THRESHOLD")
+                    .then(|| raw.into()))
+                .judge_threshold,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn judge_scores_retain_reference_regex_and_unicode_decimal_behavior() {
+        for (text, expected) in [
+            ("", 1.0),
+            ("不输出评分", 1.0),
+            ("充分性：0.23456", 0.23456),
+            (".75", 0.75),
+            ("9.75", 1.0),
+            ("-0.2", 0.2),
+            ("2", 1.0),
+            ("评分０.７５", 0.75),
+            ("٠.٢٥", 0.25),
+            ("1.000", 1.0),
+            ("0", 0.0),
+        ] {
+            assert_eq!(parse_judge_score(text), expected, "{text}");
+        }
+    }
     use serde_json::json;
 
     fn settings() -> ModelRouterSettings {

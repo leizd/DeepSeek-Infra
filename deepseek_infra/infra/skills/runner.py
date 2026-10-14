@@ -15,6 +15,7 @@ from deepseek_infra.infra.skills import analytics, evidence, registry, security
 from deepseek_infra.infra.skills.permissions import skill_allowed_tools
 from deepseek_infra.infra.skills.schema import validate_instance
 from deepseek_infra.infra.skills.templates import format_project_context, offline_skill_content, skill_system_prompt, skill_user_message
+from deepseek_infra.infra.workspace import mutation_gate
 
 LLMCallable = Callable[..., dict[str, Any]]
 MEDIA_CONTEXT_MAX_CHARS = 24_000
@@ -36,6 +37,10 @@ def run_skill(
     persist: bool = True,
     security_approved: bool = False,
 ) -> dict[str, Any]:
+    # Even persist=False records a trace. Refuse before starting a run or model
+    # call when restore recovery owns the workspace.
+    with mutation_gate.mutation_scope(root=mutation_gate.workspace_root_for_path(registry.SKILLS_DIR)):
+        pass
     skill = registry.get_skill(skill_id)
     run_id = f"run-{secrets.token_hex(8)}"
     started_at = utc_now_iso()

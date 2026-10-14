@@ -285,6 +285,7 @@ pub fn extract_uploaded_file(
     ocr_enabled: bool,
     project_id: Option<&str>,
 ) -> Result<Value, AppError> {
+    crate::extraction_control::check()?;
     let extension = extension_of(filename);
     if data.is_empty() {
         return Err(AppError {
@@ -312,13 +313,13 @@ pub fn extract_uploaded_file(
                     status: 422,
                 });
             }
-            let ocr_text = crate::ocr::ocr_pdf(data)?;
+            let (ocr_text, page_texts) = crate::ocr::ocr_pdf_document(data)?;
             let text = normalize_extracted_text(&ocr_text);
             (
                 text.clone(),
                 "pdf".to_string(),
                 extracted.page_count,
-                vec![json!({"page": 1, "text": text})],
+                page_texts,
             )
         } else {
             let text = normalize_extracted_text(&extracted.text);
@@ -376,6 +377,7 @@ pub fn extract_uploaded_file(
     let file_id = file_content_id(filename, data);
     let chunks = chunk_text(&text);
     let stored_pages = normalized_page_texts(Some(&Value::Array(page_texts.clone())));
+    crate::extraction_control::check()?;
     write_cache(&CachedFile {
         root,
         file_id: &file_id,
@@ -467,6 +469,7 @@ pub fn extract_upload_batch(
     let mut extracted = Vec::new();
     let mut errors = Vec::new();
     for file in files {
+        crate::extraction_control::check()?;
         match extract_uploaded_file(
             root,
             &file.filename,

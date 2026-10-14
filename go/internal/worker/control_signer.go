@@ -11,6 +11,7 @@ import (
 
 	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"google.golang.org/protobuf/proto"
 )
@@ -28,6 +29,13 @@ func (client *Client) SignControl(ctx context.Context, request *actionv1.SignCon
 	keyID, err := store.SignerKeyIDForPublicKey(binding.PublicKey)
 	if err != nil {
 		return nil, err
+	}
+	if request.Purpose == actionv1.ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_AGENT_EXECUTION || request.Purpose == actionv1.ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_AGENT_INSTALL_EPOCH {
+		if _, err := agentGrantIntent(request); err != nil {
+			return nil, err
+		}
+	} else if request.AgentIntent != nil {
+		return nil, ErrControlSignerResponse
 	}
 	if client == nil || !client.tlsSecured || !client.bearerAttached {
 		return nil, ErrWorkerTLSRequired
@@ -50,7 +58,7 @@ func (client *Client) SignControl(ctx context.Context, request *actionv1.SignCon
 	var document map[string]any
 	now := time.Now().UTC()
 	switch request.Purpose {
-	case actionv1.ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_INSTALL_EPOCH:
+	case actionv1.ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_INSTALL_EPOCH, actionv1.ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_AGENT_INSTALL_EPOCH:
 		document, err = store.VerifyAuthorityRequestDocument(response.CanonicalDocument, store.AuthorityRequestContext{Now: now, SignerPublicKey: binding.PublicKey, SignerKeyID: keyID, ExpectedDomain: "action", ExpectedOperation: "install-epoch", ExpectedRuntime: "go", ExpectedMode: "shadow", ExpectedFleetID: binding.FleetID, ExpectedEnvironment: binding.Environment, ExpectedRole: "control-plane", CurrentFencingToken: int64(request.FencingToken), MaxFutureSkewSeconds: 30})
 	case actionv1.ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_STORAGE_PUT:
 		document, err = store.VerifyStorageOperationGrant(response.CanonicalDocument, store.StorageOperationGrantContext{Now: now, SignerPublicKey: binding.PublicKey, SignerKeyID: keyID, ExpectedDomain: "action", ExpectedOperation: store.StorageOperationGrantPut, ExpectedRuntime: "go", ExpectedMode: "shadow", ExpectedFleetID: binding.FleetID, ExpectedEnvironment: binding.Environment, ExpectedRole: "control-plane", CurrentFencingToken: int64(request.FencingToken), LiveEpoch: int64(request.Fence.ExecutionEpoch), MaxFutureSkewSeconds: 30})
@@ -70,6 +78,17 @@ func (client *Client) SignControl(ctx context.Context, request *actionv1.SignCon
 			}
 			err = store.BindStorageOperationGrant(document, store.StorageOperationCommand{ActionID: request.Fence.ActionId, ExecutionEpoch: request.Fence.ExecutionEpoch, OperationID: intent.OperationId, MutationType: intent.MutationType, Provider: intent.Provider, TargetIdentity: intent.TargetIdentity, Bucket: intent.Bucket, Prefix: intent.Prefix, ObjectKey: intent.ObjectKey, ObjectDigest: intent.PayloadDigest, ExpectedLength: intent.ExpectedLength, ConditionType: condition, ExpectedETag: intent.Precondition.ExpectedEtag, ClaimRevision: request.Revision})
 		}
+	case actionv1.ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_AGENT_EXECUTION:
+		intent, intentErr := agentGrantIntent(request)
+		if intentErr != nil {
+			return nil, intentErr
+		}
+		document, err = store.VerifyAgentExecutionGrant(response.CanonicalDocument, store.AuthorityRequestContext{
+			Now: now, SignerPublicKey: binding.PublicKey, SignerKeyID: keyID, ExpectedDomain: "action",
+			ExpectedOperation: store.AgentExecutionGrantOperation, ExpectedRuntime: "go", ExpectedMode: "authoritative",
+			ExpectedFleetID: binding.FleetID, ExpectedEnvironment: binding.Environment, ExpectedRole: "control-plane",
+			CurrentFencingToken: int64(request.FencingToken), LiveEpoch: int64(request.Fence.ExecutionEpoch), MaxFutureSkewSeconds: 30,
+		}, intent)
 	default:
 		return nil, ErrControlSignerResponse
 	}
@@ -82,6 +101,84 @@ func (client *Client) SignControl(ctx context.Context, request *actionv1.SignCon
 		return nil, ErrControlSignerResponse
 	}
 	return append([]byte(nil), response.CanonicalDocument...), nil
+}
+
+func agentGrantIntent(request *actionv1.SignControlRequest) (store.AgentExecutionGrantIntent, error) {
+	claim := request.AgentIntent
+	if claim == nil || claim.Request == nil || claim.Fence == nil || request.StorageIntent != nil ||
+		!proto.Equal(request.Fence, claim.Fence) || request.Revision != claim.ClaimRevision ||
+		claim.WriterFencingToken < 1 || uint64(claim.WriterFencingToken) != request.FencingToken ||
+		!((!claim.ReconciliationRequired && (claim.State == "CLAIMED" || claim.State == "EXECUTING")) ||
+			(request.Purpose == actionv1.ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_AGENT_INSTALL_EPOCH && claim.ReconciliationRequired && claim.State == "RECONCILING")) ||
+		len(claim.ProtoReflect().GetUnknown()) != 0 || len(claim.Request.ProtoReflect().GetUnknown()) != 0 || len(claim.Fence.ProtoReflect().GetUnknown()) != 0 {
+		return store.AgentExecutionGrantIntent{}, ErrControlSignerResponse
+	}
+	phase := ""
+	switch claim.Phase {
+	case agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN:
+		phase = "plan"
+	case agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS:
+		phase = "tasks"
+	case agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS:
+		phase = "synthesis"
+	default:
+		return store.AgentExecutionGrantIntent{}, ErrControlSignerResponse
+	}
+	intent := store.AgentExecutionGrantIntent{ActionID: claim.Fence.ActionId, ExecutionEpoch: claim.Fence.ExecutionEpoch,
+		RunID: claim.RunId, Phase: phase, RequestSHA256: claim.Request.Sha256, RequestLength: claim.Request.Length,
+		PlanDigest: claim.PlanDigest, MetadataIndex: claim.MetadataIndex, MetadataEpoch: claim.MetadataEpoch,
+		Owner: claim.Owner, ClaimToken: claim.ClaimToken, ClaimRevision: claim.ClaimRevision, WriterFencingToken: claim.WriterFencingToken}
+	if err := store.ValidateAgentExecutionGrantIntent(intent); err != nil {
+		return store.AgentExecutionGrantIntent{}, ErrControlSignerResponse
+	}
+	return intent, nil
+}
+
+// Epoch installation remains a separate signed operation. The Agent signer
+// then revalidates this claim with Go and admits that exact durable Rust epoch.
+func (client *Client) AuthorizeAgentExecution(ctx context.Context, claim *agentv1.AgentRunExecutionClaim, requestID, nonce string, binding ControlSignerBinding) ([]byte, error) {
+	if claim == nil {
+		return nil, ErrControlSignerResponse
+	}
+	claim = proto.Clone(claim).(*agentv1.AgentRunExecutionClaim)
+	input := &actionv1.SignControlRequest{Purpose: actionv1.ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_AGENT_EXECUTION,
+		Fence: claim.Fence, RequestId: requestID, Nonce: nonce, Revision: claim.ClaimRevision,
+		FencingToken: uint64(claim.WriterFencingToken), FleetId: binding.FleetID, Environment: binding.Environment,
+		AgentIntent: claim}
+	if _, err := agentGrantIntent(input); err != nil {
+		return nil, err
+	}
+	installation := proto.Clone(input).(*actionv1.SignControlRequest)
+	installation.Purpose = actionv1.ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_AGENT_INSTALL_EPOCH
+	installation.RequestId = signerID("agent-epoch-claim-request-v1", requestID)
+	installation.Nonce = signerID("agent-epoch-claim-nonce-v1", nonce)
+	raw, err := client.SignControl(ctx, installation, binding)
+	if err != nil {
+		return nil, err
+	}
+	if err = client.InstallAuthoritativeEpoch(ctx, claim.Fence, raw); err != nil &&
+		!errors.Is(err, store.ErrAuthorityRequestReplay) && !errors.Is(err, internalprotocol.ErrStaleEpoch) {
+		return nil, err
+	}
+	return client.SignControl(ctx, input, binding)
+}
+
+// RefreshAgentExecution signs a new explicit issuance under the same live claim.
+// It deliberately does not install an epoch: Rust signing independently requires
+// the exact epoch already installed by the initial authoritative authorization.
+func (client *Client) RefreshAgentExecution(ctx context.Context, claim *agentv1.AgentRunExecutionClaim, requestID, nonce string, binding ControlSignerBinding) ([]byte, error) {
+	if claim == nil {
+		return nil, ErrControlSignerResponse
+	}
+	claim = proto.Clone(claim).(*agentv1.AgentRunExecutionClaim)
+	input := &actionv1.SignControlRequest{Purpose: actionv1.ControlSigningPurpose_CONTROL_SIGNING_PURPOSE_AGENT_EXECUTION,
+		Fence: claim.Fence, RequestId: requestID, Nonce: nonce, Revision: claim.ClaimRevision,
+		FencingToken: uint64(claim.WriterFencingToken), FleetId: binding.FleetID, Environment: binding.Environment,
+		AgentIntent: claim}
+	if _, err := agentGrantIntent(input); err != nil {
+		return nil, err
+	}
+	return client.SignControl(ctx, input, binding)
 }
 
 func signerIntegerMatches(value any, expected int64) bool {

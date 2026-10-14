@@ -117,8 +117,18 @@ func publicConfig(view PublicView) map[string]any {
 			"requestMaxBytes": 220_000_000,
 			"maxFiles":        20,
 		},
+		"ocr": map[string]any{"enabled": envBool("OCR_ENABLED", false), "mode": publicOCRMode(), "localOnly": false},
 		"mcp": mcpStatus(),
 		"a2a": a2aStatus(),
+	}
+}
+
+func publicOCRMode() string {
+	switch mode := strings.ToLower(strings.TrimSpace(os.Getenv("OCR_MODE"))); mode {
+	case "fast", "balanced", "quality":
+		return mode
+	default:
+		return "balanced"
 	}
 }
 
