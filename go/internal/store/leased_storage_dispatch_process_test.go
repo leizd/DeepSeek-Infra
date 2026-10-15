@@ -1,12 +1,15 @@
 package store
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
@@ -17,12 +20,50 @@ type leasedDispatchCheckpoint struct {
 	Writer   WriterLease
 }
 
+const leasedDispatchCheckpointPrefix = "DEEPSEEK_LEASED_DISPATCH_CHECKPOINT_V1 "
+
+// Test harness output is diagnostic text, not an unframed JSON transport.
+// Bound both the input and retained diagnostics, and never treat a child failure
+// or another JSON line as evidence that its durable dispatch was reached.
+func readLeasedDispatchCheckpoint(reader io.Reader) (leasedDispatchCheckpoint, error) {
+	scanner := bufio.NewScanner(io.LimitReader(reader, 64*1024+1))
+	scanner.Buffer(make([]byte, 1024), 64*1024)
+	diagnostic := ""
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, leasedDispatchCheckpointPrefix) {
+			var checkpoint leasedDispatchCheckpoint
+			decoder := json.NewDecoder(strings.NewReader(strings.TrimPrefix(line, leasedDispatchCheckpointPrefix)))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&checkpoint); err != nil {
+				return checkpoint, fmt.Errorf("invalid framed child checkpoint: %w", err)
+			}
+			var extra any
+			if err := decoder.Decode(&extra); err != io.EOF {
+				return checkpoint, errors.New("trailing data after framed child checkpoint")
+			}
+			return checkpoint, nil
+		}
+		diagnostic += line + "\n"
+		if len(diagnostic) > 2048 {
+			diagnostic = diagnostic[len(diagnostic)-2048:]
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return leasedDispatchCheckpoint{}, fmt.Errorf("child checkpoint stream: %w; output: %s", err, diagnostic)
+	}
+	return leasedDispatchCheckpoint{}, fmt.Errorf("child exited without a framed durable checkpoint; output: %s", diagnostic)
+}
+
 // Actual forced process death and Go-owned SQLite takeover, not a provider or
 // deepseekd-main test. No worker is called and no applied effect is synthesized.
 func TestLeasedStorageDispatchSurvivesKilledOwner(t *testing.T) {
 	const childKey = "DEEPSEEK_TEST_LEASED_DISPATCH_CHILD"
+	// Instrumented SQLite startup can consume the old three-second lease before
+	// dispatch. Keep real UTC expiry and forced death, with setup headroom.
+	const leaseSeconds = 15
 	if path := os.Getenv(childKey); path != "" {
-		control, err := OpenControl(OpenOptions{Path: path, Owner: "killed-owner", LeaseSeconds: 3})
+		control, err := OpenControl(OpenOptions{Path: path, Owner: "killed-owner", LeaseSeconds: leaseSeconds})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -30,7 +71,7 @@ func TestLeasedStorageDispatchSurvivesKilledOwner(t *testing.T) {
 		if err := control.Put(Record{Domain: "action", ID: "killed-dispatch", Revision: 1, ExecutionEpoch: 1, State: "PENDING"}); err != nil {
 			t.Fatal(err)
 		}
-		claim, err := control.AdmitAndClaimAction(AdmissionRequest{ActionID: "killed-dispatch", LeaseSeconds: 3, ResourceKeys: []string{"reserved-target"}})
+		claim, err := control.AdmitAndClaimAction(AdmissionRequest{ActionID: "killed-dispatch", LeaseSeconds: leaseSeconds, ResourceKeys: []string{"reserved-target"}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -45,6 +86,9 @@ func TestLeasedStorageDispatchSurvivesKilledOwner(t *testing.T) {
 		dispatch, bound, err := control.GetLeasedStorageDispatch(record.ID, claim.Lease.Epoch, claim.Lease.ClaimToken)
 		if err != nil || !bound {
 			t.Fatalf("dispatch checkpoint: %v", err)
+		}
+		if _, err := fmt.Fprint(os.Stdout, leasedDispatchCheckpointPrefix); err != nil {
+			t.Fatal(err)
 		}
 		if err := json.NewEncoder(os.Stdout).Encode(leasedDispatchCheckpoint{claim.Lease, dispatch, control.Writer()}); err != nil {
 			t.Fatal(err)
@@ -74,7 +118,11 @@ func TestLeasedStorageDispatchSurvivesKilledOwner(t *testing.T) {
 	}()
 	var checkpoint leasedDispatchCheckpoint
 	ready := make(chan error, 1)
-	go func() { ready <- json.NewDecoder(io.LimitReader(stdout, 64*1024)).Decode(&checkpoint) }()
+	go func() {
+		var err error
+		checkpoint, err = readLeasedDispatchCheckpoint(stdout)
+		ready <- err
+	}()
 	select {
 	case err := <-ready:
 		if err != nil {
@@ -96,7 +144,7 @@ func TestLeasedStorageDispatchSurvivesKilledOwner(t *testing.T) {
 		t.Fatalf("owner did not exit by force: %v", err)
 	}
 	until := time.Until(time.Unix(max(checkpoint.Lease.LeaseUntil, checkpoint.Writer.LeaseUntil), 0))
-	if until > 4*time.Second {
+	if until > (leaseSeconds+1)*time.Second {
 		t.Fatal("unexpected lease horizon")
 	}
 	if until > 0 {

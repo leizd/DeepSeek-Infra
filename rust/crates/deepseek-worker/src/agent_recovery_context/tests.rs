@@ -27,9 +27,12 @@ fn context() -> AgentRunRecoveryContext {
 
 fn persist(root: &Path, bytes: &[u8]) -> Value {
     let envelope = json!({"schema":SCHEMA,"metadataProto":URL_SAFE_NO_PAD.encode(bytes)});
+    let canonical: Value =
+        serde_json::from_slice(&crate::authority_request::canonical_json_bytes(&envelope).unwrap())
+            .unwrap();
     ArtifactStore::open_native(root, "python_disabled")
         .unwrap()
-        .put(&envelope)
+        .put(&canonical)
         .unwrap();
     json!({PRIVATE_FIELD:envelope})
 }
@@ -84,6 +87,20 @@ fn recovery_context_requires_its_hash_checked_rust_artifact() {
         })
         .into();
     assert!(read(root.path(), &changed).is_err());
+}
+
+#[test]
+fn recovery_context_inline_json_order_cannot_rebind_canonical_custody() {
+    let root = tempfile::tempdir().unwrap();
+    let body = persist(root.path(), &context().encode_to_vec());
+    let canonical: Value =
+        serde_json::from_slice(&crate::authority_request::canonical_json_bytes(&body).unwrap())
+            .unwrap();
+    let first = read(root.path(), &body).unwrap().unwrap();
+    let reordered = read(root.path(), &canonical).unwrap().unwrap();
+    assert_eq!(first.reference, reordered.reference);
+    assert_eq!(first.context, reordered.context);
+    assert_eq!(first.digest, reordered.digest);
 }
 
 #[test]

@@ -67,7 +67,7 @@ pub(crate) fn read(root: &Path, body: &Value) -> Result<Option<PreparedRecovery>
     if sanitized != *envelope {
         return Err(denied());
     }
-    let stored = serde_json::to_vec(envelope).map_err(|_| denied())?;
+    let stored = crate::authority_request::canonical_json_bytes(envelope).map_err(|_| denied())?;
     let reference = ArtifactReference {
         sha256: format!("{:x}", Sha256::digest(&stored)),
         length: stored.len() as u64,

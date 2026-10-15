@@ -19,10 +19,13 @@ fn confirmed(fixture: &Fixture, worker: &mut crate::Worker) -> AgentRunRecoveryE
         "python_disabled",
     )
     .unwrap();
-    let reference = artifacts.put(&event).unwrap();
     let output =
         authority_request::canonical_json_bytes(&json!({"runId":"run_rpc","publicEvent":event}))
             .unwrap();
+    // Production projects from the canonical retained outcome. serde_json's
+    // preserve_order feature makes the earlier unsorted input a different blob.
+    let retained: Value = serde_json::from_slice(&output).unwrap();
+    let reference = artifacts.put(&retained["publicEvent"]).unwrap();
     let store = worker.authority_store.as_mut().unwrap();
     store.confirm_agent_node(&permit, &output, NOW).unwrap();
     let evidence = store
