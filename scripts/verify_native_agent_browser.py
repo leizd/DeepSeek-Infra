@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -14,7 +15,7 @@ BROWSER_QUERY = "Prepare an isolated browser verification plan"
 BROWSER_CREDENTIAL = "request-only-credential"
 
 
-def run_browser_agent(origin: str, output: Path) -> dict[str, Any]:
+def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Drive shipped React controls; no route interception or page-side API calls."""
     target = urlsplit(origin)
     if target.scheme != "http" or target.hostname != "127.0.0.1" or not target.port or target.path:
@@ -61,15 +62,36 @@ def run_browser_agent(origin: str, output: Path) -> dict[str, Any]:
             if mode.get_attribute("aria-pressed") != "true":
                 raise ValueError("Actual multi-Agent control was not enabled")
             page.locator("#reactPromptInput").fill(BROWSER_QUERY)
-            with page.expect_response(lambda response: response_for(response, "/api/agent-runs"), timeout=120_000) as created, \
-                    page.expect_response(lambda response: response_for(response, "/api/title"), timeout=120_000) as title:
+            with page.expect_response(lambda response: response_for(response, "/api/agent-runs"), timeout=120_000) as created:
                 page.get_by_role("button", name="发送消息", exact=True).click()
-                page.get_by_text("Controlled final answer", exact=True).last.wait_for(timeout=120_000)
             creation = created.value
             body = creation.json()
             run_id = body.get("runId")
             if creation.status not in {200, 201} or not isinstance(run_id, str) or not run_id:
                 raise ValueError("The React create action did not return the actual native run")
+            page.get_by_label("Agent 执行计划", exact=True).wait_for()
+            close_activity = page.get_by_role("button", name="关闭活动面板", exact=True)
+            if close_activity.is_visible():
+                close_activity.click()
+            if before_confirmation is None:
+                raise ValueError("Actual browser lacks independent pre-confirmation inspection")
+            before_confirmation(run_id)
+
+            def final_mirror(response: Any) -> bool:
+                url = urlsplit(response.url)
+                if url.netloc != target.netloc or not url.path.startswith("/api/workspace/backup-mirrors/") or \
+                        not url.path.endswith("/frontend") or response.request.method != "PUT" or response.status != 200:
+                    return False
+                envelope = json.dumps(response.request.post_data_json, ensure_ascii=False)
+                return len(envelope) <= 2 * 1024**2 and "Controlled final answer" in envelope and "Native browser conversation" in envelope
+
+            with page.expect_response(lambda response: response_for(response, f"/api/agent-runs/{run_id}/plan"), timeout=120_000) as confirmed, \
+                    page.expect_response(lambda response: response_for(response, "/api/title"), timeout=120_000) as title, \
+                    page.expect_response(final_mirror, timeout=120_000) as mirrored:
+                page.get_by_role("button", name="确认执行", exact=True).click()
+                page.get_by_text("Controlled final answer", exact=True).last.wait_for(timeout=120_000)
+            if confirmed.value.status != 200:
+                raise ValueError("Actual browser plan confirmation failed")
             if title.value.status != 200 or title.value.json().get("title") != "Native browser conversation":
                 raise ValueError("Actual native conversation title generation failed")
             page.reload(wait_until="domcontentloaded")
@@ -81,6 +103,9 @@ def run_browser_agent(origin: str, output: Path) -> dict[str, Any]:
             if not image.startswith(b"\x89PNG\r\n\x1a\n") or len(image) > 2 * 1024**2:
                 raise ValueError("Native browser rendered evidence exceeds its image bound")
             return dict(createdRunId=run_id, creationByBrowser=True, finalAnswerVisible=True,
+                        planConfirmationByBrowser=True, noTasksBeforePlanConfirmation=True,
+                        backupPolicyCreatedByBrowser=False, backupPolicyConfiguredByGoFixture=True, finalEnvelopeMirrored=True,
+                        mirrorProfileId=urlsplit(mirrored.value.url).path.split("/")[-2], mirrorReceipt=mirrored.value.json(),
                         reloadRetainedFinalAnswer=True, requestInterceptionUsed=False, apiInvokedOutsideUI=False,
                         pageErrors=list(page_errors), consoleErrors=list(console_errors), requests=list(traffic),
                         screenshot=screenshot.name, screenshotSha256=hashlib.sha256(image).hexdigest())
@@ -104,7 +129,9 @@ def inspect_browser_custody(artifacts: Path, state: Path) -> dict[str, bool]:
     if len(effects) != 4 or any(row[0] != "CONFIRMED" or hashlib.sha256(row[1]).hexdigest() != row[2] for row in effects):
         raise ValueError("Actual browser Rust effects were not independently retained")
     sealed = list((artifacts / "agent-provider-credentials-v1").glob("*.json"))
-    if len(sealed) != 1 or BROWSER_CREDENTIAL.encode() in sealed[0].read_bytes():
+    # The actual UI sends a runtime payload on confirmation, retaining revision
+    # one's immutable ciphertext while Rust prepares the second revision.
+    if len(sealed) != 2 or any(BROWSER_CREDENTIAL.encode() in path.read_bytes() for path in sealed):
         raise ValueError("Actual browser request credential custody differs")
     with sqlite3.connect((artifacts / "objects-v1.sqlite").as_uri() + "?mode=ro", uri=True) as database:
         bodies = database.execute("SELECT bytes FROM artifacts").fetchall()
@@ -113,22 +140,54 @@ def inspect_browser_custody(artifacts: Path, state: Path) -> dict[str, bool]:
     return {"rustEffectsIndependentlyRetained": True, "requestCredentialEncrypted": True}
 
 
+def inspect_browser_mirror(workspace: Path, observed: dict[str, Any]) -> dict[str, bool]:
+    """Compare the public receipt to the independently retained Rust ciphertext."""
+    receipt, profile = observed.get("mirrorReceipt"), observed.get("mirrorProfileId")
+    if not isinstance(receipt, dict) or receipt.get("creationVerified") is not True or \
+            not isinstance(profile, str) or not re.fullmatch(r"mirror_[a-f0-9]{16}", profile):
+        raise ValueError("Actual browser mirror receipt is missing or unverified")
+    generation, variants = receipt.get("generationId"), receipt.get("recipientVariants")
+    if not isinstance(generation, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", generation) or \
+            not isinstance(variants, list) or len(variants) != 1:
+        raise ValueError("Actual browser mirror generation or recipient variants differ")
+    variant = variants[0]
+    filename = variant.get("filename") if isinstance(variant, dict) else None
+    digest = variant.get("ciphertextSha256") if isinstance(variant, dict) else None
+    if not isinstance(filename, str) or Path(filename).name != filename or \
+            any(character in filename for character in ["/", "\\", ":"]) or not filename.endswith(".age") or \
+            not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
+        raise ValueError("Actual browser mirror ciphertext reference is invalid")
+    path = workspace / ".backup-mirror" / profile / "generations" / generation / filename
+    if not path.resolve().is_relative_to(workspace.resolve()) or path.is_symlink():
+        raise ValueError("Actual browser mirror left its isolated workspace")
+    body = path.read_bytes()
+    if not 0 < len(body) <= 2 * 1024**2 or not body.startswith(b"age-encryption.org/v1") or \
+            hashlib.sha256(body).hexdigest() != digest or any(value in body for value in
+                [BROWSER_CREDENTIAL.encode(), b"Controlled final answer", b"Native browser conversation"]):
+        raise ValueError("Actual browser retained mirror differs from its ciphertext receipt")
+    return {"independentMirrorCiphertextVerified": True}
+
+
 def validate_browser_result(result: dict[str, Any], exchanges: list[dict[str, Any]]) -> None:
     flags = ["actualDaemonCLIQualified", "independentlyValidatedByGoStore", "resourcesReleased",
-             "builtFrontendAssetsServed", "rustEffectsIndependentlyRetained", "requestCredentialEncrypted", "cloudOnlyNativeBuild"]
+             "builtFrontendAssetsServed", "rustEffectsIndependentlyRetained", "requestCredentialEncrypted", "cloudOnlyNativeBuild",
+             "independentNativeBackupPolicyVerified", "independentMirrorCiphertextVerified"]
     denied = ["inputBodySeededByOfflineOracle", "privateCustodyVariablesExportedToGo", "productionProviderQualified", "fullMigrationQualified"]
     if any(result.get(key) is not True for key in flags) or any(result.get(key) is not False for key in denied) or \
             result.get("productionRuntimeProcesses") != ["Go", "Rust"] or result.get("pythonMutatingPublicRequests") != 0 or \
             result.get("readiness") != "NOT_READY" or not re.fullmatch(r"[a-f0-9]{40}", str(result.get("sourceCommit", ""))):
         raise ValueError("Actual native browser chain evidence is missing or overclaims production readiness")
-    if result.get("status") != "PASS" or result.get("runStatus") != "done" or result.get("nextIndex") != 8 or \
+    if result.get("status") != "PASS" or result.get("runStatus") != "done" or result.get("nextIndex") != 9 or \
+            result.get("runtimeRevision") != 2 or result.get("metadataSchemaVersion") != 2 or \
             result.get("actualPreset") != "auto" or result.get("durablePhases") != 3 or \
             not re.fullmatch(r"[a-f0-9]{64}", str(result.get("frontendIndexSha256", ""))) or \
             not isinstance(result.get("frontendAssetCount"), int) or result["frontendAssetCount"] < 1:
         raise ValueError("Actual browser run, immutable assets or retained phases differ")
     observed = result.get("browser")
     if not isinstance(observed, dict) or observed.get("createdRunId") != result.get("runId") or \
-            any(observed.get(key) is not True for key in ["creationByBrowser", "finalAnswerVisible", "reloadRetainedFinalAnswer"]) or \
+            any(observed.get(key) is not True for key in ["creationByBrowser", "finalAnswerVisible", "reloadRetainedFinalAnswer",
+                "planConfirmationByBrowser", "noTasksBeforePlanConfirmation", "backupPolicyConfiguredByGoFixture", "finalEnvelopeMirrored"]) or \
+            observed.get("backupPolicyCreatedByBrowser") is not False or \
             any(observed.get(key) is not False for key in ["requestInterceptionUsed", "apiInvokedOutsideUI"]) or \
             observed.get("pageErrors") != [] or observed.get("consoleErrors") != [] or \
             observed.get("screenshot") != "browser-final.png" or \
@@ -140,8 +199,14 @@ def validate_browser_result(result: dict[str, Any], exchanges: list[dict[str, An
     creations = [row for row in requests if row.get("method") == "POST" and row.get("path") == "/api/agent-runs"]
     streams = [row for row in requests if row.get("method") == "GET" and row.get("path") == f"/api/agent-runs/{result['runId']}/stream"]
     titles = [row for row in requests if row.get("method") == "POST" and row.get("path") == "/api/title"]
+    confirmations = [row for row in requests if row.get("method") == "POST" and row.get("path") == f"/api/agent-runs/{result['runId']}/plan"]
+    policies = [row for row in requests if row.get("method") == "POST" and row.get("path") == "/api/workspace/backup-policies"]
+    mirrors = [row for row in requests if row.get("method") == "PUT" and
+               str(row.get("path", "")).startswith("/api/workspace/backup-mirrors/") and str(row.get("path", "")).endswith("/frontend")]
     if len(creations) != 1 or creations[0].get("status") not in {200, 201} or \
-            not streams or any(row.get("status") != 200 for row in streams) or len(titles) != 1 or titles[0].get("status") != 200:
+            not streams or any(row.get("status") != 200 for row in streams) or len(titles) != 1 or titles[0].get("status") != 200 or \
+            len(confirmations) != 1 or confirmations[0].get("status") != 200 or policies or \
+            not mirrors or any(row.get("status") != 200 for row in mirrors):
         raise ValueError("Native browser creation, run NDJSON or conversation title did not succeed")
     agents = [row for row in exchanges if row.get("kind", "agent") == "agent"]
     titles = [row for row in exchanges if row.get("kind") == "title"]

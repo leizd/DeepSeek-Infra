@@ -14,11 +14,13 @@ from scripts import verify_native_agent_browser as browser
 def browser_fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     result: dict[str, Any] = {
         "status": "PASS", "sourceCommit": "a" * 40, "runId": "browser-run",
-        "runStatus": "done", "nextIndex": 8, "actualPreset": "auto", "durablePhases": 3,
+        "runStatus": "done", "nextIndex": 9, "actualPreset": "auto", "durablePhases": 3,
+        "runtimeRevision": 2, "metadataSchemaVersion": 2,
         "actualDaemonCLIQualified": True, "independentlyValidatedByGoStore": True,
         "resourcesReleased": True, "builtFrontendAssetsServed": True,
         "frontendIndexSha256": "b" * 64, "frontendAssetCount": 3,
         "rustEffectsIndependentlyRetained": True, "requestCredentialEncrypted": True,
+        "independentNativeBackupPolicyVerified": True, "independentMirrorCiphertextVerified": True,
         "privateCustodyVariablesExportedToGo": False, "cloudOnlyNativeBuild": True,
         "inputBodySeededByOfflineOracle": False, "pythonMutatingPublicRequests": 0,
         "productionRuntimeProcesses": ["Go", "Rust"], "productionProviderQualified": False,
@@ -26,6 +28,8 @@ def browser_fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "browser": {
             "createdRunId": "browser-run", "creationByBrowser": True,
             "finalAnswerVisible": True, "reloadRetainedFinalAnswer": True,
+            "planConfirmationByBrowser": True, "noTasksBeforePlanConfirmation": True,
+            "backupPolicyCreatedByBrowser": False, "backupPolicyConfiguredByGoFixture": True, "finalEnvelopeMirrored": True,
             "requestInterceptionUsed": False, "apiInvokedOutsideUI": False,
             "pageErrors": [], "consoleErrors": [],
             "screenshot": "browser-final.png", "screenshotSha256": "c" * 64,
@@ -33,6 +37,8 @@ def browser_fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
                 {"method": "POST", "path": "/api/agent-runs", "status": 200},
                 {"method": "GET", "path": "/api/agent-runs/browser-run/stream", "status": 200},
                 {"method": "POST", "path": "/api/title", "status": 200},
+                {"method": "POST", "path": "/api/agent-runs/browser-run/plan", "status": 200},
+                {"method": "PUT", "path": "/api/workspace/backup-mirrors/mirror_123/frontend", "status": 200},
             ],
         },
     }
@@ -47,10 +53,46 @@ def test_accepts_completed_native_browser_run_with_independent_go_inspection() -
     browser.validate_browser_result(result, exchanges)
 
 
+def test_auto_browser_flow_retains_explicit_plan_confirmation() -> None:
+    result, exchanges = browser_fixture()
+    browser.validate_browser_result(result, exchanges)
+
+
+@pytest.mark.parametrize("change", ["no_confirmation", "failed_confirmation", "no_policy_configuration", "claimed_browser_policy", "no_mirror", "failed_mirror", "no_browser_confirmation", "early_tasks", "no_native_policy", "no_ciphertext_proof", "wrong_event_count", "unexpected_policy_request"])
+def test_rejects_missing_confirmation_or_native_backup_evidence(change: str) -> None:
+    result, exchanges = browser_fixture()
+    requests = result["browser"]["requests"]
+    index = {"no_confirmation": 3, "failed_confirmation": 3, "no_mirror": 4, "failed_mirror": 4}.get(change)
+    if index is not None:
+        if change.startswith("no_"):
+            requests.pop(index)
+        else:
+            requests[index]["status"] = 503
+    elif change == "no_policy_configuration":
+        result["browser"]["backupPolicyConfiguredByGoFixture"] = False
+    elif change == "claimed_browser_policy":
+        result["browser"]["backupPolicyCreatedByBrowser"] = True
+    elif change == "unexpected_policy_request":
+        requests.append({"method": "POST", "path": "/api/workspace/backup-policies", "status": 200})
+    elif change == "no_browser_confirmation":
+        result["browser"]["planConfirmationByBrowser"] = False
+    elif change == "early_tasks":
+        result["browser"]["noTasksBeforePlanConfirmation"] = False
+    elif change == "no_native_policy":
+        result["independentNativeBackupPolicyVerified"] = False
+    elif change == "no_ciphertext_proof":
+        result["independentMirrorCiphertextVerified"] = False
+    else:
+        result["nextIndex"] = 8
+    with pytest.raises(ValueError):
+        browser.validate_browser_result(result, exchanges)
+
+
 @pytest.mark.parametrize("key", [
     "actualDaemonCLIQualified", "independentlyValidatedByGoStore", "resourcesReleased",
     "builtFrontendAssetsServed", "rustEffectsIndependentlyRetained", "requestCredentialEncrypted",
     "cloudOnlyNativeBuild",
+    "independentNativeBackupPolicyVerified", "independentMirrorCiphertextVerified",
 ])
 def test_rejects_missing_native_browser_chain_evidence(key: str) -> None:
     result, exchanges = browser_fixture()
@@ -62,6 +104,7 @@ def test_rejects_missing_native_browser_chain_evidence(key: str) -> None:
 @pytest.mark.parametrize("key,value", [
     ("sourceCommit", "unknown"), ("runStatus", "running"), ("nextIndex", 7),
     ("actualPreset", "full"), ("durablePhases", 2), ("pythonMutatingPublicRequests", 1),
+    ("runtimeRevision", 1), ("metadataSchemaVersion", 1),
     ("productionRuntimeProcesses", ["Python", "Go", "Rust"]), ("inputBodySeededByOfflineOracle", True),
     ("privateCustodyVariablesExportedToGo", True), ("productionProviderQualified", True),
     ("fullMigrationQualified", True), ("readiness", "READY"),
@@ -102,7 +145,7 @@ def test_requires_one_successful_ui_creation_and_the_actual_run_stream(change: s
         requests.append(deepcopy(requests[0]))
     elif change == "title_missing":
         requests.pop(2)
-    else:
+    elif change == "title_failed":
         requests[2]["status"] = 500
     with pytest.raises(ValueError):
         browser.validate_browser_result(result, exchanges)
@@ -137,7 +180,34 @@ def test_native_browser_acceptance_cannot_fall_back_to_local_runtime(tmp_path: P
         browser.run_browser_agent("http://127.0.0.1:8888", tmp_path)
 
 
-@pytest.mark.parametrize("failure", [None, "missing_effect", "unknown_effect", "bad_hash", "plaintext_cipher", "plaintext_artifact"])
+@pytest.mark.parametrize("failure", [None, "unverified", "profile_path", "generation_path", "file_path", "bad_hash", "plaintext", "wrong_format"])
+def test_browser_mirror_receipt_is_checked_against_readonly_ciphertext(tmp_path: Path, failure: str | None) -> None:
+    profile, generation, filename = "mirror_0123456789abcdef", "generation_1", "fixture.age"
+    # Offline validator input only; actual Rust encryption is proved by the cloud case.
+    body = b"age-encryption.org/v1\noffline-validator-input"
+    if failure == "plaintext":
+        body += browser.BROWSER_CREDENTIAL.encode()
+    elif failure == "wrong_format":
+        body = b"unsealed public text"
+    path = tmp_path / ".backup-mirror" / profile / "generations" / generation / filename
+    path.parent.mkdir(parents=True)
+    path.write_bytes(body)
+    digest = "0" * 64 if failure == "bad_hash" else hashlib.sha256(body).hexdigest()
+    observed = {"mirrorProfileId": "../outside" if failure == "profile_path" else profile,
+                "mirrorReceipt": {"creationVerified": failure != "unverified",
+                    "generationId": "../outside" if failure == "generation_path" else generation,
+                    "recipientVariants": [{"filename": "../outside.age" if failure == "file_path" else filename,
+                                           "ciphertextSha256": digest}]}}
+    before = path.read_bytes()
+    if failure:
+        with pytest.raises(ValueError):
+            browser.inspect_browser_mirror(tmp_path, observed)
+    else:
+        assert browser.inspect_browser_mirror(tmp_path, observed) == {"independentMirrorCiphertextVerified": True}
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("failure", [None, "missing_effect", "unknown_effect", "bad_hash", "plaintext_cipher", "plaintext_artifact", "missing_cipher", "extra_cipher"])
 def test_independent_readonly_browser_custody_inspection(tmp_path: Path, failure: str | None) -> None:
     artifacts, state = tmp_path / "artifacts", tmp_path / "state"
     effects = state / "rust-worker"
@@ -145,8 +215,9 @@ def test_independent_readonly_browser_custody_inspection(tmp_path: Path, failure
     sealed = artifacts / "agent-provider-credentials-v1"
     sealed.mkdir(parents=True)
     # These are offline validator inputs, never a claim of real encryption.
-    (sealed / "fixture.json").write_bytes(
-        browser.BROWSER_CREDENTIAL.encode() if failure == "plaintext_cipher" else b'{"offlineCipherFixture":true}')
+    for index in range(1 if failure == "missing_cipher" else (3 if failure == "extra_cipher" else 2)):
+        (sealed / f"fixture-{index}.json").write_bytes(
+            browser.BROWSER_CREDENTIAL.encode() if failure == "plaintext_cipher" and index == 1 else b'{"offlineCipherFixture":true}')
     with sqlite3.connect(effects / "authority.sqlite3") as database:
         database.execute("CREATE TABLE agent_node_effects(state TEXT,output BLOB,output_sha256 TEXT)")
         body = b"offline node output"

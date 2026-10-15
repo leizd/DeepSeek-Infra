@@ -259,10 +259,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         fixture_environment.update(DEEPSEEK_AGENT_SIGNING_PROBE_DIR=case.as_posix(),
             DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY=binding["signerPublicKey"], DEEPSEEK_TEST_HEAD_SHA=revision)
         fixture_environment["DEEPSEEK_TEST_AGENT_DAEMON_STAGE"] = "seed"
+        if browser_mode:
+            fixture_environment["DEEPSEEK_TEST_AGENT_DAEMON_BROWSER"] = "true"
         fixture_command = [fixture.as_posix(), "-test.run=^TestNativeAgentDaemonPublicProcess$", "-test.v", "-test.timeout=2m"]
         signing.record_command(fixture_command, ROOT / "go/internal/api", fixture_environment, output, "daemon-empty-ownership", timeout=150)
         seed = json.loads((case / "daemon-seed.json").read_text(encoding="utf-8"))
-        if seed.get("emptyApplicationRecords") is not True:
+        if seed.get("emptyAgentAndActionRecords") is not True or \
+                seed.get("emptyApplicationRecords") is not (not browser_mode) or \
+                seed.get("backupPolicyConfiguredByGoFixture") is not browser_mode:
             raise ValueError("Offline ownership fixture seeded an Agent")
 
         class ProviderFixture(BaseHTTPRequestHandler):
@@ -314,7 +318,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             target = target_address
             control_origin = "http://" + control_address
             daemon_env = daemon_environment(dict(os.environ), seed, control_address, target, ca, bearer, expiry, binding["signerPublicKey"])
-
             def start_daemon(label: str) -> subprocess.Popen[bytes]:
                 environment = dict(daemon_env, DEEPSEEKD_OWNER="actual-agent-daemon-" + secrets.token_hex(12))
                 with (output / (label + ".log")).open("wb") as log:
@@ -350,6 +353,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 public.credential_worker_transport(target, ca, bearer))
             if browser_mode:
                 edge_env["DEEPSEEK_API_URL"] = f"http://127.0.0.1:{provider.server_port}/chat"
+                edge_env["DEEPSEEK_INFRA_ROOT"] = case.as_posix()
+                edge_env["DEEPSEEK_BACKUP_MIRROR_DIR"] = (case / ".backup-mirror").as_posix()
             with (output / "daemon-public-edge.log").open("wb") as log:
                 edge = subprocess.Popen([args.edge.resolve().as_posix()], cwd=ROOT, env=edge_env, stdout=log, stderr=subprocess.STDOUT)
             public.wait_edge(origin, edge)
@@ -357,7 +362,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if browser_mode:
                 import verify_native_agent_browser as browser
 
-                observed = browser.run_browser_agent(origin, output)
+                def inspect_waiting_confirmation(run_id: str) -> None:
+                    time.sleep(1.2)
+                    waiting = request_json(origin, "/api/agent-runs/" + run_id)["run"]
+                    if waiting.get("status") != "awaiting_plan" or len(exchanges) != 1 or exchanges[0].get("kind") != "agent":
+                        raise ValueError("Actual browser run executed tasks before UI confirmation")
+                    (output / "pre-confirmation.json").write_text(json.dumps({
+                        "runId": run_id, "status": "awaiting_plan", "providerCalls": 1,
+                        "noTasksBeforePublicConfirmation": True}) + "\n", encoding="utf-8")
+
+                try:
+                    observed = browser.run_browser_agent(origin, output, inspect_waiting_confirmation)
+                finally:
+                    (output / "provider-exchanges.json").write_text(json.dumps(exchanges, indent=2) + "\n", encoding="utf-8")
                 run_id = observed["createdRunId"]
                 final = request_json(origin, "/api/agent-runs/" + run_id)["run"]
                 if final.get("status") != "done" or "Controlled final answer" not in str(final.get("finalAnswer", "")):
@@ -375,6 +392,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     productionProviderQualified=False, fullMigrationQualified=False,
                     cloudOnlyNativeBuild=True, providerExchanges=exchanges, readiness="NOT_READY")
                 result.update(browser.inspect_browser_custody(artifacts, state))
+                result.update(browser.inspect_browser_mirror(case, observed))
                 browser.validate_browser_result(result, exchanges)
                 result["controlledNativeBrowserQualified"] = True
                 (output / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

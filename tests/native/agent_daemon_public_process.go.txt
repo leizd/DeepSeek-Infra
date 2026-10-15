@@ -2,8 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,8 +14,9 @@ import (
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 )
 
-// This fixture only initializes signed empty ownership and validates settled
-// output after deepseekd exits. It never schedules an Agent or executes a node.
+// This fixture initializes signed empty ownership, optionally configures an
+// isolated backup policy, and validates settled output after deepseekd exits.
+// It never seeds Agent input, schedules an Agent, or executes a node.
 func TestNativeAgentDaemonPublicProcess(t *testing.T) {
 	directory := os.Getenv("DEEPSEEK_AGENT_SIGNING_PROBE_DIR")
 	stage := os.Getenv("DEEPSEEK_TEST_AGENT_DAEMON_STAGE")
@@ -27,11 +31,20 @@ func TestNativeAgentDaemonPublicProcess(t *testing.T) {
 	controlPath := filepath.Join(directory, "go-control")
 	if stage == "seed" {
 		control := nativeSigningControl(t, 30, controlPath)
-		for _, domain := range []string{"agent_run", "action"} {
+		domains := []string{"agent_run", "action"}
+		if os.Getenv("DEEPSEEK_TEST_AGENT_DAEMON_BROWSER") == "true" {
+			nativeBrowserEmptyBackupOwnership(t, control)
+			domains = append(domains, "policy", "target")
+		}
+		for _, domain := range domains {
 			rows, err := control.ListAuthoritativeRecords(domain)
 			if err != nil || len(rows) != 0 {
 				t.Fatal("ownership fixture seeded application input", domain, err)
 			}
+		}
+		browser := os.Getenv("DEEPSEEK_TEST_AGENT_DAEMON_BROWSER") == "true"
+		if browser {
+			nativeBrowserConfigureBackupPolicy(t, control)
 		}
 		if err := control.Close(); err != nil {
 			t.Fatal(err)
@@ -39,7 +52,8 @@ func TestNativeAgentDaemonPublicProcess(t *testing.T) {
 		nativeSigningWrite(t, filepath.Join(directory, "daemon-seed.json"), map[string]any{
 			"controlPath": controlPath, "internalBearer": testInternalBearer,
 			"promotionPublicKey": promotionRoutePublic, "fleetId": mutationFleetID,
-			"environment": mutationEnvironment, "emptyApplicationRecords": true})
+			"environment": mutationEnvironment, "emptyApplicationRecords": !browser,
+			"emptyAgentAndActionRecords": true, "backupPolicyConfiguredByGoFixture": browser})
 		return
 	}
 	var input struct {
@@ -56,11 +70,7 @@ func TestNativeAgentDaemonPublicProcess(t *testing.T) {
 	}
 	defer control.Close()
 	metadata, found, err := control.AgentRunMetadata(input.RunID)
-	expectedIndex, expectedConfirmation := int64(9), true
-	if input.Browser {
-		expectedIndex, expectedConfirmation = 8, false
-	}
-	if err != nil || !found || metadata.Status != "done" || metadata.NextIndex != expectedIndex || metadata.ConfirmPlan != expectedConfirmation || metadata.Preset != "auto" {
+	if err != nil || !found || metadata.Status != "done" || metadata.NextIndex != 9 || !metadata.ConfirmPlan || metadata.Preset != "auto" {
 		t.Fatal("actual daemon final metadata is incomplete", err)
 	}
 	expected := []agent.RunPlanNode{{ID: "coder", Task: "write"}, {ID: "critic", Task: "review", DependsOn: []string{"coder"}}}
@@ -85,11 +95,111 @@ func TestNativeAgentDaemonPublicProcess(t *testing.T) {
 			t.Fatal("actual daemon terminal proof or resource release differs", leaseErr, resourceErr)
 		}
 	}
+	if input.Browser {
+		if metadata.RuntimeVersion() != 2 || metadata.SchemaVersion != 2 {
+			t.Fatal("actual browser confirmation did not retain its runtime revision")
+		}
+		policies, err := control.ListAuthoritativeRecords("policy")
+		if err != nil || len(policies) != 1 {
+			t.Fatal("isolated native backup configuration missing", err)
+		}
+		var policy struct {
+			Name       string
+			Enabled    bool
+			Protection struct {
+				Mode       string
+				Recipients []string
+			}
+		}
+		if json.Unmarshal(policies[0].Payload, &policy) != nil || policy.Name != "Native browser verification" || !policy.Enabled || policy.Protection.Mode != "age-recipient" ||
+			len(policy.Protection.Recipients) != 1 || policy.Protection.Recipients[0] != "age1fu59d59ghmr8x2t5dyzjs9xdcjgnakujp7mjy7cz2v7fq6vjqypskh4e62" {
+			t.Fatal("backup policy was not retained by the actual Go daemon")
+		}
+	}
 	nativeSigningWrite(t, filepath.Join(directory, "daemon-inspected.json"), map[string]any{
 		"status": "PASS", "runId": metadata.RunID, "runStatus": metadata.Status, "nextIndex": metadata.NextIndex,
 		"durablePhases": len(records), "resourcesReleased": true, "requestSha256": metadata.Request.SHA256,
 		"requestLength": metadata.Request.Length, "actualPreset": metadata.Preset, "actualPlan": metadata.Plan,
 		"runtimeRevision":                 metadata.RuntimeVersion(),
 		"metadataSchemaVersion":           metadata.SchemaVersion,
-		"independentlyValidatedByGoStore": true, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})
+		"independentlyValidatedByGoStore": true, "independentNativeBackupPolicyVerified": input.Browser,
+		"sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})
+}
+
+// Promote attested empty inventories. No Agent inputs or execution records are
+// imported; the isolated backup configuration is created by the Go handler below.
+func nativeBrowserEmptyBackupOwnership(t *testing.T, control *store.Control) {
+	t.Helper()
+	for _, domain := range []string{"policy", "target"} {
+		current, err := control.GetCutover(domain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dual, err := control.TransitionCutover(store.CutoverTransition{Domain: domain, To: store.CutoverDualEvaluate,
+			ExpectedRevision: current.Revision, ExpectedEpoch: current.Epoch, FencingToken: current.FencingToken,
+			TransferID: "browser-empty-" + domain})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var imported store.PythonInventoryImportResult
+		if domain == "policy" {
+			imported = attestedEmptyPolicyImport(t, control)
+		} else {
+			directory := filepath.Join("..", "store", "testdata", "target-health-empty-v1")
+			source := copyPythonSourceFixture(t, filepath.Join("target-health-empty-v1", "python_empty_control_source_v1.sqlite3"), "target")
+			scheduler := filepath.Join(filepath.Dir(filepath.Dir(source)), ".backup-scheduler")
+			if err := os.MkdirAll(scheduler, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(filepath.Join(directory, "python_empty_scheduler_source_v1.sqlite3"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(scheduler, "scheduler.db"), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			raw, err = os.ReadFile(filepath.Join(directory, "python_empty_target_inventory_export_v2.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			attestation, err := store.AttestPythonInventorySource(source, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			imported, err = control.ImportAttestedPythonInventory(raw, attestation)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if imported.Imported != 0 {
+			t.Fatal("browser ownership import seeded application records")
+		}
+		request := store.CutoverTransition{Domain: domain, To: store.CutoverGoAuthoritative,
+			ExpectedRevision: dual.Revision, ExpectedEpoch: dual.Epoch, FencingToken: dual.FencingToken,
+			TransferID: imported.TransferID, Authority: authorityCheckpointFixture(t)}
+		if _, err := control.TransitionCutover(signedPromotionRoute(t, request, dual, time.Now().UTC().Unix(), &imported)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func nativeBrowserConfigureBackupPolicy(t *testing.T, control *store.Control) {
+	t.Helper()
+	t.Setenv("AUTH_DISABLED", "true")
+	public := http.NewServeMux()
+	RegisterPublic(public, control)
+	body := `{"name":"Native browser verification","enabled":true,"protection":{"mode":"age-recipient","recipients":["age1fu59d59ghmr8x2t5dyzjs9xdcjgnakujp7mjy7cz2v7fq6vjqypskh4e62"]}}`
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/workspace/backup-policies", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	public.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("isolated native backup configuration: %d %s", response.Code, response.Body.String())
+	}
+	for _, domain := range []string{"agent_run", "action"} {
+		records, err := control.ListAuthoritativeRecords(domain)
+		if err != nil || len(records) != 0 {
+			t.Fatal("backup configuration seeded Agent execution input", domain, err)
+		}
+	}
 }
