@@ -1183,14 +1183,15 @@ func (x *QueryAgentNodeEffectResponse) GetEffect() *AgentNodeEffectMetadata {
 }
 
 type PrepareAgentCredentialsRequest struct {
-	state           protoimpl.MessageState  `protogen:"open.v1"`
-	SchemaVersion   uint32                  `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
-	Fence           *commonv1.ActionFence   `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
-	RunId           string                  `protobuf:"bytes,3,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
-	Request         *AgentArtifactReference `protobuf:"bytes,4,opt,name=request,proto3" json:"request,omitempty"`
-	RuntimeRevision uint64                  `protobuf:"varint,5,opt,name=runtime_revision,json=runtimeRevision,proto3" json:"runtime_revision,omitempty"`
-	ApiKey          string                  `protobuf:"bytes,6,opt,name=api_key,json=apiKey,proto3" json:"api_key,omitempty"`
-	TavilyApiKey    string                  `protobuf:"bytes,7,opt,name=tavily_api_key,json=tavilyApiKey,proto3" json:"tavily_api_key,omitempty"`
+	state           protoimpl.MessageState        `protogen:"open.v1"`
+	SchemaVersion   uint32                        `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Fence           *commonv1.ActionFence         `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
+	RunId           string                        `protobuf:"bytes,3,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	Request         *AgentArtifactReference       `protobuf:"bytes,4,opt,name=request,proto3" json:"request,omitempty"`
+	RuntimeRevision uint64                        `protobuf:"varint,5,opt,name=runtime_revision,json=runtimeRevision,proto3" json:"runtime_revision,omitempty"`
+	ApiKey          string                        `protobuf:"bytes,6,opt,name=api_key,json=apiKey,proto3" json:"api_key,omitempty"`
+	TavilyApiKey    string                        `protobuf:"bytes,7,opt,name=tavily_api_key,json=tavilyApiKey,proto3" json:"tavily_api_key,omitempty"`
+	RuntimeUpdate   *AgentCredentialRuntimeUpdate `protobuf:"bytes,8,opt,name=runtime_update,json=runtimeUpdate,proto3" json:"runtime_update,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1274,6 +1275,84 @@ func (x *PrepareAgentCredentialsRequest) GetTavilyApiKey() string {
 	return ""
 }
 
+func (x *PrepareAgentCredentialsRequest) GetRuntimeUpdate() *AgentCredentialRuntimeUpdate {
+	if x != nil {
+		return x.RuntimeUpdate
+	}
+	return nil
+}
+
+// Private Rust-to-Rust preparation only. Go receives only immutable references.
+// Omitted credential replacements inherit the current Go-bound sealed values;
+// an explicit replacement with an empty key clears that value.
+type AgentCredentialRuntimeUpdate struct {
+	state                   protoimpl.MessageState  `protogen:"open.v1"`
+	PreviousRequest         *AgentArtifactReference `protobuf:"bytes,1,opt,name=previous_request,json=previousRequest,proto3" json:"previous_request,omitempty"`
+	PreviousRuntimeRevision uint64                  `protobuf:"varint,2,opt,name=previous_runtime_revision,json=previousRuntimeRevision,proto3" json:"previous_runtime_revision,omitempty"`
+	ReplaceApiKey           bool                    `protobuf:"varint,3,opt,name=replace_api_key,json=replaceApiKey,proto3" json:"replace_api_key,omitempty"`
+	ReplaceTavilyApiKey     bool                    `protobuf:"varint,4,opt,name=replace_tavily_api_key,json=replaceTavilyApiKey,proto3" json:"replace_tavily_api_key,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *AgentCredentialRuntimeUpdate) Reset() {
+	*x = AgentCredentialRuntimeUpdate{}
+	mi := &file_agent_v1_agent_node_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentCredentialRuntimeUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentCredentialRuntimeUpdate) ProtoMessage() {}
+
+func (x *AgentCredentialRuntimeUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_node_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentCredentialRuntimeUpdate.ProtoReflect.Descriptor instead.
+func (*AgentCredentialRuntimeUpdate) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *AgentCredentialRuntimeUpdate) GetPreviousRequest() *AgentArtifactReference {
+	if x != nil {
+		return x.PreviousRequest
+	}
+	return nil
+}
+
+func (x *AgentCredentialRuntimeUpdate) GetPreviousRuntimeRevision() uint64 {
+	if x != nil {
+		return x.PreviousRuntimeRevision
+	}
+	return 0
+}
+
+func (x *AgentCredentialRuntimeUpdate) GetReplaceApiKey() bool {
+	if x != nil {
+		return x.ReplaceApiKey
+	}
+	return false
+}
+
+func (x *AgentCredentialRuntimeUpdate) GetReplaceTavilyApiKey() bool {
+	if x != nil {
+		return x.ReplaceTavilyApiKey
+	}
+	return false
+}
+
 type AgentCredentialScope struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	FleetId         string                 `protobuf:"bytes,1,opt,name=fleet_id,json=fleetId,proto3" json:"fleet_id,omitempty"`
@@ -1289,7 +1368,7 @@ type AgentCredentialScope struct {
 
 func (x *AgentCredentialScope) Reset() {
 	*x = AgentCredentialScope{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[14]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1301,7 +1380,7 @@ func (x *AgentCredentialScope) String() string {
 func (*AgentCredentialScope) ProtoMessage() {}
 
 func (x *AgentCredentialScope) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[14]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1314,7 +1393,7 @@ func (x *AgentCredentialScope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentCredentialScope.ProtoReflect.Descriptor instead.
 func (*AgentCredentialScope) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{14}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *AgentCredentialScope) GetFleetId() string {
@@ -1377,7 +1456,7 @@ type AgentCredentialObjectReference struct {
 
 func (x *AgentCredentialObjectReference) Reset() {
 	*x = AgentCredentialObjectReference{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[15]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1389,7 +1468,7 @@ func (x *AgentCredentialObjectReference) String() string {
 func (*AgentCredentialObjectReference) ProtoMessage() {}
 
 func (x *AgentCredentialObjectReference) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[15]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1402,7 +1481,7 @@ func (x *AgentCredentialObjectReference) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentCredentialObjectReference.ProtoReflect.Descriptor instead.
 func (*AgentCredentialObjectReference) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{15}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *AgentCredentialObjectReference) GetId() string {
@@ -1436,7 +1515,7 @@ type PrepareAgentCredentialsResponse struct {
 
 func (x *PrepareAgentCredentialsResponse) Reset() {
 	*x = PrepareAgentCredentialsResponse{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[16]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1448,7 +1527,7 @@ func (x *PrepareAgentCredentialsResponse) String() string {
 func (*PrepareAgentCredentialsResponse) ProtoMessage() {}
 
 func (x *PrepareAgentCredentialsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[16]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1461,7 +1540,7 @@ func (x *PrepareAgentCredentialsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrepareAgentCredentialsResponse.ProtoReflect.Descriptor instead.
 func (*PrepareAgentCredentialsResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{16}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *PrepareAgentCredentialsResponse) GetScope() *AgentCredentialScope {
@@ -1495,7 +1574,7 @@ type ExecuteAgentTaskRequest struct {
 
 func (x *ExecuteAgentTaskRequest) Reset() {
 	*x = ExecuteAgentTaskRequest{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[17]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1507,7 +1586,7 @@ func (x *ExecuteAgentTaskRequest) String() string {
 func (*ExecuteAgentTaskRequest) ProtoMessage() {}
 
 func (x *ExecuteAgentTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[17]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1520,7 +1599,7 @@ func (x *ExecuteAgentTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecuteAgentTaskRequest.ProtoReflect.Descriptor instead.
 func (*ExecuteAgentTaskRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{17}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ExecuteAgentTaskRequest) GetSchemaVersion() uint32 {
@@ -1592,7 +1671,7 @@ type ProjectAgentPlanRequest struct {
 
 func (x *ProjectAgentPlanRequest) Reset() {
 	*x = ProjectAgentPlanRequest{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[18]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1604,7 +1683,7 @@ func (x *ProjectAgentPlanRequest) String() string {
 func (*ProjectAgentPlanRequest) ProtoMessage() {}
 
 func (x *ProjectAgentPlanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[18]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1617,7 +1696,7 @@ func (x *ProjectAgentPlanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProjectAgentPlanRequest.ProtoReflect.Descriptor instead.
 func (*ProjectAgentPlanRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{18}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ProjectAgentPlanRequest) GetSchemaVersion() uint32 {
@@ -1708,7 +1787,7 @@ type AgentPlanProjectionEvidence struct {
 
 func (x *AgentPlanProjectionEvidence) Reset() {
 	*x = AgentPlanProjectionEvidence{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[19]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1720,7 +1799,7 @@ func (x *AgentPlanProjectionEvidence) String() string {
 func (*AgentPlanProjectionEvidence) ProtoMessage() {}
 
 func (x *AgentPlanProjectionEvidence) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[19]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1733,7 +1812,7 @@ func (x *AgentPlanProjectionEvidence) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentPlanProjectionEvidence.ProtoReflect.Descriptor instead.
 func (*AgentPlanProjectionEvidence) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{19}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *AgentPlanProjectionEvidence) GetSchemaVersion() uint32 {
@@ -1853,7 +1932,7 @@ type AgentPlanProjectionReceipt struct {
 
 func (x *AgentPlanProjectionReceipt) Reset() {
 	*x = AgentPlanProjectionReceipt{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[20]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1865,7 +1944,7 @@ func (x *AgentPlanProjectionReceipt) String() string {
 func (*AgentPlanProjectionReceipt) ProtoMessage() {}
 
 func (x *AgentPlanProjectionReceipt) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[20]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1878,7 +1957,7 @@ func (x *AgentPlanProjectionReceipt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentPlanProjectionReceipt.ProtoReflect.Descriptor instead.
 func (*AgentPlanProjectionReceipt) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{20}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *AgentPlanProjectionReceipt) GetSchemaVersion() uint32 {
@@ -1925,7 +2004,7 @@ type SettleAgentPlanRequest struct {
 
 func (x *SettleAgentPlanRequest) Reset() {
 	*x = SettleAgentPlanRequest{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[21]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1937,7 +2016,7 @@ func (x *SettleAgentPlanRequest) String() string {
 func (*SettleAgentPlanRequest) ProtoMessage() {}
 
 func (x *SettleAgentPlanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[21]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1950,7 +2029,7 @@ func (x *SettleAgentPlanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettleAgentPlanRequest.ProtoReflect.Descriptor instead.
 func (*SettleAgentPlanRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{21}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *SettleAgentPlanRequest) GetSchemaVersion() uint32 {
@@ -2020,7 +2099,7 @@ type SettleAgentPlanResponse struct {
 
 func (x *SettleAgentPlanResponse) Reset() {
 	*x = SettleAgentPlanResponse{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[22]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2032,7 +2111,7 @@ func (x *SettleAgentPlanResponse) String() string {
 func (*SettleAgentPlanResponse) ProtoMessage() {}
 
 func (x *SettleAgentPlanResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[22]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2045,7 +2124,7 @@ func (x *SettleAgentPlanResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettleAgentPlanResponse.ProtoReflect.Descriptor instead.
 func (*SettleAgentPlanResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{22}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SettleAgentPlanResponse) GetAlreadyApplied() bool {
@@ -2085,7 +2164,7 @@ type AgentTaskOutputMetadata struct {
 
 func (x *AgentTaskOutputMetadata) Reset() {
 	*x = AgentTaskOutputMetadata{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[23]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2097,7 +2176,7 @@ func (x *AgentTaskOutputMetadata) String() string {
 func (*AgentTaskOutputMetadata) ProtoMessage() {}
 
 func (x *AgentTaskOutputMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[23]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2110,7 +2189,7 @@ func (x *AgentTaskOutputMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentTaskOutputMetadata.ProtoReflect.Descriptor instead.
 func (*AgentTaskOutputMetadata) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{23}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *AgentTaskOutputMetadata) GetSchemaVersion() uint32 {
@@ -2168,7 +2247,7 @@ type SettleAgentTaskRequest struct {
 
 func (x *SettleAgentTaskRequest) Reset() {
 	*x = SettleAgentTaskRequest{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[24]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2180,7 +2259,7 @@ func (x *SettleAgentTaskRequest) String() string {
 func (*SettleAgentTaskRequest) ProtoMessage() {}
 
 func (x *SettleAgentTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[24]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2193,7 +2272,7 @@ func (x *SettleAgentTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettleAgentTaskRequest.ProtoReflect.Descriptor instead.
 func (*SettleAgentTaskRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{24}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *SettleAgentTaskRequest) GetSchemaVersion() uint32 {
@@ -2277,7 +2356,7 @@ type SettleAgentTaskResponse struct {
 
 func (x *SettleAgentTaskResponse) Reset() {
 	*x = SettleAgentTaskResponse{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[25]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2289,7 +2368,7 @@ func (x *SettleAgentTaskResponse) String() string {
 func (*SettleAgentTaskResponse) ProtoMessage() {}
 
 func (x *SettleAgentTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[25]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2302,7 +2381,7 @@ func (x *SettleAgentTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettleAgentTaskResponse.ProtoReflect.Descriptor instead.
 func (*SettleAgentTaskResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{25}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *SettleAgentTaskResponse) GetAlreadyApplied() bool {
@@ -2344,7 +2423,7 @@ type CompleteAgentTasksRequest struct {
 
 func (x *CompleteAgentTasksRequest) Reset() {
 	*x = CompleteAgentTasksRequest{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[26]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2356,7 +2435,7 @@ func (x *CompleteAgentTasksRequest) String() string {
 func (*CompleteAgentTasksRequest) ProtoMessage() {}
 
 func (x *CompleteAgentTasksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[26]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2369,7 +2448,7 @@ func (x *CompleteAgentTasksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteAgentTasksRequest.ProtoReflect.Descriptor instead.
 func (*CompleteAgentTasksRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{26}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *CompleteAgentTasksRequest) GetSchemaVersion() uint32 {
@@ -2439,7 +2518,7 @@ type CompleteAgentTasksResponse struct {
 
 func (x *CompleteAgentTasksResponse) Reset() {
 	*x = CompleteAgentTasksResponse{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[27]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2451,7 +2530,7 @@ func (x *CompleteAgentTasksResponse) String() string {
 func (*CompleteAgentTasksResponse) ProtoMessage() {}
 
 func (x *CompleteAgentTasksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[27]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2464,7 +2543,7 @@ func (x *CompleteAgentTasksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteAgentTasksResponse.ProtoReflect.Descriptor instead.
 func (*CompleteAgentTasksResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{27}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *CompleteAgentTasksResponse) GetAlreadyApplied() bool {
@@ -2504,7 +2583,7 @@ type ProjectAgentSynthesisRequest struct {
 
 func (x *ProjectAgentSynthesisRequest) Reset() {
 	*x = ProjectAgentSynthesisRequest{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[28]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2516,7 +2595,7 @@ func (x *ProjectAgentSynthesisRequest) String() string {
 func (*ProjectAgentSynthesisRequest) ProtoMessage() {}
 
 func (x *ProjectAgentSynthesisRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[28]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2529,7 +2608,7 @@ func (x *ProjectAgentSynthesisRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProjectAgentSynthesisRequest.ProtoReflect.Descriptor instead.
 func (*ProjectAgentSynthesisRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{28}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ProjectAgentSynthesisRequest) GetSchemaVersion() uint32 {
@@ -2594,7 +2673,7 @@ type AgentSynthesisProjectionEvidence struct {
 
 func (x *AgentSynthesisProjectionEvidence) Reset() {
 	*x = AgentSynthesisProjectionEvidence{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[29]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2606,7 +2685,7 @@ func (x *AgentSynthesisProjectionEvidence) String() string {
 func (*AgentSynthesisProjectionEvidence) ProtoMessage() {}
 
 func (x *AgentSynthesisProjectionEvidence) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[29]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2619,7 +2698,7 @@ func (x *AgentSynthesisProjectionEvidence) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentSynthesisProjectionEvidence.ProtoReflect.Descriptor instead.
 func (*AgentSynthesisProjectionEvidence) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{29}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *AgentSynthesisProjectionEvidence) GetSchemaVersion() uint32 {
@@ -2711,7 +2790,7 @@ type AgentSynthesisProjectionReceipt struct {
 
 func (x *AgentSynthesisProjectionReceipt) Reset() {
 	*x = AgentSynthesisProjectionReceipt{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[30]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2723,7 +2802,7 @@ func (x *AgentSynthesisProjectionReceipt) String() string {
 func (*AgentSynthesisProjectionReceipt) ProtoMessage() {}
 
 func (x *AgentSynthesisProjectionReceipt) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[30]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2736,7 +2815,7 @@ func (x *AgentSynthesisProjectionReceipt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentSynthesisProjectionReceipt.ProtoReflect.Descriptor instead.
 func (*AgentSynthesisProjectionReceipt) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{30}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *AgentSynthesisProjectionReceipt) GetSchemaVersion() uint32 {
@@ -2783,7 +2862,7 @@ type SettleAgentSynthesisRequest struct {
 
 func (x *SettleAgentSynthesisRequest) Reset() {
 	*x = SettleAgentSynthesisRequest{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[31]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2795,7 +2874,7 @@ func (x *SettleAgentSynthesisRequest) String() string {
 func (*SettleAgentSynthesisRequest) ProtoMessage() {}
 
 func (x *SettleAgentSynthesisRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[31]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2808,7 +2887,7 @@ func (x *SettleAgentSynthesisRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettleAgentSynthesisRequest.ProtoReflect.Descriptor instead.
 func (*SettleAgentSynthesisRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{31}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *SettleAgentSynthesisRequest) GetSchemaVersion() uint32 {
@@ -2878,7 +2957,7 @@ type SettleAgentSynthesisResponse struct {
 
 func (x *SettleAgentSynthesisResponse) Reset() {
 	*x = SettleAgentSynthesisResponse{}
-	mi := &file_agent_v1_agent_node_proto_msgTypes[32]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2890,7 +2969,7 @@ func (x *SettleAgentSynthesisResponse) String() string {
 func (*SettleAgentSynthesisResponse) ProtoMessage() {}
 
 func (x *SettleAgentSynthesisResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_node_proto_msgTypes[32]
+	mi := &file_agent_v1_agent_node_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2903,7 +2982,7 @@ func (x *SettleAgentSynthesisResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettleAgentSynthesisResponse.ProtoReflect.Descriptor instead.
 func (*SettleAgentSynthesisResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{32}
+	return file_agent_v1_agent_node_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *SettleAgentSynthesisResponse) GetAlreadyApplied() bool {
@@ -3038,7 +3117,7 @@ const file_agent_v1_agent_node_proto_rawDesc = "" +
 	"\anode_id\x18\x04 \x01(\tR\x06nodeId\"x\n" +
 	"\x1cQueryAgentNodeEffectResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12B\n" +
-	"\x06effect\x18\x02 \x01(\v2*.deepseek.agent.v1.AgentNodeEffectMetadataR\x06effect\"\xc4\x02\n" +
+	"\x06effect\x18\x02 \x01(\v2*.deepseek.agent.v1.AgentNodeEffectMetadataR\x06effect\"\x9c\x03\n" +
 	"\x1ePrepareAgentCredentialsRequest\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x125\n" +
 	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12\x15\n" +
@@ -3046,7 +3125,13 @@ const file_agent_v1_agent_node_proto_rawDesc = "" +
 	"\arequest\x18\x04 \x01(\v2).deepseek.agent.v1.AgentArtifactReferenceR\arequest\x12)\n" +
 	"\x10runtime_revision\x18\x05 \x01(\x04R\x0fruntimeRevision\x12\x17\n" +
 	"\aapi_key\x18\x06 \x01(\tR\x06apiKey\x12$\n" +
-	"\x0etavily_api_key\x18\a \x01(\tR\ftavilyApiKey\"\x8a\x02\n" +
+	"\x0etavily_api_key\x18\a \x01(\tR\ftavilyApiKey\x12V\n" +
+	"\x0eruntime_update\x18\b \x01(\v2/.deepseek.agent.v1.AgentCredentialRuntimeUpdateR\rruntimeUpdate\"\x8d\x02\n" +
+	"\x1cAgentCredentialRuntimeUpdate\x12T\n" +
+	"\x10previous_request\x18\x01 \x01(\v2).deepseek.agent.v1.AgentArtifactReferenceR\x0fpreviousRequest\x12:\n" +
+	"\x19previous_runtime_revision\x18\x02 \x01(\x04R\x17previousRuntimeRevision\x12&\n" +
+	"\x0freplace_api_key\x18\x03 \x01(\bR\rreplaceApiKey\x123\n" +
+	"\x16replace_tavily_api_key\x18\x04 \x01(\bR\x13replaceTavilyApiKey\"\x8a\x02\n" +
 	"\x14AgentCredentialScope\x12\x19\n" +
 	"\bfleet_id\x18\x01 \x01(\tR\afleetId\x12 \n" +
 	"\venvironment\x18\x02 \x01(\tR\venvironment\x12\x15\n" +
@@ -3231,7 +3316,7 @@ func file_agent_v1_agent_node_proto_rawDescGZIP() []byte {
 	return file_agent_v1_agent_node_proto_rawDescData
 }
 
-var file_agent_v1_agent_node_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
+var file_agent_v1_agent_node_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
 var file_agent_v1_agent_node_proto_goTypes = []any{
 	(*AgentNodeDispatchIntent)(nil),          // 0: deepseek.agent.v1.AgentNodeDispatchIntent
 	(*BeginAgentNodeDispatchRequest)(nil),    // 1: deepseek.agent.v1.BeginAgentNodeDispatchRequest
@@ -3247,122 +3332,125 @@ var file_agent_v1_agent_node_proto_goTypes = []any{
 	(*QueryAgentNodeEffectRequest)(nil),      // 11: deepseek.agent.v1.QueryAgentNodeEffectRequest
 	(*QueryAgentNodeEffectResponse)(nil),     // 12: deepseek.agent.v1.QueryAgentNodeEffectResponse
 	(*PrepareAgentCredentialsRequest)(nil),   // 13: deepseek.agent.v1.PrepareAgentCredentialsRequest
-	(*AgentCredentialScope)(nil),             // 14: deepseek.agent.v1.AgentCredentialScope
-	(*AgentCredentialObjectReference)(nil),   // 15: deepseek.agent.v1.AgentCredentialObjectReference
-	(*PrepareAgentCredentialsResponse)(nil),  // 16: deepseek.agent.v1.PrepareAgentCredentialsResponse
-	(*ExecuteAgentTaskRequest)(nil),          // 17: deepseek.agent.v1.ExecuteAgentTaskRequest
-	(*ProjectAgentPlanRequest)(nil),          // 18: deepseek.agent.v1.ProjectAgentPlanRequest
-	(*AgentPlanProjectionEvidence)(nil),      // 19: deepseek.agent.v1.AgentPlanProjectionEvidence
-	(*AgentPlanProjectionReceipt)(nil),       // 20: deepseek.agent.v1.AgentPlanProjectionReceipt
-	(*SettleAgentPlanRequest)(nil),           // 21: deepseek.agent.v1.SettleAgentPlanRequest
-	(*SettleAgentPlanResponse)(nil),          // 22: deepseek.agent.v1.SettleAgentPlanResponse
-	(*AgentTaskOutputMetadata)(nil),          // 23: deepseek.agent.v1.AgentTaskOutputMetadata
-	(*SettleAgentTaskRequest)(nil),           // 24: deepseek.agent.v1.SettleAgentTaskRequest
-	(*SettleAgentTaskResponse)(nil),          // 25: deepseek.agent.v1.SettleAgentTaskResponse
-	(*CompleteAgentTasksRequest)(nil),        // 26: deepseek.agent.v1.CompleteAgentTasksRequest
-	(*CompleteAgentTasksResponse)(nil),       // 27: deepseek.agent.v1.CompleteAgentTasksResponse
-	(*ProjectAgentSynthesisRequest)(nil),     // 28: deepseek.agent.v1.ProjectAgentSynthesisRequest
-	(*AgentSynthesisProjectionEvidence)(nil), // 29: deepseek.agent.v1.AgentSynthesisProjectionEvidence
-	(*AgentSynthesisProjectionReceipt)(nil),  // 30: deepseek.agent.v1.AgentSynthesisProjectionReceipt
-	(*SettleAgentSynthesisRequest)(nil),      // 31: deepseek.agent.v1.SettleAgentSynthesisRequest
-	(*SettleAgentSynthesisResponse)(nil),     // 32: deepseek.agent.v1.SettleAgentSynthesisResponse
-	(*commonv1.ActionFence)(nil),             // 33: deepseek.common.v1.ActionFence
-	(AgentRunExecutionPhase)(0),              // 34: deepseek.agent.v1.AgentRunExecutionPhase
-	(*AgentArtifactReference)(nil),           // 35: deepseek.agent.v1.AgentArtifactReference
-	(*AgentRunExecutionClaim)(nil),           // 36: deepseek.agent.v1.AgentRunExecutionClaim
-	(*AgentRunPlanNode)(nil),                 // 37: deepseek.agent.v1.AgentRunPlanNode
-	(*AgentRunSnapshot)(nil),                 // 38: deepseek.agent.v1.AgentRunSnapshot
+	(*AgentCredentialRuntimeUpdate)(nil),     // 14: deepseek.agent.v1.AgentCredentialRuntimeUpdate
+	(*AgentCredentialScope)(nil),             // 15: deepseek.agent.v1.AgentCredentialScope
+	(*AgentCredentialObjectReference)(nil),   // 16: deepseek.agent.v1.AgentCredentialObjectReference
+	(*PrepareAgentCredentialsResponse)(nil),  // 17: deepseek.agent.v1.PrepareAgentCredentialsResponse
+	(*ExecuteAgentTaskRequest)(nil),          // 18: deepseek.agent.v1.ExecuteAgentTaskRequest
+	(*ProjectAgentPlanRequest)(nil),          // 19: deepseek.agent.v1.ProjectAgentPlanRequest
+	(*AgentPlanProjectionEvidence)(nil),      // 20: deepseek.agent.v1.AgentPlanProjectionEvidence
+	(*AgentPlanProjectionReceipt)(nil),       // 21: deepseek.agent.v1.AgentPlanProjectionReceipt
+	(*SettleAgentPlanRequest)(nil),           // 22: deepseek.agent.v1.SettleAgentPlanRequest
+	(*SettleAgentPlanResponse)(nil),          // 23: deepseek.agent.v1.SettleAgentPlanResponse
+	(*AgentTaskOutputMetadata)(nil),          // 24: deepseek.agent.v1.AgentTaskOutputMetadata
+	(*SettleAgentTaskRequest)(nil),           // 25: deepseek.agent.v1.SettleAgentTaskRequest
+	(*SettleAgentTaskResponse)(nil),          // 26: deepseek.agent.v1.SettleAgentTaskResponse
+	(*CompleteAgentTasksRequest)(nil),        // 27: deepseek.agent.v1.CompleteAgentTasksRequest
+	(*CompleteAgentTasksResponse)(nil),       // 28: deepseek.agent.v1.CompleteAgentTasksResponse
+	(*ProjectAgentSynthesisRequest)(nil),     // 29: deepseek.agent.v1.ProjectAgentSynthesisRequest
+	(*AgentSynthesisProjectionEvidence)(nil), // 30: deepseek.agent.v1.AgentSynthesisProjectionEvidence
+	(*AgentSynthesisProjectionReceipt)(nil),  // 31: deepseek.agent.v1.AgentSynthesisProjectionReceipt
+	(*SettleAgentSynthesisRequest)(nil),      // 32: deepseek.agent.v1.SettleAgentSynthesisRequest
+	(*SettleAgentSynthesisResponse)(nil),     // 33: deepseek.agent.v1.SettleAgentSynthesisResponse
+	(*commonv1.ActionFence)(nil),             // 34: deepseek.common.v1.ActionFence
+	(AgentRunExecutionPhase)(0),              // 35: deepseek.agent.v1.AgentRunExecutionPhase
+	(*AgentArtifactReference)(nil),           // 36: deepseek.agent.v1.AgentArtifactReference
+	(*AgentRunExecutionClaim)(nil),           // 37: deepseek.agent.v1.AgentRunExecutionClaim
+	(*AgentRunPlanNode)(nil),                 // 38: deepseek.agent.v1.AgentRunPlanNode
+	(*AgentRunSnapshot)(nil),                 // 39: deepseek.agent.v1.AgentRunSnapshot
 }
 var file_agent_v1_agent_node_proto_depIdxs = []int32{
-	33, // 0: deepseek.agent.v1.AgentNodeDispatchIntent.fence:type_name -> deepseek.common.v1.ActionFence
-	34, // 1: deepseek.agent.v1.AgentNodeDispatchIntent.phase:type_name -> deepseek.agent.v1.AgentRunExecutionPhase
-	35, // 2: deepseek.agent.v1.AgentNodeDispatchIntent.request:type_name -> deepseek.agent.v1.AgentArtifactReference
-	33, // 3: deepseek.agent.v1.BeginAgentNodeDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	34, // 0: deepseek.agent.v1.AgentNodeDispatchIntent.fence:type_name -> deepseek.common.v1.ActionFence
+	35, // 1: deepseek.agent.v1.AgentNodeDispatchIntent.phase:type_name -> deepseek.agent.v1.AgentRunExecutionPhase
+	36, // 2: deepseek.agent.v1.AgentNodeDispatchIntent.request:type_name -> deepseek.agent.v1.AgentArtifactReference
+	34, // 3: deepseek.agent.v1.BeginAgentNodeDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	0,  // 4: deepseek.agent.v1.BeginAgentNodeDispatchResponse.intent:type_name -> deepseek.agent.v1.AgentNodeDispatchIntent
-	36, // 5: deepseek.agent.v1.BeginAgentNodeDispatchResponse.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
-	33, // 6: deepseek.agent.v1.GetAgentNodeDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	37, // 5: deepseek.agent.v1.BeginAgentNodeDispatchResponse.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
+	34, // 6: deepseek.agent.v1.GetAgentNodeDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	0,  // 7: deepseek.agent.v1.GetAgentNodeDispatchResponse.intent:type_name -> deepseek.agent.v1.AgentNodeDispatchIntent
 	10, // 8: deepseek.agent.v1.GetAgentNodeDispatchResponse.outcome_receipt:type_name -> deepseek.agent.v1.AgentNodeOutcomeReceipt
-	33, // 9: deepseek.agent.v1.RecordAgentNodeOutcomeRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	34, // 9: deepseek.agent.v1.RecordAgentNodeOutcomeRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	10, // 10: deepseek.agent.v1.RecordAgentNodeOutcomeRequest.outcome_receipt:type_name -> deepseek.agent.v1.AgentNodeOutcomeReceipt
-	36, // 11: deepseek.agent.v1.ExecuteAgentPlanRequest.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
-	33, // 12: deepseek.agent.v1.ExecuteAgentPlanRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	33, // 13: deepseek.agent.v1.AgentNodeEffectMetadata.fence:type_name -> deepseek.common.v1.ActionFence
-	35, // 14: deepseek.agent.v1.AgentNodeEffectMetadata.public_event:type_name -> deepseek.agent.v1.AgentArtifactReference
+	37, // 11: deepseek.agent.v1.ExecuteAgentPlanRequest.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
+	34, // 12: deepseek.agent.v1.ExecuteAgentPlanRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	34, // 13: deepseek.agent.v1.AgentNodeEffectMetadata.fence:type_name -> deepseek.common.v1.ActionFence
+	36, // 14: deepseek.agent.v1.AgentNodeEffectMetadata.public_event:type_name -> deepseek.agent.v1.AgentArtifactReference
 	10, // 15: deepseek.agent.v1.AgentNodeEffectMetadata.outcome_receipt:type_name -> deepseek.agent.v1.AgentNodeOutcomeReceipt
-	33, // 16: deepseek.agent.v1.AgentNodeOutcomeEvidence.fence:type_name -> deepseek.common.v1.ActionFence
-	34, // 17: deepseek.agent.v1.AgentNodeOutcomeEvidence.phase:type_name -> deepseek.agent.v1.AgentRunExecutionPhase
-	35, // 18: deepseek.agent.v1.AgentNodeOutcomeEvidence.request:type_name -> deepseek.agent.v1.AgentArtifactReference
-	35, // 19: deepseek.agent.v1.AgentNodeOutcomeEvidence.public_event:type_name -> deepseek.agent.v1.AgentArtifactReference
-	37, // 20: deepseek.agent.v1.AgentNodeOutcomeEvidence.provider_plan:type_name -> deepseek.agent.v1.AgentRunPlanNode
-	23, // 21: deepseek.agent.v1.AgentNodeOutcomeEvidence.task_output:type_name -> deepseek.agent.v1.AgentTaskOutputMetadata
+	34, // 16: deepseek.agent.v1.AgentNodeOutcomeEvidence.fence:type_name -> deepseek.common.v1.ActionFence
+	35, // 17: deepseek.agent.v1.AgentNodeOutcomeEvidence.phase:type_name -> deepseek.agent.v1.AgentRunExecutionPhase
+	36, // 18: deepseek.agent.v1.AgentNodeOutcomeEvidence.request:type_name -> deepseek.agent.v1.AgentArtifactReference
+	36, // 19: deepseek.agent.v1.AgentNodeOutcomeEvidence.public_event:type_name -> deepseek.agent.v1.AgentArtifactReference
+	38, // 20: deepseek.agent.v1.AgentNodeOutcomeEvidence.provider_plan:type_name -> deepseek.agent.v1.AgentRunPlanNode
+	24, // 21: deepseek.agent.v1.AgentNodeOutcomeEvidence.task_output:type_name -> deepseek.agent.v1.AgentTaskOutputMetadata
 	9,  // 22: deepseek.agent.v1.AgentNodeOutcomeReceipt.evidence:type_name -> deepseek.agent.v1.AgentNodeOutcomeEvidence
-	33, // 23: deepseek.agent.v1.QueryAgentNodeEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	34, // 23: deepseek.agent.v1.QueryAgentNodeEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	8,  // 24: deepseek.agent.v1.QueryAgentNodeEffectResponse.effect:type_name -> deepseek.agent.v1.AgentNodeEffectMetadata
-	33, // 25: deepseek.agent.v1.PrepareAgentCredentialsRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	35, // 26: deepseek.agent.v1.PrepareAgentCredentialsRequest.request:type_name -> deepseek.agent.v1.AgentArtifactReference
-	14, // 27: deepseek.agent.v1.PrepareAgentCredentialsResponse.scope:type_name -> deepseek.agent.v1.AgentCredentialScope
-	15, // 28: deepseek.agent.v1.PrepareAgentCredentialsResponse.object:type_name -> deepseek.agent.v1.AgentCredentialObjectReference
-	36, // 29: deepseek.agent.v1.ExecuteAgentTaskRequest.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
-	33, // 30: deepseek.agent.v1.ExecuteAgentTaskRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	11, // 31: deepseek.agent.v1.ProjectAgentPlanRequest.source:type_name -> deepseek.agent.v1.QueryAgentNodeEffectRequest
-	33, // 32: deepseek.agent.v1.ProjectAgentPlanRequest.settlement_fence:type_name -> deepseek.common.v1.ActionFence
-	37, // 33: deepseek.agent.v1.ProjectAgentPlanRequest.normalized_plan:type_name -> deepseek.agent.v1.AgentRunPlanNode
-	33, // 34: deepseek.agent.v1.AgentPlanProjectionEvidence.settlement_fence:type_name -> deepseek.common.v1.ActionFence
-	37, // 35: deepseek.agent.v1.AgentPlanProjectionEvidence.normalized_plan:type_name -> deepseek.agent.v1.AgentRunPlanNode
-	35, // 36: deepseek.agent.v1.AgentPlanProjectionEvidence.plan_body:type_name -> deepseek.agent.v1.AgentArtifactReference
-	35, // 37: deepseek.agent.v1.AgentPlanProjectionEvidence.status_body:type_name -> deepseek.agent.v1.AgentArtifactReference
-	35, // 38: deepseek.agent.v1.AgentPlanProjectionEvidence.planning_body:type_name -> deepseek.agent.v1.AgentArtifactReference
-	19, // 39: deepseek.agent.v1.AgentPlanProjectionReceipt.evidence:type_name -> deepseek.agent.v1.AgentPlanProjectionEvidence
-	33, // 40: deepseek.agent.v1.SettleAgentPlanRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	20, // 41: deepseek.agent.v1.SettleAgentPlanRequest.projection:type_name -> deepseek.agent.v1.AgentPlanProjectionReceipt
-	38, // 42: deepseek.agent.v1.SettleAgentPlanResponse.run:type_name -> deepseek.agent.v1.AgentRunSnapshot
-	33, // 43: deepseek.agent.v1.SettleAgentTaskRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	38, // 44: deepseek.agent.v1.SettleAgentTaskResponse.run:type_name -> deepseek.agent.v1.AgentRunSnapshot
-	33, // 45: deepseek.agent.v1.CompleteAgentTasksRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	38, // 46: deepseek.agent.v1.CompleteAgentTasksResponse.run:type_name -> deepseek.agent.v1.AgentRunSnapshot
-	11, // 47: deepseek.agent.v1.ProjectAgentSynthesisRequest.source:type_name -> deepseek.agent.v1.QueryAgentNodeEffectRequest
-	33, // 48: deepseek.agent.v1.ProjectAgentSynthesisRequest.settlement_fence:type_name -> deepseek.common.v1.ActionFence
-	33, // 49: deepseek.agent.v1.AgentSynthesisProjectionEvidence.settlement_fence:type_name -> deepseek.common.v1.ActionFence
-	35, // 50: deepseek.agent.v1.AgentSynthesisProjectionEvidence.content_body:type_name -> deepseek.agent.v1.AgentArtifactReference
-	35, // 51: deepseek.agent.v1.AgentSynthesisProjectionEvidence.done_body:type_name -> deepseek.agent.v1.AgentArtifactReference
-	29, // 52: deepseek.agent.v1.AgentSynthesisProjectionReceipt.evidence:type_name -> deepseek.agent.v1.AgentSynthesisProjectionEvidence
-	33, // 53: deepseek.agent.v1.SettleAgentSynthesisRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	30, // 54: deepseek.agent.v1.SettleAgentSynthesisRequest.projection:type_name -> deepseek.agent.v1.AgentSynthesisProjectionReceipt
-	38, // 55: deepseek.agent.v1.SettleAgentSynthesisResponse.run:type_name -> deepseek.agent.v1.AgentRunSnapshot
-	1,  // 56: deepseek.agent.v1.AgentNodeControl.BeginDispatch:input_type -> deepseek.agent.v1.BeginAgentNodeDispatchRequest
-	3,  // 57: deepseek.agent.v1.AgentNodeControl.GetDispatch:input_type -> deepseek.agent.v1.GetAgentNodeDispatchRequest
-	5,  // 58: deepseek.agent.v1.AgentNodeControl.RecordOutcome:input_type -> deepseek.agent.v1.RecordAgentNodeOutcomeRequest
-	21, // 59: deepseek.agent.v1.AgentNodeControl.SettlePlan:input_type -> deepseek.agent.v1.SettleAgentPlanRequest
-	31, // 60: deepseek.agent.v1.AgentNodeControl.SettleSynthesis:input_type -> deepseek.agent.v1.SettleAgentSynthesisRequest
-	24, // 61: deepseek.agent.v1.AgentNodeControl.SettleTask:input_type -> deepseek.agent.v1.SettleAgentTaskRequest
-	26, // 62: deepseek.agent.v1.AgentNodeControl.CompleteTasks:input_type -> deepseek.agent.v1.CompleteAgentTasksRequest
-	13, // 63: deepseek.agent.v1.AgentNodeWorker.PrepareCredentials:input_type -> deepseek.agent.v1.PrepareAgentCredentialsRequest
-	7,  // 64: deepseek.agent.v1.AgentNodeWorker.ExecutePlan:input_type -> deepseek.agent.v1.ExecuteAgentPlanRequest
-	17, // 65: deepseek.agent.v1.AgentNodeWorker.ExecuteTask:input_type -> deepseek.agent.v1.ExecuteAgentTaskRequest
-	17, // 66: deepseek.agent.v1.AgentNodeWorker.ExecuteSynthesis:input_type -> deepseek.agent.v1.ExecuteAgentTaskRequest
-	11, // 67: deepseek.agent.v1.AgentNodeWorker.QueryEffect:input_type -> deepseek.agent.v1.QueryAgentNodeEffectRequest
-	18, // 68: deepseek.agent.v1.AgentNodeWorker.ProjectPlan:input_type -> deepseek.agent.v1.ProjectAgentPlanRequest
-	28, // 69: deepseek.agent.v1.AgentNodeWorker.ProjectSynthesis:input_type -> deepseek.agent.v1.ProjectAgentSynthesisRequest
-	2,  // 70: deepseek.agent.v1.AgentNodeControl.BeginDispatch:output_type -> deepseek.agent.v1.BeginAgentNodeDispatchResponse
-	4,  // 71: deepseek.agent.v1.AgentNodeControl.GetDispatch:output_type -> deepseek.agent.v1.GetAgentNodeDispatchResponse
-	6,  // 72: deepseek.agent.v1.AgentNodeControl.RecordOutcome:output_type -> deepseek.agent.v1.RecordAgentNodeOutcomeResponse
-	22, // 73: deepseek.agent.v1.AgentNodeControl.SettlePlan:output_type -> deepseek.agent.v1.SettleAgentPlanResponse
-	32, // 74: deepseek.agent.v1.AgentNodeControl.SettleSynthesis:output_type -> deepseek.agent.v1.SettleAgentSynthesisResponse
-	25, // 75: deepseek.agent.v1.AgentNodeControl.SettleTask:output_type -> deepseek.agent.v1.SettleAgentTaskResponse
-	27, // 76: deepseek.agent.v1.AgentNodeControl.CompleteTasks:output_type -> deepseek.agent.v1.CompleteAgentTasksResponse
-	16, // 77: deepseek.agent.v1.AgentNodeWorker.PrepareCredentials:output_type -> deepseek.agent.v1.PrepareAgentCredentialsResponse
-	8,  // 78: deepseek.agent.v1.AgentNodeWorker.ExecutePlan:output_type -> deepseek.agent.v1.AgentNodeEffectMetadata
-	8,  // 79: deepseek.agent.v1.AgentNodeWorker.ExecuteTask:output_type -> deepseek.agent.v1.AgentNodeEffectMetadata
-	8,  // 80: deepseek.agent.v1.AgentNodeWorker.ExecuteSynthesis:output_type -> deepseek.agent.v1.AgentNodeEffectMetadata
-	12, // 81: deepseek.agent.v1.AgentNodeWorker.QueryEffect:output_type -> deepseek.agent.v1.QueryAgentNodeEffectResponse
-	20, // 82: deepseek.agent.v1.AgentNodeWorker.ProjectPlan:output_type -> deepseek.agent.v1.AgentPlanProjectionReceipt
-	30, // 83: deepseek.agent.v1.AgentNodeWorker.ProjectSynthesis:output_type -> deepseek.agent.v1.AgentSynthesisProjectionReceipt
-	70, // [70:84] is the sub-list for method output_type
-	56, // [56:70] is the sub-list for method input_type
-	56, // [56:56] is the sub-list for extension type_name
-	56, // [56:56] is the sub-list for extension extendee
-	0,  // [0:56] is the sub-list for field type_name
+	34, // 25: deepseek.agent.v1.PrepareAgentCredentialsRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	36, // 26: deepseek.agent.v1.PrepareAgentCredentialsRequest.request:type_name -> deepseek.agent.v1.AgentArtifactReference
+	14, // 27: deepseek.agent.v1.PrepareAgentCredentialsRequest.runtime_update:type_name -> deepseek.agent.v1.AgentCredentialRuntimeUpdate
+	36, // 28: deepseek.agent.v1.AgentCredentialRuntimeUpdate.previous_request:type_name -> deepseek.agent.v1.AgentArtifactReference
+	15, // 29: deepseek.agent.v1.PrepareAgentCredentialsResponse.scope:type_name -> deepseek.agent.v1.AgentCredentialScope
+	16, // 30: deepseek.agent.v1.PrepareAgentCredentialsResponse.object:type_name -> deepseek.agent.v1.AgentCredentialObjectReference
+	37, // 31: deepseek.agent.v1.ExecuteAgentTaskRequest.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
+	34, // 32: deepseek.agent.v1.ExecuteAgentTaskRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	11, // 33: deepseek.agent.v1.ProjectAgentPlanRequest.source:type_name -> deepseek.agent.v1.QueryAgentNodeEffectRequest
+	34, // 34: deepseek.agent.v1.ProjectAgentPlanRequest.settlement_fence:type_name -> deepseek.common.v1.ActionFence
+	38, // 35: deepseek.agent.v1.ProjectAgentPlanRequest.normalized_plan:type_name -> deepseek.agent.v1.AgentRunPlanNode
+	34, // 36: deepseek.agent.v1.AgentPlanProjectionEvidence.settlement_fence:type_name -> deepseek.common.v1.ActionFence
+	38, // 37: deepseek.agent.v1.AgentPlanProjectionEvidence.normalized_plan:type_name -> deepseek.agent.v1.AgentRunPlanNode
+	36, // 38: deepseek.agent.v1.AgentPlanProjectionEvidence.plan_body:type_name -> deepseek.agent.v1.AgentArtifactReference
+	36, // 39: deepseek.agent.v1.AgentPlanProjectionEvidence.status_body:type_name -> deepseek.agent.v1.AgentArtifactReference
+	36, // 40: deepseek.agent.v1.AgentPlanProjectionEvidence.planning_body:type_name -> deepseek.agent.v1.AgentArtifactReference
+	20, // 41: deepseek.agent.v1.AgentPlanProjectionReceipt.evidence:type_name -> deepseek.agent.v1.AgentPlanProjectionEvidence
+	34, // 42: deepseek.agent.v1.SettleAgentPlanRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	21, // 43: deepseek.agent.v1.SettleAgentPlanRequest.projection:type_name -> deepseek.agent.v1.AgentPlanProjectionReceipt
+	39, // 44: deepseek.agent.v1.SettleAgentPlanResponse.run:type_name -> deepseek.agent.v1.AgentRunSnapshot
+	34, // 45: deepseek.agent.v1.SettleAgentTaskRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	39, // 46: deepseek.agent.v1.SettleAgentTaskResponse.run:type_name -> deepseek.agent.v1.AgentRunSnapshot
+	34, // 47: deepseek.agent.v1.CompleteAgentTasksRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	39, // 48: deepseek.agent.v1.CompleteAgentTasksResponse.run:type_name -> deepseek.agent.v1.AgentRunSnapshot
+	11, // 49: deepseek.agent.v1.ProjectAgentSynthesisRequest.source:type_name -> deepseek.agent.v1.QueryAgentNodeEffectRequest
+	34, // 50: deepseek.agent.v1.ProjectAgentSynthesisRequest.settlement_fence:type_name -> deepseek.common.v1.ActionFence
+	34, // 51: deepseek.agent.v1.AgentSynthesisProjectionEvidence.settlement_fence:type_name -> deepseek.common.v1.ActionFence
+	36, // 52: deepseek.agent.v1.AgentSynthesisProjectionEvidence.content_body:type_name -> deepseek.agent.v1.AgentArtifactReference
+	36, // 53: deepseek.agent.v1.AgentSynthesisProjectionEvidence.done_body:type_name -> deepseek.agent.v1.AgentArtifactReference
+	30, // 54: deepseek.agent.v1.AgentSynthesisProjectionReceipt.evidence:type_name -> deepseek.agent.v1.AgentSynthesisProjectionEvidence
+	34, // 55: deepseek.agent.v1.SettleAgentSynthesisRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	31, // 56: deepseek.agent.v1.SettleAgentSynthesisRequest.projection:type_name -> deepseek.agent.v1.AgentSynthesisProjectionReceipt
+	39, // 57: deepseek.agent.v1.SettleAgentSynthesisResponse.run:type_name -> deepseek.agent.v1.AgentRunSnapshot
+	1,  // 58: deepseek.agent.v1.AgentNodeControl.BeginDispatch:input_type -> deepseek.agent.v1.BeginAgentNodeDispatchRequest
+	3,  // 59: deepseek.agent.v1.AgentNodeControl.GetDispatch:input_type -> deepseek.agent.v1.GetAgentNodeDispatchRequest
+	5,  // 60: deepseek.agent.v1.AgentNodeControl.RecordOutcome:input_type -> deepseek.agent.v1.RecordAgentNodeOutcomeRequest
+	22, // 61: deepseek.agent.v1.AgentNodeControl.SettlePlan:input_type -> deepseek.agent.v1.SettleAgentPlanRequest
+	32, // 62: deepseek.agent.v1.AgentNodeControl.SettleSynthesis:input_type -> deepseek.agent.v1.SettleAgentSynthesisRequest
+	25, // 63: deepseek.agent.v1.AgentNodeControl.SettleTask:input_type -> deepseek.agent.v1.SettleAgentTaskRequest
+	27, // 64: deepseek.agent.v1.AgentNodeControl.CompleteTasks:input_type -> deepseek.agent.v1.CompleteAgentTasksRequest
+	13, // 65: deepseek.agent.v1.AgentNodeWorker.PrepareCredentials:input_type -> deepseek.agent.v1.PrepareAgentCredentialsRequest
+	7,  // 66: deepseek.agent.v1.AgentNodeWorker.ExecutePlan:input_type -> deepseek.agent.v1.ExecuteAgentPlanRequest
+	18, // 67: deepseek.agent.v1.AgentNodeWorker.ExecuteTask:input_type -> deepseek.agent.v1.ExecuteAgentTaskRequest
+	18, // 68: deepseek.agent.v1.AgentNodeWorker.ExecuteSynthesis:input_type -> deepseek.agent.v1.ExecuteAgentTaskRequest
+	11, // 69: deepseek.agent.v1.AgentNodeWorker.QueryEffect:input_type -> deepseek.agent.v1.QueryAgentNodeEffectRequest
+	19, // 70: deepseek.agent.v1.AgentNodeWorker.ProjectPlan:input_type -> deepseek.agent.v1.ProjectAgentPlanRequest
+	29, // 71: deepseek.agent.v1.AgentNodeWorker.ProjectSynthesis:input_type -> deepseek.agent.v1.ProjectAgentSynthesisRequest
+	2,  // 72: deepseek.agent.v1.AgentNodeControl.BeginDispatch:output_type -> deepseek.agent.v1.BeginAgentNodeDispatchResponse
+	4,  // 73: deepseek.agent.v1.AgentNodeControl.GetDispatch:output_type -> deepseek.agent.v1.GetAgentNodeDispatchResponse
+	6,  // 74: deepseek.agent.v1.AgentNodeControl.RecordOutcome:output_type -> deepseek.agent.v1.RecordAgentNodeOutcomeResponse
+	23, // 75: deepseek.agent.v1.AgentNodeControl.SettlePlan:output_type -> deepseek.agent.v1.SettleAgentPlanResponse
+	33, // 76: deepseek.agent.v1.AgentNodeControl.SettleSynthesis:output_type -> deepseek.agent.v1.SettleAgentSynthesisResponse
+	26, // 77: deepseek.agent.v1.AgentNodeControl.SettleTask:output_type -> deepseek.agent.v1.SettleAgentTaskResponse
+	28, // 78: deepseek.agent.v1.AgentNodeControl.CompleteTasks:output_type -> deepseek.agent.v1.CompleteAgentTasksResponse
+	17, // 79: deepseek.agent.v1.AgentNodeWorker.PrepareCredentials:output_type -> deepseek.agent.v1.PrepareAgentCredentialsResponse
+	8,  // 80: deepseek.agent.v1.AgentNodeWorker.ExecutePlan:output_type -> deepseek.agent.v1.AgentNodeEffectMetadata
+	8,  // 81: deepseek.agent.v1.AgentNodeWorker.ExecuteTask:output_type -> deepseek.agent.v1.AgentNodeEffectMetadata
+	8,  // 82: deepseek.agent.v1.AgentNodeWorker.ExecuteSynthesis:output_type -> deepseek.agent.v1.AgentNodeEffectMetadata
+	12, // 83: deepseek.agent.v1.AgentNodeWorker.QueryEffect:output_type -> deepseek.agent.v1.QueryAgentNodeEffectResponse
+	21, // 84: deepseek.agent.v1.AgentNodeWorker.ProjectPlan:output_type -> deepseek.agent.v1.AgentPlanProjectionReceipt
+	31, // 85: deepseek.agent.v1.AgentNodeWorker.ProjectSynthesis:output_type -> deepseek.agent.v1.AgentSynthesisProjectionReceipt
+	72, // [72:86] is the sub-list for method output_type
+	58, // [58:72] is the sub-list for method input_type
+	58, // [58:58] is the sub-list for extension type_name
+	58, // [58:58] is the sub-list for extension extendee
+	0,  // [0:58] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_agent_node_proto_init() }
@@ -3377,7 +3465,7 @@ func file_agent_v1_agent_node_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_agent_node_proto_rawDesc), len(file_agent_v1_agent_node_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   33,
+			NumMessages:   34,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

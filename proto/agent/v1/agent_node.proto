@@ -178,6 +178,17 @@ message PrepareAgentCredentialsRequest {
   uint64 runtime_revision = 5;
   string api_key = 6;
   string tavily_api_key = 7;
+  AgentCredentialRuntimeUpdate runtime_update = 8;
+}
+
+// Private Rust-to-Rust preparation only. Go receives only immutable references.
+// Omitted credential replacements inherit the current Go-bound sealed values;
+// an explicit replacement with an empty key clears that value.
+message AgentCredentialRuntimeUpdate {
+  AgentArtifactReference previous_request = 1;
+  uint64 previous_runtime_revision = 2;
+  bool replace_api_key = 3;
+  bool replace_tavily_api_key = 4;
 }
 
 message AgentCredentialScope {

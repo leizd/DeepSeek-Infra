@@ -127,6 +127,16 @@ message AgentRunSnapshot {
   repeated AgentRunNodeMetadata nodes = 10;
   int64 final_after = 11;
   AgentRunEventMetadata last_event = 12;
+  // Absent on pre-revision peers; current Go reports at least revision one.
+  uint64 runtime_revision = 13;
+}
+
+// Go alone swaps immutable Rust request references. The current event cursor,
+// prior request and revision must all match in the same authority transaction.
+message AgentRunRuntimeUpdate {
+  uint64 expected_runtime_revision = 1;
+  AgentArtifactReference expected_request = 2;
+  AgentArtifactReference request = 3;
 }
 
 message AppendAgentRunEventRequest {
@@ -140,6 +150,7 @@ message AppendAgentRunEventRequest {
   // The current Go domain epoch, obtained from GetAuthority, must match inside
   // the write transaction. This is a metadata fence, not a worker effect grant.
   deepseek.common.v1.ActionFence fence = 8;
+  AgentRunRuntimeUpdate runtime_update = 9;
 }
 
 message AppendAgentRunEventResponse {

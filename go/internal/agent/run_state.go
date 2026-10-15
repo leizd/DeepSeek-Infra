@@ -65,20 +65,31 @@ type RunNode struct {
 // Node views do not authorize effects: dispatch must also check the action
 // journal, live fences, and reconciliation, including EFFECT_UNKNOWN.
 type RunMetadata struct {
-	SchemaVersion  uint32             `json:"agentMetadataSchemaVersion"`
-	RunID          string             `json:"runId"`
-	Status         string             `json:"status"`
-	NextIndex      int64              `json:"nextIndex"`
-	Preset         string             `json:"agentPreset"`
-	ConfirmPlan    bool               `json:"confirmPlan"`
-	ConversationID string             `json:"conversationId"`
-	MessageID      string             `json:"messageId"`
-	Request        ArtifactRef        `json:"requestRef"`
-	Plan           []RunPlanNode      `json:"plan"`
-	BaseNodes      map[string]RunNode `json:"nodeMetadata"`
-	Cancelled      bool               `json:"cancelledObserved"`
-	FinalAfter     int64              `json:"finalAfter"`
-	LastEvent      RunEvent           `json:"lastEvent"`
+	SchemaVersion   uint32             `json:"agentMetadataSchemaVersion"`
+	RunID           string             `json:"runId"`
+	Status          string             `json:"status"`
+	NextIndex       int64              `json:"nextIndex"`
+	Preset          string             `json:"agentPreset"`
+	ConfirmPlan     bool               `json:"confirmPlan"`
+	ConversationID  string             `json:"conversationId"`
+	MessageID       string             `json:"messageId"`
+	Request         ArtifactRef        `json:"requestRef"`
+	RuntimeRevision uint64             `json:"runtimeRevision,omitempty"`
+	Plan            []RunPlanNode      `json:"plan"`
+	BaseNodes       map[string]RunNode `json:"nodeMetadata"`
+	Cancelled       bool               `json:"cancelledObserved"`
+	FinalAfter      int64              `json:"finalAfter"`
+	LastEvent       RunEvent           `json:"lastEvent"`
+}
+
+// RuntimeVersion keeps existing v1 metadata byte-compatible: an absent revision
+// identifies the original immutable request. Only Go's runtime-swap transaction
+// can persist a later revision alongside a new request reference.
+func (run RunMetadata) RuntimeVersion() uint64 {
+	if run.RuntimeRevision == 0 {
+		return 1
+	}
+	return run.RuntimeRevision
 }
 
 func runNodePhase(phase string) bool {

@@ -27,6 +27,9 @@ use tonic::{
     transport::Channel,
 };
 
+mod runtime;
+use runtime::{operator_event_with_runtime, prepare_runtime_update, request_credential};
+
 #[derive(Clone)]
 struct ReadConfig {
     origin: String,
@@ -544,19 +547,8 @@ async fn create(
     if crate::agent_credential_client::has_reserved_field(&input) {
         return Err(invalid_request());
     }
-    let credential = |name: &str| -> Result<Option<String>, ReadError> {
-        match input["payload"].get(name) {
-            None | Some(Value::Null) => Ok(None),
-            Some(Value::String(value))
-                if value.len() <= 4096 && !value.chars().any(char::is_control) =>
-            {
-                Ok((!value.trim().is_empty()).then(|| value.trim().to_string()))
-            }
-            _ => Err(invalid_request()),
-        }
-    };
-    let api_key = credential("apiKey")?.map(zeroize::Zeroizing::new);
-    let tavily_api_key = credential("tavilyApiKey")?.map(zeroize::Zeroizing::new);
+    let api_key = request_credential(&input["payload"], "apiKey")?;
+    let tavily_api_key = request_credential(&input["payload"], "tavilyApiKey")?;
     let mut sanitized = deepseek_policy::agent_run_data::sanitize(&input);
     let id = new_run_id()?;
     // Check the configured private control peer and actual domain authority before
@@ -581,14 +573,19 @@ async fn create(
                 .credentials
                 .as_ref()
                 .ok_or_else(control_unavailable)?,
-            &id,
-            session.epoch,
-            &request,
-            api_key.as_ref().map(|value| value.as_str()),
-            tavily_api_key.as_ref().map(|value| value.as_str()),
+            crate::agent_credential_client::Preparation {
+                run_id: &id,
+                epoch: session.epoch,
+                reference: &request,
+                runtime_revision: 1,
+                api_key: api_key.as_ref().map(|value| value.as_str()),
+                tavily_api_key: tavily_api_key.as_ref().map(|value| value.as_str()),
+                runtime_update: None,
+            },
         )
         .await
-        .map_err(|_| control_unavailable())?;
+        .map_err(|_| control_unavailable())?
+        .ok_or_else(control_unavailable)?;
         sanitized
             .as_object_mut()
             .ok_or_else(invalid_request)?
@@ -631,6 +628,7 @@ async fn create(
             action_id: id.clone(),
             execution_epoch: session.epoch,
         }),
+        runtime_update: None,
     });
     session
         .client
@@ -731,49 +729,10 @@ fn confirmation_plan(value: &Value) -> Result<Option<Vec<AgentRunPlanNode>>, Rea
 
 async fn operator_event(
     session: &mut ReadSession,
-    mut event: AgentRunEventMetadata,
+    event: AgentRunEventMetadata,
     body: Value,
 ) -> Result<(), ReadError> {
-    let root = session.config.artifacts.clone();
-    let reference = tokio::task::spawn_blocking(move || {
-        ArtifactStore::open_native(&root, "python_disabled")
-            .map_err(data_error)?
-            .put(&body)
-            .map_err(data_error)
-    })
-    .await
-    .map_err(|_| data_error(DataError::Unavailable))??;
-    let operation = Sha256::digest(format!(
-        "{}:{}:{}:{}:{}",
-        session.snapshot.run_id,
-        session.epoch,
-        session.snapshot.next_index,
-        event.r#type,
-        reference.sha256
-    ));
-    event.body = Some(AgentArtifactReference {
-        sha256: reference.sha256,
-        length: reference.length,
-    });
-    let request = session.request(AppendAgentRunEventRequest {
-        schema_version: 1,
-        operation_id: format!("agent-web-{operation:x}"),
-        actor: "operator:agent-web".into(),
-        run_id: session.snapshot.run_id.clone(),
-        expected_index: session.snapshot.next_index,
-        create: None,
-        event: Some(event),
-        fence: Some(ActionFence {
-            action_id: session.snapshot.run_id.clone(),
-            execution_epoch: session.epoch,
-        }),
-    });
-    session
-        .client
-        .append_event(request)
-        .await
-        .map_err(rpc_error)?;
-    session.refresh().await
+    operator_event_with_runtime(session, event, body, None).await
 }
 
 async fn confirm_plan(
@@ -800,6 +759,7 @@ async fn confirm_plan(
     if session.snapshot.status != "awaiting_plan" {
         return Err(action_conflict());
     }
+    let runtime_update = prepare_runtime_update(&session, &input).await?;
     if let Some(plan) = plan {
         let body = json!({"type":"agent_plan","plan":plan_value(&plan)});
         operator_event(
@@ -816,7 +776,7 @@ async fn confirm_plan(
     if session.snapshot.status != "awaiting_plan" || session.snapshot.plan.is_empty() {
         return Err(action_conflict());
     }
-    operator_event(
+    operator_event_with_runtime(
         &mut session,
         AgentRunEventMetadata {
             r#type: "run_status".into(),
@@ -824,6 +784,7 @@ async fn confirm_plan(
             ..Default::default()
         },
         json!({"type":"run_status","status":"running"}),
+        runtime_update,
     )
     .await?;
     Ok(Json(

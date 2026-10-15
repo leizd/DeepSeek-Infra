@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
+import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import sqlite3
 import threading
 from typing import Any
 
@@ -33,6 +35,69 @@ def daemon_fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
 
 def test_accepts_actual_daemon_restart_and_assets_without_browser_claim() -> None:
     daemon.validate_daemon_result(*daemon_fixture())
+
+
+def runtime_update_fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    result, calls = daemon_fixture()
+    result.update(runtimePayloadUpdatedAfterRestart=True, currentRequestRevisionBoundByGo=True,
+        originalRuntimeRequestRetained=True, originalCredentialCiphertextRetained=True,
+        updatedContextReachedEveryRemainingPhase=True, runtimeRevision=2, metadataSchemaVersion=2, initialRuntimeRevision=1,
+        encryptedCredentialObjectCount=2, initialRequestSha256="a" * 64, requestSha256="b" * 64)
+    for index, call in enumerate(calls):
+        call.update(runtimeContextUsed=index != 0, requestCredentialUsed=True, credentialInProviderBody=False)
+    return result, calls
+
+
+def test_accepts_actual_runtime_revision_without_full_migration_claim() -> None:
+    daemon.validate_runtime_update_result(*runtime_update_fixture())
+
+
+@pytest.mark.parametrize("mutation", ["runtimePayloadUpdatedAfterRestart", "currentRequestRevisionBoundByGo",
+    "originalRuntimeRequestRetained", "originalCredentialCiphertextRetained", "updatedContextReachedEveryRemainingPhase",
+    "runtimeRevision", "metadataSchemaVersion", "initialRuntimeRevision", "encryptedCredentialObjectCount", "same-request", "missing-old-hash",
+    "planner-context", "task-context", "task-key", "body-leak"])
+def test_runtime_revision_evidence_refuses_missing_or_inconsistent_proofs(mutation: str) -> None:
+    result, calls = runtime_update_fixture()
+    if mutation in {"runtimeRevision", "metadataSchemaVersion", "initialRuntimeRevision", "encryptedCredentialObjectCount"}:
+        result[mutation] = 0
+    elif mutation == "same-request":
+        result["initialRequestSha256"] = result["requestSha256"]
+    elif mutation == "missing-old-hash":
+        result.pop("initialRequestSha256")
+    elif mutation == "planner-context":
+        calls[0]["runtimeContextUsed"] = True
+    elif mutation == "task-context":
+        calls[2]["runtimeContextUsed"] = False
+    elif mutation == "task-key":
+        calls[1]["requestCredentialUsed"] = False
+    elif mutation == "body-leak":
+        calls[3]["credentialInProviderBody"] = True
+    else:
+        result[mutation] = False
+    with pytest.raises(ValueError, match="runtime|Runtime"):
+        daemon.validate_runtime_update_result(result, calls)
+
+
+def test_runtime_request_inspection_checks_go_reference_and_rust_bytes(tmp_path: Path) -> None:
+    control, artifacts = tmp_path / "control", tmp_path / "artifacts"
+    control.mkdir()
+    artifacts.mkdir()
+    body = b'{"payload":{"messages":[{"role":"user","content":"fixture"}]}}'
+    digest = hashlib.sha256(body).hexdigest()
+    with sqlite3.connect(control / "control.sqlite3") as database:
+        database.execute("CREATE TABLE agent_runs(id TEXT,payload_json TEXT)")
+        database.execute("INSERT INTO agent_runs VALUES(?,?)", ("run-fixture", json.dumps({"requestRef": {"sha256": digest, "length": len(body)}})))
+    with sqlite3.connect(artifacts / "objects-v1.sqlite") as database:
+        database.execute("CREATE TABLE artifacts(sha256 TEXT,length INTEGER,bytes BLOB)")
+        database.execute("INSERT INTO artifacts VALUES(?,?,?)", (digest, len(body), body))
+    result = daemon.runtime_request_binding(control, artifacts, "run-fixture")
+    assert result["revision"] == 1 and result["bytes"] == body
+    with sqlite3.connect(artifacts / "objects-v1.sqlite") as database:
+        database.execute("UPDATE artifacts SET bytes=?", (b"changed",))
+    with pytest.raises(ValueError, match="binding differs"):
+        daemon.runtime_request_binding(control, artifacts, "run-fixture")
+    with pytest.raises(ValueError, match="metadata is missing"):
+        daemon.runtime_request_binding(control, artifacts, "absent-run")
 
 
 @pytest.mark.parametrize(("key", "value"), [

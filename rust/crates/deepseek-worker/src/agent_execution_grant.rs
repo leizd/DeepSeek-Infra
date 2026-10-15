@@ -80,6 +80,44 @@ impl std::fmt::Debug for AgentExecutionControl {
     }
 }
 impl AgentExecutionControl {
+    pub(crate) async fn runtime_binding(
+        &self,
+        run_id: &str,
+        metadata_epoch: u64,
+    ) -> Result<deepseek_protocol::generated::deepseek::agent::v1::AgentRunSnapshot, Status> {
+        use deepseek_protocol::generated::deepseek::{
+            agent::v1::GetAgentRunRequest, common::v1::ActionFence,
+        };
+        let channel = self.endpoint.connect().await.map_err(|_| unavailable())?;
+        // An edited four-role plan can occur both in the snapshot and its last
+        // event, with each retained task bounded to32KiB.
+        let mut client = AgentRunControlClient::new(channel).max_decoding_message_size(512 * 1024);
+        let mut request = Request::new(GetAgentRunRequest {
+            run_id: run_id.to_string(),
+            fence: Some(ActionFence {
+                action_id: run_id.to_string(),
+                execution_epoch: metadata_epoch,
+            }),
+        });
+        request
+            .metadata_mut()
+            .insert("authorization", self.authorization.clone());
+        let response = client
+            .get_run(request)
+            .await
+            .map_err(|_| unavailable())?
+            .into_inner();
+        let run = response.run.ok_or_else(invalid)?;
+        if !response.authoritative
+            || run.run_id != run_id
+            || run.request.is_none()
+            || run.runtime_revision > i64::MAX as u64
+        {
+            return Err(invalid());
+        }
+        Ok(run)
+    }
+
     pub(crate) async fn metadata_epoch(&self) -> Result<u64, Status> {
         use deepseek_protocol::generated::deepseek::agent::v1::AgentRunAuthorityInput;
         let channel = self.endpoint.connect().await.map_err(|_| unavailable())?;
