@@ -379,6 +379,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     (output / "provider-exchanges.json").write_text(json.dumps(exchanges, indent=2) + "\n", encoding="utf-8")
                 run_id = observed["createdRunId"]
                 final = request_json(origin, "/api/agent-runs/" + run_id)["run"]
+                encoded_final = json.dumps(final, ensure_ascii=False).encode()
+                if len(encoded_final) > 2 * 1024**2 or any(secret in encoded_final for secret in
+                        [b"request-only-credential", b"request-only-search-credential", b"private-task-reasoning"]):
+                    raise ValueError("Public browser run projection exceeds its bound or exposes private material")
+                (output / "browser-public-run.json").write_bytes(encoded_final)
                 if final.get("status") != "done" or "Controlled final answer" not in str(final.get("finalAnswer", "")):
                     raise ValueError("Browser final answer differs from the native run projection")
                 stop_daemon(daemon)

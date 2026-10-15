@@ -158,12 +158,16 @@ describe("Agent plan confirmation titles", () => {
     getRunMock.mockResolvedValue(run("awaiting_plan"));
     confirmPlanMock.mockResolvedValue(run("running"));
     streamMock.mockImplementation(async (options: { onEvent: (event: Record<string, unknown>) => void }) => {
+      options.onEvent({ type: "run_status", status: "running" });
       if (completion === "failed") {
         options.onEvent({ type: "content", text: "Incomplete answer" });
         throw new Error("provider disconnected");
       }
       if (completion === "awaiting_plan") options.onEvent({ type: "run_status", status: "awaiting_plan" });
-      else options.onEvent({ type: "done", content: "Confirmed final answer" });
+      else {
+        options.onEvent({ type: "content", text: "Confirmed final answer" });
+        options.onEvent({ type: "done" });
+      }
       return { lastEventIndex: 42, completed: true };
     });
     const generateTitle = vi.fn(() => Promise.resolve());
@@ -176,6 +180,9 @@ describe("Agent plan confirmation titles", () => {
     expect(confirmPlanMock).toHaveBeenCalledTimes(1);
     if (laterTurn || completion !== "done") expect(generateTitle).not.toHaveBeenCalled();
     else expect(generateTitle).toHaveBeenCalledExactlyOnceWith("conversation-1", true, "Review this project", "Confirmed final answer");
+    const rendered = result.current.state.conversations[0]!.messages.find((entry) => entry.id === message.id);
+    if (completion === "done") expect(rendered?.content).toBe("Confirmed final answer");
+    if (completion === "failed") expect(rendered?.content).toBe("Incomplete answer");
   });
 });
 

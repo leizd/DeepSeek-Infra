@@ -47,6 +47,29 @@ describe("applyStreamEvent", () => {
     expect(stale.agentRunLastEventIndex).toBe(7);
   });
 
+  it.each(["running", "done", "failed", "cancelled"] as const)("removes the generated confirmation notice when the run becomes %s", (status) => {
+    const waiting = applyStreamEvent(createAssistantMessage("confirmed"), { type: "run_status", status: "awaiting_plan", runId: "run-9" });
+    const resumed = applyStreamEvent(waiting, { type: "run_status", status, runId: "run-9" });
+    const answering = applyStreamEvent(resumed, { type: "content", text: "Controlled final answer" });
+    const done = applyStreamEvent(answering, { type: "done" });
+
+    expect(waiting.content).toBe("Agent 计划已生成，等待确认执行。");
+    expect(resumed.content).toBe("");
+    expect(done.content).toBe("Controlled final answer");
+  });
+
+  it.each([
+    { status: "done", content: "Retained final answer" },
+    { status: "done", content: "Agent 计划已生成，等待确认执行。" },
+    { status: "awaiting_plan", content: "Retained answer before an edit" },
+  ] as const)("retains real answer text across resumption ($status / $content)", ({ status, content }) => {
+    const message = { ...createAssistantMessage("retained"), agentRunId: "run-1", agentRunStatus: status, content };
+    const resumed = applyStreamEvent(message, { type: "run_status", status: "running", runId: "run-1" });
+
+    expect(resumed.content).toBe(content);
+    expect(message.content).toBe(content);
+  });
+
   it("records terminal errors and ignores forward-compatible unknown events", () => {
     const initial = createAssistantMessage("message-3");
     const unknown = applyStreamEvent(initial, {
