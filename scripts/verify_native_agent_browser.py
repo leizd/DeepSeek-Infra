@@ -278,3 +278,6 @@ def validate_browser_result(result: dict[str, Any], exchanges: list[dict[str, An
         raise ValueError("Actual browser provider calls lost their credential isolation or Agent fences")
     if agents[1].get("browserEditedTaskInPrompt") is not True or agents[3].get("browserEditedTaskInPrompt") is not True:
         raise ValueError("Actual Rust task execution or synthesis omitted the browser's edited task")
+    if agents[2].get("predecessorSummaryInPrompt") is not True or agents[3].get("predecessorSummaryInPrompt") is not True or \
+            any(row.get("privateReasoningInPrompt") is not False for row in agents):
+        raise ValueError("Actual browser task or synthesis lost public predecessor summaries or exposed private context")

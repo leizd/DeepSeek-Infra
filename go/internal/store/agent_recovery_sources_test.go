@@ -293,3 +293,43 @@ func TestRecoveryHistoryRejectsClearingCurrentCancellationWithoutANewScope(t *te
 		t.Fatal("ordinary status append cleared current cancellation", err)
 	}
 }
+
+func TestRecoveryScopeEncodingChangeDoesNotReopenOrReplaceTheSameLegacyScope(t *testing.T) {
+	control, input := recoveryAdmissionFixture(t, "cancelled")
+	result, err := control.CommitAgentRunRecovery(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(result.Run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(encoded, &fields) != nil {
+		t.Fatal("cannot read scope envelope")
+	}
+	var legacy map[string]json.RawMessage
+	if json.Unmarshal(fields["recoveryScope"], &legacy) != nil {
+		t.Fatal("cannot read scope header")
+	}
+	delete(legacy, "metadataProto")
+	legacy["metadata"], err = json.Marshal(result.Run.Recovery.Metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields["recoveryScope"], err = json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPayload, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := Record{Domain: "agent_run", ID: input.RunID, State: result.Run.Status, Revision: result.Run.NextIndex,
+		ExecutionEpoch: result.Run.LastEvent.ExecutionEpoch, Payload: oldPayload}
+	after := before
+	after.Payload = encoded
+	if changedAgentRecoveryScope(before, after) || validateAgentRecoveryMetadataEdge(before, after) != nil {
+		t.Fatal("equivalent storage encoding was mistaken for a new recovery generation")
+	}
+}

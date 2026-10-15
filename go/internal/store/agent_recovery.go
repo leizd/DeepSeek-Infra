@@ -51,10 +51,13 @@ func agentRecoveryEvents(preview AgentRunRecoveryPreview) []agent.RunEvent {
 }
 
 func changedAgentRecoveryScope(before, after Record) bool {
-	var first, second map[string]json.RawMessage
-	_ = json.Unmarshal(before.Payload, &first)
-	_ = json.Unmarshal(after.Payload, &second)
-	return !bytes.Equal(first["recoveryScope"], second["recoveryScope"])
+	var first, second agent.RunMetadata
+	if len(before.Payload) != 0 && json.Unmarshal(before.Payload, &first) != nil || json.Unmarshal(after.Payload, &second) != nil {
+		return true
+	}
+	left, err := json.Marshal(first.Recovery)
+	right, otherErr := json.Marshal(second.Recovery)
+	return err != nil || otherErr != nil || !bytes.Equal(left, right)
 }
 
 // Every accepted and historical scope transition must have the same immutable

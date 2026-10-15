@@ -693,16 +693,19 @@ fn confirmation_plan(value: &Value) -> Result<Option<Vec<AgentRunPlanNode>>, Rea
         if task.trim().is_empty() || task.len() > 32 * 1024 {
             return Err(invalid_request());
         }
-        let dependencies = entry.get("dependsOn").map_or(Ok(Vec::new()), |value| {
-            let values = value.as_array().ok_or_else(invalid_request)?;
-            if values.len() > 4 {
-                return Err(invalid_request());
-            }
-            values
-                .iter()
-                .map(|v| v.as_str().map(str::to_string).ok_or_else(invalid_request))
-                .collect::<Result<Vec<_>, _>>()
-        })?;
+        let dependencies = entry
+            .get("depends_on")
+            .or_else(|| entry.get("dependsOn"))
+            .map_or(Ok(Vec::new()), |value| {
+                let values = value.as_array().ok_or_else(invalid_request)?;
+                if values.len() > 4 {
+                    return Err(invalid_request());
+                }
+                values
+                    .iter()
+                    .map(|v| v.as_str().map(str::to_string).ok_or_else(invalid_request))
+                    .collect::<Result<Vec<_>, _>>()
+            })?;
         plan.push(AgentRunPlanNode {
             id: id.into(),
             task: task.into(),

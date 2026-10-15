@@ -833,6 +833,36 @@ async fn public_plan_confirmation_uses_go_events_and_rust_custody() {
     assert_eq!(body["run"]["nextIndex"], original + 2);
 }
 
+#[test]
+fn confirmation_plan_retains_public_dependency_keys_and_the_existing_camel_alias() {
+    for key in ["depends_on", "dependsOn"] {
+        let mut request =
+            json!({"plan":[{"id":"coder","task":"write"},{"id":"critic","task":"review"}]});
+        request["plan"][1][key] = json!(["coder"]);
+        let plan = confirmation_plan(&request).unwrap().unwrap();
+        assert_eq!(plan[1].depends_on, vec!["coder"]);
+        assert_eq!(plan_value(&plan)[1]["depends_on"], json!(["coder"]));
+        request["plan"][0][key] = json!(["critic"]);
+        assert!(confirmation_plan(&request).is_err(), "cycle through {key}");
+        request["plan"][0][key] = json!([]);
+        request["plan"][1][key] = json!(["unknown"]);
+        assert!(
+            confirmation_plan(&request).is_err(),
+            "unknown dependency through {key}"
+        );
+        request["plan"][1][key] = json!("coder");
+        assert!(
+            confirmation_plan(&request).is_err(),
+            "invalid dependency type through {key}"
+        );
+    }
+    let plan = confirmation_plan(&json!({"plan":[{"id":"coder","task":"write"},
+        {"id":"critic","task":"review","depends_on":["coder"],"dependsOn":[]}]}))
+    .unwrap()
+    .unwrap();
+    assert_eq!(plan[1].depends_on, vec!["coder"]);
+}
+
 #[tokio::test]
 async fn public_plan_confirmation_merges_runtime_values_and_commits_the_new_reference() {
     let running = running_fixture().await;
@@ -918,7 +948,8 @@ async fn public_confirmation_retains_an_edited_plan_and_runtime_in_the_same_ui_r
     let (status, body) = operator_response(
         read_router(true, Some(running.config.clone())),
         &format!("/api/agent-runs/{RUN}/plan"),
-        &json!({"plan":[{"id":"coder","task":"edited through UI"}],"payload":{"model":"deepseek-reasoner"}}),
+        &json!({"plan":[{"id":"coder","task":"edited through UI"},
+            {"id":"critic","task":"review","depends_on":["coder"]}],"payload":{"model":"deepseek-reasoner"}}),
     ).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let snapshot = running.fixture.snapshot.lock().unwrap().clone();
@@ -926,6 +957,9 @@ async fn public_confirmation_retains_an_edited_plan_and_runtime_in_the_same_ui_r
     assert_eq!(snapshot.next_index, original_index + 2);
     assert_eq!(snapshot.runtime_revision, 2);
     assert_eq!(snapshot.plan[0].task, "edited through UI");
+    assert_eq!(snapshot.plan.len(), 2);
+    assert_eq!(snapshot.plan[1].depends_on, vec!["coder"]);
+    assert_eq!(body["run"]["plan"][1]["depends_on"], json!(["coder"]));
     let events = running.fixture.events.lock().unwrap().clone();
     let edit = &events[events.len() - 2];
     assert_eq!(edit.r#type, "agent_plan");

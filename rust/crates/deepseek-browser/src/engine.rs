@@ -52,8 +52,56 @@ const URL_SETTLE_TIMEOUT: Duration = Duration::from_millis(1_000);
 const URL_SETTLE_POLL: Duration = Duration::from_millis(50);
 /// How long to let an animated wheel settle before reporting the scroll done.
 const SCROLL_SETTLE_TIMEOUT: Duration = Duration::from_millis(1_000);
-/// How often to re-read `window.scrollY` while a wheel settles.
+/// How often to re-read both window scroll offsets while a wheel settles.
 const SCROLL_SETTLE_POLL: Duration = Duration::from_millis(50);
+
+struct ScrollSettlement {
+    target: (f64, f64),
+    previous: Option<(f64, f64)>,
+    stable: u8,
+}
+
+impl ScrollSettlement {
+    fn new(initial: (f64, f64), delta: (i32, i32)) -> Self {
+        Self {
+            target: (
+                initial.0 + f64::from(delta.0),
+                initial.1 + f64::from(delta.1),
+            ),
+            previous: None,
+            stable: 0,
+        }
+    }
+
+    fn observe(&mut self, point: (f64, f64)) -> bool {
+        let near = |first: (f64, f64), second: (f64, f64)| {
+            (first.0 - second.0).abs() < 0.01 && (first.1 - second.1).abs() < 0.01
+        };
+        if self.previous.is_some_and(|previous| near(previous, point)) {
+            self.stable = self.stable.saturating_add(1);
+        } else {
+            self.stable = 0;
+        }
+        self.previous = Some(point);
+        // Repeated baseline samples are not proof that the input was processed.
+        // Intermediate animation plateaus must not settle a requested wheel.
+        near(point, self.target) && self.stable >= 2
+    }
+}
+
+fn scroll_offsets(value: &Value) -> Result<(f64, f64), AppError> {
+    let point = value
+        .as_array()
+        .filter(|point| point.len() == 2)
+        .and_then(|point| Some((point[0].as_f64()?, point[1].as_f64()?)))
+        .filter(|point| point.0.is_finite() && point.1.is_finite());
+    point.ok_or_else(|| {
+        AppError::new(
+            codes::INTERNAL,
+            "the browser returned invalid scroll offsets",
+        )
+    })
+}
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -735,13 +783,14 @@ impl Engine {
     /// position — the viewport centre, since nothing else moved it.
     /// Mirrors `page.mouse.wheel(x, y)` — *including* the part that is not obvious:
     /// Chromium animates a wheel event, so the scroll has not happened yet when the CDP
-    /// call returns. Playwright's `mouse.wheel` gives its caller a page that has already
-    /// scrolled; a port that returns immediately hands back `window.scrollY == 0` and
-    /// the difference shows up as a scroll that did nothing.
+    /// call returns. Native acceptance also verifies the observed result, so repeated
+    /// baseline samples must not be mistaken for a completed animation.
     ///
     /// The wait is a bounded settle on the observed position, not a fixed sleep: a page
-    /// that cannot scroll that far settles at once and returns without waiting.
+    /// that cannot reach that offset (an edge, snapping or a nested scroll target)
+    /// uses the same bounded deadline rather than claiming the target was observed.
     pub async fn scroll(&mut self, x: i32, y: i32) -> Result<(), AppError> {
+        let initial = scroll_offsets(&self.value("[window.scrollX, window.scrollY]").await?)?;
         let session = self.session_id.clone();
         self.call(
             Some(&session),
@@ -755,15 +804,16 @@ impl Engine {
             }),
         )
         .await?;
+        if x == 0 && y == 0 {
+            return Ok(());
+        }
         let deadline = Instant::now() + SCROLL_SETTLE_TIMEOUT;
-        let mut previous: Option<i64> = None;
+        let mut settlement = ScrollSettlement::new(initial, (x, y));
         while Instant::now() < deadline {
-            let position = self.value("window.scrollY").await?;
-            let position = position.as_i64().unwrap_or(0);
-            if previous == Some(position) {
+            let position = scroll_offsets(&self.value("[window.scrollX, window.scrollY]").await?)?;
+            if settlement.observe(position) {
                 return Ok(());
             }
-            previous = Some(position);
             tokio::time::sleep(SCROLL_SETTLE_POLL).await;
         }
         Ok(())
@@ -951,4 +1001,49 @@ fn decode_base64(value: &str) -> Result<Vec<u8>, AppError> {
 fn compact(value: &Value) -> String {
     let text = value.to_string();
     text.chars().take(400).collect()
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+
+    #[test]
+    fn an_unchanged_baseline_or_intermediate_plateau_cannot_complete_a_wheel() {
+        let mut settlement = ScrollSettlement::new((0.0, 0.0), (0, 900));
+        for _ in 0..20 {
+            assert!(!settlement.observe((0.0, 0.0)));
+        }
+        for _ in 0..20 {
+            assert!(!settlement.observe((0.0, 400.0)));
+        }
+        assert!(!settlement.observe((0.0, 900.0)));
+        assert!(!settlement.observe((0.0, 900.0)));
+        assert!(settlement.observe((0.0, 900.0)));
+    }
+
+    #[test]
+    fn fractional_horizontal_and_negative_offsets_remain_observable() {
+        let mut settlement = ScrollSettlement::new((0.5, 900.25), (400, -300));
+        assert!(!settlement.observe((0.5, 600.25)));
+        assert!(!settlement.observe((400.5, 600.25)));
+        assert!(!settlement.observe((400.5, 600.25)));
+        assert!(settlement.observe((400.5, 600.25)));
+        assert_eq!(
+            scroll_offsets(&json!([0.5, 600.25])).unwrap(),
+            (0.5, 600.25)
+        );
+    }
+
+    #[test]
+    fn malformed_scroll_values_are_not_fabricated_as_zero() {
+        for value in [
+            Value::Null,
+            json!([]),
+            json!([0]),
+            json!(["0", 1]),
+            json!([0, 1, 2]),
+        ] {
+            assert!(scroll_offsets(&value).is_err());
+        }
+    }
 }

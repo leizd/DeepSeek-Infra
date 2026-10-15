@@ -273,6 +273,24 @@ async fn the_engine_drives_a_real_browser_through_the_declared_actions() {
         Some(900.0),
         "an animated wheel must have landed before scroll returns"
     );
+    engine.scroll(0, -300).await.expect("negative scroll");
+    assert_eq!(
+        engine.value("window.scrollY").await.unwrap().as_f64(),
+        Some(600.0)
+    );
+    engine
+        .value("document.body.style.width = '3000px'; true")
+        .await
+        .unwrap();
+    engine.scroll(400, 0).await.expect("horizontal scroll");
+    assert_eq!(
+        engine.value("window.scrollX").await.unwrap().as_f64(),
+        Some(400.0)
+    );
+    assert_eq!(
+        engine.value("window.scrollY").await.unwrap().as_f64(),
+        Some(600.0)
+    );
 
     // screenshot: a real PNG, not a placeholder. The signature is checked rather
     // than the bytes, which no two Chromium builds agree on.

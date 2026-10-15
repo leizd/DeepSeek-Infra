@@ -49,7 +49,8 @@ def browser_fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     }
     exchanges = [dict(kind="agent", requestCredentialUsed=True, credentialInProviderBody=False,
                       actionId=f"phase-{i}", executionEpoch="1", operationId=f"node-{i}",
-                      browserEditedTaskInPrompt=i in (1, 3)) for i in range(4)]
+                      browserEditedTaskInPrompt=i in (1, 3), predecessorSummaryInPrompt=i in (2, 3),
+                      privateReasoningInPrompt=False) for i in range(4)]
     exchanges.append(dict(kind="title", requestCredentialUsed=True, credentialInProviderBody=False))
     return result, exchanges
 
@@ -356,3 +357,16 @@ def test_history_reload_rejects_a_missing_receipt_before_navigating(payload: Any
     page = SimpleNamespace(reload=lambda **_: pytest.fail("Invalid receipt must not navigate"))
     with pytest.raises(ValueError, match="mirror receipt"):
         browser.reload_browser_history(page, SimpleNamespace(json=lambda: payload))
+
+
+@pytest.mark.parametrize("change", ["critic_lost_predecessor", "synthesis_lost_outputs", "private_context"])
+def test_browser_provider_context_requires_settled_public_predecessor_summaries(change: str) -> None:
+    result, exchanges = browser_fixture()
+    if change == "critic_lost_predecessor":
+        exchanges[2]["predecessorSummaryInPrompt"] = False
+    elif change == "synthesis_lost_outputs":
+        exchanges[3]["predecessorSummaryInPrompt"] = False
+    else:
+        exchanges[2]["privateReasoningInPrompt"] = True
+    with pytest.raises(ValueError, match="public predecessor"):
+        browser.validate_browser_result(result, exchanges)
