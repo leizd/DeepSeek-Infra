@@ -79,6 +79,7 @@ func NewControlRPC(control *store.Control, bearer string, health ControlPlaneHea
 	agentv1.RegisterAgentChatSchedulerServer(server, &agentChatService{health: health, limits: agent.ChatLimitsFromEnv()})
 	agentRun := &agentRunService{control: control, health: health}
 	agentv1.RegisterAgentRunControlServer(server, agentRun)
+	agentv1.RegisterAgentRunRecoveryControlServer(server, &agentRunRecoveryService{run: agentRun})
 	agentv1.RegisterAgentNodeControlServer(server, &agentNodeService{run: agentRun})
 	return server
 }
