@@ -70,10 +70,14 @@ func TestNativeAgentDaemonPublicProcess(t *testing.T) {
 	}
 	defer control.Close()
 	metadata, found, err := control.AgentRunMetadata(input.RunID)
-	if err != nil || !found || metadata.Status != "done" || metadata.NextIndex != 9 || !metadata.ConfirmPlan || metadata.Preset != "auto" {
+	expectedIndex, coderTask := int64(9), "write"
+	if input.Browser {
+		expectedIndex, coderTask = 10, "write through browser"
+	}
+	if err != nil || !found || metadata.Status != "done" || metadata.NextIndex != expectedIndex || !metadata.ConfirmPlan || metadata.Preset != "auto" {
 		t.Fatal("actual daemon final metadata is incomplete", err)
 	}
-	expected := []agent.RunPlanNode{{ID: "coder", Task: "write"}, {ID: "critic", Task: "review", DependsOn: []string{"coder"}}}
+	expected := []agent.RunPlanNode{{ID: "coder", Task: coderTask}, {ID: "critic", Task: "review", DependsOn: []string{"coder"}}}
 	if len(metadata.Plan) != len(expected) {
 		t.Fatal("actual daemon changed task cardinality")
 	}

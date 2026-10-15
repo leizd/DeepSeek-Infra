@@ -93,6 +93,14 @@ impl AgentRunControl for Fixture {
         }
         let input = request.into_inner();
         validate_fence(input.fence.as_ref(), &input.run_id)?;
+        // Match the production Go RPC's presence contract, including operator edits.
+        if input
+            .event
+            .as_ref()
+            .is_some_and(|event| !event.has_plan && !event.plan.is_empty())
+        {
+            return Err(Status::invalid_argument("AGENT_RUN_METADATA_INVALID"));
+        }
         if input.create.is_none()
             && input.schema_version == 1
             && input.actor == "operator:agent-web"
@@ -886,6 +894,52 @@ async fn public_plan_confirmation_merges_runtime_values_and_commits_the_new_refe
             .sha256,
         current.sha256
     );
+}
+
+#[tokio::test]
+async fn public_confirmation_retains_an_edited_plan_and_runtime_in_the_same_ui_request() {
+    let running = running_fixture().await;
+    running.fixture.mutations.store(true, Ordering::SeqCst);
+    let original_body = json!({"payload":{"messages":[{"role":"user","content":"retained query"}],
+        "model":"deepseek-chat"},"agentPreset":"auto","confirmPlan":true});
+    let previous = ArtifactStore::open_native(&running.config.artifacts, "python_disabled")
+        .unwrap()
+        .put(&original_body)
+        .unwrap();
+    {
+        let mut snapshot = running.fixture.snapshot.lock().unwrap();
+        snapshot.status = "awaiting_plan".into();
+        snapshot.request = Some(AgentArtifactReference {
+            sha256: previous.sha256.clone(),
+            length: previous.length,
+        });
+    }
+    let original_index = running.fixture.snapshot.lock().unwrap().next_index;
+    let (status, body) = operator_response(
+        read_router(true, Some(running.config.clone())),
+        &format!("/api/agent-runs/{RUN}/plan"),
+        &json!({"plan":[{"id":"coder","task":"edited through UI"}],"payload":{"model":"deepseek-reasoner"}}),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let snapshot = running.fixture.snapshot.lock().unwrap().clone();
+    assert_eq!(snapshot.status, "running");
+    assert_eq!(snapshot.next_index, original_index + 2);
+    assert_eq!(snapshot.runtime_revision, 2);
+    assert_eq!(snapshot.plan[0].task, "edited through UI");
+    let events = running.fixture.events.lock().unwrap().clone();
+    let edit = &events[events.len() - 2];
+    assert_eq!(edit.r#type, "agent_plan");
+    assert!(edit.has_plan);
+    let store = ArtifactStore::open_readonly(&running.config.artifacts).unwrap();
+    assert_eq!(store.get(&previous).unwrap(), original_body);
+    let updated = store
+        .get(&reference(snapshot.request.as_ref()).unwrap())
+        .unwrap();
+    assert_eq!(
+        updated["payload"]["messages"],
+        original_body["payload"]["messages"]
+    );
+    assert_eq!(updated["payload"]["model"], "deepseek-reasoner");
 }
 
 #[tokio::test]

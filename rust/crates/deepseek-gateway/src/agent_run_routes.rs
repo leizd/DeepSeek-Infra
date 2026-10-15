@@ -766,6 +766,7 @@ async fn confirm_plan(
             &mut session,
             AgentRunEventMetadata {
                 r#type: "agent_plan".into(),
+                has_plan: true,
                 plan,
                 ..Default::default()
             },

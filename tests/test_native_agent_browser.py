@@ -14,7 +14,8 @@ from scripts import verify_native_agent_browser as browser
 def browser_fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     result: dict[str, Any] = {
         "status": "PASS", "sourceCommit": "a" * 40, "runId": "browser-run",
-        "runStatus": "done", "nextIndex": 9, "actualPreset": "auto", "durablePhases": 3,
+        "runStatus": "done", "nextIndex": 10, "actualPreset": "auto", "durablePhases": 3,
+        "actualPlan": [{"id": "coder", "task": browser.BROWSER_TASK}, {"id": "critic", "task": "review", "depends_on": ["coder"]}],
         "runtimeRevision": 2, "metadataSchemaVersion": 2,
         "actualDaemonCLIQualified": True, "independentlyValidatedByGoStore": True,
         "resourcesReleased": True, "builtFrontendAssetsServed": True,
@@ -29,6 +30,7 @@ def browser_fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
             "createdRunId": "browser-run", "creationByBrowser": True,
             "finalAnswerVisible": True, "reloadRetainedFinalAnswer": True,
             "planConfirmationByBrowser": True, "noTasksBeforePlanConfirmation": True,
+            "planEditedByBrowser": True,
             "backupPolicyCreatedByBrowser": False, "backupPolicyConfiguredByGoFixture": True, "finalEnvelopeMirrored": True,
             "requestInterceptionUsed": False, "apiInvokedOutsideUI": False,
             "pageErrors": [], "consoleErrors": [],
@@ -43,7 +45,8 @@ def browser_fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         },
     }
     exchanges = [dict(kind="agent", requestCredentialUsed=True, credentialInProviderBody=False,
-                      actionId=f"phase-{i}", executionEpoch="1", operationId=f"node-{i}") for i in range(4)]
+                      actionId=f"phase-{i}", executionEpoch="1", operationId=f"node-{i}",
+                      browserEditedTaskInPrompt=i in (1, 3)) for i in range(4)]
     exchanges.append(dict(kind="title", requestCredentialUsed=True, credentialInProviderBody=False))
     return result, exchanges
 
@@ -56,6 +59,21 @@ def test_accepts_completed_native_browser_run_with_independent_go_inspection() -
 def test_auto_browser_flow_retains_explicit_plan_confirmation() -> None:
     result, exchanges = browser_fixture()
     browser.validate_browser_result(result, exchanges)
+
+
+@pytest.mark.parametrize("change", ["missing_plan", "unedited_task", "lost_dependency", "extra_task"])
+def test_browser_confirmation_must_retain_the_operator_edit_and_dependency(change: str) -> None:
+    result, exchanges = browser_fixture()
+    if change == "missing_plan":
+        result.pop("actualPlan")
+    elif change == "unedited_task":
+        result["actualPlan"][0]["task"] = "write"
+    elif change == "lost_dependency":
+        result["actualPlan"][1].pop("depends_on")
+    else:
+        result["actualPlan"].append({"id": "extra", "task": "unexpected"})
+    with pytest.raises(ValueError, match="plan edit or dependent task"):
+        browser.validate_browser_result(result, exchanges)
 
 
 @pytest.mark.parametrize("change", ["no_confirmation", "failed_confirmation", "no_policy_configuration", "claimed_browser_policy", "no_mirror", "failed_mirror", "no_browser_confirmation", "early_tasks", "no_native_policy", "no_ciphertext_proof", "wrong_event_count", "unexpected_policy_request"])
@@ -83,7 +101,7 @@ def test_rejects_missing_confirmation_or_native_backup_evidence(change: str) -> 
     elif change == "no_ciphertext_proof":
         result["independentMirrorCiphertextVerified"] = False
     else:
-        result["nextIndex"] = 8
+        result["nextIndex"] = 9
     with pytest.raises(ValueError):
         browser.validate_browser_result(result, exchanges)
 
@@ -118,6 +136,7 @@ def test_rejects_incomplete_or_overclaimed_browser_qualification(key: str, value
 
 @pytest.mark.parametrize("key,value", [
     ("createdRunId", "another-run"), ("creationByBrowser", False), ("finalAnswerVisible", False),
+    ("planEditedByBrowser", False),
     ("reloadRetainedFinalAnswer", False), ("requestInterceptionUsed", True),
     ("apiInvokedOutsideUI", True), ("pageErrors", ["unhandled exception"]),
     ("consoleErrors", ["failed request"]), ("screenshotSha256", "missing"),
@@ -151,7 +170,7 @@ def test_requires_one_successful_ui_creation_and_the_actual_run_stream(change: s
         browser.validate_browser_result(result, exchanges)
 
 
-@pytest.mark.parametrize("change", ["missing", "wrong_credential", "credential_body", "unfenced", "duplicate_operation"])
+@pytest.mark.parametrize("change", ["missing", "wrong_credential", "credential_body", "unfenced", "duplicate_operation", "edit_not_executed", "edit_not_synthesized"])
 def test_retains_fenced_provider_and_private_credential_proof(change: str) -> None:
     result, exchanges = browser_fixture()
     if change == "missing":
@@ -162,6 +181,10 @@ def test_retains_fenced_provider_and_private_credential_proof(change: str) -> No
         exchanges[1]["credentialInProviderBody"] = True
     elif change == "unfenced":
         exchanges[1]["executionEpoch"] = "0"
+    elif change == "edit_not_executed":
+        exchanges[1]["browserEditedTaskInPrompt"] = False
+    elif change == "edit_not_synthesized":
+        exchanges[3]["browserEditedTaskInPrompt"] = False
     else:
         exchanges[1]["operationId"] = exchanges[0]["operationId"]
     with pytest.raises(ValueError):

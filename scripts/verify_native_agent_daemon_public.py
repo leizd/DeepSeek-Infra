@@ -219,6 +219,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     browser_mode = bool(getattr(args, "browser", False))
     if browser_mode and runtime_update:
         raise ValueError("Browser creation and restarted runtime revision are separate acceptance cases")
+    if browser_mode:
+        import verify_native_agent_browser as browser
+
     plan = {"agents": [{"role": "coder", "task": "write", "dependsOn": []},
                         {"role": "critic", "task": "review", "dependsOn": ["coder"]}]}
     with tempfile.TemporaryDirectory(prefix="native-daemon-agent-") as temporary:
@@ -291,6 +294,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "credentialInProviderBody": any(value in prompt for value in
                         ["request-only-credential", "request-only-search-credential", RUNTIME_CREDENTIAL]),
                     "selectedTaskInPrompt": "write" in prompt, "dependentTaskInPrompt": "review" in prompt,
+                    "browserEditedTaskInPrompt": browser.BROWSER_TASK in prompt if browser_mode else False,
                     "predecessorSummaryInPrompt": "Controlled public task summary" in prompt,
                     "privateReasoningInPrompt": "private-task-reasoning" in prompt,
                     "synthesisCoderInPrompt": "write" in prompt, "synthesisCriticInPrompt": "review" in prompt})
@@ -360,8 +364,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             public.wait_edge(origin, edge)
             index_sha, asset_count = serve_built_frontend(origin)
             if browser_mode:
-                import verify_native_agent_browser as browser
-
                 def inspect_waiting_confirmation(run_id: str) -> None:
                     time.sleep(1.2)
                     waiting = request_json(origin, "/api/agent-runs/" + run_id)["run"]

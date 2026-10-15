@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 BROWSER_QUERY = "Prepare an isolated browser verification plan"
 BROWSER_CREDENTIAL = "request-only-credential"
+BROWSER_TASK = "write through browser"
 
 
 def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[str], None] | None = None) -> dict[str, Any]:
@@ -73,6 +74,7 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
             close_activity = page.get_by_role("button", name="关闭活动面板", exact=True)
             if close_activity.is_visible():
                 close_activity.click()
+            page.get_by_label("Agent 执行计划", exact=True).get_by_role("textbox", name="Agent 任务", exact=True).first.fill(BROWSER_TASK)
             if before_confirmation is None:
                 raise ValueError("Actual browser lacks independent pre-confirmation inspection")
             before_confirmation(run_id)
@@ -85,13 +87,13 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
                 envelope = json.dumps(response.request.post_data_json, ensure_ascii=False)
                 return len(envelope) <= 2 * 1024**2 and "Controlled final answer" in envelope and "Native browser conversation" in envelope
 
-            with page.expect_response(lambda response: response_for(response, f"/api/agent-runs/{run_id}/plan"), timeout=120_000) as confirmed, \
-                    page.expect_response(lambda response: response_for(response, "/api/title"), timeout=120_000) as title, \
+            with page.expect_response(lambda response: response_for(response, "/api/title"), timeout=120_000) as title, \
                     page.expect_response(final_mirror, timeout=120_000) as mirrored:
-                page.get_by_role("button", name="确认执行", exact=True).click()
+                with page.expect_response(lambda response: response_for(response, f"/api/agent-runs/{run_id}/plan"), timeout=120_000) as confirmed:
+                    page.get_by_role("button", name="确认执行", exact=True).click()
+                if confirmed.value.status != 200:
+                    raise ValueError(f"Actual browser plan confirmation failed with HTTP {confirmed.value.status}")
                 page.get_by_text("Controlled final answer", exact=True).last.wait_for(timeout=120_000)
-            if confirmed.value.status != 200:
-                raise ValueError("Actual browser plan confirmation failed")
             if title.value.status != 200 or title.value.json().get("title") != "Native browser conversation":
                 raise ValueError("Actual native conversation title generation failed")
             page.reload(wait_until="domcontentloaded")
@@ -104,6 +106,7 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
                 raise ValueError("Native browser rendered evidence exceeds its image bound")
             return dict(createdRunId=run_id, creationByBrowser=True, finalAnswerVisible=True,
                         planConfirmationByBrowser=True, noTasksBeforePlanConfirmation=True,
+                        planEditedByBrowser=True,
                         backupPolicyCreatedByBrowser=False, backupPolicyConfiguredByGoFixture=True, finalEnvelopeMirrored=True,
                         mirrorProfileId=urlsplit(mirrored.value.url).path.split("/")[-2], mirrorReceipt=mirrored.value.json(),
                         reloadRetainedFinalAnswer=True, requestInterceptionUsed=False, apiInvokedOutsideUI=False,
@@ -177,16 +180,19 @@ def validate_browser_result(result: dict[str, Any], exchanges: list[dict[str, An
             result.get("productionRuntimeProcesses") != ["Go", "Rust"] or result.get("pythonMutatingPublicRequests") != 0 or \
             result.get("readiness") != "NOT_READY" or not re.fullmatch(r"[a-f0-9]{40}", str(result.get("sourceCommit", ""))):
         raise ValueError("Actual native browser chain evidence is missing or overclaims production readiness")
-    if result.get("status") != "PASS" or result.get("runStatus") != "done" or result.get("nextIndex") != 9 or \
+    if result.get("status") != "PASS" or result.get("runStatus") != "done" or result.get("nextIndex") != 10 or \
             result.get("runtimeRevision") != 2 or result.get("metadataSchemaVersion") != 2 or \
             result.get("actualPreset") != "auto" or result.get("durablePhases") != 3 or \
             not re.fullmatch(r"[a-f0-9]{64}", str(result.get("frontendIndexSha256", ""))) or \
             not isinstance(result.get("frontendAssetCount"), int) or result["frontendAssetCount"] < 1:
         raise ValueError("Actual browser run, immutable assets or retained phases differ")
+    if result.get("actualPlan") != [{"id": "coder", "task": BROWSER_TASK},
+            {"id": "critic", "task": "review", "depends_on": ["coder"]}]:
+        raise ValueError("Actual browser plan edit or dependent task was not retained")
     observed = result.get("browser")
     if not isinstance(observed, dict) or observed.get("createdRunId") != result.get("runId") or \
             any(observed.get(key) is not True for key in ["creationByBrowser", "finalAnswerVisible", "reloadRetainedFinalAnswer",
-                "planConfirmationByBrowser", "noTasksBeforePlanConfirmation", "backupPolicyConfiguredByGoFixture", "finalEnvelopeMirrored"]) or \
+                "planConfirmationByBrowser", "planEditedByBrowser", "noTasksBeforePlanConfirmation", "backupPolicyConfiguredByGoFixture", "finalEnvelopeMirrored"]) or \
             observed.get("backupPolicyCreatedByBrowser") is not False or \
             any(observed.get(key) is not False for key in ["requestInterceptionUsed", "apiInvokedOutsideUI"]) or \
             observed.get("pageErrors") != [] or observed.get("consoleErrors") != [] or \
@@ -215,3 +221,5 @@ def validate_browser_result(result: dict[str, Any], exchanges: list[dict[str, An
             any(not row.get("actionId") or not row.get("operationId") or not str(row.get("executionEpoch", "")).isdigit() or
                 int(row["executionEpoch"]) <= 0 for row in agents):
         raise ValueError("Actual browser provider calls lost their credential isolation or Agent fences")
+    if agents[1].get("browserEditedTaskInPrompt") is not True or agents[3].get("browserEditedTaskInPrompt") is not True:
+        raise ValueError("Actual Rust task execution or synthesis omitted the browser's edited task")
