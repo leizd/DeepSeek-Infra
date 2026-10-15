@@ -14,6 +14,43 @@ from urllib.parse import urlsplit
 BROWSER_QUERY = "Prepare an isolated browser verification plan"
 BROWSER_CREDENTIAL = "request-only-credential"
 BROWSER_TASK = "write through browser"
+# The existing native/legacy title contract retains at most 24 characters.
+BROWSER_TITLE = "Native browser conversat"
+
+
+def is_final_browser_mirror(payload: Any, run_id: str, conversation_id: str) -> bool:
+    """Match the versioned checkpoint for this UI-created conversation and run."""
+    if not isinstance(payload, dict) or not run_id or not conversation_id:
+        return False
+    if len(json.dumps(payload, ensure_ascii=False).encode()) > 2 * 1024**2:
+        return False
+    envelope = payload.get("envelope")
+    if not isinstance(envelope, dict) or envelope.get("schemaVersion") != 1:
+        return False
+    conversations = envelope.get("conversations")
+    if not isinstance(conversations, list):
+        return False
+    for row in conversations:
+        if not isinstance(row, dict) or row.get("conversationId") != conversation_id:
+            continue
+        checkpoint = row.get("checkpoint")
+        if not isinstance(checkpoint, dict) or checkpoint.get("schemaVersion") != 3 or \
+                checkpoint.get("conversationId") != conversation_id or not row.get("headRevision") or \
+                checkpoint.get("revision") != row["headRevision"]:
+            continue
+        conversation = checkpoint.get("conversation")
+        if not isinstance(conversation, dict) or conversation.get("id") != conversation_id or \
+                conversation.get("title") != BROWSER_TITLE or conversation.get("autoTitleDone") is not True:
+            continue
+        messages = conversation.get("messages")
+        if not isinstance(messages, list):
+            continue
+        if any(isinstance(message, dict) and message.get("role") == "user" and message.get("content") == BROWSER_QUERY
+               for message in messages) and any(isinstance(message, dict) and message.get("role") == "assistant" and
+                   message.get("content") == "Controlled final answer" and message.get("agentRunId") == run_id and
+                   message.get("agentRunStatus") == "done" for message in messages):
+            return True
+    return False
 
 
 def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[str], None] | None = None) -> dict[str, Any]:
@@ -70,6 +107,10 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
             run_id = body.get("runId")
             if creation.status not in {200, 201} or not isinstance(run_id, str) or not run_id:
                 raise ValueError("The React create action did not return the actual native run")
+            creation_request = creation.request.post_data_json
+            conversation_id = creation_request.get("conversationId") if isinstance(creation_request, dict) else None
+            if not isinstance(conversation_id, str) or not conversation_id:
+                raise ValueError("The React create action omitted its actual conversation identity")
             page.get_by_label("Agent 执行计划", exact=True).wait_for()
             close_activity = page.get_by_role("button", name="关闭活动面板", exact=True)
             if close_activity.is_visible():
@@ -84,8 +125,7 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
                 if url.netloc != target.netloc or not url.path.startswith("/api/workspace/backup-mirrors/") or \
                         not url.path.endswith("/frontend") or response.request.method != "PUT" or response.status != 200:
                     return False
-                envelope = json.dumps(response.request.post_data_json, ensure_ascii=False)
-                return len(envelope) <= 2 * 1024**2 and "Controlled final answer" in envelope and "Native browser conversation" in envelope
+                return is_final_browser_mirror(response.request.post_data_json, run_id, conversation_id)
 
             with page.expect_response(lambda response: response_for(response, "/api/title"), timeout=120_000) as title, \
                     page.expect_response(final_mirror, timeout=120_000) as mirrored:
@@ -94,10 +134,11 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
                 if confirmed.value.status != 200:
                     raise ValueError(f"Actual browser plan confirmation failed with HTTP {confirmed.value.status}")
                 page.get_by_text("Controlled final answer", exact=True).last.wait_for(timeout=120_000)
-            if title.value.status != 200 or title.value.json().get("title") != "Native browser conversation":
+            if title.value.status != 200 or title.value.json().get("title") != BROWSER_TITLE:
                 raise ValueError("Actual native conversation title generation failed")
             page.reload(wait_until="domcontentloaded")
             page.get_by_text("Controlled final answer", exact=True).last.wait_for()
+            page.get_by_text(BROWSER_TITLE, exact=True).last.wait_for()
             page.wait_for_load_state("networkidle", timeout=30_000)
             screenshot = output / "browser-final.png"
             page.screenshot(path=str(screenshot), full_page=True)
@@ -105,6 +146,8 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
             if not image.startswith(b"\x89PNG\r\n\x1a\n") or len(image) > 2 * 1024**2:
                 raise ValueError("Native browser rendered evidence exceeds its image bound")
             return dict(createdRunId=run_id, creationByBrowser=True, finalAnswerVisible=True,
+                        createdConversationId=conversation_id, mirroredConversationId=conversation_id,
+                        conversationTitle=BROWSER_TITLE, titleRetainedAfterReload=True,
                         planConfirmationByBrowser=True, noTasksBeforePlanConfirmation=True,
                         planEditedByBrowser=True,
                         backupPolicyCreatedByBrowser=False, backupPolicyConfiguredByGoFixture=True, finalEnvelopeMirrored=True,
@@ -191,6 +234,9 @@ def validate_browser_result(result: dict[str, Any], exchanges: list[dict[str, An
         raise ValueError("Actual browser plan edit or dependent task was not retained")
     observed = result.get("browser")
     if not isinstance(observed, dict) or observed.get("createdRunId") != result.get("runId") or \
+            not isinstance(observed.get("createdConversationId"), str) or not observed["createdConversationId"] or \
+            observed.get("mirroredConversationId") != observed["createdConversationId"] or \
+            observed.get("conversationTitle") != BROWSER_TITLE or observed.get("titleRetainedAfterReload") is not True or \
             any(observed.get(key) is not True for key in ["creationByBrowser", "finalAnswerVisible", "reloadRetainedFinalAnswer",
                 "planConfirmationByBrowser", "planEditedByBrowser", "noTasksBeforePlanConfirmation", "backupPolicyConfiguredByGoFixture", "finalEnvelopeMirrored"]) or \
             observed.get("backupPolicyCreatedByBrowser") is not False or \

@@ -28,6 +28,8 @@ def browser_fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "fullMigrationQualified": False, "readiness": "NOT_READY",
         "browser": {
             "createdRunId": "browser-run", "creationByBrowser": True,
+            "createdConversationId": "conversation-1", "mirroredConversationId": "conversation-1",
+            "conversationTitle": browser.BROWSER_TITLE, "titleRetainedAfterReload": True,
             "finalAnswerVisible": True, "reloadRetainedFinalAnswer": True,
             "planConfirmationByBrowser": True, "noTasksBeforePlanConfirmation": True,
             "planEditedByBrowser": True,
@@ -49,6 +51,65 @@ def browser_fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
                       browserEditedTaskInPrompt=i in (1, 3)) for i in range(4)]
     exchanges.append(dict(kind="title", requestCredentialUsed=True, credentialInProviderBody=False))
     return result, exchanges
+
+
+def final_mirror_payload() -> dict[str, Any]:
+    conversation = {"id": "conversation-1", "title": "Native browser conversat", "autoTitleDone": True,
+        "messages": [{"role": "user", "content": browser.BROWSER_QUERY},
+                     {"role": "assistant", "content": "Controlled final answer", "agentRunId": "browser-run", "agentRunStatus": "done"}]}
+    return {"sourceEpoch": "legacy", "envelope": {"schemaVersion": 1, "conversations": [
+        {"conversationId": "conversation-1", "headRevision": "revision-1", "checkpoint": {
+            "schemaVersion": 3, "conversationId": "conversation-1", "revision": "revision-1", "conversation": conversation}}]}}
+
+
+def test_native_browser_title_matches_the_existing_title_normalization_contract() -> None:
+    from deepseek_infra.infra.gateway.title_generator import _sanitize_title
+
+    assert _sanitize_title("Native browser conversation") == browser.BROWSER_TITLE == "Native browser conversat"
+
+
+def test_final_mirror_matches_the_actual_normalized_title_and_same_native_run() -> None:
+    assert browser.is_final_browser_mirror(final_mirror_payload(), "browser-run", "conversation-1")
+
+
+@pytest.mark.parametrize("change", ["raw_title", "unrelated_title", "other_run", "other_conversation", "unfinished",
+    "waiting_hint", "missing_answer", "missing_query", "wrong_schema", "wrong_checkpoint", "wrong_revision", "oversized"])
+def test_final_mirror_rejects_coincidental_text_and_incomplete_or_foreign_conversations(change: str) -> None:
+    payload = final_mirror_payload()
+    row = payload["envelope"]["conversations"][0]
+    conversation = row["checkpoint"]["conversation"]
+    if change == "raw_title":
+        conversation["title"] = "Native browser conversation"
+    elif change == "unrelated_title":
+        conversation["title"] = "Another conversation"
+        payload["unrelated"] = "Native browser conversat"
+    elif change == "other_run":
+        conversation["messages"][1]["agentRunId"] = "another-run"
+    elif change == "other_conversation":
+        conversation["id"] = "another-conversation"
+    elif change == "unfinished":
+        conversation["messages"][1]["agentRunStatus"] = "running"
+    elif change == "waiting_hint":
+        conversation["messages"][1]["content"] = "Waiting for confirmation. Controlled final answer"
+    elif change == "missing_answer":
+        conversation["messages"].pop()
+        payload["unrelated"] = "Controlled final answer"
+    elif change == "missing_query":
+        conversation["messages"].pop(0)
+    elif change == "wrong_schema":
+        payload["envelope"]["schemaVersion"] = 2
+    elif change == "wrong_checkpoint":
+        row["checkpoint"]["conversationId"] = "another-conversation"
+    elif change == "wrong_revision":
+        row["checkpoint"]["revision"] = "another-revision"
+    else:
+        payload["unrelated"] = "x" * (2 * 1024**2)
+    assert not browser.is_final_browser_mirror(payload, "browser-run", "conversation-1")
+
+
+@pytest.mark.parametrize("payload", [None, [], {}, {"envelope": []}, {"envelope": {"schemaVersion": 1, "conversations": [None]}}])
+def test_final_mirror_rejects_malformed_envelopes(payload: Any) -> None:
+    assert not browser.is_final_browser_mirror(payload, "browser-run", "conversation-1")
 
 
 def test_accepts_completed_native_browser_run_with_independent_go_inspection() -> None:
@@ -136,6 +197,8 @@ def test_rejects_incomplete_or_overclaimed_browser_qualification(key: str, value
 
 @pytest.mark.parametrize("key,value", [
     ("createdRunId", "another-run"), ("creationByBrowser", False), ("finalAnswerVisible", False),
+    ("createdConversationId", ""), ("mirroredConversationId", "another-conversation"),
+    ("conversationTitle", "Native browser conversation"), ("titleRetainedAfterReload", False),
     ("planEditedByBrowser", False),
     ("reloadRetainedFinalAnswer", False), ("requestInterceptionUsed", True),
     ("apiInvokedOutsideUI", True), ("pageErrors", ["unhandled exception"]),
