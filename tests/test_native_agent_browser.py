@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 import sqlite3
 from typing import Any
 
@@ -323,3 +324,35 @@ def test_independent_readonly_browser_custody_inspection(tmp_path: Path, failure
         assert browser.inspect_browser_custody(artifacts, state) == {
             "rustEffectsIndependentlyRetained": True, "requestCredentialEncrypted": True}
     assert {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
+def test_history_reload_keeps_the_receipt_before_chromium_discards_the_old_document_response() -> None:
+    # Offline response-lifetime model only: no browser, native process or network.
+    events: list[str] = []
+    receipt = {"generationId": "retained-generation", "creationVerified": True}
+
+    class Response:
+        def json(self) -> dict[str, Any]:
+            if "navigation" in events:
+                raise RuntimeError("Chromium discarded the previous document response")
+            events.append("receipt")
+            return receipt
+
+    class Page:
+        def reload(self, **options: Any) -> None:
+            assert options == {"wait_until": "domcontentloaded"}
+            events.append("navigation")
+
+        def get_by_text(self, text: str, **options: Any) -> Any:
+            assert options == {"exact": True}
+            return SimpleNamespace(last=SimpleNamespace(wait_for=lambda: events.append(text)))
+
+    assert browser.reload_browser_history(Page(), Response()) is receipt
+    assert events == ["receipt", "navigation", "Controlled final answer", browser.BROWSER_TITLE]
+
+
+@pytest.mark.parametrize("payload", [None, [], "invalid receipt"])
+def test_history_reload_rejects_a_missing_receipt_before_navigating(payload: Any) -> None:
+    page = SimpleNamespace(reload=lambda **_: pytest.fail("Invalid receipt must not navigate"))
+    with pytest.raises(ValueError, match="mirror receipt"):
+        browser.reload_browser_history(page, SimpleNamespace(json=lambda: payload))

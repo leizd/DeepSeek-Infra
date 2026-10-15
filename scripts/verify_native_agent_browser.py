@@ -53,6 +53,17 @@ def is_final_browser_mirror(payload: Any, run_id: str, conversation_id: str) -> 
     return False
 
 
+def reload_browser_history(page: Any, mirror_response: Any) -> dict[str, Any]:
+    """Retain the final public receipt while verifying the reloaded history."""
+    receipt = mirror_response.json()
+    if not isinstance(receipt, dict):
+        raise ValueError("Actual browser mirror receipt is missing")
+    page.reload(wait_until="domcontentloaded")
+    page.get_by_text("Controlled final answer", exact=True).last.wait_for()
+    page.get_by_text(BROWSER_TITLE, exact=True).last.wait_for()
+    return receipt
+
+
 def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Drive shipped React controls; no route interception or page-side API calls."""
     target = urlsplit(origin)
@@ -136,9 +147,7 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
                 page.get_by_text("Controlled final answer", exact=True).last.wait_for(timeout=120_000)
             if title.value.status != 200 or title.value.json().get("title") != BROWSER_TITLE:
                 raise ValueError("Actual native conversation title generation failed")
-            page.reload(wait_until="domcontentloaded")
-            page.get_by_text("Controlled final answer", exact=True).last.wait_for()
-            page.get_by_text(BROWSER_TITLE, exact=True).last.wait_for()
+            mirror_receipt = reload_browser_history(page, mirrored.value)
             page.wait_for_load_state("networkidle", timeout=30_000)
             screenshot = output / "browser-final.png"
             page.screenshot(path=str(screenshot), full_page=True)
@@ -151,7 +160,7 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
                         planConfirmationByBrowser=True, noTasksBeforePlanConfirmation=True,
                         planEditedByBrowser=True,
                         backupPolicyCreatedByBrowser=False, backupPolicyConfiguredByGoFixture=True, finalEnvelopeMirrored=True,
-                        mirrorProfileId=urlsplit(mirrored.value.url).path.split("/")[-2], mirrorReceipt=mirrored.value.json(),
+                        mirrorProfileId=urlsplit(mirrored.value.url).path.split("/")[-2], mirrorReceipt=mirror_receipt,
                         reloadRetainedFinalAnswer=True, requestInterceptionUsed=False, apiInvokedOutsideUI=False,
                         pageErrors=list(page_errors), consoleErrors=list(console_errors), requests=list(traffic),
                         screenshot=screenshot.name, screenshotSha256=hashlib.sha256(image).hexdigest())
