@@ -116,9 +116,11 @@ impl WorkerRpcService {
         let api_key = Zeroizing::new(std::mem::take(&mut input.api_key));
         let tavily_api_key = Zeroizing::new(std::mem::take(&mut input.tavily_api_key));
         let update = input.runtime_update.take();
+        let recovery_context = input.recovery_context.take();
         let fence = input.fence.as_ref().ok_or_else(denied)?;
         let reference = input.request.as_ref().ok_or_else(denied)?;
         if input.schema_version != 1
+            || recovery_context.is_some() && update.is_none()
             || input.runtime_revision == 0
             || input.runtime_revision > i64::MAX as u64
             || fence.action_id != input.run_id
@@ -158,8 +160,25 @@ impl WorkerRpcService {
                 .await?;
             if current.runtime_revision != previous.previous_runtime_revision
                 || current.request.as_ref() != previous.previous_request.as_ref()
-                || current.status != "awaiting_plan"
             {
+                return Err(denied());
+            }
+            if let Some(context) = recovery_context.as_ref() {
+                if context.run_id != input.run_id
+                    || context.metadata_epoch != live_epoch
+                    || context.expected_index != current.next_index
+                    || context.expected_runtime_revision != current.runtime_revision
+                    || context.expected_request.as_ref() != current.request.as_ref()
+                    || context.previous_scope.as_ref() != current.recovery_scope.as_ref()
+                {
+                    return Err(crate::agent_recovery_context::denied());
+                }
+                self.agent_execution_control
+                    .as_ref()
+                    .ok_or_else(denied)?
+                    .validate_recovery_context(context)
+                    .await?;
+            } else if current.status != "awaiting_plan" || current.recovery_scope.is_some() {
                 return Err(denied());
             }
         }
@@ -174,12 +193,38 @@ impl WorkerRpcService {
             length: reference.length,
         };
         let signer = Arc::clone(self.control_signer.as_ref().ok_or_else(denied)?);
+        let worker = Arc::clone(&self.worker);
         let response = tokio::task::spawn_blocking(move || {
             let body = read_body(&root, &reference)?;
             if body.get(PRIVATE_FIELD).is_some() {
                 return Err(denied());
             }
+            let prepared = crate::agent_recovery_context::read(&root, &body)?;
+            if prepared.as_ref().map(|value| &value.context) != recovery_context.as_ref() {
+                return Err(crate::agent_recovery_context::denied());
+            }
+            if let Some(context) = recovery_context.as_ref() {
+                let worker = worker.blocking_lock();
+                let authority = worker.agent_node_authority()?;
+                worker
+                    .authority_store
+                    .as_ref()
+                    .ok_or_else(denied)?
+                    .verify_agent_recovery_context(context, &authority)?;
+            }
+            // Never hold the effect-journal mutex while opening signer custody.
             let signer = signer.blocking_lock();
+            if let Some(context) = recovery_context.as_ref() {
+                for source in context
+                    .prior_effects
+                    .iter()
+                    .chain(&context.retained_outputs)
+                {
+                    signer.verify_retained_node_outcome(
+                        source.outcome.as_ref().ok_or_else(denied)?,
+                    )?;
+                }
+            }
             let (fleet_id, environment) = signer.agent_credential_binding()?;
             let inherited = if let Some(previous) = update.as_ref() {
                 let previous_reference = previous.previous_request.as_ref().ok_or_else(denied)?;
@@ -190,11 +235,22 @@ impl WorkerRpcService {
                         length: previous_reference.length,
                     },
                 )?;
+                // A new metadata epoch does not rewrite an old sealed credential
+                // object's original scope. Go's CAS pins this prior request hash.
+                let previous_epoch =
+                    if recovery_context.is_some() && previous_body.get(PRIVATE_FIELD).is_some() {
+                        previous_body[PRIVATE_FIELD]["scope"]["metadataEpoch"]
+                            .as_u64()
+                            .filter(|epoch| *epoch > 0 && *epoch <= live_epoch)
+                            .ok_or_else(denied)?
+                    } else {
+                        live_epoch
+                    };
                 bound_reference(
                     &root,
                     previous_body,
                     &input.run_id,
-                    live_epoch,
+                    previous_epoch,
                     previous.previous_runtime_revision,
                     &fleet_id,
                     &environment,
@@ -271,9 +327,6 @@ impl WorkerRpcService {
         if !body.is_object() {
             return Err(denied());
         }
-        if body.get(PRIVATE_FIELD).is_none() {
-            return Ok(executor);
-        }
         let binding = self
             .agent_execution_control
             .as_ref()
@@ -282,6 +335,18 @@ impl WorkerRpcService {
             .await?;
         if binding.request.as_ref() != claim.request.as_ref() {
             return Err(denied());
+        }
+        let prepared = crate::agent_recovery_context::read(&root, &body)?;
+        crate::agent_recovery_context::validate_binding(prepared.as_ref(), &binding)?;
+        if let Some(prepared) = prepared.as_ref() {
+            if prepared.context.metadata_epoch > metadata_epoch
+                || claim.metadata_index < prepared.context.expected_index
+            {
+                return Err(crate::agent_recovery_context::denied());
+            }
+        }
+        if body.get(PRIVATE_FIELD).is_none() {
+            return Ok(executor);
         }
         // The admitted signed request hash pins this envelope. Its revision is
         // independently compared with Go's live metadata while its reservation

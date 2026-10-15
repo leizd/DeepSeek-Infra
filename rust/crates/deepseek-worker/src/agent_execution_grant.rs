@@ -15,6 +15,8 @@ use tonic::{Request, Status, metadata::MetadataValue, transport::Endpoint};
 
 pub const AGENT_EXECUTION_GRANT_SCHEMA: &str = "control-agent-execution-grant-v1";
 const SIGNATURE_DOMAIN: &[u8] = b"deepseek-infra:control-agent-execution-grant-v1\0";
+#[cfg(test)]
+mod recovery_tests;
 const FIELDS: &[&str] = &[
     "actionId",
     "digest",
@@ -80,6 +82,58 @@ impl std::fmt::Debug for AgentExecutionControl {
     }
 }
 impl AgentExecutionControl {
+    pub(crate) async fn validate_recovery_context(
+        &self,
+        context: &deepseek_protocol::generated::deepseek::agent::v1::AgentRunRecoveryContext,
+    ) -> Result<(), Status> {
+        use deepseek_protocol::generated::deepseek::{
+            agent::v1::{
+                PreviewAgentRunRecoveryRequest,
+                agent_run_recovery_control_client::AgentRunRecoveryControlClient,
+            },
+            common::v1::ActionFence,
+        };
+        let channel = self.endpoint.connect().await.map_err(|_| unavailable())?;
+        let mut client =
+            AgentRunRecoveryControlClient::new(channel).max_decoding_message_size(2 * 1024 * 1024);
+        let mut request = Request::new(PreviewAgentRunRecoveryRequest {
+            schema_version: 1,
+            run_id: context.run_id.clone(),
+            metadata_fence: Some(ActionFence {
+                action_id: context.run_id.clone(),
+                execution_epoch: context.metadata_epoch,
+            }),
+            expected_index: context.expected_index,
+            expected_runtime_revision: context.expected_runtime_revision,
+            expected_request: context.expected_request.clone(),
+            selection: context.selection.clone(),
+        });
+        request
+            .metadata_mut()
+            .insert("authorization", self.authorization.clone());
+        let response = client
+            .preview(request)
+            .await
+            .map_err(|status| {
+                if matches!(
+                    status.code(),
+                    tonic::Code::Unavailable | tonic::Code::DeadlineExceeded
+                ) {
+                    unavailable()
+                } else {
+                    crate::agent_recovery_context::denied()
+                }
+            })?
+            .into_inner();
+        if !response.authoritative
+            || response.context.as_ref() != Some(context)
+            || response.context_sha256 != crate::agent_recovery_context::digest(context)?
+        {
+            return Err(crate::agent_recovery_context::denied());
+        }
+        Ok(())
+    }
+
     pub(crate) async fn runtime_binding(
         &self,
         run_id: &str,

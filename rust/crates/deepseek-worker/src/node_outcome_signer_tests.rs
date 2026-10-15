@@ -123,9 +123,24 @@ fn outcome_signature_journal_is_idempotent_after_restart_and_refuses_corrupt_rec
     };
     let mut signer = reopen(root.path());
     let first = signer.sign_node_outcome(evidence.clone()).unwrap();
+    signer.verify_retained_node_outcome(&first).unwrap();
+    let mut changed = first.clone();
+    changed.signature[0] ^= 1;
+    assert!(signer.verify_retained_node_outcome(&changed).is_err());
+    changed = first.clone();
+    changed
+        .evidence
+        .as_mut()
+        .unwrap()
+        .request
+        .as_mut()
+        .unwrap()
+        .sha256 = "f".repeat(64);
+    assert!(signer.verify_retained_node_outcome(&changed).is_err());
     assert_eq!(first, signer.sign_node_outcome(evidence.clone()).unwrap());
     drop(signer);
     let mut signer = reopen(root.path());
+    signer.verify_retained_node_outcome(&first).unwrap();
     assert_eq!(first, signer.sign_node_outcome(evidence.clone()).unwrap());
     let mut wrong = evidence.clone();
     wrong.environment = "foreign".into();
@@ -136,6 +151,7 @@ fn outcome_signature_journal_is_idempotent_after_restart_and_refuses_corrupt_rec
     let corrupted = tempfile::tempdir().unwrap();
     fs::create_dir(corrupted.path().join("rust-worker")).unwrap();
     let mut signer = reopen(corrupted.path());
+    assert!(signer.verify_retained_node_outcome(&first).is_err());
     let payload = evidence.encode_to_vec();
     let mut identity = b"deepseek-infra:agent-node-outcome-receipt-v1:request\0".to_vec();
     identity.extend(&payload);
@@ -155,6 +171,7 @@ fn outcome_signature_journal_is_idempotent_after_restart_and_refuses_corrupt_rec
         signer.journal.existing(&request_id).unwrap().unwrap(),
         b"corrupted protobuf receipt"
     );
+    assert!(signer.verify_retained_node_outcome(&first).is_err());
 }
 
 fn synthesis_test_custody(root: &Path) -> ControlSigner {

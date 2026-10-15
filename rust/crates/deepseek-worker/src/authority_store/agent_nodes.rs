@@ -12,6 +12,7 @@ use prost::Message;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use tonic::Status;
 
+mod recovery;
 #[cfg(test)]
 mod tests;
 

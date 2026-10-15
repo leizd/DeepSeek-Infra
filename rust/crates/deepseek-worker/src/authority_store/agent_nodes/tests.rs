@@ -5,6 +5,7 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+mod recovery_custody;
 mod synthesis_executor;
 mod task_executor;
 

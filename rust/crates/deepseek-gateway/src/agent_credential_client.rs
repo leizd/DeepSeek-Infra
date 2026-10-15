@@ -45,6 +45,7 @@ pub(crate) fn has_reserved_field(value: &Value) -> bool {
         Value::Object(values) => {
             values.contains_key(PRIVATE_FIELD)
                 || values.contains_key(PREPARATION_FIELD)
+                || values.contains_key("_nativeRecoveryContext")
                 || values.values().any(has_reserved_field)
         }
         Value::Array(values) => values.iter().any(has_reserved_field),
@@ -194,6 +195,8 @@ mod tests {
             json!({"messages":[{"content":{PRIVATE_FIELD:{}}}]}),
             json!({PREPARATION_FIELD:"caller-cannot-select-custody-scope"}),
             json!({"payload":{PREPARATION_FIELD:"caller-cannot-select-custody-scope"}}),
+            json!({"_nativeRecoveryContext":{}}),
+            json!({"messages":[{"_nativeRecoveryContext":{}}]}),
         ] {
             assert!(has_reserved_field(&value));
         }

@@ -40,6 +40,32 @@ impl std::fmt::Debug for ControlSigner {
 }
 
 impl ControlSigner {
+    /// Only accept an existing original receipt. Recovery must not recreate a
+    /// missing signature journal entry by calling the signing path again.
+    pub(crate) fn verify_retained_node_outcome(
+        &self,
+        receipt: &deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeReceipt,
+    ) -> Result<(), Status> {
+        use prost::Message as _;
+        let denied = || Status::failed_precondition("AGENT_RECOVERY_RECEIPT_NOT_RETAINED");
+        let evidence = receipt.evidence.as_ref().ok_or_else(denied)?;
+        if receipt.schema_version != 1
+            || receipt.signature.len() != 64
+            || receipt.signer_public_key != self.key.public_key()
+        {
+            return Err(denied());
+        }
+        let mut identity = b"deepseek-infra:agent-node-outcome-receipt-v1:request\0".to_vec();
+        identity.extend(evidence.encode_to_vec());
+        let request_id = format!("{:x}", Sha256::digest(&identity));
+        if self.journal.existing(&request_id)?.as_deref()
+            != Some(receipt.encode_to_vec().as_slice())
+        {
+            return Err(denied());
+        }
+        Ok(())
+    }
+
     pub(crate) fn prepare_agent_credentials(
         &self,
         root: &Path,
