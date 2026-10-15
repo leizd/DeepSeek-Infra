@@ -129,6 +129,16 @@ message AgentRunSnapshot {
   AgentRunEventMetadata last_event = 12;
   // Absent on pre-revision peers; current Go reports at least revision one.
   uint64 runtime_revision = 13;
+  // A recovery scope names immutable Rust custody. It is scheduling metadata,
+  // never an effect grant or a replacement for historical outcome proofs.
+  AgentRunRecoveryScope recovery_scope = 14;
+}
+
+message AgentRunRecoveryScope {
+  uint64 generation = 1;
+  AgentArtifactReference context = 2;
+  string context_sha256 = 3;
+  int64 start_index = 4;
 }
 
 // Go alone swaps immutable Rust request references. The current event cursor,

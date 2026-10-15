@@ -1018,8 +1018,11 @@ type AgentRunSnapshot struct {
 	LastEvent      *AgentRunEventMetadata  `protobuf:"bytes,12,opt,name=last_event,json=lastEvent,proto3" json:"last_event,omitempty"`
 	// Absent on pre-revision peers; current Go reports at least revision one.
 	RuntimeRevision uint64 `protobuf:"varint,13,opt,name=runtime_revision,json=runtimeRevision,proto3" json:"runtime_revision,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// A recovery scope names immutable Rust custody. It is scheduling metadata,
+	// never an effect grant or a replacement for historical outcome proofs.
+	RecoveryScope *AgentRunRecoveryScope `protobuf:"bytes,14,opt,name=recovery_scope,json=recoveryScope,proto3" json:"recovery_scope,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentRunSnapshot) Reset() {
@@ -1143,6 +1146,81 @@ func (x *AgentRunSnapshot) GetRuntimeRevision() uint64 {
 	return 0
 }
 
+func (x *AgentRunSnapshot) GetRecoveryScope() *AgentRunRecoveryScope {
+	if x != nil {
+		return x.RecoveryScope
+	}
+	return nil
+}
+
+type AgentRunRecoveryScope struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	Generation    uint64                  `protobuf:"varint,1,opt,name=generation,proto3" json:"generation,omitempty"`
+	Context       *AgentArtifactReference `protobuf:"bytes,2,opt,name=context,proto3" json:"context,omitempty"`
+	ContextSha256 string                  `protobuf:"bytes,3,opt,name=context_sha256,json=contextSha256,proto3" json:"context_sha256,omitempty"`
+	StartIndex    int64                   `protobuf:"varint,4,opt,name=start_index,json=startIndex,proto3" json:"start_index,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentRunRecoveryScope) Reset() {
+	*x = AgentRunRecoveryScope{}
+	mi := &file_agent_v1_agent_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentRunRecoveryScope) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentRunRecoveryScope) ProtoMessage() {}
+
+func (x *AgentRunRecoveryScope) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentRunRecoveryScope.ProtoReflect.Descriptor instead.
+func (*AgentRunRecoveryScope) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *AgentRunRecoveryScope) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *AgentRunRecoveryScope) GetContext() *AgentArtifactReference {
+	if x != nil {
+		return x.Context
+	}
+	return nil
+}
+
+func (x *AgentRunRecoveryScope) GetContextSha256() string {
+	if x != nil {
+		return x.ContextSha256
+	}
+	return ""
+}
+
+func (x *AgentRunRecoveryScope) GetStartIndex() int64 {
+	if x != nil {
+		return x.StartIndex
+	}
+	return 0
+}
+
 // Go alone swaps immutable Rust request references. The current event cursor,
 // prior request and revision must all match in the same authority transaction.
 type AgentRunRuntimeUpdate struct {
@@ -1156,7 +1234,7 @@ type AgentRunRuntimeUpdate struct {
 
 func (x *AgentRunRuntimeUpdate) Reset() {
 	*x = AgentRunRuntimeUpdate{}
-	mi := &file_agent_v1_agent_proto_msgTypes[12]
+	mi := &file_agent_v1_agent_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1168,7 +1246,7 @@ func (x *AgentRunRuntimeUpdate) String() string {
 func (*AgentRunRuntimeUpdate) ProtoMessage() {}
 
 func (x *AgentRunRuntimeUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[12]
+	mi := &file_agent_v1_agent_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1181,7 +1259,7 @@ func (x *AgentRunRuntimeUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentRunRuntimeUpdate.ProtoReflect.Descriptor instead.
 func (*AgentRunRuntimeUpdate) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{12}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *AgentRunRuntimeUpdate) GetExpectedRuntimeRevision() uint64 {
@@ -1224,7 +1302,7 @@ type AppendAgentRunEventRequest struct {
 
 func (x *AppendAgentRunEventRequest) Reset() {
 	*x = AppendAgentRunEventRequest{}
-	mi := &file_agent_v1_agent_proto_msgTypes[13]
+	mi := &file_agent_v1_agent_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1236,7 +1314,7 @@ func (x *AppendAgentRunEventRequest) String() string {
 func (*AppendAgentRunEventRequest) ProtoMessage() {}
 
 func (x *AppendAgentRunEventRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[13]
+	mi := &file_agent_v1_agent_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1249,7 +1327,7 @@ func (x *AppendAgentRunEventRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendAgentRunEventRequest.ProtoReflect.Descriptor instead.
 func (*AppendAgentRunEventRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{13}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *AppendAgentRunEventRequest) GetSchemaVersion() uint32 {
@@ -1326,7 +1404,7 @@ type AppendAgentRunEventResponse struct {
 
 func (x *AppendAgentRunEventResponse) Reset() {
 	*x = AppendAgentRunEventResponse{}
-	mi := &file_agent_v1_agent_proto_msgTypes[14]
+	mi := &file_agent_v1_agent_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1338,7 +1416,7 @@ func (x *AppendAgentRunEventResponse) String() string {
 func (*AppendAgentRunEventResponse) ProtoMessage() {}
 
 func (x *AppendAgentRunEventResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[14]
+	mi := &file_agent_v1_agent_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1351,7 +1429,7 @@ func (x *AppendAgentRunEventResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendAgentRunEventResponse.ProtoReflect.Descriptor instead.
 func (*AppendAgentRunEventResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{14}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *AppendAgentRunEventResponse) GetAlreadyApplied() bool {
@@ -1385,7 +1463,7 @@ type GetAgentRunRequest struct {
 
 func (x *GetAgentRunRequest) Reset() {
 	*x = GetAgentRunRequest{}
-	mi := &file_agent_v1_agent_proto_msgTypes[15]
+	mi := &file_agent_v1_agent_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1397,7 +1475,7 @@ func (x *GetAgentRunRequest) String() string {
 func (*GetAgentRunRequest) ProtoMessage() {}
 
 func (x *GetAgentRunRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[15]
+	mi := &file_agent_v1_agent_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1410,7 +1488,7 @@ func (x *GetAgentRunRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAgentRunRequest.ProtoReflect.Descriptor instead.
 func (*GetAgentRunRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{15}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetAgentRunRequest) GetRunId() string {
@@ -1437,7 +1515,7 @@ type GetAgentRunResponse struct {
 
 func (x *GetAgentRunResponse) Reset() {
 	*x = GetAgentRunResponse{}
-	mi := &file_agent_v1_agent_proto_msgTypes[16]
+	mi := &file_agent_v1_agent_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1449,7 +1527,7 @@ func (x *GetAgentRunResponse) String() string {
 func (*GetAgentRunResponse) ProtoMessage() {}
 
 func (x *GetAgentRunResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[16]
+	mi := &file_agent_v1_agent_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1462,7 +1540,7 @@ func (x *GetAgentRunResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAgentRunResponse.ProtoReflect.Descriptor instead.
 func (*GetAgentRunResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{16}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *GetAgentRunResponse) GetAuthoritative() bool {
@@ -1491,7 +1569,7 @@ type AgentRunEventsRequest struct {
 
 func (x *AgentRunEventsRequest) Reset() {
 	*x = AgentRunEventsRequest{}
-	mi := &file_agent_v1_agent_proto_msgTypes[17]
+	mi := &file_agent_v1_agent_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1503,7 +1581,7 @@ func (x *AgentRunEventsRequest) String() string {
 func (*AgentRunEventsRequest) ProtoMessage() {}
 
 func (x *AgentRunEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[17]
+	mi := &file_agent_v1_agent_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1516,7 +1594,7 @@ func (x *AgentRunEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentRunEventsRequest.ProtoReflect.Descriptor instead.
 func (*AgentRunEventsRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{17}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *AgentRunEventsRequest) GetRunId() string {
@@ -1557,7 +1635,7 @@ type AgentRunEventsResponse struct {
 
 func (x *AgentRunEventsResponse) Reset() {
 	*x = AgentRunEventsResponse{}
-	mi := &file_agent_v1_agent_proto_msgTypes[18]
+	mi := &file_agent_v1_agent_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1569,7 +1647,7 @@ func (x *AgentRunEventsResponse) String() string {
 func (*AgentRunEventsResponse) ProtoMessage() {}
 
 func (x *AgentRunEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[18]
+	mi := &file_agent_v1_agent_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1582,7 +1660,7 @@ func (x *AgentRunEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentRunEventsResponse.ProtoReflect.Descriptor instead.
 func (*AgentRunEventsResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{18}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *AgentRunEventsResponse) GetAuthoritative() bool {
@@ -1609,7 +1687,7 @@ type AgentRunAuthorityInput struct {
 
 func (x *AgentRunAuthorityInput) Reset() {
 	*x = AgentRunAuthorityInput{}
-	mi := &file_agent_v1_agent_proto_msgTypes[19]
+	mi := &file_agent_v1_agent_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1621,7 +1699,7 @@ func (x *AgentRunAuthorityInput) String() string {
 func (*AgentRunAuthorityInput) ProtoMessage() {}
 
 func (x *AgentRunAuthorityInput) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[19]
+	mi := &file_agent_v1_agent_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1634,7 +1712,7 @@ func (x *AgentRunAuthorityInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentRunAuthorityInput.ProtoReflect.Descriptor instead.
 func (*AgentRunAuthorityInput) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{19}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{20}
 }
 
 type AgentRunAuthorityOutput struct {
@@ -1647,7 +1725,7 @@ type AgentRunAuthorityOutput struct {
 
 func (x *AgentRunAuthorityOutput) Reset() {
 	*x = AgentRunAuthorityOutput{}
-	mi := &file_agent_v1_agent_proto_msgTypes[20]
+	mi := &file_agent_v1_agent_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1659,7 +1737,7 @@ func (x *AgentRunAuthorityOutput) String() string {
 func (*AgentRunAuthorityOutput) ProtoMessage() {}
 
 func (x *AgentRunAuthorityOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[20]
+	mi := &file_agent_v1_agent_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1672,7 +1750,7 @@ func (x *AgentRunAuthorityOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentRunAuthorityOutput.ProtoReflect.Descriptor instead.
 func (*AgentRunAuthorityOutput) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{20}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *AgentRunAuthorityOutput) GetAuthoritative() bool {
@@ -1712,7 +1790,7 @@ type AgentRunExecutionClaim struct {
 
 func (x *AgentRunExecutionClaim) Reset() {
 	*x = AgentRunExecutionClaim{}
-	mi := &file_agent_v1_agent_proto_msgTypes[21]
+	mi := &file_agent_v1_agent_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1724,7 +1802,7 @@ func (x *AgentRunExecutionClaim) String() string {
 func (*AgentRunExecutionClaim) ProtoMessage() {}
 
 func (x *AgentRunExecutionClaim) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[21]
+	mi := &file_agent_v1_agent_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1737,7 +1815,7 @@ func (x *AgentRunExecutionClaim) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentRunExecutionClaim.ProtoReflect.Descriptor instead.
 func (*AgentRunExecutionClaim) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{21}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *AgentRunExecutionClaim) GetFence() *commonv1.ActionFence {
@@ -1862,7 +1940,7 @@ type ClaimAgentRunExecutionRequest struct {
 
 func (x *ClaimAgentRunExecutionRequest) Reset() {
 	*x = ClaimAgentRunExecutionRequest{}
-	mi := &file_agent_v1_agent_proto_msgTypes[22]
+	mi := &file_agent_v1_agent_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1874,7 +1952,7 @@ func (x *ClaimAgentRunExecutionRequest) String() string {
 func (*ClaimAgentRunExecutionRequest) ProtoMessage() {}
 
 func (x *ClaimAgentRunExecutionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[22]
+	mi := &file_agent_v1_agent_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1887,7 +1965,7 @@ func (x *ClaimAgentRunExecutionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimAgentRunExecutionRequest.ProtoReflect.Descriptor instead.
 func (*ClaimAgentRunExecutionRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{22}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ClaimAgentRunExecutionRequest) GetSchemaVersion() uint32 {
@@ -1963,7 +2041,7 @@ type ClaimAgentRunExecutionResponse struct {
 
 func (x *ClaimAgentRunExecutionResponse) Reset() {
 	*x = ClaimAgentRunExecutionResponse{}
-	mi := &file_agent_v1_agent_proto_msgTypes[23]
+	mi := &file_agent_v1_agent_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1975,7 +2053,7 @@ func (x *ClaimAgentRunExecutionResponse) String() string {
 func (*ClaimAgentRunExecutionResponse) ProtoMessage() {}
 
 func (x *ClaimAgentRunExecutionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[23]
+	mi := &file_agent_v1_agent_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1988,7 +2066,7 @@ func (x *ClaimAgentRunExecutionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaimAgentRunExecutionResponse.ProtoReflect.Descriptor instead.
 func (*ClaimAgentRunExecutionResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{23}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ClaimAgentRunExecutionResponse) GetAlreadyApplied() bool {
@@ -2018,7 +2096,7 @@ type RenewAgentRunExecutionRequest struct {
 
 func (x *RenewAgentRunExecutionRequest) Reset() {
 	*x = RenewAgentRunExecutionRequest{}
-	mi := &file_agent_v1_agent_proto_msgTypes[24]
+	mi := &file_agent_v1_agent_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2030,7 +2108,7 @@ func (x *RenewAgentRunExecutionRequest) String() string {
 func (*RenewAgentRunExecutionRequest) ProtoMessage() {}
 
 func (x *RenewAgentRunExecutionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[24]
+	mi := &file_agent_v1_agent_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2043,7 +2121,7 @@ func (x *RenewAgentRunExecutionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenewAgentRunExecutionRequest.ProtoReflect.Descriptor instead.
 func (*RenewAgentRunExecutionRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{24}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *RenewAgentRunExecutionRequest) GetFence() *commonv1.ActionFence {
@@ -2090,7 +2168,7 @@ type RenewAgentRunExecutionResponse struct {
 
 func (x *RenewAgentRunExecutionResponse) Reset() {
 	*x = RenewAgentRunExecutionResponse{}
-	mi := &file_agent_v1_agent_proto_msgTypes[25]
+	mi := &file_agent_v1_agent_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2102,7 +2180,7 @@ func (x *RenewAgentRunExecutionResponse) String() string {
 func (*RenewAgentRunExecutionResponse) ProtoMessage() {}
 
 func (x *RenewAgentRunExecutionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[25]
+	mi := &file_agent_v1_agent_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2115,7 +2193,7 @@ func (x *RenewAgentRunExecutionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenewAgentRunExecutionResponse.ProtoReflect.Descriptor instead.
 func (*RenewAgentRunExecutionResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{25}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *RenewAgentRunExecutionResponse) GetClaim() *AgentRunExecutionClaim {
@@ -2143,7 +2221,7 @@ type AuthorizeAgentRunExecutionResponse struct {
 
 func (x *AuthorizeAgentRunExecutionResponse) Reset() {
 	*x = AuthorizeAgentRunExecutionResponse{}
-	mi := &file_agent_v1_agent_proto_msgTypes[26]
+	mi := &file_agent_v1_agent_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2155,7 +2233,7 @@ func (x *AuthorizeAgentRunExecutionResponse) String() string {
 func (*AuthorizeAgentRunExecutionResponse) ProtoMessage() {}
 
 func (x *AuthorizeAgentRunExecutionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[26]
+	mi := &file_agent_v1_agent_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2168,7 +2246,7 @@ func (x *AuthorizeAgentRunExecutionResponse) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use AuthorizeAgentRunExecutionResponse.ProtoReflect.Descriptor instead.
 func (*AuthorizeAgentRunExecutionResponse) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{26}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *AuthorizeAgentRunExecutionResponse) GetAlreadyApplied() bool {
@@ -2233,7 +2311,7 @@ type RefreshAgentRunAuthorizationRequest struct {
 
 func (x *RefreshAgentRunAuthorizationRequest) Reset() {
 	*x = RefreshAgentRunAuthorizationRequest{}
-	mi := &file_agent_v1_agent_proto_msgTypes[27]
+	mi := &file_agent_v1_agent_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2245,7 +2323,7 @@ func (x *RefreshAgentRunAuthorizationRequest) String() string {
 func (*RefreshAgentRunAuthorizationRequest) ProtoMessage() {}
 
 func (x *RefreshAgentRunAuthorizationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_agent_proto_msgTypes[27]
+	mi := &file_agent_v1_agent_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2258,7 +2336,7 @@ func (x *RefreshAgentRunAuthorizationRequest) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use RefreshAgentRunAuthorizationRequest.ProtoReflect.Descriptor instead.
 func (*RefreshAgentRunAuthorizationRequest) Descriptor() ([]byte, []int) {
-	return file_agent_v1_agent_proto_rawDescGZIP(), []int{27}
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *RefreshAgentRunAuthorizationRequest) GetSchemaVersion() uint32 {
@@ -2398,7 +2476,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\rprompt_tokens\x18\x05 \x01(\x04R\fpromptTokens\x12+\n" +
 	"\x11completion_tokens\x18\x06 \x01(\x04R\x10completionTokens\x12\x16\n" +
 	"\x06failed\x18\a \x01(\bR\x06failedB\r\n" +
-	"\v_latency_ms\"\xb5\x04\n" +
+	"\v_latency_ms\"\x86\x05\n" +
 	"\x10AgentRunSnapshot\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x1d\n" +
@@ -2417,7 +2495,16 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"finalAfter\x12G\n" +
 	"\n" +
 	"last_event\x18\f \x01(\v2(.deepseek.agent.v1.AgentRunEventMetadataR\tlastEvent\x12)\n" +
-	"\x10runtime_revision\x18\r \x01(\x04R\x0fruntimeRevision\"\xee\x01\n" +
+	"\x10runtime_revision\x18\r \x01(\x04R\x0fruntimeRevision\x12O\n" +
+	"\x0erecovery_scope\x18\x0e \x01(\v2(.deepseek.agent.v1.AgentRunRecoveryScopeR\rrecoveryScope\"\xc4\x01\n" +
+	"\x15AgentRunRecoveryScope\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x01 \x01(\x04R\n" +
+	"generation\x12C\n" +
+	"\acontext\x18\x02 \x01(\v2).deepseek.agent.v1.AgentArtifactReferenceR\acontext\x12%\n" +
+	"\x0econtext_sha256\x18\x03 \x01(\tR\rcontextSha256\x12\x1f\n" +
+	"\vstart_index\x18\x04 \x01(\x03R\n" +
+	"startIndex\"\xee\x01\n" +
 	"\x15AgentRunRuntimeUpdate\x12:\n" +
 	"\x19expected_runtime_revision\x18\x01 \x01(\x04R\x17expectedRuntimeRevision\x12T\n" +
 	"\x10expected_request\x18\x02 \x01(\v2).deepseek.agent.v1.AgentArtifactReferenceR\x0fexpectedRequest\x12C\n" +
@@ -2547,7 +2634,7 @@ func file_agent_v1_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_agent_v1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_agent_v1_agent_proto_goTypes = []any{
 	(AgentChatPhase)(0),                         // 0: deepseek.agent.v1.AgentChatPhase
 	(AgentRunExecutionPhase)(0),                 // 1: deepseek.agent.v1.AgentRunExecutionPhase
@@ -2563,35 +2650,36 @@ var file_agent_v1_agent_proto_goTypes = []any{
 	(*AgentRunCreateMetadata)(nil),              // 11: deepseek.agent.v1.AgentRunCreateMetadata
 	(*AgentRunNodeMetadata)(nil),                // 12: deepseek.agent.v1.AgentRunNodeMetadata
 	(*AgentRunSnapshot)(nil),                    // 13: deepseek.agent.v1.AgentRunSnapshot
-	(*AgentRunRuntimeUpdate)(nil),               // 14: deepseek.agent.v1.AgentRunRuntimeUpdate
-	(*AppendAgentRunEventRequest)(nil),          // 15: deepseek.agent.v1.AppendAgentRunEventRequest
-	(*AppendAgentRunEventResponse)(nil),         // 16: deepseek.agent.v1.AppendAgentRunEventResponse
-	(*GetAgentRunRequest)(nil),                  // 17: deepseek.agent.v1.GetAgentRunRequest
-	(*GetAgentRunResponse)(nil),                 // 18: deepseek.agent.v1.GetAgentRunResponse
-	(*AgentRunEventsRequest)(nil),               // 19: deepseek.agent.v1.AgentRunEventsRequest
-	(*AgentRunEventsResponse)(nil),              // 20: deepseek.agent.v1.AgentRunEventsResponse
-	(*AgentRunAuthorityInput)(nil),              // 21: deepseek.agent.v1.AgentRunAuthorityInput
-	(*AgentRunAuthorityOutput)(nil),             // 22: deepseek.agent.v1.AgentRunAuthorityOutput
-	(*AgentRunExecutionClaim)(nil),              // 23: deepseek.agent.v1.AgentRunExecutionClaim
-	(*ClaimAgentRunExecutionRequest)(nil),       // 24: deepseek.agent.v1.ClaimAgentRunExecutionRequest
-	(*ClaimAgentRunExecutionResponse)(nil),      // 25: deepseek.agent.v1.ClaimAgentRunExecutionResponse
-	(*RenewAgentRunExecutionRequest)(nil),       // 26: deepseek.agent.v1.RenewAgentRunExecutionRequest
-	(*RenewAgentRunExecutionResponse)(nil),      // 27: deepseek.agent.v1.RenewAgentRunExecutionResponse
-	(*AuthorizeAgentRunExecutionResponse)(nil),  // 28: deepseek.agent.v1.AuthorizeAgentRunExecutionResponse
-	(*RefreshAgentRunAuthorizationRequest)(nil), // 29: deepseek.agent.v1.RefreshAgentRunAuthorizationRequest
-	(*commonv1.ActionFence)(nil),                // 30: deepseek.common.v1.ActionFence
-	(commonv1.EffectState)(0),                   // 31: deepseek.common.v1.EffectState
+	(*AgentRunRecoveryScope)(nil),               // 14: deepseek.agent.v1.AgentRunRecoveryScope
+	(*AgentRunRuntimeUpdate)(nil),               // 15: deepseek.agent.v1.AgentRunRuntimeUpdate
+	(*AppendAgentRunEventRequest)(nil),          // 16: deepseek.agent.v1.AppendAgentRunEventRequest
+	(*AppendAgentRunEventResponse)(nil),         // 17: deepseek.agent.v1.AppendAgentRunEventResponse
+	(*GetAgentRunRequest)(nil),                  // 18: deepseek.agent.v1.GetAgentRunRequest
+	(*GetAgentRunResponse)(nil),                 // 19: deepseek.agent.v1.GetAgentRunResponse
+	(*AgentRunEventsRequest)(nil),               // 20: deepseek.agent.v1.AgentRunEventsRequest
+	(*AgentRunEventsResponse)(nil),              // 21: deepseek.agent.v1.AgentRunEventsResponse
+	(*AgentRunAuthorityInput)(nil),              // 22: deepseek.agent.v1.AgentRunAuthorityInput
+	(*AgentRunAuthorityOutput)(nil),             // 23: deepseek.agent.v1.AgentRunAuthorityOutput
+	(*AgentRunExecutionClaim)(nil),              // 24: deepseek.agent.v1.AgentRunExecutionClaim
+	(*ClaimAgentRunExecutionRequest)(nil),       // 25: deepseek.agent.v1.ClaimAgentRunExecutionRequest
+	(*ClaimAgentRunExecutionResponse)(nil),      // 26: deepseek.agent.v1.ClaimAgentRunExecutionResponse
+	(*RenewAgentRunExecutionRequest)(nil),       // 27: deepseek.agent.v1.RenewAgentRunExecutionRequest
+	(*RenewAgentRunExecutionResponse)(nil),      // 28: deepseek.agent.v1.RenewAgentRunExecutionResponse
+	(*AuthorizeAgentRunExecutionResponse)(nil),  // 29: deepseek.agent.v1.AuthorizeAgentRunExecutionResponse
+	(*RefreshAgentRunAuthorizationRequest)(nil), // 30: deepseek.agent.v1.RefreshAgentRunAuthorizationRequest
+	(*commonv1.ActionFence)(nil),                // 31: deepseek.common.v1.ActionFence
+	(commonv1.EffectState)(0),                   // 32: deepseek.common.v1.EffectState
 }
 var file_agent_v1_agent_proto_depIdxs = []int32{
-	30, // 0: deepseek.agent.v1.AgentTaskCommand.fence:type_name -> deepseek.common.v1.ActionFence
-	30, // 1: deepseek.agent.v1.AgentTaskResult.fence:type_name -> deepseek.common.v1.ActionFence
-	31, // 2: deepseek.agent.v1.AgentTaskResult.state:type_name -> deepseek.common.v1.EffectState
+	31, // 0: deepseek.agent.v1.AgentTaskCommand.fence:type_name -> deepseek.common.v1.ActionFence
+	31, // 1: deepseek.agent.v1.AgentTaskResult.fence:type_name -> deepseek.common.v1.ActionFence
+	32, // 2: deepseek.agent.v1.AgentTaskResult.state:type_name -> deepseek.common.v1.EffectState
 	4,  // 3: deepseek.agent.v1.AgentChatScheduleInput.candidates:type_name -> deepseek.agent.v1.AgentChatTask
 	5,  // 4: deepseek.agent.v1.AgentChatScheduleInput.outcomes:type_name -> deepseek.agent.v1.AgentChatOutcome
 	4,  // 5: deepseek.agent.v1.AgentChatScheduleOutput.plan:type_name -> deepseek.agent.v1.AgentChatTask
 	4,  // 6: deepseek.agent.v1.AgentChatScheduleOutput.execute:type_name -> deepseek.agent.v1.AgentChatTask
 	0,  // 7: deepseek.agent.v1.AgentChatScheduleOutput.phase:type_name -> deepseek.agent.v1.AgentChatPhase
-	30, // 8: deepseek.agent.v1.AgentRunEventMetadata.fence:type_name -> deepseek.common.v1.ActionFence
+	31, // 8: deepseek.agent.v1.AgentRunEventMetadata.fence:type_name -> deepseek.common.v1.ActionFence
 	9,  // 9: deepseek.agent.v1.AgentRunEventMetadata.plan:type_name -> deepseek.agent.v1.AgentRunPlanNode
 	8,  // 10: deepseek.agent.v1.AgentRunEventMetadata.body:type_name -> deepseek.agent.v1.AgentArtifactReference
 	8,  // 11: deepseek.agent.v1.AgentRunCreateMetadata.request:type_name -> deepseek.agent.v1.AgentArtifactReference
@@ -2599,51 +2687,53 @@ var file_agent_v1_agent_proto_depIdxs = []int32{
 	9,  // 13: deepseek.agent.v1.AgentRunSnapshot.plan:type_name -> deepseek.agent.v1.AgentRunPlanNode
 	12, // 14: deepseek.agent.v1.AgentRunSnapshot.nodes:type_name -> deepseek.agent.v1.AgentRunNodeMetadata
 	10, // 15: deepseek.agent.v1.AgentRunSnapshot.last_event:type_name -> deepseek.agent.v1.AgentRunEventMetadata
-	8,  // 16: deepseek.agent.v1.AgentRunRuntimeUpdate.expected_request:type_name -> deepseek.agent.v1.AgentArtifactReference
-	8,  // 17: deepseek.agent.v1.AgentRunRuntimeUpdate.request:type_name -> deepseek.agent.v1.AgentArtifactReference
-	11, // 18: deepseek.agent.v1.AppendAgentRunEventRequest.create:type_name -> deepseek.agent.v1.AgentRunCreateMetadata
-	10, // 19: deepseek.agent.v1.AppendAgentRunEventRequest.event:type_name -> deepseek.agent.v1.AgentRunEventMetadata
-	30, // 20: deepseek.agent.v1.AppendAgentRunEventRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	14, // 21: deepseek.agent.v1.AppendAgentRunEventRequest.runtime_update:type_name -> deepseek.agent.v1.AgentRunRuntimeUpdate
-	10, // 22: deepseek.agent.v1.AppendAgentRunEventResponse.event:type_name -> deepseek.agent.v1.AgentRunEventMetadata
-	13, // 23: deepseek.agent.v1.AppendAgentRunEventResponse.run:type_name -> deepseek.agent.v1.AgentRunSnapshot
-	30, // 24: deepseek.agent.v1.GetAgentRunRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	13, // 25: deepseek.agent.v1.GetAgentRunResponse.run:type_name -> deepseek.agent.v1.AgentRunSnapshot
-	30, // 26: deepseek.agent.v1.AgentRunEventsRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	10, // 27: deepseek.agent.v1.AgentRunEventsResponse.events:type_name -> deepseek.agent.v1.AgentRunEventMetadata
-	30, // 28: deepseek.agent.v1.AgentRunExecutionClaim.fence:type_name -> deepseek.common.v1.ActionFence
-	1,  // 29: deepseek.agent.v1.AgentRunExecutionClaim.phase:type_name -> deepseek.agent.v1.AgentRunExecutionPhase
-	8,  // 30: deepseek.agent.v1.AgentRunExecutionClaim.request:type_name -> deepseek.agent.v1.AgentArtifactReference
-	1,  // 31: deepseek.agent.v1.ClaimAgentRunExecutionRequest.phase:type_name -> deepseek.agent.v1.AgentRunExecutionPhase
-	30, // 32: deepseek.agent.v1.ClaimAgentRunExecutionRequest.metadata_fence:type_name -> deepseek.common.v1.ActionFence
-	23, // 33: deepseek.agent.v1.ClaimAgentRunExecutionResponse.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
-	30, // 34: deepseek.agent.v1.RenewAgentRunExecutionRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	23, // 35: deepseek.agent.v1.RenewAgentRunExecutionResponse.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
-	23, // 36: deepseek.agent.v1.AuthorizeAgentRunExecutionResponse.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
-	30, // 37: deepseek.agent.v1.RefreshAgentRunAuthorizationRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	6,  // 38: deepseek.agent.v1.AgentChatScheduler.Evaluate:input_type -> deepseek.agent.v1.AgentChatScheduleInput
-	21, // 39: deepseek.agent.v1.AgentRunControl.GetAuthority:input_type -> deepseek.agent.v1.AgentRunAuthorityInput
-	15, // 40: deepseek.agent.v1.AgentRunControl.AppendEvent:input_type -> deepseek.agent.v1.AppendAgentRunEventRequest
-	17, // 41: deepseek.agent.v1.AgentRunControl.GetRun:input_type -> deepseek.agent.v1.GetAgentRunRequest
-	19, // 42: deepseek.agent.v1.AgentRunControl.EventsAfter:input_type -> deepseek.agent.v1.AgentRunEventsRequest
-	24, // 43: deepseek.agent.v1.AgentRunControl.ClaimExecution:input_type -> deepseek.agent.v1.ClaimAgentRunExecutionRequest
-	26, // 44: deepseek.agent.v1.AgentRunControl.RenewExecution:input_type -> deepseek.agent.v1.RenewAgentRunExecutionRequest
-	24, // 45: deepseek.agent.v1.AgentRunControl.AuthorizeExecution:input_type -> deepseek.agent.v1.ClaimAgentRunExecutionRequest
-	29, // 46: deepseek.agent.v1.AgentRunControl.RefreshAuthorization:input_type -> deepseek.agent.v1.RefreshAgentRunAuthorizationRequest
-	7,  // 47: deepseek.agent.v1.AgentChatScheduler.Evaluate:output_type -> deepseek.agent.v1.AgentChatScheduleOutput
-	22, // 48: deepseek.agent.v1.AgentRunControl.GetAuthority:output_type -> deepseek.agent.v1.AgentRunAuthorityOutput
-	16, // 49: deepseek.agent.v1.AgentRunControl.AppendEvent:output_type -> deepseek.agent.v1.AppendAgentRunEventResponse
-	18, // 50: deepseek.agent.v1.AgentRunControl.GetRun:output_type -> deepseek.agent.v1.GetAgentRunResponse
-	20, // 51: deepseek.agent.v1.AgentRunControl.EventsAfter:output_type -> deepseek.agent.v1.AgentRunEventsResponse
-	25, // 52: deepseek.agent.v1.AgentRunControl.ClaimExecution:output_type -> deepseek.agent.v1.ClaimAgentRunExecutionResponse
-	27, // 53: deepseek.agent.v1.AgentRunControl.RenewExecution:output_type -> deepseek.agent.v1.RenewAgentRunExecutionResponse
-	28, // 54: deepseek.agent.v1.AgentRunControl.AuthorizeExecution:output_type -> deepseek.agent.v1.AuthorizeAgentRunExecutionResponse
-	28, // 55: deepseek.agent.v1.AgentRunControl.RefreshAuthorization:output_type -> deepseek.agent.v1.AuthorizeAgentRunExecutionResponse
-	47, // [47:56] is the sub-list for method output_type
-	38, // [38:47] is the sub-list for method input_type
-	38, // [38:38] is the sub-list for extension type_name
-	38, // [38:38] is the sub-list for extension extendee
-	0,  // [0:38] is the sub-list for field type_name
+	14, // 16: deepseek.agent.v1.AgentRunSnapshot.recovery_scope:type_name -> deepseek.agent.v1.AgentRunRecoveryScope
+	8,  // 17: deepseek.agent.v1.AgentRunRecoveryScope.context:type_name -> deepseek.agent.v1.AgentArtifactReference
+	8,  // 18: deepseek.agent.v1.AgentRunRuntimeUpdate.expected_request:type_name -> deepseek.agent.v1.AgentArtifactReference
+	8,  // 19: deepseek.agent.v1.AgentRunRuntimeUpdate.request:type_name -> deepseek.agent.v1.AgentArtifactReference
+	11, // 20: deepseek.agent.v1.AppendAgentRunEventRequest.create:type_name -> deepseek.agent.v1.AgentRunCreateMetadata
+	10, // 21: deepseek.agent.v1.AppendAgentRunEventRequest.event:type_name -> deepseek.agent.v1.AgentRunEventMetadata
+	31, // 22: deepseek.agent.v1.AppendAgentRunEventRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	15, // 23: deepseek.agent.v1.AppendAgentRunEventRequest.runtime_update:type_name -> deepseek.agent.v1.AgentRunRuntimeUpdate
+	10, // 24: deepseek.agent.v1.AppendAgentRunEventResponse.event:type_name -> deepseek.agent.v1.AgentRunEventMetadata
+	13, // 25: deepseek.agent.v1.AppendAgentRunEventResponse.run:type_name -> deepseek.agent.v1.AgentRunSnapshot
+	31, // 26: deepseek.agent.v1.GetAgentRunRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	13, // 27: deepseek.agent.v1.GetAgentRunResponse.run:type_name -> deepseek.agent.v1.AgentRunSnapshot
+	31, // 28: deepseek.agent.v1.AgentRunEventsRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	10, // 29: deepseek.agent.v1.AgentRunEventsResponse.events:type_name -> deepseek.agent.v1.AgentRunEventMetadata
+	31, // 30: deepseek.agent.v1.AgentRunExecutionClaim.fence:type_name -> deepseek.common.v1.ActionFence
+	1,  // 31: deepseek.agent.v1.AgentRunExecutionClaim.phase:type_name -> deepseek.agent.v1.AgentRunExecutionPhase
+	8,  // 32: deepseek.agent.v1.AgentRunExecutionClaim.request:type_name -> deepseek.agent.v1.AgentArtifactReference
+	1,  // 33: deepseek.agent.v1.ClaimAgentRunExecutionRequest.phase:type_name -> deepseek.agent.v1.AgentRunExecutionPhase
+	31, // 34: deepseek.agent.v1.ClaimAgentRunExecutionRequest.metadata_fence:type_name -> deepseek.common.v1.ActionFence
+	24, // 35: deepseek.agent.v1.ClaimAgentRunExecutionResponse.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
+	31, // 36: deepseek.agent.v1.RenewAgentRunExecutionRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	24, // 37: deepseek.agent.v1.RenewAgentRunExecutionResponse.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
+	24, // 38: deepseek.agent.v1.AuthorizeAgentRunExecutionResponse.claim:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
+	31, // 39: deepseek.agent.v1.RefreshAgentRunAuthorizationRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	6,  // 40: deepseek.agent.v1.AgentChatScheduler.Evaluate:input_type -> deepseek.agent.v1.AgentChatScheduleInput
+	22, // 41: deepseek.agent.v1.AgentRunControl.GetAuthority:input_type -> deepseek.agent.v1.AgentRunAuthorityInput
+	16, // 42: deepseek.agent.v1.AgentRunControl.AppendEvent:input_type -> deepseek.agent.v1.AppendAgentRunEventRequest
+	18, // 43: deepseek.agent.v1.AgentRunControl.GetRun:input_type -> deepseek.agent.v1.GetAgentRunRequest
+	20, // 44: deepseek.agent.v1.AgentRunControl.EventsAfter:input_type -> deepseek.agent.v1.AgentRunEventsRequest
+	25, // 45: deepseek.agent.v1.AgentRunControl.ClaimExecution:input_type -> deepseek.agent.v1.ClaimAgentRunExecutionRequest
+	27, // 46: deepseek.agent.v1.AgentRunControl.RenewExecution:input_type -> deepseek.agent.v1.RenewAgentRunExecutionRequest
+	25, // 47: deepseek.agent.v1.AgentRunControl.AuthorizeExecution:input_type -> deepseek.agent.v1.ClaimAgentRunExecutionRequest
+	30, // 48: deepseek.agent.v1.AgentRunControl.RefreshAuthorization:input_type -> deepseek.agent.v1.RefreshAgentRunAuthorizationRequest
+	7,  // 49: deepseek.agent.v1.AgentChatScheduler.Evaluate:output_type -> deepseek.agent.v1.AgentChatScheduleOutput
+	23, // 50: deepseek.agent.v1.AgentRunControl.GetAuthority:output_type -> deepseek.agent.v1.AgentRunAuthorityOutput
+	17, // 51: deepseek.agent.v1.AgentRunControl.AppendEvent:output_type -> deepseek.agent.v1.AppendAgentRunEventResponse
+	19, // 52: deepseek.agent.v1.AgentRunControl.GetRun:output_type -> deepseek.agent.v1.GetAgentRunResponse
+	21, // 53: deepseek.agent.v1.AgentRunControl.EventsAfter:output_type -> deepseek.agent.v1.AgentRunEventsResponse
+	26, // 54: deepseek.agent.v1.AgentRunControl.ClaimExecution:output_type -> deepseek.agent.v1.ClaimAgentRunExecutionResponse
+	28, // 55: deepseek.agent.v1.AgentRunControl.RenewExecution:output_type -> deepseek.agent.v1.RenewAgentRunExecutionResponse
+	29, // 56: deepseek.agent.v1.AgentRunControl.AuthorizeExecution:output_type -> deepseek.agent.v1.AuthorizeAgentRunExecutionResponse
+	29, // 57: deepseek.agent.v1.AgentRunControl.RefreshAuthorization:output_type -> deepseek.agent.v1.AuthorizeAgentRunExecutionResponse
+	49, // [49:58] is the sub-list for method output_type
+	40, // [40:49] is the sub-list for method input_type
+	40, // [40:40] is the sub-list for extension type_name
+	40, // [40:40] is the sub-list for extension extendee
+	0,  // [0:40] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_agent_proto_init() }
@@ -2659,7 +2749,7 @@ func file_agent_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_agent_proto_rawDesc), len(file_agent_v1_agent_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   28,
+			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

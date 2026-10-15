@@ -60,26 +60,38 @@ type RunNode struct {
 	Failed           bool   `json:"failed"`
 }
 
+// Recovery retains only control decisions and signed original effect identities.
+// Provider bodies, credentials and the immutable context object stay in Rust.
+type RunRecoveryScope struct {
+	Generation    uint64                           `json:"generation"`
+	Context       ArtifactRef                      `json:"contextRef"`
+	ContextSHA256 string                           `json:"contextSha256"`
+	StartIndex    int64                            `json:"startIndex"`
+	Metadata      *agentv1.AgentRunRecoveryContext `json:"metadata"`
+}
+
 // RunMetadata persists only Go-owned control metadata. BaseNodes records the
 // last event state; queued/cancelled views are derived again after plan edits.
 // Node views do not authorize effects: dispatch must also check the action
 // journal, live fences, and reconciliation, including EFFECT_UNKNOWN.
 type RunMetadata struct {
-	SchemaVersion   uint32             `json:"agentMetadataSchemaVersion"`
-	RunID           string             `json:"runId"`
-	Status          string             `json:"status"`
-	NextIndex       int64              `json:"nextIndex"`
-	Preset          string             `json:"agentPreset"`
-	ConfirmPlan     bool               `json:"confirmPlan"`
-	ConversationID  string             `json:"conversationId"`
-	MessageID       string             `json:"messageId"`
-	Request         ArtifactRef        `json:"requestRef"`
-	RuntimeRevision uint64             `json:"runtimeRevision,omitempty"`
-	Plan            []RunPlanNode      `json:"plan"`
-	BaseNodes       map[string]RunNode `json:"nodeMetadata"`
-	Cancelled       bool               `json:"cancelledObserved"`
-	FinalAfter      int64              `json:"finalAfter"`
-	LastEvent       RunEvent           `json:"lastEvent"`
+	SchemaVersion          uint32             `json:"agentMetadataSchemaVersion"`
+	RunID                  string             `json:"runId"`
+	Status                 string             `json:"status"`
+	NextIndex              int64              `json:"nextIndex"`
+	Preset                 string             `json:"agentPreset"`
+	ConfirmPlan            bool               `json:"confirmPlan"`
+	ConversationID         string             `json:"conversationId"`
+	MessageID              string             `json:"messageId"`
+	Request                ArtifactRef        `json:"requestRef"`
+	RuntimeRevision        uint64             `json:"runtimeRevision,omitempty"`
+	Plan                   []RunPlanNode      `json:"plan"`
+	BaseNodes              map[string]RunNode `json:"nodeMetadata"`
+	Cancelled              bool               `json:"cancelledObserved"`
+	CancellationGeneration uint64             `json:"cancellationGeneration,omitempty"`
+	Recovery               *RunRecoveryScope  `json:"recoveryScope,omitempty"`
+	FinalAfter             int64              `json:"finalAfter"`
+	LastEvent              RunEvent           `json:"lastEvent"`
 }
 
 // RuntimeVersion keeps existing v1 metadata byte-compatible: an absent revision
@@ -90,6 +102,12 @@ func (run RunMetadata) RuntimeVersion() uint64 {
 		return 1
 	}
 	return run.RuntimeRevision
+}
+
+// A new durable generation does not erase an observed cancellation. Its own
+// separately admitted scope determines whether that cancellation is still active.
+func (run RunMetadata) CancellationActive() bool {
+	return run.Cancelled && (run.Recovery == nil || run.CancellationGeneration >= run.Recovery.Generation)
 }
 
 func runNodePhase(phase string) bool {
@@ -124,6 +142,9 @@ func (run *RunMetadata) ApplyRunEvent(event RunEvent) {
 		}
 		if event.Status == "cancelled" {
 			run.Cancelled = true
+			if run.Recovery != nil {
+				run.CancellationGeneration = run.Recovery.Generation
+			}
 		}
 	case "agent_plan":
 		run.Plan = event.Plan
@@ -190,7 +211,7 @@ func (run RunMetadata) Nodes() map[string]RunNode {
 		}
 	}
 	for id, node := range nodes {
-		if run.Cancelled && node.State != "succeeded" && node.State != "cancelled" {
+		if run.CancellationActive() && node.State != "succeeded" && node.State != "cancelled" {
 			node.State = "cancelled"
 		} else if node.State == "created" {
 			ready := true

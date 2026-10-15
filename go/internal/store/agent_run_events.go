@@ -52,8 +52,10 @@ func decodeAgentMetadata(record Record) (agent.RunMetadata, error) {
 	if err := json.Unmarshal(record.Payload, &run); err != nil {
 		return run, ErrAgentRunMetadataInvalid
 	}
-	if (run.SchemaVersion != 1 && run.SchemaVersion != 2) ||
-		run.SchemaVersion == 1 && run.RuntimeRevision > 1 || run.SchemaVersion == 2 && run.RuntimeRevision < 2 ||
+	legacy := (run.SchemaVersion == 1 && run.RuntimeRevision <= 1 || run.SchemaVersion == 2 && run.RuntimeRevision >= 2) &&
+		run.Recovery == nil && run.CancellationGeneration == 0
+	recovery := run.SchemaVersion == 3 && run.RuntimeRevision >= 2 && validAgentRecoveryScope(run)
+	if (!legacy && !recovery) ||
 		run.RunID != record.ID || run.Status != record.State ||
 		run.NextIndex != record.Revision || run.LastEvent.Index != record.Revision-1 ||
 		run.LastEvent.RunID != record.ID || run.LastEvent.ActionID != record.ID ||

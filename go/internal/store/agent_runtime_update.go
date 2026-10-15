@@ -22,6 +22,11 @@ func applyAgentRuntimeUpdateTx(tx *sql.Tx, run *agent.RunMetadata, mutation Agen
 	if update == nil {
 		return nil
 	}
+	// Recovery has a distinct atomic request/context admission. This legacy
+	// awaiting-plan swap must never downgrade or rewrite a schema3 scope.
+	if run.Recovery != nil || run.SchemaVersion >= 3 {
+		return ErrIllegalTransition
+	}
 	current := run.RuntimeVersion()
 	if update.ExpectedRevision == 0 || current >= math.MaxInt64 ||
 		!validAgentArtifact(update.ExpectedRequest) || !validAgentArtifact(update.Request) {
