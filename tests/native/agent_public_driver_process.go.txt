@@ -460,13 +460,17 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 	if !bytes.Contains(raw, []byte("Controlled final answer")) || bytes.Contains(raw, []byte("request-only-credential")) {
 		t.Fatal("public final answer missing or private credential leaked")
 	}
-	nativeSigningWrite(t, filepath.Join(directory, "result.json"), map[string]any{
+	result := map[string]any{
 		"status": "PASS", "runId": created.RunID, "runStatus": metadata.Status, "nextIndex": metadata.NextIndex,
 		"durablePhases": len(records), "resourcesReleased": true, "requestSha256": metadata.Request.SHA256, "requestLength": metadata.Request.Length,
 		"publicEventCount": len(events), "finalAnswerVisible": true, "publicResponseLength": len(serialized),
 		"inputBodySeededByOfflineOracle": false, "productionProviderQualified": false, "fullMigrationQualified": false,
 		"productionRuntimeProcesses": []string{"Go", "Rust"}, "providerFixtureIsOfflineTestTool": true,
 		"publicCreationAndDAGDriverQualified": true, "publicPlanConfirmationQualified": expectedConfirmation && confirmed, "noTasksBeforePublicConfirmation": expectedConfirmation && confirmed,
-		"planConfirmationRequired": metadata.ConfirmPlan, "actualPreset": metadata.Preset, "actualPlan": metadata.Plan, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")})
+		"planConfirmationRequired": metadata.ConfirmPlan, "actualPreset": metadata.Preset, "actualPlan": metadata.Plan, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA")}
+	if os.Getenv("DEEPSEEK_TEST_AGENT_RECOVERY_PREPARATION") == "1" {
+		result = nativeRecoveryPreparation(t, control, origin, ready, os.Getenv("DEEPSEEK_AGENT_SIGNING_WORKER_BEARER"), public.Origin, client, metadata, publicRun, result)
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "result.json"), result)
 	fmt.Println("actual native public create / leader / dependent DAG / synthesis / final settlement PASS")
 }

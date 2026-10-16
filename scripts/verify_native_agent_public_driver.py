@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from datetime import datetime, timedelta, timezone
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -75,6 +76,39 @@ def validate_driver_result(result: dict[str, Any], exchanges: list[dict[str, Any
             exchanges[2].get("predecessorSummaryInPrompt") is not True or exchanges[2].get("privateReasoningInPrompt") is not False or \
             exchanges[3].get("synthesisCoderInPrompt") is not True or exchanges[3].get("synthesisCriticInPrompt") is not True:
         raise ValueError("Actual native DAG dependency/final request assembly is unqualified")
+
+
+def validate_recovery_preparation_result(result: dict[str, Any], exchanges: list[dict[str, Any]]) -> None:
+    base = result.get("baseExecution")
+    recovery = result.get("recoveryPreparation")
+    if not isinstance(base, dict) or not isinstance(recovery, dict):
+        raise ValueError("Actual recovery preparation evidence is missing")
+    validate_driver_result(base, exchanges)
+    if result.get("status") != "PASS" or result.get("runStatus") != "done" or result.get("nextIndex") != 11 or \
+            result.get("publicEventCount") != 11 or result.get("durablePhases") != 3 or \
+            result.get("productionRuntimeProcesses") != ["Go", "Rust"] or result.get("finalAnswerVisible") is not True or \
+            result.get("productionProviderQualified") is not False or result.get("fullMigrationQualified") is not False or \
+            result.get("sourceCommit") != base.get("sourceCommit") or result.get("runId") != base.get("runId"):
+        raise ValueError("Recovery preparation omitted actual public settlement or overclaims qualification")
+    if recovery.get("kind") != "completed-resume" or recovery.get("generation") != 1 or \
+            recovery.get("originalRuntimeRevision") != 1 or recovery.get("runtimeRevision") != 2 or \
+            recovery.get("priorEffectCount") != 4 or recovery.get("retainedOutputCount") != 2 or \
+            recovery.get("newProviderCalls") != 0 or recovery.get("newDurablePhases") != 0 or \
+            recovery.get("goOpenedRustBody") is not False or recovery.get("fullResumeRerunQualified") is not False:
+        raise ValueError("Recovery preparation lost original custody or admitted extra effects")
+    for key in ["preparedByRust", "readOnlyPreview", "preparationRetryIdempotent", "commitRetryIdempotent",
+                "forgedContextDenied", "unauthenticatedDenied", "stalePreparationDenied", "originalEffectsUnchanged",
+                "originalPublicEventsUnchanged", "publicReadQualified"]:
+        if recovery.get(key) is not True:
+            raise ValueError("Recovery preparation lacks actual custody/CAS denial evidence: " + key)
+    for value in [result.get("requestSha256"), recovery.get("originalRequestSha256"),
+                  recovery.get("contextSha256"), recovery.get("contextArtifactSha256")]:
+        if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+            raise ValueError("Recovery preparation omitted a precise immutable artifact binding")
+    if recovery["originalRequestSha256"] != base.get("requestSha256") or \
+            result["requestSha256"] == base.get("requestSha256") or \
+            type(recovery.get("contextArtifactLength")) is not int or recovery["contextArtifactLength"] <= 0:
+        raise ValueError("Recovery preparation reused or omitted the new context/request custody")
 
 
 def wait_edge(origin: str, process: subprocess.Popen[bytes]) -> None:
@@ -202,6 +236,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     preset_case = getattr(args, "preset_case", None)
     cancel_after_plan = bool(getattr(args, "cancel_after_plan", False))
     cancel_active = bool(getattr(args, "cancel_active", False))
+    recovery_preparation = bool(getattr(args, "recovery_preparation", False))
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=True)
     source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -217,11 +252,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         version = subprocess.check_output(["go", "version"], env=environment, text=True).strip()
         if not version.startswith(f"go version {signing.GO_VERSION} "):
             raise ValueError("Native Go toolchain pin differs")
-        fixtures = [ROOT / "tests/native/agent_signing_process.go.txt", ROOT / "tests/native/agent_public_driver_process.go.txt"]
+        fixtures = [ROOT / "tests/native/agent_signing_process.go.txt", ROOT / "tests/native/agent_public_driver_process.go.txt",
+                    ROOT / "tests/native/agent_recovery_preparation_process.go.txt"]
         overlay = scratch / "overlay.json"
         overlay.write_text(json.dumps({"Replace": {
             (ROOT / "go/internal/api/zz_native_agent_signing_process_test.go").as_posix(): fixtures[0].as_posix(),
-            (ROOT / "go/internal/api/zz_native_agent_public_driver_process_test.go").as_posix(): fixtures[1].as_posix()}}), encoding="utf-8")
+            (ROOT / "go/internal/api/zz_native_agent_public_driver_process_test.go").as_posix(): fixtures[1].as_posix(),
+            (ROOT / "go/internal/api/zz_native_agent_recovery_preparation_process_test.go").as_posix(): fixtures[2].as_posix()}}), encoding="utf-8")
         binary = scratch / "native-public-agent-api-tests"
         signing.record_command(["go", "test", "-c", "-p=2", "-overlay", overlay.as_posix(), "-o", binary.as_posix(), "./internal/api"],
             ROOT / "go", environment, output, "go-public-driver-build", timeout=600)
@@ -300,6 +337,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             environment.update(DEEPSEEK_AGENT_PUBLIC_DRIVER_PROBE="1", DEEPSEEK_AGENT_SIGNING_PROBE_DIR=case.as_posix(),
                 DEEPSEEK_AGENT_SIGNING_WORKER_BEARER=bearer, DEEPSEEK_TEST_HEAD_SHA=source_commit,
                 DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY=binding["signerPublicKey"])
+            if recovery_preparation:
+                environment["DEEPSEEK_TEST_AGENT_RECOVERY_PREPARATION"] = "1"
             if cancel_after_plan:
                 environment["DEEPSEEK_TEST_AGENT_CANCEL_AFTER_PLAN"] = "1"
             if cancel_active:
@@ -348,7 +387,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             result = signing.wait_json(case / "result.json", producer, timeout=360 if cancel_active else 180)
             if producer.wait(timeout=15) != 0:
                 raise RuntimeError("Actual native public driver process failed")
-            if preset_case is None:
+            if recovery_preparation:
+                validate_recovery_preparation_result(result, exchanges)
+            elif preset_case is None:
                 validate_driver_result(result, exchanges)
             if result.get("sourceCommit") != source_commit:
                 raise ValueError("Go process source revision differs")
@@ -359,6 +400,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 request = json.loads(row[1])
                 if request["payload"].get("apiKey") is not None or "request-only-credential" in row[1].decode():
                     raise ValueError("Actual public request persisted a credential")
+                if recovery_preparation:
+                    recovery = result["recoveryPreparation"]
+                    context_row = db.execute("SELECT length,bytes FROM artifacts WHERE sha256=?",
+                                             (recovery["contextArtifactSha256"],)).fetchone()
+                    envelope = request.get("_nativeRecoveryContext")
+                    if not context_row or context_row[0] != recovery["contextArtifactLength"] or \
+                            hashlib.sha256(context_row[1]).hexdigest() != recovery["contextArtifactSha256"] or \
+                            json.loads(context_row[1]) != envelope or not isinstance(envelope, dict) or \
+                            set(envelope) != {"schema", "metadataProto"} or envelope["schema"] != "native-agent-recovery-context-v1":
+                        raise ValueError("Prepared recovery context lacks independently retained Rust custody")
+                    encoded = envelope["metadataProto"]
+                    context_proto = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+                    if base64.urlsafe_b64encode(context_proto).decode().rstrip("=") != encoded or \
+                            hashlib.sha256(context_proto).hexdigest() != recovery["contextSha256"]:
+                        raise ValueError("Prepared recovery protobuf digest differs from live Go preview")
+                    result["recoveryContextArtifactVerified"] = True
             with sqlite3.connect((state / "rust-worker/authority.sqlite3").as_uri() + "?mode=ro", uri=True) as db:
                 rows = db.execute("SELECT operation_id,state,output,output_sha256 FROM agent_node_effects").fetchall()
                 expected_nodes = (1 if preset_case is not None and preset_case.get("cancelPhase") == "plan" else 2) if cancel_active else (1 if cancel_after_plan else (4 if preset_case is None else len(preset_case["plan"]) + 2))
@@ -398,6 +455,7 @@ def main() -> int:
     mode.add_argument("--preset-matrix", action="store_true")
     mode.add_argument("--cancellation-matrix", action="store_true")
     mode.add_argument("--active-cancellation-matrix", action="store_true")
+    mode.add_argument("--recovery-preparation", action="store_true")
     args = parser.parse_args()
     if args.preset_matrix or args.cancellation_matrix or args.active_cancellation_matrix:
         output = args.out.resolve()

@@ -213,6 +213,13 @@ message AgentCredentialObjectReference {
 message PrepareAgentCredentialsResponse {
   AgentCredentialScope scope = 1;
   AgentCredentialObjectReference object = 2;
+  // Present only for recovery preparation. Rust stores the complete request,
+  // canonical context and ordered initial public bodies; Go sees references
+  // only and must atomically commit them under its live fence and exact CAS.
+  AgentArtifactReference prepared_request = 3;
+  AgentArtifactReference recovery_context = 4;
+  string recovery_context_sha256 = 5;
+  repeated AgentArtifactReference recovery_event_bodies = 6;
 }
 
 // The caller selects only a node ID. Task text and dependencies come from the

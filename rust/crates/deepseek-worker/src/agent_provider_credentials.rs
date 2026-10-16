@@ -151,6 +151,7 @@ impl WorkerRpcService {
         if fence.execution_epoch != live_epoch {
             return Err(Status::failed_precondition("STALE_EXECUTION_EPOCH"));
         }
+        let mut previous_binding = None;
         if let Some(previous) = update.as_ref() {
             let current = self
                 .agent_execution_control
@@ -181,6 +182,7 @@ impl WorkerRpcService {
             } else if current.status != "awaiting_plan" || current.recovery_scope.is_some() {
                 return Err(denied());
             }
+            previous_binding = Some(current);
         }
         let root = self
             .agent_plan_executor
@@ -195,12 +197,27 @@ impl WorkerRpcService {
         let signer = Arc::clone(self.control_signer.as_ref().ok_or_else(denied)?);
         let worker = Arc::clone(&self.worker);
         let response = tokio::task::spawn_blocking(move || {
-            let body = read_body(&root, &reference)?;
-            if body.get(PRIVATE_FIELD).is_some() {
+            let mut body = read_body(&root, &reference)?;
+            let original_request = recovery_context.as_ref().is_some_and(|context| {
+                context.expected_request.as_ref().is_some_and(|expected| {
+                    expected.sha256 == reference.sha256 && expected.length == reference.length
+                })
+            });
+            if original_request {
+                // Go supplies its current opaque request reference. Only Rust
+                // opens the body and removes the previous private bindings.
+                let previous = previous_binding.as_ref().ok_or_else(denied)?;
+                let retained = crate::agent_recovery_context::read(&root, &body)?;
+                crate::agent_recovery_context::validate_binding(retained.as_ref(), previous)?;
+                let object = body.as_object_mut().ok_or_else(denied)?;
+                object.remove(PRIVATE_FIELD);
+                object.remove(crate::agent_recovery_context::PRIVATE_FIELD);
+            } else if body.get(PRIVATE_FIELD).is_some() {
                 return Err(denied());
-            }
-            let prepared = crate::agent_recovery_context::read(&root, &body)?;
-            if prepared.as_ref().map(|value| &value.context) != recovery_context.as_ref() {
+            } else if body
+                .get(crate::agent_recovery_context::PRIVATE_FIELD)
+                .is_some()
+            {
                 return Err(crate::agent_recovery_context::denied());
             }
             if let Some(context) = recovery_context.as_ref() {
@@ -266,6 +283,17 @@ impl WorkerRpcService {
                 api_key.as_str(),
                 tavily_api_key.as_str(),
             )?;
+            let prepared = if let Some(context) = recovery_context.as_ref() {
+                Some(crate::agent_recovery_context::prepare(
+                    &root, &mut body, context,
+                )?)
+            } else {
+                None
+            };
+            let reference = prepared
+                .as_ref()
+                .map(|(_, reference)| reference.clone())
+                .unwrap_or(reference);
             let scope = AgentCredentialScope {
                 fleet_id,
                 environment,
@@ -279,7 +307,38 @@ impl WorkerRpcService {
                 .as_ref()
                 .map(|value| signer.prepare_agent_credentials(&root, &scope, value))
                 .transpose()?;
+            let (prepared_request, prepared_context, context_sha256, event_bodies) =
+                if let Some((prepared, _)) = prepared {
+                    if let Some(object) = object.as_ref() {
+                        body[PRIVATE_FIELD] = serde_json::json!({"scope":&scope,"object":object});
+                    }
+                    let mut artifacts = ArtifactStore::open_native(&root, "python_disabled")
+                        .map_err(|_| denied())?;
+                    let final_request = artifacts.put(&body).map_err(|_| denied())?;
+                    let events = crate::agent_recovery_context::initial_event_bodies(
+                        &mut artifacts,
+                        &prepared.context,
+                    )?;
+                    let protocol_ref = |r: ArtifactReference| {
+                        deepseek_protocol::generated::deepseek::agent::v1::AgentArtifactReference {
+                            sha256: r.sha256,
+                            length: r.length,
+                        }
+                    };
+                    (
+                        Some(protocol_ref(final_request)),
+                        Some(protocol_ref(prepared.reference)),
+                        prepared.digest,
+                        events,
+                    )
+                } else {
+                    (None, None, String::new(), vec![])
+                };
             Ok::<_, Status>(PrepareAgentCredentialsResponse {
+                prepared_request,
+                recovery_context: prepared_context,
+                recovery_context_sha256: context_sha256,
+                recovery_event_bodies: event_bodies,
                 scope: Some(
                     deepseek_protocol::generated::deepseek::agent::v1::AgentCredentialScope {
                         fleet_id: scope.fleet_id,

@@ -2,10 +2,10 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use deepseek_policy::agent_run_data::{ArtifactReference, ArtifactStore, sanitize};
 use deepseek_protocol::generated::deepseek::agent::v1::{
-    AgentRunRecoveryContext, AgentRunSnapshot,
+    AgentArtifactReference, AgentRunRecoveryContext, AgentRunRecoveryKind, AgentRunSnapshot,
 };
 use prost::Message;
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use tonic::Status;
@@ -30,6 +30,74 @@ pub(crate) fn digest(context: &AgentRunRecoveryContext) -> Result<String, Status
         return Err(denied());
     }
     Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+/// Called only after authoritative Go preview and the independent Rust journal
+/// audit. Immutable orphan objects cannot authorize effects if Go's CAS loses.
+pub(crate) fn prepare(
+    root: &Path,
+    body: &mut Value,
+    context: &AgentRunRecoveryContext,
+) -> Result<(PreparedRecovery, ArtifactReference), Status> {
+    if !body.is_object()
+        || body.get(PRIVATE_FIELD).is_some()
+        || body.get("_nativeProviderCredentials").is_some()
+    {
+        return Err(denied());
+    }
+    let context_digest = digest(context)?;
+    let envelope =
+        json!({"metadataProto":URL_SAFE_NO_PAD.encode(context.encode_to_vec()),"schema":SCHEMA});
+    let canonical: Value = serde_json::from_slice(
+        &crate::authority_request::canonical_json_bytes(&envelope).map_err(|_| denied())?,
+    )
+    .map_err(|_| denied())?;
+    let mut store = ArtifactStore::open_native(root, "python_disabled").map_err(|_| denied())?;
+    let reference = store.put(&canonical).map_err(|_| denied())?;
+    body[PRIVATE_FIELD] = canonical;
+    let request = store.put(body).map_err(|_| denied())?;
+    let prepared = read(root, body)?.ok_or_else(denied)?;
+    if prepared.context != *context
+        || prepared.digest != context_digest
+        || prepared.reference != reference
+    {
+        return Err(denied());
+    }
+    Ok((prepared, request))
+}
+
+pub(crate) fn initial_event_bodies(
+    store: &mut ArtifactStore,
+    context: &AgentRunRecoveryContext,
+) -> Result<Vec<AgentArtifactReference>, Status> {
+    let mut bodies = vec![json!({"type":"run_status","status":"running"})];
+    for id in &context.reset_ids {
+        bodies.push(json!({"type":"agent_reset","phase":id}));
+    }
+    if context.reset_final
+        && (context
+            .selection
+            .as_ref()
+            .is_some_and(|s| s.kind == AgentRunRecoveryKind::Resume as i32)
+            || context.execute.is_empty())
+    {
+        bodies.push(json!({"type":"final_reset","scope":"final_answer"}));
+    }
+    if context.complete_immediately {
+        bodies.push(json!({"type":"run_status","status":"done"}));
+    }
+    bodies
+        .iter()
+        .map(|body| {
+            store
+                .put(body)
+                .map(|r| AgentArtifactReference {
+                    sha256: r.sha256,
+                    length: r.length,
+                })
+                .map_err(|_| denied())
+        })
+        .collect()
 }
 
 /// The envelope is itself a hash-checked Rust artifact. A missing object, an

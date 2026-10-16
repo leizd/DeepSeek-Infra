@@ -70,6 +70,7 @@ impl AgentNodeWorker for CustodyFixture {
                 sha256: "b".repeat(64),
                 length: 300,
             }),
+            ..Default::default()
         }))
     }
 

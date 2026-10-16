@@ -1,0 +1,185 @@
+// Offline process fixture: all body writes, custody, preview and commit use the
+// production Go/Rust services. Go never opens the Rust artifact database.
+package api
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"io"
+	"net/http"
+	"os"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
+	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+)
+
+func nativeRecoveryPreparation(t *testing.T, control *store.Control, origin string, ready nativeSigningWorkerReady,
+	bearer, publicOrigin string, client *http.Client, before agent.RunMetadata, beforePublic map[string]any, base map[string]any) map[string]any {
+	t.Helper()
+	connection, err := grpc.NewClient(strings.TrimPrefix(origin, "http://"), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	runs := agentv1.NewAgentRunControlClient(connection)
+	recovery := agentv1.NewAgentRunRecoveryControlClient(connection)
+	ctx, cancel := context.WithTimeout(controlRPCContext(t, testInternalBearer), 60*time.Second)
+	defer cancel()
+	authority, err := runs.GetAuthority(ctx, &agentv1.AgentRunAuthorityInput{})
+	if err != nil {
+		t.Fatal("actual recovery authority unavailable", err)
+	}
+	request := &agentv1.AgentArtifactReference{Sha256: before.Request.SHA256, Length: before.Request.Length}
+	previewInput := &agentv1.PreviewAgentRunRecoveryRequest{SchemaVersion: 1, RunId: before.RunID,
+		MetadataFence: &commonv1.ActionFence{ActionId: before.RunID, ExecutionEpoch: authority.MetadataEpoch},
+		ExpectedIndex: before.NextIndex, ExpectedRuntimeRevision: before.RuntimeVersion(), ExpectedRequest: request,
+		Selection: &agentv1.AgentRunRecoverySelection{Kind: agentv1.AgentRunRecoveryKind_AGENT_RUN_RECOVERY_KIND_RESUME}}
+	preview, err := recovery.Preview(ctx, previewInput)
+	if err != nil || !preview.GetAuthoritative() || preview.Context == nil || preview.Context.Generation != 1 ||
+		!preview.Context.CompleteImmediately || preview.Context.Synthesize || len(preview.Context.Execute) != 0 ||
+		len(preview.Context.PriorEffects) != 4 || len(preview.Context.RetainedOutputs) != 2 {
+		t.Fatal("completed resume did not independently retain actual original effects", preview, err)
+	}
+	actionsBefore, err := control.ListAuthoritativeRecords("action")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := os.ReadFile(ready.TrustRootFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(ca) {
+		t.Fatal("actual worker CA missing")
+	}
+	workerConnection, err := grpc.NewClient(ready.Target, grpc.WithTransportCredentials(credentials.NewTLS(
+		&tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS12})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = workerConnection.Close() })
+	worker := agentv1.NewAgentNodeWorkerClient(workerConnection)
+	workerContext, workerCancel := context.WithTimeout(metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+bearer), 60*time.Second)
+	defer workerCancel()
+	prepare := &agentv1.PrepareAgentCredentialsRequest{SchemaVersion: 1, RunId: before.RunID, Fence: previewInput.MetadataFence,
+		Request: request, RuntimeRevision: before.RuntimeVersion() + 1,
+		RuntimeUpdate:   &agentv1.AgentCredentialRuntimeUpdate{PreviousRequest: request, PreviousRuntimeRevision: before.RuntimeVersion()},
+		RecoveryContext: preview.Context}
+	forged := proto.Clone(prepare).(*agentv1.PrepareAgentCredentialsRequest)
+	forged.RecoveryContext.Generation++
+	if _, err := worker.PrepareCredentials(workerContext, forged); status.Code(err) != codes.FailedPrecondition {
+		t.Fatal("worker accepted recovery metadata not returned by live Go preview", err)
+	}
+	unauthenticated := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer invalid-probe-bearer")
+	unauthenticated, unauthenticatedCancel := context.WithTimeout(unauthenticated, 10*time.Second)
+	defer unauthenticatedCancel()
+	if _, err := worker.PrepareCredentials(unauthenticated, prepare); status.Code(err) != codes.Unauthenticated {
+		t.Fatal("worker credential recovery bypassed authentication", err)
+	}
+	prepared, err := worker.PrepareCredentials(workerContext, prepare)
+	if err != nil || prepared.GetScope() == nil || prepared.GetObject() == nil || prepared.GetPreparedRequest() == nil ||
+		prepared.GetRecoveryContext() == nil || prepared.RecoveryContextSha256 != preview.ContextSha256 ||
+		prepared.Scope.RuntimeRevision != before.RuntimeVersion()+1 || len(prepared.RecoveryEventBodies) != 2 ||
+		proto.Equal(prepared.PreparedRequest, request) {
+		t.Fatal("Rust did not prepare real immutable custody and ordered event bodies", prepared, err)
+	}
+	retry, err := worker.PrepareCredentials(workerContext, prepare)
+	if err != nil || !proto.Equal(prepared, retry) {
+		t.Fatal("preparation retry rebound immutable custody", err)
+	}
+	unchanged, found, err := control.AgentRunMetadata(before.RunID)
+	if err != nil || !found || !reflect.DeepEqual(before, unchanged) {
+		t.Fatal("preparation changed Go authority before commit", err)
+	}
+	commit := &agentv1.CommitAgentRunRecoveryRequest{SchemaVersion: 1, OperationId: "native-recovery-" + before.RunID,
+		Actor: "operator:native-recovery-process", RunId: before.RunID, Fence: previewInput.MetadataFence,
+		ExpectedIndex: before.NextIndex, ExpectedRuntimeRevision: before.RuntimeVersion(), ExpectedRequest: request,
+		Selection: previewInput.Selection, ContextSha256: prepared.RecoveryContextSha256, Context: prepared.RecoveryContext,
+		Request: prepared.PreparedRequest, EventBodies: prepared.RecoveryEventBodies}
+	committed, err := recovery.Commit(ctx, commit)
+	if err != nil || committed.AlreadyApplied || committed.Run == nil || committed.Run.Status != "done" ||
+		committed.Run.NextIndex != before.NextIndex+2 || committed.Run.RuntimeRevision != before.RuntimeVersion()+1 ||
+		committed.Run.RecoveryScope == nil || committed.Run.RecoveryScope.Generation != 1 ||
+		!proto.Equal(committed.Run.Request, prepared.PreparedRequest) || len(committed.Events) != 2 ||
+		committed.Events[0].Status != "running" || committed.Events[1].Status != "done" {
+		t.Fatal("Go did not atomically commit the prepared completed resume", committed, err)
+	}
+	replayed, err := recovery.Commit(ctx, commit)
+	if err != nil || !replayed.AlreadyApplied || !proto.Equal(replayed.Run, committed.Run) || len(replayed.Events) != 2 {
+		t.Fatal("recovery commit lost its original idempotent receipt", err)
+	}
+	for i := range replayed.Events {
+		if !proto.Equal(replayed.Events[i], committed.Events[i]) {
+			t.Fatal("commit retry changed an original event")
+		}
+	}
+	if _, err := worker.PrepareCredentials(workerContext, prepare); status.Code(err) != codes.FailedPrecondition {
+		t.Fatal("old preview could prepare against a newer committed runtime", err)
+	}
+	after, found, err := control.AgentRunMetadata(before.RunID)
+	if err != nil || !found || after.SchemaVersion != 3 || after.Recovery == nil || after.Recovery.Generation != 1 ||
+		after.Cancelled != before.Cancelled || !reflect.DeepEqual(after.Plan, before.Plan) {
+		t.Fatal("recovery rewrote public plan/cancellation history", err)
+	}
+	actionsAfter, err := control.ListAuthoritativeRecords("action")
+	if err != nil || !reflect.DeepEqual(actionsBefore, actionsAfter) {
+		t.Fatal("completed resume admitted or rebound a durable effect", err)
+	}
+	response, err := client.Get(publicOrigin + "/api/agent-runs/" + before.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	response.Body.Close()
+	var public struct {
+		Run map[string]any `json:"run"`
+	}
+	if err != nil || response.StatusCode != http.StatusOK || json.Unmarshal(raw, &public) != nil || public.Run == nil ||
+		public.Run["status"] != "done" || public.Run["nextIndex"] != float64(before.NextIndex+2) ||
+		!bytes.Contains(raw, []byte("Controlled final answer")) {
+		t.Fatal("actual public read omitted committed recovery", err)
+	}
+	for _, private := range []string{"request-only-credential", "_nativeProviderCredentials", "_nativeRecoveryContext"} {
+		if bytes.Contains(raw, []byte(private)) {
+			t.Fatal("recovery leaked private custody in public output")
+		}
+	}
+	events, ok := public.Run["events"].([]any)
+	beforeEvents, oldOK := beforePublic["events"].([]any)
+	if !ok || !oldOK || len(events) != len(beforeEvents)+2 || !reflect.DeepEqual(events[:len(beforeEvents)], beforeEvents) {
+		t.Fatal("recovery rebound historical public event bodies")
+	}
+	result := make(map[string]any, len(base)+4)
+	for key, value := range base {
+		result[key] = value
+	}
+	result["baseExecution"] = base
+	result["nextIndex"], result["publicEventCount"] = after.NextIndex, len(events)
+	result["requestSha256"], result["requestLength"] = after.Request.SHA256, after.Request.Length
+	result["recoveryPreparation"] = map[string]any{"kind": "completed-resume", "generation": after.Recovery.Generation,
+		"originalRuntimeRevision": before.RuntimeVersion(), "runtimeRevision": after.RuntimeVersion(),
+		"originalRequestSha256": before.Request.SHA256, "contextSha256": preview.ContextSha256,
+		"contextArtifactSha256": prepared.RecoveryContext.Sha256, "contextArtifactLength": prepared.RecoveryContext.Length,
+		"priorEffectCount": len(preview.Context.PriorEffects), "retainedOutputCount": len(preview.Context.RetainedOutputs),
+		"preparedByRust": true, "goOpenedRustBody": false, "readOnlyPreview": true, "preparationRetryIdempotent": true,
+		"commitRetryIdempotent": true, "forgedContextDenied": true, "unauthenticatedDenied": true, "stalePreparationDenied": true,
+		"originalEffectsUnchanged": true, "originalPublicEventsUnchanged": true, "newProviderCalls": 0, "newDurablePhases": 0,
+		"publicReadQualified": true, "fullResumeRerunQualified": false}
+	return result
+}

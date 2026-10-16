@@ -27,7 +27,7 @@
     },
     {
       "path": "go/internal/protocol/agentv1/agent_node.pb.go",
-      "sha256": "d680dc1a181f433eaa02920faf1e5443a594259babb222b381a5da2afa0d5106"
+      "sha256": "d41ac7c79febc611d5854724b592728b123bf44331c9e1335f899884db2b6418"
     },
     {
       "path": "go/internal/protocol/agentv1/agent_node_grpc.pb.go",
@@ -75,7 +75,7 @@
     },
     {
       "path": "proto/generated/descriptor.pb",
-      "sha256": "1bb9202604422a473aa8efdadeb30a1825a4c4e119961707c4cdebcc732e836c"
+      "sha256": "525d2f772d31896418fd77499e827959073b00d4e52b18d8b17e0cba533e9bbf"
     }
   ],
   "schema_version": 1,
@@ -94,7 +94,7 @@
     },
     {
       "path": "proto/agent/v1/agent_node.proto",
-      "sha256": "a70644da6c6b542f33fcdef95e9dba32144dab67b6977a88b4ac82fe6a658550"
+      "sha256": "2d3a37c6befd8dc790a5df219e2975a38557baa7c82fd5fdedee425ff90387f5"
     },
     {
       "path": "proto/browser/v1/browser.proto",

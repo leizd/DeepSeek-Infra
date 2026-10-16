@@ -203,3 +203,86 @@ fn recovery_execution_cannot_omit_rebind_or_downgrade_its_context() {
         assert!(validate_binding(Some(&prepared), &changed).is_err());
     }
 }
+
+#[test]
+fn recovery_preparation_persists_context_and_request_without_private_keys() {
+    let root = tempfile::tempdir().unwrap();
+    let context = context();
+    let source = json!({"payload":{"messages":[{"role":"user","content":"recover"}]}});
+    let mut body = source.clone();
+    let (prepared, request) = prepare(root.path(), &mut body, &context).unwrap();
+    assert_eq!(prepared.context, context);
+    assert_eq!(prepared.digest, digest(&context).unwrap());
+    let store = ArtifactStore::open_readonly(root.path()).unwrap();
+    assert_eq!(store.get(&request).unwrap(), body);
+    let reopened = read(root.path(), &body).unwrap().unwrap();
+    assert_eq!(reopened.reference, prepared.reference);
+    assert_eq!(reopened.context, context);
+    let mut retry = source;
+    let (again, retry_request) = prepare(root.path(), &mut retry, &context).unwrap();
+    assert_eq!(retry_request, request);
+    assert_eq!(again.reference, prepared.reference);
+    assert!(body.get("_nativeProviderCredentials").is_none());
+}
+
+#[test]
+fn recovery_preparation_refuses_unstripped_private_fields_or_nonobjects() {
+    let root = tempfile::tempdir().unwrap();
+    for mut body in [
+        Value::Null,
+        json!([]),
+        json!({PRIVATE_FIELD:{}}),
+        json!({"_nativeProviderCredentials":{}}),
+    ] {
+        assert!(prepare(root.path(), &mut body, &context()).is_err());
+    }
+}
+
+#[test]
+fn recovery_event_bodies_preserve_resets_and_delay_rerun_final_reset() {
+    let root = tempfile::tempdir().unwrap();
+    let mut store = ArtifactStore::open_native(root.path(), "python_disabled").unwrap();
+    let mut context = context();
+    context.reset_ids = vec!["coder".into(), "critic".into()];
+    context.reset_final = true;
+    let bodies = initial_event_bodies(&mut store, &context).unwrap();
+    let read_bodies = |store: &ArtifactStore, refs: Vec<AgentArtifactReference>| {
+        refs.iter()
+            .map(|r| {
+                store
+                    .get(&ArtifactReference {
+                        sha256: r.sha256.clone(),
+                        length: r.length,
+                    })
+                    .unwrap()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        read_bodies(&store, bodies),
+        vec![
+            json!({"type":"run_status","status":"running"}),
+            json!({"type":"agent_reset","phase":"coder"}),
+            json!({"type":"agent_reset","phase":"critic"}),
+            json!({"type":"final_reset","scope":"final_answer"}),
+        ]
+    );
+    context.selection.as_mut().unwrap().kind = AgentRunRecoveryKind::Rerun as i32;
+    context.execute.push(Default::default());
+    let bodies = initial_event_bodies(&mut store, &context).unwrap();
+    assert_eq!(bodies.len(), 3);
+    context.execute.clear();
+    let bodies = initial_event_bodies(&mut store, &context).unwrap();
+    assert_eq!(bodies.len(), 4);
+    context.reset_ids.clear();
+    context.reset_final = false;
+    context.complete_immediately = true;
+    let bodies = initial_event_bodies(&mut store, &context).unwrap();
+    assert_eq!(
+        read_bodies(&store, bodies),
+        vec![
+            json!({"type":"run_status","status":"running"}),
+            json!({"type":"run_status","status":"done"}),
+        ]
+    );
+}

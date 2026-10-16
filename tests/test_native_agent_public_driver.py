@@ -20,6 +20,52 @@ def complete_evidence():
     return result, exchanges
 
 
+def complete_recovery_evidence():
+    base, exchanges = complete_evidence()
+    base.update(runId="controlled-recovery", sourceCommit="f" * 40, requestSha256="a" * 64)
+    result = copy.deepcopy(base)
+    result.update(baseExecution=base, nextIndex=11, publicEventCount=11, requestSha256="b" * 64)
+    result["recoveryPreparation"] = {
+        "kind":"completed-resume", "generation":1, "originalRuntimeRevision":1, "runtimeRevision":2,
+        "priorEffectCount":4, "retainedOutputCount":2, "newProviderCalls":0, "newDurablePhases":0,
+        "goOpenedRustBody":False, "fullResumeRerunQualified":False, "originalRequestSha256":"a" * 64,
+        "contextSha256":"c" * 64, "contextArtifactSha256":"d" * 64, "contextArtifactLength":180,
+        **{key:True for key in ["preparedByRust", "readOnlyPreview", "preparationRetryIdempotent", "commitRetryIdempotent",
+            "forgedContextDenied", "unauthenticatedDenied", "stalePreparationDenied", "originalEffectsUnchanged",
+            "originalPublicEventsUnchanged", "publicReadQualified"]}}
+    return result, exchanges
+
+
+def test_recovery_preparation_requires_original_success_and_new_exact_custody():
+    from scripts.verify_native_agent_public_driver import validate_recovery_preparation_result
+
+    result, exchanges = complete_recovery_evidence()
+    original = copy.deepcopy(result)
+    validate_recovery_preparation_result(result, exchanges)
+    assert result == original
+
+
+@pytest.mark.parametrize("section,key,value", [
+    ("recoveryPreparation", "priorEffectCount", 3), ("recoveryPreparation", "retainedOutputCount", 0),
+    ("recoveryPreparation", "newProviderCalls", 1), ("recoveryPreparation", "newDurablePhases", 1),
+    ("recoveryPreparation", "goOpenedRustBody", True), ("recoveryPreparation", "fullResumeRerunQualified", True),
+    ("recoveryPreparation", "generation", 2), ("recoveryPreparation", "runtimeRevision", 1),
+    ("recoveryPreparation", "contextSha256", "unbound"), ("recoveryPreparation", "originalRequestSha256", "e" * 64),
+    ("recoveryPreparation", "commitRetryIdempotent", False), ("recoveryPreparation", "stalePreparationDenied", False),
+    ("recoveryPreparation", "forgedContextDenied", False), ("recoveryPreparation", "contextArtifactLength", 0),
+    ("baseExecution", "durablePhases", 2), ("baseExecution", "sourceCommit", "e" * 40),
+    ("", "nextIndex", 9), ("", "publicEventCount", 9), ("", "requestSha256", "a" * 64),
+    ("", "productionProviderQualified", True), ("", "fullMigrationQualified", True),
+])
+def test_recovery_preparation_rejects_partial_or_rebound_evidence(section, key, value):
+    from scripts.verify_native_agent_public_driver import validate_recovery_preparation_result
+
+    result, exchanges = complete_recovery_evidence()
+    (result[section] if section else result)[key] = value
+    with pytest.raises(ValueError):
+        validate_recovery_preparation_result(result, exchanges)
+
+
 def test_public_driver_complete_controlled_evidence_retains_qualification_limits():
     result, exchanges = complete_evidence()
     original = copy.deepcopy((result, exchanges))

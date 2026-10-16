@@ -1,36 +1,41 @@
 <!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
 ## Current cloud verification checkpoint
 
-2026-10-14: latest reviewed snapshot `9c38f1dd9e68238f6cc5b06274e405004b567b1b`
-(tree `465f3c6741721fc1523ae1c495f249e0c040e269`, parent6e3b0b4d,8files)
-repairs credential-path test peers and narrows the Go worker client to only its
-six execution/projection methods. Credential preparation remains private Rust
-TLS RPC. Existing metadata/sanitization assertions remain; missing peer, wrong
-hostname and bearer refusal tests are added. Real worker crypto/restart proof
-remains mandatory; the new controlled TLS unit peer is not encryption proof.
+2026-10-16: parent source `ce95e2767d2dbd055e0546247252e5ae06820b53`
+(tree `ab58f285f94bf05394c57bc32153c80ef7ffac15`) passed its complete
+37-job source `workflow_dispatch` CI and independent Rust push workflow.
+This is source qualification, not PR merge-candidate qualification or product readiness.
+Rust: https://github.com/leizd/DeepSeek-Infra/actions/runs/38743989113
+CI: https://github.com/leizd/DeepSeek-Infra/actions/runs/38744087509
+Rust:1527 passed,1 existing Redis ignore;84108/102369 lines=82.16159188816927%.
+Go default:13103/13790=95.0181290790428%; Android:12930/13600=95.0735294117647%.
+Python3.10/3.11/3.12:6061 passed,1 skipped,61 subtests each;95.57/95.51/95.57%.
+Original coverage floors remain Rust80%,Go/Android/Python95%; Go race keeps
+all instrumentation and the original90-minute package bound. Reports were
+independently downloaded/digest checked; no caches, images or volumes returned.
 
-Rust: https://github.com/leizd/DeepSeek-Infra/actions/runs/38501431635
-CI: https://github.com/leizd/DeepSeek-Infra/actions/runs/38501553143
-Exact source proof:902 native /3676 whole files. Rust expects1502 passes plus
-the existing Redis ignore; original80% coverage remains required. All37CI,
-all14Go-Docker and Go/Android/Python95% floors are unchanged. The complete Go
-race binaries keep all tests and instrumentation with a measured90-minute
-package bound. Earlier identical Go source passed in40minutes but exhausted
-60minutes with a4-second test running; archived timing/digests explain the change.
+The current change prepares a new recovery request and context in Rust through
+the existing private TLS credential RPC. Go supplies its current opaque request
+reference; Rust verifies the live Go preview plus original effect/signature
+journals, strips only previously bound private headers, inherits sealed keys,
+and writes the new canonical context, request and ordered event bodies.
+Go alone atomically commits their references with its cursor/runtime CAS.
+The dedicated cloud process probe exercises completed-resume preparation,
+forged/unauthenticated/stale denials, idempotent preparation/commit and the real
+public read, while retaining all original effects and the final answer.
+This new source needs its own exact-source cloud qualification. Parent results
+must not be borrowed. The probe does not qualify active resume/rerun execution.
 
-Local188 offline boundary checks, formatting, pinned codegen, ownership/shadow,
-docs and exact non-secret review pass. Python type input bytes are unchanged,
-so the prior Linux/Win32 963-file proofs are explicitly reused. No local native
-builds or compiler caches; only reports return. Root dirty source/index remain
-preserved. Prior1a74b532 checks failed one outdated gateway fixture and Go fake
-interface compilation; these are not PASS. Superseded affected runs were cancelled
-and recorded. Prior b1d5c323 bounded Rust fully passed1494+1ignore /82.17874352578164%.
-
-Overall `NOT_READY`. Collect this head's real credential override and encrypted
-vault reopen across actual worker restart, fix genuine failures, then implement
-retained runtime updates, resume/rerun and admitted tool continuation. No main
-merge, release or real data operation. Review/checkpoint:
-`artifacts/native-20261014-credential-peer-fixture/`.
+Full product readiness remains `NOT_READY`. Continue generation-aware Go
+scheduling/admission and Rust dependency/synthesis reads of original outputs,
+public resume/rerun, known-failure closure, admitted tools and timeline/live
+output, real providers, all retained product workloads, desktop/Android/worker
+packages and default zero-Python runtime evidence. Unknown effects remain
+`EFFECT_UNKNOWN`; never repeat a possibly completed provider write. Python is
+only an offline/test/oracle tool here. Preserve the original dirty workspace.
+All native builds/tests/containers run in GitHub Actions. Keep PR consolidation
+at21:40 Asia/Shanghai, at most once per date; no automatic main merge, release
+or real production data operation.
 <!-- END CURRENT_NATIVE_CLOUD_CHECKPOINT -->
 
 
