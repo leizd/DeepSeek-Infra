@@ -38,11 +38,12 @@ type CompleteAgentTasksResult struct {
 }
 
 func completedAgentTasks(run agent.RunMetadata) bool {
-	if run.Status != "running" || run.Cancelled || len(run.Plan) == 0 || len(run.Plan) > 4 {
+	plan := run.ExecutionTasks()
+	if run.Status != "running" || run.CancellationActive() || len(plan) == 0 || len(plan) > 4 {
 		return false
 	}
 	nodes := run.Nodes()
-	for _, entry := range run.Plan {
+	for _, entry := range plan {
 		if nodes[entry.ID].State != "succeeded" || nodes[entry.ID].Failed {
 			return false
 		}
@@ -121,10 +122,13 @@ func (store *Control) validateAgentTasksCompletionTx(tx *sql.Tx, action Record) 
 		return ErrCorruptRecord
 	}
 	run, err := decodeAgentMetadata(record)
-	if err != nil || run.Request != binding.Request || executionPlanDigest(run) != binding.PlanDigest || !completedAgentTasks(run) || len(markers) != len(run.Plan) {
+	if err != nil || run.Request != binding.Request || executionPlanDigest(run) != binding.PlanDigest || !completedAgentTasks(run) || len(markers) != len(run.ExecutionTasks()) {
 		return ErrCorruptRecord
 	}
-	for _, node := range run.Plan {
+	if _, err := store.verifiedAgentRecoveryOutputsTx(tx, run); err != nil {
+		return err
+	}
+	for _, node := range run.ExecutionTasks() {
 		marker, present := markers[node.ID]
 		if !present || marker.MetadataIndex >= completion.MetadataIndex {
 			return ErrCorruptRecord
@@ -211,10 +215,13 @@ func (store *Control) CompleteAgentTasks(input CompleteAgentTasksRequest) (Compl
 	if err != nil {
 		return CompleteAgentTasksResult{}, err
 	}
-	if len(markers) != len(run.Plan) {
+	if _, err := store.verifiedAgentRecoveryOutputsTx(tx, run); err != nil {
+		return CompleteAgentTasksResult{}, err
+	}
+	if len(markers) != len(run.ExecutionTasks()) {
 		return CompleteAgentTasksResult{}, ErrAgentNodeOutcomeRequired
 	}
-	for _, node := range run.Plan {
+	for _, node := range run.ExecutionTasks() {
 		if _, present := markers[node.ID]; !present {
 			return CompleteAgentTasksResult{}, ErrAgentNodeOutcomeRequired
 		}

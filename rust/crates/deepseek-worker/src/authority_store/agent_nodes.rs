@@ -13,6 +13,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use tonic::Status;
 
 mod recovery;
+mod task_outputs;
 #[cfg(test)]
 mod tests;
 
@@ -335,71 +336,6 @@ impl AuthorityStore {
                 .map_err(|_| denied())?;
         let claim = response.claim.as_ref().ok_or_else(denied)?;
         Ok(expires.min(claim.lease_until).min(claim.writer_lease_until))
-    }
-
-    /// Go admits dependency completion; Rust resolves the matching immutable
-    /// provider bodies itself. Caller text and older plan generations are denied.
-    pub(crate) fn agent_task_prior_outputs(
-        &self,
-        permit: &AgentNodeEffectPermit,
-    ) -> Result<Vec<serde_json::Value>, Status> {
-        live(&self.connection, &permit.fence, permit.fencing_token)?;
-        let current = stored(&self.connection, &permit.operation_id)?.ok_or_else(denied)?;
-        if self.fencing_token != permit.fencing_token
-            || current.state != "DISPATCHING"
-            || !matches!(current.intent.phase, 2 | 3)
-            || (current.intent.phase == 3
-                && (current.intent.node_id != "synthesizer"
-                    || current.intent.depends_on.is_empty()))
-            || current.intent_digest != permit.intent_digest
-            || current.grant_digest != permit.grant_digest
-            || agent_node_effect::digest(&permit.intent.encode_to_vec()) != permit.intent_digest
-            || permit.intent.depends_on.len() > 4
-        {
-            return Err(denied());
-        }
-        let mut outputs = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for dependency in &permit.intent.depends_on {
-            if dependency == &permit.intent.node_id
-                || !seen.insert(dependency)
-                || deepseek_policy::multi_agent::profile(dependency).is_none()
-            {
-                return Err(denied());
-            }
-            let operation: String = self.connection.query_row(
-                "SELECT operation_id FROM agent_node_effects WHERE run_id=?1 AND phase=2 AND node_id=?2 AND metadata_index<=?3 ORDER BY metadata_index DESC LIMIT 1",
-                params![permit.intent.run_id, dependency, permit.intent.metadata_index], |row| row.get(0))
-                .map_err(|_| denied())?;
-            let source = stored(&self.connection, &operation)?.ok_or_else(denied)?;
-            if source.intent.plan_digest != permit.intent.plan_digest
-                || source.intent.request != permit.intent.request
-                || source.intent.metadata_epoch > permit.intent.metadata_epoch
-                || (permit.intent.phase == 3
-                    && source.intent.metadata_epoch != permit.intent.metadata_epoch)
-                || source.token > permit.fencing_token
-                || source.intent.task.is_empty()
-            {
-                return Err(denied());
-            }
-            let source_task = source.intent.task.clone();
-            let known = outcome(source)?;
-            let envelope: serde_json::Value =
-                serde_json::from_slice(&known.output).map_err(|_| denied())?;
-            let event = &envelope["publicEvent"];
-            let output = &event["output"];
-            if envelope["runId"] != permit.intent.run_id
-                || event["type"] != "agent_output"
-                || event["phase"] != dependency.as_str()
-                || output["id"] != dependency.as_str()
-                || output["task"] != source_task
-                || !output.is_object()
-            {
-                return Err(denied());
-            }
-            outputs.push(output.clone());
-        }
-        Ok(outputs)
     }
 
     pub(crate) fn agent_node_snapshot(

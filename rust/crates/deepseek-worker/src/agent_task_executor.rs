@@ -183,6 +183,42 @@ impl WorkerRpcService {
             .upstream
             .validate()
             .map_err(|_| Status::failed_precondition("AGENT_PROVIDER_CREDENTIAL_MISSING"))?;
+        let root = executor.artifact_root.clone();
+        let reference = claim.request.as_ref().ok_or_else(denied)?;
+        let reference = deepseek_policy::agent_run_data::ArtifactReference {
+            sha256: reference.sha256.clone(),
+            length: reference.length,
+        };
+        let recovery = tokio::task::spawn_blocking(move || {
+            let body = deepseek_policy::agent_run_data::ArtifactStore::open_readonly(&root)
+                .and_then(|store| store.get(&reference))
+                .map_err(|_| denied())?;
+            crate::agent_recovery_context::read(&root, &body)
+        })
+        .await
+        .map_err(|_| denied())??;
+        if let Some(recovery) = recovery.as_ref() {
+            {
+                let worker = self.worker.lock().await;
+                let config = worker.agent_node_authority()?;
+                worker
+                    .authority_store
+                    .as_ref()
+                    .ok_or_else(denied)?
+                    .verify_agent_recovery_retained_outputs(&recovery.context, &config)?;
+            }
+            // Check original custody without minting successor signatures.
+            // Do not hold the worker journal while opening signer custody.
+            let signer = self
+                .control_signer
+                .as_ref()
+                .ok_or_else(denied)?
+                .lock()
+                .await;
+            for source in &recovery.context.retained_outputs {
+                signer.verify_retained_node_outcome(source.outcome.as_ref().ok_or_else(denied)?)?;
+            }
+        }
         let mut begin = Request::new(BeginAgentNodeEffect {
             claim: claim.clone(),
             signed_phase_grant: input.signed_phase_grant,
@@ -208,14 +244,19 @@ impl WorkerRpcService {
         let run_id = claim.run_id.clone();
         retain_admitted_agent_output(async move {
             let sent = async {
-                let outputs = service
-                    .worker
-                    .lock()
-                    .await
-                    .authority_store
-                    .as_ref()
-                    .ok_or_else(denied)?
-                    .agent_task_prior_outputs(&permit)?;
+                let outputs = {
+                    let worker = service.worker.lock().await;
+                    let store = worker.authority_store.as_ref().ok_or_else(denied)?;
+                    if let Some(recovery) = recovery.as_ref() {
+                        store.agent_recovery_task_prior_outputs(
+                            &permit,
+                            &recovery.context,
+                            &worker.agent_node_authority()?,
+                        )?
+                    } else {
+                        store.agent_task_prior_outputs(&permit)?
+                    }
+                };
                 let intent = &permit.intent;
                 let role = intent.node_id.clone();
                 let task = intent.task.clone();

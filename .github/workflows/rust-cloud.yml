@@ -129,6 +129,12 @@ jobs:
         run: |
           set -o pipefail
           python scripts/verify_native_agent_public_driver.py --recovery-preparation --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-recovery-preparation 2>&1 | tee artifacts/rust-cloud/agent-recovery-preparation.log
+      - name: Verify actual recovery synthesis with original Rust outputs and fresh Go fencing
+        if: matrix.mode == 'checks'
+        timeout-minutes: 8
+        run: |
+          set -o pipefail
+          python scripts/verify_native_agent_public_driver.py --recovery-driving --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-recovery-driving 2>&1 | tee artifacts/rust-cloud/agent-recovery-driving.log
       - name: Verify all retained presets through actual native public creation
         if: matrix.mode == 'checks'
         run: |

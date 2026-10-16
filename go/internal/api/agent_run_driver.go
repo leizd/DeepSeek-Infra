@@ -99,11 +99,11 @@ func (driver *agentRunDriver) run(ctx context.Context) {
 					return
 				}
 				run, found, err := driver.service.control.AgentRunMetadata(record.ID)
-				if err != nil || !found || !driverRunnable(run) && !run.Cancelled {
+				if err != nil || !found || !driverRunnable(run) && !run.CancellationActive() {
 					continue
 				}
 				live[run.RunID] = true
-				if run.Cancelled {
+				if run.CancellationActive() {
 					err = driver.recoverCancellation(ctx, run)
 				} else {
 					err = driver.drive(ctx, run)
@@ -139,15 +139,16 @@ func driverErrorCode(err error) string {
 }
 
 func driverRunnable(run agent.RunMetadata) bool {
-	return !run.Cancelled && (run.Status == "created" || run.Status == "planning" || run.Status == "running")
+	return !run.CancellationActive() && (run.Status == "created" || run.Status == "planning" || run.Status == "running")
 }
 
 func driverTasksComplete(run agent.RunMetadata) bool {
-	if len(run.Plan) == 0 {
+	plan := run.ExecutionTasks()
+	if len(plan) == 0 {
 		return false
 	}
 	nodes := run.Nodes()
-	for _, entry := range run.Plan {
+	for _, entry := range plan {
 		if nodes[entry.ID].State != "succeeded" || nodes[entry.ID].Failed {
 			return false
 		}
@@ -159,6 +160,9 @@ func (driver *agentRunDriver) phase(run agent.RunMetadata) (agentv1.AgentRunExec
 	phase := agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_PLAN
 	if run.Status == "running" {
 		phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS
+		if run.Recovery != nil && run.Recovery.Metadata != nil && len(run.Recovery.Metadata.Execute) == 0 && run.Recovery.Metadata.Synthesize {
+			phase = agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS
+		}
 	}
 	records, err := driver.service.control.ListAuthoritativeRecords("action")
 	if err != nil {
@@ -176,7 +180,7 @@ func (driver *agentRunDriver) phase(run agent.RunMetadata) (agentv1.AgentRunExec
 			continue
 		}
 		matching := binding.Request == run.Request && binding.PlanDigest == planDigest && binding.MetadataIndex <= run.NextIndex
-		if !matching && binding.Phase == executionPhaseName(phase) && record.State != "SUCCEEDED" {
+		if !matching && binding.Phase == executionPhaseName(phase) && record.State != "SUCCEEDED" && record.State != "CANCELLED_CONFIRMED" {
 			return phase, nil, errAgentDriverUnknown
 		}
 		if !matching {
@@ -471,7 +475,7 @@ func (driver *agentRunDriver) node(ctx context.Context, client agentDriverWorker
 
 func (driver *agentRunDriver) tasks(ctx context.Context, client agentDriverWorker, nodes *agentNodeService, claim *agentv1.AgentRunExecutionClaim, grant []byte, run agent.RunMetadata) error {
 	for !driverTasksComplete(run) {
-		entries := append([]agent.RunPlanNode(nil), run.Plan...)
+		entries := run.ExecutionTasks()
 		sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
 		ready := ""
 		states := run.Nodes()
@@ -532,7 +536,7 @@ func (driver *agentRunDriver) tasks(ctx context.Context, client agentDriverWorke
 // Cancelled recovery observes only retained dispatches. It cannot issue a grant,
 // execute a node, project output or schedule dependencies/synthesis.
 func (driver *agentRunDriver) recoverCancellation(ctx context.Context, run agent.RunMetadata) error {
-	if !run.Cancelled || run.Status != "cancelled" {
+	if !run.CancellationActive() || run.Status != "cancelled" {
 		return errAgentDriverUnknown
 	}
 	if err := driver.service.executionProcess(); err != nil {

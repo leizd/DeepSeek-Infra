@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 )
 
 var ErrAgentNodeDispatchRequired = errors.New("AGENT_NODE_DISPATCH_REQUIRED")
@@ -114,27 +115,33 @@ func agentNodeOperationID(node AgentNodeDispatch) string {
 	return "agent-node-" + hex.EncodeToString(digest[:])
 }
 
-func agentDispatchPlanNode(run agent.RunMetadata, binding AgentRunExecutionBinding, nodeID string, completed ...map[string]AgentTaskSettlement) (agent.RunPlanNode, error) {
+func agentDispatchPlanNode(run agent.RunMetadata, binding AgentRunExecutionBinding, nodeID string, completed map[string]AgentTaskSettlement, retained map[string]*agentv1.AgentRunRecoveryEffectSource) (agent.RunPlanNode, error) {
 	if binding.Phase == "plan" && nodeID == "leader" {
 		return agent.RunPlanNode{ID: "leader", Task: "plan agent run", DependsOn: []string{}}, nil
 	}
-	if binding.Phase == "synthesis" && nodeID == "synthesizer" && completedAgentTasks(run) {
+	if binding.Phase == "synthesis" && nodeID == "synthesizer" && (completedAgentTasks(run) || recoverySynthesisOnlyReady(run)) {
 		dependencies := make([]string, 0, len(run.Plan))
-		for _, node := range run.Plan {
-			dependencies = append(dependencies, node.ID)
+		if run.Recovery != nil {
+			dependencies = append(dependencies, run.Recovery.Metadata.SynthesisOutputIds...)
+		} else {
+			for _, node := range run.Plan {
+				dependencies = append(dependencies, node.ID)
+			}
 		}
 		return agent.RunPlanNode{ID: "synthesizer", Task: "synthesize verified agent outputs", DependsOn: dependencies}, nil
 	}
 	if binding.Phase == "tasks" {
-		for _, node := range run.Plan {
+		for _, node := range run.ExecutionTasks() {
 			if node.ID == nodeID {
 				// The imported event projection is not effect evidence. Dependencies
 				// need verified Rust outcomes before this path may admit them.
 				for _, dependency := range node.DependsOn {
-					if len(completed) != 1 {
-						return agent.RunPlanNode{}, ErrAgentNodeDependencyUnverified
+					_, verified := completed[dependency]
+					if source := retained[dependency]; !verified && source != nil && source.Outcome != nil && source.Outcome.Evidence != nil &&
+						source.Outcome.Evidence.TaskOutput != nil && !source.Outcome.Evidence.TaskOutput.Failed {
+						verified = true
 					}
-					if _, verified := completed[0][dependency]; !verified || run.Nodes()[dependency].State != "succeeded" {
+					if !verified || run.Nodes()[dependency].State != "succeeded" {
 						return agent.RunPlanNode{}, ErrAgentNodeDependencyUnverified
 					}
 				}
@@ -223,12 +230,16 @@ func (store *Control) BeginAgentNodeDispatch(input AgentNodeDispatchRequest) (Ag
 	if err != nil {
 		return AgentNodeDispatchResult{}, err
 	}
+	retained, err := store.verifiedAgentRecoveryOutputsTx(tx, run)
+	if err != nil {
+		return AgentNodeDispatchResult{}, err
+	}
 	if binding.Phase == "synthesis" {
 		if _, err := store.verifiedAgentSynthesisSourceTx(tx, binding); err != nil {
 			return AgentNodeDispatchResult{}, err
 		}
 	}
-	planNode, err := agentDispatchPlanNode(run, binding, input.NodeID, completed)
+	planNode, err := agentDispatchPlanNode(run, binding, input.NodeID, completed, retained)
 	if err != nil {
 		return AgentNodeDispatchResult{}, err
 	}

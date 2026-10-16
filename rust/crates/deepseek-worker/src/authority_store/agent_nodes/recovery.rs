@@ -87,7 +87,7 @@ impl AuthorityStore {
         Ok(())
     }
 
-    fn verify_recovery_source(
+    pub(super) fn verify_recovery_source(
         &self,
         context: &AgentRunRecoveryContext,
         source: &AgentRunRecoveryEffectSource,

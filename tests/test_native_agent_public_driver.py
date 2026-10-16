@@ -36,6 +36,61 @@ def complete_recovery_evidence():
     return result, exchanges
 
 
+def complete_recovery_execution_evidence():
+    result, exchanges = complete_recovery_evidence()
+    result.update(nextIndex=13, publicEventCount=13, durablePhases=4, directSynthesisRecoveryQualified=True)
+    result["recoveryPreparation"].update(kind="direct-synthesis", newProviderCalls=1, newDurablePhases=1,
+        newTaskPhases=0, newSynthesisActionId="recovery-synthesis")
+    exchanges.append({"actionId":"recovery-synthesis", "operationId":"recovery-synthesis-node", "executionEpoch":"1", "stream":False,
+        "synthesisCoderInPrompt":True, "synthesisCriticInPrompt":True, "privateReasoningInPrompt":False})
+    return result, exchanges
+
+
+def test_recovery_execution_requires_a_fresh_synthesis_and_original_public_summaries():
+    from scripts.verify_native_agent_public_driver import validate_recovery_execution_result
+
+    result, exchanges = complete_recovery_execution_evidence()
+    validate_recovery_execution_result(result, exchanges)
+
+
+@pytest.mark.parametrize("change", ["extra-call", "missing-call", "extra-phase", "task-phase", "missing-source", "missing-context",
+    "reused-request", "reused-action", "reused-operation", "stale-fence", "missing-summary", "private-reasoning", "unsettled", "overclaim"])
+def test_recovery_execution_rejects_extra_effects_rebinding_and_unverified_sources(change):
+    from scripts.verify_native_agent_public_driver import validate_recovery_execution_result
+
+    result, exchanges = complete_recovery_execution_evidence()
+    if change == "extra-call":
+        exchanges.append(copy.deepcopy(exchanges[-1]))
+    elif change == "missing-call":
+        exchanges.pop()
+    elif change == "extra-phase":
+        result["durablePhases"] = 5
+    elif change == "task-phase":
+        result["recoveryPreparation"]["newTaskPhases"] = 1
+    elif change == "missing-source":
+        result["recoveryPreparation"]["retainedOutputCount"] = 1
+    elif change == "missing-context":
+        result["recoveryPreparation"]["contextSha256"] = ""
+    elif change == "reused-request":
+        result["requestSha256"] = result["baseExecution"]["requestSha256"]
+    elif change == "reused-action":
+        exchanges[-1]["actionId"] = exchanges[3]["actionId"]
+    elif change == "reused-operation":
+        exchanges[-1]["operationId"] = exchanges[3]["operationId"]
+    elif change == "stale-fence":
+        exchanges[-1]["executionEpoch"] = "0"
+    elif change == "missing-summary":
+        exchanges[-1]["synthesisCoderInPrompt"] = False
+    elif change == "private-reasoning":
+        exchanges[-1]["privateReasoningInPrompt"] = True
+    elif change == "unsettled":
+        result["runStatus"] = "running"
+    else:
+        result["fullMigrationQualified"] = True
+    with pytest.raises(ValueError):
+        validate_recovery_execution_result(result, exchanges)
+
+
 def test_recovery_preparation_requires_original_success_and_new_exact_custody():
     from scripts.verify_native_agent_public_driver import validate_recovery_preparation_result
 

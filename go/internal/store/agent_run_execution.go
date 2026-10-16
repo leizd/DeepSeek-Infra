@@ -109,9 +109,13 @@ func readAgentExecutionActionTx(tx *sql.Tx, id string) (Record, bool, error) {
 }
 
 func executionPhaseReady(run agent.RunMetadata, phase string) bool {
+	if run.CancellationActive() {
+		return false
+	}
 	return phase == "plan" && (run.Status == "created" || run.Status == "planning") ||
-		phase == "tasks" && run.Status == "running" && len(run.Plan) > 0 ||
-		phase == "synthesis" && completedAgentTasks(run)
+		phase == "tasks" && run.Status == "running" && len(run.ExecutionTasks()) > 0 ||
+		phase == "synthesis" && (completedAgentTasks(run) || recoverySynthesisOnlyReady(run)) &&
+			(run.Recovery == nil || run.Recovery.Metadata != nil && run.Recovery.Metadata.Synthesize)
 }
 
 // The caller has decoded the immutable binding. All three lease paths read
@@ -163,6 +167,9 @@ func (store *Control) agentExecutionAdmissionTx(tx *sql.Tx, record Record, takeo
 	if err != nil {
 		return nil, err
 	}
+	if _, err := store.verifiedAgentRecoveryOutputsTx(tx, run); err != nil {
+		return nil, err
+	}
 	if intent.Phase == "synthesis" {
 		if _, err := store.verifiedAgentSynthesisSourceTx(tx, intent); err != nil {
 			return nil, err
@@ -187,6 +194,9 @@ func (store *Control) agentExecutionRenewalTx(tx *sql.Tx, record Record) error {
 	}
 	run, err := store.agentExecutionRunTx(tx, intent)
 	if err != nil {
+		return err
+	}
+	if _, err := store.verifiedAgentRecoveryOutputsTx(tx, run); err != nil {
 		return err
 	}
 	if intent.Phase == "synthesis" {

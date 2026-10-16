@@ -25,6 +25,24 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestDriverRecoveryKeepsCancellationHistoryAndCompletesOnlySelectedTasks(t *testing.T) {
+	run := agent.RunMetadata{Status: "running", Cancelled: true, CancellationGeneration: 0,
+		Plan:      []agent.RunPlanNode{{ID: "coder", Task: "write"}, {ID: "critic", Task: "review"}},
+		BaseNodes: map[string]agent.RunNode{"coder": {ID: "coder", State: "succeeded"}, "critic": {ID: "critic", State: "failed", Failed: true}},
+		Recovery:  &agent.RunRecoveryScope{Generation: 1, Metadata: &agentv1.AgentRunRecoveryContext{Execute: []*agentv1.AgentRunPlanNode{{Id: "researcher", Task: "selected outside the public plan"}}}}}
+	if !driverRunnable(run) || driverTasksComplete(run) {
+		t.Fatal("old cancellation prevented the committed selection, or work was skipped")
+	}
+	run.BaseNodes["researcher"] = agent.RunNode{ID: "researcher", State: "succeeded"}
+	if !driverTasksComplete(run) || !run.Cancelled || len(run.Plan) != 2 {
+		t.Fatal("completion demanded unrelated tasks or erased history")
+	}
+	run.CancellationGeneration = 1
+	if driverRunnable(run) {
+		t.Fatal("new generation cancellation was ignored")
+	}
+}
+
 // Offline signed worker fixtures qualify Go orchestration and refusal behavior;
 // they never qualify Rust custody, a provider or the public native process path.
 type driverFixtureWorker struct {

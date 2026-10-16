@@ -111,6 +111,42 @@ def validate_recovery_preparation_result(result: dict[str, Any], exchanges: list
         raise ValueError("Recovery preparation reused or omitted the new context/request custody")
 
 
+def validate_recovery_execution_result(result: dict[str, Any], exchanges: list[dict[str, Any]]) -> None:
+    base, recovery = result.get("baseExecution"), result.get("recoveryPreparation")
+    if not isinstance(base, dict) or not isinstance(recovery, dict) or len(exchanges) != 5:
+        raise ValueError("Direct synthesis recovery omitted original execution or made extra provider calls")
+    validate_driver_result(base, exchanges[:4])
+    if result.get("status") != "PASS" or result.get("runStatus") != "done" or result.get("nextIndex") != 13 or \
+            result.get("publicEventCount") != 13 or result.get("durablePhases") != 4 or \
+            result.get("sourceCommit") != base.get("sourceCommit") or result.get("runId") != base.get("runId") or \
+            result.get("directSynthesisRecoveryQualified") is not True or result.get("productionProviderQualified") is not False or \
+            result.get("fullMigrationQualified") is not False or result.get("productionRuntimeProcesses") != ["Go", "Rust"]:
+        raise ValueError("Direct synthesis recovery omitted durable/public settlement or overclaims qualification")
+    if recovery.get("kind") != "direct-synthesis" or recovery.get("generation") != 1 or \
+            recovery.get("originalRuntimeRevision") != 1 or recovery.get("runtimeRevision") != 2 or \
+            recovery.get("priorEffectCount") != 4 or recovery.get("retainedOutputCount") != 2 or \
+            recovery.get("newProviderCalls") != 1 or recovery.get("newDurablePhases") != 1 or recovery.get("newTaskPhases") != 0 or \
+            recovery.get("goOpenedRustBody") is not False or recovery.get("fullResumeRerunQualified") is not False:
+        raise ValueError("Direct synthesis recovery reused false custody or invented task settlement")
+    for flag in ["preparedByRust", "preparationRetryIdempotent", "commitRetryIdempotent", "stalePreparationDenied",
+                 "originalEffectsUnchanged", "originalPublicEventsUnchanged", "publicReadQualified"]:
+        if recovery.get(flag) is not True:
+            raise ValueError("Direct synthesis recovery lacks actual proof: " + flag)
+    for value in [result.get("requestSha256"), recovery.get("contextSha256"), recovery.get("contextArtifactSha256")]:
+        if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+            raise ValueError("Direct synthesis recovery omitted exact immutable bindings")
+    if recovery.get("originalRequestSha256") != base.get("requestSha256") or result["requestSha256"] == base.get("requestSha256") or \
+            type(recovery.get("contextArtifactLength")) is not int or recovery["contextArtifactLength"] <= 0:
+        raise ValueError("Direct synthesis recovery rebound the original request")
+    last = exchanges[4]
+    if not last.get("actionId") or last.get("actionId") != recovery.get("newSynthesisActionId") or \
+            last["actionId"] in {row["actionId"] for row in exchanges[:4]} or not last.get("operationId") or \
+            last["operationId"] in {row["operationId"] for row in exchanges[:4]} or last.get("executionEpoch") != "1" or last.get("stream") is not False or \
+            last.get("synthesisCoderInPrompt") is not True or last.get("synthesisCriticInPrompt") is not True or \
+            last.get("privateReasoningInPrompt") is not False:
+        raise ValueError("Direct synthesis lacks a fresh fenced effect and both original public summaries")
+
+
 def wait_edge(origin: str, process: subprocess.Popen[bytes]) -> None:
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
@@ -237,6 +273,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     cancel_after_plan = bool(getattr(args, "cancel_after_plan", False))
     cancel_active = bool(getattr(args, "cancel_active", False))
     recovery_preparation = bool(getattr(args, "recovery_preparation", False))
+    recovery_driving = bool(getattr(args, "recovery_driving", False))
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=True)
     source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -318,6 +355,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 upstream = preset_case is None or preset_case["upstreamPlanner"]
                 final_position = 4 if preset_case is None else len(preset_case["plan"]) + 1 + int(upstream)
                 content = json.dumps({"agents":plan["tasks"]}) if upstream and position == 1 else ("Controlled final answer" if position == final_position else "## 摘要\nControlled public task summary")
+                if recovery_driving and position == 5:
+                    content = "Controlled recovered final answer"
                 reply = json.dumps({"id": f"public-agent-{position}", "model": "deepseek-v4-pro",
                     "choices": [{"message": {"role": "assistant", "content": content, "reasoning_content": "private-task-reasoning"}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}, separators=(",", ":")).encode()
@@ -339,6 +378,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY=binding["signerPublicKey"])
             if recovery_preparation:
                 environment["DEEPSEEK_TEST_AGENT_RECOVERY_PREPARATION"] = "1"
+            if recovery_driving:
+                environment["DEEPSEEK_TEST_AGENT_RECOVERY_DRIVING"] = "1"
             if cancel_after_plan:
                 environment["DEEPSEEK_TEST_AGENT_CANCEL_AFTER_PLAN"] = "1"
             if cancel_active:
@@ -387,7 +428,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             result = signing.wait_json(case / "result.json", producer, timeout=360 if cancel_active else 180)
             if producer.wait(timeout=15) != 0:
                 raise RuntimeError("Actual native public driver process failed")
-            if recovery_preparation:
+            if recovery_driving:
+                validate_recovery_execution_result(result, exchanges)
+            elif recovery_preparation:
                 validate_recovery_preparation_result(result, exchanges)
             elif preset_case is None:
                 validate_driver_result(result, exchanges)
@@ -400,7 +443,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 request = json.loads(row[1])
                 if request["payload"].get("apiKey") is not None or "request-only-credential" in row[1].decode():
                     raise ValueError("Actual public request persisted a credential")
-                if recovery_preparation:
+                if recovery_preparation or recovery_driving:
                     recovery = result["recoveryPreparation"]
                     context_row = db.execute("SELECT length,bytes FROM artifacts WHERE sha256=?",
                                              (recovery["contextArtifactSha256"],)).fetchone()
@@ -419,6 +462,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             with sqlite3.connect((state / "rust-worker/authority.sqlite3").as_uri() + "?mode=ro", uri=True) as db:
                 rows = db.execute("SELECT operation_id,state,output,output_sha256 FROM agent_node_effects").fetchall()
                 expected_nodes = (1 if preset_case is not None and preset_case.get("cancelPhase") == "plan" else 2) if cancel_active else (1 if cancel_after_plan else (4 if preset_case is None else len(preset_case["plan"]) + 2))
+                if recovery_driving:
+                    expected_nodes = 5
                 if len(rows) != expected_nodes or any(row[1] != "CONFIRMED" or hashlib.sha256(row[2]).hexdigest() != row[3] for row in rows):
                     raise ValueError("Rust actual four-node custody is missing or corrupt")
                 leader = next((json.loads(row[2]) for row in rows if json.loads(row[2]).get("publicEvent", {}).get("type") == "agent_plan"), None)
@@ -456,6 +501,7 @@ def main() -> int:
     mode.add_argument("--cancellation-matrix", action="store_true")
     mode.add_argument("--active-cancellation-matrix", action="store_true")
     mode.add_argument("--recovery-preparation", action="store_true")
+    mode.add_argument("--recovery-driving", action="store_true")
     args = parser.parse_args()
     if args.preset_matrix or args.cancellation_matrix or args.active_cancellation_matrix:
         output = args.out.resolve()

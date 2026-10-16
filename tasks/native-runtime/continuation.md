@@ -1,41 +1,46 @@
 <!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
 ## Current cloud verification checkpoint
 
-2026-10-16: parent source `ce95e2767d2dbd055e0546247252e5ae06820b53`
-(tree `ab58f285f94bf05394c57bc32153c80ef7ffac15`) passed its complete
-37-job source `workflow_dispatch` CI and independent Rust push workflow.
-This is source qualification, not PR merge-candidate qualification or product readiness.
-Rust: https://github.com/leizd/DeepSeek-Infra/actions/runs/38743989113
-CI: https://github.com/leizd/DeepSeek-Infra/actions/runs/38744087509
-Rust:1527 passed,1 existing Redis ignore;84108/102369 lines=82.16159188816927%.
-Go default:13103/13790=95.0181290790428%; Android:12930/13600=95.0735294117647%.
-Python3.10/3.11/3.12:6061 passed,1 skipped,61 subtests each;95.57/95.51/95.57%.
-Original coverage floors remain Rust80%,Go/Android/Python95%; Go race keeps
-all instrumentation and the original90-minute package bound. Reports were
-independently downloaded/digest checked; no caches, images or volumes returned.
+2026-10-16: parent `d899ff41b1303ddcab4f8d02cb55e129bc7757bf`
+(tree `25549d5eb4b1467b6f9b6f89994f44e2cdc0f11a`) passed the complete
+independent Rust push workflow:1530 passed,1 existing Redis ignore;
+84252/102579 lines=82.13377006989734%, original80% floor unchanged.
+Real Go Preview / private Rust TLS preparation / Go atomic commit / public
+read, denial and replay probes passed. Rust reports and all3707 raw source
+files/930 native inputs were independently verified; no caches were downloaded.
+Rust: https://github.com/leizd/DeepSeek-Infra/actions/runs/38877809858
+Parent full source CI: https://github.com/leizd/DeepSeek-Infra/actions/runs/38877909482
+The parent CI's latest observation has33 of34 current jobs passed, with the
+complete native Go race job still live and downstream jobs not yet created.
+Do not call it complete37-job qualification or PR merge-candidate evidence.
+Earlier ce95e276 passed all37 original source CI jobs and Go/Android95% floors.
 
-The current change prepares a new recovery request and context in Rust through
-the existing private TLS credential RPC. Go supplies its current opaque request
-reference; Rust verifies the live Go preview plus original effect/signature
-journals, strips only previously bound private headers, inherits sealed keys,
-and writes the new canonical context, request and ordered event bodies.
-Go alone atomically commits their references with its cursor/runtime CAS.
-The dedicated cloud process probe exercises completed-resume preparation,
-forged/unauthenticated/stale denials, idempotent preparation/commit and the real
-public read, while retaining all original effects and the final answer.
-This new source needs its own exact-source cloud qualification. Parent results
-must not be borrowed. The probe does not qualify active resume/rerun execution.
+The current change separates the committed recovery execution selection from
+its retained public plan. Go revalidates original signed outputs, public
+settlements, typed terminal actions and reset history inside admission/renewal,
+and requires only this generation's selected tasks in its new completion.
+Old outputs never become forged current-generation settlement markers. Direct
+synthesis can use original verified sources without inventing a new task phase.
+Cancellation remains observed; its generation controls new driving. Rust checks
+retained signer/effect custody and reads original artifacts for dependencies
+and synthesis, while each new effect retains a fresh Go grant and Rust intent.
+The dedicated cloud probe performs actual additional HTTP synthesis through
+the production driver and verifies old action/event identities, final reset,
+new-only final answer, separate termination and replay without extra calls.
+This new source needs its own exact-source cloud compile, tests and process
+qualification; parent results do not qualify it.
 
-Full product readiness remains `NOT_READY`. Continue generation-aware Go
-scheduling/admission and Rust dependency/synthesis reads of original outputs,
-public resume/rerun, known-failure closure, admitted tools and timeline/live
-output, real providers, all retained product workloads, desktop/Android/worker
-packages and default zero-Python runtime evidence. Unknown effects remain
-`EFFECT_UNKNOWN`; never repeat a possibly completed provider write. Python is
-only an offline/test/oracle tool here. Preserve the original dirty workspace.
-All native builds/tests/containers run in GitHub Actions. Keep PR consolidation
-at21:40 Asia/Shanghai, at most once per date; no automatic main merge, release
-or real production data operation.
+Overall readiness is `NOT_READY`. The task-rerun late note/final-reset boundary
+and no-resynthesis done transition still need typed completion support; premature
+rerun synthesis is denied. Continue actual partial-resume and selected-task
+rerun/failure/restart probes, public resume/rerun routes, admitted tools, timeline
+and live output, real providers, all retained server/desktop/Android/background
+workloads, packages and default zero-Python/Evidence gates. Preserve unknown
+effects as `EFFECT_UNKNOWN`, original action/epoch/operation identities, Rust
+private-key custody and the original dirty checkout. All native compilation,
+tests and Docker verification remain in GitHub Actions; only reports return.
+PR consolidation only daily21:40 Asia/Shanghai, at most once per date. No main
+merge, release or real production data operation.
 <!-- END CURRENT_NATIVE_CLOUD_CHECKPOINT -->
 
 

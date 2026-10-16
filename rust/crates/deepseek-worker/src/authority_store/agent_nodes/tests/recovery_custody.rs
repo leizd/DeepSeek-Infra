@@ -71,6 +71,167 @@ fn context(source: AgentRunRecoveryEffectSource) -> AgentRunRecoveryContext {
     }
 }
 
+fn recovered_output_fixture(source: &Fixture, synthesis: bool) -> Fixture {
+    let mut next = Fixture::new();
+    let phase = if synthesis { 3 } else { 2 };
+    let name = if synthesis { "synthesis" } else { "tasks" };
+    let claim = next.response.claim.as_mut().unwrap();
+    claim.phase = phase;
+    claim.metadata_index = 8;
+    claim.request.as_mut().unwrap().sha256 = "d".repeat(64);
+    claim.fence.as_mut().unwrap().action_id = format!(
+        "agent-exec-{:x}",
+        Sha256::digest(format!("agent-run-execution-v1\nrun_rpc\n{name}\n8\n").as_bytes())
+    );
+    let intent = next.response.intent.as_mut().unwrap();
+    intent.fence = claim.fence.clone();
+    intent.request = claim.request.clone();
+    intent.phase = phase;
+    intent.metadata_index = 8;
+    intent.node_id = if synthesis { "synthesizer" } else { "critic" }.into();
+    intent.task = if synthesis {
+        "synthesize verified agent outputs"
+    } else {
+        "review"
+    }
+    .into();
+    intent.depends_on = vec!["coder".into()];
+    intent.operation_id = agent_node_effect::node_operation_id(intent).unwrap();
+    let mut epoch: Value = serde_json::from_slice(&source.epoch).unwrap();
+    epoch["actionId"] = claim.fence.as_ref().unwrap().action_id.clone().into();
+    epoch["requestId"] = "5".repeat(64).into();
+    epoch["nonce"] = "6".repeat(64).into();
+    next.epoch = signed(epoch, b"deepseek-infra:control-authority-request-v1\0");
+    let mut grant: Value = serde_json::from_slice(&source.grant).unwrap();
+    grant["actionId"] = claim.fence.as_ref().unwrap().action_id.clone().into();
+    grant["requestId"] = "7".repeat(64).into();
+    grant["nonce"] = "8".repeat(64).into();
+    grant["payload"] = crate::agent_execution_grant::claim_payload(claim).unwrap();
+    next.grant = signed(grant, b"deepseek-infra:control-agent-execution-grant-v1\0");
+    next
+}
+
+#[test]
+fn recovery_outputs_keep_original_custody_for_new_task_and_synthesis_scopes() {
+    for synthesis in [false, true] {
+        let fixture = Fixture::new();
+        let mut worker = fixture.worker(true);
+        let source = confirmed(&fixture, &mut worker);
+        let mut context = context(source.clone());
+        context.retained_ids = vec!["coder".into()];
+        context.retained_outputs = vec![source.clone()];
+        context.synthesize = true;
+        context.synthesis_output_ids = vec!["coder".into()];
+        context.execute = vec![
+            deepseek_protocol::generated::deepseek::agent::v1::AgentRunPlanNode {
+                id: "critic".into(),
+                task: "review".into(),
+                depends_on: vec!["coder".into()],
+            },
+        ];
+        let next = recovered_output_fixture(&fixture, synthesis);
+        worker
+            .authority_store
+            .as_mut()
+            .unwrap()
+            .install(
+                worker.authority.as_ref().unwrap(),
+                next.response
+                    .claim
+                    .as_ref()
+                    .unwrap()
+                    .fence
+                    .as_ref()
+                    .unwrap(),
+                &next.epoch,
+            )
+            .unwrap();
+        let permit = started(next.begin(&mut worker, true).unwrap());
+        let store = worker.authority_store.as_ref().unwrap();
+        assert!(store.agent_task_prior_outputs(&permit).is_err());
+        let outputs = store
+            .agent_recovery_task_prior_outputs(&permit, &context, &fixture.config)
+            .unwrap();
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0]["id"], "coder");
+        assert_eq!(outputs[0]["content"], "settled output");
+        assert_eq!(context.retained_outputs[0], source);
+        let mut wrong = context.clone();
+        wrong.retained_outputs[0]
+            .outcome
+            .as_mut()
+            .unwrap()
+            .evidence
+            .as_mut()
+            .unwrap()
+            .request
+            .as_mut()
+            .unwrap()
+            .sha256 = "f".repeat(64);
+        assert!(
+            store
+                .agent_recovery_task_prior_outputs(&permit, &wrong, &fixture.config)
+                .is_err()
+        );
+        wrong = context.clone();
+        wrong.complete_immediately = true;
+        assert!(
+            store
+                .agent_recovery_task_prior_outputs(&permit, &wrong, &fixture.config)
+                .is_err()
+        );
+        wrong = context.clone();
+        wrong.expected_request = permit.intent.request.clone();
+        assert!(
+            store
+                .agent_recovery_task_prior_outputs(&permit, &wrong, &fixture.config)
+                .is_err()
+        );
+        wrong = context.clone();
+        wrong.execute.clear();
+        wrong.synthesize = false;
+        assert!(
+            store
+                .agent_recovery_task_prior_outputs(&permit, &wrong, &fixture.config)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn recovery_output_preflight_refuses_incomplete_duplicate_or_foreign_source_sets() {
+    let fixture = Fixture::new();
+    let mut worker = fixture.worker(true);
+    let source = confirmed(&fixture, &mut worker);
+    let mut context = context(source.clone());
+    context.retained_ids = vec!["coder".into()];
+    context.retained_outputs = vec![source];
+    let store = worker.authority_store.as_ref().unwrap();
+    store
+        .verify_agent_recovery_retained_outputs(&context, &fixture.config)
+        .unwrap();
+    for change in [0, 1, 2, 3, 4] {
+        let mut wrong = context.clone();
+        match change {
+            0 => wrong.retained_ids.clear(),
+            1 => wrong.retained_ids[0] = "critic".into(),
+            2 => {
+                wrong.retained_ids.push("coder".into());
+                wrong
+                    .retained_outputs
+                    .push(wrong.retained_outputs[0].clone());
+            }
+            3 => wrong.retained_outputs[0].dispatch = None,
+            _ => wrong.generation = 0,
+        }
+        assert!(
+            store
+                .verify_agent_recovery_retained_outputs(&wrong, &fixture.config)
+                .is_err()
+        );
+    }
+}
+
 #[test]
 fn recovery_custody_preserves_original_effects_after_worker_restart() {
     let fixture = planner_fixture();
