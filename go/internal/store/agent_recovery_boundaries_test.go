@@ -159,17 +159,27 @@ func TestRecoveryMetadataEdgeRefusesEveryScopeForgery(t *testing.T) {
 	}
 	for _, testCase := range []struct {
 		name   string
-		tamper func(*agent.RunMetadata)
+		tamper func(*agent.RunMetadata) error
 	}{
-		{"final cursor", func(run *agent.RunMetadata) { run.FinalAfter++ }},
-		{"context epoch", func(run *agent.RunMetadata) { run.Recovery.Metadata.MetadataEpoch++ }},
+		{"final cursor", func(run *agent.RunMetadata) error { run.FinalAfter++; return nil }},
+		{"expected request", func(run *agent.RunMetadata) error {
+			run.Recovery.Metadata.ExpectedRequest = &agentv1.AgentArtifactReference{Sha256: strings.Repeat("9", 64), Length: 7}
+			digest, err := agentRecoveryContextDigest(run.Recovery.Metadata)
+			if err != nil {
+				return err
+			}
+			run.Recovery.ContextSHA256 = digest
+			return nil
+		}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			var tampered agent.RunMetadata
 			if json.Unmarshal(firstPayload, &tampered) != nil {
 				t.Fatal("cannot detach the committed scope payload")
 			}
-			testCase.tamper(&tampered)
+			if err := testCase.tamper(&tampered); err != nil {
+				t.Fatal(err)
+			}
 			payload, err := json.Marshal(tampered)
 			if err != nil {
 				t.Fatal(err)
