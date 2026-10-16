@@ -314,8 +314,19 @@ func nativeRecoveryDrive(t *testing.T, control *store.Control, origin string, re
 		synthesisID = action.ID
 	}
 	replay, err := recovery.Commit(ctx, commit)
-	if err != nil || !replay.AlreadyApplied || !proto.Equal(replay.Run, committed.Run) {
+	// Commit replay returns the current run alongside the original operation's
+	// immutable event receipt. Synthesis has legitimately advanced this run.
+	if err != nil || !replay.AlreadyApplied || !proto.Equal(replay.Run, runProtocol(after)) || len(replay.Events) != len(committed.Events) {
 		t.Fatal("completed recovery commit lost original receipt", err)
+	}
+	for index := range replay.Events {
+		if !proto.Equal(replay.Events[index], committed.Events[index]) {
+			t.Fatal("completed recovery replay changed an original event")
+		}
+	}
+	unchanged, found, err := control.AgentRunMetadata(before.RunID)
+	if err != nil || !found || !reflect.DeepEqual(after, unchanged) {
+		t.Fatal("commit replay changed completed recovery state", err)
 	}
 	if _, err := worker.PrepareCredentials(workerContext, prepare); status.Code(err) != codes.FailedPrecondition {
 		t.Fatal("completed recovery accepted an old preview", err)
