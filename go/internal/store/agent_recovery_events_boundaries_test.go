@@ -127,14 +127,13 @@ func TestRecoveryFinalPresenceRefusesAnUnmatchedHistory(t *testing.T) {
 }
 
 func TestAgentRunEventsRefuseCreateOnExistingAndRuntimeSwapOnAScope(t *testing.T) {
-	control, create := runtimeUpdateFixture(t, false)
-	created, err := control.AppendAgentRunEvent(create)
+	control, confirmation := runtimeUpdateFixture(t, false)
+	confirmed, err := control.AppendAgentRunEvent(confirmation)
 	if err != nil {
 		t.Fatal(err)
 	}
-	extra := eventMutation(t, control, created.Run.NextIndex, agent.RunEvent{Type: "agent_note", Phase: "coder"})
-	extra.Create = create.Create
-	extra.Create.ConversationID = "another-conversation"
+	extra := eventMutation(t, control, confirmed.Run.NextIndex, agent.RunEvent{Type: "agent_note", Phase: "coder"})
+	extra.Create = &agent.RunMetadata{Request: agent.ArtifactRef{SHA256: strings.Repeat("c", 64), Length: 10}}
 	if _, err := control.AppendAgentRunEvent(extra); !errors.Is(err, ErrAgentRunMetadataInvalid) {
 		t.Fatalf("create metadata was accepted on an existing run: %v", err)
 	}
