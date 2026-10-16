@@ -129,7 +129,7 @@ func TestRecoveryMetadataEdgeRefusesEveryScopeForgery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	beforeRecord := Record{ID: input.RunID, State: before.Status, Revision: before.NextIndex, Payload: beforePayload}
+	beforeRecord := Record{ID: input.RunID, State: before.Status, Revision: before.NextIndex, ExecutionEpoch: before.LastEvent.ExecutionEpoch, Payload: beforePayload}
 	result, err := control.CommitAgentRunRecovery(input)
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestRecoveryMetadataEdgeRefusesEveryScopeForgery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	finalRecord := Record{ID: input.RunID, State: result.Run.Status, Revision: result.Run.NextIndex, Payload: finalPayload}
+	finalRecord := Record{ID: input.RunID, State: result.Run.Status, Revision: result.Run.NextIndex, ExecutionEpoch: result.Run.LastEvent.ExecutionEpoch, Payload: finalPayload}
 	if err := validateAgentRecoveryMetadataEdge(Record{}, finalRecord); !errors.Is(err, ErrAgentRunRecoveryRequired) {
 		t.Fatalf("a new record claimed a recovery scope: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestRecoveryMetadataEdgeRefusesEveryScopeForgery(t *testing.T) {
 		input.RunID, before.NextIndex+1).Scan(&firstPayload); err != nil {
 		t.Fatal(err)
 	}
-	firstRecord := Record{ID: input.RunID, State: "running", Revision: before.NextIndex + 1, Payload: firstPayload}
+	firstRecord := Record{ID: input.RunID, State: "running", Revision: before.NextIndex + 1, ExecutionEpoch: result.Run.LastEvent.ExecutionEpoch, Payload: firstPayload}
 	if err := validateAgentRecoveryMetadataEdge(beforeRecord, firstRecord); err != nil {
 		t.Fatalf("the committed first scope transition was refused: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestRecoveryMetadataEdgeRefusesEveryScopeForgery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = validateAgentRecoveryMetadataEdge(beforeRecord, Record{ID: input.RunID, State: "running", Revision: before.NextIndex + 1, Payload: payload})
+			err = validateAgentRecoveryMetadataEdge(beforeRecord, Record{ID: input.RunID, State: "running", Revision: before.NextIndex + 1, ExecutionEpoch: result.Run.LastEvent.ExecutionEpoch, Payload: payload})
 			if !errors.Is(err, ErrAgentRunRecoveryRequired) {
 				t.Fatalf("a tampered scope transition was accepted: %v", err)
 			}
@@ -267,12 +267,13 @@ func TestRecoveryContextTransactionRefusesMalformedRecords(t *testing.T) {
 	if _, err := control.agentRecoveryContextTx(tx, Record{ID: input.RunID, Payload: []byte("{")}, expected); err == nil {
 		t.Fatal("an undecodable record reached the recovery context")
 	}
-	if _, err := control.agentRecoveryContextTx(tx, Record{ID: input.RunID, State: result.Run.Status, Payload: committed}, expected); !errors.Is(err, ErrIllegalTransition) {
+	committedRecord := Record{ID: input.RunID, State: result.Run.Status, Revision: result.Run.NextIndex, ExecutionEpoch: result.Run.LastEvent.ExecutionEpoch, Payload: committed}
+	if _, err := control.agentRecoveryContextTx(tx, committedRecord, expected); !errors.Is(err, ErrIllegalTransition) {
 		t.Fatalf("a running scope accepted another recovery: %v", err)
 	}
 	badSelection := expected
 	badSelection.Selection = &agentv1.AgentRunRecoverySelection{Kind: agentv1.AgentRunRecoveryKind_AGENT_RUN_RECOVERY_KIND_RESUME, AgentId: "coder"}
-	if _, err := control.agentRecoveryContextTx(tx, Record{ID: input.RunID, State: result.Run.Status, Payload: committed}, badSelection); !errors.Is(err, agent.ErrInvalidRunRecovery) {
+	if _, err := control.agentRecoveryContextTx(tx, committedRecord, badSelection); !errors.Is(err, agent.ErrInvalidRunRecovery) {
 		t.Fatalf("the context transaction accepted a selected resume: %v", err)
 	}
 }
