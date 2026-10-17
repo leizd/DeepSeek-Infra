@@ -109,7 +109,7 @@ export function useAgentRun(params: AgentRunHookParams) {
         if (settled) dispatch({ type: "agentStreamSettled", messageId: assistantMessage.id });
         if (abortControllerRef.current === controller) abortControllerRef.current = null;
       }
-      return content;
+      return settled && lastStatus === "done" ? content : "";
     },
     [abortControllerRef, dispatch, waitUntilResumed],
   );
@@ -182,9 +182,15 @@ export function useAgentRun(params: AgentRunHookParams) {
         dispatch({ type: "requestFailed", messageId: message.id, error: errorMessage(reason) });
         return;
       }
-      await attachStream(message, message.agentRunId, message.agentRunLastEventIndex ?? -1);
+      const content = await attachStream(message, message.agentRunId, message.agentRunLastEventIndex ?? -1);
+      if (!content.trim()) return;
+      const conversation = state.conversations.find((item) => item.messages.some((entry) => entry.id === message.id));
+      if (!conversation) return;
+      const position = conversation.messages.findIndex((entry) => entry.id === message.id);
+      const users = conversation.messages.slice(0, position).filter((entry) => entry.role === "user");
+      if (users.length === 1) await maybeGenerateTitle(conversation.id, true, users[0]!.content, content);
     },
-    [attachStream, dispatch, runtimePayload, state.requestStatus],
+    [attachStream, dispatch, maybeGenerateTitle, runtimePayload, state],
   );
 
   const rerunPhase = useCallback(

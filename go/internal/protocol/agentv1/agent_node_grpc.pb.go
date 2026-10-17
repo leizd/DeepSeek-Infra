@@ -695,3 +695,144 @@ var AgentNodeWorker_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "agent/v1/agent_node.proto",
 }
+
+const (
+	AgentRunRecoveryControl_Preview_FullMethodName = "/deepseek.agent.v1.AgentRunRecoveryControl/Preview"
+	AgentRunRecoveryControl_Commit_FullMethodName  = "/deepseek.agent.v1.AgentRunRecoveryControl/Commit"
+)
+
+// AgentRunRecoveryControlClient is the client API for AgentRunRecoveryControl service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type AgentRunRecoveryControlClient interface {
+	Preview(ctx context.Context, in *PreviewAgentRunRecoveryRequest, opts ...grpc.CallOption) (*PreviewAgentRunRecoveryResponse, error)
+	Commit(ctx context.Context, in *CommitAgentRunRecoveryRequest, opts ...grpc.CallOption) (*CommitAgentRunRecoveryResponse, error)
+}
+
+type agentRunRecoveryControlClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewAgentRunRecoveryControlClient(cc grpc.ClientConnInterface) AgentRunRecoveryControlClient {
+	return &agentRunRecoveryControlClient{cc}
+}
+
+func (c *agentRunRecoveryControlClient) Preview(ctx context.Context, in *PreviewAgentRunRecoveryRequest, opts ...grpc.CallOption) (*PreviewAgentRunRecoveryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PreviewAgentRunRecoveryResponse)
+	err := c.cc.Invoke(ctx, AgentRunRecoveryControl_Preview_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentRunRecoveryControlClient) Commit(ctx context.Context, in *CommitAgentRunRecoveryRequest, opts ...grpc.CallOption) (*CommitAgentRunRecoveryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CommitAgentRunRecoveryResponse)
+	err := c.cc.Invoke(ctx, AgentRunRecoveryControl_Commit_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AgentRunRecoveryControlServer is the server API for AgentRunRecoveryControl service.
+// All implementations must embed UnimplementedAgentRunRecoveryControlServer
+// for forward compatibility.
+type AgentRunRecoveryControlServer interface {
+	Preview(context.Context, *PreviewAgentRunRecoveryRequest) (*PreviewAgentRunRecoveryResponse, error)
+	Commit(context.Context, *CommitAgentRunRecoveryRequest) (*CommitAgentRunRecoveryResponse, error)
+	mustEmbedUnimplementedAgentRunRecoveryControlServer()
+}
+
+// UnimplementedAgentRunRecoveryControlServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedAgentRunRecoveryControlServer struct{}
+
+func (UnimplementedAgentRunRecoveryControlServer) Preview(context.Context, *PreviewAgentRunRecoveryRequest) (*PreviewAgentRunRecoveryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Preview not implemented")
+}
+func (UnimplementedAgentRunRecoveryControlServer) Commit(context.Context, *CommitAgentRunRecoveryRequest) (*CommitAgentRunRecoveryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Commit not implemented")
+}
+func (UnimplementedAgentRunRecoveryControlServer) mustEmbedUnimplementedAgentRunRecoveryControlServer() {
+}
+func (UnimplementedAgentRunRecoveryControlServer) testEmbeddedByValue() {}
+
+// UnsafeAgentRunRecoveryControlServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to AgentRunRecoveryControlServer will
+// result in compilation errors.
+type UnsafeAgentRunRecoveryControlServer interface {
+	mustEmbedUnimplementedAgentRunRecoveryControlServer()
+}
+
+func RegisterAgentRunRecoveryControlServer(s grpc.ServiceRegistrar, srv AgentRunRecoveryControlServer) {
+	// If the following call panics, it indicates UnimplementedAgentRunRecoveryControlServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&AgentRunRecoveryControl_ServiceDesc, srv)
+}
+
+func _AgentRunRecoveryControl_Preview_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PreviewAgentRunRecoveryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunRecoveryControlServer).Preview(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunRecoveryControl_Preview_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunRecoveryControlServer).Preview(ctx, req.(*PreviewAgentRunRecoveryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentRunRecoveryControl_Commit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CommitAgentRunRecoveryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunRecoveryControlServer).Commit(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunRecoveryControl_Commit_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunRecoveryControlServer).Commit(ctx, req.(*CommitAgentRunRecoveryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// AgentRunRecoveryControl_ServiceDesc is the grpc.ServiceDesc for AgentRunRecoveryControl service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var AgentRunRecoveryControl_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "deepseek.agent.v1.AgentRunRecoveryControl",
+	HandlerType: (*AgentRunRecoveryControlServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Preview",
+			Handler:    _AgentRunRecoveryControl_Preview_Handler,
+		},
+		{
+			MethodName: "Commit",
+			Handler:    _AgentRunRecoveryControl_Commit_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "agent/v1/agent_node.proto",
+}

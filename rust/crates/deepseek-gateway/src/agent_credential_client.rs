@@ -133,6 +133,7 @@ pub(crate) async fn prepare(
         api_key: api_key.unwrap_or_default().into(),
         tavily_api_key: tavily_api_key.unwrap_or_default().into(),
         runtime_update,
+        recovery_context: None,
     });
     let mut authorization: MetadataValue<_> = format!("Bearer {}", bearer.as_str())
         .parse()

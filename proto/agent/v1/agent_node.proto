@@ -179,6 +179,9 @@ message PrepareAgentCredentialsRequest {
   string api_key = 6;
   string tavily_api_key = 7;
   AgentCredentialRuntimeUpdate runtime_update = 8;
+  // This prepares custody only. Go must subsequently commit the same context
+  // under its live metadata fence and CAS before any fresh execution is legal.
+  AgentRunRecoveryContext recovery_context = 9;
 }
 
 // Private Rust-to-Rust preparation only. Go receives only immutable references.
@@ -383,5 +386,107 @@ message SettleAgentSynthesisResponse {
   bool already_applied = 1;
   AgentRunSnapshot run = 2;
   string action_state = 3;
+}
+
+enum AgentRunRecoveryKind {
+  AGENT_RUN_RECOVERY_KIND_UNSPECIFIED = 0;
+  AGENT_RUN_RECOVERY_KIND_RESUME = 1;
+  AGENT_RUN_RECOVERY_KIND_RERUN = 2;
+}
+
+message AgentRunRecoverySelection {
+  AgentRunRecoveryKind kind = 1;
+  string agent_id = 2;
+  // Missing means true for rerun. Synthesis aliases always synthesize.
+  optional bool resynthesize = 3;
+}
+
+// These are original, independently verified identities. Neither a succeeded
+// public node nor an artifact reference can substitute for their proof chain.
+message AgentRunRecoveryEffectSource {
+  AgentNodeDispatchIntent dispatch = 1;
+  AgentNodeOutcomeReceipt outcome = 2;
+  // The Go settlement cursor may be zero for a confirmed, unpublished late
+  // cancellation effect. Such an effect cannot become a retained public output.
+  int64 settlement_metadata_index = 3;
+}
+
+// Go computes this bounded plan from its verified history. Rust retains its
+// canonical protobuf and binds its reference into the next immutable request.
+// Existing execution grants keep their original format and bind that request.
+message AgentRunRecoveryContext {
+  uint32 schema_version = 1;
+  string run_id = 2;
+  uint64 generation = 3;
+  uint64 metadata_epoch = 4;
+  int64 expected_index = 5;
+  uint64 expected_runtime_revision = 6;
+  AgentArtifactReference expected_request = 7;
+  AgentRunRecoveryScope previous_scope = 8;
+  AgentRunRecoverySelection selection = 9;
+  // Effective execution plan: defaults and a one-Agent rerun must not silently
+  // replace the retained public plan snapshot.
+  repeated AgentRunPlanNode plan = 10;
+  repeated AgentRunPlanNode execute = 11;
+  repeated string completed_ids = 12;
+  repeated string retained_ids = 13;
+  repeated string prior_ids = 14;
+  repeated string reset_ids = 15;
+  repeated string synthesis_output_ids = 16;
+  bool synthesize = 17;
+  bool reset_final = 18;
+  bool complete_immediately = 19;
+  // New effects since previous_scope must all be confirmed before recovery.
+  // Unknown effects and any pending reservation, including an expired one,
+  // prohibit committing a fresh generation.
+  repeated AgentRunRecoveryEffectSource prior_effects = 20;
+  repeated AgentRunRecoveryEffectSource retained_outputs = 21;
+}
+
+message PreviewAgentRunRecoveryRequest {
+  uint32 schema_version = 1;
+  string run_id = 2;
+  deepseek.common.v1.ActionFence metadata_fence = 3;
+  int64 expected_index = 4;
+  uint64 expected_runtime_revision = 5;
+  AgentArtifactReference expected_request = 6;
+  AgentRunRecoverySelection selection = 7;
+}
+
+message PreviewAgentRunRecoveryResponse {
+  bool authoritative = 1;
+  AgentRunRecoveryContext context = 2;
+  string context_sha256 = 3;
+}
+
+message CommitAgentRunRecoveryRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  string run_id = 4;
+  // Metadata authority only: action_id must equal run_id, and the epoch must
+  // match the current Go-owned domain inside the commit transaction.
+  deepseek.common.v1.ActionFence fence = 5;
+  int64 expected_index = 6;
+  uint64 expected_runtime_revision = 7;
+  AgentArtifactReference expected_request = 8;
+  AgentRunRecoverySelection selection = 9;
+  string context_sha256 = 10;
+  AgentArtifactReference context = 11;
+  AgentArtifactReference request = 12;
+  // Rust creates sanitized bodies; Go recomputes each event's type/scope and
+  // commits all bodies, metadata and the request swap in one authority transaction.
+  repeated AgentArtifactReference event_bodies = 13;
+}
+
+message CommitAgentRunRecoveryResponse {
+  bool already_applied = 1;
+  AgentRunSnapshot run = 2;
+  repeated AgentRunEventMetadata events = 3;
+}
+
+service AgentRunRecoveryControl {
+  rpc Preview(PreviewAgentRunRecoveryRequest) returns (PreviewAgentRunRecoveryResponse);
+  rpc Commit(CommitAgentRunRecoveryRequest) returns (CommitAgentRunRecoveryResponse);
 }
 

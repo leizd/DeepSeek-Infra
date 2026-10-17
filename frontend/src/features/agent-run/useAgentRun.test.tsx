@@ -94,7 +94,10 @@ function stateWith(message: ChatMessage): ChatState {
   return createInitialChatState({ schemaVersion: 1, currentConversationId: conversation.id, conversations: [conversation] });
 }
 
-function renderAgentRun(initialState: ChatState) {
+function renderAgentRun(
+  initialState: ChatState,
+  maybeGenerateTitle: (conversationId: string, firstTurn: boolean, userText: string, assistantContent: string) => Promise<void> = () => Promise.resolve(),
+) {
   return renderHook(() => {
     const [state, dispatch] = useReducer(chatReducer, initialState);
     const abortControllerRef = useRef<AbortController | null>(null);
@@ -111,7 +114,7 @@ function renderAgentRun(initialState: ChatState) {
         memoryEnabled: false,
       }),
       hasBackendKey: () => true,
-      maybeGenerateTitle: () => Promise.resolve(),
+      maybeGenerateTitle,
     });
     return { state, agentRun };
   });
@@ -134,6 +137,53 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+});
+
+describe("Agent plan confirmation titles", () => {
+  it.each([
+    { completion: "done", laterTurn: false },
+    { completion: "done", laterTurn: true },
+    { completion: "failed", laterTurn: false },
+    { completion: "awaiting_plan", laterTurn: false },
+  ])("generates a first-turn title only after confirmation completes ($completion, later=$laterTurn)", async ({ completion, laterTurn }) => {
+    const message = agentMessage({ agentRunStatus: "awaiting_plan", content: "Agent 计划已生成，等待确认执行。" });
+    const user = { ...agentMessage(), id: "user-1", role: "user" as const, content: "Review this project" };
+    const earlier = { ...user, id: "user-earlier", content: "Earlier question" };
+    const initial = stateWith(message);
+    const initialState = createInitialChatState({
+      schemaVersion: 1,
+      currentConversationId: "conversation-1",
+      conversations: [{ ...initial.conversations[0]!, messages: laterTurn ? [earlier, user, message] : [user, message] }],
+    });
+    getRunMock.mockResolvedValue(run("awaiting_plan"));
+    confirmPlanMock.mockResolvedValue(run("running"));
+    streamMock.mockImplementation(async (options: { onEvent: (event: Record<string, unknown>) => void }) => {
+      options.onEvent({ type: "run_status", status: "running" });
+      if (completion === "failed") {
+        options.onEvent({ type: "content", text: "Incomplete answer" });
+        throw new Error("provider disconnected");
+      }
+      if (completion === "awaiting_plan") options.onEvent({ type: "run_status", status: "awaiting_plan" });
+      else {
+        options.onEvent({ type: "content", text: "Confirmed final answer" });
+        options.onEvent({ type: "done" });
+      }
+      return { lastEventIndex: 42, completed: true };
+    });
+    const generateTitle = vi.fn(() => Promise.resolve());
+    const { result } = renderAgentRun(initialState, generateTitle);
+
+    await act(async () => {
+      await result.current.agentRun.confirmPlan(message, [{ id: "coder", task: "review" }]);
+    });
+
+    expect(confirmPlanMock).toHaveBeenCalledTimes(1);
+    if (laterTurn || completion !== "done") expect(generateTitle).not.toHaveBeenCalled();
+    else expect(generateTitle).toHaveBeenCalledExactlyOnceWith("conversation-1", true, "Review this project", "Confirmed final answer");
+    const rendered = result.current.state.conversations[0]!.messages.find((entry) => entry.id === message.id);
+    if (completion === "done") expect(rendered?.content).toBe("Confirmed final answer");
+    if (completion === "failed") expect(rendered?.content).toBe("Incomplete answer");
+  });
 });
 
 describe("useAgentRun restore reconciliation", () => {

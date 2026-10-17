@@ -1,0 +1,909 @@
+{
+  "schema": "offline-agent-recovery-control-v2",
+  "referenceSourceCommit": "4edeb138ab037efdaf4e73d363c07c188d9597fb",
+  "sources": [
+    {
+      "path": "deepseek_infra/infra/agent_runtime/multi_agent.py",
+      "sha256": "3823c0051c15fa078f7d84ae0b4c1bdc6cc4d2de8efb95e9b3f7061848280954"
+    },
+    {
+      "path": "deepseek_infra/infra/agent_runtime/agent_runs.py",
+      "sha256": "d0616783b817d4e3df01a306af9a03e11abc0fe636edc4ab1bfde5850d2c66ca"
+    },
+    {
+      "path": "deepseek_infra/infra/agent_runtime/agent_state.py",
+      "sha256": "31d2b7556bedfdbf89ca97bdde92ea24712e8a62862372e897678cf72a7286d5"
+    }
+  ],
+  "nativeRecoveryQualified": false,
+  "cases": [
+    {
+      "name": "resume none complete",
+      "input": {
+        "mode": "resume",
+        "agentId": "",
+        "resynthesize": true
+      },
+      "checkpoint": {
+        "plan": [
+          {
+            "id": "coder",
+            "task": "write"
+          },
+          {
+            "id": "critic",
+            "task": "review",
+            "depends_on": [
+              "coder"
+            ]
+          }
+        ],
+        "nodeStates": {
+          "coder": "queued",
+          "critic": "created"
+        },
+        "outputs": [],
+        "finalAnswerPresent": false
+      },
+      "calls": [
+        {
+          "kind": "dag",
+          "planIds": [
+            "coder",
+            "critic"
+          ],
+          "completedIds": []
+        }
+      ],
+      "resetIds": [
+        "coder",
+        "critic"
+      ],
+      "retainedIds": [],
+      "resetFinal": true,
+      "synthesize": true,
+      "completeImmediately": false,
+      "expectError": false
+    },
+    {
+      "name": "resume retains coder",
+      "input": {
+        "mode": "resume",
+        "agentId": "",
+        "resynthesize": true
+      },
+      "checkpoint": {
+        "plan": [
+          {
+            "id": "coder",
+            "task": "write"
+          },
+          {
+            "id": "critic",
+            "task": "review",
+            "depends_on": [
+              "coder"
+            ]
+          }
+        ],
+        "nodeStates": {
+          "coder": "succeeded",
+          "critic": "queued"
+        },
+        "outputs": [
+          {
+            "id": "coder",
+            "failed": false
+          }
+        ],
+        "finalAnswerPresent": false
+      },
+      "calls": [
+        {
+          "kind": "dag",
+          "planIds": [
+            "coder",
+            "critic"
+          ],
+          "completedIds": [
+            "coder"
+          ]
+        }
+      ],
+      "resetIds": [
+        "critic"
+      ],
+      "retainedIds": [
+        "coder"
+      ],
+      "resetFinal": true,
+      "synthesize": true,
+      "completeImmediately": false,
+      "expectError": false
+    },
+    {
+      "name": "resume synthesis only",
+      "input": {
+        "mode": "resume",
+        "agentId": "",
+        "resynthesize": true
+      },
+      "checkpoint": {
+        "plan": [
+          {
+            "id": "coder",
+            "task": "write"
+          },
+          {
+            "id": "critic",
+            "task": "review",
+            "depends_on": [
+              "coder"
+            ]
+          }
+        ],
+        "nodeStates": {
+          "coder": "succeeded",
+          "critic": "succeeded"
+        },
+        "outputs": [
+          {
+            "id": "coder",
+            "failed": false
+          },
+          {
+            "id": "critic",
+            "failed": false
+          }
+        ],
+        "finalAnswerPresent": false
+      },
+      "calls": [
+        {
+          "kind": "synthesis",
+          "outputIds": [
+            "coder",
+            "critic"
+          ]
+        }
+      ],
+      "resetIds": [],
+      "retainedIds": [
+        "coder",
+        "critic"
+      ],
+      "resetFinal": true,
+      "synthesize": true,
+      "completeImmediately": false,
+      "expectError": false
+    },
+    {
+      "name": "resume already final",
+      "input": {
+        "mode": "resume",
+        "agentId": "",
+        "resynthesize": true
+      },
+      "checkpoint": {
+        "plan": [
+          {
+            "id": "coder",
+            "task": "write"
+          },
+          {
+            "id": "critic",
+            "task": "review",
+            "depends_on": [
+              "coder"
+            ]
+          }
+        ],
+        "nodeStates": {
+          "coder": "succeeded",
+          "critic": "succeeded"
+        },
+        "outputs": [
+          {
+            "id": "coder",
+            "failed": false
+          },
+          {
+            "id": "critic",
+            "failed": false
+          }
+        ],
+        "finalAnswerPresent": true
+      },
+      "calls": [],
+      "resetIds": [],
+      "retainedIds": [
+        "coder",
+        "critic"
+      ],
+      "resetFinal": false,
+      "synthesize": false,
+      "completeImmediately": true,
+      "expectError": false
+    },
+    {
+      "name": "resume cancelled",
+      "input": {
+        "mode": "resume",
+        "agentId": "",
+        "resynthesize": true
+      },
+      "checkpoint": {
+        "plan": [
+          {
+            "id": "coder",
+            "task": "write"
+          },
+          {
+            "id": "critic",
+            "task": "review",
+            "depends_on": [
+              "coder"
+            ]
+          }
+        ],
+        "nodeStates": {
+          "coder": "succeeded",
+          "critic": "queued"
+        },
+        "outputs": [
+          {
+            "id": "coder",
+            "failed": false
+          }
+        ],
+        "finalAnswerPresent": false
+      },
+      "calls": [
+        {
+          "kind": "dag",
+          "planIds": [
+            "coder",
+            "critic"
+          ],
+          "completedIds": [
+            "coder"
+          ]
+        }
+      ],
+      "resetIds": [
+        "critic"
+      ],
+      "retainedIds": [
+        "coder"
+      ],
+      "resetFinal": true,
+      "synthesize": true,
+      "completeImmediately": false,
+      "expectError": false
+    },
+    {
+      "name": "resume failed critic",
+      "input": {
+        "mode": "resume",
+        "agentId": "",
+        "resynthesize": true
+      },
+      "checkpoint": {
+        "plan": [
+          {
+            "id": "coder",
+            "task": "write"
+          },
+          {
+            "id": "critic",
+            "task": "review",
+            "depends_on": [
+              "coder"
+            ]
+          }
+        ],
+        "nodeStates": {
+          "coder": "succeeded",
+          "critic": "failed"
+        },
+        "outputs": [
+          {
+            "id": "coder",
+            "failed": false
+          },
+          {
+            "id": "critic",
+            "failed": true
+          }
+        ],
+        "finalAnswerPresent": false
+      },
+      "calls": [
+        {
+          "kind": "dag",
+          "planIds": [
+            "coder",
+            "critic"
+          ],
+          "completedIds": [
+            "coder"
+          ]
+        }
+      ],
+      "resetIds": [
+        "critic"
+      ],
+      "retainedIds": [
+        "coder"
+      ],
+      "resetFinal": true,
+      "synthesize": true,
+      "completeImmediately": false,
+      "expectError": false
+    },
+    {
+      "name": "rerun unplanned researcher",
+      "input": {
+        "mode": "rerun",
+        "agentId": "researcher",
+        "resynthesize": true
+      },
+      "checkpoint": {
+        "plan": [
+          {
+            "id": "coder",
+            "task": "write"
+          },
+          {
+            "id": "critic",
+            "task": "review",
+            "depends_on": [
+              "coder"
+            ]
+          }
+        ],
+        "nodeStates": {
+          "coder": "succeeded",
+          "critic": "succeeded"
+        },
+        "outputs": [
+          {
+            "id": "coder",
+            "failed": false
+          },
+          {
+            "id": "critic",
+            "failed": false
+          }
+        ],
+        "finalAnswerPresent": false
+      },
+      "calls": [
+        {
+          "kind": "node",
+          "id": "researcher",
+          "task": "重新运行该 Agent 并给出公开摘要",
+          "priorIds": [
+            "coder",
+            "critic"
+          ]
+        },
+        {
+          "kind": "synthesis",
+          "outputIds": [
+            "coder",
+            "critic",
+            "researcher"
+          ]
+        }
+      ],
+      "resetIds": [
+        "researcher"
+      ],
+      "retainedIds": [
+        "coder",
+        "critic"
+      ],
+      "resetFinal": true,
+      "synthesize": true,
+      "completeImmediately": false,
+      "expectError": false
+    },
+    {
+      "name": "synthesis without outputs",
+      "input": {
+        "mode": "rerun",
+        "agentId": "synth",
+        "resynthesize": true
+      },
+      "checkpoint": {
+        "plan": [
+          {
+            "id": "coder",
+            "task": "write"
+          },
+          {
+            "id": "critic",
+            "task": "review",
+            "depends_on": [
+              "coder"
+            ]
+          }
+        ],
+        "nodeStates": {
+          "coder": "queued",
+          "critic": "created"
+        },
+        "outputs": [],
+        "finalAnswerPresent": false
+      },
+      "calls": [],
+      "resetIds": [],
+      "retainedIds": [],
+      "resetFinal": true,
+      "synthesize": false,
+      "completeImmediately": false,
+      "expectError": true
+    },
+    {
+      "name": "invalid rerun role",
+      "input": {
+        "mode": "rerun",
+        "agentId": "unregistered",
+        "resynthesize": true
+      },
+      "checkpoint": {
+        "plan": [
+          {
+            "id": "coder",
+            "task": "write"
+          },
+          {
+            "id": "critic",
+            "task": "review",
+            "depends_on": [
+              "coder"
+            ]
+          }
+        ],
+        "nodeStates": {
+          "coder": "succeeded",
+          "critic": "queued"
+        },
+        "outputs": [
+          {
+            "id": "coder",
+            "failed": false
+          }
+        ],
+        "finalAnswerPresent": false
+      },
+      "calls": [],
+      "resetIds": [],
+      "retainedIds": [
+        "coder"
+      ],
+      "resetFinal": false,
+      "synthesize": false,
+      "completeImmediately": false,
+      "expectError": true
+    },
+    {
+      "name": "rerun coder",
+      "input": {
+        "mode": "rerun",
+        "agentId": "coder",
+        "resynthesize": true
+      },
+      "checkpoint": {
+        "plan": [
+          {
+            "id": "coder",
+            "task": "write"
+          },
+          {
+            "id": "critic",
+            "task": "review",
+            "depends_on": [
+              "coder"
+            ]
+          }
+        ],
+        "nodeStates": {
+          "coder": "succeeded",
+          "critic": "succeeded"
+        },
+        "outputs": [
+          {
+            "id": "coder",
+            "failed": false
+          },
+          {
+            "id": "critic",
+            "failed": false
+          }
+        ],
+        "finalAnswerPresent": true
+      },
+      "calls": [
+        {
+          "kind": "node",
+          "id": "coder",
+          "task": "write",
+          "priorIds": []
+        },
+        {
+          "kind": "synthesis",
+          "outputIds": [
+            "coder",
+            "critic"
+          ]
+        }
+      ],
+      "resetIds": [
+        "coder"
+      ],
+      "retainedIds": [
+        "critic"
+      ],
+      "resetFinal": true,
+      "synthesize": true,
+      "completeImmediately": false,
+      "expectError": false
+    },
+    {
+      "name": "rerun critic",
+      "input": {
+        "mode": "rerun",
+        "agentId": "critic",
+        "resynthesize": true
+      },
+      "checkpoint": {
+        "plan": [
+          {
+            "id": "coder",
+            "task": "write"
+          },
+          {
+            "id": "critic",
+            "task": "review",
+            "depends_on": [
+              "coder"
+            ]
+          }
+        ],
+        "nodeStates": {
+          "coder": "succeeded",
+          "critic": "succeeded"
+        },
+        "outputs": [
+          {
+            "id": "coder",
+            "failed": false
+          },
+          {
+            "id": "critic",
+            "failed": false
+          }
+        ],
+        "finalAnswerPresent": false
+      },
+      "calls": [
+        {
+          "kind": "node",
+          "id": "critic",
+          "task": "review",
+          "priorIds": [
+            "coder"
+          ]
+        },
+        {
+          "kind": "synthesis",
+          "outputIds": [
+            "coder",
+            "critic"
+          ]
+        }
+      ],
+      "resetIds": [
+        "critic"
+      ],
+      "retainedIds": [
+        "coder"
+      ],
+      "resetFinal": true,
+      "synthesize": true,
+      "completeImmediately": false,
+      "expectError": false
+    },
+    {
+      "name": "rerun critic reverse DAG",
+      "input": {
+        "mode": "rerun",
+        "agentId": "critic",
+        "resynthesize": true
+      },
+      "checkpoint": {
+        "plan": [
+          {
+            "id": "critic",
+            "task": "review",
+            "depends_on": [
+              "coder"
+            ]
+          },
+          {
+            "id": "coder",
+            "task": "write"
+          }
+        ],
+        "nodeStates": {
+          "critic": "succeeded",
+          "coder": "succeeded"
+        },
+        "outputs": [
+          {
+            "id": "coder",
+            "failed": false
+          },
+          {
+            "id": "critic",
+            "failed": false
+          }
+        ],
+        "finalAnswerPresent": false
+      },
+      "calls": [
+        {
+          "kind": "node",
+          "id": "critic",
+          "task": "review",
+          "priorIds": [
+            "coder"
+          ]
+        },
+        {
+          "kind": "synthesis",
+          "outputIds": [
+            "critic",
+            "coder"
+          ]
+        }
+      ],
+      "resetIds": [
+        "critic"
+      ],
+      "retainedIds": [
+        "coder"
+      ],
+      "resetFinal": true,
+      "synthesize": true,
+      "completeImmediately": false,
+      "expectError": false
+    },
+    {
+      "name": "rerun without synthesis",
+      "input": {
+        "mode": "rerun",
+        "agentId": "coder",
+        "resynthesize": false
+      },
+      "checkpoint": {
+        "plan": [
+          {
+            "id": "coder",
+            "task": "write"
+          },
+          {
+            "id": "critic",
+            "task": "review",
+            "depends_on": [
+              "coder"
+            ]
+          }
+        ],
+        "nodeStates": {
+          "coder": "succeeded",
+          "critic": "succeeded"
+        },
+        "outputs": [
+          {
+            "id": "coder",
+            "failed": false
+          },
+          {
+            "id": "critic",
+            "failed": false
+          }
+        ],
+        "finalAnswerPresent": true
+      },
+      "calls": [
+        {
+          "kind": "node",
+          "id": "coder",
+          "task": "write",
+          "priorIds": []
+        }
+      ],
+      "resetIds": [
+        "coder"
+      ],
+      "retainedIds": [
+        "critic"
+      ],
+      "resetFinal": false,
+      "synthesize": false,
+      "completeImmediately": false,
+      "expectError": false
+    },
+    {
+      "name": "synthesis alias synth",
+      "input": {
+        "mode": "rerun",
+        "agentId": "synth",
+        "resynthesize": false
+      },
+      "checkpoint": {
+        "plan": [
+          {
+            "id": "coder",
+            "task": "write"
+          },
+          {
+            "id": "critic",
+            "task": "review",
+            "depends_on": [
+              "coder"
+            ]
+          }
+        ],
+        "nodeStates": {
+          "coder": "succeeded",
+          "critic": "succeeded"
+        },
+        "outputs": [
+          {
+            "id": "coder",
+            "failed": false
+          },
+          {
+            "id": "critic",
+            "failed": false
+          }
+        ],
+        "finalAnswerPresent": false
+      },
+      "calls": [
+        {
+          "kind": "synthesis",
+          "outputIds": [
+            "coder",
+            "critic"
+          ]
+        }
+      ],
+      "resetIds": [],
+      "retainedIds": [
+        "coder",
+        "critic"
+      ],
+      "resetFinal": true,
+      "synthesize": true,
+      "completeImmediately": false,
+      "expectError": false
+    },
+    {
+      "name": "synthesis alias leader",
+      "input": {
+        "mode": "rerun",
+        "agentId": "leader",
+        "resynthesize": false
+      },
+      "checkpoint": {
+        "plan": [
+          {
+            "id": "coder",
+            "task": "write"
+          },
+          {
+            "id": "critic",
+            "task": "review",
+            "depends_on": [
+              "coder"
+            ]
+          }
+        ],
+        "nodeStates": {
+          "coder": "succeeded",
+          "critic": "succeeded"
+        },
+        "outputs": [
+          {
+            "id": "coder",
+            "failed": false
+          },
+          {
+            "id": "critic",
+            "failed": false
+          }
+        ],
+        "finalAnswerPresent": false
+      },
+      "calls": [
+        {
+          "kind": "synthesis",
+          "outputIds": [
+            "coder",
+            "critic"
+          ]
+        }
+      ],
+      "resetIds": [],
+      "retainedIds": [
+        "coder",
+        "critic"
+      ],
+      "resetFinal": true,
+      "synthesize": true,
+      "completeImmediately": false,
+      "expectError": false
+    },
+    {
+      "name": "synthesis alias synthesizer",
+      "input": {
+        "mode": "rerun",
+        "agentId": "synthesizer",
+        "resynthesize": false
+      },
+      "checkpoint": {
+        "plan": [
+          {
+            "id": "coder",
+            "task": "write"
+          },
+          {
+            "id": "critic",
+            "task": "review",
+            "depends_on": [
+              "coder"
+            ]
+          }
+        ],
+        "nodeStates": {
+          "coder": "succeeded",
+          "critic": "succeeded"
+        },
+        "outputs": [
+          {
+            "id": "coder",
+            "failed": false
+          },
+          {
+            "id": "critic",
+            "failed": false
+          }
+        ],
+        "finalAnswerPresent": false
+      },
+      "calls": [
+        {
+          "kind": "synthesis",
+          "outputIds": [
+            "coder",
+            "critic"
+          ]
+        }
+      ],
+      "resetIds": [],
+      "retainedIds": [
+        "coder",
+        "critic"
+      ],
+      "resetFinal": true,
+      "synthesize": true,
+      "completeImmediately": false,
+      "expectError": false
+    }
+  ]
+}

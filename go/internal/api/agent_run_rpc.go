@@ -193,6 +193,10 @@ func runProtocol(run agent.RunMetadata) *agentv1.AgentRunSnapshot {
 	output := &agentv1.AgentRunSnapshot{RunId: run.RunID, Status: run.Status, NextIndex: run.NextIndex, Preset: run.Preset,
 		ConfirmPlan: run.ConfirmPlan, ConversationId: run.ConversationID, MessageId: run.MessageID, Request: artifactProtocol(run.Request),
 		Plan: planProtocol(run.Plan), FinalAfter: run.FinalAfter, LastEvent: eventProtocol(run.LastEvent), RuntimeRevision: run.RuntimeVersion()}
+	if run.Recovery != nil {
+		output.RecoveryScope = &agentv1.AgentRunRecoveryScope{Generation: run.Recovery.Generation,
+			Context: artifactProtocol(run.Recovery.Context), ContextSha256: run.Recovery.ContextSHA256, StartIndex: run.Recovery.StartIndex}
+	}
 	nodes := run.Nodes()
 	ids := make([]string, 0, len(nodes))
 	for id := range nodes {

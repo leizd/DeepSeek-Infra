@@ -142,13 +142,17 @@ function applyStreamEventBody(message: ChatMessage, event: ChatStreamEvent): Cha
 
     case "run_status": {
       const phase = phaseForRunStatus(event.status, message.phase);
+      const confirmationNotice = "Agent 计划已生成，等待确认执行。";
+      const content = message.agentRunStatus === "awaiting_plan" && message.content === confirmationNotice && event.status !== "awaiting_plan"
+        ? ""
+        : message.content;
       return {
         ...message,
         phase,
         streaming: !["done", "failed", "cancelled", "interrupted"].includes(event.status),
         agentRunId: event.runId ?? message.agentRunId,
         agentRunStatus: event.status,
-        content: event.status === "awaiting_plan" && !message.content ? "Agent 计划已生成，等待确认执行。" : message.content,
+        content: event.status === "awaiting_plan" && !content ? confirmationNotice : content,
       };
     }
 

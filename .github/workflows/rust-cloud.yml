@@ -148,6 +148,13 @@ jobs:
         timeout-minutes: 8
         run: |
           python scripts/verify_native_agent_daemon_public.py --runtime-update --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-runtime-update 2>&1 | tee artifacts/rust-cloud/agent-runtime-update.log
+      - name: Verify the built React browser through actual native Agent execution
+        if: matrix.mode == 'checks'
+        timeout-minutes: 10
+        run: |
+          python -m pip install -r requirements-browser.txt
+          python -m playwright install --with-deps chromium
+          python scripts/verify_native_agent_daemon_public.py --browser --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-native-browser 2>&1 | tee artifacts/rust-cloud/agent-native-browser.log
       - name: Install pinned coverage tooling on the cloud runner
         if: matrix.mode == 'coverage'
         run: |

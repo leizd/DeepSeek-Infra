@@ -1385,6 +1385,7 @@ func (store *Control) putLeasedControlRecord(record Record, dispatch *StorageDis
 // identity. It cannot be rebound by modifying the caller's payload or intent.
 type controlRecordWrite struct {
 	agentEvent                  bool
+	agentRecovery               bool
 	agentExecution              bool
 	agentNodeDispatch           bool
 	agentNodeOutcome            bool
@@ -1469,6 +1470,14 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 	if record.Domain == "agent_run" && !write.agentEvent &&
 		(nativeAgentMetadata(record.Payload) || exists && nativeAgentMetadata(existing.Payload)) {
 		return ErrAgentRunEventRequired
+	}
+	if record.Domain == "agent_run" && nativeAgentMetadata(record.Payload) {
+		if err := validateAgentRecoveryMetadataEdge(existing, record); err != nil {
+			return err
+		}
+		if changedAgentRecoveryScope(existing, record) && !write.agentRecovery {
+			return ErrAgentRunRecoveryRequired
+		}
 	}
 	if record.Domain == "action" && !write.agentExecution &&
 		(nativeAgentExecution(record.Payload) || exists && nativeAgentExecution(existing.Payload)) {
@@ -1846,6 +1855,11 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 			expectedRevision = event.Revision
 		}
 		legal := LegalTransition(latest.Domain, previousState, event.State)
+		if latest.Domain == "agent_run" && nativeAgentMetadata(event.Payload) {
+			if err := validateAgentRecoveryMetadataEdge(final, event); err != nil {
+				return ErrCorruptRecord
+			}
+		}
 		if latest.Domain == "action" {
 			var beforeFields, afterFields map[string]json.RawMessage
 			_ = json.Unmarshal(final.Payload, &beforeFields)
