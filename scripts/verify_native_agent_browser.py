@@ -18,7 +18,7 @@ BROWSER_TASK = "write through browser"
 BROWSER_TITLE = "Native browser conversat"
 
 
-def is_final_browser_mirror(payload: Any, run_id: str, conversation_id: str) -> bool:
+def is_final_browser_mirror(payload: Any, run_id: str, conversation_id: str, final_answer: str = "Controlled final answer") -> bool:
     """Match the versioned checkpoint for this UI-created conversation and run."""
     if not isinstance(payload, dict) or not run_id or not conversation_id:
         return False
@@ -47,24 +47,26 @@ def is_final_browser_mirror(payload: Any, run_id: str, conversation_id: str) -> 
             continue
         if any(isinstance(message, dict) and message.get("role") == "user" and message.get("content") == BROWSER_QUERY
                for message in messages) and any(isinstance(message, dict) and message.get("role") == "assistant" and
-                   message.get("content") == "Controlled final answer" and message.get("agentRunId") == run_id and
+                    message.get("content") == final_answer and message.get("agentRunId") == run_id and
                    message.get("agentRunStatus") == "done" for message in messages):
             return True
     return False
 
 
-def reload_browser_history(page: Any, mirror_response: Any) -> dict[str, Any]:
+def reload_browser_history(page: Any, mirror_response: Any, final_answer: str = "Controlled final answer") -> dict[str, Any]:
     """Retain the final public receipt while verifying the reloaded history."""
     receipt = mirror_response.json()
     if not isinstance(receipt, dict):
         raise ValueError("Actual browser mirror receipt is missing")
     page.reload(wait_until="domcontentloaded")
-    page.get_by_text("Controlled final answer", exact=True).last.wait_for()
+    page.get_by_text(final_answer, exact=True).last.wait_for()
     page.get_by_text(BROWSER_TITLE, exact=True).last.wait_for()
     return receipt
 
 
-def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[str], None] | None = None) -> dict[str, Any]:
+def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[str], None] | None = None,
+                      recovery: bool = False, before_recovery: Callable[[str], None] | None = None,
+                      inspect_inflight_recovery: Callable[[str], Callable[[], None]] | None = None) -> dict[str, Any]:
     """Drive shipped React controls; no route interception or page-side API calls."""
     target = urlsplit(origin)
     if target.scheme != "http" or target.hostname != "127.0.0.1" or not target.port or target.path:
@@ -131,12 +133,14 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
                 raise ValueError("Actual browser lacks independent pre-confirmation inspection")
             before_confirmation(run_id)
 
+            expected_final = "Controlled final answer"
+
             def final_mirror(response: Any) -> bool:
                 url = urlsplit(response.url)
                 if url.netloc != target.netloc or not url.path.startswith("/api/workspace/backup-mirrors/") or \
                         not url.path.endswith("/frontend") or response.request.method != "PUT" or response.status != 200:
                     return False
-                return is_final_browser_mirror(response.request.post_data_json, run_id, conversation_id)
+                return is_final_browser_mirror(response.request.post_data_json, run_id, conversation_id, expected_final)
 
             with page.expect_response(lambda response: response_for(response, "/api/title"), timeout=120_000) as title, \
                     page.expect_response(final_mirror, timeout=120_000) as mirrored:
@@ -147,9 +151,34 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
                 page.get_by_text("Controlled final answer", exact=True).last.wait_for(timeout=120_000)
             if title.value.status != 200 or title.value.json().get("title") != BROWSER_TITLE:
                 raise ValueError("Actual native conversation title generation failed")
-            mirror_receipt = reload_browser_history(page, mirrored.value)
+            last_mirror=mirrored.value
+            recovery_observed: dict[str,Any]={}
+            if recovery:
+                from verify_native_agent_browser_recovery import RECOVERED_FINAL
+                if before_recovery is None or inspect_inflight_recovery is None:
+                    raise ValueError("Actual browser recovery lacks independent before/in-flight inspection")
+                before_recovery(run_id)
+                expected_final=RECOVERED_FINAL
+                with page.expect_response(final_mirror,timeout=120_000) as recovery_mirror:
+                    with page.expect_response(lambda response: response_for(response,f"/api/agent-runs/{run_id}/rerun"),timeout=120_000) as rerun:
+                        page.locator('.agent-step[data-agent-phase="critic"]').get_by_role("button",name="重跑",exact=True).click()
+                    request=rerun.value.request.post_data_json
+                    if rerun.value.status!=200 or not isinstance(request,dict) or request.get("agentId")!="critic" or \
+                            request.get("resynthesize") is not True or not isinstance(request.get("payload"),dict):
+                        raise ValueError("Actual React rerun did not send its selected role and runtime payload")
+                    release=inspect_inflight_recovery(run_id)
+                    try:
+                        page.get_by_text("Controlled final answer",exact=True).last.wait_for()
+                        page.screenshot(path=str(output/"browser-recovery-inflight.png"),full_page=True)
+                    finally:
+                        release()
+                    page.get_by_text(expected_final,exact=True).last.wait_for(timeout=120_000)
+                last_mirror=recovery_mirror.value
+                recovery_observed={"rerunByBrowser":True,"oldFinalVisibleDuringRerun":True,
+                                   "recoveredFinalVisible":True,"rerunSelectionAndPayloadVerified":True}
+            mirror_receipt = reload_browser_history(page, last_mirror, expected_final)
             page.wait_for_load_state("networkidle", timeout=30_000)
-            screenshot = output / "browser-final.png"
+            screenshot = output / ("browser-recovery.png" if recovery else "browser-final.png")
             page.screenshot(path=str(screenshot), full_page=True)
             image = screenshot.read_bytes()
             if not image.startswith(b"\x89PNG\r\n\x1a\n") or len(image) > 2 * 1024**2:
@@ -160,10 +189,10 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
                         planConfirmationByBrowser=True, noTasksBeforePlanConfirmation=True,
                         planEditedByBrowser=True,
                         backupPolicyCreatedByBrowser=False, backupPolicyConfiguredByGoFixture=True, finalEnvelopeMirrored=True,
-                        mirrorProfileId=urlsplit(mirrored.value.url).path.split("/")[-2], mirrorReceipt=mirror_receipt,
+                        mirrorProfileId=urlsplit(last_mirror.url).path.split("/")[-2], mirrorReceipt=mirror_receipt,
                         reloadRetainedFinalAnswer=True, requestInterceptionUsed=False, apiInvokedOutsideUI=False,
                         pageErrors=list(page_errors), consoleErrors=list(console_errors), requests=list(traffic),
-                        screenshot=screenshot.name, screenshotSha256=hashlib.sha256(image).hexdigest())
+                        screenshot=screenshot.name, screenshotSha256=hashlib.sha256(image).hexdigest(),**recovery_observed)
         except Exception:
             (output / "browser-failed.json").write_text(json.dumps({"pageErrors": page_errors,
                 "consoleErrors": console_errors, "requests": traffic}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -177,16 +206,16 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
             browser.close()
 
 
-def inspect_browser_custody(artifacts: Path, state: Path) -> dict[str, bool]:
+def inspect_browser_custody(artifacts: Path, state: Path, recovery: bool = False) -> dict[str, bool]:
     """Validate isolated Rust outputs without creating or changing runtime data."""
     with sqlite3.connect((state / "rust-worker/authority.sqlite3").as_uri() + "?mode=ro", uri=True) as database:
         effects = database.execute("SELECT state,output,output_sha256 FROM agent_node_effects").fetchall()
-    if len(effects) != 4 or any(row[0] != "CONFIRMED" or hashlib.sha256(row[1]).hexdigest() != row[2] for row in effects):
+    if len(effects) != (6 if recovery else 4) or any(row[0] != "CONFIRMED" or hashlib.sha256(row[1]).hexdigest() != row[2] for row in effects):
         raise ValueError("Actual browser Rust effects were not independently retained")
     sealed = list((artifacts / "agent-provider-credentials-v1").glob("*.json"))
     # The actual UI sends a runtime payload on confirmation, retaining revision
     # one's immutable ciphertext while Rust prepares the second revision.
-    if len(sealed) != 2 or any(BROWSER_CREDENTIAL.encode() in path.read_bytes() for path in sealed):
+    if len(sealed) != (3 if recovery else 2) or any(BROWSER_CREDENTIAL.encode() in path.read_bytes() for path in sealed):
         raise ValueError("Actual browser request credential custody differs")
     with sqlite3.connect((artifacts / "objects-v1.sqlite").as_uri() + "?mode=ro", uri=True) as database:
         bodies = database.execute("SELECT bytes FROM artifacts").fetchall()
@@ -218,7 +247,7 @@ def inspect_browser_mirror(workspace: Path, observed: dict[str, Any]) -> dict[st
     body = path.read_bytes()
     if not 0 < len(body) <= 2 * 1024**2 or not body.startswith(b"age-encryption.org/v1") or \
             hashlib.sha256(body).hexdigest() != digest or any(value in body for value in
-                [BROWSER_CREDENTIAL.encode(), b"Controlled final answer", b"Native browser conversation"]):
+                [BROWSER_CREDENTIAL.encode(), b"Controlled final answer", b"Native browser conversation", b"Controlled recovered browser final answer"]):
         raise ValueError("Actual browser retained mirror differs from its ciphertext receipt")
     return {"independentMirrorCiphertextVerified": True}
 

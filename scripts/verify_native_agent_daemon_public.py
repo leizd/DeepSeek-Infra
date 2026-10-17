@@ -19,7 +19,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -217,10 +217,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     exchanges: list[dict[str, Any]] = []
     runtime_update = bool(getattr(args, "runtime_update", False))
     browser_mode = bool(getattr(args, "browser", False))
+    browser_recovery = bool(getattr(args, "browser_recovery", False))
+    if browser_recovery and not browser_mode:
+        raise ValueError("Browser recovery requires the actual browser mode")
     if browser_mode and runtime_update:
         raise ValueError("Browser creation and restarted runtime revision are separate acceptance cases")
     if browser_mode:
         import verify_native_agent_browser as browser
+    if browser_recovery:
+        import verify_native_agent_browser_recovery as browser_recovery_probe
 
     plan = {"agents": [{"role": "coder", "task": "write", "dependsOn": []},
                         {"role": "critic", "task": "review", "dependsOn": ["coder"]}]}
@@ -295,11 +300,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         ["request-only-credential", "request-only-search-credential", RUNTIME_CREDENTIAL]),
                     "selectedTaskInPrompt": "write" in prompt, "dependentTaskInPrompt": "review" in prompt,
                     "browserEditedTaskInPrompt": browser.BROWSER_TASK in prompt if browser_mode else False,
+                    "recoveredCriticSummaryInPrompt": "Controlled browser rerun task summary" in prompt,
                     "predecessorSummaryInPrompt": "Controlled public task summary" in prompt,
                     "privateReasoningInPrompt": "private-task-reasoning" in prompt,
                     "synthesisCoderInPrompt": "write" in prompt, "synthesisCriticInPrompt": "review" in prompt})
                 position = len(exchanges)
+                agent_position=sum(row["kind"]=="agent" for row in exchanges)
+                if browser_recovery and kind=="agent" and agent_position==5:
+                    signing.write_ready(case/"browser-rerun-arrived.json",{"agentPosition":agent_position})
+                    deadline=time.monotonic()+60
+                    while not (case/"browser-rerun-release.json").exists():
+                        if time.monotonic()>deadline:
+                            raise RuntimeError("Actual browser did not release the paused recovery task")
+                        time.sleep(0.05)
                 content = json.dumps(plan) if position == 1 else ("Controlled final answer" if position == 4 else "## 摘要\nControlled public task summary")
+                if browser_recovery and kind=="agent" and agent_position>=5:
+                    content=("## 摘要\n"+browser_recovery_probe.RERUN_SUMMARY) if agent_position==5 else browser_recovery_probe.RECOVERED_FINAL
                 if kind == "title":
                     content = "Native browser conversation"
                 reply = json.dumps({"id": f"daemon-agent-{position}", "model": "deepseek-v4-pro",
@@ -364,6 +380,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             public.wait_edge(origin, edge)
             index_sha, asset_count = serve_built_frontend(origin)
             if browser_mode:
+                recovery_before: dict[str,Any]={}
+
+                def inspect_before_recovery(run_id: str) -> None:
+                    nonlocal recovery_before
+                    initial=request_json(origin,"/api/agent-runs/"+run_id)["run"]
+                    recovery_before=browser_recovery_probe.capture_before_recovery(Path(seed["controlPath"]),state,initial)
+                    (output/"browser-before-rerun.json").write_text(json.dumps(recovery_before,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+
+                def inspect_inflight_recovery(run_id: str) -> Callable[[],None]:
+                    if worker is None:
+                        raise ValueError("Actual browser recovery worker is not running")
+                    signing.wait_json(case/"browser-rerun-arrived.json",worker)
+                    during=request_json(origin,"/api/agent-runs/"+run_id)["run"]
+                    if during.get("status")!="running" or during.get("nextIndex")!=12 or during.get("finalAnswer")!="Controlled final answer" or \
+                            not isinstance(during.get("outputs"),dict) or during["outputs"].get("coder")!=recovery_before["outputs"].get("coder"):
+                        raise ValueError("Actual browser rerun erased the old final/coder before task completion")
+                    (output/"browser-rerun-inflight.json").write_text(json.dumps({"runId":run_id,"nextIndex":12,
+                        "oldFinalRetained":True,"coderRetained":True},indent=2)+"\n",encoding="utf-8")
+                    return lambda: signing.write_ready(case/"browser-rerun-release.json",{"release":True})
+
                 def inspect_waiting_confirmation(run_id: str) -> None:
                     time.sleep(1.2)
                     waiting = request_json(origin, "/api/agent-runs/" + run_id)["run"]
@@ -374,7 +410,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         "noTasksBeforePublicConfirmation": True}) + "\n", encoding="utf-8")
 
                 try:
-                    observed = browser.run_browser_agent(origin, output, inspect_waiting_confirmation)
+                    observed = browser.run_browser_agent(origin, output, inspect_waiting_confirmation,
+                        recovery=browser_recovery,before_recovery=inspect_before_recovery if browser_recovery else None,
+                        inspect_inflight_recovery=inspect_inflight_recovery if browser_recovery else None)
                 finally:
                     (output / "provider-exchanges.json").write_text(json.dumps(exchanges, indent=2) + "\n", encoding="utf-8")
                 run_id = observed["createdRunId"]
@@ -384,10 +422,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         [b"request-only-credential", b"request-only-search-credential", b"private-task-reasoning"]):
                     raise ValueError("Public browser run projection exceeds its bound or exposes private material")
                 (output / "browser-public-run.json").write_bytes(encoded_final)
-                if final.get("status") != "done" or "Controlled final answer" not in str(final.get("finalAnswer", "")):
+                expected_final=browser_recovery_probe.RECOVERED_FINAL if browser_recovery else "Controlled final answer"
+                if final.get("status") != "done" or final.get("finalAnswer")!=expected_final:
                     raise ValueError("Browser final answer differs from the native run projection")
                 stop_daemon(daemon)
-                signing.write_ready(case / "daemon-inspect-input.json", {"runId": run_id, "browser": True})
+                signing.write_ready(case / "daemon-inspect-input.json", {"runId": run_id, "browser": True,"recovery":browser_recovery})
                 fixture_environment["DEEPSEEK_TEST_AGENT_DAEMON_STAGE"] = "inspect"
                 signing.record_command(fixture_command, ROOT / "go/internal/api", fixture_environment, output,
                                        "daemon-browser-independent-inspection", timeout=150)
@@ -398,9 +437,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     productionRuntimeProcesses=["Go", "Rust"], privateCustodyVariablesExportedToGo=False,
                     productionProviderQualified=False, fullMigrationQualified=False,
                     cloudOnlyNativeBuild=True, providerExchanges=exchanges, readiness="NOT_READY")
-                result.update(browser.inspect_browser_custody(artifacts, state))
+                result.update(browser.inspect_browser_custody(artifacts, state, recovery=browser_recovery))
                 result.update(browser.inspect_browser_mirror(case, observed))
-                browser.validate_browser_result(result, exchanges)
+                if browser_recovery:
+                    result.update(browser_recovery_probe.inspect_after_recovery(Path(seed["controlPath"]),state,final,recovery_before,result))
+                    browser_recovery_probe.validate_browser_recovery_result(result,exchanges)
+                    result["controlledNativeBrowserRecoveryQualified"]=True
+                else:
+                    browser.validate_browser_result(result, exchanges)
                 result["controlledNativeBrowserQualified"] = True
                 (output / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
                 return result
@@ -527,6 +571,7 @@ def main() -> int:
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--runtime-update", action="store_true")
     parser.add_argument("--browser", action="store_true")
+    parser.add_argument("--browser-recovery", action="store_true")
     result = run(parser.parse_args())
     print(json.dumps({key: result[key] for key in ["status", "sourceCommit", "actualDaemonCLIQualified", "actualDaemonProcessRestartQualified", "builtFrontendAssetsServed", "controlledNativeBrowserQualified", "readiness"] if key in result}))
     return 0

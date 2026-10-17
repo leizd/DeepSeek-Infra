@@ -1,3 +1,37 @@
+## Actual React native recovery candidate - 2026-10-17
+
+This candidate starts from339a6582e6fb1e2fd0ed3880ea52f66a60abb935 and adds an
+actual built-React critic rerun after initial native execution/plan confirmation.
+It observes the POST from the shipped control, pauses the real controlled-provider
+task, requires the old final and retained coder to remain visible, then requires
+fresh critic/synthesis results, durable typed progress and the recovered final
+after reload. All initial/private/public/alias/browser gates remain present.
+New native/browser execution is pending; source tests do not qualify those flows.
+
+A Go inspector must independently verify schema4/runtime3/generation1, five settled
+phases, released resources and the pinned Rust progress signature. Read-only
+snapshots must preserve three original Go action rows, four Rust effects, the
+first ten public events and original coder output; six total Agent provider
+calls plus one title request, a unique actual Rust signer journal document,
+encrypted credentials and the new mirror ciphertext are required. New snapshot
+unit tests exposed and fixed a mutable history alias; the observation now retains
+independent data and a fixed prefix digest. No initial application data is seeded
+by the browser fixture and no mutating API is called outside actual React controls.
+
+Local408 offline public/browser validator tests, Linux/Win32966-file types, Ruff
+and Go fixture format/syntax pass. Production Go/Rust/Proto/frontend and main CI
+workflow inputs are unchanged. Native builds and browser acceptance remain
+cloud-only with original Rust80% and Go/Android/Python95% floors intact. Latest
+339 Rust and full source CI are still live; earlierb96 Rust qualification is
+1545 tests,1 original Redis ignore,85536/104259 lines=82.04183811469512% plus
+four actual public task-rerun scenarios. This is not qualification of a later
+commit or any PR merge candidate. Whole-product readiness remains NOT_READY.
+
+Orphaned/partial/failed/cancelled recovery, payload/credential variants, signed
+failed-task/tool/timeline/live-output closure, real-provider/crash recovery, all
+retained domains, desktop/Android/background packages, default zero-Python and
+complete exact-source CI/Evidence remain in scope.
+
 ## Public completed-resume and synthesis-alias candidate - 2026-10-17
 
 The candidate starts fromb96ada4fe7e8d4e354696c18eeab8c3e8d09944e. Its exact
