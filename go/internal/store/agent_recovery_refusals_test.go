@@ -12,8 +12,8 @@ import (
 // barrier and a dropped agent account table. Each probe asserts the refusal.
 
 func TestRecoveryHistoryRefusesAnUnscannableJournalID(t *testing.T) {
-	control, input := recoveryAdmissionFixture(t, "failed")
-	run, found, err := control.AgentRunMetadata(input.RunID)
+	control, runID := recoveryCompletedRun(t)
+	run, found, err := control.AgentRunMetadata(runID)
 	if err != nil || !found {
 		t.Fatal(err)
 	}
@@ -39,8 +39,8 @@ func TestRecoveryHistoryRefusesTamperedJournalRows(t *testing.T) {
 		{"dispatches", "json_set(payload_json,'$.nativeAgentNodeDispatches','broken') AS payload_json", "revision, execution_epoch, state"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			control, input := recoveryAdmissionFixture(t, "failed")
-			run, found, err := control.AgentRunMetadata(input.RunID)
+			control, runID := recoveryCompletedRun(t)
+			run, found, err := control.AgentRunMetadata(runID)
 			if err != nil || !found {
 				t.Fatal(err)
 			}
