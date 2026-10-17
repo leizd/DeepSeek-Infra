@@ -93,17 +93,17 @@
   <g font-size="9" fill="#78350f">
     <text x="844" y="243" font-weight="600">Helpers: backup-crypto · deepseek-backup</text>
     <text x="844" y="256" font-weight="600">Worker Plane: deepseek-worker (:50052 gRPC)</text>
-    <text x="844" y="267" font-size="8.2" fill="#b45309">actionId+epoch admission fence · Stale epoch denial · Effect Journal</text>
+    <text x="844" y="267" font-size="8.2" fill="#b45309">Agent task/plan executors · actionId+epoch fence · Effect Journal</text>
     <text x="844" y="279" font-weight="600">Storage &amp; Transfer: deepseek-storage / -transfer</text>
     <text x="844" y="290" font-size="8.2" fill="#b45309">S3 zero-copy · Object-Set v1 · Receipt/Commit v4</text>
-    <text x="844" y="302" font-weight="600">Federation &amp; Proof: deepseek-federation · -proof</text>
+    <text x="844" y="302" font-weight="600">Federation &amp; Vault: deepseek-federation (vault) · -proof</text>
     <text x="844" y="315" font-weight="600">Gateway &amp; Protocol Preparation</text>
     <text x="844" y="326" font-size="8.2" fill="#b45309">POST /gateway/request/prepare · POST /mcp/request/prepare</text>
     <text x="844" y="338" font-weight="600">Tool Policy Evaluation: POST /policy/{url,path,capability}</text>
     <text x="844" y="350" font-weight="600">RAG Vector Ranking · JSON / compact binary</text>
     <text x="844" y="361" font-size="8.2" fill="#b45309">POST /rag/vectors/rank · POST /rag/vectors/rank-binary</text>
     <text x="844" y="373" font-weight="600">RAG Document Preparation &amp; CDC: POST /rag/documents/prepare</text>
-    <text x="844" y="384" font-size="8.2" fill="#b45309">CDP Browser: deepseek-browser · Gateway: deepseek-gateway</text>
+    <text x="844" y="384" font-size="8.2" fill="#b45309">CDP Browser: deepseek-browser · Gateway: deepseek-gateway (Agent routes)</text>
   </g>
 
   <!-- Block 2: Go Control Plane Shadow -->
@@ -114,7 +114,7 @@
   <g font-size="8.5" fill="#155e75">
     <text x="844" y="469">• Versioned Protobuf v1 RPC contracts (proto/*/v1)</text>
     <text x="844" y="481">• pythonDecisionDigest == goDecisionDigest parity</text>
-    <text x="844" y="493">• State machines: Scheduler / Action Lease / Resilience / DAG</text>
+    <text x="844" y="493">• State machines: Agent Run Driver · Schema v8/v9 Cutover · DAG</text>
     <text x="844" y="505">• Dedicated go-control/ · Mutation denied (HTTP 403)</text>
   </g>
 

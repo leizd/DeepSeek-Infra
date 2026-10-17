@@ -96,17 +96,17 @@
   <g font-size="9" fill="#78350f">
     <text x="844" y="243" font-weight="600">生产助手: backup-crypto · deepseek-backup</text>
     <text x="844" y="256" font-weight="600">执行 Worker: deepseek-worker (:50052 gRPC)</text>
-    <text x="844" y="267" font-size="8.2" fill="#b45309">actionId+epoch 强纪元准入 · 过期拒绝 · Effect 账本</text>
+    <text x="844" y="267" font-size="8.2" fill="#b45309">Agent 任务/规划执行器 · actionId+epoch 强纪元 · Effect 账本</text>
     <text x="844" y="279" font-weight="600">存储传输: deepseek-storage / -transfer</text>
     <text x="844" y="290" font-size="8.2" fill="#b45309">S3 直连 · 零拷贝通道 · Receipt/Commit v4</text>
-    <text x="844" y="302" font-weight="600">联邦取证: deepseek-federation · deepseek-proof</text>
+    <text x="844" y="302" font-weight="600">联邦与金库: deepseek-federation (凭据金库) · deepseek-proof</text>
     <text x="844" y="315" font-weight="600">网关与协议预处理</text>
     <text x="844" y="326" font-size="8.2" fill="#b45309">POST /gateway/request/prepare · POST /mcp/request/prepare</text>
     <text x="844" y="338" font-weight="600">工具策略评估: POST /policy/{url,path,capability}</text>
     <text x="844" y="350" font-weight="600">RAG 向量排序 · JSON / 紧凑二进制</text>
     <text x="844" y="361" font-size="8" fill="#b45309">POST /rag/vectors/rank · POST /rag/vectors/rank-binary</text>
     <text x="844" y="373" font-weight="600">RAG 文档预处理 &amp; 差分分块: POST /rag/documents/prepare</text>
-    <text x="844" y="384" font-size="8" fill="#b45309">CDP 浏览器: deepseek-browser · 网关: deepseek-gateway</text>
+    <text x="844" y="384" font-size="8" fill="#b45309">CDP 浏览器: deepseek-browser · 网关: deepseek-gateway (Agent 路由)</text>
   </g>
 
   <!-- Block 2: Go Control Plane Shadow -->
@@ -117,7 +117,7 @@
   <g font-size="8.5" fill="#155e75">
     <text x="844" y="469">• 版本化 Protobuf v1 RPC 跨进程契约 (proto/*/v1)</text>
     <text x="844" y="481">• pythonDecisionDigest == goDecisionDigest 核对</text>
-    <text x="844" y="493">• 状态机: Scheduler / Action Lease / Resilience / DAG</text>
+    <text x="844" y="493">• 状态机: Agent Run 驱动 · Schema v8/v9 切换 · 调度 / Lease</text>
     <text x="844" y="505">• 独占 go-control/ · 物理写拦截 (/internal/action/execute 403)</text>
   </g>
 
