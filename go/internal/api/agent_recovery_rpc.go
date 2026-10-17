@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
+	"github.com/leizd/DeepSeek-Infra/go/internal/agentproof"
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"google.golang.org/grpc/codes"
@@ -96,7 +97,7 @@ func agentRecoveryRPCError(err error) error {
 	switch {
 	case errors.Is(err, agent.ErrInvalidRunRecovery):
 		return status.Error(codes.InvalidArgument, "AGENT_RUN_METADATA_INVALID")
-	case errors.Is(err, store.ErrAgentRunRecoveryUnsettled), errors.Is(err, store.ErrAgentRunRecoveryRequired):
+	case errors.Is(err, store.ErrAgentRunRecoveryUnsettled), errors.Is(err, store.ErrAgentRunRecoveryRequired), errors.Is(err, agentproof.ErrAgentRecoveryProgressInvalid):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, store.ErrEmptyRecordID):
 		return status.Error(codes.NotFound, "AGENT_RUN_NOT_FOUND")

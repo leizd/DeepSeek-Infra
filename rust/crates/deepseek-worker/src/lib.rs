@@ -19,6 +19,7 @@ mod agent_plan_executor;
 mod agent_plan_projection;
 mod agent_provider_credentials;
 mod agent_recovery_context;
+mod agent_recovery_progress;
 mod agent_synthesis_projection;
 mod agent_task_executor;
 mod authority_request;

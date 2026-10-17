@@ -82,6 +82,54 @@ impl std::fmt::Debug for AgentExecutionControl {
     }
 }
 impl AgentExecutionControl {
+    pub(crate) async fn validate_recovery_progress(
+        &self,
+        context: &deepseek_protocol::generated::deepseek::agent::v1::AgentRecoveryProgressContext,
+    ) -> Result<(), Status> {
+        use deepseek_protocol::generated::deepseek::{
+            agent::v1::{
+                PreviewAgentRecoveryProgressRequest,
+                agent_run_recovery_control_client::AgentRunRecoveryControlClient,
+            },
+            common::v1::ActionFence,
+        };
+        let channel = self.endpoint.connect().await.map_err(|_| unavailable())?;
+        let mut client =
+            AgentRunRecoveryControlClient::new(channel).max_decoding_message_size(2 * 1024 * 1024);
+        let mut request = Request::new(PreviewAgentRecoveryProgressRequest {
+            schema_version: 1,
+            run_id: context.run_id.clone(),
+            metadata_fence: Some(ActionFence {
+                action_id: context.run_id.clone(),
+                execution_epoch: context.metadata_epoch,
+            }),
+            expected_index: context.expected_index,
+            runtime_revision: context.runtime_revision,
+            request: context.request.clone(),
+        });
+        request
+            .metadata_mut()
+            .insert("authorization", self.authorization.clone());
+        let response = client
+            .preview_progress(request)
+            .await
+            .map_err(|status| {
+                if matches!(
+                    status.code(),
+                    tonic::Code::Unavailable | tonic::Code::DeadlineExceeded
+                ) {
+                    unavailable()
+                } else {
+                    crate::agent_recovery_context::denied()
+                }
+            })?
+            .into_inner();
+        if !response.authoritative || response.context.as_ref() != Some(context) {
+            return Err(crate::agent_recovery_context::denied());
+        }
+        Ok(())
+    }
+
     pub(crate) async fn validate_recovery_context(
         &self,
         context: &deepseek_protocol::generated::deepseek::agent::v1::AgentRunRecoveryContext,

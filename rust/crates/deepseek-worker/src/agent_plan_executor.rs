@@ -298,6 +298,18 @@ impl AgentPlanExecutor {
 
 #[tonic::async_trait]
 impl AgentNodeWorker for WorkerRpcService {
+    async fn prepare_recovery_progress(
+        &self,
+        request: Request<
+            deepseek_protocol::generated::deepseek::agent::v1::PrepareAgentRecoveryProgressRequest,
+        >,
+    ) -> Result<
+        Response<deepseek_protocol::generated::deepseek::agent::v1::AgentRecoveryProgressReceipt>,
+        Status,
+    > {
+        self.prepare_agent_recovery_progress(request).await
+    }
+
     async fn prepare_credentials(
         &self,
         request: Request<

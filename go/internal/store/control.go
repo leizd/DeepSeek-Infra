@@ -1386,6 +1386,7 @@ func (store *Control) putLeasedControlRecord(record Record, dispatch *StorageDis
 type controlRecordWrite struct {
 	agentEvent                  bool
 	agentRecovery               bool
+	agentRecoveryProgress       bool
 	agentExecution              bool
 	agentNodeDispatch           bool
 	agentNodeOutcome            bool
@@ -1477,6 +1478,29 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 		}
 		if changedAgentRecoveryScope(existing, record) && !write.agentRecovery {
 			return ErrAgentRunRecoveryRequired
+		}
+		if changedRecoveryProgress(existing, record) && !write.agentRecoveryProgress && !write.agentRecovery {
+			return ErrAgentRunRecoveryRequired
+		}
+		if changedRecoveryProgress(existing, record) && write.agentRecoveryProgress {
+			if err := agentRecoveryProgressUnreservedTx(tx, record.ID); err != nil {
+				return err
+			}
+			previous, err := decodeAgentMetadata(existing)
+			if err != nil {
+				return err
+			}
+			next, err := decodeAgentMetadata(record)
+			if err != nil || next.RecoveryProgress == nil {
+				return ErrAgentRunRecoveryRequired
+			}
+			expected, err := store.agentRecoveryProgressContextTx(tx, previous, record.ExecutionEpoch)
+			if err != nil {
+				return err
+			}
+			if err := store.verifyRecoveryProgressReceipt(next.RecoveryProgress.Receipt, expected); err != nil {
+				return err
+			}
 		}
 	}
 	if record.Domain == "action" && !write.agentExecution &&

@@ -7,6 +7,68 @@ use deepseek_protocol::generated::deepseek::agent::v1::{
 use prost::Message as _;
 
 #[test]
+fn recovery_progress_signature_keeps_its_canonical_receipt_after_signer_restart() {
+    use deepseek_protocol::generated::deepseek::agent::v1::{
+        AgentRecoveryProgressContext, AgentRecoveryProgressEvidence, AgentRunRecoveryEffectSource,
+    };
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("rust-worker")).unwrap();
+    let password = b"isolated-progress-custody-password-32-bytes";
+    let bundle = create_control_signer_bundle(password, "fleet-a", "test").unwrap();
+    let public = bundle["binding"]["signerPublicKey"].as_str().unwrap();
+    let bound = String::from_utf8(canonical_json_bytes(&bundle["binding"]).unwrap()).unwrap();
+    let reopen = || ControlSigner {
+        key: load_control_signer(&bundle, password, "fleet-a", "test", public).unwrap(),
+        journal: SignatureJournal::open(root.path(), &bound).unwrap(),
+    };
+    let reference = || {
+        Some(AgentArtifactReference {
+            sha256: "a".repeat(64),
+            length: 40,
+        })
+    };
+    let evidence = AgentRecoveryProgressEvidence {
+        schema_version: 1,
+        context: Some(AgentRecoveryProgressContext {
+            schema_version: 1,
+            run_id: "run".into(),
+            generation: 1,
+            metadata_epoch: 3,
+            expected_index: 12,
+            runtime_revision: 2,
+            request: reference(),
+            recovery_context_sha256: "b".repeat(64),
+            task_action_id: "original-task".into(),
+            task_action_revision: 7,
+            task_metadata_index: 12,
+            role: "critic".into(),
+            synthesize: true,
+            outputs: vec![AgentRunRecoveryEffectSource::default()],
+        }),
+        note_body: reference(),
+        next_body: reference(),
+        fleet_id: "fleet-a".into(),
+        environment: "test".into(),
+    };
+    let mut signer = reopen();
+    let first = signer.sign_recovery_progress(evidence.clone()).unwrap();
+    assert_eq!(first.signature.len(), 64);
+    assert_eq!(
+        first,
+        signer.sign_recovery_progress(evidence.clone()).unwrap()
+    );
+    drop(signer);
+    let mut signer = reopen();
+    assert_eq!(
+        first,
+        signer.sign_recovery_progress(evidence.clone()).unwrap()
+    );
+    let mut bad = evidence;
+    bad.environment = "foreign".into();
+    assert!(signer.sign_recovery_progress(bad).is_err());
+}
+
+#[test]
 fn plan_projection_journal_preserves_derived_signature_after_restart() {
     use deepseek_protocol::generated::deepseek::agent::v1::{
         AgentPlanProjectionEvidence, AgentRunPlanNode,

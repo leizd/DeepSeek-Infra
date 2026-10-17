@@ -45,11 +45,20 @@ func (store *Control) verifiedAgentSynthesisSourceTx(tx *sql.Tx, intent AgentRun
 		return Record{}, ErrAgentNodeDependencyUnverified
 	}
 	context := run.Recovery.Metadata
+	lookup := intent
 	if context.Selection.GetKind() == agentv1.AgentRunRecoveryKind_AGENT_RUN_RECOVERY_KIND_RERUN &&
-		len(context.Execute) > 0 && context.ResetFinal && run.FinalAfter < run.Recovery.StartIndex {
-		// A task rerun keeps the prior final answer until its separately typed
-		// progress transition. A lease alone cannot skip that public boundary.
-		return Record{}, ErrAgentRunRecoveryRequired
+		len(context.Execute) > 0 && context.ResetFinal {
+		if run.RecoveryProgress == nil || run.FinalAfter < run.Recovery.StartIndex {
+			return Record{}, ErrAgentRunRecoveryRequired
+		}
+		if err := store.validateRecoveryProgressTx(tx, run); err != nil {
+			return Record{}, err
+		}
+		progress := run.RecoveryProgress.Receipt.Evidence.Context
+		if !progress.Synthesize || progress.ExpectedIndex+2 != intent.MetadataIndex {
+			return Record{}, ErrAgentRunRecoveryRequired
+		}
+		lookup.MetadataIndex = progress.TaskMetadataIndex
 	}
 	retained, err := store.verifiedAgentRecoveryOutputsTx(tx, run)
 	if err != nil {
@@ -58,7 +67,7 @@ func (store *Control) verifiedAgentSynthesisSourceTx(tx *sql.Tx, intent AgentRun
 	current := map[string]AgentTaskSettlement{}
 	var source Record
 	if len(run.ExecutionTasks()) != 0 {
-		source, err = store.verifiedSameRequestSynthesisSourceTx(tx, intent, true)
+		source, err = store.verifiedSameRequestSynthesisSourceTx(tx, lookup, true)
 		if err != nil {
 			return Record{}, err
 		}

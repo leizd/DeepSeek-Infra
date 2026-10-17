@@ -360,6 +360,9 @@ func (driver *agentRunDriver) drive(ctx context.Context, run agent.RunMetadata) 
 	if !ok {
 		return errAgentDriverCustody
 	}
+	if phase == agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_SYNTHESIS && driverNeedsRecoveryProgress(run) {
+		return driver.recoveryProgress(ctx, client, run)
+	}
 	claim, err := driver.admission(ctx, run, phase, existing)
 	if err != nil {
 		return err

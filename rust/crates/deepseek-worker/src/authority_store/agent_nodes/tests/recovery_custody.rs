@@ -4,6 +4,178 @@ use deepseek_protocol::generated::deepseek::agent::v1::{
     AgentRunRecoveryScope,
 };
 
+#[test]
+fn rerun_progress_requires_the_original_selected_effect_below_authoritative_go_metadata() {
+    use deepseek_protocol::generated::deepseek::agent::v1::{
+        AgentRecoveryProgressContext, AgentRunPlanNode, AgentRunRecoveryKind,
+        AgentRunRecoverySelection,
+    };
+    let fixture = Fixture::new();
+    let mut worker = fixture.worker(true);
+    let original = confirmed(&fixture, &mut worker);
+    let mut recovery = context(original.clone());
+    recovery.selection = Some(AgentRunRecoverySelection {
+        kind: AgentRunRecoveryKind::Rerun as i32,
+        agent_id: "critic".into(),
+        resynthesize: Some(true),
+    });
+    recovery.execute = vec![AgentRunPlanNode {
+        id: "critic".into(),
+        task: "review".into(),
+        depends_on: vec!["coder".into()],
+    }];
+    recovery.retained_ids = vec!["coder".into()];
+    recovery.retained_outputs = vec![original.clone()];
+    recovery.synthesize = true;
+    let selected = recovered_output_fixture(&fixture, false);
+    worker
+        .authority_store
+        .as_mut()
+        .unwrap()
+        .install(
+            worker.authority.as_ref().unwrap(),
+            selected
+                .response
+                .claim
+                .as_ref()
+                .unwrap()
+                .fence
+                .as_ref()
+                .unwrap(),
+            &selected.epoch,
+        )
+        .unwrap();
+    let mut source = confirmed(&selected, &mut worker);
+    source.settlement_metadata_index = 9;
+    let progress = AgentRecoveryProgressContext {
+        schema_version: 1,
+        run_id: recovery.run_id.clone(),
+        generation: recovery.generation,
+        metadata_epoch: recovery.metadata_epoch,
+        expected_index: 10,
+        runtime_revision: recovery.expected_runtime_revision + 1,
+        request: source.dispatch.as_ref().unwrap().request.clone(),
+        recovery_context_sha256: crate::agent_recovery_context::digest(&recovery).unwrap(),
+        task_action_id: source
+            .dispatch
+            .as_ref()
+            .unwrap()
+            .fence
+            .as_ref()
+            .unwrap()
+            .action_id
+            .clone(),
+        task_action_revision: 7,
+        task_metadata_index: 10,
+        role: "critic".into(),
+        synthesize: true,
+        outputs: vec![source],
+    };
+    let store = worker.authority_store.as_ref().unwrap();
+    store
+        .verify_agent_recovery_progress(&progress, &recovery, &fixture.config)
+        .unwrap();
+    assert_eq!(recovery.retained_outputs[0], original);
+    for change in [
+        "schema",
+        "generation",
+        "epoch",
+        "cursor",
+        "task-cursor",
+        "runtime",
+        "digest",
+        "request",
+        "action",
+        "revision",
+        "role",
+        "synthesize",
+        "outputs",
+        "node",
+        "source-request",
+        "settlement",
+        "receipt",
+        "proof",
+    ] {
+        let mut bad = progress.clone();
+        match change {
+            "schema" => bad.schema_version = 0,
+            "generation" => bad.generation += 1,
+            "epoch" => bad.metadata_epoch = 0,
+            "cursor" => bad.expected_index = i64::MAX,
+            "task-cursor" => bad.task_metadata_index += 1,
+            "runtime" => bad.runtime_revision += 1,
+            "digest" => bad.recovery_context_sha256 = "f".repeat(64),
+            "request" => bad.request = recovery.expected_request.clone(),
+            "action" => bad.task_action_id = "foreign".into(),
+            "revision" => bad.task_action_revision = 0,
+            "role" => bad.role = "coder".into(),
+            "synthesize" => bad.synthesize = false,
+            "outputs" => bad.outputs.clear(),
+            "node" => bad.outputs[0].dispatch.as_mut().unwrap().node_id = "coder".into(),
+            "source-request" => {
+                bad.outputs[0].dispatch.as_mut().unwrap().request =
+                    recovery.expected_request.clone()
+            }
+            "settlement" => bad.outputs[0].settlement_metadata_index -= 1,
+            "receipt" => bad.outputs[0].outcome = None,
+            "proof" => {
+                bad.outputs[0]
+                    .outcome
+                    .as_mut()
+                    .unwrap()
+                    .evidence
+                    .as_mut()
+                    .unwrap()
+                    .outcome_sha256 = "e".repeat(64)
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            store
+                .verify_agent_recovery_progress(&bad, &recovery, &fixture.config)
+                .is_err(),
+            "{change}"
+        );
+    }
+    // A later unresolved node is not proof of an unapplied operation. Metadata
+    // progress cannot close the public run over that durable uncertainty.
+    let mut unknown = recovered_output_fixture(&fixture, true);
+    let mut epoch: Value = serde_json::from_slice(&unknown.epoch).unwrap();
+    epoch["requestId"] = format!("{:x}", Sha256::digest(b"progress-unknown-epoch-request")).into();
+    epoch["nonce"] = format!("{:x}", Sha256::digest(b"progress-unknown-epoch-nonce")).into();
+    unknown.epoch = signed(epoch, b"deepseek-infra:control-authority-request-v1\0");
+    let mut grant: Value = serde_json::from_slice(&unknown.grant).unwrap();
+    grant["requestId"] = format!("{:x}", Sha256::digest(b"progress-unknown-grant-request")).into();
+    grant["nonce"] = format!("{:x}", Sha256::digest(b"progress-unknown-grant-nonce")).into();
+    unknown.grant = signed(grant, b"deepseek-infra:control-agent-execution-grant-v1\0");
+    worker
+        .authority_store
+        .as_mut()
+        .unwrap()
+        .install(
+            worker.authority.as_ref().unwrap(),
+            unknown
+                .response
+                .claim
+                .as_ref()
+                .unwrap()
+                .fence
+                .as_ref()
+                .unwrap(),
+            &unknown.epoch,
+        )
+        .unwrap();
+    let _permit = started(unknown.begin(&mut worker, true).unwrap());
+    assert!(
+        worker
+            .authority_store
+            .as_ref()
+            .unwrap()
+            .verify_agent_recovery_progress(&progress, &recovery, &fixture.config)
+            .is_err()
+    );
+}
+
 fn confirmed(fixture: &Fixture, worker: &mut crate::Worker) -> AgentRunRecoveryEffectSource {
     let permit = started(fixture.begin(worker, true).unwrap());
     let intent = fixture.response.intent.as_ref().unwrap();

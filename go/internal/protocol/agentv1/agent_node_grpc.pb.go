@@ -355,13 +355,14 @@ var AgentNodeControl_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	AgentNodeWorker_PrepareCredentials_FullMethodName = "/deepseek.agent.v1.AgentNodeWorker/PrepareCredentials"
-	AgentNodeWorker_ExecutePlan_FullMethodName        = "/deepseek.agent.v1.AgentNodeWorker/ExecutePlan"
-	AgentNodeWorker_ExecuteTask_FullMethodName        = "/deepseek.agent.v1.AgentNodeWorker/ExecuteTask"
-	AgentNodeWorker_ExecuteSynthesis_FullMethodName   = "/deepseek.agent.v1.AgentNodeWorker/ExecuteSynthesis"
-	AgentNodeWorker_QueryEffect_FullMethodName        = "/deepseek.agent.v1.AgentNodeWorker/QueryEffect"
-	AgentNodeWorker_ProjectPlan_FullMethodName        = "/deepseek.agent.v1.AgentNodeWorker/ProjectPlan"
-	AgentNodeWorker_ProjectSynthesis_FullMethodName   = "/deepseek.agent.v1.AgentNodeWorker/ProjectSynthesis"
+	AgentNodeWorker_PrepareCredentials_FullMethodName      = "/deepseek.agent.v1.AgentNodeWorker/PrepareCredentials"
+	AgentNodeWorker_PrepareRecoveryProgress_FullMethodName = "/deepseek.agent.v1.AgentNodeWorker/PrepareRecoveryProgress"
+	AgentNodeWorker_ExecutePlan_FullMethodName             = "/deepseek.agent.v1.AgentNodeWorker/ExecutePlan"
+	AgentNodeWorker_ExecuteTask_FullMethodName             = "/deepseek.agent.v1.AgentNodeWorker/ExecuteTask"
+	AgentNodeWorker_ExecuteSynthesis_FullMethodName        = "/deepseek.agent.v1.AgentNodeWorker/ExecuteSynthesis"
+	AgentNodeWorker_QueryEffect_FullMethodName             = "/deepseek.agent.v1.AgentNodeWorker/QueryEffect"
+	AgentNodeWorker_ProjectPlan_FullMethodName             = "/deepseek.agent.v1.AgentNodeWorker/ProjectPlan"
+	AgentNodeWorker_ProjectSynthesis_FullMethodName        = "/deepseek.agent.v1.AgentNodeWorker/ProjectSynthesis"
 )
 
 // AgentNodeWorkerClient is the client API for AgentNodeWorker service.
@@ -374,6 +375,7 @@ type AgentNodeWorkerClient interface {
 	// Private Rust-to-Rust custody preparation only. No provider effect is admitted.
 	// Credentials must never be forwarded to the Go control plane or public events.
 	PrepareCredentials(ctx context.Context, in *PrepareAgentCredentialsRequest, opts ...grpc.CallOption) (*PrepareAgentCredentialsResponse, error)
+	PrepareRecoveryProgress(ctx context.Context, in *PrepareAgentRecoveryProgressRequest, opts ...grpc.CallOption) (*AgentRecoveryProgressReceipt, error)
 	ExecutePlan(ctx context.Context, in *ExecuteAgentPlanRequest, opts ...grpc.CallOption) (*AgentNodeEffectMetadata, error)
 	ExecuteTask(ctx context.Context, in *ExecuteAgentTaskRequest, opts ...grpc.CallOption) (*AgentNodeEffectMetadata, error)
 	// Only synthesis-phase claims with the Go-selected synthesizer node are valid.
@@ -395,6 +397,16 @@ func (c *agentNodeWorkerClient) PrepareCredentials(ctx context.Context, in *Prep
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PrepareAgentCredentialsResponse)
 	err := c.cc.Invoke(ctx, AgentNodeWorker_PrepareCredentials_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentNodeWorkerClient) PrepareRecoveryProgress(ctx context.Context, in *PrepareAgentRecoveryProgressRequest, opts ...grpc.CallOption) (*AgentRecoveryProgressReceipt, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AgentRecoveryProgressReceipt)
+	err := c.cc.Invoke(ctx, AgentNodeWorker_PrepareRecoveryProgress_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -471,6 +483,7 @@ type AgentNodeWorkerServer interface {
 	// Private Rust-to-Rust custody preparation only. No provider effect is admitted.
 	// Credentials must never be forwarded to the Go control plane or public events.
 	PrepareCredentials(context.Context, *PrepareAgentCredentialsRequest) (*PrepareAgentCredentialsResponse, error)
+	PrepareRecoveryProgress(context.Context, *PrepareAgentRecoveryProgressRequest) (*AgentRecoveryProgressReceipt, error)
 	ExecutePlan(context.Context, *ExecuteAgentPlanRequest) (*AgentNodeEffectMetadata, error)
 	ExecuteTask(context.Context, *ExecuteAgentTaskRequest) (*AgentNodeEffectMetadata, error)
 	// Only synthesis-phase claims with the Go-selected synthesizer node are valid.
@@ -490,6 +503,9 @@ type UnimplementedAgentNodeWorkerServer struct{}
 
 func (UnimplementedAgentNodeWorkerServer) PrepareCredentials(context.Context, *PrepareAgentCredentialsRequest) (*PrepareAgentCredentialsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PrepareCredentials not implemented")
+}
+func (UnimplementedAgentNodeWorkerServer) PrepareRecoveryProgress(context.Context, *PrepareAgentRecoveryProgressRequest) (*AgentRecoveryProgressReceipt, error) {
+	return nil, status.Error(codes.Unimplemented, "method PrepareRecoveryProgress not implemented")
 }
 func (UnimplementedAgentNodeWorkerServer) ExecutePlan(context.Context, *ExecuteAgentPlanRequest) (*AgentNodeEffectMetadata, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExecutePlan not implemented")
@@ -544,6 +560,24 @@ func _AgentNodeWorker_PrepareCredentials_Handler(srv interface{}, ctx context.Co
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AgentNodeWorkerServer).PrepareCredentials(ctx, req.(*PrepareAgentCredentialsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentNodeWorker_PrepareRecoveryProgress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareAgentRecoveryProgressRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentNodeWorkerServer).PrepareRecoveryProgress(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentNodeWorker_PrepareRecoveryProgress_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentNodeWorkerServer).PrepareRecoveryProgress(ctx, req.(*PrepareAgentRecoveryProgressRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -668,6 +702,10 @@ var AgentNodeWorker_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _AgentNodeWorker_PrepareCredentials_Handler,
 		},
 		{
+			MethodName: "PrepareRecoveryProgress",
+			Handler:    _AgentNodeWorker_PrepareRecoveryProgress_Handler,
+		},
+		{
 			MethodName: "ExecutePlan",
 			Handler:    _AgentNodeWorker_ExecutePlan_Handler,
 		},
@@ -697,8 +735,10 @@ var AgentNodeWorker_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	AgentRunRecoveryControl_Preview_FullMethodName = "/deepseek.agent.v1.AgentRunRecoveryControl/Preview"
-	AgentRunRecoveryControl_Commit_FullMethodName  = "/deepseek.agent.v1.AgentRunRecoveryControl/Commit"
+	AgentRunRecoveryControl_Preview_FullMethodName         = "/deepseek.agent.v1.AgentRunRecoveryControl/Preview"
+	AgentRunRecoveryControl_Commit_FullMethodName          = "/deepseek.agent.v1.AgentRunRecoveryControl/Commit"
+	AgentRunRecoveryControl_PreviewProgress_FullMethodName = "/deepseek.agent.v1.AgentRunRecoveryControl/PreviewProgress"
+	AgentRunRecoveryControl_CommitProgress_FullMethodName  = "/deepseek.agent.v1.AgentRunRecoveryControl/CommitProgress"
 )
 
 // AgentRunRecoveryControlClient is the client API for AgentRunRecoveryControl service.
@@ -707,6 +747,8 @@ const (
 type AgentRunRecoveryControlClient interface {
 	Preview(ctx context.Context, in *PreviewAgentRunRecoveryRequest, opts ...grpc.CallOption) (*PreviewAgentRunRecoveryResponse, error)
 	Commit(ctx context.Context, in *CommitAgentRunRecoveryRequest, opts ...grpc.CallOption) (*CommitAgentRunRecoveryResponse, error)
+	PreviewProgress(ctx context.Context, in *PreviewAgentRecoveryProgressRequest, opts ...grpc.CallOption) (*PreviewAgentRecoveryProgressResponse, error)
+	CommitProgress(ctx context.Context, in *CommitAgentRecoveryProgressRequest, opts ...grpc.CallOption) (*CommitAgentRunRecoveryResponse, error)
 }
 
 type agentRunRecoveryControlClient struct {
@@ -737,12 +779,34 @@ func (c *agentRunRecoveryControlClient) Commit(ctx context.Context, in *CommitAg
 	return out, nil
 }
 
+func (c *agentRunRecoveryControlClient) PreviewProgress(ctx context.Context, in *PreviewAgentRecoveryProgressRequest, opts ...grpc.CallOption) (*PreviewAgentRecoveryProgressResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PreviewAgentRecoveryProgressResponse)
+	err := c.cc.Invoke(ctx, AgentRunRecoveryControl_PreviewProgress_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentRunRecoveryControlClient) CommitProgress(ctx context.Context, in *CommitAgentRecoveryProgressRequest, opts ...grpc.CallOption) (*CommitAgentRunRecoveryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CommitAgentRunRecoveryResponse)
+	err := c.cc.Invoke(ctx, AgentRunRecoveryControl_CommitProgress_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentRunRecoveryControlServer is the server API for AgentRunRecoveryControl service.
 // All implementations must embed UnimplementedAgentRunRecoveryControlServer
 // for forward compatibility.
 type AgentRunRecoveryControlServer interface {
 	Preview(context.Context, *PreviewAgentRunRecoveryRequest) (*PreviewAgentRunRecoveryResponse, error)
 	Commit(context.Context, *CommitAgentRunRecoveryRequest) (*CommitAgentRunRecoveryResponse, error)
+	PreviewProgress(context.Context, *PreviewAgentRecoveryProgressRequest) (*PreviewAgentRecoveryProgressResponse, error)
+	CommitProgress(context.Context, *CommitAgentRecoveryProgressRequest) (*CommitAgentRunRecoveryResponse, error)
 	mustEmbedUnimplementedAgentRunRecoveryControlServer()
 }
 
@@ -758,6 +822,12 @@ func (UnimplementedAgentRunRecoveryControlServer) Preview(context.Context, *Prev
 }
 func (UnimplementedAgentRunRecoveryControlServer) Commit(context.Context, *CommitAgentRunRecoveryRequest) (*CommitAgentRunRecoveryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Commit not implemented")
+}
+func (UnimplementedAgentRunRecoveryControlServer) PreviewProgress(context.Context, *PreviewAgentRecoveryProgressRequest) (*PreviewAgentRecoveryProgressResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PreviewProgress not implemented")
+}
+func (UnimplementedAgentRunRecoveryControlServer) CommitProgress(context.Context, *CommitAgentRecoveryProgressRequest) (*CommitAgentRunRecoveryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CommitProgress not implemented")
 }
 func (UnimplementedAgentRunRecoveryControlServer) mustEmbedUnimplementedAgentRunRecoveryControlServer() {
 }
@@ -817,6 +887,42 @@ func _AgentRunRecoveryControl_Commit_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentRunRecoveryControl_PreviewProgress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PreviewAgentRecoveryProgressRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunRecoveryControlServer).PreviewProgress(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunRecoveryControl_PreviewProgress_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunRecoveryControlServer).PreviewProgress(ctx, req.(*PreviewAgentRecoveryProgressRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AgentRunRecoveryControl_CommitProgress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CommitAgentRecoveryProgressRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentRunRecoveryControlServer).CommitProgress(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentRunRecoveryControl_CommitProgress_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentRunRecoveryControlServer).CommitProgress(ctx, req.(*CommitAgentRecoveryProgressRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentRunRecoveryControl_ServiceDesc is the grpc.ServiceDesc for AgentRunRecoveryControl service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -831,6 +937,14 @@ var AgentRunRecoveryControl_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Commit",
 			Handler:    _AgentRunRecoveryControl_Commit_Handler,
+		},
+		{
+			MethodName: "PreviewProgress",
+			Handler:    _AgentRunRecoveryControl_PreviewProgress_Handler,
+		},
+		{
+			MethodName: "CommitProgress",
+			Handler:    _AgentRunRecoveryControl_CommitProgress_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

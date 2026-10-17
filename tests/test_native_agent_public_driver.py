@@ -46,6 +46,91 @@ def complete_recovery_execution_evidence():
     return result, exchanges
 
 
+def complete_task_recovery_evidence(role, synthesize):
+    import base64
+    import hashlib
+
+    result, exchanges = complete_recovery_evidence()
+    added = 2 if synthesize else 1
+    receipt = b"offline-receipt-shape-only"
+    result.update(nextIndex=16 if synthesize else 14, publicEventCount=16 if synthesize else 14,
+                  durablePhases=3+added, taskRerunProgressQualified=True)
+    result["recoveryPreparation"].update(kind="task-rerun", role=role, synthesize=synthesize,
+        retainedOutputCount=1 if role=="critic" else 2, newProviderCalls=added, newDurablePhases=added,
+        newTaskActionId="rerun-task", newSynthesisActionId="rerun-synthesis" if synthesize else "",
+        oldFinalRetainedDuringTask=True, unfinishedProgressDenied=True, staleProgressDenied=True,
+        progressMetadataSchemaVersion=4, progressReceiptSha256=hashlib.sha256(receipt).hexdigest(),
+        progressReceiptBase64=base64.urlsafe_b64encode(receipt).decode().rstrip("="), noteBodySha256="e"*64, nextBodySha256="f"*64)
+    exchanges.append({"actionId":"rerun-task","operationId":"rerun-task-node","executionEpoch":"1","stream":False,
+        "predecessorSummaryInPrompt":True,"rerunSelectedRoleInPrompt":True,"requestCredentialUsed":True,"privateReasoningInPrompt":False})
+    if synthesize:
+        exchanges.append({"actionId":"rerun-synthesis","operationId":"rerun-synthesis-node","executionEpoch":"1","stream":False,
+            "synthesisCoderInPrompt":True,"synthesisCriticInPrompt":True,"recoveredTaskSummaryInPrompt":True,
+            "requestCredentialUsed":True,"privateReasoningInPrompt":False})
+    return result, exchanges, {"role":role,"synthesize":synthesize}
+
+
+@pytest.mark.parametrize("role",["critic","researcher"])
+@pytest.mark.parametrize("synthesize",[True,False])
+def test_task_recovery_requires_exact_selected_work_and_late_signed_progress(role,synthesize):
+    from scripts.verify_native_agent_public_driver import validate_task_recovery_result
+
+    validate_task_recovery_result(*complete_task_recovery_evidence(role,synthesize))
+
+
+@pytest.mark.parametrize("change",["extra-call","no-task","extra-phase","cursor","source","role","synthesize","old-final","early-progress",
+    "stale-progress","schema","proof-bytes","proof-digest","reused-action","reused-operation","task-context","new-summary","credential","private-reasoning","no-synthesis-phase","overclaim"])
+def test_task_recovery_refuses_unproven_progress_or_replayed_provider_effects(change):
+    from scripts.verify_native_agent_public_driver import validate_task_recovery_result
+
+    result,exchanges,case=complete_task_recovery_evidence("critic",True)
+    recovery=result["recoveryPreparation"]
+    if change=="extra-call":
+        exchanges.append(copy.deepcopy(exchanges[-1]))
+    elif change=="no-task":
+        exchanges.pop(4)
+    elif change=="extra-phase":
+        result["durablePhases"]+=1
+    elif change=="cursor":
+        result["nextIndex"]-=1
+    elif change=="source":
+        result["sourceCommit"]="e"*40
+    elif change=="role":
+        recovery["role"]="researcher"
+    elif change=="synthesize":
+        recovery["synthesize"]=False
+    elif change=="old-final":
+        recovery["oldFinalRetainedDuringTask"]=False
+    elif change=="early-progress":
+        recovery["unfinishedProgressDenied"]=False
+    elif change=="stale-progress":
+        recovery["staleProgressDenied"]=False
+    elif change=="schema":
+        recovery["progressMetadataSchemaVersion"]=3
+    elif change=="proof-bytes":
+        recovery["progressReceiptBase64"]="***"
+    elif change=="proof-digest":
+        recovery["progressReceiptSha256"]="0"*64
+    elif change=="reused-action":
+        exchanges[4]["actionId"]=exchanges[1]["actionId"]
+    elif change=="reused-operation":
+        exchanges[4]["operationId"]=exchanges[1]["operationId"]
+    elif change=="task-context":
+        exchanges[4]["predecessorSummaryInPrompt"]=False
+    elif change=="new-summary":
+        exchanges[5]["recoveredTaskSummaryInPrompt"]=False
+    elif change=="credential":
+        exchanges[4]["requestCredentialUsed"]=False
+    elif change=="private-reasoning":
+        exchanges[5]["privateReasoningInPrompt"]=True
+    elif change=="no-synthesis-phase":
+        recovery["newSynthesisActionId"]=""
+    elif change=="overclaim":
+        recovery["fullResumeRerunQualified"]=True
+    with pytest.raises(ValueError):
+        validate_task_recovery_result(result,exchanges,case)
+
+
 def test_recovery_execution_requires_a_fresh_synthesis_and_original_public_summaries():
     from scripts.verify_native_agent_public_driver import validate_recovery_execution_result
 

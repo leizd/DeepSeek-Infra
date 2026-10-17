@@ -27,6 +27,13 @@ struct CustodyFixture {
 
 #[tonic::async_trait]
 impl AgentNodeWorker for CustodyFixture {
+    async fn prepare_recovery_progress(
+        &self,
+        _: Request<PrepareAgentRecoveryProgressRequest>,
+    ) -> Result<Response<AgentRecoveryProgressReceipt>, Status> {
+        Err(Status::unimplemented("NOT_A_RECOVERY_FIXTURE"))
+    }
+
     async fn prepare_credentials(
         &self,
         request: Request<PrepareAgentCredentialsRequest>,

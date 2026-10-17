@@ -1,3 +1,14 @@
+## Typed task-rerun progress candidate - 2026-10-17
+
+Go control owns atomic progress and operation history; Rust owns original effects,
+public bodies and purpose-bound signatures. Selected tasks terminate independently
+before note/reset-or-done; retained outputs keep their original identities. Schema4
+prevents lossy downgrade and later synthesis retains a separate fenced admission.
+The four actual role/synthesis process scenarios and all native compile/race/coverage
+gates are cloud pending for this candidate. Offline validators do not establish
+provider, public resume/rerun, platform or full production qualification. Original
+coverage floors remain; product readiness is NOT_READY.
+
 <!-- native-planner-worker-20261011 -->
 The current isolated candidate adds authenticated typed planner execution and historical node queries to the production Rust worker. It reuses the native request policy, reads the immutable request body by its bound Rust artifact reference, checks the stored signed grant and installed epoch immediately before one bounded HTTP exchange, and persists received-result evidence before publishing a Rust-owned public-event reference. The planner path reads budget data without schema/pragma writes. It never turns an unknown effect into a fresh dispatch.
 

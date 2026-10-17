@@ -40,6 +40,43 @@ impl std::fmt::Debug for ControlSigner {
 }
 
 impl ControlSigner {
+    pub(crate) fn sign_recovery_progress(
+        &mut self,
+        evidence: deepseek_protocol::generated::deepseek::agent::v1::AgentRecoveryProgressEvidence,
+    ) -> Result<
+        deepseek_protocol::generated::deepseek::agent::v1::AgentRecoveryProgressReceipt,
+        Status,
+    > {
+        use deepseek_protocol::generated::deepseek::agent::v1::AgentRecoveryProgressReceipt;
+        use prost::Message as _;
+        let payload = evidence.encode_to_vec();
+        let signature = self
+            .key
+            .sign_agent_recovery_progress(&evidence)
+            .map_err(|_| Status::failed_precondition("AGENT_RECOVERY_PROGRESS_INVALID"))?;
+        let receipt = AgentRecoveryProgressReceipt {
+            schema_version: 1,
+            evidence: Some(evidence),
+            signature,
+            signer_public_key: self.key.public_key(),
+        };
+        let bytes = receipt.encode_to_vec();
+        let mut identity = b"deepseek-infra:agent-recovery-progress:request\0".to_vec();
+        identity.extend(&payload);
+        let request_id = format!("{:x}", Sha256::digest(identity));
+        let mut nonce = b"deepseek-infra:agent-recovery-progress:nonce\0".to_vec();
+        nonce.extend(&payload);
+        let nonce = format!("{:x}", Sha256::digest(nonce));
+        if let Some(prior) = self.journal.existing(&request_id)? {
+            if prior != bytes {
+                return Err(Status::data_loss("AGENT_RECOVERY_PROGRESS_CORRUPT"));
+            }
+        } else {
+            self.journal.record(&request_id, &nonce, &bytes)?;
+        }
+        Ok(receipt)
+    }
+
     /// Only accept an existing original receipt. Recovery must not recreate a
     /// missing signature journal entry by calling the signing path again.
     pub(crate) fn verify_retained_node_outcome(

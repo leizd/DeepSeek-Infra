@@ -27,6 +27,63 @@ impl std::fmt::Debug for ControlSigningKey {
 }
 
 impl ControlSigningKey {
+    /// Metadata progress has a distinct purpose and never authorizes provider I/O.
+    pub fn sign_agent_recovery_progress(
+        &self,
+        evidence: &deepseek_protocol::generated::deepseek::agent::v1::AgentRecoveryProgressEvidence,
+    ) -> Result<Vec<u8>, FederationIdentityError> {
+        use prost::Message as _;
+        let invalid = || error("AGENT_RECOVERY_PROGRESS_INVALID");
+        let digest = |value: &str| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        };
+        let reference = |value: Option<
+            &deepseek_protocol::generated::deepseek::agent::v1::AgentArtifactReference,
+        >| {
+            value
+                .is_some_and(|r| digest(&r.sha256) && r.length > 0 && r.length <= 128 * 1024 * 1024)
+        };
+        let context = evidence.context.as_ref().ok_or_else(invalid)?;
+        if evidence.schema_version != 1
+            || context.schema_version != 1
+            || context.run_id.is_empty()
+            || context.generation == 0
+            || context.generation > i64::MAX as u64
+            || context.metadata_epoch == 0
+            || context.metadata_epoch > i64::MAX as u64
+            || context.expected_index < 1
+            || context.expected_index > i64::MAX - 2
+            || context.runtime_revision < 2
+            || context.runtime_revision > i64::MAX as u64
+            || !reference(context.request.as_ref())
+            || !digest(&context.recovery_context_sha256)
+            || context.task_action_id.is_empty()
+            || context.task_action_revision < 1
+            || context.task_metadata_index != context.expected_index
+            || !matches!(
+                context.role.as_str(),
+                "researcher" | "coder" | "reasoner" | "critic"
+            )
+            || context.outputs.len() != 1
+            || !reference(evidence.note_body.as_ref())
+            || !reference(evidence.next_body.as_ref())
+            || self.binding["fleetId"] != evidence.fleet_id
+            || self.binding["environment"] != evidence.environment
+        {
+            return Err(invalid());
+        }
+        let bytes = evidence.encode_to_vec();
+        if bytes.len() > 1024 * 1024 {
+            return Err(invalid());
+        }
+        let mut message = b"deepseek-infra:agent-recovery-progress-proof-v1\0".to_vec();
+        message.extend(bytes);
+        Ok(self.key.sign(&message).to_bytes().to_vec())
+    }
+
     /// Provider credentials remain in Rust. A distinct HKDF domain derives the
     /// encryption key; neither the signing seed nor this key is returned.
     pub fn seal_agent_credentials(

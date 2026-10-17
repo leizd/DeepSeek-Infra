@@ -53,8 +53,11 @@ func decodeAgentMetadata(record Record) (agent.RunMetadata, error) {
 		return run, ErrAgentRunMetadataInvalid
 	}
 	legacy := (run.SchemaVersion == 1 && run.RuntimeRevision <= 1 || run.SchemaVersion == 2 && run.RuntimeRevision >= 2) &&
-		run.Recovery == nil && run.CancellationGeneration == 0
-	recovery := run.SchemaVersion == 3 && run.RuntimeRevision >= 2 && validAgentRecoveryScope(run)
+		run.Recovery == nil && run.RecoveryProgress == nil && run.CancellationGeneration == 0
+	// A v3 reader must reject metadata containing the new signed progress proof.
+	// Otherwise a downgraded controller could silently drop it on the next write.
+	recoverySchema := run.SchemaVersion == 3 && run.RecoveryProgress == nil || run.SchemaVersion == 4 && run.RecoveryProgress != nil
+	recovery := recoverySchema && run.RuntimeRevision >= 2 && validAgentRecoveryScope(run) && validRecoveryProgressHeader(run)
 	if (!legacy && !recovery) ||
 		run.RunID != record.ID || run.Status != record.State ||
 		run.NextIndex != record.Revision || run.LastEvent.Index != record.Revision-1 ||
@@ -224,6 +227,19 @@ func (store *Control) AgentRunMetadata(id string) (agent.RunMetadata, bool, erro
 		return agent.RunMetadata{}, found, err
 	}
 	run, err := decodeAgentMetadata(record)
+	if err == nil && run.RecoveryProgress != nil {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		if store.closed {
+			return agent.RunMetadata{}, true, ErrWriterFenceHeld
+		}
+		tx, beginErr := store.db.Begin()
+		if beginErr != nil {
+			return agent.RunMetadata{}, true, beginErr
+		}
+		defer tx.Rollback()
+		err = store.validateRecoveryProgressTx(tx, run)
+	}
 	return run, true, err
 }
 

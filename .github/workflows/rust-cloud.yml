@@ -135,6 +135,12 @@ jobs:
         run: |
           set -o pipefail
           python scripts/verify_native_agent_public_driver.py --recovery-driving --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-recovery-driving 2>&1 | tee artifacts/rust-cloud/agent-recovery-driving.log
+      - name: Verify task rerun progress with retained outputs and optional synthesis
+        if: matrix.mode == 'checks'
+        timeout-minutes: 12
+        run: |
+          set -o pipefail
+          python scripts/verify_native_agent_public_driver.py --recovery-rerun-matrix --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-recovery-rerun 2>&1 | tee artifacts/rust-cloud/agent-recovery-rerun.log
       - name: Verify all retained presets through actual native public creation
         if: matrix.mode == 'checks'
         run: |

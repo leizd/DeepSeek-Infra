@@ -1,0 +1,274 @@
+// Actual Go/Rust process probe. Body storage and signing stay in Rust; the
+// controlled provider is an offline test tool rather than release evidence.
+package api
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
+	"github.com/leizd/DeepSeek-Infra/go/internal/agentproof"
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
+	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+)
+
+func nativeTaskRecoveryDrive(t *testing.T, control *store.Control, origin string, ready nativeSigningWorkerReady,
+	bearer, publicOrigin string, client *http.Client, before agent.RunMetadata, beforePublic map[string]any, base map[string]any) map[string]any {
+	t.Helper()
+	role := os.Getenv("DEEPSEEK_TEST_AGENT_RECOVERY_ROLE")
+	synthesize := os.Getenv("DEEPSEEK_TEST_AGENT_RECOVERY_SYNTHESIZE") == "true"
+	if role != "critic" && role != "researcher" {
+		t.Fatal("unrecognized task recovery scenario")
+	}
+	connection, err := grpc.NewClient(strings.TrimPrefix(origin, "http://"), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	runs, recovery := agentv1.NewAgentRunControlClient(connection), agentv1.NewAgentRunRecoveryControlClient(connection)
+	ctx, cancel := context.WithTimeout(controlRPCContext(t, testInternalBearer), 120*time.Second)
+	defer cancel()
+	authority, err := runs.GetAuthority(ctx, &agentv1.AgentRunAuthorityInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &agentv1.AgentArtifactReference{Sha256: before.Request.SHA256, Length: before.Request.Length}
+	input := &agentv1.PreviewAgentRunRecoveryRequest{SchemaVersion: 1, RunId: before.RunID, MetadataFence: &commonv1.ActionFence{ActionId: before.RunID, ExecutionEpoch: authority.MetadataEpoch},
+		ExpectedIndex: before.NextIndex, ExpectedRuntimeRevision: before.RuntimeVersion(), ExpectedRequest: request,
+		Selection: &agentv1.AgentRunRecoverySelection{Kind: agentv1.AgentRunRecoveryKind_AGENT_RUN_RECOVERY_KIND_RERUN, AgentId: role, Resynthesize: proto.Bool(synthesize)}}
+	preview, err := recovery.Preview(ctx, input)
+	retained := 1
+	if role == "researcher" {
+		retained = 2
+	}
+	if err != nil || !preview.GetAuthoritative() || preview.Context == nil || preview.Context.Synthesize != synthesize || len(preview.Context.Execute) != 1 || preview.Context.Execute[0].Id != role || len(preview.Context.RetainedOutputs) != retained || len(preview.Context.PriorEffects) != 4 {
+		t.Fatal("rerun selection or retained provenance differs", err)
+	}
+	actionsBefore, err := control.ListAuthoritativeRecords("action")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := os.ReadFile(ready.TrustRootFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(ca) {
+		t.Fatal("worker trust root unavailable")
+	}
+	workerConnection, err := grpc.NewClient(ready.Target, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS12})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = workerConnection.Close() })
+	worker := agentv1.NewAgentNodeWorkerClient(workerConnection)
+	workerCtx, workerCancel := context.WithTimeout(metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+bearer), 120*time.Second)
+	defer workerCancel()
+	prepare := &agentv1.PrepareAgentCredentialsRequest{SchemaVersion: 1, RunId: before.RunID, Fence: input.MetadataFence, Request: request, RuntimeRevision: before.RuntimeVersion() + 1,
+		RuntimeUpdate: &agentv1.AgentCredentialRuntimeUpdate{PreviousRequest: request, PreviousRuntimeRevision: before.RuntimeVersion()}, RecoveryContext: preview.Context}
+	prepared, err := worker.PrepareCredentials(workerCtx, prepare)
+	if err != nil || prepared.GetPreparedRequest() == nil || prepared.GetRecoveryContext() == nil || prepared.RecoveryContextSha256 != preview.ContextSha256 || len(prepared.RecoveryEventBodies) != 2 {
+		t.Fatal("actual task rerun custody preparation failed", err)
+	}
+	retry, err := worker.PrepareCredentials(workerCtx, prepare)
+	if err != nil || !proto.Equal(retry, prepared) {
+		t.Fatal("task preparation retry changed immutable custody", err)
+	}
+	commit := &agentv1.CommitAgentRunRecoveryRequest{SchemaVersion: 1, OperationId: "native-task-recovery-" + before.RunID, Actor: "operator:native-task-recovery-process",
+		RunId: before.RunID, Fence: input.MetadataFence, ExpectedIndex: before.NextIndex, ExpectedRuntimeRevision: before.RuntimeVersion(), ExpectedRequest: request,
+		Selection: input.Selection, ContextSha256: preview.ContextSha256, Context: prepared.RecoveryContext, Request: prepared.PreparedRequest, EventBodies: prepared.RecoveryEventBodies}
+	committed, err := recovery.Commit(ctx, commit)
+	if err != nil || committed.AlreadyApplied || committed.Run == nil || committed.Run.NextIndex != before.NextIndex+2 || committed.Run.Status != "running" || committed.Run.FinalAfter != before.FinalAfter {
+		t.Fatal("rerun admission changed the final answer before task completion", err)
+	}
+	readPublic := func() map[string]any {
+		response, err := client.Get(publicOrigin + "/api/agent-runs/" + before.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+		response.Body.Close()
+		var payload struct {
+			Run map[string]any `json:"run"`
+		}
+		if err != nil || response.StatusCode != http.StatusOK || json.Unmarshal(raw, &payload) != nil || payload.Run == nil {
+			t.Fatal("task rerun public read failed", err)
+		}
+		for _, secret := range []string{"request-only-credential", "_nativeProviderCredentials", "_nativeRecoveryContext", "private-task-reasoning"} {
+			if bytes.Contains(raw, []byte(secret)) {
+				t.Fatal("task recovery public response leaked private custody")
+			}
+		}
+		return payload.Run
+	}
+	var arrived map[string]any
+	directory := os.Getenv("DEEPSEEK_AGENT_SIGNING_PROBE_DIR")
+	nativeSigningRead(t, filepath.Join(directory, "rerun-task-arrived.json"), &arrived)
+	during := readPublic()
+	running, found, err := control.AgentRunMetadata(before.RunID)
+	if err != nil || !found || running.Status != "running" || running.NextIndex != before.NextIndex+2 || running.RecoveryProgress != nil || running.FinalAfter != before.FinalAfter || during["finalAnswer"] != beforePublic["finalAnswer"] {
+		t.Fatal("in-flight task erased the old final or fabricated progress", err)
+	}
+	_, err = recovery.PreviewProgress(ctx, &agentv1.PreviewAgentRecoveryProgressRequest{SchemaVersion: 1, RunId: before.RunID, MetadataFence: input.MetadataFence, ExpectedIndex: running.NextIndex, RuntimeRevision: running.RuntimeVersion(), Request: prepared.PreparedRequest})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatal("unfinished task authorized public progress", err)
+	}
+	inflightActions, err := control.ListAuthoritativeRecords("action")
+	if err != nil || len(inflightActions) != len(actionsBefore)+1 {
+		t.Fatal("rerun admitted unrelated work before task settlement", err)
+	}
+	nativeSigningWrite(t, filepath.Join(directory, "rerun-task-release.json"), map[string]any{"released": true})
+	deadline := time.Now().Add(90 * time.Second)
+	var public map[string]any
+	for {
+		public = readPublic()
+		if public["status"] == "done" {
+			break
+		}
+		if time.Now().After(deadline) || public["status"] == "failed" || public["status"] == "cancelled" {
+			t.Fatal("actual task rerun did not finish", public["status"])
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	after, found, err := control.AgentRunMetadata(before.RunID)
+	added := int64(5)
+	newPhases := 1
+	if synthesize {
+		added = 7
+		newPhases = 2
+	}
+	if err != nil || !found || after.SchemaVersion != 4 || after.RecoveryProgress == nil || after.Status != "done" || after.NextIndex != before.NextIndex+added || after.RuntimeVersion() != before.RuntimeVersion()+1 || after.Recovery == nil || after.Recovery.Generation != 1 || !reflect.DeepEqual(before.Plan, after.Plan) {
+		t.Fatal("task rerun durable completion differs", err)
+	}
+	wantedFinal := beforePublic["finalAnswer"]
+	wantedFinalAfter := before.FinalAfter
+	if synthesize {
+		wantedFinal = "Controlled recovered final answer"
+		wantedFinalAfter = before.NextIndex + 4
+	}
+	if after.FinalAfter != wantedFinalAfter || public["finalAnswer"] != wantedFinal || public["nextIndex"] != float64(after.NextIndex) {
+		t.Fatal("rerun final answer differs from its synthesis selection")
+	}
+	events, ok := public["events"].([]any)
+	oldEvents, oldOK := beforePublic["events"].([]any)
+	if !ok || !oldOK || len(events) != len(oldEvents)+int(added) || !reflect.DeepEqual(events[:len(oldEvents)], oldEvents) {
+		t.Fatal("rerun rewrote original public events")
+	}
+	headers, err := control.AgentRunEventsAfter(before.RunID, before.NextIndex-1, 20)
+	if err != nil || int64(len(headers)) != added || headers[0].Type != "run_status" || headers[0].Status != "running" || headers[1].Type != "agent_reset" || headers[1].Phase != role || headers[2].Type != "agent_output" || headers[2].Phase != role || headers[3].Type != "agent_note" || headers[3].Phase != role {
+		t.Fatal("rerun note/reset/completion order differs", err)
+	}
+	if synthesize {
+		if headers[4].Type != "final_reset" || headers[5].Type != "content" || headers[6].Type != "done" {
+			t.Fatal("synthesis ran before the late final reset")
+		}
+	} else if headers[4].Type != "run_status" || headers[4].Status != "done" {
+		t.Fatal("rerun without synthesis omitted terminal public status")
+	}
+	proof := after.RecoveryProgress.Receipt
+	if err := agentproof.VerifyAgentRecoveryProgress(proof, proof.Evidence.Context, agentproof.Binding{PublicKey: ready.PublicKey, FleetID: "fleet-a", Environment: "production"}); err != nil {
+		t.Fatal("actual Rust progress signature failed pinned verification", err)
+	}
+	progress := proof.Evidence.Context
+	if progress.Role != role || progress.Synthesize != synthesize || progress.ExpectedIndex != before.NextIndex+3 || progress.Generation != 1 || len(progress.Outputs) != 1 || proof.Evidence.NoteBody.Sha256 != headers[3].Body.SHA256 || proof.Evidence.NextBody.Sha256 != headers[4].Body.SHA256 {
+		t.Fatal("signed progress did not bind the actual selected output and public bodies")
+	}
+	actionsAfter, err := control.ListAuthoritativeRecords("action")
+	if err != nil || len(actionsAfter) != len(actionsBefore)+newPhases {
+		t.Fatal("rerun admitted additional durable phases", err)
+	}
+	byID := map[string]store.Record{}
+	for _, record := range actionsAfter {
+		byID[record.ID] = record
+	}
+	for _, record := range actionsBefore {
+		if !reflect.DeepEqual(record, byID[record.ID]) {
+			t.Fatal("rerun rebound an original action or proof")
+		}
+		delete(byID, record.ID)
+	}
+	newTask, newSynthesis := "", ""
+	for _, record := range byID {
+		binding, err := store.AgentRunExecutionBindingFromRecord(record)
+		resources, resourceErr := control.GetResourceLeases(record.ID)
+		if err != nil || resourceErr != nil || record.State != "SUCCEEDED" || binding.Request != after.Request || len(resources) != 0 {
+			t.Fatal("new phase was not independently settled", err, resourceErr)
+		}
+		switch binding.Phase {
+		case "tasks":
+			newTask = record.ID
+			if progress.TaskActionId != record.ID || progress.TaskActionRevision != record.Revision {
+				t.Fatal("progress invented task termination")
+			}
+		case "synthesis":
+			newSynthesis = record.ID
+		default:
+			t.Fatal("rerun created a new planner or unrelated phase")
+		}
+	}
+	if newTask == "" || (newSynthesis != "") != synthesize {
+		t.Fatal("rerun phase selection differs")
+	}
+	replay, err := recovery.Commit(ctx, commit)
+	if err != nil || !replay.AlreadyApplied || !proto.Equal(replay.Run, runProtocol(after)) || len(replay.Events) != len(committed.Events) {
+		t.Fatal("recovery replay lost original operation events", err)
+	}
+	for i := range replay.Events {
+		if !proto.Equal(replay.Events[i], committed.Events[i]) {
+			t.Fatal("recovery replay changed original event identity")
+		}
+	}
+	unchanged, found, err := control.AgentRunMetadata(before.RunID)
+	if err != nil || !found || !reflect.DeepEqual(unchanged, after) {
+		t.Fatal("recovery replay rewrote completed progress", err)
+	}
+	oldProgress := &agentv1.PrepareAgentRecoveryProgressRequest{SchemaVersion: 1, Context: proto.Clone(progress).(*agentv1.AgentRecoveryProgressContext), Fence: input.MetadataFence}
+	if _, err := worker.PrepareRecoveryProgress(workerCtx, oldProgress); status.Code(err) != codes.FailedPrecondition {
+		t.Fatal("completed rerun accepted an old progress preview", err)
+	}
+	rawProof, err := (proto.MarshalOptions{Deterministic: true}).Marshal(proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(rawProof)
+	result := make(map[string]any, len(base)+8)
+	for k, v := range base {
+		result[k] = v
+	}
+	result["baseExecution"] = base
+	result["nextIndex"], result["publicEventCount"], result["durablePhases"] = after.NextIndex, len(events), len(actionsAfter)
+	result["requestSha256"], result["requestLength"] = after.Request.SHA256, after.Request.Length
+	result["recoveryPreparation"] = map[string]any{"kind": "task-rerun", "role": role, "synthesize": synthesize, "generation": after.Recovery.Generation,
+		"originalRuntimeRevision": before.RuntimeVersion(), "runtimeRevision": after.RuntimeVersion(), "originalRequestSha256": before.Request.SHA256,
+		"contextSha256": preview.ContextSha256, "contextArtifactSha256": prepared.RecoveryContext.Sha256, "contextArtifactLength": prepared.RecoveryContext.Length,
+		"priorEffectCount": len(preview.Context.PriorEffects), "retainedOutputCount": retained, "preparedByRust": true, "goOpenedRustBody": false,
+		"preparationRetryIdempotent": true, "commitRetryIdempotent": true, "originalEffectsUnchanged": true, "originalPublicEventsUnchanged": true, "publicReadQualified": true,
+		"oldFinalRetainedDuringTask": true, "unfinishedProgressDenied": true, "staleProgressDenied": true, "progressMetadataSchemaVersion": after.SchemaVersion,
+		"progressReceiptSha256": hex.EncodeToString(digest[:]), "progressReceiptBase64": base64.RawURLEncoding.EncodeToString(rawProof),
+		"noteBodySha256": proof.Evidence.NoteBody.Sha256, "nextBodySha256": proof.Evidence.NextBody.Sha256, "newProviderCalls": newPhases,
+		"newDurablePhases": newPhases, "newTaskActionId": newTask, "newSynthesisActionId": newSynthesis, "fullResumeRerunQualified": false}
+	result["taskRerunProgressQualified"] = true
+	return result
+}

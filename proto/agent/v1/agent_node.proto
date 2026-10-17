@@ -161,6 +161,7 @@ service AgentNodeWorker {
   // Private Rust-to-Rust custody preparation only. No provider effect is admitted.
   // Credentials must never be forwarded to the Go control plane or public events.
   rpc PrepareCredentials(PrepareAgentCredentialsRequest) returns (PrepareAgentCredentialsResponse);
+  rpc PrepareRecoveryProgress(PrepareAgentRecoveryProgressRequest) returns (AgentRecoveryProgressReceipt);
   rpc ExecutePlan(ExecuteAgentPlanRequest) returns (AgentNodeEffectMetadata);
   rpc ExecuteTask(ExecuteAgentTaskRequest) returns (AgentNodeEffectMetadata);
   // Only synthesis-phase claims with the Go-selected synthesizer node are valid.
@@ -495,5 +496,77 @@ message CommitAgentRunRecoveryResponse {
 service AgentRunRecoveryControl {
   rpc Preview(PreviewAgentRunRecoveryRequest) returns (PreviewAgentRunRecoveryResponse);
   rpc Commit(CommitAgentRunRecoveryRequest) returns (CommitAgentRunRecoveryResponse);
+  rpc PreviewProgress(PreviewAgentRecoveryProgressRequest) returns (PreviewAgentRecoveryProgressResponse);
+  rpc CommitProgress(CommitAgentRecoveryProgressRequest) returns (CommitAgentRunRecoveryResponse);
+}
+
+// The selected task phase is already independently terminated. This context
+// authorizes no provider effect; it binds the two ordered public events which
+// finish a task rerun or prepare its separately admitted synthesis.
+message AgentRecoveryProgressContext {
+  uint32 schema_version = 1;
+  string run_id = 2;
+  uint64 generation = 3;
+  uint64 metadata_epoch = 4;
+  int64 expected_index = 5;
+  uint64 runtime_revision = 6;
+  AgentArtifactReference request = 7;
+  string recovery_context_sha256 = 8;
+  string task_action_id = 9;
+  int64 task_action_revision = 10;
+  int64 task_metadata_index = 11;
+  string role = 12;
+  bool synthesize = 13;
+  repeated AgentRunRecoveryEffectSource outputs = 14;
+}
+
+message AgentRecoveryProgressEvidence {
+  uint32 schema_version = 1;
+  AgentRecoveryProgressContext context = 2;
+  AgentArtifactReference note_body = 3;
+  AgentArtifactReference next_body = 4;
+  string fleet_id = 5;
+  string environment = 6;
+}
+
+// A separate Rust signature purpose prevents using planning, task or synthesis
+// receipts to fabricate the post-task note/reset/done boundary.
+message AgentRecoveryProgressReceipt {
+  uint32 schema_version = 1;
+  AgentRecoveryProgressEvidence evidence = 2;
+  bytes signature = 3;
+  string signer_public_key = 4;
+}
+
+message PreviewAgentRecoveryProgressRequest {
+  uint32 schema_version = 1;
+  string run_id = 2;
+  deepseek.common.v1.ActionFence metadata_fence = 3;
+  int64 expected_index = 4;
+  uint64 runtime_revision = 5;
+  AgentArtifactReference request = 6;
+}
+
+message PreviewAgentRecoveryProgressResponse {
+  bool authoritative = 1;
+  AgentRecoveryProgressContext context = 2;
+}
+
+message PrepareAgentRecoveryProgressRequest {
+  uint32 schema_version = 1;
+  AgentRecoveryProgressContext context = 2;
+  deepseek.common.v1.ActionFence fence = 3;
+}
+
+message CommitAgentRecoveryProgressRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  string run_id = 4;
+  deepseek.common.v1.ActionFence metadata_fence = 5;
+  int64 expected_index = 6;
+  uint64 runtime_revision = 7;
+  AgentArtifactReference request = 8;
+  AgentRecoveryProgressReceipt receipt = 9;
 }
 

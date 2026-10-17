@@ -147,6 +147,68 @@ def validate_recovery_execution_result(result: dict[str, Any], exchanges: list[d
         raise ValueError("Direct synthesis lacks a fresh fenced effect and both original public summaries")
 
 
+def task_rerun_cases() -> list[dict[str, Any]]:
+    return [{"name":role+("-synthesize" if synthesize else "-keep-final"),"role":role,"synthesize":synthesize}
+            for role in ["critic","researcher"] for synthesize in [True,False]]
+
+
+def validate_task_recovery_result(result: dict[str, Any], exchanges: list[dict[str, Any]], case: dict[str, Any]) -> None:
+    base,recovery=result.get("baseExecution"),result.get("recoveryPreparation")
+    role,synthesize=case.get("role"),case.get("synthesize")
+    if role not in {"critic","researcher"} or type(synthesize) is not bool or not isinstance(base,dict) or not isinstance(recovery,dict):
+        raise ValueError("Task rerun omitted its independently selected scenario")
+    validate_driver_result(base,exchanges[:4])
+    calls,events=1+int(synthesize),14+2*int(synthesize)
+    if len(exchanges)!=4+calls or result.get("status")!="PASS" or result.get("runStatus")!="done" or \
+            result.get("nextIndex")!=events or result.get("publicEventCount")!=events or result.get("durablePhases")!=3+calls or \
+            result.get("sourceCommit")!=base.get("sourceCommit") or result.get("runId")!=base.get("runId") or \
+            result.get("taskRerunProgressQualified") is not True or result.get("productionProviderQualified") is not False or \
+            result.get("fullMigrationQualified") is not False or result.get("productionRuntimeProcesses")!=["Go","Rust"]:
+        raise ValueError("Task rerun omitted public/terminal settlement or admitted extra effects")
+    if recovery.get("kind")!="task-rerun" or recovery.get("role")!=role or recovery.get("synthesize") is not synthesize or \
+            recovery.get("generation")!=1 or recovery.get("originalRuntimeRevision")!=1 or recovery.get("runtimeRevision")!=2 or \
+            recovery.get("priorEffectCount")!=4 or recovery.get("retainedOutputCount")!=(1 if role=="critic" else 2) or \
+            recovery.get("newProviderCalls")!=calls or recovery.get("newDurablePhases")!=calls or \
+            recovery.get("goOpenedRustBody") is not False or recovery.get("fullResumeRerunQualified") is not False or \
+            recovery.get("progressMetadataSchemaVersion")!=4 or recovery.get("originalRequestSha256")!=base.get("requestSha256") or \
+            result.get("requestSha256")==base.get("requestSha256"):
+        raise ValueError("Task rerun changed its source, selection, progress schema or original request")
+    for flag in ["preparedByRust","preparationRetryIdempotent","commitRetryIdempotent","originalEffectsUnchanged",
+                 "originalPublicEventsUnchanged","publicReadQualified","oldFinalRetainedDuringTask","unfinishedProgressDenied","staleProgressDenied"]:
+        if recovery.get(flag) is not True:
+            raise ValueError("Task rerun lacks actual proof: "+flag)
+    for value in [result.get("requestSha256"),recovery.get("contextSha256"),recovery.get("contextArtifactSha256"),
+                  recovery.get("noteBodySha256"),recovery.get("nextBodySha256"),recovery.get("progressReceiptSha256")]:
+        if not isinstance(value,str) or len(value)!=64 or any(c not in "0123456789abcdef" for c in value):
+            raise ValueError("Task rerun omitted exact immutable artifact bindings")
+    encoded=recovery.get("progressReceiptBase64")
+    if not isinstance(encoded,str) or len(encoded)>2*1024**2:
+        raise ValueError("Task rerun omitted its bounded actual Rust receipt")
+    try:
+        receipt=base64.urlsafe_b64decode(encoded+"="*(-len(encoded)%4))
+    except ValueError as error:
+        raise ValueError("Malformed progress receipt encoding") from error
+    if not receipt or base64.urlsafe_b64encode(receipt).decode().rstrip("=")!=encoded or hashlib.sha256(receipt).hexdigest()!=recovery.get("progressReceiptSha256"):
+        raise ValueError("Task rerun receipt bytes differ from its actual stored signature")
+    old_actions={item.get("actionId") for item in exchanges[:4]}
+    old_operations={item.get("operationId") for item in exchanges[:4]}
+    task=exchanges[4]
+    if not task.get("actionId") or task["actionId"]!=recovery.get("newTaskActionId") or task["actionId"] in old_actions or \
+            not task.get("operationId") or task["operationId"] in old_operations or task.get("executionEpoch")!="1" or task.get("stream") is not False or \
+            task.get("predecessorSummaryInPrompt") is not True or task.get("rerunSelectedRoleInPrompt") is not True or \
+            task.get("requestCredentialUsed") is not True or task.get("privateReasoningInPrompt") is not False:
+        raise ValueError("Rerun task lacks original summaries, inherited Rust credentials or a fresh fenced effect")
+    if synthesize:
+        final=exchanges[5]
+        if not final.get("actionId") or final["actionId"]!=recovery.get("newSynthesisActionId") or final["actionId"] in old_actions|{task["actionId"]} or \
+                not final.get("operationId") or final["operationId"] in old_operations|{task["operationId"]} or final.get("executionEpoch")!="1" or \
+                final.get("stream") is not False or final.get("synthesisCoderInPrompt") is not True or final.get("synthesisCriticInPrompt") is not True or \
+                final.get("recoveredTaskSummaryInPrompt") is not True or final.get("requestCredentialUsed") is not True or final.get("privateReasoningInPrompt") is not False:
+            raise ValueError("Rerun synthesis lacks the latest selected output or its own admitted effect")
+    elif recovery.get("newSynthesisActionId")!="":
+        raise ValueError("Rerun without synthesis invented a synthesis action")
+
+
 def wait_edge(origin: str, process: subprocess.Popen[bytes]) -> None:
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
@@ -274,6 +336,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     cancel_active = bool(getattr(args, "cancel_active", False))
     recovery_preparation = bool(getattr(args, "recovery_preparation", False))
     recovery_driving = bool(getattr(args, "recovery_driving", False))
+    task_recovery_case = getattr(args, "task_recovery_case", None)
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=True)
     source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -290,12 +353,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if not version.startswith(f"go version {signing.GO_VERSION} "):
             raise ValueError("Native Go toolchain pin differs")
         fixtures = [ROOT / "tests/native/agent_signing_process.go.txt", ROOT / "tests/native/agent_public_driver_process.go.txt",
-                    ROOT / "tests/native/agent_recovery_preparation_process.go.txt"]
+                    ROOT / "tests/native/agent_recovery_preparation_process.go.txt",
+                    ROOT / "tests/native/agent_task_recovery_process.go.txt"]
         overlay = scratch / "overlay.json"
         overlay.write_text(json.dumps({"Replace": {
             (ROOT / "go/internal/api/zz_native_agent_signing_process_test.go").as_posix(): fixtures[0].as_posix(),
             (ROOT / "go/internal/api/zz_native_agent_public_driver_process_test.go").as_posix(): fixtures[1].as_posix(),
-            (ROOT / "go/internal/api/zz_native_agent_recovery_preparation_process_test.go").as_posix(): fixtures[2].as_posix()}}), encoding="utf-8")
+            (ROOT / "go/internal/api/zz_native_agent_recovery_preparation_process_test.go").as_posix(): fixtures[2].as_posix(),
+            (ROOT / "go/internal/api/zz_native_agent_task_recovery_process_test.go").as_posix(): fixtures[3].as_posix()}}), encoding="utf-8")
         binary = scratch / "native-public-agent-api-tests"
         signing.record_command(["go", "test", "-c", "-p=2", "-overlay", overlay.as_posix(), "-o", binary.as_posix(), "./internal/api"],
             ROOT / "go", environment, output, "go-public-driver-build", timeout=600)
@@ -342,8 +407,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "dependentTaskInPrompt": "Agent 子任务：review" in prompt,
                     "predecessorSummaryInPrompt": "Controlled public task summary" in prompt,
                     "privateReasoningInPrompt": "private-task-reasoning" in prompt,
-                    "synthesisCoderInPrompt": "任务：write" in prompt, "synthesisCriticInPrompt": "任务：review" in prompt})
+                    "synthesisCoderInPrompt": "任务：write" in prompt, "synthesisCriticInPrompt": "任务：review" in prompt,
+                    "recoveredTaskSummaryInPrompt":"Controlled rerun task summary" in prompt,
+                    "requestCredentialUsed":self.headers.get("Authorization")=="Bearer request-only-credential",
+                    "rerunSelectedRoleInPrompt":task_recovery_case is not None and
+                        ("你负责挑错、找漏洞" if task_recovery_case["role"]=="critic" else "你负责事实、资料") in prompt})
                 position = len(exchanges)
+                if task_recovery_case is not None and position==5:
+                    signing.write_ready(case/"rerun-task-arrived.json",{"position":position})
+                    deadline=time.monotonic()+30
+                    while not (case/"rerun-task-release.json").exists():
+                        if time.monotonic()>deadline:
+                            raise RuntimeError("Task rerun did not release the controlled provider")
+                        time.sleep(0.05)
                 planning_cancel = cancel_active and preset_case is not None and preset_case.get("cancelPhase") == "plan"
                 if cancel_active and position == (1 if planning_cancel else 2):
                     signing.write_ready(case / "provider-task-arrived.json", {"nodeId":"leader" if planning_cancel else "coder"})
@@ -357,6 +433,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 content = json.dumps({"agents":plan["tasks"]}) if upstream and position == 1 else ("Controlled final answer" if position == final_position else "## 摘要\nControlled public task summary")
                 if recovery_driving and position == 5:
                     content = "Controlled recovered final answer"
+                if task_recovery_case is not None and position>=5:
+                    content="## 摘要\nControlled rerun task summary" if position==5 else "Controlled recovered final answer"
                 reply = json.dumps({"id": f"public-agent-{position}", "model": "deepseek-v4-pro",
                     "choices": [{"message": {"role": "assistant", "content": content, "reasoning_content": "private-task-reasoning"}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}, separators=(",", ":")).encode()
@@ -380,6 +458,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 environment["DEEPSEEK_TEST_AGENT_RECOVERY_PREPARATION"] = "1"
             if recovery_driving:
                 environment["DEEPSEEK_TEST_AGENT_RECOVERY_DRIVING"] = "1"
+            if task_recovery_case is not None:
+                environment["DEEPSEEK_TEST_AGENT_RECOVERY_ROLE"]=task_recovery_case["role"]
+                environment["DEEPSEEK_TEST_AGENT_RECOVERY_SYNTHESIZE"]=str(task_recovery_case["synthesize"]).lower()
             if cancel_after_plan:
                 environment["DEEPSEEK_TEST_AGENT_CANCEL_AFTER_PLAN"] = "1"
             if cancel_active:
@@ -428,7 +509,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             result = signing.wait_json(case / "result.json", producer, timeout=360 if cancel_active else 180)
             if producer.wait(timeout=15) != 0:
                 raise RuntimeError("Actual native public driver process failed")
-            if recovery_driving:
+            if task_recovery_case is not None:
+                validate_task_recovery_result(result,exchanges,task_recovery_case)
+            elif recovery_driving:
                 validate_recovery_execution_result(result, exchanges)
             elif recovery_preparation:
                 validate_recovery_preparation_result(result, exchanges)
@@ -464,12 +547,35 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 expected_nodes = (1 if preset_case is not None and preset_case.get("cancelPhase") == "plan" else 2) if cancel_active else (1 if cancel_after_plan else (4 if preset_case is None else len(preset_case["plan"]) + 2))
                 if recovery_driving:
                     expected_nodes = 5
+                if task_recovery_case is not None:
+                    expected_nodes=5+int(task_recovery_case["synthesize"])
                 if len(rows) != expected_nodes or any(row[1] != "CONFIRMED" or hashlib.sha256(row[2]).hexdigest() != row[3] for row in rows):
                     raise ValueError("Rust actual four-node custody is missing or corrupt")
                 leader = next((json.loads(row[2]) for row in rows if json.loads(row[2]).get("publicEvent", {}).get("type") == "agent_plan"), None)
                 if leader is None:
                     raise ValueError("Rust retained planning outcome is missing")
                 result["actualPlanningSource"] = "retained-preset-policy" if leader.get("planningSource") == "retained-preset-policy" else "upstream-provider"
+            if task_recovery_case is not None:
+                recovery=result["recoveryPreparation"]
+                encoded=recovery["progressReceiptBase64"]
+                receipt=base64.urlsafe_b64decode(encoded+"="*(-len(encoded)%4))
+                with sqlite3.connect((state/"rust-worker/control-signatures.sqlite3").as_uri()+"?mode=ro",uri=True) as signatures:
+                    if signatures.execute("PRAGMA integrity_check").fetchone()[0]!="ok" or signatures.execute("SELECT count(*) FROM signatures WHERE document=?",(receipt,)).fetchone()[0]!=1:
+                        raise ValueError("Go progress does not match a unique actual Rust signer journal receipt")
+                with sqlite3.connect((artifacts/"objects-v1.sqlite").as_uri()+"?mode=ro",uri=True) as objects:
+                    bodies=[]
+                    for name in ["noteBodySha256","nextBodySha256"]:
+                        row=objects.execute("SELECT length,bytes FROM artifacts WHERE sha256=?",(recovery[name],)).fetchone()
+                        if not row or row[0]!=len(row[1]) or hashlib.sha256(row[1]).hexdigest()!=recovery[name]:
+                            raise ValueError("Actual Rust progress body custody is missing or corrupt")
+                        bodies.append(json.loads(row[1]))
+                expected_note={"type":"agent_note","phase":task_recovery_case["role"],
+                    "name":"反驳审查 Agent" if task_recovery_case["role"]=="critic" else "资料检索 Agent",
+                    "text":"其他 Agent 未自动重跑；最终回答将基于最新该 Agent 与现有其他 Agent 输出重新综合。"}
+                expected_next={"type":"final_reset","scope":"final_answer","reason":"rerun_agent"} if task_recovery_case["synthesize"] else {"type":"run_status","status":"done"}
+                if bodies!=[expected_note,expected_next]:
+                    raise ValueError("Actual progress bodies changed retained public behavior")
+                result["progressArtifactAndSignerCustodyVerified"]=True
             result.update(actualHTTPRequests=len(exchanges), providerExchanges=exchanges,
                 requestBodyStoredByRust=True, bootstrapUIIsOfflineFixture=True, cloudOnlyNativeBuild=True,
                 privateCustodyVariablesExportedToGo=False, readiness="NOT_READY")
@@ -502,8 +608,27 @@ def main() -> int:
     mode.add_argument("--active-cancellation-matrix", action="store_true")
     mode.add_argument("--recovery-preparation", action="store_true")
     mode.add_argument("--recovery-driving", action="store_true")
+    mode.add_argument("--recovery-rerun-matrix", action="store_true")
     args = parser.parse_args()
-    if args.preset_matrix or args.cancellation_matrix or args.active_cancellation_matrix:
+    if args.recovery_rerun_matrix:
+        output=args.out.resolve()
+        results=[]
+        for case in task_rerun_cases():
+            child=argparse.Namespace(**vars(args))
+            child.out=output/case["name"]
+            child.task_recovery_case=case
+            child.recovery_driving=True
+            report=run(child)
+            if report.get("progressArtifactAndSignerCustodyVerified") is not True:
+                raise ValueError("Task recovery lacks actual Rust custody")
+            results.append({"name":case["name"],"role":case["role"],"synthesize":case["synthesize"],"status":report["status"],"sourceCommit":report["sourceCommit"],
+                "actualHTTPRequests":report["actualHTTPRequests"],"nextIndex":report["nextIndex"],"progressArtifactAndSignerCustodyVerified":True})
+            print(json.dumps(results[-1]),flush=True)
+        result={"status":"PASS","sourceCommit":results[0]["sourceCommit"],"caseCount":len(results),"cases":results,
+            "allInputsCreatedThroughRustHTTP":True,"taskRerunProgressQualified":True,"runtimePython":False,"realProviderQualified":False,"fullMigrationQualified":False,"readiness":"NOT_READY"}
+        output.mkdir(parents=True,exist_ok=True)
+        (output/"result.json").write_text(json.dumps(result,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    elif args.preset_matrix or args.cancellation_matrix or args.active_cancellation_matrix:
         output = args.out.resolve()
         cases = [active_cancellation_case(), active_planning_cancellation_case()] if args.active_cancellation_matrix else (cancellation_cases() if args.cancellation_matrix else preset_cases())
         results = []

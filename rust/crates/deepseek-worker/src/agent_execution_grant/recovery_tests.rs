@@ -5,6 +5,10 @@ use deepseek_protocol::generated::deepseek::agent::v1::{
     PreviewAgentRunRecoveryResponse,
     agent_run_recovery_control_server::{AgentRunRecoveryControl, AgentRunRecoveryControlServer},
 };
+use deepseek_protocol::generated::deepseek::agent::v1::{
+    AgentRecoveryProgressContext, AgentRunRecoveryEffectSource, CommitAgentRecoveryProgressRequest,
+    PreviewAgentRecoveryProgressRequest, PreviewAgentRecoveryProgressResponse,
+};
 use std::sync::{
     Arc,
     atomic::{AtomicU8, Ordering},
@@ -18,8 +22,82 @@ struct Preview {
     mode: Arc<AtomicU8>,
 }
 
+impl Preview {
+    fn progress(&self) -> AgentRecoveryProgressContext {
+        AgentRecoveryProgressContext {
+            schema_version: 1,
+            run_id: self.context.run_id.clone(),
+            generation: self.context.generation,
+            metadata_epoch: self.context.metadata_epoch,
+            expected_index: self.context.expected_index + 3,
+            runtime_revision: self.context.expected_runtime_revision + 1,
+            request: self.context.expected_request.clone(),
+            recovery_context_sha256: crate::agent_recovery_context::digest(&self.context).unwrap(),
+            task_action_id: "original-task".into(),
+            task_action_revision: 7,
+            task_metadata_index: self.context.expected_index + 3,
+            role: "critic".into(),
+            synthesize: true,
+            outputs: vec![AgentRunRecoveryEffectSource::default()],
+        }
+    }
+}
+
 #[tonic::async_trait]
 impl AgentRunRecoveryControl for Preview {
+    async fn preview_progress(
+        &self,
+        request: Request<PreviewAgentRecoveryProgressRequest>,
+    ) -> Result<Response<PreviewAgentRecoveryProgressResponse>, Status> {
+        if request
+            .metadata()
+            .get("authorization")
+            .and_then(|m| m.to_str().ok())
+            != Some(format!("Bearer {TOKEN}").as_str())
+        {
+            return Err(Status::unauthenticated("fixture auth"));
+        }
+        let input = request.into_inner();
+        let context = self.progress();
+        assert_eq!(input.schema_version, 1);
+        assert_eq!(input.run_id, context.run_id);
+        assert_eq!(
+            input.metadata_fence.unwrap().execution_epoch,
+            context.metadata_epoch
+        );
+        assert_eq!(input.expected_index, context.expected_index);
+        assert_eq!(input.runtime_revision, context.runtime_revision);
+        assert_eq!(input.request, context.request);
+        let mode = self.mode.load(Ordering::SeqCst);
+        if mode == 5 {
+            return Err(Status::failed_precondition("fixture stale progress"));
+        }
+        if mode == 6 {
+            return Err(Status::unavailable("fixture unavailable"));
+        }
+        let mut response = PreviewAgentRecoveryProgressResponse {
+            authoritative: mode != 1,
+            context: Some(context),
+        };
+        if mode == 2 {
+            response.context.as_mut().unwrap().task_action_revision += 1;
+        }
+        if mode == 3 {
+            response.context.as_mut().unwrap().outputs.clear();
+        }
+        if mode == 4 {
+            response.context = None;
+        }
+        Ok(Response::new(response))
+    }
+
+    async fn commit_progress(
+        &self,
+        _: Request<CommitAgentRecoveryProgressRequest>,
+    ) -> Result<Response<CommitAgentRunRecoveryResponse>, Status> {
+        panic!("Rust preview cannot mutate the Go progress journal")
+    }
+
     async fn preview(
         &self,
         request: Request<PreviewAgentRunRecoveryRequest>,
@@ -103,6 +181,7 @@ async fn recovery_context_is_rechecked_through_authenticated_authoritative_previ
         context: context.clone(),
         mode: Arc::clone(&mode),
     };
+    let progress = fixture.progress();
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = socket.local_addr().unwrap();
     drop(socket);
@@ -128,10 +207,23 @@ async fn recovery_context_is_rechecked_through_authenticated_authoritative_previ
     let origin = format!("http://{address}");
     let client = AgentExecutionControl::new(&origin, TOKEN).unwrap();
     client.validate_recovery_context(&context).await.unwrap();
+    client.validate_recovery_progress(&progress).await.unwrap();
     for value in 1..=6 {
         mode.store(value, Ordering::SeqCst);
         let error = client
             .validate_recovery_context(&context)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.code(),
+            if value == 6 {
+                tonic::Code::Unavailable
+            } else {
+                tonic::Code::FailedPrecondition
+            }
+        );
+        let error = client
+            .validate_recovery_progress(&progress)
             .await
             .unwrap_err();
         assert_eq!(
@@ -152,6 +244,14 @@ async fn recovery_context_is_rechecked_through_authenticated_authoritative_previ
             .is_err()
     );
     client.validate_recovery_context(&context).await.unwrap();
+    assert!(
+        AgentExecutionControl::new(&origin, "wrong-recovery-bearer-32-characters")
+            .unwrap()
+            .validate_recovery_progress(&progress)
+            .await
+            .is_err()
+    );
+    client.validate_recovery_progress(&progress).await.unwrap();
     stop.send(()).unwrap();
     server.await.unwrap();
 }

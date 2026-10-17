@@ -1,44 +1,48 @@
 <!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
 ## Current cloud verification checkpoint
 
-2026-10-17: source `9f0c8a923e8a5b3646e10683815ffe3ebbba27c0`
-(tree `8c90de8d2e56a71041e65b85f737d216d92b1546`) passed its independent
-Rust push workflow:1532 passed,1 original Redis ignore;84349/102731
-lines=82.10666692624426%, with all15 crates and the original80% floor.
-Actual authenticated Go/Rust custody, completed resume preparation and direct
-synthesis recovery/replay probes passed. All3714 source files/937 native
-inputs and source contexts were independently compared; reports only returned.
-Rust: https://github.com/leizd/DeepSeek-Infra/actions/runs/38887130074
-Full source CI: https://github.com/leizd/DeepSeek-Infra/actions/runs/38887234259
-Default Go coverage passed13233/13926=95.02369668246446% and the full default
-race suite passed. Android-compatible SQLite tests failed when a one-second
-lease expired inside ClaimExecution, before the test could advance to its
-intended takeover. Android coverage was not produced. Evidence Assembly and
-RC readiness failed; this is not full-source or PR merge-candidate qualification.
+2026-10-17: this candidate adds typed task-rerun progress after independent
+selected-task termination. Rust verifies a fresh authoritative Go preview,
+the original effect and signer journals, then persists and purpose-signs an
+agent_note plus final_reset or run_status done. Go verifies the pinned signer,
+source history, terminal task and free reservation before atomically committing
+both events and an idempotent operation receipt. The original action/epoch/
+operation and retained outputs remain unchanged. Metadata schema4 prevents
+older schema3 controllers silently dropping the progress receipt; the next
+recovery generation clears it through the typed recovery transaction.
 
-A separate remote test branch at `12356e77e33ec45f03bb384654938d36bb2df6f2`
-contains four recovery-boundary test files absent from that source, while the
-recovery implementation has seven independent commits absent from the test
-branch. Its PR#197 CI failed because an event fixture unintentionally supplied
-Create metadata before attempting its intended runtime-swap denial.
-This change includes both source sets in one reviewed snapshot, fixes that
-fixture without accepting successful writes, and supplies an atomic test clock
-for lease-expiry orchestration. The real returned deadline is crossed only
-after a successful claim; no-extra-effect, original action and retained resource
-assertions remain. Production Go/Rust, proto, dependencies and workflows are
-unchanged. The new combined source still requires exact cloud qualification;
-none of the earlier results qualify this new tree.
+The driver finishes interrupted typed task termination before progress, preserves
+the previous final answer while the selected task runs, and admits synthesis
+only after the verified late reset. Rerun without synthesis keeps the final and
+ends with done. Existing direct synthesis/resume preparation remains covered.
+New actual Go/Rust process cases cover critic and outside-plan researcher with
+synthesis enabled and disabled, inherited Rust-held credentials, original
+public history, immutable signer/body custody, and refusal before completion
+or after a stale preview. These process cases require cloud execution; their
+source and passing offline evidence-shape tests are not runtime qualification.
 
-No root source/index replacement, local Go/Cargo/Docker execution, main merge,
-release or production-data operation. Original floors Rust80/Go95/AndroidGo95/
-Python95, all37CI/all14Go-Docker gates and full race instrumentation remain.
+Parent source b74329593c0e6fead2314cf57f373ad6698198f5 combines the previously
+forked recovery implementation and all four remote test files. Its independent
+Rust push run38984947094 passed1532 tests plus1 original Redis ignore and
+84347/102731 lines=82.10472009422665%, retaining all15 crates and80% floor.
+Its source workflow_dispatch run38985019190 has passed default Go tests and
+95% coverage; the full race suite is still running at this checkpoint, with
+Android and downstream gates pending. These results qualify only that parent,
+not this candidate or any PR merge candidate.
+
+No root source/index replacement or local Go/Cargo/Docker execution. Original
+Rust80/Go95/AndroidGo95/Python95 floors, all37CI/all14Go-Docker gates, full
+race instrumentation, and previous process probes remain required. Native
+compilation/caches/containers stay in GitHub Actions; only reports return.
+Reviewed source commits and pushes follow the standing human authorization.
 PR handling is daily21:40 Asia/Shanghai only, once for the complete work.
-The unpublished typed task-rerun note/reset-or-done work is preserved separately
-and excluded until its Rust service, driver and real process gates are complete.
-Continue full public resume/rerun/cancellation, tool/timeline/live-output paths,
-real-provider recovery, every retained domain, default server/desktop/Android/
-worker packages, actual application/device behavior and zero-Python production
-Evidence Assembly. Product readiness remains **NOT_READY**.
+No main merge, release or production-data operation.
+
+Continue public resume/rerun HTTP and frontend behavior, failed-task typed
+closure, tool/timeline/live-output paths, real-provider response-loss/restart
+recovery, every retained domain, default server/desktop/Android/background
+packages, actual app/device workloads and zero-Python Evidence Assembly.
+Product readiness remains **NOT_READY**.
 <!-- END CURRENT_NATIVE_CLOUD_CHECKPOINT -->
 
 
