@@ -153,11 +153,11 @@ func TestProgressRejectsUnreadableCorruptAndUntrustedAuthorityInputs(t *testing.
 					}
 				}()
 			case "bad-task-record":
-				if _, err := control.db.Exec("UPDATE action_journal SET record_digest='bad' WHERE id=?", input.Receipt.Evidence.Context.TaskActionId); err != nil {
+				if _, err := control.db.Exec("UPDATE action_journal SET record_digest='0000000000000000000000000000000000000000000000000000000000000000' WHERE id=?", input.Receipt.Evidence.Context.TaskActionId); err != nil {
 					t.Fatal(err)
 				}
 			case "bad-record-digest":
-				if _, err := control.db.Exec("UPDATE agent_runs SET record_digest='bad' WHERE id=?", input.RunID); err != nil {
+				if _, err := control.db.Exec("UPDATE agent_runs SET record_digest='0000000000000000000000000000000000000000000000000000000000000000' WHERE id=?", input.RunID); err != nil {
 					t.Fatal(err)
 				}
 			case "bad-metadata-schema":
@@ -256,7 +256,7 @@ func TestProgressHistoryReadRefusesMissingTamperedOrPartialSignedPrefixes(t *tes
 				if _, err := tx.Exec("DROP TRIGGER control_events_no_update"); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := tx.Exec("UPDATE control_events SET record_digest='bad' WHERE domain='agent_run' AND record_id=? AND revision=?", run.RunID, context.ExpectedIndex); err != nil {
+				if _, err := tx.Exec("UPDATE control_events SET record_digest='0000000000000000000000000000000000000000000000000000000000000000' WHERE domain='agent_run' AND record_id=? AND revision=?", run.RunID, context.ExpectedIndex); err != nil {
 					t.Fatal(err)
 				}
 			case "invalid-base-schema", "bad-source-proof":
