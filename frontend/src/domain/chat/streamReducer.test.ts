@@ -155,3 +155,17 @@ describe("native complete Agent outputs", () => {
     expect(result).toMatchObject({ phase: "done", streaming: false, content: "final" });
   });
 });
+
+
+describe("completed native Agent recovery notes", () => {
+  it.each([false, true])("keeps a completed role terminal when a recovery note arrives, failed=%s", (failed) => {
+    const original = applyStreamEvent(createAssistantMessage("native-note"), { type: "agent_output", payload: {
+      phase: "critic", output: { id: "critic", content: failed ? "rejected role" : "latest review", failed },
+    } });
+    const noted = applyStreamEvent(original, { type: "agent_note", phase: "critic", text: "Other roles were retained", payload: {} });
+    expect(noted.timeline).toHaveLength(1);
+    expect(noted.timeline[0]).toMatchObject({ phase: "critic", status: failed ? "error" : "done", notes: ["Other roles were retained"] });
+    expect(original.timeline[0].notes).toEqual([]);
+    expect(noted.timeline[0].output).toBe(original.timeline[0].output);
+  });
+});

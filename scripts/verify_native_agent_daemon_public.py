@@ -393,11 +393,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         raise ValueError("Actual browser recovery worker is not running")
                     signing.wait_json(case/"browser-rerun-arrived.json",worker)
                     during=request_json(origin,"/api/agent-runs/"+run_id)["run"]
-                    if during.get("status")!="running" or during.get("nextIndex")!=12 or during.get("finalAnswer")!="Controlled final answer" or \
-                            not isinstance(during.get("outputs"),dict) or during["outputs"].get("coder")!=recovery_before["outputs"].get("coder"):
-                        raise ValueError("Actual browser rerun erased the old final/coder before task completion")
-                    (output/"browser-rerun-inflight.json").write_text(json.dumps({"runId":run_id,"nextIndex":12,
-                        "oldFinalRetained":True,"coderRetained":True},indent=2)+"\n",encoding="utf-8")
+                    observation={"runId":run_id,"status":during.get("status"),"nextIndex":during.get("nextIndex"),
+                        "publicFields":sorted(during),"agentOutputsType":type(during.get("agentOutputs")).__name__,
+                        "oldFinalRetained":during.get("finalAnswer")=="Controlled final answer"}
+                    (output/"browser-rerun-inflight-observation.json").write_text(json.dumps(observation,indent=2)+"\n",encoding="utf-8")
+                    try:
+                        proof=browser_recovery_probe.inspect_inflight_public(during,recovery_before)
+                    except Exception:
+                        signing.write_ready(case/"browser-rerun-release.json",{"release":True,"inspectionFailed":True})
+                        raise
+                    (output/"browser-rerun-inflight.json").write_text(json.dumps({"runId":run_id,"nextIndex":12,**proof},indent=2)+"\n",encoding="utf-8")
                     return lambda: signing.write_ready(case/"browser-rerun-release.json",{"release":True})
 
                 def inspect_waiting_confirmation(run_id: str) -> None:

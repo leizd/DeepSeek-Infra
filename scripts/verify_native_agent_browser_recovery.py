@@ -51,6 +51,19 @@ def capture_before_recovery(control: Path, state: Path, public: dict[str, Any]) 
             "publicEventPrefixSha256":_digest(events)}
 
 
+def inspect_inflight_public(during: dict[str, Any], before: dict[str, Any]) -> dict[str, bool]:
+    """Use the same actual public output contract at every recovery boundary."""
+    current=during.get("agentOutputs")
+    original=before.get("agentOutputs")
+    coder_retained=isinstance(current,dict) and isinstance(original,dict) and "coder" in original and current.get("coder")==original["coder"]
+    final_retained=during.get("finalAnswer")=="Controlled final answer"
+    if during.get("status")!="running" or during.get("nextIndex")!=12 or not final_retained or not coder_retained:
+        observed={"status":during.get("status"),"nextIndex":during.get("nextIndex"),
+            "agentOutputsType":type(current).__name__,"oldFinalRetained":final_retained,"coderRetained":coder_retained}
+        raise ValueError("Actual browser in-flight recovery differs: "+json.dumps(observed,sort_keys=True))
+    return {"oldFinalRetained":True,"coderRetained":True}
+
+
 def inspect_after_recovery(control: Path, state: Path, public: dict[str, Any], before: dict[str, Any],
                            inspected: dict[str, Any]) -> dict[str, bool]:
     actions,effects=_actions(control),_effects(state)

@@ -64,6 +64,21 @@ def reload_browser_history(page: Any, mirror_response: Any, final_answer: str = 
     return receipt
 
 
+def inspect_completed_agent_cards(page: Any) -> dict[str, int]:
+    """Inspect the actual transcript, independently of metadata/report claims."""
+    message=page.locator(".assistant-message").last
+    observed={}
+    for phase in ("coder","critic"):
+        card=message.locator(f'.agent-step.status-done[data-agent-phase="{phase}"]')
+        card.first.wait_for(timeout=120_000)
+        observed[phase]=message.locator(f'.agent-step[data-agent-phase="{phase}"]').count()
+        card.get_by_role("button",name="重跑",exact=True).wait_for(timeout=120_000)
+    observed["running"]=message.locator(".agent-step.status-running").count()
+    if observed!={"coder":1,"critic":1,"running":0}:
+        raise ValueError("Actual native recovery duplicated or reopened a task card: "+json.dumps(observed,sort_keys=True))
+    return observed
+
+
 def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[str], None] | None = None,
                       recovery: bool = False, before_recovery: Callable[[str], None] | None = None,
                       inspect_inflight_recovery: Callable[[str], Callable[[], None]] | None = None) -> dict[str, Any]:
@@ -157,11 +172,12 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
                 from verify_native_agent_browser_recovery import RECOVERED_FINAL
                 if before_recovery is None or inspect_inflight_recovery is None:
                     raise ValueError("Actual browser recovery lacks independent before/in-flight inspection")
+                initial_cards=inspect_completed_agent_cards(page)
                 before_recovery(run_id)
                 expected_final=RECOVERED_FINAL
                 with page.expect_response(final_mirror,timeout=120_000) as recovery_mirror:
                     with page.expect_response(lambda response: response_for(response,f"/api/agent-runs/{run_id}/rerun"),timeout=120_000) as rerun:
-                        page.locator('.agent-step[data-agent-phase="critic"]').get_by_role("button",name="重跑",exact=True).click()
+                        page.locator(".assistant-message").last.locator('.agent-step[data-agent-phase="critic"]').get_by_role("button",name="重跑",exact=True).click()
                     request=rerun.value.request.post_data_json
                     if rerun.value.status!=200 or not isinstance(request,dict) or request.get("agentId")!="critic" or \
                             request.get("resynthesize") is not True or not isinstance(request.get("payload"),dict):
@@ -174,7 +190,9 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
                         release()
                     page.get_by_text(expected_final,exact=True).last.wait_for(timeout=120_000)
                 last_mirror=recovery_mirror.value
-                recovery_observed={"rerunByBrowser":True,"oldFinalVisibleDuringRerun":True,
+                recovered_cards=inspect_completed_agent_cards(page)
+                recovery_observed={"initialCompletedTaskCards":initial_cards,"recoveredCompletedTaskCards":recovered_cards,
+                                   "nativeCompletedTaskCardsVisible":True,"recoveredTaskCardsStable":True,"rerunByBrowser":True,"oldFinalVisibleDuringRerun":True,
                                    "recoveredFinalVisible":True,"rerunSelectionAndPayloadVerified":True}
             mirror_receipt = reload_browser_history(page, last_mirror, expected_final)
             page.wait_for_load_state("networkidle", timeout=30_000)

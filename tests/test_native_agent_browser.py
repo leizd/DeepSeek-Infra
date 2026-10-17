@@ -532,3 +532,34 @@ def test_browser_recovery_baseline_uses_actual_native_public_view(tmp_path: Path
         before=recovery.capture_before_recovery(tmp_path,tmp_path,public)
         assert before["agentOutputs"]==public["agentOutputs"]
         assert before["events"]==public["events"]
+
+
+@pytest.mark.parametrize("fault",[None,"legacy-field","wrong-final","wrong-coder","missing-coder","wrong-status","wrong-index","missing-baseline"])
+def test_browser_inflight_guard_uses_the_actual_native_output_contract(fault: str | None) -> None:
+    import json
+    from scripts import verify_native_agent_browser_recovery as recovery
+
+    initial = json.loads((Path(__file__).parent / "native/agent_public_browser_v1.json").read_text(encoding="utf-8"))
+    before = {"agentOutputs": deepcopy(initial["agentOutputs"])}
+    during = deepcopy(initial)
+    during.update(status="running", nextIndex=12)
+    during["agentOutputs"].pop("critic")
+    if fault == "legacy-field":
+        during["outputs"] = during.pop("agentOutputs")
+    elif fault == "wrong-final":
+        during["finalAnswer"] = "erased"
+    elif fault == "wrong-coder":
+        during["agentOutputs"]["coder"] = {"content": "changed"}
+    elif fault == "missing-coder":
+        during["agentOutputs"].pop("coder")
+    elif fault == "wrong-status":
+        during["status"] = "done"
+    elif fault == "wrong-index":
+        during["nextIndex"] = 13
+    elif fault == "missing-baseline":
+        before = {}
+    if fault is None:
+        assert recovery.inspect_inflight_public(during, before) == {"oldFinalRetained": True, "coderRetained": True}
+    else:
+        with pytest.raises(ValueError):
+            recovery.inspect_inflight_public(during, before)

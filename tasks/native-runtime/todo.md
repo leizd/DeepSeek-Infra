@@ -1,5 +1,37 @@
 <!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
 
+## Browser in-flight contract and terminal note repair — 2026-10-17
+
+The actual React rerun on source2e95b2f2 reached the native public endpoint
+with HTTP200, then the in-flight observer failed because a remaining callback
+still read `outputs` instead of the real `agentOutputs` field. Rust push
+run39024557310 retains that failure; its passing coverage is not browser
+recovery qualification. The full workflow_dispatch CI remains a separate gate.
+
+Baseline, in-flight and final inspection now share the actual public output
+contract. Eight in-flight regressions use the controlled native public-view
+fixture; the existing wrong-field logic first failed2 tests and passed6, then
+all8 passed after repair. Failure observations record bounded counts/types and
+the controlled provider is released even when an inspector rejects the state.
+
+Recovery notes now attach to an existing completed/error role rather than
+creating a second running card. Actual browser acceptance requires one completed
+coder and critic, zero running cards, and visible rerun controls before and after
+the real request. This also preserves the prior final during task execution.
+Local418 boundary tests, Linux/Win32 each966 source-file types and Ruff pass.
+The entire249-file frontend and native public-view fixture are byte-identical
+to the complete74-file/634-test frontend check; that local result is reused only
+within its identical frontend scope. New full-source native/browser validation
+remains CLOUD_PENDING. No local Go/Cargo builds/tests or Docker ran.
+
+Go/Rust/Proto, dependencies, main CI and the original Go/Python95 percent and
+Rust80 percent floors are unchanged. The complete failed-task implementation
+remains preserved and unuploaded under artifacts/native-20261017-failed-task-
+recovery-v3. Typed planner/synthesis rejection, remaining run recovery/tool/live
+output paths, real providers, platform/zero-Python release acceptance and final
+Evidence Assembly remain required. Full-product readiness remains NOT_READY.
+PR handling stays once daily at21:40 Asia/Shanghai.
+
 ## Native Agent output timeline and browser contract repair — 2026-10-17
 
 Source `9e0f3962` completed workflow_dispatch CI run39012405690 with37/37

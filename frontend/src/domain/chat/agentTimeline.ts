@@ -123,9 +123,10 @@ export function appendTimelineAgentNote(timeline: readonly TimelineStep[], event
   const phase = event.phase ?? "";
   const note = (event.text ?? "").trim();
   if (!note) return timeline;
+  // A note enriches the latest attempt; it never starts a second execution.
   for (let index = timeline.length - 1; index >= 0; index -= 1) {
     const step = timeline[index];
-    if (step.type === "agent" && step.phase === phase && step.status === "running") {
+    if (step.type === "agent" && step.phase === phase) {
       const next = [...timeline];
       next[index] = { ...step, notes: [...(step.notes ?? []), note].slice(-AGENT_NOTES_LIMIT) };
       return capTimeline(next);
