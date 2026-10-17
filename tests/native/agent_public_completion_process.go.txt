@@ -1,0 +1,230 @@
+// Actual public completed-resume and synthesis-alias probes. The fixture reads
+// Go metadata and public HTTP only; it never opens or seeds Rust body storage.
+package api
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
+	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
+)
+
+func nativePublicCompletionRead(t *testing.T, client *http.Client, origin, runID string) map[string]any {
+	t.Helper()
+	response, err := client.Get(origin + "/api/agent-runs/" + runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	var payload struct {
+		Run map[string]any `json:"run"`
+	}
+	if err != nil || response.StatusCode != http.StatusOK || json.Unmarshal(raw, &payload) != nil || payload.Run == nil {
+		t.Fatal("public completion read failed", err)
+	}
+	for _, private := range []string{"request-only-credential", "_nativeProviderCredentials", "_nativeRecoveryContext", "private-task-reasoning"} {
+		if bytes.Contains(raw, []byte(private)) {
+			t.Fatal("public completion read leaked private custody")
+		}
+	}
+	return payload.Run
+}
+
+func nativePublicCompletion(t *testing.T, control *store.Control, origin, publicOrigin string, client *http.Client,
+	before agent.RunMetadata, beforePublic, base map[string]any) map[string]any {
+	t.Helper()
+	alias := os.Getenv("DEEPSEEK_TEST_AGENT_PUBLIC_SYNTHESIS_ALIAS")
+	synthesizing := alias != ""
+	if synthesizing && alias != "synth" && alias != "leader" && alias != "synthesizer" {
+		t.Fatal("unknown public synthesis alias")
+	}
+	if !synthesizing && os.Getenv("DEEPSEEK_TEST_AGENT_PUBLIC_COMPLETED_RESUME") != "1" {
+		t.Fatal("unselected public completion case")
+	}
+	connection, err := grpc.NewClient(strings.TrimPrefix(origin, "http://"), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	runs := agentv1.NewAgentRunControlClient(connection)
+	recovery := agentv1.NewAgentRunRecoveryControlClient(connection)
+	ctx, cancel := context.WithTimeout(controlRPCContext(t, testInternalBearer), 120*time.Second)
+	defer cancel()
+	authority, err := runs.GetAuthority(ctx, &agentv1.AgentRunAuthorityInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := &agentv1.AgentRunRecoverySelection{Kind: agentv1.AgentRunRecoveryKind_AGENT_RUN_RECOVERY_KIND_RESUME}
+	path := "resume"
+	body := map[string]any{"payload": map[string]any{"temperature": 1.0}}
+	if synthesizing {
+		selection.Kind = agentv1.AgentRunRecoveryKind_AGENT_RUN_RECOVERY_KIND_RERUN
+		selection.AgentId, selection.Resynthesize = alias, proto.Bool(false)
+		path, body["agentId"], body["resynthesize"] = "rerun", " "+alias+" ", false
+	}
+	input := &agentv1.PreviewAgentRunRecoveryRequest{SchemaVersion: 1, RunId: before.RunID,
+		MetadataFence: &commonv1.ActionFence{ActionId: before.RunID, ExecutionEpoch: authority.MetadataEpoch},
+		ExpectedIndex: before.NextIndex, ExpectedRuntimeRevision: before.RuntimeVersion(),
+		ExpectedRequest: artifactProtocol(before.Request), Selection: selection}
+	preview, err := recovery.Preview(ctx, input)
+	if err != nil || !preview.GetAuthoritative() || preview.Context == nil || preview.Context.Generation != 1 ||
+		preview.Context.Synthesize != synthesizing || preview.Context.CompleteImmediately == synthesizing ||
+		len(preview.Context.Execute) != 0 || len(preview.Context.PriorEffects) != 4 || len(preview.Context.RetainedOutputs) != 2 {
+		t.Fatal("public completion lacks exact original effect provenance", err)
+	}
+	actionsBefore, err := control.ListAuthoritativeRecords("action")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, response := nativePublicRecoveryPost(t, client, publicOrigin, before.RunID, path, encoded)
+	if status != http.StatusOK || response["ok"] != true || response["started"] != true || response["run"] == nil {
+		t.Fatal("public completion admission failed", path, status)
+	}
+	admitted, found, err := control.AgentRunMetadata(before.RunID)
+	if err != nil || !found || admitted.Recovery == nil || admitted.RuntimeVersion() != before.RuntimeVersion()+1 ||
+		admitted.Recovery.ContextSHA256 != preview.ContextSha256 || !proto.Equal(admitted.Recovery.Metadata, preview.Context) ||
+		admitted.NextIndex != before.NextIndex+2 || admitted.Request == before.Request {
+		t.Fatal("public completion changed its Go preview or failed to bind the fresh Rust request", err)
+	}
+	headers, err := control.AgentRunEventsAfter(before.RunID, before.NextIndex-1, 3)
+	if err != nil || len(headers) != 2 {
+		t.Fatal("public completion did not atomically retain its original event pair", err)
+	}
+	digest := sha256.Sum256([]byte(fmt.Sprintf("%s:%d:%d:%s:%s", before.RunID, authority.MetadataEpoch,
+		before.NextIndex, preview.ContextSha256, admitted.Request.SHA256)))
+	commit := &agentv1.CommitAgentRunRecoveryRequest{SchemaVersion: 1, OperationId: fmt.Sprintf("agent-web-recovery-%x", digest),
+		Actor: "operator:agent-web", RunId: before.RunID, Fence: input.MetadataFence, ExpectedIndex: before.NextIndex,
+		ExpectedRuntimeRevision: before.RuntimeVersion(), ExpectedRequest: input.ExpectedRequest, Selection: selection,
+		ContextSha256: preview.ContextSha256, Context: artifactProtocol(admitted.Recovery.Context), Request: artifactProtocol(admitted.Request),
+		EventBodies: []*agentv1.AgentArtifactReference{artifactProtocol(headers[0].Body), artifactProtocol(headers[1].Body)}}
+	var refusals []map[string]any
+	if synthesizing {
+		if admitted.Status != "running" || admitted.FinalAfter != before.NextIndex+1 {
+			t.Fatal("synthesis alias did not reset the current final at its original event boundary")
+		}
+		directory := os.Getenv("DEEPSEEK_AGENT_SIGNING_PROBE_DIR")
+		var arrived map[string]any
+		nativeSigningRead(t, filepath.Join(directory, "public-synthesis-arrived.json"), &arrived)
+		during := nativePublicCompletionRead(t, client, publicOrigin, before.RunID)
+		if during["finalAnswer"] != "" || !reflect.DeepEqual(during["outputs"], beforePublic["outputs"]) {
+			t.Fatal("synthesis alias lost retained task outputs or exposed the old final during synthesis")
+		}
+		refusals = nativePublicRecoveryRefusals(t, control, client, publicOrigin, before.RunID, "critic")
+		nativeSigningWrite(t, filepath.Join(directory, "public-synthesis-release.json"), map[string]any{"release": true})
+	}
+	public := nativePublicCompletionRead(t, client, publicOrigin, before.RunID)
+	deadline := time.Now().Add(60 * time.Second)
+	for public["status"] != "done" {
+		if !synthesizing || time.Now().After(deadline) {
+			t.Fatal("public completion did not reach its actual durable terminal state")
+		}
+		time.Sleep(50 * time.Millisecond)
+		public = nativePublicCompletionRead(t, client, publicOrigin, before.RunID)
+	}
+	after, found, err := control.AgentRunMetadata(before.RunID)
+	added := int64(2)
+	newPhases := 0
+	if synthesizing {
+		added, newPhases = 4, 1
+	}
+	if err != nil || !found || after.Status != "done" || after.NextIndex != before.NextIndex+added ||
+		after.RuntimeVersion() != before.RuntimeVersion()+1 || after.Recovery == nil || after.Recovery.Generation != 1 ||
+		!reflect.DeepEqual(after.Plan, before.Plan) || !reflect.DeepEqual(public["outputs"], beforePublic["outputs"]) {
+		t.Fatal("public completion changed its retained plan/output or event/runtime boundaries", err)
+	}
+	expectedFinal := beforePublic["finalAnswer"]
+	if synthesizing {
+		expectedFinal = "Controlled recovered final answer"
+	}
+	if public["finalAnswer"] != expectedFinal || public["nextIndex"] != float64(after.NextIndex) {
+		t.Fatal("public completion final answer differs")
+	}
+	events, ok := public["events"].([]any)
+	original, oldOK := beforePublic["events"].([]any)
+	if !ok || !oldOK || len(events) != len(original)+int(added) || !reflect.DeepEqual(events[:len(original)], original) {
+		t.Fatal("public completion rewrote original public history")
+	}
+	actionsAfter, err := control.ListAuthoritativeRecords("action")
+	if err != nil || len(actionsAfter) != len(actionsBefore)+newPhases {
+		t.Fatal("public completion invented a task or provider phase", err)
+	}
+	byID := map[string]store.Record{}
+	for _, action := range actionsAfter {
+		byID[action.ID] = action
+	}
+	for _, action := range actionsBefore {
+		if !reflect.DeepEqual(action, byID[action.ID]) {
+			t.Fatal("public completion changed an original signed action")
+		}
+		delete(byID, action.ID)
+	}
+	var synthesisID string
+	for _, action := range byID {
+		binding, err := store.AgentRunExecutionBindingFromRecord(action)
+		leases, leaseErr := control.GetResourceLeases(action.ID)
+		if err != nil || leaseErr != nil || action.State != "SUCCEEDED" || binding.Phase != "synthesis" ||
+			binding.Request != after.Request || len(leases) != 0 {
+			t.Fatal("public synthesis did not independently settle and release its exact phase", err, leaseErr)
+		}
+		synthesisID = action.ID
+	}
+	saved, err := json.Marshal(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := recovery.Commit(ctx, commit)
+	if err != nil || !replay.GetAlreadyApplied() || !proto.Equal(replay.Run, runProtocol(after)) || len(replay.Events) != 2 {
+		t.Fatal("public completion replay did not retain its original operation and latest projection", err)
+	}
+	for i, event := range replay.Events {
+		if !proto.Equal(event, eventProtocol(headers[i])) {
+			t.Fatal("public completion replay rewrote an original admitted event")
+		}
+	}
+	unchanged, found, err := control.AgentRunMetadata(before.RunID)
+	raw, marshalErr := json.Marshal(unchanged)
+	if err != nil || marshalErr != nil || !found || !bytes.Equal(saved, raw) {
+		t.Fatal("public completion replay changed durable metadata", err, marshalErr)
+	}
+	result := make(map[string]any, len(base)+6)
+	for key, value := range base {
+		result[key] = value
+	}
+	result["baseExecution"] = base
+	result["nextIndex"], result["publicEventCount"], result["durablePhases"] = after.NextIndex, len(events), len(actionsAfter)
+	result["requestSha256"], result["requestLength"] = after.Request.SHA256, after.Request.Length
+	result["publicCompletionRecoveryQualified"] = true
+	result["recoveryPreparation"] = map[string]any{"kind": "public-completion", "path": path, "agentId": alias,
+		"synthesize": synthesizing, "generation": after.Recovery.Generation, "originalRuntimeRevision": before.RuntimeVersion(),
+		"runtimeRevision": after.RuntimeVersion(), "originalRequestSha256": before.Request.SHA256, "contextSha256": preview.ContextSha256,
+		"contextArtifactSha256": after.Recovery.Context.SHA256, "contextArtifactLength": after.Recovery.Context.Length,
+		"priorEffectCount": len(preview.Context.PriorEffects), "retainedOutputCount": len(preview.Context.RetainedOutputs),
+		"preparedByRust": true, "goOpenedRustBody": false, "admittedThroughRustHTTP": true, "literalFalseSentForAlias": synthesizing,
+		"privatePreparationRetryQualified": false, "commitRetryIdempotent": true, "originalEffectsUnchanged": true,
+		"originalPublicEventsUnchanged": true, "originalTaskOutputsUnchanged": true, "publicReadQualified": true,
+		"newProviderCalls": newPhases, "newDurablePhases": newPhases, "newTaskPhases": 0, "newSynthesisActionId": synthesisID,
+		"publicRefusals": refusals, "actualRecoveryPostRequests": 1 + len(refusals), "fullResumeRerunQualified": false}
+	return result
+}

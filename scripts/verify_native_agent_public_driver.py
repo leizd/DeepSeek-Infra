@@ -147,6 +147,69 @@ def validate_recovery_execution_result(result: dict[str, Any], exchanges: list[d
         raise ValueError("Direct synthesis lacks a fresh fenced effect and both original public summaries")
 
 
+def public_completion_cases() -> list[dict[str, Any]]:
+    return [{"name":alias or "completed-resume","alias":alias,"synthesize":bool(alias),"path":"rerun" if alias else "resume"}
+            for alias in ["","synth","leader","synthesizer"]]
+
+
+def validate_public_completion_result(result: dict[str, Any], exchanges: list[dict[str, Any]], case: dict[str, Any]) -> None:
+    alias=case.get("alias")
+    if not isinstance(alias,str) or alias not in {"","synth","leader","synthesizer"}:
+        raise ValueError("Unrecognized public completion selection")
+    synthesize=bool(alias)
+    path="rerun" if alias else "resume"
+    if case.get("synthesize") is not synthesize or case.get("path")!=path:
+        raise ValueError("Public completion scenario changed its independently selected request")
+    base,recovery=result.get("baseExecution"),result.get("recoveryPreparation")
+    if not isinstance(base,dict) or not isinstance(recovery,dict):
+        raise ValueError("Public completion omitted the original durable execution")
+    validate_driver_result(base,exchanges[:4])
+    count=int(synthesize)
+    if result.get("status")!="PASS" or result.get("runStatus")!="done" or len(exchanges)!=4+count or \
+            result.get("nextIndex")!=11+2*count or result.get("publicEventCount")!=11+2*count or result.get("durablePhases")!=3+count or \
+            result.get("sourceCommit")!=base.get("sourceCommit") or result.get("runId")!=base.get("runId") or \
+            result.get("publicCompletionRecoveryQualified") is not True or result.get("productionProviderQualified") is not False or \
+            result.get("fullMigrationQualified") is not False or result.get("productionRuntimeProcesses")!=["Go","Rust"]:
+        raise ValueError("Public completion omitted exact durable/provider boundaries or overclaimed qualification")
+    if recovery.get("kind")!="public-completion" or recovery.get("path")!=path or recovery.get("agentId")!=alias or \
+            recovery.get("synthesize") is not synthesize or recovery.get("literalFalseSentForAlias") is not synthesize or \
+            recovery.get("generation")!=1 or recovery.get("originalRuntimeRevision")!=1 or recovery.get("runtimeRevision")!=2 or \
+            recovery.get("priorEffectCount")!=4 or recovery.get("retainedOutputCount")!=2 or \
+            recovery.get("newProviderCalls")!=count or recovery.get("newDurablePhases")!=count or recovery.get("newTaskPhases")!=0 or \
+            recovery.get("goOpenedRustBody") is not False or recovery.get("privatePreparationRetryQualified") is not False or \
+            recovery.get("fullResumeRerunQualified") is not False:
+        raise ValueError("Public completion rebound selection, source custody or retained phase semantics")
+    for flag in ["preparedByRust","admittedThroughRustHTTP","commitRetryIdempotent","originalEffectsUnchanged",
+                 "originalPublicEventsUnchanged","originalTaskOutputsUnchanged","publicReadQualified"]:
+        if recovery.get(flag) is not True:
+            raise ValueError("Public completion lacks actual proof: "+flag)
+    for value in [result.get("requestSha256"),recovery.get("contextSha256"),recovery.get("contextArtifactSha256")]:
+        if not isinstance(value,str) or len(value)!=64 or any(c not in "0123456789abcdef" for c in value):
+            raise ValueError("Public completion omitted exact immutable body bindings")
+    if recovery.get("originalRequestSha256")!=base.get("requestSha256") or result["requestSha256"]==base.get("requestSha256") or \
+            type(recovery.get("contextArtifactLength")) is not int or recovery["contextArtifactLength"]<=0 or \
+            any(row.get("requestCredentialUsed") is not True for row in exchanges):
+        raise ValueError("Public completion omitted actual inherited Rust credentials or a fresh runtime request")
+    refusals=recovery.get("publicRefusals")
+    if synthesize:
+        expected={"invalid-json":400,"missing-role":400,"unknown-role":400,"private-input":400,
+                  "duplicate-rerun-while-active":409,"resume-while-active":409,"missing-run":404}
+        if recovery.get("actualRecoveryPostRequests")!=8 or not isinstance(refusals,list) or len(refusals)!=7 or \
+                {r.get("case"):r.get("status") for r in refusals if isinstance(r,dict)}!=expected or \
+                any(not isinstance(r,dict) or r.get("runUnchanged") is not True or type(r.get("status")) is not int or
+                    r.get("path")!=("resume" if r.get("case")=="resume-while-active" else "rerun") for r in refusals):
+            raise ValueError("Public synthesis alias omitted actual POST refusal and no-mutation evidence")
+        last=exchanges[4]
+        if not last.get("actionId") or last.get("actionId")!=recovery.get("newSynthesisActionId") or \
+                last["actionId"] in {r["actionId"] for r in exchanges[:4]} or not last.get("operationId") or \
+                last["operationId"] in {r["operationId"] for r in exchanges[:4]} or last.get("executionEpoch")!="1" or last.get("stream") is not False or \
+                last.get("synthesisCoderInPrompt") is not True or last.get("synthesisCriticInPrompt") is not True or \
+                last.get("privateReasoningInPrompt") is not False:
+            raise ValueError("Public alias synthesis lacks a distinct effect and the original public task summaries")
+    elif recovery.get("actualRecoveryPostRequests")!=1 or refusals not in (None,[]) or recovery.get("newSynthesisActionId")!="":
+        raise ValueError("Completed public resume admitted a new provider/task effect")
+
+
 def task_rerun_cases() -> list[dict[str, Any]]:
     return [{"name":role+("-synthesize" if synthesize else "-keep-final"),"role":role,"synthesize":synthesize}
             for role in ["critic","researcher"] for synthesize in [True,False]]
@@ -351,7 +414,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     recovery_preparation = bool(getattr(args, "recovery_preparation", False))
     recovery_driving = bool(getattr(args, "recovery_driving", False))
     task_recovery_case = getattr(args, "task_recovery_case", None)
-    public_recovery = bool(getattr(args, "public_recovery_rerun_matrix", False))
+    public_completion_case = getattr(args, "public_completion_case", None)
+    public_recovery = bool(getattr(args, "public_recovery_rerun_matrix", False) or getattr(args, "public_recovery_completion_matrix", False))
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=True)
     source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -370,14 +434,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         fixtures = [ROOT / "tests/native/agent_signing_process.go.txt", ROOT / "tests/native/agent_public_driver_process.go.txt",
                     ROOT / "tests/native/agent_recovery_preparation_process.go.txt",
                     ROOT / "tests/native/agent_task_recovery_process.go.txt",
-                    ROOT / "tests/native/agent_public_recovery_process.go.txt"]
+                    ROOT / "tests/native/agent_public_recovery_process.go.txt",
+                    ROOT / "tests/native/agent_public_completion_process.go.txt"]
         overlay = scratch / "overlay.json"
         overlay.write_text(json.dumps({"Replace": {
             (ROOT / "go/internal/api/zz_native_agent_signing_process_test.go").as_posix(): fixtures[0].as_posix(),
             (ROOT / "go/internal/api/zz_native_agent_public_driver_process_test.go").as_posix(): fixtures[1].as_posix(),
             (ROOT / "go/internal/api/zz_native_agent_recovery_preparation_process_test.go").as_posix(): fixtures[2].as_posix(),
             (ROOT / "go/internal/api/zz_native_agent_task_recovery_process_test.go").as_posix(): fixtures[3].as_posix(),
-            (ROOT / "go/internal/api/zz_native_agent_public_recovery_process_test.go").as_posix(): fixtures[4].as_posix()}}), encoding="utf-8")
+            (ROOT / "go/internal/api/zz_native_agent_public_recovery_process_test.go").as_posix(): fixtures[4].as_posix(),
+            (ROOT / "go/internal/api/zz_native_agent_public_completion_process_test.go").as_posix(): fixtures[5].as_posix()}}), encoding="utf-8")
         binary = scratch / "native-public-agent-api-tests"
         signing.record_command(["go", "test", "-c", "-p=2", "-overlay", overlay.as_posix(), "-o", binary.as_posix(), "./internal/api"],
             ROOT / "go", environment, output, "go-public-driver-build", timeout=600)
@@ -430,6 +496,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "rerunSelectedRoleInPrompt":task_recovery_case is not None and
                         ("你负责挑错、找漏洞" if task_recovery_case["role"]=="critic" else "你负责事实、资料") in prompt})
                 position = len(exchanges)
+                if public_completion_case is not None and public_completion_case["synthesize"] and position==5:
+                    signing.write_ready(case/"public-synthesis-arrived.json",{"position":position})
+                    deadline=time.monotonic()+60
+                    while not (case/"public-synthesis-release.json").exists():
+                        if time.monotonic()>deadline:
+                            raise RuntimeError("Public synthesis did not release the controlled provider")
+                        time.sleep(0.05)
                 if task_recovery_case is not None and position==5:
                     signing.write_ready(case/"rerun-task-arrived.json",{"position":position})
                     deadline=time.monotonic()+(60 if public_recovery else 30)
@@ -480,6 +553,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 environment["DEEPSEEK_TEST_AGENT_RECOVERY_SYNTHESIZE"]=str(task_recovery_case["synthesize"]).lower()
             if public_recovery:
                 environment["DEEPSEEK_TEST_AGENT_PUBLIC_RECOVERY"]="1"
+            if public_completion_case is not None:
+                if public_completion_case["synthesize"]:
+                    environment["DEEPSEEK_TEST_AGENT_PUBLIC_SYNTHESIS_ALIAS"]=public_completion_case["alias"]
+                else:
+                    environment["DEEPSEEK_TEST_AGENT_PUBLIC_COMPLETED_RESUME"]="1"
             if cancel_after_plan:
                 environment["DEEPSEEK_TEST_AGENT_CANCEL_AFTER_PLAN"] = "1"
             if cancel_active:
@@ -528,7 +606,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             result = signing.wait_json(case / "result.json", producer, timeout=360 if cancel_active else 180)
             if producer.wait(timeout=15) != 0:
                 raise RuntimeError("Actual native public driver process failed")
-            if task_recovery_case is not None:
+            if public_completion_case is not None:
+                validate_public_completion_result(result,exchanges,public_completion_case)
+            elif task_recovery_case is not None:
                 validate_task_recovery_result(result,exchanges,task_recovery_case)
             elif recovery_driving:
                 validate_recovery_execution_result(result, exchanges)
@@ -629,8 +709,32 @@ def main() -> int:
     mode.add_argument("--recovery-driving", action="store_true")
     mode.add_argument("--recovery-rerun-matrix", action="store_true")
     mode.add_argument("--public-recovery-rerun-matrix", action="store_true")
+    mode.add_argument("--public-recovery-completion-matrix", action="store_true")
     args = parser.parse_args()
-    if args.recovery_rerun_matrix or args.public_recovery_rerun_matrix:
+    if args.public_recovery_completion_matrix:
+        output=args.out.resolve()
+        results=[]
+        for case in public_completion_cases():
+            child=argparse.Namespace(**vars(args))
+            child.out=output/case["name"]
+            child.public_completion_case=case
+            child.recovery_driving=case["synthesize"]
+            child.recovery_preparation=not case["synthesize"]
+            report=run(child)
+            if report.get("recoveryContextArtifactVerified") is not True:
+                raise ValueError("Public completion omitted actual Rust context custody")
+            results.append({"name":case["name"],"alias":case["alias"],"synthesize":case["synthesize"],"status":report["status"],
+                "sourceCommit":report["sourceCommit"],"actualProviderHTTPRequests":report["actualHTTPRequests"],
+                "actualRecoveryPostRequests":report["recoveryPreparation"]["actualRecoveryPostRequests"],"nextIndex":report["nextIndex"]})
+            print(json.dumps(results[-1]),flush=True)
+        result={"status":"PASS","sourceCommit":results[0]["sourceCommit"],"caseCount":len(results),"cases":results,
+            "allInputsCreatedThroughRustHTTP":True,"publicCompletionRecoveryQualified":True,
+            "actualRecoveryPostRequests":sum(r["actualRecoveryPostRequests"] for r in results),
+            "actualProviderHTTPRequests":sum(r["actualProviderHTTPRequests"] for r in results),
+            "runtimePython":False,"realProviderQualified":False,"fullMigrationQualified":False,"readiness":"NOT_READY"}
+        output.mkdir(parents=True,exist_ok=True)
+        (output/"result.json").write_text(json.dumps(result,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    elif args.recovery_rerun_matrix or args.public_recovery_rerun_matrix:
         output=args.out.resolve()
         results=[]
         for case in task_rerun_cases():

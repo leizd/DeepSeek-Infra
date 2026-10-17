@@ -32,6 +32,9 @@ import (
 func nativeRecoveryPreparation(t *testing.T, control *store.Control, origin string, ready nativeSigningWorkerReady,
 	bearer, publicOrigin string, client *http.Client, before agent.RunMetadata, beforePublic map[string]any, base map[string]any) map[string]any {
 	t.Helper()
+	if os.Getenv("DEEPSEEK_TEST_AGENT_PUBLIC_COMPLETED_RESUME") == "1" {
+		return nativePublicCompletion(t, control, origin, publicOrigin, client, before, beforePublic, base)
+	}
 	connection, err := grpc.NewClient(strings.TrimPrefix(origin, "http://"), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatal(err)
@@ -190,6 +193,9 @@ func nativeRecoveryPreparation(t *testing.T, control *store.Control, origin stri
 func nativeRecoveryDrive(t *testing.T, control *store.Control, origin string, ready nativeSigningWorkerReady,
 	bearer, publicOrigin string, client *http.Client, before agent.RunMetadata, beforePublic map[string]any, base map[string]any) map[string]any {
 	t.Helper()
+	if os.Getenv("DEEPSEEK_TEST_AGENT_PUBLIC_SYNTHESIS_ALIAS") != "" {
+		return nativePublicCompletion(t, control, origin, publicOrigin, client, before, beforePublic, base)
+	}
 	if os.Getenv("DEEPSEEK_TEST_AGENT_RECOVERY_ROLE") != "" {
 		return nativeTaskRecoveryDrive(t, control, origin, ready, bearer, publicOrigin, client, before, beforePublic, base)
 	}

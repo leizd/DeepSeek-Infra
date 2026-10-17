@@ -1,5 +1,34 @@
 <!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
-## Public recovery candidate and exact-source verification - 2026-10-17
+## Public completed-resume and synthesis-alias candidate - 2026-10-17
+
+The candidate starts fromb96ada4fe7e8d4e354696c18eeab8c3e8d09944e. Its exact
+Rust workspace test step, original80% coverage gate and actual public HTTP task
+rerun/refusal matrix have passed in run39008917742; final report collection is
+pending. Source CI39008999116 has passed Docker, Go default tests and the
+original95% coverage gate; full race/Android and downstream qualification are
+still running. A previous3ff Docker download timeout remains a failed historical
+result, not a pass borrowed fromb96. No PR merge candidate has been qualified.
+
+This test-only candidate adds actual Rust HTTP completed-resume and all three
+synthesis aliases (synth/leader/synthesizer). It requires completed resume to
+retain the original final, outputs, actions and history without a new provider
+call. Alias reruns send literal resynthesize=false, retain task outputs, reset
+the current final, admit only one new synthesis, verify exact original operation
+replay, release phase resources and exercise seven HTTP refusals while paused.
+These four new cases expect25 recovery POST commands and19 provider exchanges;
+GET inspection is separate. They have not run natively yet. The original private
+RPC, public task-rerun, browser and full CI gates remain retained. No production
+Go/Rust/Proto/frontend or main CI workflow input is changed by this candidate.
+
+Local252 offline validator tests, Linux/Win32965-file types, Ruff and Go fixture
+format/syntax checks pass; the new guards first failed before implementation.
+All native compilation and process qualification remains on GitHub Actions.
+Failed/partial/cancelled resume, payload/credential variants, actual React
+recovery controls, failed task/tools/timeline/live outputs, real providers,
+all retained domains, platforms/background workloads, default zero-Python and
+complete exact-source Evidence remain required. Whole product stays NOT_READY.
+
+## Prior public recovery candidate - 2026-10-17
 
 The candidate is based on3ff6492902cd4027b105af620b1b8d6b3f801638. That
 source has passed cloud Go vet, default tests and the unchanged95% statement

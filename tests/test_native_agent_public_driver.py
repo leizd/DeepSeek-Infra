@@ -90,6 +90,94 @@ def complete_public_task_recovery_evidence(role="critic", synthesize=True):
     return result,exchanges,case
 
 
+def complete_public_completion_evidence(alias=""):
+    result,exchanges=complete_recovery_evidence()
+    synthesize=bool(alias)
+    result.update(nextIndex=13 if synthesize else 11,publicEventCount=13 if synthesize else 11,
+                  durablePhases=4 if synthesize else 3,publicCompletionRecoveryQualified=True)
+    for exchange in exchanges:
+        exchange["requestCredentialUsed"]=True
+    result["recoveryPreparation"]={"kind":"public-completion","path":"rerun" if alias else "resume","agentId":alias,
+        "synthesize":synthesize,"generation":1,"originalRuntimeRevision":1,"runtimeRevision":2,
+        "originalRequestSha256":result["baseExecution"]["requestSha256"],"contextSha256":"c"*64,
+        "contextArtifactSha256":"d"*64,"contextArtifactLength":80,"priorEffectCount":4,"retainedOutputCount":2,
+        "goOpenedRustBody":False,"literalFalseSentForAlias":synthesize,"privatePreparationRetryQualified":False,
+        "newProviderCalls":int(synthesize),"newDurablePhases":int(synthesize),"newTaskPhases":0,
+        "newSynthesisActionId":"public-synthesis" if alias else "","actualRecoveryPostRequests":8 if alias else 1,
+        "fullResumeRerunQualified":False,
+        **{key:True for key in ["preparedByRust","admittedThroughRustHTTP","commitRetryIdempotent",
+            "originalEffectsUnchanged","originalPublicEventsUnchanged","originalTaskOutputsUnchanged","publicReadQualified"]}}
+    result["recoveryPreparation"]["publicRefusals"]=complete_public_task_recovery_evidence()[0]["recoveryPreparation"]["publicRefusals"] if alias else None
+    if alias:
+        exchanges.append({"actionId":"public-synthesis","operationId":"public-synthesis-node","executionEpoch":"1","stream":False,
+            "synthesisCoderInPrompt":True,"synthesisCriticInPrompt":True,"privateReasoningInPrompt":False,"requestCredentialUsed":True})
+    return result,exchanges,{"name":alias or "completed-resume","alias":alias,"synthesize":synthesize,"path":"rerun" if alias else "resume"}
+
+
+@pytest.mark.parametrize("alias",["","synth","leader","synthesizer"])
+def test_public_completion_requires_actual_http_no_extra_tasks_and_retained_sources(alias):
+    from scripts.verify_native_agent_public_driver import validate_public_completion_result
+
+    validate_public_completion_result(*complete_public_completion_evidence(alias))
+
+
+@pytest.mark.parametrize("change",["source","cursor","events","phases","request","scope","length","runtime","public-admission",
+    "private-retry","original-effects","history","outputs","provider-calls","task-phase","false-selection","http-count",
+    "missing-refusal","refusal-status","refusal-path","credential","old-action","old-operation","no-summary","private-reasoning","overclaim"])
+def test_public_completion_refuses_rebinding_duplicate_effects_and_unproved_http(change):
+    from scripts.verify_native_agent_public_driver import validate_public_completion_result
+
+    result,exchanges,case=complete_public_completion_evidence("leader")
+    recovery=result["recoveryPreparation"]
+    if change=="source":
+        result["sourceCommit"]="e"*40
+    elif change in {"cursor","events","phases"}:
+        key={"cursor":"nextIndex","events":"publicEventCount","phases":"durablePhases"}[change]
+        result[key]+=1
+    elif change=="request":
+        result["requestSha256"]=result["baseExecution"]["requestSha256"]
+    elif change=="scope":
+        recovery["contextSha256"]="bad"
+    elif change=="length":
+        recovery["contextArtifactLength"]=0
+    elif change=="runtime":
+        recovery["runtimeRevision"]=1
+    elif change in {"public-admission","original-effects","history","outputs"}:
+        key={"public-admission":"admittedThroughRustHTTP","original-effects":"originalEffectsUnchanged",
+             "history":"originalPublicEventsUnchanged","outputs":"originalTaskOutputsUnchanged"}[change]
+        recovery[key]=False
+    elif change=="private-retry":
+        recovery["privatePreparationRetryQualified"]=True
+    elif change=="provider-calls":
+        exchanges.append(copy.deepcopy(exchanges[-1]))
+    elif change=="task-phase":
+        recovery["newTaskPhases"]=1
+    elif change=="false-selection":
+        recovery["literalFalseSentForAlias"]=False
+    elif change=="http-count":
+        recovery["actualRecoveryPostRequests"]-=1
+    elif change=="missing-refusal":
+        recovery["publicRefusals"].pop()
+    elif change=="refusal-status":
+        recovery["publicRefusals"][0]["status"]=200
+    elif change=="refusal-path":
+        recovery["publicRefusals"][0]["path"]="resume"
+    elif change=="credential":
+        exchanges[-1]["requestCredentialUsed"]=False
+    elif change=="old-action":
+        exchanges[-1]["actionId"]=exchanges[0]["actionId"]
+    elif change=="old-operation":
+        exchanges[-1]["operationId"]=exchanges[0]["operationId"]
+    elif change=="no-summary":
+        exchanges[-1]["synthesisCriticInPrompt"]=False
+    elif change=="private-reasoning":
+        exchanges[-1]["privateReasoningInPrompt"]=True
+    else:
+        recovery["fullResumeRerunQualified"]=True
+    with pytest.raises(ValueError):
+        validate_public_completion_result(result,exchanges,case)
+
+
 @pytest.mark.parametrize("role",["critic","researcher"])
 @pytest.mark.parametrize("synthesize",[True,False])
 def test_public_task_recovery_requires_http_admission_refusals_and_original_progress_proof(role,synthesize):
