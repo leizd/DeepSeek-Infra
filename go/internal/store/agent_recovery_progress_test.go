@@ -116,9 +116,24 @@ func TestRecoveryProgressCommitsNoteAndLateResetOrDoneWithoutNewEffect(t *testin
 				if err != nil || following.Run.Recovery.Generation != run.Recovery.Generation+1 || following.Run.RecoveryProgress != nil {
 					t.Fatal("next generation retained a stale progress marker", err)
 				}
+				storedBefore, found, err := control.Get("agent_run", run.RunID)
+				if err != nil || !found {
+					t.Fatal("current generation metadata is missing", err)
+				}
+				beforeOldReplay := countControlEvents(t, control)
 				replay, err := control.CommitAgentRecoveryProgress(input)
-				if err != nil || !reflect.DeepEqual(replay.Events, result.Events) || !reflect.DeepEqual(replay.Run, following.Run) {
+				if err != nil || replay.Mutation.Status != OperatorMutationAlreadyApplied || !reflect.DeepEqual(replay.Events, result.Events) {
 					t.Fatal("old operation replay replaced the current generation", err)
+				}
+				// Protobuf reflection and size caches are not durable run metadata.
+				// Compare the complete serialized representation, including the new
+				// generation, and independently prove the stored record is unchanged.
+				wanted := recoveryBoundaryRecord(t, following.Run).Payload
+				replayed := recoveryBoundaryRecord(t, replay.Run).Payload
+				storedAfter, found, err := control.Get("agent_run", run.RunID)
+				if err != nil || !found || string(replayed) != string(wanted) || !reflect.DeepEqual(storedAfter, storedBefore) ||
+					countControlEvents(t, control) != beforeOldReplay {
+					t.Fatal("old operation replay changed serialized metadata, stored history or the current generation", err)
 				}
 			}
 		})
