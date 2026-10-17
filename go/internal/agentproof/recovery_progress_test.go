@@ -12,6 +12,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestProgressUnknownFieldGuardRejectsPlainAndTypedNilMessages(t *testing.T) {
+	var typedNil *agentv1.AgentRecoveryProgressReceipt
+	if KnownRecoveryProgressMessage(nil) || KnownRecoveryProgressMessage(typedNil) {
+		t.Fatal("a missing protobuf message was considered supported")
+	}
+}
+
 func progressProofFixture(t *testing.T) (*agentv1.AgentRecoveryProgressReceipt, Binding, ed25519.PrivateKey) {
 	t.Helper()
 	public, private, err := ed25519.GenerateKey(rand.Reader)

@@ -1,13 +1,14 @@
-## Typed task-rerun progress candidate - 2026-10-17
+## Typed task-rerun progress evidence - 2026-10-17
 
-Go control owns atomic progress and operation history; Rust owns original effects,
-public bodies and purpose-bound signatures. Selected tasks terminate independently
-before note/reset-or-done; retained outputs keep their original identities. Schema4
-prevents lossy downgrade and later synthesis retains a separate fenced admission.
-The four actual role/synthesis process scenarios and all native compile/race/coverage
-gates are cloud pending for this candidate. Offline validators do not establish
-provider, public resume/rerun, platform or full production qualification. Original
-coverage floors remain; product readiness is NOT_READY.
+Exact e738e464 Rust push qualification is collected:1536 tests/1 original ignore,
+82.07839491827406% and all four actual role/synthesis scenarios (22 HTTP effects).
+Signed original outcomes and history remain unchanged; Rust custody and Go atomic
+note/reset-or-done work in these controlled-provider processes. Source full CI
+fails its unchanged Go95% floor at94.72212513107306%; full race/Android are skipped.
+The new candidate adds boundary tests, never coverage exclusions or relaxed floors.
+Public HTTP resume/rerun/React, failed tasks/tools, real providers, all platform
+workloads/default ownership, zero-Python and complete Evidence remain unqualified.
+Whole-product readiness is NOT_READY; older b743 source37/37 does not qualify e738.
 
 <!-- native-planner-worker-20261011 -->
 The current isolated candidate adds authenticated typed planner execution and historical node queries to the production Rust worker. It reuses the native request policy, reads the immutable request body by its bound Rust artifact reference, checks the stored signed grant and installed epoch immediately before one bounded HTTP exchange, and persists received-result evidence before publishing a Rust-owned public-event reference. The planner path reads budget data without schema/pragma writes. It never turns an unknown effect into a fresh dispatch.

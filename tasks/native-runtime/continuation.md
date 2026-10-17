@@ -1,47 +1,54 @@
 <!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
 ## Current cloud verification checkpoint
 
-2026-10-17: this candidate adds typed task-rerun progress after independent
-selected-task termination. Rust verifies a fresh authoritative Go preview,
-the original effect and signer journals, then persists and purpose-signs an
-agent_note plus final_reset or run_status done. Go verifies the pinned signer,
-source history, terminal task and free reservation before atomically committing
-both events and an idempotent operation receipt. The original action/epoch/
-operation and retained outputs remain unchanged. Metadata schema4 prevents
-older schema3 controllers silently dropping the progress receipt; the next
-recovery generation clears it through the typed recovery transaction.
+2026-10-17: source e738e4648f08e4de85a1f5ff43bdc61e5f7433ef
+(tree8e23cce0797b1ae1027b26514e4c68659c9fa232) has fully collected Rust
+push qualification:1536 passed,1 original Redis ignore,84764/103272
+lines=82.07839491827406%, all15 crates and the original80% floor.
+Actual Go/Rust critic/researcher reruns with synthesis true/false passed all
+four scenarios,22 HTTP requests, final cursors16/14, pinned progress signatures,
+original task/output/public history, inherited Rust credentials and independent
+body/signer journal checks. This is controlled-provider process qualification;
+full public HTTP resume/rerun and production providers remain unfinished.
+Rust: https://github.com/leizd/DeepSeek-Infra/actions/runs/38989635767
 
-The driver finishes interrupted typed task termination before progress, preserves
-the previous final answer while the selected task runs, and admits synthesis
-only after the verified late reset. Rerun without synthesis keeps the final and
-ends with done. Existing direct synthesis/resume preparation remains covered.
-New actual Go/Rust process cases cover critic and outside-plan researcher with
-synthesis enabled and disabled, inherited Rust-held credentials, original
-public history, immutable signer/body custody, and refusal before completion
-or after a stale preview. These process cases require cloud execution; their
-source and passing offline evidence-shape tests are not runtime qualification.
+Its full source workflow_dispatch CI38989706184 failed33/37:default Go tests
+passed, but coverage is13550/14305=94.72212513107306%, below the unchanged95%
+floor. Full race and Android were skipped; Evidence Assembly, release package
+and RC readiness did not pass. Python3.10/3.11/3.12 each passed6123 tests plus
+1 original skip and61 subtests, with95.57/95.51/95.57% coverage. Source dispatch,
+Rust push and PR merge-candidate evidence must remain separate.
+CI: https://github.com/leizd/DeepSeek-Infra/actions/runs/38989706184
 
-Parent source b74329593c0e6fead2314cf57f373ad6698198f5 combines the previously
-forked recovery implementation and all four remote test files. Its independent
-Rust push run38984947094 passed1532 tests plus1 original Redis ignore and
-84347/102731 lines=82.10472009422665%, retaining all15 crates and80% floor.
-Its source workflow_dispatch run38985019190 has passed default Go tests and
-95% coverage; the full race suite is still running at this checkpoint, with
-Android and downstream gates pending. These results qualify only that parent,
-not this candidate or any PR merge candidate.
+Earlier source b74329593c0e6fead2314cf57f373ad6698198f5 independently completed
+37/37 source CI38985019190, including full race and Android. That older tree
+has no typed progress production changes and cannot qualify the new source.
+The a283a253 source's Go replay assertion failure is preserved; e738 fixes its
+comparison of process-local protobuf internals with complete serialized run
+metadata plus unchanged original events, record and event count.
 
-No root source/index replacement or local Go/Cargo/Docker execution. Original
-Rust80/Go95/AndroidGo95/Python95 floors, all37CI/all14Go-Docker gates, full
-race instrumentation, and previous process probes remain required. Native
-compilation/caches/containers stay in GitHub Actions; only reports return.
-Reviewed source commits and pushes follow the standing human authorization.
-PR handling is daily21:40 Asia/Shanghai only, once for the complete work.
-No main merge, release or production-data operation.
+This candidate adds only boundary regression tests and checkpoint documents.
+It checks missing/corrupt authoritative metadata, lost resource evidence,
+malformed or rebound operations, atomic rollback when the operation receipt
+cannot persist, missing/tampered signed event prefixes, ordinary metadata
+writer denial and central proof revalidation. Raw Go production/Rust/protocol/
+frontend/workflow inputs are unchanged; no tests, coverage files or floors are
+excluded. At least40 additional covered statements are required; new coverage
+must be measured in cloud, not inferred from added cases.
 
-Continue public resume/rerun HTTP and frontend behavior, failed-task typed
-closure, tool/timeline/live-output paths, real-provider response-loss/restart
-recovery, every retained domain, default server/desktop/Android/background
-packages, actual app/device workloads and zero-Python Evidence Assembly.
+No root source/index replacement, local Go/Cargo/Docker execution, main merge,
+release or production-data operation. Native compilation/caches/containers stay
+in GitHub Actions and only reports return. Original Rust80/Go95/AndroidGo95/
+Python95 floors, all37CI/all14Go-Docker and full instrumentation remain.
+Reviewed source uploads follow the standing human authorization; PR handling
+is daily21:40 Asia/Shanghai only, once for the complete work.
+
+Six unpublished Rust public recovery files are preserved separately and excluded
+from this candidate. Their TLS/context/body coherence and actual HTTP/React
+cases still need review/qualification. Continue public resume/rerun, failed-task
+typed closure, tools/timeline/live-output, real-provider fault/restart recovery,
+all retained domains and default server/desktop/Android/background packages,
+actual app/device workloads, zero-Python production and complete Evidence.
 Product readiness remains **NOT_READY**.
 <!-- END CURRENT_NATIVE_CLOUD_CHECKPOINT -->
 
