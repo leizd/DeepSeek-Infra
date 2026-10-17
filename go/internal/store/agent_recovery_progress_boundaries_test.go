@@ -9,8 +9,9 @@ import (
 	"testing"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
-	"github.com/leizd/DeepSeek-Infra/go/internal/protocol"
+	internalprotocol "github.com/leizd/DeepSeek-Infra/go/internal/protocol"
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
+	"github.com/leizd/DeepSeek-Infra/go/pkg/protocol"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -82,7 +83,7 @@ func TestProgressPreviewRejectsFencesAndCASWithoutWritingMetadata(t *testing.T) 
 	} {
 		t.Run(name, func(t *testing.T) {
 			input := valid.AgentRecoveryProgressExpected
-			input.Fence = proto.Clone(input.Fence).(*protocol.ActionFence)
+			input.Fence = proto.Clone(input.Fence).(*internalprotocol.ActionFence)
 			change(&input)
 			if _, err := control.PreviewAgentRecoveryProgress(input); err == nil {
 				t.Fatal("invalid preview succeeded")
