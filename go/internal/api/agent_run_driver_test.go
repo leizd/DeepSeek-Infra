@@ -200,11 +200,15 @@ func (fixture *driverFixtureWorker) ProjectAgentSynthesis(_ context.Context, inp
 	return receipt, nil
 }
 
-func driverFixtureAuthority(t *testing.T, key string) *store.Control {
+func driverFixtureAuthority(t *testing.T, key string, clocks ...func() int64) *store.Control {
 	t.Helper()
-	control, err := store.OpenControl(store.OpenOptions{Path: t.TempDir(), Owner: "agent-driver-unit-test", LeaseSeconds: 600,
+	options := store.OpenOptions{Path: t.TempDir(), Owner: "agent-driver-unit-test", LeaseSeconds: 600,
 		AuthorizeCutover: true, PromotionSignerPublicKey: promotionRoutePublic, AgentOutcomeSignerPublicKey: key,
-		FleetID: mutationFleetID, Environment: mutationEnvironment})
+		FleetID: mutationFleetID, Environment: mutationEnvironment}
+	if len(clocks) != 0 {
+		options.Now = clocks[0]
+	}
+	control, err := store.OpenControl(options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,11 +234,11 @@ func driverFixtureAuthority(t *testing.T, key string) *store.Control {
 	return control
 }
 
-func newDriverFixture(t *testing.T, confirm bool) (*agentRunDriver, *driverFixtureWorker, agent.RunMetadata) {
+func newDriverFixture(t *testing.T, confirm bool, clocks ...func() int64) (*agentRunDriver, *driverFixtureWorker, agent.RunMetadata) {
 	t.Helper()
 	private := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{31}, ed25519.SeedSize)) // offline fixture only
 	key := base64.RawURLEncoding.EncodeToString(private.Public().(ed25519.PublicKey))
-	control := driverFixtureAuthority(t, key)
+	control := driverFixtureAuthority(t, key, clocks...)
 	service := &agentRunService{control: control, health: HealthFor(config.Config{Mode: config.ModeAuthoritative})}
 	authority, err := service.GetAuthority(context.Background(), &agentv1.AgentRunAuthorityInput{})
 	if err != nil {
@@ -634,7 +638,17 @@ func TestAgentDriverCannotTakeAStillLiveForeignClaim(t *testing.T) {
 }
 
 func TestAgentDriverExpiredClaimOnlyAdmitsReconciliationWithNoFreshEffect(t *testing.T) {
-	driver, fixture, run := newDriverFixture(t, false)
+	// A one-second wall-clock claim can expire inside the WASM SQLite commit.
+	// Freeze only after fixture initialization, then cross the actual returned
+	// lease boundary. Real UTC custody/takeover remains a separate process gate.
+	var frozen atomic.Int64
+	driver, fixture, run := newDriverFixture(t, false, func() int64 {
+		if now := frozen.Load(); now != 0 {
+			return now
+		}
+		return time.Now().UTC().Unix()
+	})
+	frozen.Store(time.Now().UTC().Unix())
 	authority, err := driver.service.GetAuthority(context.Background(), &agentv1.AgentRunAuthorityInput{})
 	if err != nil {
 		t.Fatal(err)
@@ -649,9 +663,10 @@ func TestAgentDriverExpiredClaimOnlyAdmitsReconciliationWithNoFreshEffect(t *tes
 		t.Fatal(err)
 	}
 	claim := admitted.Claim
-	for time.Now().Unix() <= claim.LeaseUntil {
-		time.Sleep(20 * time.Millisecond)
+	if claim.LeaseUntil != frozen.Load()+1 {
+		t.Fatal("claim did not retain the requested lease boundary")
 	}
+	frozen.Store(claim.LeaseUntil + 1)
 	record, found, err := driver.service.control.Get("action", claim.Fence.ActionId)
 	if err != nil || !found {
 		t.Fatal(err)
@@ -668,6 +683,14 @@ func TestAgentDriverExpiredClaimOnlyAdmitsReconciliationWithNoFreshEffect(t *tes
 	_, err = driver.node(context.Background(), fixture, fixture.nodes, recovered, grant, "leader")
 	if !errors.Is(err, errAgentDriverUnknown) || len(fixture.calls) != 0 {
 		t.Fatal("missing original custody redispatched an effect", err)
+	}
+	actions, err := driver.service.control.ListAuthoritativeRecords("action")
+	if err != nil || len(actions) != 1 || actions[0].ID != claim.Fence.ActionId || actions[0].State != "RECONCILING" {
+		t.Fatal("takeover invented an action or completed an unknown effect", err)
+	}
+	resources, err := driver.service.control.GetResourceLeases(claim.Fence.ActionId)
+	if err != nil || len(resources) != 1 || driverFixtureRun(t, driver, run.RunID).NextIndex != run.NextIndex {
+		t.Fatal("reconciliation released custody or fabricated public progress", err)
 	}
 }
 

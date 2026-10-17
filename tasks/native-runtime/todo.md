@@ -1,36 +1,44 @@
 <!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
 ## Current cloud verification checkpoint
 
-2026-10-14: latest reviewed snapshot `9c38f1dd9e68238f6cc5b06274e405004b567b1b`
-(tree `465f3c6741721fc1523ae1c495f249e0c040e269`, parent6e3b0b4d,8files)
-repairs credential-path test peers and narrows the Go worker client to only its
-six execution/projection methods. Credential preparation remains private Rust
-TLS RPC. Existing metadata/sanitization assertions remain; missing peer, wrong
-hostname and bearer refusal tests are added. Real worker crypto/restart proof
-remains mandatory; the new controlled TLS unit peer is not encryption proof.
+2026-10-17: source `9f0c8a923e8a5b3646e10683815ffe3ebbba27c0`
+(tree `8c90de8d2e56a71041e65b85f737d216d92b1546`) passed its independent
+Rust push workflow:1532 passed,1 original Redis ignore;84349/102731
+lines=82.10666692624426%, with all15 crates and the original80% floor.
+Actual authenticated Go/Rust custody, completed resume preparation and direct
+synthesis recovery/replay probes passed. All3714 source files/937 native
+inputs and source contexts were independently compared; reports only returned.
+Rust: https://github.com/leizd/DeepSeek-Infra/actions/runs/38887130074
+Full source CI: https://github.com/leizd/DeepSeek-Infra/actions/runs/38887234259
+Default Go coverage passed13233/13926=95.02369668246446% and the full default
+race suite passed. Android-compatible SQLite tests failed when a one-second
+lease expired inside ClaimExecution, before the test could advance to its
+intended takeover. Android coverage was not produced. Evidence Assembly and
+RC readiness failed; this is not full-source or PR merge-candidate qualification.
 
-Rust: https://github.com/leizd/DeepSeek-Infra/actions/runs/38501431635
-CI: https://github.com/leizd/DeepSeek-Infra/actions/runs/38501553143
-Exact source proof:902 native /3676 whole files. Rust expects1502 passes plus
-the existing Redis ignore; original80% coverage remains required. All37CI,
-all14Go-Docker and Go/Android/Python95% floors are unchanged. The complete Go
-race binaries keep all tests and instrumentation with a measured90-minute
-package bound. Earlier identical Go source passed in40minutes but exhausted
-60minutes with a4-second test running; archived timing/digests explain the change.
+A separate remote test branch at `12356e77e33ec45f03bb384654938d36bb2df6f2`
+contains four recovery-boundary test files absent from that source, while the
+recovery implementation has seven independent commits absent from the test
+branch. Its PR#197 CI failed because an event fixture unintentionally supplied
+Create metadata before attempting its intended runtime-swap denial.
+This change includes both source sets in one reviewed snapshot, fixes that
+fixture without accepting successful writes, and supplies an atomic test clock
+for lease-expiry orchestration. The real returned deadline is crossed only
+after a successful claim; no-extra-effect, original action and retained resource
+assertions remain. Production Go/Rust, proto, dependencies and workflows are
+unchanged. The new combined source still requires exact cloud qualification;
+none of the earlier results qualify this new tree.
 
-Local188 offline boundary checks, formatting, pinned codegen, ownership/shadow,
-docs and exact non-secret review pass. Python type input bytes are unchanged,
-so the prior Linux/Win32 963-file proofs are explicitly reused. No local native
-builds or compiler caches; only reports return. Root dirty source/index remain
-preserved. Prior1a74b532 checks failed one outdated gateway fixture and Go fake
-interface compilation; these are not PASS. Superseded affected runs were cancelled
-and recorded. Prior b1d5c323 bounded Rust fully passed1494+1ignore /82.17874352578164%.
-
-Overall `NOT_READY`. Collect this head's real credential override and encrypted
-vault reopen across actual worker restart, fix genuine failures, then implement
-retained runtime updates, resume/rerun and admitted tool continuation. No main
-merge, release or real data operation. Review/checkpoint:
-`artifacts/native-20261014-credential-peer-fixture/`.
+No root source/index replacement, local Go/Cargo/Docker execution, main merge,
+release or production-data operation. Original floors Rust80/Go95/AndroidGo95/
+Python95, all37CI/all14Go-Docker gates and full race instrumentation remain.
+PR handling is daily21:40 Asia/Shanghai only, once for the complete work.
+The unpublished typed task-rerun note/reset-or-done work is preserved separately
+and excluded until its Rust service, driver and real process gates are complete.
+Continue full public resume/rerun/cancellation, tool/timeline/live-output paths,
+real-provider recovery, every retained domain, default server/desktop/Android/
+worker packages, actual application/device behavior and zero-Python production
+Evidence Assembly. Product readiness remains **NOT_READY**.
 <!-- END CURRENT_NATIVE_CLOUD_CHECKPOINT -->
 
 
