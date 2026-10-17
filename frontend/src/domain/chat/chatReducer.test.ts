@@ -21,6 +21,37 @@ function userMessage(): ChatMessage {
 }
 
 describe("chatReducer", () => {
+  it("retains the generated conversation title through native Agent rerun and stream settlement", () => {
+    let state = createInitialChatState({ schemaVersion: 1, currentConversationId: null, conversations: [] });
+    state = chatReducer(state, { type: "requestStarted", conversationId: "conversation-1",
+      userMessage: userMessage(), assistantMessage: createAssistantMessage("assistant-1"), model: "deepseek-v4-pro", thinkingEnabled: true });
+    state = chatReducer(state, { type: "streamEventReceived", messageId: "assistant-1", event: { type: "run_status", status: "done", runId: "native-run" } });
+    state = chatReducer(state, { type: "streamEventReceived", messageId: "assistant-1", event: { type: "done", content: "Original answer" } });
+    state = chatReducer(state, { type: "conversationTitleUpdated", conversationId: "conversation-1", title: "Generated title" });
+    state = chatReducer(state, { type: "agentStreamAttached", messageId: "assistant-1" });
+    expect(state.conversations[0]?.title).toBe("Generated title");
+    state = chatReducer(state, { type: "streamEventReceived", messageId: "assistant-1", event: { type: "run_status", status: "running", runId: "native-run" } });
+    state = chatReducer(state, { type: "streamEventReceived", messageId: "assistant-1", event: { type: "final_reset", scope: "final_answer" } });
+    state = chatReducer(state, { type: "streamEventReceived", messageId: "assistant-1", event: { type: "content", text: "Recovered answer" } });
+    state = chatReducer(state, { type: "streamEventReceived", messageId: "assistant-1", event: { type: "done" } });
+    state = chatReducer(state, { type: "agentStreamSettled", messageId: "assistant-1" });
+    expect(state.conversations[0]).toMatchObject({ title: "Generated title", autoTitleDone: true, customTitle: false });
+    expect(state.conversations[0]?.messages[1]).toMatchObject({ content: "Recovered answer", agentRunStatus: "done", streaming: false });
+    expect(state.requestStatus).toBe("idle");
+  });
+
+  it("retains the generated title when a later user turn begins", () => {
+    let state = createInitialChatState({ schemaVersion: 1, currentConversationId: null, conversations: [] });
+    state = chatReducer(state, { type: "requestStarted", conversationId: "conversation-1", userMessage: userMessage(),
+      assistantMessage: createAssistantMessage("assistant-1"), model: "deepseek-v4-pro", thinkingEnabled: true });
+    state = chatReducer(state, { type: "streamEventReceived", messageId: "assistant-1", event: { type: "done", content: "First answer" } });
+    state = chatReducer(state, { type: "conversationTitleUpdated", conversationId: "conversation-1", title: "Generated title" });
+    state = chatReducer(state, { type: "requestStarted", conversationId: "conversation-1", userMessage: { ...userMessage(), id: "user-2", content: "Follow-up question" },
+      assistantMessage: createAssistantMessage("assistant-2"), model: "deepseek-v4-pro", thinkingEnabled: true });
+    expect(state.conversations[0]).toMatchObject({ title: "Generated title", autoTitleDone: true, customTitle: false });
+    expect(state.conversations[0]?.messages).toHaveLength(4);
+  });
+
   it("creates a conversation, applies stream events, and settles the request", () => {
     const initial = createInitialChatState({ schemaVersion: 1, currentConversationId: null, conversations: [] });
     const started = chatReducer(initial, {

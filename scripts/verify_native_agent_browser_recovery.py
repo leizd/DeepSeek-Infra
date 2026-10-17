@@ -123,7 +123,7 @@ def validate_browser_recovery_result(result: dict[str, Any], exchanges: list[dic
             any(observed.get(k) is not True for k in ["creationByBrowser","finalAnswerVisible","reloadRetainedFinalAnswer",
                 "titleRetainedAfterReload","planConfirmationByBrowser","planEditedByBrowser","noTasksBeforePlanConfirmation",
                 "backupPolicyConfiguredByGoFixture","finalEnvelopeMirrored","rerunByBrowser","oldFinalVisibleDuringRerun",
-                "recoveredFinalVisible","rerunSelectionAndPayloadVerified"]) or \
+                "recoveredFinalVisible","rerunSelectionAndPayloadVerified","generatedTitleRetainedDuringRecovery"]) or \
             any(observed.get(k) is not False for k in ["backupPolicyCreatedByBrowser","requestInterceptionUsed","apiInvokedOutsideUI"]) or \
             observed.get("pageErrors")!=[] or observed.get("consoleErrors")!=[] or observed.get("screenshot")!="browser-recovery.png" or \
             not re.fullmatch(r"[a-f0-9]{64}",str(observed.get("screenshotSha256",""))):

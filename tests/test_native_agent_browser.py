@@ -71,6 +71,7 @@ def browser_recovery_fixture() -> tuple[dict[str,Any],list[dict[str,Any]]]:
         originalBrowserHistoryUnchanged=True,browserRetainedCoderAndLatestCriticVerified=True,browserProgressRustJournalVerified=True,
         browserRecoveryTaskActionId="rerun-task",browserRecoverySynthesisActionId="rerun-synthesis")
     result["browser"].update(rerunByBrowser=True,oldFinalVisibleDuringRerun=True,recoveredFinalVisible=True,
+        generatedTitleRetainedDuringRecovery=True,
         rerunSelectionAndPayloadVerified=True,screenshot="browser-recovery.png")
     result["browser"]["requests"].append({"method":"POST","path":"/api/agent-runs/browser-run/rerun","status":200})
     exchanges[2]["actionId"]=exchanges[1]["actionId"]
@@ -89,6 +90,19 @@ def test_actual_browser_recovery_retains_exact_ui_and_native_proof_boundaries() 
     from scripts.verify_native_agent_browser_recovery import validate_browser_recovery_result
 
     validate_browser_recovery_result(*browser_recovery_fixture())
+
+
+@pytest.mark.parametrize("title_proof", [False, None])
+def test_actual_browser_recovery_requires_generated_title_survival(title_proof: bool | None) -> None:
+    from scripts.verify_native_agent_browser_recovery import validate_browser_recovery_result
+
+    result, exchanges = browser_recovery_fixture()
+    if title_proof is None:
+        result["browser"].pop("generatedTitleRetainedDuringRecovery")
+    else:
+        result["browser"]["generatedTitleRetainedDuringRecovery"] = title_proof
+    with pytest.raises(ValueError):
+        validate_browser_recovery_result(result, exchanges)
 
 
 @pytest.mark.parametrize("change",["source","cursor","runtime","schema","phases","generation","signature","old-actions",

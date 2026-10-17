@@ -1,5 +1,35 @@
 <!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
 
+## Native browser generated-title retention repair — 2026-10-17
+
+Source58cac61c completed1545 Rust tests with zero failures and the original
+single Redis ignore. Its Rust coverage job succeeded, while mandatory actual
+React recovery run39027301212 failed waiting for the recovered frontend mirror.
+The original failure log,280 report files and screenshots are retained. Actual
+rerunHTTP200 reached the controlled provider, old final/coder were retained at
+cursor12, and the recovered final plus exactly two completed cards rendered.
+The screenshot also showed the generated title reverting to the first question.
+
+The shared conversation message replacement preserved custom titles but ignored
+`autoTitleDone`. It now retains either kind of completed title while continuing
+to update unfinished provisional titles. Three regressions first failed with
+18 existing tests passing, then all21 passed. A fourth case retains provisional
+title updates. The complete74-file/638-test frontend type/build/bundle check and
+420 offline boundary tests passed. Actual browser acceptance still requires the
+same generated-title/final-answer mirror, successful sealed restore and reload;
+it additionally checks the generated title before, during and after rerun.
+A missing/false title proof is rejected by two offline report guards.
+
+Full-source Rust/browser push and workflow_dispatch CI remain CLOUD_PENDING for
+this repair. Go/Rust/Proto, dependencies, main CI and the original Go/Python95
+percent and Rust80 percent floors are unchanged. No local native build/test or
+Docker stack ran. The complete failed-task snapshot9ad14b5f and planner/synthesis
+failure WIP are preserved without upload until the browser repair passes.
+Remaining task/run recovery/tool/live-output paths, real providers, all platform
+and zero-Python release acceptance and final Evidence Assembly remain required.
+Full-product readiness remains NOT_READY. PR processing is once daily at21:40
+Asia/Shanghai; this repair does not create or update a PR outside that window.
+
 ## Browser in-flight contract and terminal note repair — 2026-10-17
 
 The actual React rerun on source2e95b2f2 reached the native public endpoint

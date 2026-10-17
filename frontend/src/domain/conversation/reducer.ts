@@ -39,7 +39,7 @@ export function replaceConversationMessages(
 ): Conversation {
   return {
     ...conversation,
-    title: conversation.customTitle ? conversation.title : titleFromMessages(messages),
+    title: conversation.customTitle || conversation.autoTitleDone ? conversation.title : titleFromMessages(messages),
     messages,
     updatedAt: Date.now(),
   };

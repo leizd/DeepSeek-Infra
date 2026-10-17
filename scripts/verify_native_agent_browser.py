@@ -173,6 +173,7 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
                 if before_recovery is None or inspect_inflight_recovery is None:
                     raise ValueError("Actual browser recovery lacks independent before/in-flight inspection")
                 initial_cards=inspect_completed_agent_cards(page)
+                page.get_by_text(BROWSER_TITLE, exact=True).last.wait_for()
                 before_recovery(run_id)
                 expected_final=RECOVERED_FINAL
                 with page.expect_response(final_mirror,timeout=120_000) as recovery_mirror:
@@ -185,15 +186,18 @@ def run_browser_agent(origin: str, output: Path, before_confirmation: Callable[[
                     release=inspect_inflight_recovery(run_id)
                     try:
                         page.get_by_text("Controlled final answer",exact=True).last.wait_for()
+                        page.get_by_text(BROWSER_TITLE, exact=True).last.wait_for()
                         page.screenshot(path=str(output/"browser-recovery-inflight.png"),full_page=True)
                     finally:
                         release()
                     page.get_by_text(expected_final,exact=True).last.wait_for(timeout=120_000)
+                    page.get_by_text(BROWSER_TITLE, exact=True).last.wait_for()
                 last_mirror=recovery_mirror.value
                 recovered_cards=inspect_completed_agent_cards(page)
                 recovery_observed={"initialCompletedTaskCards":initial_cards,"recoveredCompletedTaskCards":recovered_cards,
                                    "nativeCompletedTaskCardsVisible":True,"recoveredTaskCardsStable":True,"rerunByBrowser":True,"oldFinalVisibleDuringRerun":True,
-                                   "recoveredFinalVisible":True,"rerunSelectionAndPayloadVerified":True}
+                                    "recoveredFinalVisible":True,"rerunSelectionAndPayloadVerified":True,
+                                    "generatedTitleRetainedDuringRecovery":True}
             mirror_receipt = reload_browser_history(page, last_mirror, expected_final)
             page.wait_for_load_state("networkidle", timeout=30_000)
             screenshot = output / ("browser-recovery.png" if recovery else "browser-final.png")
