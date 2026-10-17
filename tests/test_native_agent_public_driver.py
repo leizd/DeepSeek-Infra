@@ -78,6 +78,60 @@ def test_task_recovery_requires_exact_selected_work_and_late_signed_progress(rol
     validate_task_recovery_result(*complete_task_recovery_evidence(role,synthesize))
 
 
+def complete_public_task_recovery_evidence(role="critic", synthesize=True):
+    result,exchanges,case=complete_task_recovery_evidence(role,synthesize)
+    case["publicAdmission"]=True
+    result["recoveryPreparation"].update(publicAdmissionQualified=True,preparationRetryIdempotent=False,
+        actualPublicRecoveryHTTPRequests=8,
+        publicRefusals=[{"case":name,"path":"resume" if name=="resume-while-active" else "rerun",
+                         "status":status,"runUnchanged":True} for name,status in [
+            ("invalid-json",400),("missing-role",400),("unknown-role",400),("private-input",400),
+            ("duplicate-rerun-while-active",409),("resume-while-active",409),("missing-run",404)]])
+    return result,exchanges,case
+
+
+@pytest.mark.parametrize("role",["critic","researcher"])
+@pytest.mark.parametrize("synthesize",[True,False])
+def test_public_task_recovery_requires_http_admission_refusals_and_original_progress_proof(role,synthesize):
+    from scripts.verify_native_agent_public_driver import validate_task_recovery_result
+
+    validate_task_recovery_result(*complete_public_task_recovery_evidence(role,synthesize))
+
+
+@pytest.mark.parametrize("change",["admission","private-retry-claim","missing","duplicate","status","mutated",
+                                  "path","absent","extra","non-object","count"])
+def test_public_task_recovery_rejects_private_rpc_substitution_or_unproved_http_refusals(change):
+    from scripts.verify_native_agent_public_driver import validate_task_recovery_result
+
+    result,exchanges,case=complete_public_task_recovery_evidence()
+    recovery=result["recoveryPreparation"]
+    refusals=recovery["publicRefusals"]
+    if change=="admission":
+        recovery["publicAdmissionQualified"]=False
+    elif change=="private-retry-claim":
+        recovery["preparationRetryIdempotent"]=True
+    elif change=="missing":
+        refusals.pop()
+    elif change=="duplicate":
+        refusals[-1]=copy.deepcopy(refusals[0])
+    elif change=="status":
+        refusals[-1]["status"]=200
+    elif change=="mutated":
+        refusals[0]["runUnchanged"]=False
+    elif change=="path":
+        refusals[-1]["path"]="resume"
+    elif change=="absent":
+        recovery.pop("publicRefusals")
+    elif change=="extra":
+        refusals.append(copy.deepcopy(refusals[-1]))
+    elif change=="non-object":
+        refusals[-1]=None
+    else:
+        recovery["actualPublicRecoveryHTTPRequests"]-=1
+    with pytest.raises(ValueError):
+        validate_task_recovery_result(result,exchanges,case)
+
+
 @pytest.mark.parametrize("change",["extra-call","no-task","extra-phase","cursor","source","role","synthesize","old-final","early-progress",
     "stale-progress","schema","proof-bytes","proof-digest","reused-action","reused-operation","task-context","new-summary","credential","private-reasoning","no-synthesis-phase","overclaim"])
 def test_task_recovery_refuses_unproven_progress_or_replayed_provider_effects(change):

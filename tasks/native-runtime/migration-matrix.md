@@ -1,3 +1,33 @@
+## Public recovery candidate and exact-source verification - 2026-10-17
+
+The candidate is based on3ff6492902cd4027b105af620b1b8d6b3f801638. That
+source has passed cloud Go vet, default tests and the unchanged95% statement
+coverage gate (job117321342183, completed coverage at05:52:19Z). Exact profile
+counts, full race, Android and all37 source-CI jobs are not yet collected. Docker
+job117321342091 failed because crates.io indexmap download timed out; its failure
+is retained and a same-source retry remains pending. Source CI39006972812 and
+Rust push39006914824 are distinct validations, neither is a PR merge candidate.
+
+This candidate wires public Rust POST resume/rerun through fresh Go recovery
+preview, authenticated Rust custody, hash-checked draft/context/base/final bodies,
+and Go CAS commit. RPC conflict statuses are retained and missing custody config
+is refused before draft persistence. Credentials and private keys stay in Rust;
+Go stores metadata and opaque body references. Nine new Rust boundary tests and
+an additional actual HTTP rerun matrix (critic/researcher, synthesize true/false,
+seven refusals each) are source only until the exact cloud revision qualifies.
+The existing private-RPC matrix, original workflows, all coverage floors and
+249 frontend inputs remain retained. Public HTTP and provider HTTP request counts
+are separate, and public admission does not claim the private preparation retry.
+
+Local222 offline validator tests, Linux/Win32965-file mypy, Ruff and installed
+Rust/Go formatting checks pass. No local native compile, Go test, Docker build,
+real data action, PR mutation or release operation was performed. These local
+checks do not establish native runtime success. Whole-product readiness remains
+NOT_READY. Completed/failed resume, synthesis aliases, payload/credential variants,
+actual React recovery entry, failed-task/tools/timeline/live-output behavior,
+real-provider recovery, all retained domains, desktop/Android/background workloads,
+default zero-Python ownership and complete exact-source Evidence remain required.
+
 ## Typed task-rerun progress evidence - 2026-10-17
 
 Exact e738e464 Rust push qualification is collected:1536 tests/1 original ignore,

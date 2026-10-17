@@ -681,6 +681,7 @@ version = "0.1.0"
 dependencies = [
  "async-stream",
  "axum",
+ "base64",
  "blake2",
  "bytes",
  "deepseek-browser",
@@ -692,6 +693,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "percent-encoding",
+ "prost",
  "rcgen",
  "reqwest",
  "rusqlite",

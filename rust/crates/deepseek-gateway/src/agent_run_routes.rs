@@ -27,6 +27,7 @@ use tonic::{
     transport::Channel,
 };
 
+mod recovery;
 mod runtime;
 use runtime::{operator_event_with_runtime, prepare_runtime_update, request_credential};
 
@@ -206,6 +207,7 @@ fn hydrate(store: &ArtifactStore, metadata: &AgentRunEventMetadata) -> Result<Va
 
 struct ReadSession {
     config: ReadConfig,
+    channel: Channel,
     client: AgentRunControlClient<Channel>,
     authorization: MetadataValue<Ascii>,
     epoch: u64,
@@ -245,7 +247,8 @@ impl ReadSession {
             .map_err(|_| control_unavailable())?;
         let mut session = Self {
             config,
-            client: AgentRunControlClient::new(channel).max_decoding_message_size(1 << 20),
+            client: AgentRunControlClient::new(channel.clone()).max_decoding_message_size(1 << 20),
+            channel,
             authorization,
             epoch: 0,
             snapshot: AgentRunSnapshot {
@@ -440,6 +443,8 @@ fn read_router(enabled: bool, config: Option<ReadConfig>) -> Router {
         .route("/api/agent-runs/:run_id", get(detail))
         .route("/api/agent-runs/:run_id/plan", post(confirm_plan))
         .route("/api/agent-runs/:run_id/cancel", post(cancel_run))
+        .route("/api/agent-runs/:run_id/resume", post(recovery::resume_run))
+        .route("/api/agent-runs/:run_id/rerun", post(recovery::rerun_run))
         .route("/api/agent-runs/:run_id/events", get(events))
         .route("/api/agent-runs/:run_id/stream", get(stream))
         .with_state(config)

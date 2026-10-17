@@ -39,6 +39,7 @@ func nativeTaskRecoveryDrive(t *testing.T, control *store.Control, origin string
 	t.Helper()
 	role := os.Getenv("DEEPSEEK_TEST_AGENT_RECOVERY_ROLE")
 	synthesize := os.Getenv("DEEPSEEK_TEST_AGENT_RECOVERY_SYNTHESIZE") == "true"
+	publicAdmission := os.Getenv("DEEPSEEK_TEST_AGENT_PUBLIC_RECOVERY") == "1"
 	if role != "critic" && role != "researcher" {
 		t.Fatal("unrecognized task recovery scenario")
 	}
@@ -86,21 +87,28 @@ func nativeTaskRecoveryDrive(t *testing.T, control *store.Control, origin string
 	worker := agentv1.NewAgentNodeWorkerClient(workerConnection)
 	workerCtx, workerCancel := context.WithTimeout(metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+bearer), 120*time.Second)
 	defer workerCancel()
-	prepare := &agentv1.PrepareAgentCredentialsRequest{SchemaVersion: 1, RunId: before.RunID, Fence: input.MetadataFence, Request: request, RuntimeRevision: before.RuntimeVersion() + 1,
-		RuntimeUpdate: &agentv1.AgentCredentialRuntimeUpdate{PreviousRequest: request, PreviousRuntimeRevision: before.RuntimeVersion()}, RecoveryContext: preview.Context}
-	prepared, err := worker.PrepareCredentials(workerCtx, prepare)
-	if err != nil || prepared.GetPreparedRequest() == nil || prepared.GetRecoveryContext() == nil || prepared.RecoveryContextSha256 != preview.ContextSha256 || len(prepared.RecoveryEventBodies) != 2 {
-		t.Fatal("actual task rerun custody preparation failed", err)
+	var prepared *agentv1.PrepareAgentCredentialsResponse
+	var commit *agentv1.CommitAgentRunRecoveryRequest
+	var committed *agentv1.CommitAgentRunRecoveryResponse
+	if publicAdmission {
+		prepared, commit, committed = nativePublicTaskRecoveryAdmission(t, control, client, publicOrigin, before, input, preview, ctx, recovery)
+	} else {
+		prepare := &agentv1.PrepareAgentCredentialsRequest{SchemaVersion: 1, RunId: before.RunID, Fence: input.MetadataFence, Request: request, RuntimeRevision: before.RuntimeVersion() + 1,
+			RuntimeUpdate: &agentv1.AgentCredentialRuntimeUpdate{PreviousRequest: request, PreviousRuntimeRevision: before.RuntimeVersion()}, RecoveryContext: preview.Context}
+		prepared, err = worker.PrepareCredentials(workerCtx, prepare)
+		if err != nil || prepared.GetPreparedRequest() == nil || prepared.GetRecoveryContext() == nil || prepared.RecoveryContextSha256 != preview.ContextSha256 || len(prepared.RecoveryEventBodies) != 2 {
+			t.Fatal("actual task rerun custody preparation failed", err)
+		}
+		retry, err := worker.PrepareCredentials(workerCtx, prepare)
+		if err != nil || !proto.Equal(retry, prepared) {
+			t.Fatal("task preparation retry changed immutable custody", err)
+		}
+		commit = &agentv1.CommitAgentRunRecoveryRequest{SchemaVersion: 1, OperationId: "native-task-recovery-" + before.RunID, Actor: "operator:native-task-recovery-process",
+			RunId: before.RunID, Fence: input.MetadataFence, ExpectedIndex: before.NextIndex, ExpectedRuntimeRevision: before.RuntimeVersion(), ExpectedRequest: request,
+			Selection: input.Selection, ContextSha256: preview.ContextSha256, Context: prepared.RecoveryContext, Request: prepared.PreparedRequest, EventBodies: prepared.RecoveryEventBodies}
+		committed, err = recovery.Commit(ctx, commit)
 	}
-	retry, err := worker.PrepareCredentials(workerCtx, prepare)
-	if err != nil || !proto.Equal(retry, prepared) {
-		t.Fatal("task preparation retry changed immutable custody", err)
-	}
-	commit := &agentv1.CommitAgentRunRecoveryRequest{SchemaVersion: 1, OperationId: "native-task-recovery-" + before.RunID, Actor: "operator:native-task-recovery-process",
-		RunId: before.RunID, Fence: input.MetadataFence, ExpectedIndex: before.NextIndex, ExpectedRuntimeRevision: before.RuntimeVersion(), ExpectedRequest: request,
-		Selection: input.Selection, ContextSha256: preview.ContextSha256, Context: prepared.RecoveryContext, Request: prepared.PreparedRequest, EventBodies: prepared.RecoveryEventBodies}
-	committed, err := recovery.Commit(ctx, commit)
-	if err != nil || committed.AlreadyApplied || committed.Run == nil || committed.Run.NextIndex != before.NextIndex+2 || committed.Run.Status != "running" || committed.Run.FinalAfter != before.FinalAfter {
+	if err != nil || committed.GetAlreadyApplied() != publicAdmission || committed.GetRun() == nil || committed.Run.NextIndex != before.NextIndex+2 || committed.Run.Status != "running" || committed.Run.FinalAfter != before.FinalAfter {
 		t.Fatal("rerun admission changed the final answer before task completion", err)
 	}
 	readPublic := func() map[string]any {
@@ -130,6 +138,10 @@ func nativeTaskRecoveryDrive(t *testing.T, control *store.Control, origin string
 	running, found, err := control.AgentRunMetadata(before.RunID)
 	if err != nil || !found || running.Status != "running" || running.NextIndex != before.NextIndex+2 || running.RecoveryProgress != nil || running.FinalAfter != before.FinalAfter || during["finalAnswer"] != beforePublic["finalAnswer"] {
 		t.Fatal("in-flight task erased the old final or fabricated progress", err)
+	}
+	var publicRefusals []map[string]any
+	if publicAdmission {
+		publicRefusals = nativePublicRecoveryRefusals(t, control, client, publicOrigin, before.RunID, role)
 	}
 	_, err = recovery.PreviewProgress(ctx, &agentv1.PreviewAgentRecoveryProgressRequest{SchemaVersion: 1, RunId: before.RunID, MetadataFence: input.MetadataFence, ExpectedIndex: running.NextIndex, RuntimeRevision: running.RuntimeVersion(), Request: prepared.PreparedRequest})
 	if status.Code(err) != codes.FailedPrecondition {
@@ -264,11 +276,15 @@ func nativeTaskRecoveryDrive(t *testing.T, control *store.Control, origin string
 		"originalRuntimeRevision": before.RuntimeVersion(), "runtimeRevision": after.RuntimeVersion(), "originalRequestSha256": before.Request.SHA256,
 		"contextSha256": preview.ContextSha256, "contextArtifactSha256": prepared.RecoveryContext.Sha256, "contextArtifactLength": prepared.RecoveryContext.Length,
 		"priorEffectCount": len(preview.Context.PriorEffects), "retainedOutputCount": retained, "preparedByRust": true, "goOpenedRustBody": false,
-		"preparationRetryIdempotent": true, "commitRetryIdempotent": true, "originalEffectsUnchanged": true, "originalPublicEventsUnchanged": true, "publicReadQualified": true,
+		"preparationRetryIdempotent": !publicAdmission, "publicAdmissionQualified": publicAdmission, "publicRefusals": publicRefusals,
+		"commitRetryIdempotent": true, "originalEffectsUnchanged": true, "originalPublicEventsUnchanged": true, "publicReadQualified": true,
 		"oldFinalRetainedDuringTask": true, "unfinishedProgressDenied": true, "staleProgressDenied": true, "progressMetadataSchemaVersion": after.SchemaVersion,
 		"progressReceiptSha256": hex.EncodeToString(digest[:]), "progressReceiptBase64": base64.RawURLEncoding.EncodeToString(rawProof),
 		"noteBodySha256": proof.Evidence.NoteBody.Sha256, "nextBodySha256": proof.Evidence.NextBody.Sha256, "newProviderCalls": newPhases,
 		"newDurablePhases": newPhases, "newTaskActionId": newTask, "newSynthesisActionId": newSynthesis, "fullResumeRerunQualified": false}
 	result["taskRerunProgressQualified"] = true
+	if publicAdmission {
+		result["recoveryPreparation"].(map[string]any)["actualPublicRecoveryHTTPRequests"] = 1 + len(publicRefusals)
+	}
 	return result
 }

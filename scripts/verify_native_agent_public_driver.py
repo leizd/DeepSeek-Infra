@@ -173,10 +173,24 @@ def validate_task_recovery_result(result: dict[str, Any], exchanges: list[dict[s
             recovery.get("progressMetadataSchemaVersion")!=4 or recovery.get("originalRequestSha256")!=base.get("requestSha256") or \
             result.get("requestSha256")==base.get("requestSha256"):
         raise ValueError("Task rerun changed its source, selection, progress schema or original request")
-    for flag in ["preparedByRust","preparationRetryIdempotent","commitRetryIdempotent","originalEffectsUnchanged",
+    for flag in ["preparedByRust","commitRetryIdempotent","originalEffectsUnchanged",
                  "originalPublicEventsUnchanged","publicReadQualified","oldFinalRetainedDuringTask","unfinishedProgressDenied","staleProgressDenied"]:
         if recovery.get(flag) is not True:
             raise ValueError("Task rerun lacks actual proof: "+flag)
+    if case.get("publicAdmission") is True:
+        expected_refusals={"invalid-json":400,"missing-role":400,"unknown-role":400,"private-input":400,
+                           "duplicate-rerun-while-active":409,"resume-while-active":409,"missing-run":404}
+        refusals=recovery.get("publicRefusals")
+        if recovery.get("publicAdmissionQualified") is not True or recovery.get("preparationRetryIdempotent") is not False or \
+                recovery.get("actualPublicRecoveryHTTPRequests")!=8 or \
+                not isinstance(refusals,list) or len(refusals)!=len(expected_refusals):
+            raise ValueError("Task rerun lacks actual public HTTP admission and refusals")
+        if {r.get("case"):r.get("status") for r in refusals if isinstance(r,dict)}!=expected_refusals or \
+                any(not isinstance(r,dict) or r.get("runUnchanged") is not True or type(r.get("status")) is not int or
+                    r.get("path")!=("resume" if r.get("case")=="resume-while-active" else "rerun") for r in refusals):
+            raise ValueError("Public recovery refusal changed status or mutated the paused run")
+    elif recovery.get("preparationRetryIdempotent") is not True:
+        raise ValueError("Private recovery omitted its pre-commit immutable preparation retry")
     for value in [result.get("requestSha256"),recovery.get("contextSha256"),recovery.get("contextArtifactSha256"),
                   recovery.get("noteBodySha256"),recovery.get("nextBodySha256"),recovery.get("progressReceiptSha256")]:
         if not isinstance(value,str) or len(value)!=64 or any(c not in "0123456789abcdef" for c in value):
@@ -337,6 +351,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     recovery_preparation = bool(getattr(args, "recovery_preparation", False))
     recovery_driving = bool(getattr(args, "recovery_driving", False))
     task_recovery_case = getattr(args, "task_recovery_case", None)
+    public_recovery = bool(getattr(args, "public_recovery_rerun_matrix", False))
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=True)
     source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -354,13 +369,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError("Native Go toolchain pin differs")
         fixtures = [ROOT / "tests/native/agent_signing_process.go.txt", ROOT / "tests/native/agent_public_driver_process.go.txt",
                     ROOT / "tests/native/agent_recovery_preparation_process.go.txt",
-                    ROOT / "tests/native/agent_task_recovery_process.go.txt"]
+                    ROOT / "tests/native/agent_task_recovery_process.go.txt",
+                    ROOT / "tests/native/agent_public_recovery_process.go.txt"]
         overlay = scratch / "overlay.json"
         overlay.write_text(json.dumps({"Replace": {
             (ROOT / "go/internal/api/zz_native_agent_signing_process_test.go").as_posix(): fixtures[0].as_posix(),
             (ROOT / "go/internal/api/zz_native_agent_public_driver_process_test.go").as_posix(): fixtures[1].as_posix(),
             (ROOT / "go/internal/api/zz_native_agent_recovery_preparation_process_test.go").as_posix(): fixtures[2].as_posix(),
-            (ROOT / "go/internal/api/zz_native_agent_task_recovery_process_test.go").as_posix(): fixtures[3].as_posix()}}), encoding="utf-8")
+            (ROOT / "go/internal/api/zz_native_agent_task_recovery_process_test.go").as_posix(): fixtures[3].as_posix(),
+            (ROOT / "go/internal/api/zz_native_agent_public_recovery_process_test.go").as_posix(): fixtures[4].as_posix()}}), encoding="utf-8")
         binary = scratch / "native-public-agent-api-tests"
         signing.record_command(["go", "test", "-c", "-p=2", "-overlay", overlay.as_posix(), "-o", binary.as_posix(), "./internal/api"],
             ROOT / "go", environment, output, "go-public-driver-build", timeout=600)
@@ -415,7 +432,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 position = len(exchanges)
                 if task_recovery_case is not None and position==5:
                     signing.write_ready(case/"rerun-task-arrived.json",{"position":position})
-                    deadline=time.monotonic()+30
+                    deadline=time.monotonic()+(60 if public_recovery else 30)
                     while not (case/"rerun-task-release.json").exists():
                         if time.monotonic()>deadline:
                             raise RuntimeError("Task rerun did not release the controlled provider")
@@ -461,6 +478,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if task_recovery_case is not None:
                 environment["DEEPSEEK_TEST_AGENT_RECOVERY_ROLE"]=task_recovery_case["role"]
                 environment["DEEPSEEK_TEST_AGENT_RECOVERY_SYNTHESIZE"]=str(task_recovery_case["synthesize"]).lower()
+            if public_recovery:
+                environment["DEEPSEEK_TEST_AGENT_PUBLIC_RECOVERY"]="1"
             if cancel_after_plan:
                 environment["DEEPSEEK_TEST_AGENT_CANCEL_AFTER_PLAN"] = "1"
             if cancel_active:
@@ -609,11 +628,14 @@ def main() -> int:
     mode.add_argument("--recovery-preparation", action="store_true")
     mode.add_argument("--recovery-driving", action="store_true")
     mode.add_argument("--recovery-rerun-matrix", action="store_true")
+    mode.add_argument("--public-recovery-rerun-matrix", action="store_true")
     args = parser.parse_args()
-    if args.recovery_rerun_matrix:
+    if args.recovery_rerun_matrix or args.public_recovery_rerun_matrix:
         output=args.out.resolve()
         results=[]
         for case in task_rerun_cases():
+            if args.public_recovery_rerun_matrix:
+                case=dict(case,publicAdmission=True)
             child=argparse.Namespace(**vars(args))
             child.out=output/case["name"]
             child.task_recovery_case=case
@@ -622,10 +644,16 @@ def main() -> int:
             if report.get("progressArtifactAndSignerCustodyVerified") is not True:
                 raise ValueError("Task recovery lacks actual Rust custody")
             results.append({"name":case["name"],"role":case["role"],"synthesize":case["synthesize"],"status":report["status"],"sourceCommit":report["sourceCommit"],
-                "actualHTTPRequests":report["actualHTTPRequests"],"nextIndex":report["nextIndex"],"progressArtifactAndSignerCustodyVerified":True})
+                "actualHTTPRequests":report["actualHTTPRequests"],"nextIndex":report["nextIndex"],"progressArtifactAndSignerCustodyVerified":True,
+                "publicAdmissionQualified":report["recoveryPreparation"].get("publicAdmissionQualified",False),
+                "actualPublicRecoveryHTTPRequests":report["recoveryPreparation"].get("actualPublicRecoveryHTTPRequests",0)})
             print(json.dumps(results[-1]),flush=True)
         result={"status":"PASS","sourceCommit":results[0]["sourceCommit"],"caseCount":len(results),"cases":results,
-            "allInputsCreatedThroughRustHTTP":True,"taskRerunProgressQualified":True,"runtimePython":False,"realProviderQualified":False,"fullMigrationQualified":False,"readiness":"NOT_READY"}
+            "allInputsCreatedThroughRustHTTP":True,"taskRerunProgressQualified":True,
+            "publicRecoveryAdmissionQualified":args.public_recovery_rerun_matrix,
+            "actualPublicRecoveryHTTPRequests":sum(r["actualPublicRecoveryHTTPRequests"] for r in results),
+            "actualProviderHTTPRequests":sum(r["actualHTTPRequests"] for r in results),
+            "runtimePython":False,"realProviderQualified":False,"fullMigrationQualified":False,"readiness":"NOT_READY"}
         output.mkdir(parents=True,exist_ok=True)
         (output/"result.json").write_text(json.dumps(result,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     elif args.preset_matrix or args.cancellation_matrix or args.active_cancellation_matrix:
