@@ -1,0 +1,217 @@
+{
+  "agentOutputs": {
+    "coder": {
+      "content": "## 摘要\nControlled public task summary",
+      "evidence": "",
+      "full_output": "",
+      "id": "coder",
+      "latencyMs": 35,
+      "name": "代码分析 Agent",
+      "risks": "",
+      "summary": "Controlled public task summary",
+      "task": "write through browser",
+      "usage": {
+        "completion_tokens": 1,
+        "prompt_tokens": 3,
+        "total_tokens": 4
+      }
+    },
+    "critic": {
+      "content": "## 摘要\nControlled public task summary",
+      "evidence": "",
+      "full_output": "",
+      "id": "critic",
+      "latencyMs": 34,
+      "name": "反驳审查 Agent",
+      "risks": "",
+      "summary": "Controlled public task summary",
+      "task": "review",
+      "usage": {
+        "completion_tokens": 1,
+        "prompt_tokens": 3,
+        "total_tokens": 4
+      }
+    }
+  },
+  "finalAnswer": "Controlled final answer",
+  "diagnostics": {},
+  "runId": "run_90d9bef3bfc2a6270d03478c5f0d6f5486b2c7ae781fda6d8ef06765ffc6b595",
+  "status": "done",
+  "nextIndex": 10,
+  "createdAt": "2026-10-17T07:34:55Z",
+  "updatedAt": "2026-10-17T07:35:00Z",
+  "plan": [
+    {
+      "id": "coder",
+      "task": "write through browser"
+    },
+    {
+      "id": "critic",
+      "task": "review",
+      "depends_on": [
+        "coder"
+      ]
+    }
+  ],
+  "nodes": {
+    "coder": {
+      "id": "coder",
+      "state": "succeeded",
+      "attempts": 0,
+      "latencyMs": 35,
+      "promptTokens": 3,
+      "completionTokens": 1,
+      "failed": false
+    },
+    "critic": {
+      "id": "critic",
+      "state": "succeeded",
+      "attempts": 0,
+      "latencyMs": 34,
+      "promptTokens": 3,
+      "completionTokens": 1,
+      "failed": false
+    }
+  },
+  "events": [
+    {
+      "type": "run_status",
+      "status": "created",
+      "runId": "run_90d9bef3bfc2a6270d03478c5f0d6f5486b2c7ae781fda6d8ef06765ffc6b595",
+      "index": 0,
+      "createdAt": "2026-10-17T07:34:55Z"
+    },
+    {
+      "type": "run_status",
+      "status": "planning",
+      "runId": "run_90d9bef3bfc2a6270d03478c5f0d6f5486b2c7ae781fda6d8ef06765ffc6b595",
+      "index": 1,
+      "createdAt": "2026-10-17T07:34:56Z"
+    },
+    {
+      "plan": [
+        {
+          "id": "coder",
+          "task": "write",
+          "depends_on": []
+        },
+        {
+          "id": "critic",
+          "task": "review",
+          "depends_on": [
+            "coder"
+          ]
+        }
+      ],
+      "text": "{\"agents\": [{\"role\": \"coder\", \"task\": \"write\", \"dependsOn\": []}, {\"role\": \"critic\", \"task\": \"review\", \"dependsOn\": [\"coder\"]}]}",
+      "type": "agent_plan",
+      "usage": {
+        "completion_tokens": 1,
+        "prompt_tokens": 3,
+        "total_tokens": 4
+      },
+      "runId": "run_90d9bef3bfc2a6270d03478c5f0d6f5486b2c7ae781fda6d8ef06765ffc6b595",
+      "index": 2,
+      "createdAt": "2026-10-17T07:34:56Z"
+    },
+    {
+      "type": "run_status",
+      "status": "awaiting_plan",
+      "runId": "run_90d9bef3bfc2a6270d03478c5f0d6f5486b2c7ae781fda6d8ef06765ffc6b595",
+      "index": 3,
+      "createdAt": "2026-10-17T07:34:56Z"
+    },
+    {
+      "type": "agent_plan",
+      "plan": [
+        {
+          "id": "coder",
+          "task": "write through browser"
+        },
+        {
+          "id": "critic",
+          "task": "review",
+          "depends_on": [
+            "coder"
+          ]
+        }
+      ],
+      "runId": "run_90d9bef3bfc2a6270d03478c5f0d6f5486b2c7ae781fda6d8ef06765ffc6b595",
+      "index": 4,
+      "createdAt": "2026-10-17T07:34:58Z"
+    },
+    {
+      "type": "run_status",
+      "status": "running",
+      "runId": "run_90d9bef3bfc2a6270d03478c5f0d6f5486b2c7ae781fda6d8ef06765ffc6b595",
+      "index": 5,
+      "createdAt": "2026-10-17T07:34:58Z"
+    },
+    {
+      "output": {
+        "content": "## 摘要\nControlled public task summary",
+        "evidence": "",
+        "full_output": "",
+        "id": "coder",
+        "latencyMs": 35,
+        "name": "代码分析 Agent",
+        "risks": "",
+        "summary": "Controlled public task summary",
+        "task": "write through browser",
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 3,
+          "total_tokens": 4
+        }
+      },
+      "phase": "coder",
+      "type": "agent_output",
+      "runId": "run_90d9bef3bfc2a6270d03478c5f0d6f5486b2c7ae781fda6d8ef06765ffc6b595",
+      "index": 6,
+      "createdAt": "2026-10-17T07:34:59Z"
+    },
+    {
+      "output": {
+        "content": "## 摘要\nControlled public task summary",
+        "evidence": "",
+        "full_output": "",
+        "id": "critic",
+        "latencyMs": 34,
+        "name": "反驳审查 Agent",
+        "risks": "",
+        "summary": "Controlled public task summary",
+        "task": "review",
+        "usage": {
+          "completion_tokens": 1,
+          "prompt_tokens": 3,
+          "total_tokens": 4
+        }
+      },
+      "phase": "critic",
+      "type": "agent_output",
+      "runId": "run_90d9bef3bfc2a6270d03478c5f0d6f5486b2c7ae781fda6d8ef06765ffc6b595",
+      "index": 7,
+      "createdAt": "2026-10-17T07:34:59Z"
+    },
+    {
+      "text": "Controlled final answer",
+      "type": "content",
+      "runId": "run_90d9bef3bfc2a6270d03478c5f0d6f5486b2c7ae781fda6d8ef06765ffc6b595",
+      "index": 8,
+      "createdAt": "2026-10-17T07:35:00Z"
+    },
+    {
+      "type": "done",
+      "runId": "run_90d9bef3bfc2a6270d03478c5f0d6f5486b2c7ae781fda6d8ef06765ffc6b595",
+      "index": 9,
+      "createdAt": "2026-10-17T07:35:00Z"
+    }
+  ],
+  "requestMeta": {
+    "conversationId": "c695364b-9b89-4f4a-a890-38f9e134b3fd",
+    "messageId": "53317218-0685-43d7-b643-0a80f259b605",
+    "model": "deepseek-v4-pro",
+    "agentPreset": "auto",
+    "confirmPlan": true
+  }
+}

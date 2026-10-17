@@ -1,4 +1,37 @@
 <!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
+
+## Native Agent output timeline and browser contract repair — 2026-10-17
+
+Source `9e0f3962` completed workflow_dispatch CI run39012405690 with37/37
+jobs successful, including original Go/Python95 percent and Rust80 percent
+coverage gates. Separately, Rust push run39012294859 retained a failed mandatory
+React recovery gate; its other native probes and coverage succeeded. The new
+browser case is not qualified by the separate full-CI success.
+
+The controlled native HTTP report exposes `agentOutputs`, not `outputs`; the
+recovery oracle and its old synthetic fixture had assumed the wrong field. The
+real browser screenshot also showed no completed Agent cards. React previously
+ignored native `agent_output` frames; those are the only task-output frames in
+the actual native stream. This repair upserts bounded completed/error cards from
+public output fields, preserves existing legacy cards, excludes private provider
+fields, and keeps the prior final answer until its explicit reset. It retains
+the existing rerun controls and layout.
+
+A checked-in raw public-view fixture comes from that controlled exact-source
+cloud report. New regressions first reproduced the incorrect field and four
+missing/incorrect timeline behaviors; targeted checks now pass. Complete local
+frontend type/tests/build/bundle checks,410 offline boundary tests, Linux/Win32
+966-file types and Ruff pass. Rust/Go/Proto and main CI source are unchanged.
+Actual repaired React rerun acceptance and exact-new-source cloud validation
+remain pending. Compiler caches, Docker images and volumes stay in the cloud.
+
+The separately frozen21-file signed failed-task implementation is preserved
+under artifacts/native-20261017-failed-task-recovery and has not been uploaded.
+Carry it forward only after fixing this failure and addressing its recorded
+review finding. Full-product migration, real provider/crash recovery, remaining
+tool/timeline/live-output behavior, desktop/Android and zero-Python release
+acceptance remain required. Readiness remains NOT_READY; PR handling stays at
+most once daily at21:40 Asia/Shanghai.
 ## Actual React native recovery candidate - 2026-10-17
 
 This candidate starts from339a6582e6fb1e2fd0ed3880ea52f66a60abb935 and adds an

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { applyStreamEvent, createAssistantMessage } from "./streamReducer";
@@ -87,5 +88,70 @@ describe("applyStreamEvent", () => {
     const initial = { ...createAssistantMessage("message-agent"), agentRunId: "run-1", agentRunStatus: "running" };
     const done = applyStreamEvent(initial, { type: "done", runId: "run-1" });
     expect(done.agentRunStatus).toBe("done");
+  });
+});
+
+
+describe("native complete Agent outputs", () => {
+  it("retains actual native public output frames as completed rerunnable Agent cards", () => {
+    const run = JSON.parse(readFileSync(new URL("../../../../tests/native/agent_public_browser_v1.json", import.meta.url), "utf8")) as {
+      runId: string; events: Record<string, unknown>[];
+    };
+    const initial = createAssistantMessage("native-complete");
+    let message = initial;
+    for (const payload of run.events.filter((event) => event.type === "agent_output")) {
+      message = applyStreamEvent(message, { type: "agent_output", runId: run.runId, index: payload.index as number, payload });
+    }
+    message = applyStreamEvent(message, { type: "done", runId: run.runId });
+    expect(initial.timeline).toEqual([]);
+    expect(message.timeline.map((step) => ({ phase: step.phase, status: step.status }))).toEqual([
+      { phase: "coder", status: "done" }, { phase: "critic", status: "done" },
+    ]);
+    expect(message.timeline.every((step) => Boolean(step.output?.includes("Controlled public task summary")))).toBe(true);
+    expect(message).toMatchObject({ streaming: false, agentRunId: run.runId, agentRunStatus: "done" });
+  });
+
+  it("updates an existing completed legacy card without duplicating it or exposing private fields", () => {
+    const running = applyStreamEvent(createAssistantMessage("legacy"), {
+      type: "agent_delta", phase: "coder", text: "draft", payload: {},
+    });
+    const completed = applyStreamEvent(running, { type: "agent", phase: "coder", status: "done", payload: {} });
+    const result = applyStreamEvent(completed, { type: "agent_output", payload: {
+      phase: "coder", output: { id: "coder", name: "代码实现 Agent", content: "complete public output", latencyMs: 125,
+        reasoning_content: "private provider reasoning", apiKey: "private credential" },
+    } });
+    expect(result.timeline).toHaveLength(1);
+    expect(result.timeline[0]).toMatchObject({ name: "代码实现 Agent", output: "complete public output", status: "done", durationMs: 125 });
+    expect(completed.timeline[0].output).toBe("draft");
+    expect(JSON.stringify(result.timeline)).not.toMatch(/private provider reasoning|private credential/);
+  });
+
+  it("keeps a failed output visibly failed and preserves the final answer until explicit reset", () => {
+    const initial = { ...createAssistantMessage("failed-output"), content: "retained final" };
+    const failed = applyStreamEvent(initial, { type: "agent_output", payload: {
+      phase: "critic", output: { id: "critic", name: "反驳审查 Agent", failed: true, content: "该 Agent 执行失败：HTTP 401", duration_ms: 90 },
+    } });
+    expect(failed.timeline[0]).toMatchObject({ phase: "critic", status: "error", durationMs: 90, output: "该 Agent 执行失败：HTTP 401" });
+    expect(failed.content).toBe("retained final");
+    expect(initial.timeline).toHaveLength(0);
+  });
+
+  it.each([
+    { phase: "critic", output: { id: "coder", content: "wrong role" } },
+    { phase: "unknown", output: { id: "unknown", content: "unsupported role" } },
+    { phase: "critic", output: { id: "critic", content: "bad failure type", failed: "false" } },
+    { phase: "critic", output: null },
+  ])("ignores invalid or rebound native output %j", (payload) => {
+    const initial = createAssistantMessage("invalid-output");
+    expect(applyStreamEvent(initial, { type: "agent_output", payload }).timeline).toEqual([]);
+  });
+
+  it("bounds public output text and does not turn a completed message back into a running one", () => {
+    const done = applyStreamEvent(createAssistantMessage("bounded-output"), { type: "done", content: "final" });
+    const result = applyStreamEvent(done, { type: "agent_output", payload: {
+      phase: "coder", output: { id: "coder", content: "x".repeat(70_000) },
+    } });
+    expect(result.timeline[0].output).toHaveLength(60_000);
+    expect(result).toMatchObject({ phase: "done", streaming: false, content: "final" });
   });
 });

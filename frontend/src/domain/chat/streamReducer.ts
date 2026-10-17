@@ -1,5 +1,6 @@
 import {
   appendTimelineAgent,
+  appendTimelineAgentOutput,
   appendTimelineAgentDelta,
   appendTimelineAgentNote,
   appendTimelineAgentReasoning,
@@ -183,8 +184,16 @@ function applyStreamEventBody(message: ChatMessage, event: ChatStreamEvent): Cha
         timeline: event.phase ? resetTimelineAgentPhase(message.timeline, event.phase) : message.timeline,
       };
 
-    case "agent_output":
-      return message;
+    case "agent_output": {
+      const timeline = appendTimelineAgentOutput(message.timeline, event);
+      if (timeline === message.timeline) return message;
+      return {
+        ...message,
+        phase: message.streaming ? "agent" : message.phase,
+        agentRunId: event.runId ?? message.agentRunId,
+        timeline,
+      };
+    }
 
     case "done":
       return {

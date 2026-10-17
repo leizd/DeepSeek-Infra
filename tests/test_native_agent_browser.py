@@ -169,7 +169,7 @@ def test_browser_recovery_inspection_reads_immutable_rows_and_actual_receipt_jou
             body=f'{{"public":{i}}}'.encode()
             database.execute("INSERT INTO agent_node_effects VALUES(?,?,?,?)",(f"old-{i}","CONFIRMED",body,hashlib.sha256(body).hexdigest()))
     public: dict[str,Any]={"status":"done","nextIndex":10,"finalAnswer":"Controlled final answer","events":[{"index":i} for i in range(10)],
-            "outputs":{"coder":"retained coder","critic":"original critic"}}
+            "agentOutputs":{"coder":"retained coder","critic":"original critic"}}
     before=recovery.capture_before_recovery(control,state,public)
     with sqlite3.connect(control/"control.sqlite3") as database:
         for key in ["new-task","new-synthesis"]:
@@ -192,13 +192,13 @@ def test_browser_recovery_inspection_reads_immutable_rows_and_actual_receipt_jou
             database.execute("INSERT INTO signatures VALUES(?)",(document,))
     final=deepcopy(public)
     final.update(nextIndex=17,finalAnswer=recovery.RECOVERED_FINAL,events=public["events"]+[{"index":i} for i in range(10,17)])
-    final["outputs"]["critic"]=recovery.RERUN_SUMMARY
+    final["agentOutputs"]["critic"]=recovery.RERUN_SUMMARY
     if fault=="history":
         final["events"][0]["index"]=-1
     elif fault=="coder":
-        final["outputs"]["coder"]="changed"
+        final["agentOutputs"]["coder"]="changed"
     elif fault=="critic":
-        final["outputs"]["critic"]="original critic"
+        final["agentOutputs"]["critic"]="original critic"
     inspected={"browserRecoveryReceiptBase64":base64.urlsafe_b64encode(document).decode().rstrip("="),
                "browserRecoveryReceiptSha256":hashlib.sha256(document).hexdigest() if fault!="receipt-hash" else "e"*64}
     if fault is None:
@@ -514,3 +514,21 @@ def test_browser_provider_context_requires_settled_public_predecessor_summaries(
         exchanges[2]["privateReasoningInPrompt"] = True
     with pytest.raises(ValueError, match="public predecessor"):
         browser.validate_browser_result(result, exchanges)
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_browser_recovery_baseline_uses_actual_native_public_view(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy: bool) -> None:
+    import json
+    from scripts import verify_native_agent_browser_recovery as recovery
+
+    public=json.loads((Path(__file__).parent/"native/agent_public_browser_v1.json").read_text(encoding="utf-8"))
+    monkeypatch.setattr(recovery,"_actions",lambda _: {str(i):"original-action" for i in range(3)})
+    monkeypatch.setattr(recovery,"_effects",lambda _: {str(i):"original-effect" for i in range(4)})
+    if legacy:
+        public["outputs"]=public.pop("agentOutputs")
+        with pytest.raises(ValueError):
+            recovery.capture_before_recovery(tmp_path,tmp_path,public)
+    else:
+        before=recovery.capture_before_recovery(tmp_path,tmp_path,public)
+        assert before["agentOutputs"]==public["agentOutputs"]
+        assert before["events"]==public["events"]

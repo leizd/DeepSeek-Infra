@@ -42,9 +42,12 @@ def capture_before_recovery(control: Path, state: Path, public: dict[str, Any]) 
     actions,effects=_actions(control),_effects(state)
     events=public.get("events")
     if public.get("status")!="done" or public.get("nextIndex")!=10 or public.get("finalAnswer")!="Controlled final answer" or \
-            not isinstance(events,list) or len(events)!=10 or not isinstance(public.get("outputs"),dict) or len(actions)!=3 or len(effects)!=4:
-        raise ValueError("Browser recovery baseline is not the actual completed native run")
-    return {"actions":actions,"effects":effects,"events":deepcopy(events),"outputs":deepcopy(public.get("outputs")),
+            not isinstance(events,list) or len(events)!=10 or not isinstance(public.get("agentOutputs"),dict) or len(actions)!=3 or len(effects)!=4:
+        observed={"status":public.get("status"),"nextIndex":public.get("nextIndex"),
+            "eventCount":len(events) if isinstance(events,list) else None,
+            "agentOutputsType":type(public.get("agentOutputs")).__name__,"actions":len(actions),"effects":len(effects)}
+        raise ValueError("Browser recovery baseline differs: "+json.dumps(observed,sort_keys=True))
+    return {"actions":actions,"effects":effects,"events":deepcopy(events),"agentOutputs":deepcopy(public.get("agentOutputs")),
             "publicEventPrefixSha256":_digest(events)}
 
 
@@ -59,9 +62,9 @@ def inspect_after_recovery(control: Path, state: Path, public: dict[str, Any], b
             not isinstance(events,list) or len(events)!=17 or events[:10]!=before["events"] or \
             _digest(events[:10])!=before["publicEventPrefixSha256"]:
         raise ValueError("Actual React recovery changed public history or failed to persist its new final")
-    outputs=public.get("outputs")
-    if not isinstance(outputs,dict) or not isinstance(before.get("outputs"),dict) or \
-            outputs.get("coder")!=before["outputs"].get("coder") or RERUN_SUMMARY not in str(outputs.get("critic")):
+    outputs=public.get("agentOutputs")
+    if not isinstance(outputs,dict) or not isinstance(before.get("agentOutputs"),dict) or \
+            outputs.get("coder")!=before["agentOutputs"].get("coder") or RERUN_SUMMARY not in str(outputs.get("critic")):
         raise ValueError("Actual React recovery lost the retained coder or newest critic output")
     raw=inspected.get("browserRecoveryReceiptBase64")
     if not isinstance(raw,str) or len(raw)>2*1024**2:
