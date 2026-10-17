@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,7 +23,11 @@ type leasedDispatchCheckpoint struct {
 func TestLeasedStorageDispatchSurvivesKilledOwner(t *testing.T) {
 	const childKey = "DEEPSEEK_TEST_LEASED_DISPATCH_CHILD"
 	if path := os.Getenv(childKey); path != "" {
-		control, err := OpenControl(OpenOptions{Path: path, Owner: "killed-owner", LeaseSeconds: 3})
+		// The child performs five statements between opening the control store
+		// and writing its checkpoint. A race build on a loaded runner can spend
+		// the whole lease there, so keep a horizon long enough for the setup
+		// while still expiring inside the parent's bounded takeover window.
+		control, err := OpenControl(OpenOptions{Path: path, Owner: "killed-owner", LeaseSeconds: 15})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -30,7 +35,7 @@ func TestLeasedStorageDispatchSurvivesKilledOwner(t *testing.T) {
 		if err := control.Put(Record{Domain: "action", ID: "killed-dispatch", Revision: 1, ExecutionEpoch: 1, State: "PENDING"}); err != nil {
 			t.Fatal(err)
 		}
-		claim, err := control.AdmitAndClaimAction(AdmissionRequest{ActionID: "killed-dispatch", LeaseSeconds: 3, ResourceKeys: []string{"reserved-target"}})
+		claim, err := control.AdmitAndClaimAction(AdmissionRequest{ActionID: "killed-dispatch", LeaseSeconds: 15, ResourceKeys: []string{"reserved-target"}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -73,12 +78,15 @@ func TestLeasedStorageDispatchSurvivesKilledOwner(t *testing.T) {
 		}
 	}()
 	var checkpoint leasedDispatchCheckpoint
+	var captured bytes.Buffer
 	ready := make(chan error, 1)
-	go func() { ready <- json.NewDecoder(io.LimitReader(stdout, 64*1024)).Decode(&checkpoint) }()
+	go func() {
+		ready <- json.NewDecoder(io.TeeReader(io.LimitReader(stdout, 64*1024), &captured)).Decode(&checkpoint)
+	}()
 	select {
 	case err := <-ready:
 		if err != nil {
-			t.Fatalf("child checkpoint: %v", err)
+			t.Fatalf("child checkpoint: %v (child output: %q)", err, captured.String())
 		}
 	case <-ctx.Done():
 		t.Fatal("child did not reach durable dispatch")
@@ -96,7 +104,7 @@ func TestLeasedStorageDispatchSurvivesKilledOwner(t *testing.T) {
 		t.Fatalf("owner did not exit by force: %v", err)
 	}
 	until := time.Until(time.Unix(max(checkpoint.Lease.LeaseUntil, checkpoint.Writer.LeaseUntil), 0))
-	if until > 4*time.Second {
+	if until > 16*time.Second {
 		t.Fatal("unexpected lease horizon")
 	}
 	if until > 0 {
