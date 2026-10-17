@@ -33,3 +33,17 @@ func TestSettlementEntryPointsRefuseAMismatchedPhase(t *testing.T) {
 		t.Fatal("a synthesis settlement accepted a tasks action")
 	}
 }
+
+func TestSettlementRefusesAForeignLeaseClaim(t *testing.T) {
+	control, source, _ := agentOutcomeFixture(t)
+	run, found, err := control.AgentRunMetadata(source.RunID)
+	if err != nil || !found {
+		t.Fatal(err)
+	}
+	_, err = control.SettleAgentTask(AgentTaskSettlementRequest{OperationID: "foreign-lease-claim", Actor: "operator:boundary-test",
+		ActionID: source.ActionID, RunID: source.RunID, NodeID: "coder", Epoch: source.Epoch, ExpectedIndex: run.NextIndex,
+		SourceReceiptSHA256: strings.Repeat("a", 64), Owner: "intruder", ClaimToken: "bogus-claim"})
+	if err == nil {
+		t.Fatal("a foreign lease claim settled a task")
+	}
+}
