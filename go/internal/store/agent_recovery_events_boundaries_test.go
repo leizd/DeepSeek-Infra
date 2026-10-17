@@ -86,7 +86,7 @@ func TestRecoveryReplayRefusesFinishedAndCraftedRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if _, err := recoveryReplayEventsTx(tx, run.RunID, crafted, crafted+1); !errors.Is(err, ErrCorruptRecord) {
+	if _, err := recoveryReplayEventsTx(tx, run.RunID, crafted-1, crafted); !errors.Is(err, ErrCorruptRecord) {
 		t.Fatalf("a crafted replay row was accepted: %v", err)
 	}
 }

@@ -43,7 +43,7 @@ func TestRecoveryPreviewSurfacesAnUndecodableContentRow(t *testing.T) {
 	}
 	if _, err := control.db.Exec(`INSERT INTO control_events(domain, record_id, revision, execution_epoch, state, payload_json, record_digest, writer_fencing_token, recorded_at)
         VALUES('agent_run', ?, ?, 1, 'running', ?, ?, 1, 0)`, run.RunID, run.NextIndex+70,
-		`{"lastEvent":{"type":"content","index":9999},"status":"running"}`, strings.Repeat("d", 64)); err != nil {
+		`{"schemaVersion":9,"lastEvent":{"type":"content","index":9999},"status":"running"}`, strings.Repeat("d", 64)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := control.PreviewAgentRunRecovery(input.AgentRunRecoveryExpected); err == nil {
