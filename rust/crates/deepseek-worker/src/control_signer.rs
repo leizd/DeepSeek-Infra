@@ -103,6 +103,60 @@ impl ControlSigner {
         Ok(())
     }
 
+    /// Read the already published proof without entering any signing/record path.
+    /// Go supplies the digest of its original retained document, not a new scope.
+    pub(crate) fn retained_node_outcome(
+        &self,
+        evidence: &deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeEvidence,
+        expected_receipt_sha256: &str,
+    ) -> Result<deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeReceipt, Status>
+    {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use deepseek_protocol::generated::deepseek::agent::v1::AgentNodeOutcomeReceipt;
+        use ed25519_dalek::{Signature, VerifyingKey};
+        use prost::Message as _;
+        let denied = || Status::failed_precondition("AGENT_RECOVERY_RECEIPT_NOT_RETAINED");
+        if expected_receipt_sha256.len() != 64
+            || !expected_receipt_sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(denied());
+        }
+        let payload = evidence.encode_to_vec();
+        let mut identity = b"deepseek-infra:agent-node-outcome-receipt-v1:request\0".to_vec();
+        identity.extend(&payload);
+        let request_id = format!("{:x}", Sha256::digest(identity));
+        let document = self.journal.existing(&request_id)?.ok_or_else(denied)?;
+        if document.is_empty()
+            || document.len() > 1024 * 1024
+            || format!("{:x}", Sha256::digest(&document)) != expected_receipt_sha256
+        {
+            return Err(denied());
+        }
+        let receipt = AgentNodeOutcomeReceipt::decode(document.as_slice()).map_err(|_| denied())?;
+        if receipt.encode_to_vec() != document
+            || receipt.schema_version != 1
+            || receipt.evidence.as_ref() != Some(evidence)
+            || receipt.signer_public_key != self.key.public_key()
+        {
+            return Err(denied());
+        }
+        let public: [u8; 32] = URL_SAFE_NO_PAD
+            .decode(&receipt.signer_public_key)
+            .map_err(|_| denied())?
+            .try_into()
+            .map_err(|_| denied())?;
+        let key = VerifyingKey::from_bytes(&public).map_err(|_| denied())?;
+        let signature = Signature::from_slice(&receipt.signature).map_err(|_| denied())?;
+        let mut message = b"deepseek-infra:agent-node-outcome-proof-v1\0".to_vec();
+        message.extend(payload);
+        key.verify_strict(&message, &signature)
+            .map_err(|_| denied())?;
+        self.verify_retained_node_outcome(&receipt)?;
+        Ok(receipt)
+    }
+
     pub(crate) fn prepare_agent_credentials(
         &self,
         root: &Path,
@@ -137,6 +191,42 @@ impl ControlSigner {
         }
     }
 
+    pub(crate) fn sign_failure_projection(
+        &mut self,
+        evidence: deepseek_protocol::generated::deepseek::agent::v1::AgentFailureProjectionEvidence,
+    ) -> Result<
+        deepseek_protocol::generated::deepseek::agent::v1::AgentFailureProjectionReceipt,
+        Status,
+    > {
+        use deepseek_protocol::generated::deepseek::agent::v1::AgentFailureProjectionReceipt;
+        use prost::Message as _;
+        let payload = evidence.encode_to_vec();
+        let signature = self
+            .key
+            .sign_agent_failure_projection(&evidence)
+            .map_err(|_| Status::failed_precondition("AGENT_FAILURE_PROJECTION_INVALID"))?;
+        let receipt = AgentFailureProjectionReceipt {
+            schema_version: 1,
+            evidence: Some(evidence),
+            signature,
+            signer_public_key: self.key.public_key(),
+        };
+        let bytes = receipt.encode_to_vec();
+        let mut request = b"deepseek-infra:agent-failure-projection:request\0".to_vec();
+        request.extend(&payload);
+        let request_id = format!("{:x}", Sha256::digest(&request));
+        let mut nonce = b"deepseek-infra:agent-failure-projection:nonce\0".to_vec();
+        nonce.extend(&payload);
+        let nonce = format!("{:x}", Sha256::digest(&nonce));
+        if let Some(prior) = self.journal.existing(&request_id)? {
+            if prior != bytes {
+                return Err(Status::data_loss("AGENT_FAILURE_PROJECTION_CORRUPT"));
+            }
+        } else {
+            self.journal.record(&request_id, &nonce, &bytes)?;
+        }
+        Ok(receipt)
+    }
     pub(crate) fn sign_synthesis_projection(
         &mut self,
         evidence: deepseek_protocol::generated::deepseek::agent::v1::AgentSynthesisProjectionEvidence,

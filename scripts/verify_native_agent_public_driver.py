@@ -415,6 +415,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     recovery_driving = bool(getattr(args, "recovery_driving", False))
     task_recovery_case = getattr(args, "task_recovery_case", None)
     public_completion_case = getattr(args, "public_completion_case", None)
+    terminal_failure_case = getattr(args, "terminal_failure_case", None)
+    if terminal_failure_case is not None and terminal_failure_case not in {"plan", "synthesis", "plan-5xx", "plan-eof", "synthesis-5xx", "synthesis-eof"}:
+        raise ValueError("Unknown terminal failure case")
+    terminal_unknown = terminal_failure_case is not None and "-" in terminal_failure_case
+    terminal_phase = terminal_failure_case.split("-", 1)[0] if terminal_failure_case is not None else None
     failed_task_case = getattr(args, "failed_task_case", None)
     if failed_task_case is not None and failed_task_case not in {"resume", "rerun"}:
         raise ValueError("Unknown failed-task recovery case")
@@ -439,7 +444,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     ROOT / "tests/native/agent_task_recovery_process.go.txt",
                     ROOT / "tests/native/agent_public_recovery_process.go.txt",
                     ROOT / "tests/native/agent_public_completion_process.go.txt",
-                    ROOT / "tests/native/agent_failed_task_process.go.txt"]
+                    ROOT / "tests/native/agent_failed_task_process.go.txt", ROOT / "tests/native/agent_terminal_failure_process.go.txt"]
         overlay = scratch / "overlay.json"
         overlay.write_text(json.dumps({"Replace": {
             (ROOT / "go/internal/api/zz_native_agent_signing_process_test.go").as_posix(): fixtures[0].as_posix(),
@@ -448,7 +453,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             (ROOT / "go/internal/api/zz_native_agent_task_recovery_process_test.go").as_posix(): fixtures[3].as_posix(),
             (ROOT / "go/internal/api/zz_native_agent_public_recovery_process_test.go").as_posix(): fixtures[4].as_posix(),
             (ROOT / "go/internal/api/zz_native_agent_public_completion_process_test.go").as_posix(): fixtures[5].as_posix(),
-            (ROOT / "go/internal/api/zz_native_agent_failed_task_process_test.go").as_posix(): fixtures[6].as_posix()}}), encoding="utf-8")
+            (ROOT / "go/internal/api/zz_native_agent_failed_task_process_test.go").as_posix(): fixtures[6].as_posix(),
+            (ROOT / "go/internal/api/zz_native_agent_terminal_failure_process_test.go").as_posix(): fixtures[7].as_posix()}}), encoding="utf-8")
         binary = scratch / "native-public-agent-api-tests"
         signing.record_command(["go", "test", "-c", "-p=2", "-overlay", overlay.as_posix(), "-o", binary.as_posix(), "./internal/api"],
             ROOT / "go", environment, output, "go-public-driver-build", timeout=600)
@@ -474,6 +480,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         state = case / "rust-state"
         state.mkdir()
         exchanges: list[dict[str, Any]] = []
+        exchange_lock = threading.Lock()
         plan = {"summary": "Controlled provider plan", "tasks": [{"role": "coder", "task": "write", "dependsOn": []},
             {"role": "critic", "task": "review", "dependsOn": ["coder"]}]}
 
@@ -488,19 +495,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     return
                 body = json.loads(self.rfile.read(length))
                 prompt = json.dumps(body, ensure_ascii=False)
-                exchanges.append({"actionId": self.headers.get("X-DeepSeek-Action-Id"),
-                    "executionEpoch": self.headers.get("X-DeepSeek-Execution-Epoch"),
-                    "operationId": self.headers.get("X-DeepSeek-Node-Operation-Id"), "model": body.get("model"),
-                    "stream": body.get("stream"), "selectedTaskInPrompt": "Agent 子任务：write" in prompt,
-                    "dependentTaskInPrompt": "Agent 子任务：review" in prompt,
-                    "predecessorSummaryInPrompt": "Controlled public task summary" in prompt,
-                    "privateReasoningInPrompt": "private-task-reasoning" in prompt,
-                    "synthesisCoderInPrompt": "任务：write" in prompt, "synthesisCriticInPrompt": "任务：review" in prompt,
-                    "recoveredTaskSummaryInPrompt":"Controlled rerun task summary" in prompt,
-                    "requestCredentialUsed":self.headers.get("Authorization")=="Bearer request-only-credential",
-                    "rerunSelectedRoleInPrompt":task_recovery_case is not None and
-                        ("你负责挑错、找漏洞" if task_recovery_case["role"]=="critic" else "你负责事实、资料") in prompt})
-                position = len(exchanges)
+                with exchange_lock:
+                    exchanges.append({"actionId": self.headers.get("X-DeepSeek-Action-Id"),
+                        "executionEpoch": self.headers.get("X-DeepSeek-Execution-Epoch"),
+                        "operationId": self.headers.get("X-DeepSeek-Node-Operation-Id"), "model": body.get("model"),
+                        "stream": body.get("stream"), "selectedTaskInPrompt": "Agent 子任务：write" in prompt,
+                        "dependentTaskInPrompt": "Agent 子任务：review" in prompt,
+                        "predecessorSummaryInPrompt": "Controlled public task summary" in prompt,
+                        "privateReasoningInPrompt": "private-task-reasoning" in prompt,
+                        "synthesisCoderInPrompt": "任务：write" in prompt, "synthesisCriticInPrompt": "任务：review" in prompt,
+                        "recoveredTaskSummaryInPrompt":"Controlled rerun task summary" in prompt,
+                        "requestCredentialUsed":self.headers.get("Authorization")=="Bearer request-only-credential",
+                        "rerunSelectedRoleInPrompt":task_recovery_case is not None and
+                            ("你负责挑错、找漏洞" if task_recovery_case["role"]=="critic" else "你负责事实、资料") in prompt})
+                    exchange = exchanges[-1]
+                    position = len(exchanges)
                 if public_completion_case is not None and public_completion_case["synthesize"] and position==5:
                     signing.write_ready(case/"public-synthesis-arrived.json",{"position":position})
                     deadline=time.monotonic()+60
@@ -534,6 +543,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "choices": [{"message": {"role": "assistant", "content": content, "reasoning_content": "private-task-reasoning"}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}, separators=(",", ":")).encode()
                 http_status=200
+                eof_rejection = False
                 if failed_task_case is not None:
                     if position==2 or failed_task_case=="rerun" and position==5:
                         http_status=401 if position==2 else 429
@@ -543,14 +553,35 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         reply=json.dumps({"id":f"failed-task-{position}","model":"deepseek-v4-pro",
                             "choices":[{"message":{"role":"assistant","content":content,"reasoning_content":"private-task-reasoning"},"finish_reason":"stop"}],
                             "usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}},separators=(",",":")).encode()
-                    exchanges[-1].update(httpStatus=http_status,responseSha256=hashlib.sha256(reply).hexdigest(),
+                    exchange.update(httpStatus=http_status,responseSha256=hashlib.sha256(reply).hexdigest(),
                         failedPredecessorInPrompt="HTTP 401" in prompt,
                         synthesisFailureNoticeInPrompt="以下 Agent 本轮执行失败" in prompt)
+                if terminal_failure_case is not None:
+                    rejected = position == (1 if terminal_phase == "plan" else 4)
+                    final = position == (6 if terminal_phase == "plan" else 5)
+                    if rejected:
+                        http_status = 503 if terminal_failure_case.endswith("-5xx") else 401
+                        eof_rejection = terminal_failure_case.endswith("-eof")
+                        reply = json.dumps({"error": {"message": "private-provider-rejection", "type": "invalid_request_error"}}, separators=(",", ":")).encode()
+                    elif final or terminal_phase == "plan":
+                        content = "Controlled terminal-failure recovered final answer" if final else "## 摘要\nControlled terminal task summary"
+                        reply = json.dumps({"id": f"terminal-{position}", "model": "deepseek-v4-pro",
+                            "choices": [{"message": {"role": "assistant", "content": content, "reasoning_content": "private-task-reasoning"}, "finish_reason": "stop"}],
+                            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}, separators=(",", ":")).encode()
+                    sent_reply = reply[:-3] if eof_rejection else reply
+                    exchange.update(httpStatus=http_status, responseComplete=not eof_rejection, responseSha256=hashlib.sha256(sent_reply).hexdigest(),
+                        terminalDefaultDescriptionsInPrompt=all(text in prompt for text in ["核查事实、背景和可能需要搜索的信息", "分析代码、架构、实现路径和工程风险", "梳理推理链路、边界条件和可执行方案", "检查方案风险、遗漏和反例"]))
+                    if rejected:
+                        signing.write_ready(case / "terminal-rejection-arrived.json", {"mode": terminal_failure_case, "position": position})
                 self.send_response(http_status)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(reply)))
+                self.send_header("Content-Length", str(len(reply) + (16 if eof_rejection else 0)))
                 self.end_headers()
-                self.wfile.write(reply)
+                self.wfile.write(reply[:-3] if eof_rejection else reply)
+                if eof_rejection:
+                    self.wfile.flush()
+                    self.close_connection = True
+                    self.connection.shutdown(socket.SHUT_WR)
 
         provider = ThreadingHTTPServer(("127.0.0.1", 0), ProviderFixture)
         thread = threading.Thread(target=provider.serve_forever, daemon=True)
@@ -562,6 +593,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             environment.update(DEEPSEEK_AGENT_PUBLIC_DRIVER_PROBE="1", DEEPSEEK_AGENT_SIGNING_PROBE_DIR=case.as_posix(),
                 DEEPSEEK_AGENT_SIGNING_WORKER_BEARER=bearer, DEEPSEEK_TEST_HEAD_SHA=source_commit,
                 DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY=binding["signerPublicKey"])
+            if terminal_failure_case is not None:
+                environment["DEEPSEEK_TEST_AGENT_TERMINAL_FAILURE"] = terminal_failure_case
             if failed_task_case is not None:
                 environment["DEEPSEEK_TEST_AGENT_FAILED_TASK_RECOVERY"]=failed_task_case
             if recovery_preparation:
@@ -634,7 +667,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             result = signing.wait_json(case / "result.json", producer, timeout=360 if cancel_active else 180)
             if producer.wait(timeout=15) != 0:
                 raise RuntimeError("Actual native public driver process failed")
-            if failed_task_case is not None:
+            if terminal_failure_case is not None:
+                import verify_native_agent_terminal_failures as terminal_failures
+                if terminal_unknown:
+                    terminal_failures.validate_unknown_result(result, exchanges, terminal_failure_case)
+                else:
+                    terminal_failures.validate_terminal_result(result, exchanges, terminal_failure_case)
+            elif failed_task_case is not None:
                 import verify_native_agent_failed_tasks as failed_tasks
                 result["observationRegressionVerified"] = True
                 failed_tasks.validate_failed_task_result(result,exchanges,failed_task_case)
@@ -680,14 +719,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     expected_nodes = 5
                 if task_recovery_case is not None:
                     expected_nodes=5+int(task_recovery_case["synthesize"])
+                if terminal_failure_case is not None:
+                    expected_nodes = (1 if terminal_phase == "plan" else 4) if terminal_unknown else (6 if terminal_phase == "plan" else 5)
                 if failed_task_case is not None:
                     expected_nodes=6
-                if len(rows) != expected_nodes or any(row[1] != "CONFIRMED" or hashlib.sha256(row[2]).hexdigest() != row[3] for row in rows):
-                    raise ValueError("Rust actual four-node custody is missing or corrupt")
-                leader = next((json.loads(row[2]) for row in rows if json.loads(row[2]).get("publicEvent", {}).get("type") == "agent_plan"), None)
-                if leader is None:
-                    raise ValueError("Rust retained planning outcome is missing")
-                result["actualPlanningSource"] = "retained-preset-policy" if leader.get("planningSource") == "retained-preset-policy" else "upstream-provider"
+                if terminal_unknown:
+                    result["actualPlanningSource"] = "upstream-provider-unknown" if terminal_phase == "plan" else "upstream-provider"
+                else:
+                    if len(rows) != expected_nodes or any(row[1] != "CONFIRMED" or hashlib.sha256(row[2]).hexdigest() != row[3] for row in rows):
+                        raise ValueError("Rust actual four-node custody is missing or corrupt")
+                    leader = next((json.loads(row[2]) for row in rows if json.loads(row[2]).get("publicEvent", {}).get("type") == "agent_plan"), None)
+                    if leader is None and terminal_failure_case != "plan":
+                        raise ValueError("Rust retained planning outcome is missing")
+                    result["actualPlanningSource"] = "confirmed-provider-rejection" if leader is None else ("retained-preset-policy" if leader.get("planningSource") == "retained-preset-policy" else "upstream-provider")
             if task_recovery_case is not None:
                 recovery=result["recoveryPreparation"]
                 encoded=recovery["progressReceiptBase64"]
@@ -709,6 +753,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 if bodies!=[expected_note,expected_next]:
                     raise ValueError("Actual progress bodies changed retained public behavior")
                 result["progressArtifactAndSignerCustodyVerified"]=True
+            if terminal_failure_case is not None:
+                if terminal_unknown:
+                    terminal_failures.verify_unknown_custody(result, exchanges, state, artifacts)
+                else:
+                    terminal_failures.verify_terminal_custody(result, exchanges, state, artifacts)
             if failed_task_case is not None:
                 failed_tasks.verify_failed_task_custody(result,exchanges,state,artifacts)
             result.update(actualHTTPRequests=len(exchanges), providerExchanges=exchanges,

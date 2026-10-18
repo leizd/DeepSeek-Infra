@@ -1,5 +1,44 @@
 <!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
 
+## Typed terminal Agent failure and recovery — 2026-10-18
+
+The exact1eef89e3 source has collected Rust1554 tests, original Redis ignore,
+82.0755 percent coverage and both actual failed-task public resume/rerun cases
+(12 actual HTTP requests,17 Go observation cases per mode and original Rust
+signer/effect/recovery custody). Its37/37 workflow_dispatch jobs have reported
+success; final report collection remains separate from this new source.
+
+This candidate closes only completely received documented provider rejections
+for planner/synthesis with typed Rust-owned failure metadata and a separately
+signed failure projection. Go atomically appends one public error, marks only
+that action FAILED, terminates its lease and releases only its resources.
+Replay reads the original failed checkpoint before committing its transaction.
+Ordinary task failures, ambiguous transport results and5xx retain their existing
+semantics. Known receipt queries require the mandatory read-only retained-proof
+RPC and cannot recreate a missing original Rust signature document.
+
+Explicit resume preserves original actions and events. A planner without output
+uses the retained Python controller's default four-role DAG, keeping the original
+empty public plan snapshot; nil and empty input plans select the same effective
+DAG. A synthesis rejection retains completed task outputs and resumes synthesis.
+The new real-process matrix requires both known recovery paths plus planner and
+synthesis EOF/5xx quarantine: public cancellation,409 resume/rerun refusal,
+original action/epoch/reservation retention and no second provider dispatch.
+Each case binds real HTTP headers and bytes to decoded Protobuf receipts,
+original Rust signature/effect journals, public artifact bodies and request hashes.
+
+Offline report-boundary/tamper guards, formatting and generated-code checks are
+local evidence only. New native compilation, Go/Rust unit/race/coverage and all
+six actual process cases remain CLOUD_PENDING for this candidate. No original
+Go/Python95 percent or Rust80 percent floor, frozen corpus or old mandatory gate
+is weakened. The browser frontend stays TypeScript; new terminal-error UI,
+provider/platform workloads, production ownership cutover, zero-Python package
+measurements and complete Evidence still require final acceptance. NOT_READY.
+
+<!-- END CURRENT_NATIVE_CLOUD_CHECKPOINT -->
+
+<!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
+
 ## Failed-task recovery observation repair — 2026-10-18
 
 Source67afdb1d Rust push39105837913 passed strict lint, workspace tests and

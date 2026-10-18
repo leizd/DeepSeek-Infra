@@ -26,6 +26,7 @@ const (
 	AgentNodeControl_SettleSynthesis_FullMethodName = "/deepseek.agent.v1.AgentNodeControl/SettleSynthesis"
 	AgentNodeControl_SettleTask_FullMethodName      = "/deepseek.agent.v1.AgentNodeControl/SettleTask"
 	AgentNodeControl_CompleteTasks_FullMethodName   = "/deepseek.agent.v1.AgentNodeControl/CompleteTasks"
+	AgentNodeControl_SettleFailure_FullMethodName   = "/deepseek.agent.v1.AgentNodeControl/SettleFailure"
 )
 
 // AgentNodeControlClient is the client API for AgentNodeControl service.
@@ -42,6 +43,7 @@ type AgentNodeControlClient interface {
 	SettleSynthesis(ctx context.Context, in *SettleAgentSynthesisRequest, opts ...grpc.CallOption) (*SettleAgentSynthesisResponse, error)
 	SettleTask(ctx context.Context, in *SettleAgentTaskRequest, opts ...grpc.CallOption) (*SettleAgentTaskResponse, error)
 	CompleteTasks(ctx context.Context, in *CompleteAgentTasksRequest, opts ...grpc.CallOption) (*CompleteAgentTasksResponse, error)
+	SettleFailure(ctx context.Context, in *SettleAgentFailureRequest, opts ...grpc.CallOption) (*SettleAgentFailureResponse, error)
 }
 
 type agentNodeControlClient struct {
@@ -122,6 +124,16 @@ func (c *agentNodeControlClient) CompleteTasks(ctx context.Context, in *Complete
 	return out, nil
 }
 
+func (c *agentNodeControlClient) SettleFailure(ctx context.Context, in *SettleAgentFailureRequest, opts ...grpc.CallOption) (*SettleAgentFailureResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SettleAgentFailureResponse)
+	err := c.cc.Invoke(ctx, AgentNodeControl_SettleFailure_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentNodeControlServer is the server API for AgentNodeControl service.
 // All implementations must embed UnimplementedAgentNodeControlServer
 // for forward compatibility.
@@ -136,6 +148,7 @@ type AgentNodeControlServer interface {
 	SettleSynthesis(context.Context, *SettleAgentSynthesisRequest) (*SettleAgentSynthesisResponse, error)
 	SettleTask(context.Context, *SettleAgentTaskRequest) (*SettleAgentTaskResponse, error)
 	CompleteTasks(context.Context, *CompleteAgentTasksRequest) (*CompleteAgentTasksResponse, error)
+	SettleFailure(context.Context, *SettleAgentFailureRequest) (*SettleAgentFailureResponse, error)
 	mustEmbedUnimplementedAgentNodeControlServer()
 }
 
@@ -166,6 +179,9 @@ func (UnimplementedAgentNodeControlServer) SettleTask(context.Context, *SettleAg
 }
 func (UnimplementedAgentNodeControlServer) CompleteTasks(context.Context, *CompleteAgentTasksRequest) (*CompleteAgentTasksResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CompleteTasks not implemented")
+}
+func (UnimplementedAgentNodeControlServer) SettleFailure(context.Context, *SettleAgentFailureRequest) (*SettleAgentFailureResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SettleFailure not implemented")
 }
 func (UnimplementedAgentNodeControlServer) mustEmbedUnimplementedAgentNodeControlServer() {}
 func (UnimplementedAgentNodeControlServer) testEmbeddedByValue()                          {}
@@ -314,6 +330,24 @@ func _AgentNodeControl_CompleteTasks_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentNodeControl_SettleFailure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SettleAgentFailureRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentNodeControlServer).SettleFailure(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentNodeControl_SettleFailure_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentNodeControlServer).SettleFailure(ctx, req.(*SettleAgentFailureRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentNodeControl_ServiceDesc is the grpc.ServiceDesc for AgentNodeControl service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -349,6 +383,10 @@ var AgentNodeControl_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "CompleteTasks",
 			Handler:    _AgentNodeControl_CompleteTasks_Handler,
 		},
+		{
+			MethodName: "SettleFailure",
+			Handler:    _AgentNodeControl_SettleFailure_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "agent/v1/agent_node.proto",
@@ -361,8 +399,10 @@ const (
 	AgentNodeWorker_ExecuteTask_FullMethodName             = "/deepseek.agent.v1.AgentNodeWorker/ExecuteTask"
 	AgentNodeWorker_ExecuteSynthesis_FullMethodName        = "/deepseek.agent.v1.AgentNodeWorker/ExecuteSynthesis"
 	AgentNodeWorker_QueryEffect_FullMethodName             = "/deepseek.agent.v1.AgentNodeWorker/QueryEffect"
+	AgentNodeWorker_ReadRetainedEffect_FullMethodName      = "/deepseek.agent.v1.AgentNodeWorker/ReadRetainedEffect"
 	AgentNodeWorker_ProjectPlan_FullMethodName             = "/deepseek.agent.v1.AgentNodeWorker/ProjectPlan"
 	AgentNodeWorker_ProjectSynthesis_FullMethodName        = "/deepseek.agent.v1.AgentNodeWorker/ProjectSynthesis"
+	AgentNodeWorker_ProjectFailure_FullMethodName          = "/deepseek.agent.v1.AgentNodeWorker/ProjectFailure"
 )
 
 // AgentNodeWorkerClient is the client API for AgentNodeWorker service.
@@ -381,8 +421,11 @@ type AgentNodeWorkerClient interface {
 	// Only synthesis-phase claims with the Go-selected synthesizer node are valid.
 	ExecuteSynthesis(ctx context.Context, in *ExecuteAgentTaskRequest, opts ...grpc.CallOption) (*AgentNodeEffectMetadata, error)
 	QueryEffect(ctx context.Context, in *QueryAgentNodeEffectRequest, opts ...grpc.CallOption) (*QueryAgentNodeEffectResponse, error)
+	// Requires expected_receipt_sha256 and never creates an outcome signature.
+	ReadRetainedEffect(ctx context.Context, in *QueryAgentNodeEffectRequest, opts ...grpc.CallOption) (*QueryAgentNodeEffectResponse, error)
 	ProjectPlan(ctx context.Context, in *ProjectAgentPlanRequest, opts ...grpc.CallOption) (*AgentPlanProjectionReceipt, error)
 	ProjectSynthesis(ctx context.Context, in *ProjectAgentSynthesisRequest, opts ...grpc.CallOption) (*AgentSynthesisProjectionReceipt, error)
+	ProjectFailure(ctx context.Context, in *ProjectAgentFailureRequest, opts ...grpc.CallOption) (*AgentFailureProjectionReceipt, error)
 }
 
 type agentNodeWorkerClient struct {
@@ -453,6 +496,16 @@ func (c *agentNodeWorkerClient) QueryEffect(ctx context.Context, in *QueryAgentN
 	return out, nil
 }
 
+func (c *agentNodeWorkerClient) ReadRetainedEffect(ctx context.Context, in *QueryAgentNodeEffectRequest, opts ...grpc.CallOption) (*QueryAgentNodeEffectResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(QueryAgentNodeEffectResponse)
+	err := c.cc.Invoke(ctx, AgentNodeWorker_ReadRetainedEffect_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *agentNodeWorkerClient) ProjectPlan(ctx context.Context, in *ProjectAgentPlanRequest, opts ...grpc.CallOption) (*AgentPlanProjectionReceipt, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AgentPlanProjectionReceipt)
@@ -467,6 +520,16 @@ func (c *agentNodeWorkerClient) ProjectSynthesis(ctx context.Context, in *Projec
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AgentSynthesisProjectionReceipt)
 	err := c.cc.Invoke(ctx, AgentNodeWorker_ProjectSynthesis_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *agentNodeWorkerClient) ProjectFailure(ctx context.Context, in *ProjectAgentFailureRequest, opts ...grpc.CallOption) (*AgentFailureProjectionReceipt, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AgentFailureProjectionReceipt)
+	err := c.cc.Invoke(ctx, AgentNodeWorker_ProjectFailure_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -489,8 +552,11 @@ type AgentNodeWorkerServer interface {
 	// Only synthesis-phase claims with the Go-selected synthesizer node are valid.
 	ExecuteSynthesis(context.Context, *ExecuteAgentTaskRequest) (*AgentNodeEffectMetadata, error)
 	QueryEffect(context.Context, *QueryAgentNodeEffectRequest) (*QueryAgentNodeEffectResponse, error)
+	// Requires expected_receipt_sha256 and never creates an outcome signature.
+	ReadRetainedEffect(context.Context, *QueryAgentNodeEffectRequest) (*QueryAgentNodeEffectResponse, error)
 	ProjectPlan(context.Context, *ProjectAgentPlanRequest) (*AgentPlanProjectionReceipt, error)
 	ProjectSynthesis(context.Context, *ProjectAgentSynthesisRequest) (*AgentSynthesisProjectionReceipt, error)
+	ProjectFailure(context.Context, *ProjectAgentFailureRequest) (*AgentFailureProjectionReceipt, error)
 	mustEmbedUnimplementedAgentNodeWorkerServer()
 }
 
@@ -519,11 +585,17 @@ func (UnimplementedAgentNodeWorkerServer) ExecuteSynthesis(context.Context, *Exe
 func (UnimplementedAgentNodeWorkerServer) QueryEffect(context.Context, *QueryAgentNodeEffectRequest) (*QueryAgentNodeEffectResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method QueryEffect not implemented")
 }
+func (UnimplementedAgentNodeWorkerServer) ReadRetainedEffect(context.Context, *QueryAgentNodeEffectRequest) (*QueryAgentNodeEffectResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadRetainedEffect not implemented")
+}
 func (UnimplementedAgentNodeWorkerServer) ProjectPlan(context.Context, *ProjectAgentPlanRequest) (*AgentPlanProjectionReceipt, error) {
 	return nil, status.Error(codes.Unimplemented, "method ProjectPlan not implemented")
 }
 func (UnimplementedAgentNodeWorkerServer) ProjectSynthesis(context.Context, *ProjectAgentSynthesisRequest) (*AgentSynthesisProjectionReceipt, error) {
 	return nil, status.Error(codes.Unimplemented, "method ProjectSynthesis not implemented")
+}
+func (UnimplementedAgentNodeWorkerServer) ProjectFailure(context.Context, *ProjectAgentFailureRequest) (*AgentFailureProjectionReceipt, error) {
+	return nil, status.Error(codes.Unimplemented, "method ProjectFailure not implemented")
 }
 func (UnimplementedAgentNodeWorkerServer) mustEmbedUnimplementedAgentNodeWorkerServer() {}
 func (UnimplementedAgentNodeWorkerServer) testEmbeddedByValue()                         {}
@@ -654,6 +726,24 @@ func _AgentNodeWorker_QueryEffect_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentNodeWorker_ReadRetainedEffect_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QueryAgentNodeEffectRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentNodeWorkerServer).ReadRetainedEffect(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentNodeWorker_ReadRetainedEffect_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentNodeWorkerServer).ReadRetainedEffect(ctx, req.(*QueryAgentNodeEffectRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AgentNodeWorker_ProjectPlan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ProjectAgentPlanRequest)
 	if err := dec(in); err != nil {
@@ -690,6 +780,24 @@ func _AgentNodeWorker_ProjectSynthesis_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentNodeWorker_ProjectFailure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProjectAgentFailureRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentNodeWorkerServer).ProjectFailure(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentNodeWorker_ProjectFailure_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentNodeWorkerServer).ProjectFailure(ctx, req.(*ProjectAgentFailureRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentNodeWorker_ServiceDesc is the grpc.ServiceDesc for AgentNodeWorker service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -722,12 +830,20 @@ var AgentNodeWorker_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _AgentNodeWorker_QueryEffect_Handler,
 		},
 		{
+			MethodName: "ReadRetainedEffect",
+			Handler:    _AgentNodeWorker_ReadRetainedEffect_Handler,
+		},
+		{
 			MethodName: "ProjectPlan",
 			Handler:    _AgentNodeWorker_ProjectPlan_Handler,
 		},
 		{
 			MethodName: "ProjectSynthesis",
 			Handler:    _AgentNodeWorker_ProjectSynthesis_Handler,
+		},
+		{
+			MethodName: "ProjectFailure",
+			Handler:    _AgentNodeWorker_ProjectFailure_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

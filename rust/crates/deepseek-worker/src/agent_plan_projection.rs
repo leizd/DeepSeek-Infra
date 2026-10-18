@@ -172,6 +172,7 @@ mod tests {
             let input = ProjectAgentPlanRequest {
                 schema_version: 1,
                 source: Some(QueryAgentNodeEffectRequest {
+                    expected_receipt_sha256: String::new(),
                     operation_id: format!("agent-node-{}", "a".repeat(64)),
                     fence: Some(fence.clone()),
                     run_id: "run".into(),

@@ -41,7 +41,7 @@ func nodeDispatchError(err error) error {
 	if errors.Is(err, store.ErrAgentNodeOutcomeConflict) {
 		return status.Error(codes.AlreadyExists, err.Error())
 	}
-	if errors.Is(err, store.ErrAgentNodeDependencyUnverified) || errors.Is(err, agentproof.ErrAgentNodeOutcomeInvalid) || errors.Is(err, agentproof.ErrAgentPlanProjectionInvalid) || errors.Is(err, agentproof.ErrAgentSynthesisProjectionInvalid) {
+	if errors.Is(err, store.ErrAgentNodeDependencyUnverified) || errors.Is(err, agentproof.ErrAgentNodeOutcomeInvalid) || errors.Is(err, agentproof.ErrAgentPlanProjectionInvalid) || errors.Is(err, agentproof.ErrAgentSynthesisProjectionInvalid) || errors.Is(err, agentproof.ErrAgentFailureProjectionInvalid) {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	}
 	return executionWriteError(err)
@@ -65,6 +65,26 @@ func (service *agentNodeService) SettlePlan(ctx context.Context, input *agentv1.
 		return nil, nodeDispatchError(err)
 	}
 	return &agentv1.SettleAgentPlanResponse{AlreadyApplied: result.AlreadyApplied, Run: runProtocol(result.Run), ActionState: result.Action.State}, nil
+}
+
+func (service *agentNodeService) SettleFailure(ctx context.Context, input *agentv1.SettleAgentFailureRequest) (*agentv1.SettleAgentFailureResponse, error) {
+	if err := service.run.executionProcess(); err != nil {
+		return nil, err
+	}
+	if input == nil || input.SchemaVersion != 1 || input.Fence == nil || input.Projection == nil ||
+		len(input.ProtoReflect().GetUnknown()) != 0 || len(input.Fence.ProtoReflect().GetUnknown()) != 0 {
+		return nil, status.Error(codes.InvalidArgument, "AGENT_FAILURE_PROJECTION_INVALID")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
+	input = proto.Clone(input).(*agentv1.SettleAgentFailureRequest)
+	result, err := service.run.control.SettleAgentFailure(store.AgentFailureSettlementRequest{OperationID: input.OperationId, Actor: input.Actor,
+		ActionID: input.Fence.ActionId, Epoch: input.Fence.ExecutionEpoch, RunID: input.RunId, Owner: input.Owner, ClaimToken: input.ClaimToken, Projection: input.Projection})
+	if err != nil {
+		return nil, nodeDispatchError(err)
+	}
+	return &agentv1.SettleAgentFailureResponse{AlreadyApplied: result.AlreadyApplied, Run: runProtocol(result.Run), ActionState: result.Action.State}, nil
 }
 
 func (service *agentNodeService) SettleSynthesis(ctx context.Context, input *agentv1.SettleAgentSynthesisRequest) (*agentv1.SettleAgentSynthesisResponse, error) {

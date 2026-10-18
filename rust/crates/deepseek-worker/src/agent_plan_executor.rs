@@ -78,6 +78,17 @@ impl WorkerRpcService {
         outcome: AgentNodeEffectOutcome,
         run_id: &str,
     ) -> Result<AgentNodeEffectMetadata, Status> {
+        self.publish_node_from_custody(executor, outcome, run_id, None)
+            .await
+    }
+
+    async fn publish_node_from_custody(
+        &self,
+        executor: &AgentPlanExecutor,
+        outcome: AgentNodeEffectOutcome,
+        run_id: &str,
+        expected_receipt_sha256: Option<&str>,
+    ) -> Result<AgentNodeEffectMetadata, Status> {
         let query = QueryAgentNodeEffect {
             operation_id: outcome.operation_id.clone(),
             fence: outcome.fence.clone(),
@@ -102,13 +113,17 @@ impl WorkerRpcService {
                 metadata.public_event.clone().ok_or_else(unavailable)?,
                 &config,
             )?;
-        let receipt = self
+        let mut signer = self
             .control_signer
             .as_ref()
             .ok_or_else(unavailable)?
             .lock()
-            .await
-            .sign_node_outcome(evidence)?;
+            .await;
+        let receipt = if let Some(expected) = expected_receipt_sha256 {
+            signer.retained_node_outcome(&evidence, expected)?
+        } else {
+            signer.sign_node_outcome(evidence)?
+        };
         metadata.outcome_receipt = Some(receipt);
         Ok(metadata)
     }
@@ -352,6 +367,17 @@ impl AgentNodeWorker for WorkerRpcService {
     > {
         self.project_agent_synthesis(request).await
     }
+    async fn project_failure(
+        &self,
+        request: Request<
+            deepseek_protocol::generated::deepseek::agent::v1::ProjectAgentFailureRequest,
+        >,
+    ) -> Result<
+        Response<deepseek_protocol::generated::deepseek::agent::v1::AgentFailureProjectionReceipt>,
+        Status,
+    > {
+        self.project_agent_failure(request).await
+    }
     async fn project_plan(
         &self,
         request: Request<
@@ -466,12 +492,18 @@ impl AgentNodeWorker for WorkerRpcService {
             } else {
                 let mut config = executor.upstream.clone();
                 config.timeout = config.timeout.min(Duration::from_secs((deadline - now) as u64));
-                let (turn, receipt) = deepseek_gateway::chat_execution::exchange_fenced_turn(&config, body.as_ref().ok_or_else(unavailable)?, &permit.fence,
-                    permit.operation_id(), crate::MAX_AGENT_NODE_OUTCOME_BYTES / 2).await.map_err(|_| Status::unavailable("AGENT_PROVIDER_RESULT_UNKNOWN"))?;
-                let content = turn.content();
-                if content.is_empty() || !turn.tool_calls().is_empty() { return Err(Status::failed_precondition("AGENT_PLAN_RESULT_UNKNOWN")); }
-                let event = json!({"type":"agent_plan","plan":multi_agent::parse_plan_response(&content),"text":content,"usage":turn.usage});
-                json!({"runId":run_id,"publicEvent":event,"providerResponseSha256":receipt})
+                match deepseek_gateway::chat_execution::exchange_fenced_task_outcome(&config, body.as_ref().ok_or_else(unavailable)?, &permit.fence,
+                    permit.operation_id(), crate::MAX_AGENT_NODE_OUTCOME_BYTES / 2).await.map_err(|_| Status::unavailable("AGENT_PROVIDER_RESULT_UNKNOWN"))? {
+                    deepseek_gateway::chat_execution::FencedTaskOutcome::Rejected { status, response_sha256 } =>
+                        crate::agent_terminal_failure::rejection_envelope(&run_id, "leader", 1, status, &response_sha256)?,
+                    deepseek_gateway::chat_execution::FencedTaskOutcome::Turn { turn, response_sha256 } => {
+                        let turn = *turn;
+                        let content = turn.content();
+                        if content.is_empty() || !turn.tool_calls().is_empty() { return Err(Status::failed_precondition("AGENT_PLAN_RESULT_UNKNOWN")); }
+                        let event = json!({"type":"agent_plan","plan":multi_agent::parse_plan_response(&content),"text":content,"usage":turn.usage});
+                        json!({"runId":run_id,"publicEvent":event,"providerResponseSha256":response_sha256})
+                    }
+                }
             };
             service.confirm_agent_node_effect(&permit, &envelope).await
         }.await;
@@ -491,12 +523,33 @@ impl AgentNodeWorker for WorkerRpcService {
         .map(Response::new)
     }
 
+    async fn read_retained_effect(
+        &self,
+        request: Request<QueryAgentNodeEffectRequest>,
+    ) -> Result<Response<QueryAgentNodeEffectResponse>, Status> {
+        if request.get_ref().expected_receipt_sha256.is_empty() {
+            return Err(Status::invalid_argument(
+                "AGENT_RECOVERY_RECEIPT_NOT_RETAINED",
+            ));
+        }
+        self.query_effect(request).await
+    }
+
     async fn query_effect(
         &self,
         request: Request<QueryAgentNodeEffectRequest>,
     ) -> Result<Response<QueryAgentNodeEffectResponse>, Status> {
         let metadata = request.metadata().clone();
         let input = request.into_inner();
+        let expected = input.expected_receipt_sha256;
+        if !expected.is_empty()
+            && (expected.len() != 64
+                || !expected
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+        {
+            return Err(Status::invalid_argument("AGENT_NODE_OUTCOME_INVALID"));
+        }
         let selector = QueryAgentNodeEffect {
             operation_id: input.operation_id,
             fence: input
@@ -528,7 +581,12 @@ impl AgentNodeWorker for WorkerRpcService {
                 .ok_or_else(unavailable)?;
             let executor = self.agent_plan_executor.as_ref().ok_or_else(unavailable)?;
             let effect = self
-                .publish_attested_node(executor, outcome, &selector.run_id)
+                .publish_node_from_custody(
+                    executor,
+                    outcome,
+                    &selector.run_id,
+                    (!expected.is_empty()).then_some(expected.as_str()),
+                )
                 .await?;
             return Ok(Response::new(QueryAgentNodeEffectResponse {
                 found: true,

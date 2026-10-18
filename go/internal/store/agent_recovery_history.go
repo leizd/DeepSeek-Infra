@@ -143,6 +143,15 @@ func (store *Control) validateAgentRecoveryTerminalTx(tx *sql.Tx, record Record,
 		}
 		return store.validateAgentCancellationSettlementTx(tx, record)
 	}
+	if record.State == "FAILED" {
+		if phase != "plan" && phase != "synthesis" {
+			return ErrAgentRunRecoveryUnsettled
+		}
+		if _, present := fields[agentFailureSettlementField]; !present {
+			return ErrAgentRunRecoveryUnsettled
+		}
+		return store.validateAgentFailureSettlementTx(tx, record)
+	}
 	if record.State != "SUCCEEDED" {
 		// A FAILED label alone, a lost lease or EFFECT_UNKNOWN cannot authorize
 		// another provider call. The original typed settlement must exist.

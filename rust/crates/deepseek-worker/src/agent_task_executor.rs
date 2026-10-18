@@ -347,9 +347,16 @@ impl WorkerRpcService {
                         &response_sha256,
                         elapsed,
                     )?,
-                    deepseek_gateway::chat_execution::FencedTaskOutcome::Rejected { .. } => {
-                        return Err(Status::unavailable("AGENT_PROVIDER_RESULT_UNKNOWN"));
-                    }
+                    deepseek_gateway::chat_execution::FencedTaskOutcome::Rejected {
+                        status,
+                        response_sha256,
+                    } => crate::agent_terminal_failure::rejection_envelope(
+                        &run_id,
+                        &intent.node_id,
+                        3,
+                        status,
+                        &response_sha256,
+                    )?,
                     deepseek_gateway::chat_execution::FencedTaskOutcome::Turn {
                         turn,
                         response_sha256,

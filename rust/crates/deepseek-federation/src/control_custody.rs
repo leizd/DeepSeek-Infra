@@ -104,6 +104,47 @@ impl ControlSigningKey {
         crate::agent_credentials::open(&seed, &self.public_key(), &self.binding, scope, sealed)
     }
 
+    pub fn sign_agent_failure_projection(
+        &self,
+        evidence: &deepseek_protocol::generated::deepseek::agent::v1::AgentFailureProjectionEvidence,
+    ) -> Result<Vec<u8>, FederationIdentityError> {
+        use prost::Message as _;
+        let digest = |s: &str| {
+            s.len() == 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        };
+        let reference = |r: Option<
+            &deepseek_protocol::generated::deepseek::agent::v1::AgentArtifactReference,
+        >| {
+            r.is_some_and(|r| digest(&r.sha256) && r.length > 0 && r.length <= 128 * 1024 * 1024)
+        };
+        if evidence.schema_version != 1
+            || !digest(&evidence.source_receipt_sha256)
+            || evidence
+                .settlement_fence
+                .as_ref()
+                .is_none_or(|f| deepseek_protocol::validate_fence(f).is_err())
+            || evidence.settlement_writer_token <= 0
+            || evidence.run_id.is_empty()
+            || evidence.metadata_epoch == 0
+            || evidence.expected_index < 0
+            || evidence.expected_index == i64::MAX
+            || !matches!(evidence.phase, 1 | 3)
+            || !reference(evidence.error_body.as_ref())
+            || self.binding["fleetId"] != evidence.fleet_id
+            || self.binding["environment"] != evidence.environment
+        {
+            return Err(error("AGENT_FAILURE_PROJECTION_INVALID"));
+        }
+        let bytes = evidence.encode_to_vec();
+        if bytes.len() > 1024 * 1024 {
+            return Err(error("AGENT_FAILURE_PROJECTION_INVALID"));
+        }
+        let mut message = b"deepseek-infra:agent-failure-projection-proof-v1\0".to_vec();
+        message.extend(bytes);
+        Ok(self.key.sign(&message).to_bytes().to_vec())
+    }
     pub fn sign_agent_synthesis_projection(
         &self,
         evidence: &deepseek_protocol::generated::deepseek::agent::v1::AgentSynthesisProjectionEvidence,
@@ -215,6 +256,20 @@ impl ControlSigningKey {
         >| {
             r.is_some_and(|r| hex(&r.sha256) && r.length > 0 && r.length <= 128 * 1024 * 1024)
         };
+        if let Some(failure) = evidence.failure.as_ref() {
+            if failure.schema_version != 1
+                || !matches!(failure.http_status, 400 | 401 | 402 | 422 | 429)
+                || !hex(&failure.response_sha256)
+                || !matches!(
+                    (evidence.phase, evidence.node_id.as_str()),
+                    (1, "leader") | (3, "synthesizer")
+                )
+                || !evidence.provider_plan.is_empty()
+                || evidence.task_output.is_some()
+            {
+                return Err(invalid());
+            }
+        }
         let fence = evidence.fence.as_ref().ok_or_else(invalid)?;
         if evidence.schema_version != 1
             || deepseek_protocol::validate_fence(fence).is_err()
@@ -225,6 +280,7 @@ impl ControlSigningKey {
             || evidence.node_id.is_empty()
             || !matches!(evidence.phase, 1..=3)
             || (evidence.phase == 3
+                && evidence.failure.is_none()
                 && (evidence.node_id != "synthesizer"
                     || !evidence.provider_plan.is_empty()
                     || evidence.task_output.as_ref().is_none_or(|stats| {

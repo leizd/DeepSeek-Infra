@@ -84,6 +84,7 @@ service AgentNodeControl {
   rpc SettleSynthesis(SettleAgentSynthesisRequest) returns (SettleAgentSynthesisResponse);
   rpc SettleTask(SettleAgentTaskRequest) returns (SettleAgentTaskResponse);
   rpc CompleteTasks(CompleteAgentTasksRequest) returns (CompleteAgentTasksResponse);
+  rpc SettleFailure(SettleAgentFailureRequest) returns (SettleAgentFailureResponse);
 }
 
 message ExecuteAgentPlanRequest {
@@ -131,6 +132,8 @@ message AgentNodeOutcomeEvidence {
   string fleet_id = 18;
   string environment = 19;
   AgentTaskOutputMetadata task_output = 20;
+  // Conclusive planner/synthesis rejection only; absent for all older receipts.
+  AgentProviderFailureMetadata failure = 21;
 }
 
 // Signature covers the canonical protobuf encoding of evidence with the fixed
@@ -147,6 +150,9 @@ message QueryAgentNodeEffectRequest {
   deepseek.common.v1.ActionFence fence = 2;
   string run_id = 3;
   string node_id = 4;
+  // A Go-retained proof requires this exact existing Rust journal document.
+  // Missing custody must not be recreated by a lookup or takeover.
+  string expected_receipt_sha256 = 5;
 }
 
 message QueryAgentNodeEffectResponse {
@@ -167,8 +173,11 @@ service AgentNodeWorker {
   // Only synthesis-phase claims with the Go-selected synthesizer node are valid.
   rpc ExecuteSynthesis(ExecuteAgentTaskRequest) returns (AgentNodeEffectMetadata);
   rpc QueryEffect(QueryAgentNodeEffectRequest) returns (QueryAgentNodeEffectResponse);
+  // Requires expected_receipt_sha256 and never creates an outcome signature.
+  rpc ReadRetainedEffect(QueryAgentNodeEffectRequest) returns (QueryAgentNodeEffectResponse);
   rpc ProjectPlan(ProjectAgentPlanRequest) returns (AgentPlanProjectionReceipt);
   rpc ProjectSynthesis(ProjectAgentSynthesisRequest) returns (AgentSynthesisProjectionReceipt);
+  rpc ProjectFailure(ProjectAgentFailureRequest) returns (AgentFailureProjectionReceipt);
 }
 
 message PrepareAgentCredentialsRequest {
@@ -570,3 +579,64 @@ message CommitAgentRecoveryProgressRequest {
   AgentRecoveryProgressReceipt receipt = 9;
 }
 
+
+// No provider error text or credentials enter Go. Rust creates this only after a
+// complete bounded 400/401/402/422/429 error response. EOF, redirects, 5xx and
+// unrecognized responses remain EFFECT_UNKNOWN, never a failure receipt.
+message AgentProviderFailureMetadata {
+  uint32 schema_version = 1;
+  uint32 http_status = 2;
+  string response_sha256 = 3;
+}
+
+// Historical Rust custody is queried using its ORIGINAL operation and fence.
+// Settlement is separately bound to the current authoritative Go claim.
+message ProjectAgentFailureRequest {
+  uint32 schema_version = 1;
+  QueryAgentNodeEffectRequest source = 2;
+  deepseek.common.v1.ActionFence settlement_fence = 3;
+  int64 settlement_writer_token = 4;
+  uint64 metadata_epoch = 5;
+  int64 expected_index = 6;
+}
+
+// Dedicated proof purpose: cannot authorize success, task settlement or dispatch.
+message AgentFailureProjectionEvidence {
+  uint32 schema_version = 1;
+  string source_receipt_sha256 = 2;
+  deepseek.common.v1.ActionFence settlement_fence = 3;
+  int64 settlement_writer_token = 4;
+  string run_id = 5;
+  AgentRunExecutionPhase phase = 6;
+  uint64 metadata_epoch = 7;
+  int64 expected_index = 8;
+  AgentArtifactReference error_body = 9;
+  string fleet_id = 10;
+  string environment = 11;
+}
+
+message AgentFailureProjectionReceipt {
+  uint32 schema_version = 1;
+  AgentFailureProjectionEvidence evidence = 2;
+  bytes signature = 3;
+  string signer_public_key = 4;
+}
+
+// One Go transaction appends the signed error reference, marks only the proved
+// action FAILED, terminates its lease, releases its resource and records replay.
+message SettleAgentFailureRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string actor = 3;
+  deepseek.common.v1.ActionFence fence = 4;
+  string run_id = 5;
+  string owner = 6;
+  string claim_token = 7;
+  AgentFailureProjectionReceipt projection = 8;
+}
+
+message SettleAgentFailureResponse {
+  bool already_applied = 1;
+  AgentRunSnapshot run = 2;
+  string action_state = 3;
+}

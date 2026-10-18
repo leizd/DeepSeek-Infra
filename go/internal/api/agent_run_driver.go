@@ -37,6 +37,7 @@ type agentDriverWorker interface {
 	QueryAgentNodeEffect(context.Context, *agentv1.QueryAgentNodeEffectRequest) (*agentv1.AgentNodeEffectMetadata, error)
 	ProjectAgentPlan(context.Context, *agentv1.ProjectAgentPlanRequest) (*agentv1.AgentPlanProjectionReceipt, error)
 	ProjectAgentSynthesis(context.Context, *agentv1.ProjectAgentSynthesisRequest) (*agentv1.AgentSynthesisProjectionReceipt, error)
+	ProjectAgentFailure(context.Context, *agentv1.ProjectAgentFailureRequest) (*agentv1.AgentFailureProjectionReceipt, error)
 }
 
 type agentRunDriver struct {
@@ -381,6 +382,9 @@ func (driver *agentRunDriver) drive(ctx context.Context, run agent.RunMetadata) 
 		if err != nil {
 			return err
 		}
+		if effect.OutcomeReceipt.Evidence.Failure != nil {
+			return driver.failure(phaseCtx, client, nodes, claim, effect, run.NextIndex)
+		}
 		candidates := make([]agent.RunPlanNode, 0)
 		for _, node := range effect.OutcomeReceipt.Evidence.ProviderPlan {
 			candidates = append(candidates, agent.RunPlanNode{ID: node.Id, Task: node.Task, DependsOn: append([]string(nil), node.DependsOn...)})
@@ -407,6 +411,9 @@ func (driver *agentRunDriver) drive(ctx context.Context, run agent.RunMetadata) 
 		if err != nil {
 			return err
 		}
+		if effect.OutcomeReceipt.Evidence.Failure != nil {
+			return driver.failure(phaseCtx, client, nodes, claim, effect, run.NextIndex)
+		}
 		projection, err := client.ProjectAgentSynthesis(phaseCtx, &agentv1.ProjectAgentSynthesisRequest{SchemaVersion: 1,
 			Source: driverQuery(effect), SettlementFence: claim.Fence, SettlementWriterToken: claim.WriterFencingToken,
 			MetadataEpoch: claim.MetadataEpoch, ExpectedIndex: run.NextIndex})
@@ -422,8 +429,39 @@ func (driver *agentRunDriver) drive(ctx context.Context, run agent.RunMetadata) 
 	}
 }
 
+func (driver *agentRunDriver) failure(ctx context.Context, client agentDriverWorker, nodes *agentNodeService, claim *agentv1.AgentRunExecutionClaim, effect *agentv1.AgentNodeEffectMetadata, index int64) error {
+	projection, err := client.ProjectAgentFailure(ctx, &agentv1.ProjectAgentFailureRequest{SchemaVersion: 1, Source: driverQuery(effect),
+		SettlementFence: claim.Fence, SettlementWriterToken: claim.WriterFencingToken, MetadataEpoch: claim.MetadataEpoch, ExpectedIndex: index})
+	if err != nil {
+		return err
+	}
+	_, err = nodes.SettleFailure(ctx, &agentv1.SettleAgentFailureRequest{SchemaVersion: 1,
+		OperationId: driverOperation("settle-failure:", claim.Fence.ActionId, ":", claim.Fence.ExecutionEpoch), Actor: agentDriverActor,
+		Fence: claim.Fence, RunId: claim.RunId, Owner: claim.Owner, ClaimToken: claim.ClaimToken, Projection: projection})
+	return err
+}
+
+func driverReceiptDigest(receipt *agentv1.AgentNodeOutcomeReceipt) (string, error) {
+	if receipt == nil {
+		return "", errAgentDriverCustody
+	}
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(receipt)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
 func driverQuery(effect *agentv1.AgentNodeEffectMetadata) *agentv1.QueryAgentNodeEffectRequest {
-	return &agentv1.QueryAgentNodeEffectRequest{OperationId: effect.OperationId, Fence: effect.Fence, RunId: effect.RunId, NodeId: effect.NodeId}
+	if effect == nil {
+		return nil
+	}
+	digest, err := driverReceiptDigest(effect.OutcomeReceipt)
+	if err != nil {
+		return nil
+	}
+	return &agentv1.QueryAgentNodeEffectRequest{OperationId: effect.OperationId, Fence: effect.Fence, RunId: effect.RunId, NodeId: effect.NodeId, ExpectedReceiptSha256: digest}
 }
 
 func (driver *agentRunDriver) node(ctx context.Context, client agentDriverWorker, nodes *agentNodeService, claim *agentv1.AgentRunExecutionClaim, grant []byte, id string) (*agentv1.AgentNodeEffectMetadata, error) {
@@ -435,8 +473,15 @@ func (driver *agentRunDriver) node(ctx context.Context, client agentDriverWorker
 	if prior.Found {
 		// Only actual retained Rust custody can resolve a committed reservation.
 		// An absent response or lost connection never grants a second call.
-		effect, err = client.QueryAgentNodeEffect(ctx, &agentv1.QueryAgentNodeEffectRequest{OperationId: prior.Intent.OperationId,
-			Fence: prior.Intent.Fence, RunId: claim.RunId, NodeId: id})
+		query := &agentv1.QueryAgentNodeEffectRequest{OperationId: prior.Intent.OperationId, Fence: prior.Intent.Fence, RunId: claim.RunId, NodeId: id}
+		if prior.OutcomeReceipt != nil {
+			digest, digestErr := driverReceiptDigest(prior.OutcomeReceipt)
+			if digestErr != nil {
+				return nil, digestErr
+			}
+			query.ExpectedReceiptSha256 = digest
+		}
+		effect, err = client.QueryAgentNodeEffect(ctx, query)
 	} else if claim.ReconciliationRequired {
 		return nil, errAgentDriverUnknown
 	} else {

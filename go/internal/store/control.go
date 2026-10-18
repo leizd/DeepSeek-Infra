@@ -1395,6 +1395,7 @@ type controlRecordWrite struct {
 	agentTaskSettlement         bool
 	agentPlanSettlement         bool
 	agentSynthesisSettlement    bool
+	agentFailureSettlement      bool
 	record                      Record
 	table                       string
 	intentJSON                  []byte
@@ -1545,6 +1546,14 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 			return err
 		}
 	}
+	if record.Domain == "action" && !write.agentFailureSettlement {
+		var beforeFields, afterFields map[string]json.RawMessage
+		_ = json.Unmarshal(existing.Payload, &beforeFields)
+		_ = json.Unmarshal(record.Payload, &afterFields)
+		if !bytes.Equal(beforeFields[agentFailureSettlementField], afterFields[agentFailureSettlementField]) {
+			return ErrAgentRunExecutionRequired
+		}
+	}
 	if record.Domain == "action" && !write.agentSynthesisSettlement {
 		var beforeFields, afterFields map[string]json.RawMessage
 		_ = json.Unmarshal(existing.Payload, &beforeFields)
@@ -1586,6 +1595,12 @@ func (store *Control) putControlRecordTx(tx *sql.Tx, write controlRecordWrite, n
 		}
 	}
 	legal := LegalTransition(record.Domain, from, record.State)
+	if write.agentFailureSettlement {
+		if !exists || !nativeAgentFailureSettlementEdge(existing, record) {
+			return ErrAgentRunExecutionRequired
+		}
+		legal = true
+	}
 	if write.agentSynthesisSettlement {
 		if !exists || !nativeAgentSynthesisSettlementEdge(existing, record) {
 			return ErrAgentRunExecutionRequired
@@ -1888,6 +1903,12 @@ func validateControlHistory(tx *sql.Tx, latest Record) error {
 			var beforeFields, afterFields map[string]json.RawMessage
 			_ = json.Unmarshal(final.Payload, &beforeFields)
 			_ = json.Unmarshal(event.Payload, &afterFields)
+			if !bytes.Equal(beforeFields[agentFailureSettlementField], afterFields[agentFailureSettlementField]) {
+				if !nativeAgentFailureSettlementEdge(final, event) {
+					return ErrCorruptRecord
+				}
+				legal = true
+			}
 			if !bytes.Equal(beforeFields[agentSynthesisSettlementField], afterFields[agentSynthesisSettlementField]) {
 				if !nativeAgentSynthesisSettlementEdge(final, event) {
 					return ErrCorruptRecord

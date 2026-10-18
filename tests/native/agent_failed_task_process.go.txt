@@ -76,7 +76,7 @@ func nativeFailedTaskReceiptDocuments(t *testing.T, control *store.Control, reco
 		}
 		ids := []string{"leader"}
 		if binding.Phase == "tasks" {
-			ids = []string{"coder", "critic"}
+			ids = []string{"researcher", "coder", "reasoner", "critic"}
 		} else if binding.Phase == "synthesis" {
 			ids = []string{"synthesizer"}
 		}

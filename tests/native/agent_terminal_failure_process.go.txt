@@ -1,0 +1,352 @@
+// Real Rust/Go processes own provider bodies, credentials, signing keys and
+// durable state. This fixture only calls public HTTP and verifies Go receipts.
+package api
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
+	"github.com/leizd/DeepSeek-Infra/go/internal/agentproof"
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
+	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+	"google.golang.org/protobuf/proto"
+)
+
+func nativeTerminalFailureDocuments(t *testing.T, control *store.Control, actions []store.Record, key string) ([]map[string]any, []map[string]any) {
+	t.Helper()
+	documents := nativeFailedTaskReceiptDocuments(t, control, actions, key)
+	sources := map[string]*agentv1.AgentNodeOutcomeReceipt{}
+	for _, document := range documents {
+		raw, err := base64.RawURLEncoding.DecodeString(document["receiptBase64"].(string))
+		var receipt agentv1.AgentNodeOutcomeReceipt
+		if err != nil || proto.Unmarshal(raw, &receipt) != nil || receipt.Evidence == nil {
+			t.Fatal("original outcome document missing", err)
+		}
+		document["terminalFailure"] = receipt.Evidence.Failure != nil
+		document["httpStatus"] = uint32(0)
+		if receipt.Evidence.Failure != nil {
+			if !agentproof.ValidTerminalFailure(receipt.Evidence) {
+				t.Fatal("failure label lacks typed original proof")
+			}
+			document["httpStatus"] = receipt.Evidence.Failure.HttpStatus
+			sources[document["actionId"].(string)] = &receipt
+		}
+	}
+	projections := []map[string]any{}
+	for _, action := range actions {
+		if action.State != "FAILED" {
+			continue
+		}
+		binding, err := store.AgentRunExecutionBindingFromRecord(action)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		var raw []byte
+		var receipt agentv1.AgentFailureProjectionReceipt
+		if json.Unmarshal(action.Payload, &fields) != nil || json.Unmarshal(fields["nativeAgentFailureSettlement"], &raw) != nil || proto.Unmarshal(raw, &receipt) != nil {
+			t.Fatal("failed action lacks its actual Rust projection")
+		}
+		source := sources[action.ID]
+		if source == nil {
+			t.Fatal("failed action lacks original pinned custody")
+		}
+		encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sourceHash := sha256.Sum256(encoded)
+		expected := &agentv1.AgentFailureProjectionEvidence{SchemaVersion: 1, SourceReceiptSha256: hex.EncodeToString(sourceHash[:]),
+			SettlementFence: &commonv1.ActionFence{ActionId: action.ID, ExecutionEpoch: action.ExecutionEpoch}, SettlementWriterToken: source.Evidence.WriterFencingToken,
+			RunId: binding.RunID, MetadataEpoch: source.Evidence.MetadataEpoch, ExpectedIndex: binding.MetadataIndex, Phase: source.Evidence.Phase,
+			ErrorBody: source.Evidence.PublicEvent, FleetId: mutationFleetID, Environment: mutationEnvironment}
+		if err := agentproof.VerifyAgentFailureProjection(&receipt, expected, agentproof.Binding{PublicKey: key, FleetID: mutationFleetID, Environment: mutationEnvironment}); err != nil {
+			t.Fatal("failure projection did not bind original Go admission", err)
+		}
+		hash := sha256.Sum256(raw)
+		projections = append(projections, map[string]any{"actionId": action.ID, "receiptBase64": base64.RawURLEncoding.EncodeToString(raw), "receiptSha256": hex.EncodeToString(hash[:]), "pinnedSignatureVerified": true})
+	}
+	return documents, projections
+}
+
+func nativeTerminalUnknownEffect(t *testing.T, control *store.Control, origin string, client *http.Client, id, key, mode, directory string) map[string]any {
+	t.Helper()
+	if mode != "plan-5xx" && mode != "plan-eof" && mode != "synthesis-5xx" && mode != "synthesis-eof" {
+		t.Fatal("unknown ambiguous terminal case")
+	}
+	planning := strings.HasPrefix(mode, "plan-")
+	phase, node, initialIndex, expectedActions := "plan", "leader", int64(2), 1
+	if !planning {
+		phase, node, initialIndex, expectedActions = "synthesis", "synthesizer", 7, 3
+	}
+	var before agent.RunMetadata
+	var action store.Record
+	var intent store.AgentNodeDispatch
+	var public map[string]any
+	deadline := time.Now().Add(120 * time.Second)
+	for time.Now().Before(deadline) {
+		public = nativePublicCompletionRead(t, client, origin, id)
+		if public["status"] == "awaiting_plan" {
+			response, err := client.Post(origin+"/api/agent-runs/"+id+"/plan", "application/json", strings.NewReader(`{"payload":{}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				t.Fatal("unknown-case plan confirmation refused", response.StatusCode)
+			}
+		}
+		actions, err := control.ListAuthoritativeRecords("action")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, candidate := range actions {
+			binding, err := store.AgentRunExecutionBindingFromRecord(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if binding.Phase == phase {
+				action = candidate
+				_, value, receipt, found, err := control.AgentNodeOutcomeSnapshot(action.ID, node)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if found && receipt != nil {
+					t.Fatal("ambiguous response acquired a conclusive outcome")
+				}
+				if found {
+					intent = value
+				}
+			}
+		}
+		if _, err := os.Stat(filepath.Join(directory, "terminal-rejection-arrived.json")); err == nil && intent.OperationID != "" && len(actions) == expectedActions {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if intent.OperationID == "" || action.ID == "" {
+		t.Fatal("actual ambiguous provider request was not observed")
+	}
+	// Give the real worker enough time to record the complete 5xx or truncated
+	// transport result. The independent verifier later requires EFFECT_UNKNOWN.
+	time.Sleep(2 * time.Second)
+	var found bool
+	var err error
+	before, found, err = control.AgentRunMetadata(id)
+	if err != nil || !found || before.NextIndex != initialIndex || before.Status == "done" || before.Status == "failed" {
+		t.Fatal("unknown effect was treated as a closed result", err, before.Status, before.NextIndex)
+	}
+	response, err := client.Post(origin+"/api/agent-runs/"+id+"/cancel", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatal("actual cancellation after unknown response refused", response.StatusCode)
+	}
+	resume, _ := nativePublicRecoveryPost(t, client, origin, id, "resume", []byte(`{"payload":{}}`))
+	rerun, _ := nativePublicRecoveryPost(t, client, origin, id, "rerun", []byte(`{"agentId":"coder","resynthesize":true,"payload":{}}`))
+	if resume != http.StatusConflict || rerun != http.StatusConflict {
+		t.Fatal("unknown effect admitted a fresh generation", resume, rerun)
+	}
+	time.Sleep(2 * time.Second)
+	after, found, err := control.AgentRunMetadata(id)
+	public = nativePublicCompletionRead(t, client, origin, id)
+	if err != nil || !found || after.Status != "cancelled" || after.NextIndex != initialIndex+1 || after.Recovery != nil || after.Request != before.Request ||
+		public["status"] != "cancelled" || public["nextIndex"] != float64(initialIndex+1) {
+		t.Fatal("refused unknown recovery changed the run", err, after.Status, after.NextIndex)
+	}
+	actions, err := control.ListAuthoritativeRecords("action")
+	if err != nil || len(actions) != expectedActions {
+		t.Fatal("unknown recovery admitted another action", err, len(actions))
+	}
+	known := []store.Record{}
+	quarantined := false
+	for _, candidate := range actions {
+		if candidate.ID != action.ID {
+			if candidate.State != "SUCCEEDED" {
+				t.Fatal("unknown effect discarded a previous successful action")
+			}
+			known = append(known, candidate)
+			continue
+		}
+		quarantined = true
+		if candidate.State == "SUCCEEDED" || candidate.State == "FAILED" || candidate.State == "CANCELLED_CONFIRMED" {
+			t.Fatal("unknown effect was silently closed", candidate.State)
+		}
+		resources, err := control.GetResourceLeases(candidate.ID)
+		_, retained, receipt, present, readErr := control.AgentNodeOutcomeSnapshot(candidate.ID, node)
+		if err != nil || len(resources) == 0 || readErr != nil || !present || receipt != nil || retained.OperationID != intent.OperationID || retained.ExecutionEpoch != intent.ExecutionEpoch {
+			t.Fatal("unknown effect lost original custody, fence or reservation", err, readErr)
+		}
+	}
+	if !quarantined {
+		t.Fatal("original unknown action disappeared from the authoritative view")
+	}
+	return map[string]any{"status": "PASS", "mode": mode, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA"), "runId": id,
+		"runStatus": after.Status, "initialEventCount": initialIndex, "nextIndex": after.NextIndex, "durablePhases": len(actions),
+		"unknownOperationId": intent.OperationID, "unknownActionId": intent.ActionID, "originalExecutionEpoch": intent.ExecutionEpoch,
+		"requestSha256": after.Request.SHA256, "requestLength": after.Request.Length, "receiptDocuments": nativeFailedTaskReceiptDocuments(t, control, known, key),
+		"resumeStatus": resume, "rerunStatus": rerun, "unknownNotClosed": true, "originalFenceRetained": true, "reservationRetained": true,
+		"noRecoveryGeneration": true, "originalRequestRetained": true, "inputBodySeededByOfflineOracle": false,
+		"productionProviderQualified": false, "fullMigrationQualified": false, "providerFixtureIsOfflineTestTool": true,
+		"productionRuntimeProcesses": []string{"Go", "Rust"}}
+}
+
+func nativeTerminalFailureRecovery(t *testing.T, control *store.Control, origin string, client *http.Client, id, key, mode string) map[string]any {
+	t.Helper()
+	if mode != "plan" && mode != "synthesis" {
+		t.Fatal("unknown terminal failure case")
+	}
+	node, initialIndex, finalIndex, initialActions, finalActions, finalDocuments := "leader", int64(3), int64(15), 1, 3, 6
+	expectedInitialDocuments := 1
+	if mode == "synthesis" {
+		node, initialIndex, finalIndex, initialActions, finalActions, finalDocuments = "synthesizer", 8, 12, 3, 4, 5
+		expectedInitialDocuments = 4
+	}
+	var before agent.RunMetadata
+	var public map[string]any
+	deadline := time.Now().Add(120 * time.Second)
+	for time.Now().Before(deadline) {
+		public = nativePublicCompletionRead(t, client, origin, id)
+		var found bool
+		var err error
+		before, found, err = control.AgentRunMetadata(id)
+		if err != nil || !found {
+			t.Fatal(err)
+		}
+		if public["status"] == "awaiting_plan" {
+			response, err := client.Post(origin+"/api/agent-runs/"+id+"/plan", "application/json", strings.NewReader(`{"payload":{}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				t.Fatal("actual public plan confirmation refused", response.StatusCode)
+			}
+		}
+		if before.Status == "failed" && before.NextIndex == initialIndex && public["status"] == "failed" && public["nextIndex"] == float64(initialIndex) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	oldEvents, ok := public["events"].([]any)
+	if before.Status != "failed" || before.NextIndex != initialIndex || !ok || len(oldEvents) != int(initialIndex) || public["finalAnswer"] != "" {
+		t.Fatalf("terminal rejection was not publicly settled: mode=%s Go=%s/%d public=%v/%v", mode, before.Status, before.NextIndex, public["status"], public["nextIndex"])
+	}
+	last, ok := oldEvents[len(oldEvents)-1].(map[string]any)
+	if !ok || last["type"] != "error" || last["phase"] != node || last["code"] != "AGENT_PROVIDER_REJECTED" {
+		t.Fatal("typed terminal rejection lost its actual public error event")
+	}
+	oldPrefix, err := json.Marshal(oldEvents)
+	if err != nil || bytes.Contains(oldPrefix, []byte("private-provider-rejection")) || bytes.Contains(oldPrefix, []byte("request-only-credential")) {
+		t.Fatal("terminal error exposed provider-private material", err)
+	}
+	actions, err := control.ListAuthoritativeRecords("action")
+	if err != nil || len(actions) != initialActions {
+		t.Fatal("terminal error changed original admissions", err, len(actions))
+	}
+	original := map[string][]byte{}
+	for _, action := range actions {
+		raw, err := json.Marshal(action)
+		if err != nil {
+			t.Fatal(err)
+		}
+		original[action.ID] = raw
+		resources, err := control.GetResourceLeases(action.ID)
+		if err != nil || len(resources) != 0 {
+			t.Fatal("known rejection retained resources", err)
+		}
+	}
+	initialDocuments, initialProjections := nativeTerminalFailureDocuments(t, control, actions, key)
+	if len(initialDocuments) != expectedInitialDocuments || len(initialProjections) != 1 {
+		t.Fatal("terminal error lacks actual outcome and projection custody")
+	}
+	status, _ := nativePublicRecoveryPost(t, client, origin, id, "resume", []byte(`{"payload":{"temperature":1.0}}`))
+	if status != http.StatusOK {
+		t.Fatal("actual public terminal recovery refused", mode, status)
+	}
+	var after agent.RunMetadata
+	deadline = time.Now().Add(120 * time.Second)
+	for time.Now().Before(deadline) {
+		public = nativePublicCompletionRead(t, client, origin, id)
+		var found bool
+		after, found, err = control.AgentRunMetadata(id)
+		if err != nil || !found {
+			t.Fatal(err)
+		}
+		if nativeFailedTaskRecoveryObserved(public, after, finalIndex) {
+			break
+		}
+		if after.Status == "failed" || after.Status == "cancelled" {
+			t.Fatal("terminal recovery failed again", mode, after.Status, after.NextIndex)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !nativeFailedTaskRecoveryObserved(public, after, finalIndex) || after.RuntimeVersion() != before.RuntimeVersion()+1 || after.SchemaVersion != 3 || after.Request == before.Request || len(after.Plan) != len(before.Plan) || public["finalAnswer"] != "Controlled terminal-failure recovered final answer" {
+		t.Fatalf("terminal recovery lost exact state: mode=%s status=%s index=%d public=%v/%v finalMatches=%v", mode, after.Status, after.NextIndex, public["status"], public["nextIndex"], public["finalAnswer"] == "Controlled terminal-failure recovered final answer")
+	}
+	events := public["events"].([]any)
+	prefix, err := json.Marshal(events[:len(oldEvents)])
+	if err != nil || !bytes.Equal(prefix, oldPrefix) {
+		t.Fatal("recovery rewrote the original terminal failure", err)
+	}
+	metadata := after.Recovery.Metadata
+	wantExecute, wantPlan := 4, 4
+	if mode == "synthesis" {
+		wantExecute, wantPlan = 0, 2
+	}
+	if metadata == nil || len(metadata.Execute) != wantExecute || len(metadata.Plan) != wantPlan || !metadata.Synthesize || metadata.CompleteImmediately {
+		t.Fatal("recovery changed default DAG or retained synthesis decision")
+	}
+	roles := []string{}
+	for _, role := range metadata.Plan {
+		roles = append(roles, role.Id)
+		if n := after.Nodes()[role.Id]; n.Failed || !n.TaskOutputSettled() {
+			t.Fatal("recovery omitted a successful task", role.Id, n.State)
+		}
+	}
+	actions, err = control.ListAuthoritativeRecords("action")
+	if err != nil || len(actions) != finalActions {
+		t.Fatal("recovery repeated an original phase", err, len(actions))
+	}
+	for _, action := range actions {
+		if old, known := original[action.ID]; known {
+			raw, err := json.Marshal(action)
+			if err != nil || !bytes.Equal(raw, old) {
+				t.Fatal("resume rewrote an original action", err)
+			}
+		} else if action.State != "SUCCEEDED" {
+			t.Fatal("new recovery action did not settle successfully")
+		}
+		resources, err := control.GetResourceLeases(action.ID)
+		if err != nil || len(resources) != 0 {
+			t.Fatal("recovery retained terminal resources", err)
+		}
+	}
+	documents, projections := nativeTerminalFailureDocuments(t, control, actions, key)
+	if len(documents) != finalDocuments || len(projections) != 1 {
+		t.Fatal("recovery repeated or discarded original signed custody")
+	}
+	return map[string]any{"status": "PASS", "mode": mode, "runId": id, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA"), "runStatus": after.Status,
+		"initialEventCount": initialIndex, "nextIndex": after.NextIndex, "publicEventCount": len(events), "initialActionCount": initialActions, "durablePhases": finalActions,
+		"runtimeRevision": after.RuntimeVersion(), "generation": after.Recovery.Generation, "metadataSchemaVersion": after.SchemaVersion, "initialPublicPlanCount": len(before.Plan), "publicPlanCount": len(after.Plan),
+		"effectiveRecoveryRoles": roles, "executeCount": len(metadata.Execute), "receiptDocuments": documents, "failureProjectionDocuments": projections,
+		"requestSha256": after.Request.SHA256, "requestLength": after.Request.Length, "originalRequestSha256": before.Request.SHA256,
+		"contextArtifactSha256": after.Recovery.Context.SHA256, "contextArtifactLength": after.Recovery.Context.Length, "contextSha256": after.Recovery.ContextSHA256,
+		"originalActionsUnchanged": true, "originalEventsUnchanged": true, "resourcesReleased": true, "coherentPublicSettlementVerified": true, "finalAnswerVisible": true,
+		"initialFailurePublic": true, "publicResumeQualified": true, "defaultDAGKeptOutOfPublicPlan": mode == "plan", "inputBodySeededByOfflineOracle": false,
+		"productionProviderQualified": false, "fullMigrationQualified": false, "providerFixtureIsOfflineTestTool": true, "productionRuntimeProcesses": []string{"Go", "Rust"},
+		"initialFailureKind": mode + "-provider-rejection"}
+}

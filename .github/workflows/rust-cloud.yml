@@ -197,6 +197,12 @@ jobs:
         run: |
           set -o pipefail
           python scripts/verify_native_agent_failed_tasks.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-native-failed-task-recovery 2>&1 | tee artifacts/rust-cloud/agent-native-failed-task-recovery.log
+      - name: Verify conclusive planner and synthesis rejection with actual public resume
+        if: matrix.mode == 'checks'
+        timeout-minutes: 20
+        run: |
+          set -o pipefail
+          python scripts/verify_native_agent_terminal_failures.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-native-terminal-failure 2>&1 | tee artifacts/rust-cloud/agent-native-terminal-failure.log
       - name: Install pinned coverage tooling on the cloud runner
         if: matrix.mode == 'coverage'
         run: |

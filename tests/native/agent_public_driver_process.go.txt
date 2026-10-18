@@ -103,6 +103,16 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 	if json.Unmarshal(raw, &created) != nil || created.RunID == "" {
 		t.Fatal("creation omitted durable identity")
 	}
+	if mode := os.Getenv("DEEPSEEK_TEST_AGENT_TERMINAL_FAILURE"); mode != "" {
+		var result map[string]any
+		if mode == "plan" || mode == "synthesis" {
+			result = nativeTerminalFailureRecovery(t, control, public.Origin, client, created.RunID, ready.PublicKey, mode)
+		} else {
+			result = nativeTerminalUnknownEffect(t, control, public.Origin, client, created.RunID, ready.PublicKey, mode, directory)
+		}
+		nativeSigningWrite(t, filepath.Join(directory, "result.json"), result)
+		return
+	}
 	if os.Getenv("DEEPSEEK_TEST_AGENT_CANCEL_ACTIVE") == "1" {
 		planningCancellation := os.Getenv("DEEPSEEK_TEST_AGENT_CANCEL_ACTIVE_PLAN") == "1"
 		expectedPhases, expectedNode, cancelledPhase := 2, expectedPlan[0].ID, "tasks"

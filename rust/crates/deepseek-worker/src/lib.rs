@@ -14,6 +14,7 @@ use deepseek_transfer::{TransferRequest, plan as plan_transfer};
 use sha2::Digest;
 
 mod agent_execution_grant;
+mod agent_failure_projection;
 mod agent_node_effect;
 mod agent_plan_executor;
 mod agent_plan_projection;
@@ -22,6 +23,7 @@ mod agent_recovery_context;
 mod agent_recovery_progress;
 mod agent_synthesis_projection;
 mod agent_task_executor;
+mod agent_terminal_failure;
 mod authority_request;
 mod authority_store;
 mod control_signer;

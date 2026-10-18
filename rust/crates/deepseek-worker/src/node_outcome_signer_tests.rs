@@ -179,6 +179,7 @@ fn outcome_signature_journal_is_idempotent_after_restart_and_refuses_corrupt_rec
             length: 1,
         }),
         provider_plan: vec![],
+        failure: None,
         task_output: None,
         fleet_id: "fleet-a".into(),
         environment: "test".into(),
@@ -256,6 +257,158 @@ fn synthesis_test_custody(root: &Path) -> ControlSigner {
 }
 
 #[test]
+fn retained_node_outcome_read_never_creates_missing_original_custody() {
+    use prost::Message as _;
+    use sha2::{Digest, Sha256};
+    let root = tempfile::tempdir().unwrap();
+    let mut signer = synthesis_test_custody(root.path());
+    let evidence = AgentNodeOutcomeEvidence {
+        schema_version: 1,
+        fence: Some(ActionFence {
+            action_id: "original-plan".into(),
+            execution_epoch: 1,
+        }),
+        operation_id: format!("agent-node-{}", "a".repeat(64)),
+        run_id: "run".into(),
+        node_id: "leader".into(),
+        phase: 1,
+        request: Some(AgentArtifactReference {
+            sha256: "b".repeat(64),
+            length: 11,
+        }),
+        plan_digest: "c".repeat(64),
+        metadata_index: 0,
+        metadata_epoch: 1,
+        writer_fencing_token: 7,
+        created_at: "2026-10-18T00:00:00Z".into(),
+        confirmed_at: "2026-10-18T00:00:01Z".into(),
+        outcome_sha256: "d".repeat(64),
+        outcome_length: 112,
+        public_event: Some(AgentArtifactReference {
+            sha256: "e".repeat(64),
+            length: 92,
+        }),
+        fleet_id: "fleet-a".into(),
+        environment: "test".into(),
+        ..Default::default()
+    };
+    let receipt = signer.sign_node_outcome(evidence.clone()).unwrap();
+    let digest = format!("{:x}", Sha256::digest(receipt.encode_to_vec()));
+    assert_eq!(
+        signer
+            .retained_node_outcome(&evidence, &digest)
+            .unwrap()
+            .encode_to_vec(),
+        receipt.encode_to_vec()
+    );
+    assert!(
+        signer
+            .retained_node_outcome(&evidence, &"f".repeat(64))
+            .is_err()
+    );
+    // Restore the same encrypted key custody without the original signature DB.
+    // The pinned read must fail instead of manufacturing the missing audit row.
+    let empty = tempfile::tempdir().unwrap();
+    fs::copy(
+        root.path().join("fixture-custody.json"),
+        empty.path().join("fixture-custody.json"),
+    )
+    .unwrap();
+    let missing = synthesis_test_custody(empty.path());
+    assert!(missing.retained_node_outcome(&evidence, &digest).is_err());
+    let db = rusqlite::Connection::open_with_flags(
+        empty.path().join("rust-worker/control-signatures.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM signatures", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let mut rebound = evidence.clone();
+    rebound.fence.as_mut().unwrap().execution_epoch = 2;
+    assert!(signer.retained_node_outcome(&rebound, &digest).is_err());
+}
+
+#[test]
+fn failure_projection_keeps_its_own_signature_domain_and_journal_after_restart() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use deepseek_protocol::generated::deepseek::agent::v1::AgentFailureProjectionEvidence;
+    use ed25519_dalek::{Signature, VerifyingKey};
+    use prost::Message as _;
+    let root = tempfile::tempdir().unwrap();
+    let evidence = AgentFailureProjectionEvidence {
+        schema_version: 1,
+        source_receipt_sha256: "a".repeat(64),
+        settlement_fence: Some(ActionFence {
+            action_id: "failed-plan".into(),
+            execution_epoch: 2,
+        }),
+        settlement_writer_token: 3,
+        run_id: "run".into(),
+        phase: 1,
+        metadata_epoch: 1,
+        expected_index: 0,
+        error_body: Some(AgentArtifactReference {
+            sha256: "b".repeat(64),
+            length: 92,
+        }),
+        fleet_id: "fleet-a".into(),
+        environment: "test".into(),
+    };
+    let mut signer = synthesis_test_custody(root.path());
+    let receipt = signer.sign_failure_projection(evidence.clone()).unwrap();
+    let public: [u8; 32] = URL_SAFE_NO_PAD
+        .decode(&receipt.signer_public_key)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let key = VerifyingKey::from_bytes(&public).unwrap();
+    let signature = Signature::from_slice(&receipt.signature).unwrap();
+    let mut message = b"deepseek-infra:agent-failure-projection-proof-v1\0".to_vec();
+    message.extend(evidence.encode_to_vec());
+    key.verify_strict(&message, &signature).unwrap();
+    for purpose in [
+        "deepseek-infra:agent-node-outcome-proof-v1\0",
+        "deepseek-infra:agent-plan-projection-proof-v1\0",
+        "deepseek-infra:agent-synthesis-projection-proof-v1\0",
+    ] {
+        let mut other = purpose.as_bytes().to_vec();
+        other.extend(evidence.encode_to_vec());
+        assert!(key.verify_strict(&other, &signature).is_err());
+    }
+    drop(signer);
+    let mut signer = synthesis_test_custody(root.path());
+    assert_eq!(
+        receipt.encode_to_vec(),
+        signer
+            .sign_failure_projection(evidence.clone())
+            .unwrap()
+            .encode_to_vec()
+    );
+    for change in 0..12 {
+        let mut bad = evidence.clone();
+        match change {
+            0 => bad.schema_version = 2,
+            1 => bad.source_receipt_sha256.clear(),
+            2 => bad.settlement_fence.as_mut().unwrap().execution_epoch = 0,
+            3 => bad.settlement_writer_token = 0,
+            4 => bad.run_id.clear(),
+            5 => bad.phase = 2,
+            6 => bad.metadata_epoch = 0,
+            7 => bad.expected_index = -1,
+            8 => bad.expected_index = i64::MAX,
+            9 => bad.error_body = None,
+            10 => bad.fleet_id = "other".into(),
+            _ => bad.environment = "other".into(),
+        }
+        assert!(signer.sign_failure_projection(bad).is_err());
+    }
+}
+
+#[test]
 fn synthesis_outcome_signing_requires_its_role_and_counters_and_recovers_after_restart() {
     use deepseek_protocol::generated::deepseek::agent::v1::AgentTaskOutputMetadata;
     let root = tempfile::tempdir().unwrap();
@@ -286,6 +439,7 @@ fn synthesis_outcome_signing_requires_its_role_and_counters_and_recovers_after_r
             length: 30,
         }),
         provider_plan: vec![],
+        failure: None,
         task_output: Some(AgentTaskOutputMetadata {
             schema_version: 1,
             prompt_tokens: 3,

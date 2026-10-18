@@ -171,6 +171,12 @@ impl AuthorityStore {
         let output: serde_json::Value =
             serde_json::from_slice(row.output.as_ref().ok_or_else(denied)?)
                 .map_err(|_| denied())?;
+        let failure = crate::agent_terminal_failure::retained_failure(
+            &output,
+            &row.run_id,
+            &row.node_id,
+            row.phase,
+        )?;
         let planner = row.phase == 1
             && row.node_id == "leader"
             && output["publicEvent"]["type"] == "agent_plan";
@@ -186,7 +192,7 @@ impl AuthorityStore {
             && output["publicEvent"]["text"]
                 .as_str()
                 .is_some_and(|text| !text.trim().is_empty());
-        if output["runId"] != query.run_id || !(planner || task || synthesis) {
+        if output["runId"] != query.run_id || !(planner || task || synthesis || failure.is_some()) {
             return Err(denied());
         }
         let event = deepseek_policy::agent_run_data::sanitize(&output["publicEvent"]);
@@ -278,6 +284,7 @@ impl AuthorityStore {
             public_event: Some(public_event),
             provider_plan,
             task_output,
+            failure,
             fleet_id: config.fleet_id.clone(),
             environment: config.environment.clone(),
         })

@@ -46,15 +46,16 @@ func TestDriverRecoveryKeepsCancellationHistoryAndCompletesOnlySelectedTasks(t *
 // Offline signed worker fixtures qualify Go orchestration and refusal behavior;
 // they never qualify Rust custody, a provider or the public native process path.
 type driverFixtureWorker struct {
-	t         *testing.T
-	nodes     *agentNodeService
-	private   ed25519.PrivateKey
-	binding   worker.ControlSignerBinding
-	effects   map[string]*agentv1.AgentNodeEffectMetadata
-	calls     []string
-	fail      string
-	failAfter string
-	closes    int
+	t          *testing.T
+	nodes      *agentNodeService
+	private    ed25519.PrivateKey
+	binding    worker.ControlSignerBinding
+	effects    map[string]*agentv1.AgentNodeEffectMetadata
+	calls      []string
+	fail       string
+	failAfter  string
+	rejectNode string
+	closes     int
 }
 
 func (fixture *driverFixtureWorker) AuthorizeAgentExecution(_ context.Context, claim *agentv1.AgentRunExecutionClaim, id, nonce string, binding worker.ControlSignerBinding) ([]byte, error) {
@@ -110,6 +111,11 @@ func (fixture *driverFixtureWorker) execute(ctx context.Context, claim *agentv1.
 	} else {
 		receipt.Evidence.TaskOutput = &agentv1.AgentTaskOutputMetadata{SchemaVersion: 1, PromptTokens: 13, CompletionTokens: 21, LatencyMs: 120}
 		receipt.Evidence.TaskOutput.Failed = fixture.fail == "confirmed-failed-task" && id == "coder"
+	}
+	if id == fixture.rejectNode {
+		receipt.Evidence.ProviderPlan = nil
+		receipt.Evidence.TaskOutput = nil
+		receipt.Evidence.Failure = &agentv1.AgentProviderFailureMetadata{SchemaVersion: 1, HttpStatus: 401, ResponseSha256: strings.Repeat("f", 64)}
 	}
 	receipt.Signature = fixture.signed(receipt.Evidence, agentproof.NodeOutcomeDomain)
 	effect.OutcomeReceipt = receipt
@@ -178,6 +184,31 @@ func (fixture *driverFixtureWorker) ProjectAgentPlan(_ context.Context, input *a
 	}
 	return receipt, nil
 }
+func (fixture *driverFixtureWorker) ProjectAgentFailure(_ context.Context, input *agentv1.ProjectAgentFailureRequest) (*agentv1.AgentFailureProjectionReceipt, error) {
+	if fixture.fail == "failure-projection" {
+		return nil, context.DeadlineExceeded
+	}
+	effect := fixture.effects[input.Source.OperationId]
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(effect.OutcomeReceipt)
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	digest := sha256.Sum256(raw)
+	if input.Source.ExpectedReceiptSha256 != hex.EncodeToString(digest[:]) {
+		fixture.t.Fatal("failure projection did not pin the original signed receipt")
+	}
+	evidence := &agentv1.AgentFailureProjectionEvidence{SchemaVersion: 1, SourceReceiptSha256: hex.EncodeToString(digest[:]),
+		SettlementFence: input.SettlementFence, SettlementWriterToken: input.SettlementWriterToken, RunId: input.Source.RunId,
+		MetadataEpoch: input.MetadataEpoch, ExpectedIndex: input.ExpectedIndex, Phase: effect.OutcomeReceipt.Evidence.Phase, ErrorBody: effect.PublicEvent,
+		FleetId: mutationFleetID, Environment: mutationEnvironment}
+	receipt := &agentv1.AgentFailureProjectionReceipt{SchemaVersion: 1, SignerPublicKey: fixture.binding.PublicKey, Evidence: evidence,
+		Signature: fixture.signed(evidence, agentproof.FailureProjectionDomain)}
+	if fixture.fail == "failure-proof" {
+		receipt.Signature[0] ^= 1
+	}
+	return receipt, nil
+}
+
 func (fixture *driverFixtureWorker) ProjectAgentSynthesis(_ context.Context, input *agentv1.ProjectAgentSynthesisRequest) (*agentv1.AgentSynthesisProjectionReceipt, error) {
 	if fixture.fail == "synthesis-projection" {
 		return nil, context.DeadlineExceeded
