@@ -354,6 +354,7 @@ impl WorkerRpcService {
                         turn,
                         response_sha256,
                     } => {
+                        let turn = *turn;
                         let calls = turn.tool_calls();
                         match turn.message.get("tool_calls") {
                             None | Some(Value::Null) => {}

@@ -1,5 +1,37 @@
 <!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
 
+## Rust task outcome representation repair — 2026-10-18
+
+Source232b4c26 Rust push39105008378 and workflow_dispatch CI39105019536
+reported the same Clippy large_enum_variant failure: the successful result
+contained at least264 bytes while the rejection contained26. Original logs
+and SHA256 digests are retained under the failed candidate; other active jobs
+are preserved. No actual failed-task process qualification is claimed from a
+lint-failed source or from a different source's passing coverage.
+
+The successful UpstreamTurn now uses Box, and both the legacy turn wrapper and
+actual task consumer unwrap it explicitly. Conclusive rejection admission,
+provider response hashes, original fencing, public bodies and all nine new
+regression tests remain unchanged. No warning suppression, test deletion or
+original Go/Python95 percent or Rust80 percent gate change is introduced.
+
+Fresh Rust formatting and448 offline boundary tests pass. All Python/type
+configuration, Go and249 frontend inputs are byte-identical to the prior locally
+validated source, so only those scoped local type/Go-format/frontend results
+are reused. Native lint,1554 Rust tests plus the original Redis ignore, full
+coverage, actual public failed-task resume/rerun matrix, actual React recovery
+and all37 workflow_dispatch jobs remain CLOUD_PENDING for this corrective tree.
+
+The generated-title browser repair on7c1b40d6 is independently collected PASS:
+1545 Rust tests,82.0399 percent coverage, complete actual rerun/title/mirror/
+reload evidence and37/37 CI. Its results do not qualify this new task feature.
+Typed planner/synthesis failure remains a separate unuploaded incomplete WIP;
+Go failure settlement/history/writer denial, complete recovery/tool/live output,
+real providers, server/desktop/Android/background and zero-Python release chains
+and final exact-source Evidence Assembly remain required. NOT_READY.
+Root163 files and its index remain preserved. PRs remain the daily21:40 unified
+batch; this corrective upload does not create or update a PR outside that time.
+
 ## Signed failed-task recovery candidate on title repair — 2026-10-17
 
 The complete retained21-file native implementation is prepared on source

@@ -488,7 +488,7 @@ pub async fn exchange_fenced_turn(
         FencedTaskOutcome::Turn {
             turn,
             response_sha256,
-        } => Ok((turn, response_sha256)),
+        } => Ok((*turn, response_sha256)),
         FencedTaskOutcome::Rejected { status, .. } => {
             Err(ChatExecutionError::UpstreamStatus { status })
         }
@@ -500,7 +500,7 @@ pub async fn exchange_fenced_turn(
 #[derive(Debug)]
 pub enum FencedTaskOutcome {
     Turn {
-        turn: UpstreamTurn,
+        turn: Box<UpstreamTurn>,
         response_sha256: String,
     },
     Rejected {
@@ -612,7 +612,7 @@ async fn exchange_fenced_response(
         });
     }
     Ok(FencedTaskOutcome::Turn {
-        turn: turn_from_payload(&payload)?,
+        turn: Box::new(turn_from_payload(&payload)?),
         response_sha256,
     })
 }
