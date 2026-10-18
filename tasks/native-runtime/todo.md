@@ -1,3 +1,28 @@
+<!-- BEGIN FAILURE_STATE_READER_FIX_20261018 -->
+
+## Conclusive action failure read repair — 2026-10-18
+
+Cloud source a69bacbb removed the v16 lease CHECK failure, but Go phase settlement
+still failed with CORRUPT_RECORD. Source inspection found that the typed writer
+permits FAILED while scanControlRecord rejects it through knownState. This repair
+recognizes that terminal in action readers only. The generic transition map stays
+byte-identical, and only the existing signed typed edge may create the terminal.
+Two new Go regression groups require both phases to read and independently verify
+their original history, and prove that reader recognition grants no generic
+transition or resource release. All earlier proof/tampering/rollback cases stay.
+
+The twenty existing history refusals receive static internal stage labels using
+wrapped ErrCorruptRecord. The unchanged public RPC mapper retains DataLoss with
+AGENT_CONTROL_HISTORY_INVALID; labels contain no credential/provider/body values.
+No rejection predicate, schema constraint, corpus, dependency or coverage floor
+is removed. Source a69bacbb native and full CI remain unqualified. This increment
+requires new exact-source cloud native tests, six real HTTP scenarios and full
+CI. Whole-product state remains NOT_READY, including desktop/Android and zero
+production Python evidence. Original root files/index are retained. PR handling
+stays in the single daily21:40 Asia/Shanghai batch.
+
+<!-- END FAILURE_STATE_READER_FIX_20261018 -->
+
 <!-- BEGIN TERMINAL_SCHEMA_REPAIR_20261018 -->
 
 ## Conclusive failure lease migration repair — 2026-10-18

@@ -2095,7 +2095,7 @@ func secretBearingControlKey(key string) bool {
 }
 
 func knownState(domain, state string) bool {
-	if domain == "action" && (state == "RECONCILING" || state == "CANCELLED_CONFIRMED" || verificationActionState(state)) {
+	if domain == "action" && (state == "RECONCILING" || state == "CANCELLED_CONFIRMED" || state == "FAILED" || verificationActionState(state)) {
 		return true
 	}
 	edges, ok := transitions[domain]

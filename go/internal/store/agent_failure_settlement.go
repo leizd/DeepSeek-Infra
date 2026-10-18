@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math"
 	"reflect"
 	"time"
@@ -35,27 +36,27 @@ type AgentFailureSettlementResult struct {
 func (store *Control) validateAgentFailureSettlementTx(tx *sql.Tx, action Record) error {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(action.Payload, &fields) != nil {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history payload", ErrCorruptRecord)
 	}
 	raw, present := fields[agentFailureSettlementField]
 	if !present {
 		return nil
 	}
 	if action.State != "FAILED" {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history action-state", ErrCorruptRecord)
 	}
 	var encoded []byte
 	var receipt agentv1.AgentFailureProjectionReceipt
 	if json.Unmarshal(raw, &encoded) != nil || proto.Unmarshal(encoded, &receipt) != nil || receipt.Evidence == nil {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history receipt-decode", ErrCorruptRecord)
 	}
 	canonical, err := proto.MarshalOptions{Deterministic: true}.Marshal(&receipt)
 	if err != nil || !bytes.Equal(canonical, encoded) {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history receipt-canonical", ErrCorruptRecord)
 	}
 	binding, err := decodeAgentExecution(action)
 	if err != nil || (binding.Phase != "plan" && binding.Phase != "synthesis") {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history execution-binding", ErrCorruptRecord)
 	}
 	nodes, err := readAgentNodeDispatches(action)
 	if err != nil {
@@ -68,31 +69,31 @@ func (store *Control) validateAgentFailureSettlementTx(tx *sql.Tx, action Record
 	sourceNode := agentFailureNode(binding.Phase)
 	source, present := outcomes[sourceNode]
 	if !present {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history source-absent", ErrCorruptRecord)
 	}
 	var sourceReceipt agentv1.AgentNodeOutcomeReceipt
 	if proto.Unmarshal(source.Receipt, &sourceReceipt) != nil || sourceReceipt.Evidence == nil {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history source-receipt", ErrCorruptRecord)
 	}
 	record, _, found, err := scanControlRecord(tx.QueryRow(`SELECT record_id,revision,execution_epoch,state,payload_json,record_digest,writer_fencing_token,recorded_at FROM control_events WHERE domain='agent_run' AND record_id=? AND revision=?`, binding.RunID, binding.MetadataIndex), "agent_run")
 	if err != nil || !found {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history original-checkpoint", ErrCorruptRecord)
 	}
 	original, err := decodeAgentMetadata(record)
 	if err != nil || original.Request != binding.Request || executionPlanDigest(original) != binding.PlanDigest || !executionPhaseReady(original, binding.Phase) {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history original-run", ErrCorruptRecord)
 	}
 	var writer, settlementAt int64
 	if tx.QueryRow(`SELECT writer_fencing_token,recorded_at FROM control_events WHERE domain='action' AND record_id=? AND revision=?`, action.ID, action.Revision).Scan(&writer, &settlementAt) != nil {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history settlement-journal", ErrCorruptRecord)
 	}
 	if sourceReceipt.Evidence.NodeId != sourceNode || !agentproof.ValidTerminalFailure(sourceReceipt.Evidence) {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history source-kind", ErrCorruptRecord)
 	}
 	sourceManifest, _ := json.Marshal([]string{"agent-run:" + binding.RunID})
 	admission, err := readAgentOutcomeAdmissionTx(tx, nodes[sourceNode], string(sourceManifest))
 	if err != nil || admission.WriterFencingToken != source.WriterFencingToken {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history source-admission", ErrCorruptRecord)
 	}
 	if err := store.validateAgentFailureSourceTx(tx, binding); err != nil {
 		return err
@@ -103,16 +104,16 @@ func (store *Control) validateAgentFailureSettlementTx(tx *sql.Tx, action Record
 		RunId: binding.RunID, MetadataEpoch: record.ExecutionEpoch, ExpectedIndex: binding.MetadataIndex, Phase: sourceReceipt.Evidence.Phase, ErrorBody: sourceReceipt.Evidence.PublicEvent,
 		FleetId: store.fleetID, Environment: store.environment}
 	if agentproof.VerifyAgentFailureProjection(&receipt, expected, agentproof.Binding{PublicKey: store.agentOutcomeSignerKey, FleetID: store.fleetID, Environment: store.environment}) != nil {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history projection-signature", ErrCorruptRecord)
 	}
 	expectedRun := original
 	checkpoint, checkpointMeta, found, err := scanControlRecord(tx.QueryRow(`SELECT record_id,revision,execution_epoch,state,payload_json,record_digest,writer_fencing_token,recorded_at FROM control_events WHERE domain='agent_run' AND record_id=? AND revision=?`, binding.RunID, binding.MetadataIndex+1), "agent_run")
 	if err != nil || !found || checkpointMeta.writerToken != writer || checkpointMeta.timestamp != settlementAt {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history failure-checkpoint", ErrCorruptRecord)
 	}
 	failedRun, err := decodeAgentMetadata(checkpoint)
 	if err != nil || checkpoint.ExecutionEpoch != record.ExecutionEpoch || failedRun.Request != binding.Request || executionPlanDigest(failedRun) != binding.PlanDigest {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history failure-run", ErrCorruptRecord)
 	}
 	body := receipt.Evidence.ErrorBody
 	event := agent.RunEvent{ActionID: binding.RunID, ExecutionEpoch: record.ExecutionEpoch, RunID: binding.RunID,
@@ -120,22 +121,22 @@ func (store *Control) validateAgentFailureSettlementTx(tx *sql.Tx, action Record
 		Body: agent.ArtifactRef{SHA256: body.Sha256, Length: body.Length}}
 	expectedRun.ApplyRunEvent(event)
 	if !reflect.DeepEqual(failedRun, expectedRun) || failedRun.Status != "failed" {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history failure-reducer", ErrCorruptRecord)
 	}
 	retained, meta, found, err := scanControlRecord(tx.QueryRow(`SELECT record_id,revision,execution_epoch,state,payload_json,record_digest,writer_fencing_token,recorded_at FROM control_events WHERE domain='action' AND record_id=? AND revision=?`, action.ID, action.Revision), "action")
 	if err != nil || !found || !bytes.Equal(retained.Payload, action.Payload) || retained.State != "FAILED" || meta.writerToken != writer || meta.timestamp != settlementAt {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history action-checkpoint", ErrCorruptRecord)
 	}
 	manifest, _ := json.Marshal([]string{"agent-run:" + binding.RunID})
 	var count int
 	if tx.QueryRow(`SELECT count(*) FROM action_lease_events WHERE action_id=? AND event_type='TERMINATED' AND epoch=? AND claim_revision=? AND writer_fencing_token=? AND recorded_at=? AND resource_keys_json=?`, action.ID, int64(action.ExecutionEpoch), action.Revision, writer, meta.timestamp, string(manifest)).Scan(&count) != nil || count != 1 {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history termination-event", ErrCorruptRecord)
 	}
 	if tx.QueryRow(`SELECT count(*) FROM action_leases WHERE action_id=? AND epoch=? AND terminal_state='FAILED_CONFIRMED' AND writer_fencing_token=? AND updated_at=?`, action.ID, int64(action.ExecutionEpoch), writer, meta.timestamp).Scan(&count) != nil || count != 1 {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history lease-terminal", ErrCorruptRecord)
 	}
 	if tx.QueryRow(`SELECT count(*) FROM action_resource_leases WHERE action_id=?`, action.ID).Scan(&count) != nil || count != 0 {
-		return ErrCorruptRecord
+		return fmt.Errorf("%w: agent failure history released-resources", ErrCorruptRecord)
 	}
 	return nil
 }
@@ -360,7 +361,7 @@ func (store *Control) SettleAgentFailure(input AgentFailureSettlementRequest) (A
 		return AgentFailureSettlementResult{}, err
 	}
 	if err := store.validateAgentFailureSettlementTx(tx, action); err != nil {
-		return AgentFailureSettlementResult{}, err
+		return AgentFailureSettlementResult{}, fmt.Errorf("failure settlement verification: %w", err)
 	}
 	payloadDigest, err := operatorPayloadDigest(action.Payload)
 	if err != nil {
@@ -383,7 +384,7 @@ func (store *Control) SettleAgentFailure(input AgentFailureSettlementRequest) (A
 	}
 	context.actionLeaseUntil = lease.LeaseUntil
 	if err := store.finishOperatorMutationTx(tx, context); err != nil {
-		return AgentFailureSettlementResult{}, err
+		return AgentFailureSettlementResult{}, fmt.Errorf("failure settlement commit: %w", err)
 	}
 	return AgentFailureSettlementResult{Run: run, Action: action}, nil
 }
