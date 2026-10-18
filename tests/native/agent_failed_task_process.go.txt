@@ -19,6 +19,53 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// The HTTP snapshot is read before local metadata. A later Go commit alone
+// cannot prove that the earlier public snapshot contains that settlement.
+func nativeFailedTaskRecoveryObserved(current map[string]any, after agent.RunMetadata, expectedIndex int64) bool {
+	events, ok := current["events"].([]any)
+	return after.Status == "done" && after.NextIndex == expectedIndex && after.Recovery != nil && after.Recovery.Generation == 1 &&
+		current["runId"] == after.RunID && current["status"] == "done" && current["nextIndex"] == float64(expectedIndex) &&
+		ok && int64(len(events)) == expectedIndex
+}
+
+func TestNativeFailedTaskRecoveryObservation(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(map[string]any, *agent.RunMetadata)
+		want   bool
+	}{
+		{"matching-public-and-Go-settlement", func(map[string]any, *agent.RunMetadata) {}, true},
+		{"Go-done-public-still-running", func(p map[string]any, _ *agent.RunMetadata) {
+			p["status"], p["nextIndex"], p["events"] = "running", float64(15), make([]any, 15)
+		}, false},
+		{"public-cursor-behind", func(p map[string]any, _ *agent.RunMetadata) { p["nextIndex"] = float64(15) }, false},
+		{"public-status-behind", func(p map[string]any, _ *agent.RunMetadata) { p["status"] = "running" }, false},
+		{"public-status-missing", func(p map[string]any, _ *agent.RunMetadata) { delete(p, "status") }, false},
+		{"public-cursor-missing", func(p map[string]any, _ *agent.RunMetadata) { delete(p, "nextIndex") }, false},
+		{"public-cursor-string", func(p map[string]any, _ *agent.RunMetadata) { p["nextIndex"] = "16" }, false},
+		{"public-cursor-fractional", func(p map[string]any, _ *agent.RunMetadata) { p["nextIndex"] = 16.5 }, false},
+		{"public-events-missing", func(p map[string]any, _ *agent.RunMetadata) { delete(p, "events") }, false},
+		{"public-events-short", func(p map[string]any, _ *agent.RunMetadata) { p["events"] = make([]any, 15) }, false},
+		{"public-events-extra", func(p map[string]any, _ *agent.RunMetadata) { p["events"] = make([]any, 17) }, false},
+		{"public-run-rebound", func(p map[string]any, _ *agent.RunMetadata) { p["runId"] = "different-run" }, false},
+		{"Go-still-running", func(_ map[string]any, a *agent.RunMetadata) { a.Status = "running" }, false},
+		{"Go-cursor-behind", func(_ map[string]any, a *agent.RunMetadata) { a.NextIndex = 15 }, false},
+		{"Go-recovery-missing", func(_ map[string]any, a *agent.RunMetadata) { a.Recovery = nil }, false},
+		{"Go-generation-old", func(_ map[string]any, a *agent.RunMetadata) { a.Recovery.Generation = 0 }, false},
+		{"Go-generation-rebound", func(_ map[string]any, a *agent.RunMetadata) { a.Recovery.Generation = 2 }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			public := map[string]any{"runId": "observed-run", "status": "done", "nextIndex": float64(16), "events": make([]any, 16)}
+			after := agent.RunMetadata{RunID: "observed-run", Status: "done", NextIndex: 16, Recovery: &agent.RunRecoveryScope{Generation: 1}}
+			tc.mutate(public, &after)
+			if got := nativeFailedTaskRecoveryObserved(public, after, 16); got != tc.want {
+				t.Fatalf("observed=%v want=%v", got, tc.want)
+			}
+		})
+	}
+}
+
 func nativeFailedTaskReceiptDocuments(t *testing.T, control *store.Control, records []store.Record, key string) []map[string]any {
 	t.Helper()
 	result := []map[string]any{}
@@ -114,6 +161,12 @@ func nativeFailedTaskRecovery(t *testing.T, control *store.Control, publicOrigin
 	}
 	var current map[string]any
 	var after agent.RunMetadata
+	expectedIndex := int64(15)
+	expectedFailed := false
+	if mode == "rerun" {
+		expectedIndex = 16
+		expectedFailed = true
+	}
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		current = nativePublicCompletionRead(t, client, publicOrigin, before.RunID)
@@ -122,7 +175,7 @@ func nativeFailedTaskRecovery(t *testing.T, control *store.Control, publicOrigin
 		if err != nil || !found {
 			t.Fatal(err)
 		}
-		if after.Recovery != nil && after.Recovery.Generation == 1 && after.Status == "done" {
+		if nativeFailedTaskRecoveryObserved(current, after, expectedIndex) {
 			break
 		}
 		if after.Status == "failed" || after.Status == "cancelled" {
@@ -130,14 +183,16 @@ func nativeFailedTaskRecovery(t *testing.T, control *store.Control, publicOrigin
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	expectedIndex := int64(15)
-	expectedFailed := false
-	if mode == "rerun" {
-		expectedIndex = 16
-		expectedFailed = true
-	}
-	if after.Status != "done" || after.NextIndex != expectedIndex || after.RuntimeVersion() != before.RuntimeVersion()+1 || after.Recovery == nil || after.Recovery.Generation != 1 || after.Request == before.Request || after.Nodes()["coder"].Failed != expectedFailed || !after.Nodes()["coder"].TaskOutputSettled() || after.Nodes()["critic"].State != "succeeded" || current["finalAnswer"] != "Controlled failed-task recovered final answer" {
-		t.Fatal("public recovery lost exact failed/successful task settlement", after.Status, after.NextIndex)
+	if !nativeFailedTaskRecoveryObserved(current, after, expectedIndex) || after.RuntimeVersion() != before.RuntimeVersion()+1 || after.Request == before.Request || after.Nodes()["coder"].Failed != expectedFailed || !after.Nodes()["coder"].TaskOutputSettled() || after.Nodes()["critic"].State != "succeeded" || current["finalAnswer"] != "Controlled failed-task recovered final answer" {
+		generation := uint64(0)
+		if after.Recovery != nil {
+			generation = after.Recovery.Generation
+		}
+		events, _ := current["events"].([]any)
+		t.Fatalf("public recovery lost exact failed/successful task settlement: mode=%s GoStatus=%s GoIndex=%d runtime=%d expectedRuntime=%d generation=%d requestChanged=%v coderState=%s coderFailed=%v expectedFailed=%v coderSettled=%v criticState=%s publicStatus=%v publicIndex=%v publicEvents=%d finalMatches=%v",
+			mode, after.Status, after.NextIndex, after.RuntimeVersion(), before.RuntimeVersion()+1, generation, after.Request != before.Request,
+			after.Nodes()["coder"].State, after.Nodes()["coder"].Failed, expectedFailed, after.Nodes()["coder"].TaskOutputSettled(), after.Nodes()["critic"].State,
+			current["status"], current["nextIndex"], len(events), current["finalAnswer"] == "Controlled failed-task recovered final answer")
 	}
 	events, ok := current["events"].([]any)
 	if !ok || len(events) != int(expectedIndex) {
@@ -204,7 +259,8 @@ func nativeFailedTaskRecovery(t *testing.T, control *store.Control, publicOrigin
 		"initialFailureRetained": true, "originalEventsUnchanged": true, "originalActionsUnchanged": true, "otherRoleNotRerun": true, "resourcesReleased": true,
 		"initialTaskFailed": true, "recoveredTaskFailed": expectedFailed, "initialReceiptCount": len(documentsBefore), "receiptDocuments": documentsAfter,
 		"newTaskActionId": newTaskID, "newSynthesisActionId": newSynthesisID, "admittedThroughRustHTTP": true, "finalAnswerVisible": true,
-		"inputBodySeededByOfflineOracle": false, "productionProviderQualified": false, "fullMigrationQualified": false,
+		"coherentPublicSettlementVerified": true,
+		"inputBodySeededByOfflineOracle":   false, "productionProviderQualified": false, "fullMigrationQualified": false,
 		"productionRuntimeProcesses": []string{"Go", "Rust"}, "providerFixtureIsOfflineTestTool": true}
 	if mode == "rerun" {
 		if after.RecoveryProgress == nil || after.RecoveryProgress.Receipt == nil {

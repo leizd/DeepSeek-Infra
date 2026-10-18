@@ -44,6 +44,8 @@ def validate_failed_task_result(result: dict[str, Any], exchanges: list[dict[str
         "resourcesReleased",
         "admittedThroughRustHTTP",
         "finalAnswerVisible",
+        "coherentPublicSettlementVerified",
+        "observationRegressionVerified",
         "providerFixtureIsOfflineTestTool",
     ):
         if result.get(field) is not True:

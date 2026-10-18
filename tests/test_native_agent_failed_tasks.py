@@ -32,6 +32,8 @@ def sample(mode: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "resourcesReleased": True,
         "admittedThroughRustHTTP": True,
         "finalAnswerVisible": True,
+        "coherentPublicSettlementVerified": True,
+        "observationRegressionVerified": True,
         "inputBodySeededByOfflineOracle": False,
         "productionProviderQualified": False,
         "fullMigrationQualified": False,
@@ -95,6 +97,8 @@ def test_failed_task_report_accepts_only_explicit_proved_closed_attempts(mode: s
         "resourcesReleased",
         "admittedThroughRustHTTP",
         "finalAnswerVisible",
+        "coherentPublicSettlementVerified",
+        "observationRegressionVerified",
     ],
 )
 def test_failed_task_report_rejects_missing_proofs(field: str) -> None:

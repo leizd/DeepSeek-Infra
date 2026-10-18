@@ -591,6 +591,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     DEEPSEEK_TEST_AGENT_PLAN=json.dumps(preset_case["plan"], ensure_ascii=False),
                     DEEPSEEK_TEST_AGENT_CONFIRMATION=str(preset_case["confirmation"]).lower(),
                     DEEPSEEK_TEST_AGENT_EXPLICIT_CONFIRMATION=str(preset_case["explicitConfirmation"]).lower())
+            if failed_task_case is not None:
+                signing.record_command(
+                    [binary.as_posix(), "-test.run=^TestNativeFailedTaskRecoveryObservation$", "-test.v", "-test.timeout=30s"],
+                    ROOT / "go/internal/api", environment, output, "failed-task-observation-regression", timeout=45,
+                )
+                observation_log = (output / "failed-task-observation-regression.log").read_bytes()
+                if b"--- PASS: TestNativeFailedTaskRecoveryObservation " not in observation_log or b"[no tests to run]" in observation_log:
+                    raise ValueError("Failed-task observation regression was not executed")
             with (output / "public-driver-go.log").open("wb") as log:
                 producer = subprocess.Popen([binary.as_posix(), "-test.run=^TestNativeAgentPublicDriverProcess$", "-test.v", "-test.timeout=4m"],
                     cwd=ROOT / "go/internal/api", env=environment, stdout=log, stderr=subprocess.STDOUT)
@@ -628,6 +636,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 raise RuntimeError("Actual native public driver process failed")
             if failed_task_case is not None:
                 import verify_native_agent_failed_tasks as failed_tasks
+                result["observationRegressionVerified"] = True
                 failed_tasks.validate_failed_task_result(result,exchanges,failed_task_case)
             elif public_completion_case is not None:
                 validate_public_completion_result(result,exchanges,public_completion_case)

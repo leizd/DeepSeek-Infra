@@ -1,3 +1,26 @@
+## Failed-task recovery observation repair — 2026-10-18
+
+Source67afdb1d Rust push39105837913 passed strict lint, workspace tests and
+coverage, but its actual failed-task public rerun probe failed after Go reached
+done/index16. Resume passed. The compound assertion did not identify the field;
+the original failure log and reports remain preserved, so this failure is not
+claimed to be explained or qualified by the independent coverage result.
+
+The probe previously read public HTTP before Go metadata and stopped on Go alone.
+It now requires both reads to show the same terminal run/cursor and complete event
+count. All existing failed/successful role, runtime, request, final answer, custody,
+immutable history and resource assertions remain mandatory. A17-case Go regression
+runs in the actual cloud-compiled process binary before each failed-task scenario;
+missing execution or missing coherent-read evidence is rejected by report validation.
+Failure output now identifies each status/cursor/role condition without private bodies.
+
+No production Rust, Go, Protobuf, frontend or workflow implementation changes are
+included. Native compilation and both actual public recovery cases remain cloud
+qualification requirements; Go/Python95 percent and Rust80 percent floors stay.
+The separate planner/synthesis terminal-failure WIP is preserved and held until
+this mandatory process gate is repaired. Whole-product readiness remains NOT_READY.
+
+
 ## Rust task outcome representation repair — 2026-10-18
 
 Source232b4c26 Rust push39105008378 and workflow_dispatch CI39105019536
