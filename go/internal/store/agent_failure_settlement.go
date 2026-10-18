@@ -131,7 +131,7 @@ func (store *Control) validateAgentFailureSettlementTx(tx *sql.Tx, action Record
 	if tx.QueryRow(`SELECT count(*) FROM action_lease_events WHERE action_id=? AND event_type='TERMINATED' AND epoch=? AND claim_revision=? AND writer_fencing_token=? AND recorded_at=? AND resource_keys_json=?`, action.ID, int64(action.ExecutionEpoch), action.Revision, writer, meta.timestamp, string(manifest)).Scan(&count) != nil || count != 1 {
 		return ErrCorruptRecord
 	}
-	if tx.QueryRow(`SELECT count(*) FROM action_leases WHERE action_id=? AND epoch=? AND terminal_state='FAILED' AND writer_fencing_token=? AND updated_at=?`, action.ID, int64(action.ExecutionEpoch), writer, meta.timestamp).Scan(&count) != nil || count != 1 {
+	if tx.QueryRow(`SELECT count(*) FROM action_leases WHERE action_id=? AND epoch=? AND terminal_state='FAILED_CONFIRMED' AND writer_fencing_token=? AND updated_at=?`, action.ID, int64(action.ExecutionEpoch), writer, meta.timestamp).Scan(&count) != nil || count != 1 {
 		return ErrCorruptRecord
 	}
 	if tx.QueryRow(`SELECT count(*) FROM action_resource_leases WHERE action_id=?`, action.ID).Scan(&count) != nil || count != 0 {
@@ -345,7 +345,7 @@ func (store *Control) SettleAgentFailure(input AgentFailureSettlementRequest) (A
 		return AgentFailureSettlementResult{}, err
 	}
 	action = write.record
-	result, err := tx.Exec(`UPDATE action_leases SET terminal_state='FAILED',updated_at=?,writer_fencing_token=? WHERE action_id=? AND epoch=? AND claim_token=? AND terminal_state IS NULL`, context.now, store.token, action.ID, int64(input.Epoch), input.ClaimToken)
+	result, err := tx.Exec(`UPDATE action_leases SET terminal_state='FAILED_CONFIRMED',updated_at=?,writer_fencing_token=? WHERE action_id=? AND epoch=? AND claim_token=? AND terminal_state IS NULL`, context.now, store.token, action.ID, int64(input.Epoch), input.ClaimToken)
 	if err != nil {
 		return AgentFailureSettlementResult{}, err
 	}

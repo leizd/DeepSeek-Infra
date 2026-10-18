@@ -1,3 +1,36 @@
+<!-- BEGIN TERMINAL_SCHEMA_REPAIR_20261018 -->
+
+## Conclusive failure lease migration repair — 2026-10-18
+
+The uploaded efe993e7 source failed real cloud validation: the Gateway TLS peer
+fixture lacked two required AgentPlanExecutor methods, and the Go v16 lease CHECK
+rejected the typed failure settlement. Rust push run39128512639 failed; the
+source workflow_dispatch run39128650417 ended31 success/5 failure/1 skipped.
+These results do not qualify the new terminal failure feature or its six actual
+planner/synthesis HTTP cases. The last separately collected Rust+full-CI source
+remains1eef89e3; whole-product readiness remains NOT_READY.
+
+This repair keeps the v5/v16 definitions intact and advances the Go store through
+v17 in one transaction. It copies every original lease column and terminal value,
+then adds only FAILED_CONFIRMED to the lease constraint. The business action
+remains FAILED. Only independently verified typed failure settlement can close
+this lease; generic completion gains no new terminal capability. Ambiguous
+transport/5xx effects remain EFFECT_UNKNOWN and keep original resources/custody.
+Historical v16 cancellation tests retain their v16 assertion before upgrading to
+the current schema for mutation. New Go cases cover every durable row, original
+terminal values, restart admission, migration fault rollback, unchanged version
+history, generic refusal and immutable history verification. The test-only Rust
+TLS peer refuses both new RPCs as NOT_A_PROVIDER_FIXTURE.
+
+Native builds/tests, coverage and actual process acceptance remain cloud-only.
+Local formatting and offline/source checks are preparation, not qualification.
+No PR is created or edited outside the daily21:40 Asia/Shanghai batch; no main
+merge, release or production data operation is included. Root dirty state stays
+untouched. Desktop/Android, zero-Python production and final Evidence requirements
+still apply to the full product migration.
+
+<!-- END TERMINAL_SCHEMA_REPAIR_20261018 -->
+
 <!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
 
 ## Typed terminal Agent failure and recovery — 2026-10-18

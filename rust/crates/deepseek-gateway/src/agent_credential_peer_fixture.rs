@@ -105,6 +105,18 @@ impl AgentNodeWorker for CustodyFixture {
     ) -> Result<Response<QueryAgentNodeEffectResponse>, Status> {
         Err(Status::unimplemented("NOT_A_PROVIDER_FIXTURE"))
     }
+    async fn read_retained_effect(
+        &self,
+        _: Request<QueryAgentNodeEffectRequest>,
+    ) -> Result<Response<QueryAgentNodeEffectResponse>, Status> {
+        Err(Status::unimplemented("NOT_A_PROVIDER_FIXTURE"))
+    }
+    async fn project_failure(
+        &self,
+        _: Request<ProjectAgentFailureRequest>,
+    ) -> Result<Response<AgentFailureProjectionReceipt>, Status> {
+        Err(Status::unimplemented("NOT_A_PROVIDER_FIXTURE"))
+    }
     async fn project_plan(
         &self,
         _: Request<ProjectAgentPlanRequest>,
