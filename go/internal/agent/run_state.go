@@ -235,3 +235,10 @@ func (run RunMetadata) Nodes() map[string]RunNode {
 	}
 	return nodes
 }
+
+// TaskOutputSettled distinguishes a terminal failed output from an unresolved
+// effect. Admission additionally requires the original signed Rust outcome and
+// its matching Go settlement; this projection alone never authorizes an effect.
+func (node RunNode) TaskOutputSettled() bool {
+	return node.State == "succeeded" && !node.Failed || node.State == "failed" && node.Failed
+}

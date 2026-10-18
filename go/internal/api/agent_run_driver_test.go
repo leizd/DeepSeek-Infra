@@ -694,19 +694,27 @@ func TestAgentDriverExpiredClaimOnlyAdmitsReconciliationWithNoFreshEffect(t *tes
 	}
 }
 
-func TestAgentDriverSignedFailedTaskBlocksItsDependentAndSynthesis(t *testing.T) {
+func TestAgentDriverSignedFailedTaskRetainsFailureThroughDependentAndSynthesis(t *testing.T) {
 	driver, fixture, run := newDriverFixture(t, false)
-	if err := driver.drive(context.Background(), run); err != nil {
+	fixture.fail = "confirmed-failed-task"
+	for phase := 0; phase < 3; phase++ {
+		if err := driver.drive(context.Background(), run); err != nil {
+			t.Fatal("phase", phase, err)
+		}
+		run = driverFixtureRun(t, driver, run.RunID)
+	}
+	if run.Status != "done" || !run.Nodes()["coder"].Failed || run.Nodes()["coder"].State != "failed" || run.Nodes()["critic"].State != "succeeded" || strings.Join(fixture.calls, ",") != "leader,coder,critic,synthesizer" {
+		t.Fatal("signed failure was lost or retried", run.Status, fixture.calls)
+	}
+	records, err := driver.service.control.ListAuthoritativeRecords("action")
+	if err != nil || len(records) != 3 {
 		t.Fatal(err)
 	}
-	run = driverFixtureRun(t, driver, run.RunID)
-	fixture.fail = "confirmed-failed-task"
-	if err := driver.drive(context.Background(), run); !errors.Is(err, errAgentDriverUnknown) {
-		t.Fatal("failed task admitted downstream effects", err)
-	}
-	run = driverFixtureRun(t, driver, run.RunID)
-	if !run.Nodes()["coder"].Failed || run.Nodes()["critic"].State == "succeeded" || run.Status == "done" || strings.Join(fixture.calls, ",") != "leader,coder" {
-		t.Fatal("failed task was replaced by fabricated completion", run.Status, fixture.calls)
+	for _, record := range records {
+		resources, err := driver.service.control.GetResourceLeases(record.ID)
+		if err != nil || len(resources) != 0 || record.State != "SUCCEEDED" {
+			t.Fatal("settled phase retained custody", err)
+		}
 	}
 }
 

@@ -203,3 +203,47 @@ fn task_custody_rejects_invalid_scheduling_counters() {
         );
     }
 }
+
+#[test]
+fn signed_failed_task_custody_is_terminal_and_cannot_be_replaced_with_success() {
+    let fixture = Fixture::new();
+    let mut worker = fixture.worker(true);
+    let permit = started(fixture.begin(&mut worker, true).unwrap());
+    let store = worker.authority_store.as_mut().unwrap();
+    let mut envelope = task_result(&fixture);
+    envelope["publicEvent"]["output"]["failed"] = json!(true);
+    let bytes = authority_request::canonical_json_bytes(&envelope).unwrap();
+    let known = store.confirm_agent_node(&permit, &bytes, NOW).unwrap();
+    let body: Value = serde_json::from_slice(&known.output).unwrap();
+    let public = serde_json::to_vec(&deepseek_policy::agent_run_data::sanitize(
+        &body["publicEvent"],
+    ))
+    .unwrap();
+    let query = crate::QueryAgentNodeEffect {
+        operation_id: known.operation_id,
+        fence: known.fence,
+        run_id: "run_rpc".into(),
+        node_id: "coder".into(),
+    };
+    let evidence = store
+        .agent_node_outcome_evidence(
+            &query,
+            AgentArtifactReference {
+                sha256: agent_node_effect::digest(&public),
+                length: public.len() as u64,
+            },
+            &fixture.config,
+        )
+        .unwrap();
+    assert!(evidence.task_output.unwrap().failed);
+    envelope["publicEvent"]["output"]["failed"] = json!(false);
+    assert!(
+        store
+            .confirm_agent_node(
+                &permit,
+                &authority_request::canonical_json_bytes(&envelope).unwrap(),
+                NOW
+            )
+            .is_err()
+    );
+}

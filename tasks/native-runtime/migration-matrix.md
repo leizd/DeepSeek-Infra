@@ -1,3 +1,47 @@
+## Signed failed-task recovery candidate on title repair — 2026-10-17
+
+The complete retained21-file native implementation is prepared on source
+7c1b40d6, including the current actual-public-field, completed-card and generated
+conversation-title repairs. All18 non-documentation feature files exactly match
+the reviewed9ad14b5f candidate; their parent bytes were checked individually
+before reapplication. There is no executable overlap with the title repair.
+The full native input set remains byte-identical to that retained candidate.
+
+Local448 offline tests pass. The entire249-file frontend and actual public-view
+fixture exactly match the newly completed74-file/638-test frontend type/build/
+bundle validation; only that identical frontend scope is reused. Native Go/Rust
+compilation, full coverage and actual public-process acceptance remain
+CLOUD_PENDING. Expected Rust tests are1554 passes plus the original Redis ignore,
+with2 added Go tests and9 added Rust tests. No local native build/test or Docker.
+
+The candidate is preserved without upload until actual Rust/browser repair
+run39029467763 on its precise parent succeeds. Source58cac61c Rust push
+run39027301212 failed the generated-title mirror predicate despite rendering
+the recovered answer; its passing coverage does not qualify that browser gate.
+All old logs, reports, source snapshots and this complete feature are retained.
+No original Go/Python95 percent or Rust80 percent gate is lowered.
+
+A fully received bounded JSON rejection for documented provider statuses
+400/401/402/422/429 is retained as a Rust-owned signed failed task outcome, with
+a generic public HTTP-status message. Raw private error text is not projected.
+Partial bodies, redirects, unsupported statuses and transport/server failures
+remain EFFECT_UNKNOWN. No automatic provider retry is introduced.
+
+Go requires the original verified Rust receipt and matching task settlement
+before a failed dependency is considered settled. Task-phase completion releases
+its own reservation while retaining the failed role. Dependents and synthesis
+receive its failure warning. The actual public-process matrix requires explicit
+resume that recovers the role and an explicit rerun rejected again, with original
+actions/history retained, no duplicate fresh phases, exact provider response
+hashes, unique Rust signer receipts and immutable recovery-context bodies.
+
+Typed terminal planner/synthesis failure remains incomplete in a separate
+private WIP. Remaining whole-run recovery, tool/live-output closure, real
+provider/crash acceptance, all server/desktop/Android/background packages,
+zero-Python production release and exact-source Evidence Assembly remain required.
+Full-product readiness stays NOT_READY. Root163 files and index are preserved.
+PR creation/update is only the daily21:40 Asia/Shanghai unified batch.
+
 ## Native browser generated-title retention repair — 2026-10-17
 
 Source58cac61c completed1545 Rust tests with zero failures and the original

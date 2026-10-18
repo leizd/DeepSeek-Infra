@@ -475,6 +475,73 @@ pub async fn exchange_fenced_turn(
     operation_id: &str,
     maximum_response_bytes: usize,
 ) -> Result<(UpstreamTurn, String), ChatExecutionError> {
+    match exchange_fenced_response(
+        config,
+        body,
+        fence,
+        operation_id,
+        maximum_response_bytes,
+        false,
+    )
+    .await?
+    {
+        FencedTaskOutcome::Turn {
+            turn,
+            response_sha256,
+        } => Ok((turn, response_sha256)),
+        FencedTaskOutcome::Rejected { status, .. } => {
+            Err(ChatExecutionError::UpstreamStatus { status })
+        }
+    }
+}
+
+/// An ordinary task may retain an explicitly rejected, fully received provider
+/// response as a failed output. The raw error body never leaves this exchange.
+#[derive(Debug)]
+pub enum FencedTaskOutcome {
+    Turn {
+        turn: UpstreamTurn,
+        response_sha256: String,
+    },
+    Rejected {
+        status: u16,
+        response_sha256: String,
+    },
+}
+
+/// These documented Chat Completions errors reject a request before a result.
+/// https://api-docs.deepseek.com/quick_start/error_codes/
+/// Other statuses, incomplete bodies and transport errors remain inconclusive.
+pub fn is_conclusive_task_rejection(status: u16) -> bool {
+    matches!(status, 400 | 401 | 402 | 422 | 429)
+}
+
+pub async fn exchange_fenced_task_outcome(
+    config: &UpstreamConfig,
+    body: &Value,
+    fence: &deepseek_protocol::ActionFence,
+    operation_id: &str,
+    maximum_response_bytes: usize,
+) -> Result<FencedTaskOutcome, ChatExecutionError> {
+    exchange_fenced_response(
+        config,
+        body,
+        fence,
+        operation_id,
+        maximum_response_bytes,
+        true,
+    )
+    .await
+}
+
+async fn exchange_fenced_response(
+    config: &UpstreamConfig,
+    body: &Value,
+    fence: &deepseek_protocol::ActionFence,
+    operation_id: &str,
+    maximum_response_bytes: usize,
+    admit_rejection: bool,
+) -> Result<FencedTaskOutcome, ChatExecutionError> {
     use futures_util::StreamExt as _;
     use sha2::{Digest as _, Sha256};
 
@@ -504,9 +571,11 @@ pub async fn exchange_fenced_turn(
         .send()
         .await
         .map_err(|_| ChatExecutionError::UpstreamUnreachable)?;
-    if !response.status().is_success() {
+    let status = response.status();
+    if !status.is_success() && (!admit_rejection || !is_conclusive_task_rejection(status.as_u16()))
+    {
         return Err(ChatExecutionError::UpstreamStatus {
-            status: response.status().as_u16(),
+            status: status.as_u16(),
         });
     }
     if response
@@ -526,10 +595,26 @@ pub async fn exchange_fenced_turn(
     }
     let payload: Value =
         serde_json::from_slice(&bytes).map_err(|_| ChatExecutionError::UpstreamMalformed)?;
-    Ok((
-        turn_from_payload(&payload)?,
-        format!("{:x}", Sha256::digest(&bytes)),
-    ))
+    let response_sha256 = format!("{:x}", Sha256::digest(&bytes));
+    if !status.is_success() {
+        if payload
+            .get("error")
+            .and_then(Value::as_object)
+            .and_then(|error| error.get("message"))
+            .and_then(Value::as_str)
+            .is_none_or(|message| message.trim().is_empty())
+        {
+            return Err(ChatExecutionError::UpstreamMalformed);
+        }
+        return Ok(FencedTaskOutcome::Rejected {
+            status: status.as_u16(),
+            response_sha256,
+        });
+    }
+    Ok(FencedTaskOutcome::Turn {
+        turn: turn_from_payload(&payload)?,
+        response_sha256,
+    })
 }
 
 /// Open one streaming upstream turn and hand back the live response.
@@ -719,6 +804,124 @@ mod tests {
         ] {
             assert!(actual.contains(header), "missing exact fence header");
         }
+    }
+
+    #[tokio::test]
+    async fn fenced_task_rejections_require_complete_documented_responses() {
+        use sha2::{Digest as _, Sha256};
+        let (fence, operation) = effect_identity();
+        for status in [400, 401, 402, 422, 429] {
+            for chunked in [false, true] {
+                let bytes=serde_json::to_vec(&json!({"error":{"message":"private-provider-error","type":"invalid_request_error"}})).unwrap();
+                let expected = format!("{:x}", Sha256::digest(&bytes));
+                let (config, task) = fenced_fixture(status, bytes, chunked);
+                let outcome =
+                    exchange_fenced_task_outcome(&config, &json!({}), &fence, &operation, 4096)
+                        .await
+                        .unwrap();
+                assert!(
+                    matches!(outcome,FencedTaskOutcome::Rejected{status:actual,response_sha256} if actual==status && response_sha256==expected)
+                );
+                assert!(task.join().unwrap().contains(&operation));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn fenced_task_rejections_never_close_ambiguous_or_redirected_effects() {
+        let (fence, operation) = effect_identity();
+        for status in [302, 403, 408, 409, 500, 503] {
+            let (config, task) = fenced_fixture(
+                status,
+                b"{\"error\":{\"message\":\"unknown\"}}".to_vec(),
+                false,
+            );
+            assert!(
+                matches!(exchange_fenced_task_outcome(&config,&json!({}),&fence,&operation,4096).await,Err(ChatExecutionError::UpstreamStatus{status:actual}) if actual==status)
+            );
+            task.join().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn fenced_task_rejections_do_not_attest_malformed_or_success_shaped_bodies() {
+        let (fence, operation) = effect_identity();
+        for body in [
+            json!([]),
+            json!({"error":"text"}),
+            json!({"error":{"message":" "}}),
+            upstream_body(),
+        ] {
+            let (config, task) = fenced_fixture(400, serde_json::to_vec(&body).unwrap(), false);
+            assert!(matches!(
+                exchange_fenced_task_outcome(&config, &json!({}), &fence, &operation, 4096).await,
+                Err(ChatExecutionError::UpstreamMalformed)
+            ));
+            task.join().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn fenced_task_rejections_obey_both_declared_and_streaming_limits() {
+        let (fence, operation) = effect_identity();
+        for chunked in [false, true] {
+            let (config, task) = fenced_fixture(401, vec![b'x'; 1024], chunked);
+            assert!(matches!(
+                exchange_fenced_task_outcome(&config, &json!({}), &fence, &operation, 100).await,
+                Err(ChatExecutionError::UpstreamMalformed)
+            ));
+            task.join().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn fenced_task_truncated_rejection_is_still_an_unknown_transport_result() {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let config = UpstreamConfig {
+            url: format!("http://{}/chat", listener.local_addr().unwrap()),
+            api_key: "fixture".into(),
+            timeout: Duration::from_secs(2),
+        };
+        let task = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            let mut buffer = [0; 1024];
+            while !bytes.windows(4).any(|p| p == b"\r\n\r\n") {
+                let count = socket.read(&mut buffer).unwrap();
+                assert!(count > 0);
+                bytes.extend_from_slice(&buffer[..count]);
+            }
+            socket.write_all(b"HTTP/1.1 401 Rejected\r\nContent-Length: 200\r\nConnection: close\r\n\r\n{\"error\":{\"message\":\"incomplete\"}}").unwrap();
+            drop(socket);
+            listener.set_nonblocking(true).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(matches!(listener.accept(),Err(e) if e.kind()==std::io::ErrorKind::WouldBlock));
+        });
+        let (fence, operation) = effect_identity();
+        assert!(matches!(
+            exchange_fenced_task_outcome(&config, &json!({}), &fence, &operation, 4096).await,
+            Err(ChatExecutionError::UpstreamUnreachable)
+        ));
+        task.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn planner_fenced_turn_keeps_rejections_as_errors() {
+        let (fence, operation) = effect_identity();
+        let (config, task) = fenced_fixture(
+            401,
+            b"{\"error\":{\"message\":\"rejected\"}}".to_vec(),
+            false,
+        );
+        assert!(matches!(
+            exchange_fenced_turn(&config, &json!({}), &fence, &operation, 4096).await,
+            Err(ChatExecutionError::UpstreamStatus { status: 401 })
+        ));
+        task.join().unwrap();
     }
 
     #[tokio::test]

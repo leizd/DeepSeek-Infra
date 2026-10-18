@@ -418,6 +418,14 @@ func TestNativeAgentPublicDriverProcess(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	metadata, found, err := control.AgentRunMetadata(created.RunID)
+	if os.Getenv("DEEPSEEK_TEST_AGENT_FAILED_TASK_RECOVERY") != "" {
+		if err != nil || !found {
+			t.Fatal(err)
+		}
+		result := nativeFailedTaskRecovery(t, control, public.Origin, client, metadata, publicRun, ready.PublicKey)
+		nativeSigningWrite(t, filepath.Join(directory, "result.json"), result)
+		return
+	}
 	if err != nil || !found || (expectedConfirmation && !confirmed) || metadata.ConfirmPlan != expectedConfirmation || metadata.Preset != preset ||
 		metadata.Status != "done" || metadata.NextIndex != int64(eventCount) {
 		t.Fatal("public state differs from actual Go durable settlement", err)

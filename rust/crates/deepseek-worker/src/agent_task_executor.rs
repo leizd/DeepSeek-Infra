@@ -99,6 +99,33 @@ fn task_envelope(
     )
 }
 
+fn rejected_task_envelope(
+    scope: (&str, &str, &str),
+    status: u16,
+    response_sha256: &str,
+    latency_ms: u64,
+) -> Result<Value, Status> {
+    let (run_id, node, task) = scope;
+    if multi_agent::profile(node).is_none()
+        || task.trim().is_empty()
+        || !deepseek_gateway::chat_execution::is_conclusive_task_rejection(status)
+        || response_sha256.len() != 64
+        || !response_sha256
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        || latency_ms > i64::MAX as u64
+    {
+        return Err(denied());
+    }
+    let mut output =
+        multi_agent::failed_output(node, task, &format!("上游已拒绝请求（HTTP {status}）"));
+    output["latencyMs"] = json!(latency_ms);
+    Ok(
+        json!({"runId":run_id,"publicEvent":{"type":"agent_output","phase":node,"output":output},
+        "providerStatus":status,"providerResponseSha256":response_sha256}),
+    )
+}
+
 fn synthesis_envelope(
     run_id: &str,
     message: Value,
@@ -300,7 +327,7 @@ impl WorkerRpcService {
                     .timeout
                     .min(Duration::from_secs((deadline - now) as u64));
                 let started = Instant::now();
-                let (turn, receipt) = deepseek_gateway::chat_execution::exchange_fenced_turn(
+                let outcome = deepseek_gateway::chat_execution::exchange_fenced_task_outcome(
                     &config,
                     &body,
                     &permit.fence,
@@ -309,24 +336,54 @@ impl WorkerRpcService {
                 )
                 .await
                 .map_err(|_| Status::unavailable("AGENT_PROVIDER_RESULT_UNKNOWN"))?;
-                let calls = turn.tool_calls();
-                match turn.message.get("tool_calls") {
-                    None | Some(Value::Null) => {}
-                    Some(Value::Array(raw)) if raw.len() == calls.len() => {}
-                    _ => return Err(Status::failed_precondition("AGENT_TASK_RESULT_UNKNOWN")),
-                }
                 let elapsed = started.elapsed().as_millis().min(i64::MAX as u128) as u64;
-                let envelope = if synthesis {
-                    synthesis_envelope(&run_id, turn.message, turn.usage, calls, &receipt, elapsed)?
-                } else {
-                    task_envelope(
+                let envelope = match outcome {
+                    deepseek_gateway::chat_execution::FencedTaskOutcome::Rejected {
+                        status,
+                        response_sha256,
+                    } if !synthesis => rejected_task_envelope(
                         (&run_id, &intent.node_id, &intent.task),
-                        turn.message,
-                        turn.usage,
-                        calls,
-                        &receipt,
+                        status,
+                        &response_sha256,
                         elapsed,
-                    )?
+                    )?,
+                    deepseek_gateway::chat_execution::FencedTaskOutcome::Rejected { .. } => {
+                        return Err(Status::unavailable("AGENT_PROVIDER_RESULT_UNKNOWN"));
+                    }
+                    deepseek_gateway::chat_execution::FencedTaskOutcome::Turn {
+                        turn,
+                        response_sha256,
+                    } => {
+                        let calls = turn.tool_calls();
+                        match turn.message.get("tool_calls") {
+                            None | Some(Value::Null) => {}
+                            Some(Value::Array(raw)) if raw.len() == calls.len() => {}
+                            _ => {
+                                return Err(Status::failed_precondition(
+                                    "AGENT_TASK_RESULT_UNKNOWN",
+                                ));
+                            }
+                        }
+                        if synthesis {
+                            synthesis_envelope(
+                                &run_id,
+                                turn.message,
+                                turn.usage,
+                                calls,
+                                &response_sha256,
+                                elapsed,
+                            )?
+                        } else {
+                            task_envelope(
+                                (&run_id, &intent.node_id, &intent.task),
+                                turn.message,
+                                turn.usage,
+                                calls,
+                                &response_sha256,
+                                elapsed,
+                            )?
+                        }
+                    }
                 };
                 service.confirm_agent_node_effect(&permit, &envelope).await
             }
@@ -546,6 +603,56 @@ mod tests {
                 0
             )
             .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod rejected_task_tests {
+    use super::*;
+    #[test]
+    fn rejected_task_retains_failed_role_without_exposing_provider_error_or_private_data() {
+        for status in [400, 401, 402, 422, 429] {
+            let event = rejected_task_envelope(
+                ("run_rejected", "critic", "review"),
+                status,
+                &"a".repeat(64),
+                123,
+            )
+            .unwrap();
+            assert_eq!(event["publicEvent"]["output"]["failed"], true);
+            assert_eq!(event["publicEvent"]["output"]["id"], "critic");
+            assert_eq!(event["publicEvent"]["output"]["task"], "review");
+            assert_eq!(event["publicEvent"]["output"]["latencyMs"], 123);
+            assert!(
+                event["publicEvent"]["output"]["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&status.to_string())
+            );
+            assert_eq!(event["providerResponseSha256"], "a".repeat(64));
+            assert_eq!(event["providerStatus"], status);
+            assert!(event.get("toolContinuation").is_none());
+            assert!(event["publicEvent"]["output"].get("usage").is_none());
+        }
+    }
+    #[test]
+    fn rejected_task_cannot_close_unsupported_status_invalid_scope_hash_or_latency() {
+        for status in [200, 302, 403, 408, 409, 500, 503] {
+            assert!(
+                rejected_task_envelope(("run", "coder", "write"), status, &"a".repeat(64), 1)
+                    .is_err()
+            );
+        }
+        for scope in [("run", "synthesizer", "task"), ("run", "critic", " ")] {
+            assert!(rejected_task_envelope(scope, 401, &"a".repeat(64), 1).is_err());
+        }
+        for hash in ["bad".to_string(), "G".repeat(64)] {
+            assert!(rejected_task_envelope(("run", "coder", "write"), 401, &hash, 1).is_err());
+        }
+        assert!(
+            rejected_task_envelope(("run", "coder", "write"), 401, &"a".repeat(64), u64::MAX)
+                .is_err()
         );
     }
 }

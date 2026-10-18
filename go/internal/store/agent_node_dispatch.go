@@ -138,10 +138,10 @@ func agentDispatchPlanNode(run agent.RunMetadata, binding AgentRunExecutionBindi
 				for _, dependency := range node.DependsOn {
 					_, verified := completed[dependency]
 					if source := retained[dependency]; !verified && source != nil && source.Outcome != nil && source.Outcome.Evidence != nil &&
-						source.Outcome.Evidence.TaskOutput != nil && !source.Outcome.Evidence.TaskOutput.Failed {
+						source.Outcome.Evidence.TaskOutput != nil {
 						verified = true
 					}
-					if !verified || run.Nodes()[dependency].State != "succeeded" {
+					if !verified || !run.Nodes()[dependency].TaskOutputSettled() {
 						return agent.RunPlanNode{}, ErrAgentNodeDependencyUnverified
 					}
 				}

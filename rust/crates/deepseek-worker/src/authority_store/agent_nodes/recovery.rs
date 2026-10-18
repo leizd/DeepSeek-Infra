@@ -63,7 +63,7 @@ impl AuthorityStore {
                 .as_ref()
                 .and_then(|r| r.evidence.as_ref())
                 .and_then(|e| e.task_output.as_ref())
-                .is_none_or(|o| o.failed)
+                .is_none()
         {
             return Err(denied());
         }

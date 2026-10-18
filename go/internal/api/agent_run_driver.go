@@ -149,7 +149,7 @@ func driverTasksComplete(run agent.RunMetadata) bool {
 	}
 	nodes := run.Nodes()
 	for _, entry := range plan {
-		if nodes[entry.ID].State != "succeeded" || nodes[entry.ID].Failed {
+		if !nodes[entry.ID].TaskOutputSettled() {
 			return false
 		}
 	}
@@ -483,15 +483,12 @@ func (driver *agentRunDriver) tasks(ctx context.Context, client agentDriverWorke
 		ready := ""
 		states := run.Nodes()
 		for _, entry := range entries {
-			if states[entry.ID].State == "succeeded" && !states[entry.ID].Failed {
+			if states[entry.ID].TaskOutputSettled() {
 				continue
-			}
-			if states[entry.ID].State == "failed" || states[entry.ID].Failed {
-				return errAgentDriverUnknown
 			}
 			dependencies := true
 			for _, dependency := range entry.DependsOn {
-				if states[dependency].State != "succeeded" || states[dependency].Failed {
+				if !states[dependency].TaskOutputSettled() {
 					dependencies = false
 					break
 				}

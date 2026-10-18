@@ -44,7 +44,7 @@ func completedAgentTasks(run agent.RunMetadata) bool {
 	}
 	nodes := run.Nodes()
 	for _, entry := range plan {
-		if nodes[entry.ID].State != "succeeded" || nodes[entry.ID].Failed {
+		if !nodes[entry.ID].TaskOutputSettled() {
 			return false
 		}
 	}

@@ -415,6 +415,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     recovery_driving = bool(getattr(args, "recovery_driving", False))
     task_recovery_case = getattr(args, "task_recovery_case", None)
     public_completion_case = getattr(args, "public_completion_case", None)
+    failed_task_case = getattr(args, "failed_task_case", None)
+    if failed_task_case is not None and failed_task_case not in {"resume", "rerun"}:
+        raise ValueError("Unknown failed-task recovery case")
     public_recovery = bool(getattr(args, "public_recovery_rerun_matrix", False) or getattr(args, "public_recovery_completion_matrix", False))
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -435,7 +438,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     ROOT / "tests/native/agent_recovery_preparation_process.go.txt",
                     ROOT / "tests/native/agent_task_recovery_process.go.txt",
                     ROOT / "tests/native/agent_public_recovery_process.go.txt",
-                    ROOT / "tests/native/agent_public_completion_process.go.txt"]
+                    ROOT / "tests/native/agent_public_completion_process.go.txt",
+                    ROOT / "tests/native/agent_failed_task_process.go.txt"]
         overlay = scratch / "overlay.json"
         overlay.write_text(json.dumps({"Replace": {
             (ROOT / "go/internal/api/zz_native_agent_signing_process_test.go").as_posix(): fixtures[0].as_posix(),
@@ -443,7 +447,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             (ROOT / "go/internal/api/zz_native_agent_recovery_preparation_process_test.go").as_posix(): fixtures[2].as_posix(),
             (ROOT / "go/internal/api/zz_native_agent_task_recovery_process_test.go").as_posix(): fixtures[3].as_posix(),
             (ROOT / "go/internal/api/zz_native_agent_public_recovery_process_test.go").as_posix(): fixtures[4].as_posix(),
-            (ROOT / "go/internal/api/zz_native_agent_public_completion_process_test.go").as_posix(): fixtures[5].as_posix()}}), encoding="utf-8")
+            (ROOT / "go/internal/api/zz_native_agent_public_completion_process_test.go").as_posix(): fixtures[5].as_posix(),
+            (ROOT / "go/internal/api/zz_native_agent_failed_task_process_test.go").as_posix(): fixtures[6].as_posix()}}), encoding="utf-8")
         binary = scratch / "native-public-agent-api-tests"
         signing.record_command(["go", "test", "-c", "-p=2", "-overlay", overlay.as_posix(), "-o", binary.as_posix(), "./internal/api"],
             ROOT / "go", environment, output, "go-public-driver-build", timeout=600)
@@ -528,7 +533,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 reply = json.dumps({"id": f"public-agent-{position}", "model": "deepseek-v4-pro",
                     "choices": [{"message": {"role": "assistant", "content": content, "reasoning_content": "private-task-reasoning"}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}, separators=(",", ":")).encode()
-                self.send_response(200)
+                http_status=200
+                if failed_task_case is not None:
+                    if position==2 or failed_task_case=="rerun" and position==5:
+                        http_status=401 if position==2 else 429
+                        reply=json.dumps({"error":{"message":"private-provider-rejection","type":"invalid_request_error"}},separators=(",",":")).encode()
+                    elif position>=5:
+                        content="## 摘要\nControlled rerun task summary" if position==5 else "Controlled failed-task recovered final answer"
+                        reply=json.dumps({"id":f"failed-task-{position}","model":"deepseek-v4-pro",
+                            "choices":[{"message":{"role":"assistant","content":content,"reasoning_content":"private-task-reasoning"},"finish_reason":"stop"}],
+                            "usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}},separators=(",",":")).encode()
+                    exchanges[-1].update(httpStatus=http_status,responseSha256=hashlib.sha256(reply).hexdigest(),
+                        failedPredecessorInPrompt="HTTP 401" in prompt,
+                        synthesisFailureNoticeInPrompt="以下 Agent 本轮执行失败" in prompt)
+                self.send_response(http_status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(reply)))
                 self.end_headers()
@@ -544,6 +562,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             environment.update(DEEPSEEK_AGENT_PUBLIC_DRIVER_PROBE="1", DEEPSEEK_AGENT_SIGNING_PROBE_DIR=case.as_posix(),
                 DEEPSEEK_AGENT_SIGNING_WORKER_BEARER=bearer, DEEPSEEK_TEST_HEAD_SHA=source_commit,
                 DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY=binding["signerPublicKey"])
+            if failed_task_case is not None:
+                environment["DEEPSEEK_TEST_AGENT_FAILED_TASK_RECOVERY"]=failed_task_case
             if recovery_preparation:
                 environment["DEEPSEEK_TEST_AGENT_RECOVERY_PREPARATION"] = "1"
             if recovery_driving:
@@ -606,7 +626,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             result = signing.wait_json(case / "result.json", producer, timeout=360 if cancel_active else 180)
             if producer.wait(timeout=15) != 0:
                 raise RuntimeError("Actual native public driver process failed")
-            if public_completion_case is not None:
+            if failed_task_case is not None:
+                import verify_native_agent_failed_tasks as failed_tasks
+                failed_tasks.validate_failed_task_result(result,exchanges,failed_task_case)
+            elif public_completion_case is not None:
                 validate_public_completion_result(result,exchanges,public_completion_case)
             elif task_recovery_case is not None:
                 validate_task_recovery_result(result,exchanges,task_recovery_case)
@@ -648,6 +671,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     expected_nodes = 5
                 if task_recovery_case is not None:
                     expected_nodes=5+int(task_recovery_case["synthesize"])
+                if failed_task_case is not None:
+                    expected_nodes=6
                 if len(rows) != expected_nodes or any(row[1] != "CONFIRMED" or hashlib.sha256(row[2]).hexdigest() != row[3] for row in rows):
                     raise ValueError("Rust actual four-node custody is missing or corrupt")
                 leader = next((json.loads(row[2]) for row in rows if json.loads(row[2]).get("publicEvent", {}).get("type") == "agent_plan"), None)
@@ -675,6 +700,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 if bodies!=[expected_note,expected_next]:
                     raise ValueError("Actual progress bodies changed retained public behavior")
                 result["progressArtifactAndSignerCustodyVerified"]=True
+            if failed_task_case is not None:
+                failed_tasks.verify_failed_task_custody(result,exchanges,state,artifacts)
             result.update(actualHTTPRequests=len(exchanges), providerExchanges=exchanges,
                 requestBodyStoredByRust=True, bootstrapUIIsOfflineFixture=True, cloudOnlyNativeBuild=True,
                 privateCustodyVariablesExportedToGo=False, readiness="NOT_READY")

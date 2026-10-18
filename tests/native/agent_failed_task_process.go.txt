@@ -1,0 +1,230 @@
+// Actual public recovery after a fully received provider rejection. All private
+// signing material remains in the independently started Rust worker.
+package api
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"net/http"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/leizd/DeepSeek-Infra/go/internal/agent"
+	"github.com/leizd/DeepSeek-Infra/go/internal/agentproof"
+	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+	"google.golang.org/protobuf/proto"
+)
+
+func nativeFailedTaskReceiptDocuments(t *testing.T, control *store.Control, records []store.Record, key string) []map[string]any {
+	t.Helper()
+	result := []map[string]any{}
+	for _, record := range records {
+		binding, err := store.AgentRunExecutionBindingFromRecord(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := []string{"leader"}
+		if binding.Phase == "tasks" {
+			ids = []string{"coder", "critic"}
+		} else if binding.Phase == "synthesis" {
+			ids = []string{"synthesizer"}
+		}
+		for _, id := range ids {
+			_, intent, receipt, found, err := control.AgentNodeOutcomeSnapshot(record.ID, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !found {
+				continue
+			}
+			if receipt == nil || receipt.Evidence == nil {
+				t.Fatal("admitted node lacks signed outcome")
+			}
+			_, err = agentproof.VerifyAgentNodeOutcome(receipt, nodeDispatchProtocol(intent), receipt.Evidence.WriterFencingToken,
+				agentproof.Binding{PublicKey: key, FleetID: mutationFleetID, Environment: mutationEnvironment})
+			if err != nil {
+				t.Fatal("actual Rust outcome failed pinned verification", err)
+			}
+			raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(receipt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(raw)
+			failed := receipt.Evidence.TaskOutput != nil && receipt.Evidence.TaskOutput.Failed
+			result = append(result, map[string]any{"actionId": record.ID, "nodeId": id, "operationId": intent.OperationID, "failed": failed,
+				"receiptBase64": base64.RawURLEncoding.EncodeToString(raw), "receiptSha256": hex.EncodeToString(digest[:]), "pinnedSignatureVerified": true})
+		}
+	}
+	return result
+}
+
+func nativeFailedTaskRecovery(t *testing.T, control *store.Control, publicOrigin string, client *http.Client,
+	before agent.RunMetadata, beforePublic map[string]any, key string) map[string]any {
+	t.Helper()
+	mode := os.Getenv("DEEPSEEK_TEST_AGENT_FAILED_TASK_RECOVERY")
+	if mode != "resume" && mode != "rerun" {
+		t.Fatal("unselected failed-task case")
+	}
+	if before.Status != "done" || before.NextIndex != 9 || before.Nodes()["coder"].State != "failed" || !before.Nodes()["coder"].Failed || before.Nodes()["critic"].State != "succeeded" || beforePublic["finalAnswer"] != "Controlled final answer" {
+		t.Fatal("confirmed failure did not finish with the other role preserved")
+	}
+	recordsBefore, err := control.ListAuthoritativeRecords("action")
+	if err != nil || len(recordsBefore) != 3 {
+		t.Fatal("initial failed task did not settle three phases", err)
+	}
+	originalActions := map[string][]byte{}
+	for _, record := range recordsBefore {
+		leases, err := control.GetResourceLeases(record.ID)
+		if err != nil || record.State != "SUCCEEDED" || len(leases) != 0 {
+			t.Fatal("confirmed failure left unresolved resource custody", err)
+		}
+		raw, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		originalActions[record.ID] = raw
+	}
+	documentsBefore := nativeFailedTaskReceiptDocuments(t, control, recordsBefore, key)
+	if len(documentsBefore) != 4 {
+		t.Fatal("initial failed attempt lacks actual four-node custody")
+	}
+	oldEvents, ok := beforePublic["events"].([]any)
+	if !ok || len(oldEvents) != 9 {
+		t.Fatal("initial immutable event history missing")
+	}
+	originalEvents, err := json.Marshal(oldEvents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{"payload": map[string]any{"temperature": 1.0}}
+	if mode == "rerun" {
+		body["agentId"], body["resynthesize"] = "coder", true
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, _ := nativePublicRecoveryPost(t, client, publicOrigin, before.RunID, mode, encoded)
+	if status != http.StatusOK {
+		t.Fatal("actual Rust public failed-task recovery refused", status)
+	}
+	var current map[string]any
+	var after agent.RunMetadata
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		current = nativePublicCompletionRead(t, client, publicOrigin, before.RunID)
+		var found bool
+		after, found, err = control.AgentRunMetadata(before.RunID)
+		if err != nil || !found {
+			t.Fatal(err)
+		}
+		if after.Recovery != nil && after.Recovery.Generation == 1 && after.Status == "done" {
+			break
+		}
+		if after.Status == "failed" || after.Status == "cancelled" {
+			t.Fatal("failed task recovery did not settle", after.Status)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	expectedIndex := int64(15)
+	expectedFailed := false
+	if mode == "rerun" {
+		expectedIndex = 16
+		expectedFailed = true
+	}
+	if after.Status != "done" || after.NextIndex != expectedIndex || after.RuntimeVersion() != before.RuntimeVersion()+1 || after.Recovery == nil || after.Recovery.Generation != 1 || after.Request == before.Request || after.Nodes()["coder"].Failed != expectedFailed || !after.Nodes()["coder"].TaskOutputSettled() || after.Nodes()["critic"].State != "succeeded" || current["finalAnswer"] != "Controlled failed-task recovered final answer" {
+		t.Fatal("public recovery lost exact failed/successful task settlement", after.Status, after.NextIndex)
+	}
+	events, ok := current["events"].([]any)
+	if !ok || len(events) != int(expectedIndex) {
+		t.Fatal("recovery public cursor differs")
+	}
+	prefix, err := json.Marshal(events[:len(oldEvents)])
+	if err != nil || !bytes.Equal(prefix, originalEvents) {
+		t.Fatal("explicit recovery rewrote original failed history")
+	}
+	recordsAfter, err := control.ListAuthoritativeRecords("action")
+	if err != nil || len(recordsAfter) != 5 {
+		t.Fatal("explicit recovery admitted additional phases", err)
+	}
+	var newTaskID, newSynthesisID string
+	originalsRetained := 0
+	for _, record := range recordsAfter {
+		leases, err := control.GetResourceLeases(record.ID)
+		if err != nil || len(leases) != 0 || record.State != "SUCCEEDED" {
+			t.Fatal("recovery phase did not release exact resource", err)
+		}
+		if original, exists := originalActions[record.ID]; exists {
+			originalsRetained++
+			raw, err := json.Marshal(record)
+			if err != nil || !bytes.Equal(raw, original) {
+				t.Fatal("recovery modified original failed action")
+			}
+			continue
+		}
+		binding, err := store.AgentRunExecutionBindingFromRecord(record)
+		if err != nil || binding.Request != after.Request {
+			t.Fatal("fresh phase rebound runtime request", err)
+		}
+		if binding.Phase == "tasks" {
+			if newTaskID != "" {
+				t.Fatal("recovery admitted duplicate fresh task phases")
+			}
+			newTaskID = record.ID
+		} else if binding.Phase == "synthesis" {
+			if newSynthesisID != "" {
+				t.Fatal("recovery admitted duplicate fresh synthesis phases")
+			}
+			newSynthesisID = record.ID
+		} else {
+			t.Fatal("recovery scheduled an unselected phase")
+		}
+	}
+	if originalsRetained != len(originalActions) || newTaskID == "" || newSynthesisID == "" {
+		t.Fatal("recovery omitted separately admitted task and synthesis")
+	}
+	documentsAfter := nativeFailedTaskReceiptDocuments(t, control, recordsAfter, key)
+	if len(documentsAfter) != 6 {
+		t.Fatal("recovery lost original receipts or executed an extra task")
+	}
+	contextBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(after.Recovery.Metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contextHash := sha256.Sum256(contextBytes)
+	result := map[string]any{"status": "PASS", "runId": before.RunID, "sourceCommit": os.Getenv("DEEPSEEK_TEST_HEAD_SHA"), "mode": mode,
+		"runStatus": after.Status, "nextIndex": after.NextIndex, "publicEventCount": len(events), "initialEventCount": len(oldEvents), "durablePhases": len(recordsAfter),
+		"requestSha256": after.Request.SHA256, "requestLength": after.Request.Length, "originalRequestSha256": before.Request.SHA256,
+		"contextArtifactSha256": after.Recovery.Context.SHA256, "contextArtifactLength": after.Recovery.Context.Length, "contextSha256": hex.EncodeToString(contextHash[:]),
+		"runtimeRevision": after.RuntimeVersion(), "generation": after.Recovery.Generation, "metadataSchemaVersion": after.SchemaVersion,
+		"initialFailureRetained": true, "originalEventsUnchanged": true, "originalActionsUnchanged": true, "otherRoleNotRerun": true, "resourcesReleased": true,
+		"initialTaskFailed": true, "recoveredTaskFailed": expectedFailed, "initialReceiptCount": len(documentsBefore), "receiptDocuments": documentsAfter,
+		"newTaskActionId": newTaskID, "newSynthesisActionId": newSynthesisID, "admittedThroughRustHTTP": true, "finalAnswerVisible": true,
+		"inputBodySeededByOfflineOracle": false, "productionProviderQualified": false, "fullMigrationQualified": false,
+		"productionRuntimeProcesses": []string{"Go", "Rust"}, "providerFixtureIsOfflineTestTool": true}
+	if mode == "rerun" {
+		if after.RecoveryProgress == nil || after.RecoveryProgress.Receipt == nil {
+			t.Fatal("failed rerun lacks typed Rust progress receipt")
+		}
+		proof := after.RecoveryProgress.Receipt
+		if err := agentproof.VerifyAgentRecoveryProgress(proof, proof.Evidence.Context, agentproof.Binding{PublicKey: key, FleetID: mutationFleetID, Environment: mutationEnvironment}); err != nil {
+			t.Fatal("failed rerun progress lacks actual pinned proof", err)
+		}
+		if len(proof.Evidence.Context.Outputs) != 1 || !proof.Evidence.Context.Outputs[0].Outcome.Evidence.TaskOutput.Failed {
+			t.Fatal("progress falsely claimed the rejected rerun succeeded")
+		}
+		raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(proof)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash := sha256.Sum256(raw)
+		result["progressReceiptBase64"], result["progressReceiptSha256"], result["progressSignatureVerified"] = base64.RawURLEncoding.EncodeToString(raw), hex.EncodeToString(hash[:]), true
+	} else if after.RecoveryProgress != nil {
+		t.Fatal("resume fabricated a single-role-rerun progress receipt")
+	}
+	return result
+}
