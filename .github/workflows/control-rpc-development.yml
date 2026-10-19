@@ -40,6 +40,9 @@ jobs:
           tar -xzf "$archive" -C "$RUNNER_TEMP/control-go"
           echo "$RUNNER_TEMP/control-go/go/bin" >> "$GITHUB_PATH"
       - name: Exercise real control lifecycle regressions without release qualification
+        env:
+          # Go race instrumentation requires Cgo; production builds remain pure Go.
+          CGO_ENABLED: "1"
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain --untracked-files=all)"
