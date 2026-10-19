@@ -1,5 +1,59 @@
 <!-- BEGIN TERMINAL_CUSTODY_FIX_20261019 -->
 
+## Proved synthesis failure across explicit recovery generations — 2026-10-19
+
+`SYNTHESIS_FAILURE_RECOVERY_20261019` combines the unuploaded coverage regressions
+with the actual conclusive-synthesis recovery fix on f9078db7. That parent passed
+1560 Rust workspace tests (original Redis ignore1) and five of six terminal process
+cases; synthesis resumed to running/index10 and then stopped. Its source CI also
+failed the original default Go95% floor (13924/14713). Neither run is an overall pass.
+
+The driver previously classified the preceding typed FAILED synthesis action as
+unresolved when the explicit recovery request changed. It now retires that prior
+action only after re-reading the exact committed recovery header and independently
+verifying the original signed failure, its immutable dispatch/outcome pair and
+source metadata cursor. Older generations retain their committed preceding scope
+and still reverify the original terminal receipt. EFFECT_UNKNOWN is never skipped.
+No failure record is rewritten and no task/provider retry is admitted implicitly.
+
+Thirteen new Go test groups include the ten refusal/rollback boundaries plus
+synthesis-only explicit resume, rebound/unknown source refusal and a second explicit
+recovery retaining both failed generations. Existing workflows, Proto, Rust code,
+coverage floors, dependency locks and frozen corpus remain unchanged. These signed
+offline fixtures do not qualify actual Rust/provider behavior.
+
+- [ ] Re-run the complete native Go, race and both original95% coverage variants
+      plus six actual terminal process cases/21HTTP and all37 source-CI jobs.
+- [ ] Continue the unuploaded Android cloud/emulator candidate after native repair.
+- [ ] Complete all retained capabilities, platform/device acceptance and measured
+      zero-Python workloads with all15 native Evidence gates. NOT_READY.
+
+
+## Failure custody refusal boundaries and original Go coverage — 2026-10-19
+
+`FAILURE_COVERAGE_20261019` is the latest unqualified corrective candidate on
+`f9078db7459c2cf5dd1e4c7ba86c61ae7073f656`; the original root remains unchanged.
+The parent source dispatch 39184406764 completed with default Go tests and race
+passing, but statement coverage was 13924/14713 = 94.63739550057772%, below the
+original 95% floor. Evidence/RC failures are downstream; the Android Go profile
+was not reached. No exclusions, denominator changes or lower threshold are allowed.
+
+This candidate adds Go refusal and corruption regressions for malformed wire,
+rebound action/run/epoch/operation/owner, missing cutover and reservations, original
+proof/cursor/termination history, ignored lease updates, writer/clock loss and
+rollback. Restore-and-reconcile assertions retain original immutable custody.
+Driver tests refuse malformed custody queries, keep the original fence and ensure
+synthesis-only recovery does not admit task execution. Production sources, Proto,
+locked tools and both existing workflows are unchanged. These are offline signed
+Go fixtures; actual Rust/provider/public recovery still requires its process gates.
+
+[ ] Qualify the new tests and both original 95% Go coverage variants in cloud.
+[ ] Collect the separate exact Rust push including six terminal cases/21 HTTP.
+[ ] Rebase the unuploaded Android cloud/emulator candidate after native repairs.
+[ ] Complete all retained product/platform ownership, measured successful zero-
+    Python workloads and all 15 native Evidence gates. Overall remains NOT_READY.
+
+
 ## Conclusive failure publication and original checkpoint custody — 2026-10-19
 
 Exact source8c1fc1ce completed Rust strict lint/workspace tests and its coverage

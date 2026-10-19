@@ -180,6 +180,12 @@ func (driver *agentRunDriver) phase(run agent.RunMetadata) (agentv1.AgentRunExec
 		if err != nil || binding.RunID != run.RunID {
 			continue
 		}
+		if record.State == "FAILED" {
+			if err := driver.verifiedPriorFailure(run, record); err != nil {
+				return phase, nil, err
+			}
+			continue
+		}
 		matching := binding.Request == run.Request && binding.PlanDigest == planDigest && binding.MetadataIndex <= run.NextIndex
 		if !matching && binding.Phase == executionPhaseName(phase) && record.State != "SUCCEEDED" && record.State != "CANCELLED_CONFIRMED" {
 			return phase, nil, errAgentDriverUnknown
