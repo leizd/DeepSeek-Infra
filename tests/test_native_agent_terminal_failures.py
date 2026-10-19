@@ -26,7 +26,7 @@ def sample(mode: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     raw = b"offline-placeholder-projection"
     result: dict[str, Any] = {
         "status": "PASS", "mode": mode, "sourceCommit": "a" * 40, "runId": "offline-terminal-" + mode, "runStatus": "done",
-        "initialEventCount": 3 if planning else 8, "nextIndex": 15 if planning else 12, "publicEventCount": 15 if planning else 12,
+        "initialEventCount": 2 if planning else 8, "nextIndex": 14 if planning else 12, "publicEventCount": 14 if planning else 12,
         "initialActionCount": 1 if planning else 3, "durablePhases": 3 if planning else 4, "runtimeRevision": 2, "generation": 1,
         "metadataSchemaVersion": 3, "initialPublicPlanCount": 0 if planning else 2, "publicPlanCount": 0 if planning else 2,
         "executeCount": 4 if planning else 0, "effectiveRecoveryRoles": ["researcher", "coder", "reasoner", "critic"] if planning else ["coder", "critic"],
@@ -63,7 +63,7 @@ def test_terminal_report_rejects_missing_actual_proofs(field: str, mode: str) ->
         validate_terminal_result(result, exchanges, mode)
 
 
-@pytest.mark.parametrize("field,value", [("initialActionCount", True), ("nextIndex", 16), ("runtimeRevision", 1), ("generation", 2),
+@pytest.mark.parametrize("field,value", [("initialActionCount", True), ("nextIndex", 16), ("initialEventCount", 3), ("nextIndex", 15), ("runtimeRevision", 1), ("generation", 2),
     ("publicPlanCount", 4), ("executeCount", 0), ("defaultDAGKeptOutOfPublicPlan", False), ("fullMigrationQualified", True),
     ("productionProviderQualified", True), ("inputBodySeededByOfflineOracle", True), ("requestSha256", "c" * 64),
     ("contextSha256", "not-a-digest"), ("requestLength", True), ("effectiveRecoveryRoles", ["coder", "critic"])])
@@ -212,13 +212,21 @@ def unknown_sample(mode: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "httpStatus": 401 if eof else 503, "responseComplete": not eof, "responseSha256": "f" * 64,
         "requestCredentialUsed": True, "privateReasoningInPrompt": False})
     result = {"status": "PASS", "mode": mode, "sourceCommit": "a" * 40, "runId": "offline-unknown-" + mode, "runStatus": "cancelled",
-        "initialEventCount": 2 if planning else 7, "nextIndex": 3 if planning else 8, "durablePhases": 1 if planning else 3,
+        "initialEventCount": 1 if planning else 7, "nextIndex": 2 if planning else 8, "durablePhases": 1 if planning else 3,
         "resumeStatus": 409, "rerunStatus": 409, "unknownOperationId": "unknown-operation", "unknownActionId": "unknown-action", "originalExecutionEpoch": 1,
         "requestSha256": "b" * 64, "requestLength": 100, "receiptDocuments": [] if planning else prior["receiptDocuments"][:3],
         "unknownNotClosed": True, "originalFenceRetained": True, "reservationRetained": True, "noRecoveryGeneration": True,
         "originalRequestRetained": True, "inputBodySeededByOfflineOracle": False, "productionProviderQualified": False,
         "fullMigrationQualified": False, "providerFixtureIsOfflineTestTool": True, "productionRuntimeProcesses": ["Go", "Rust"]}
     return result, exchanges
+
+
+@pytest.mark.parametrize("mode", ["plan-5xx", "plan-eof"])
+def test_unknown_planner_requires_its_actual_admitted_created_cursor(mode: str) -> None:
+    result, exchanges = unknown_sample(mode)
+    result["initialEventCount"], result["nextIndex"] = 2, 3
+    with pytest.raises(ValueError):
+        validate_unknown_result(result, exchanges, mode)
 
 
 @pytest.mark.parametrize("mode", ["plan-5xx", "plan-eof", "synthesis-5xx", "synthesis-eof"])

@@ -1,3 +1,40 @@
+<!-- BEGIN TERMINAL_CUSTODY_FIX_20261019 -->
+
+## Conclusive failure publication and original checkpoint custody — 2026-10-19
+
+Exact source8c1fc1ce completed Rust strict lint/workspace tests and its coverage
+job, but the source CI Go gate failed two planner-original body/time tampering
+cases. Actual terminal process acceptance also failed: publish_known omitted
+retained typed errors, the Rust workflow missed its already hash-pinned Protobuf
+report dependency, and the planner probe assumed a planning cursor not admitted
+by the current controller. These are failed-source observations, not qualification.
+
+Rust publication now accepts only the canonical retained_failure envelope for
+leader/synthesizer. Rebound/forged errors, unknown5xx, private extra fields and
+other nodes remain refused before any public artifact write. Go binds the whole
+original planner checkpoint to its separate immutable operator receipt, including
+payload, domain/id/revision/state, original epoch, original writer and time. A
+later error reducer cannot silently overwrite evidence of tampered original body
+or timestamp. New source-witness and Rust publication regressions preserve all
+previous refusal, replay, migration and unknown-effect checks.
+
+The process probe uses actual native planner admission(created/index1): a single
+confirmed error closes at2 and explicit default-DAG resume ends at14; unknown
+planning stays at1 and cancellation at2. No phantom planning event is counted.
+Synthesis counts, six scenarios,21 actual HTTP requests, original effect identity,
+no duplicate dispatch, actual signature/effect journals and resource checks stay.
+Offline report tests additionally refuse the old fabricated cursor. The cloud
+workflow installs the existing requirements-native-protocol.txt unchanged; no
+runtime fallback or unpinned dependency is introduced.
+
+This source requires fresh cloud native builds, full original Rust80/Go95/Python95
+floors, process custody and complete CI. Whole-product status remains NOT_READY,
+including real providers, production ownership, desktop/Android and zero-Python
+packages/Evidence. Root dirty source/index remain preserved. PRs are handled only
+by the daily21:40 Asia/Shanghai batch, at most once per date.
+
+<!-- END TERMINAL_CUSTODY_FIX_20261019 -->
+
 <!-- BEGIN FAILURE_STATE_READER_FIX_20261018 -->
 
 ## Conclusive action failure read repair — 2026-10-18

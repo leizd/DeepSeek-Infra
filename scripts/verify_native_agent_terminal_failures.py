@@ -53,8 +53,8 @@ def validate_terminal_result(result: dict[str, Any], exchanges: list[dict[str, A
         raise ValueError("Unknown terminal failure mode")
     planning = mode == "plan"
     expected = {
-        "initialEventCount": 3 if planning else 8, "nextIndex": 15 if planning else 12,
-        "publicEventCount": 15 if planning else 12, "initialActionCount": 1 if planning else 3,
+        "initialEventCount": 2 if planning else 8, "nextIndex": 14 if planning else 12,
+        "publicEventCount": 14 if planning else 12, "initialActionCount": 1 if planning else 3,
         "durablePhases": 3 if planning else 4, "runtimeRevision": 2, "generation": 1,
         "metadataSchemaVersion": 3, "initialPublicPlanCount": 0 if planning else 2,
         "publicPlanCount": 0 if planning else 2, "executeCount": 4 if planning else 0,
@@ -195,7 +195,7 @@ def validate_unknown_result(result: dict[str, Any], exchanges: list[dict[str, An
         raise ValueError("Unknown ambiguous terminal case")
     planning, eof = mode.startswith("plan-"), mode.endswith("-eof")
     count = 1 if planning else 4
-    expected = {"initialEventCount": 2 if planning else 7, "nextIndex": 3 if planning else 8,
+    expected = {"initialEventCount": 1 if planning else 7, "nextIndex": 2 if planning else 8,
                 "durablePhases": 1 if planning else 3, "resumeStatus": 409, "rerunStatus": 409}
     if result.get("status") != "PASS" or result.get("mode") != mode or result.get("runStatus") != "cancelled" or not _hex(result.get("sourceCommit"), 40):
         raise ValueError("Unknown effect was not preserved through actual public cancellation")

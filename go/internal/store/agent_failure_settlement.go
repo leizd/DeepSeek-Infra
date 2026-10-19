@@ -403,11 +403,37 @@ func agentFailureNode(phase string) string {
 func (store *Control) validateAgentFailureSourceTx(tx *sql.Tx, binding agentExecutionIntent) error {
 	switch binding.Phase {
 	case "plan":
-		return nil
+		return validateAgentFailurePlanningCheckpointTx(tx, binding)
 	case "synthesis":
 		_, err := store.verifiedAgentSynthesisSourceTx(tx, binding)
 		return err
 	default:
 		return ErrCorruptRecord
 	}
+}
+
+// Replaying the error replaces LastEvent. Therefore a reducer comparison alone
+// cannot authenticate the original planner event's body or timestamp. Bind the
+// whole original checkpoint to the independent, append-only operator receipt,
+// using its original writer and time rather than the successor's current fence.
+func validateAgentFailurePlanningCheckpointTx(tx *sql.Tx, binding agentExecutionIntent) error {
+	invalid := fmt.Errorf("%w: agent failure original planning checkpoint witness", ErrCorruptRecord)
+	record, metadata, found, err := scanControlRecord(tx.QueryRow(`SELECT record_id,revision,execution_epoch,state,payload_json,record_digest,writer_fencing_token,recorded_at
+        FROM control_events WHERE domain='agent_run' AND record_id=? AND revision=?`, binding.RunID, binding.MetadataIndex), "agent_run")
+	if err != nil || !found || record.ExecutionEpoch == 0 || record.ExecutionEpoch > binding.MetadataEpoch {
+		return invalid
+	}
+	digest, err := operatorPayloadDigest(record.Payload)
+	if err != nil {
+		return invalid
+	}
+	var count int
+	err = tx.QueryRow(`SELECT count(*) FROM control_operator_mutations
+        WHERE domain='agent_run' AND record_id=? AND record_revision=? AND record_state=?
+        AND action_id=? AND execution_epoch=? AND payload_digest=? AND writer_fencing_token=? AND recorded_at=?`,
+		binding.RunID, binding.MetadataIndex, record.State, binding.RunID, int64(record.ExecutionEpoch), digest, metadata.writerToken, metadata.timestamp).Scan(&count)
+	if err != nil || count != 1 {
+		return invalid
+	}
+	return nil
 }

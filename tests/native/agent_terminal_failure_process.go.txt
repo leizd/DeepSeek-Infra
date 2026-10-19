@@ -86,7 +86,7 @@ func nativeTerminalUnknownEffect(t *testing.T, control *store.Control, origin st
 		t.Fatal("unknown ambiguous terminal case")
 	}
 	planning := strings.HasPrefix(mode, "plan-")
-	phase, node, initialIndex, expectedActions := "plan", "leader", int64(2), 1
+	phase, node, initialIndex, expectedActions := "plan", "leader", int64(1), 1
 	if !planning {
 		phase, node, initialIndex, expectedActions = "synthesis", "synthesizer", 7, 3
 	}
@@ -209,7 +209,7 @@ func nativeTerminalFailureRecovery(t *testing.T, control *store.Control, origin 
 	if mode != "plan" && mode != "synthesis" {
 		t.Fatal("unknown terminal failure case")
 	}
-	node, initialIndex, finalIndex, initialActions, finalActions, finalDocuments := "leader", int64(3), int64(15), 1, 3, 6
+	node, initialIndex, finalIndex, initialActions, finalActions, finalDocuments := "leader", int64(2), int64(14), 1, 3, 6
 	expectedInitialDocuments := 1
 	if mode == "synthesis" {
 		node, initialIndex, finalIndex, initialActions, finalActions, finalDocuments = "synthesizer", 8, 12, 3, 4, 5

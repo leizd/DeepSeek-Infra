@@ -278,7 +278,26 @@ impl AgentPlanExecutor {
             && event["text"]
                 .as_str()
                 .is_some_and(|text| !text.trim().is_empty());
-        if envelope["runId"] != run_id || !(planner || task || pending_tools || synthesis) {
+        let terminal_failure = match outcome.node_id.as_str() {
+            "leader" => crate::agent_terminal_failure::retained_failure(
+                &envelope,
+                run_id,
+                &outcome.node_id,
+                1,
+            )?
+            .is_some(),
+            "synthesizer" => crate::agent_terminal_failure::retained_failure(
+                &envelope,
+                run_id,
+                &outcome.node_id,
+                3,
+            )?
+            .is_some(),
+            _ => false,
+        };
+        if envelope["runId"] != run_id
+            || !(planner || task || pending_tools || synthesis || terminal_failure)
+        {
             return Err(Status::data_loss("AGENT_PLAN_OUTCOME_CORRUPT"));
         }
         let root = self.artifact_root.clone();
@@ -650,6 +669,109 @@ mod tests {
                 ..Default::default()
             }),
             ..Default::default()
+        }
+    }
+
+    fn failure_outcome(node: &str, body: &Value) -> AgentNodeEffectOutcome {
+        let output = serde_json::to_vec(body).unwrap();
+        AgentNodeEffectOutcome {
+            operation_id: format!("agent-node-{}", "a".repeat(64)),
+            fence: ActionFence {
+                action_id: "failure-publication".into(),
+                execution_epoch: 1,
+            },
+            node_id: node.into(),
+            output_sha256: format!("{:x}", Sha256::digest(&output)),
+            output,
+        }
+    }
+
+    #[tokio::test]
+    async fn retained_conclusive_failure_publishes_only_its_exact_public_error() {
+        for (node, phase) in [("leader", 1), ("synthesizer", 3)] {
+            let root = tempfile::tempdir().unwrap();
+            let executor = executor(root.path());
+            let body = crate::agent_terminal_failure::rejection_envelope(
+                "failure-run",
+                node,
+                phase,
+                401,
+                &"c".repeat(64),
+            )
+            .unwrap();
+            let metadata = executor
+                .publish_known(failure_outcome(node, &body), "failure-run")
+                .await
+                .unwrap();
+            assert_eq!(metadata.state, "CONFIRMED");
+            assert_eq!(metadata.node_id, node);
+            assert_eq!(
+                executor
+                    .publish_known(failure_outcome(node, &body), "failure-run")
+                    .await
+                    .unwrap(),
+                metadata
+            );
+            let reference = metadata.public_event.unwrap();
+            let public = ArtifactStore::open_readonly(&executor.artifact_root)
+                .unwrap()
+                .get(&ArtifactReference {
+                    sha256: reference.sha256,
+                    length: reference.length,
+                })
+                .unwrap();
+            assert_eq!(public, body["publicEvent"]);
+            assert!(public.get("providerFailure").is_none());
+            assert!(public.get("providerResponseSha256").is_none());
+            assert!(!root.path().join("rust-worker").exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn unproved_or_rebound_error_is_refused_before_public_artifact_write() {
+        for (node, phase) in [("leader", 1), ("synthesizer", 3)] {
+            for mutation in [
+                "missing-proof",
+                "unknown-status",
+                "response-hash",
+                "public-event",
+                "private-extra",
+                "other-node",
+            ] {
+                let root = tempfile::tempdir().unwrap();
+                let executor = executor(root.path());
+                let mut body = crate::agent_terminal_failure::rejection_envelope(
+                    "failure-run",
+                    node,
+                    phase,
+                    401,
+                    &"c".repeat(64),
+                )
+                .unwrap();
+                match mutation {
+                    "missing-proof" => {
+                        body.as_object_mut().unwrap().remove("providerFailure");
+                    }
+                    "unknown-status" => body["providerFailure"]["httpStatus"] = json!(503),
+                    "response-hash" => body["providerResponseSha256"] = json!("not-a-hash"),
+                    "public-event" => body["publicEvent"]["error"] = json!("forged public failure"),
+                    "private-extra" => body["privateProviderResponse"] = json!("must-not-publish"),
+                    "other-node" => {}
+                    _ => unreachable!(),
+                }
+                let selected = if mutation == "other-node" {
+                    "coder"
+                } else {
+                    node
+                };
+                assert!(
+                    executor
+                        .publish_known(failure_outcome(selected, &body), "failure-run")
+                        .await
+                        .is_err()
+                );
+                assert!(!executor.artifact_root.exists());
+            }
         }
     }
 
