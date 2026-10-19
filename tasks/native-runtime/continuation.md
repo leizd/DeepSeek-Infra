@@ -1,3 +1,29 @@
+## Private RPC client and launcher TDD — 2026-10-19
+
+`CONTROL_RPC_CLIENT_RED_20261019` adds executable regression cases only. The
+actual Go lifecycle mTLS on c36b5e0b passed nine selected groups/41 subcases;
+its Rust and full37-job source CI are still separate pending qualifications.
+Exactad7131b9 adds bounded API24 SQLite diagnostics and remote-exit/kernel
+reporting, with696 offline checks and both972-file type checks passed. Its
+actual Android39257274454, Rust39257273989 and source39257877628 are pending.
+
+A real wiring gap remains: worker AgentExecutionControl only accepts the old
+HTTP origin, gateway Agent RPC channels have no configured client TLS identity,
+and ProductionPlan does not forward the new private transport configuration.
+New Rust lookup tests require dedicated HTTPS selection while preserving the
+public HTTP proxy and no fallback on broken explicit TLS configuration. Three
+Go plan regressions require paired endpoints, refusal of partial/mismatched
+settings, and separation of Go server transport, Rust client transport, Rust
+signer custody paths and model/search credentials by child process. The focused
+cloud workflow additionally selects these launch tests; all original full gates
+remain. This snapshot intentionally has no production implementation and is
+NOT_READY; valid semantic RED must precede the connecting implementation.
+
+Cloud-only compilation/cache policy, original authority/fencing/recovery and
+Rust private-key custody remain. Full Android worker/bootstrap, API24 repair,
+ARM64/desktop, all retained capabilities and15 Evidence gates remain required.
+PR handling stays daily21:40 once; no main merge/release/real production data.
+
 ## API24 SQLite failure isolation — 2026-10-19
 
 Exactc36b5e0b lifecycle mTLS development39254502610 is collected PASS: nine

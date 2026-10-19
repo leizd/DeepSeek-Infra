@@ -49,7 +49,7 @@ jobs:
           mkdir -p artifacts/control-rpc-development
           cd go
           set +e
-          go test -race -json -count=1 -timeout=3m -run 'TestActualLifecycle|TestInternalRPC' ./internal/config ./internal/lifecycle > ../artifacts/control-rpc-development/go-tests.jsonl 2>&1
+          go test -race -json -count=1 -timeout=3m -run 'TestActualLifecycle|TestInternalRPC|TestProductionRPC' ./internal/config ./internal/lifecycle ./internal/launch > ../artifacts/control-rpc-development/go-tests.jsonl 2>&1
           go_status=$?
           set -e
           cd ..
@@ -62,6 +62,9 @@ jobs:
               "TestActualLifecycleServesMutuallyAuthenticatedRPCAndRetainsDomainRefusal",
               "TestActualLifecycleRequiresBothTrustedClientCertificateAndBearer",
               "TestActualLifecycleCancellationClosesBothListenersBeforeWriterSuccessor",
+              "TestProductionRPCPlanForwardsBothTransportEndpoints",
+              "TestProductionRPCPlanRejectsPartialTransportBeforeLaunch",
+              "TestProductionRPCPlanIsolatesServerAndRustCustodyCredentials",
           }
           started, finished = set(), {}
           for line in Path("artifacts/control-rpc-development/go-tests.jsonl").read_text().splitlines():
@@ -80,7 +83,7 @@ jobs:
           report = {"kind": "native-control-rpc-development-v1", "sourceCommit": os.environ["GITHUB_SHA"],
                     "runId": os.environ["GITHUB_RUN_ID"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"],
                     "event": os.environ["GITHUB_EVENT_NAME"], "ref": os.environ["GITHUB_REF"],
-                    "scope": "selected config/lifecycle regression tests with race detection", "exitCode": code,
+                    "scope": "selected config/lifecycle/launch regression tests with race detection", "exitCode": code,
                     "expectedTests": sorted(required), "startedExpectedTests": sorted(started), "finishedExpectedTests": finished,
                     "fullGoSuiteQualified": False, "coverageQualified": False, "releaseQualified": False, "fullMigrationQualified": False}
           Path("artifacts/control-rpc-development/result.json").write_text(json.dumps(report, indent=2) + "\n")

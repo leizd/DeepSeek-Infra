@@ -16,6 +16,143 @@ use std::sync::{
 use tonic::Response;
 
 const TOKEN: &str = "isolated-recovery-rpc-bearer-32-bytes";
+
+fn private_control_transport_fixture() -> (
+    tempfile::TempDir,
+    std::collections::BTreeMap<String, String>,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut ca = rcgen::CertificateParams::default();
+    ca.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    ca.key_usages = vec![
+        rcgen::KeyUsagePurpose::KeyCertSign,
+        rcgen::KeyUsagePurpose::CrlSign,
+    ];
+    let ca_key = rcgen::KeyPair::generate().unwrap();
+    let ca_cert = ca.self_signed(&ca_key).unwrap();
+    let mut client = rcgen::CertificateParams::new(vec!["rust-control-client".into()]).unwrap();
+    client.key_usages = vec![rcgen::KeyUsagePurpose::DigitalSignature];
+    client.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
+    let client_key = rcgen::KeyPair::generate().unwrap();
+    let client_cert = client.signed_by(&client_key, &ca_cert, &ca_key).unwrap();
+    let ca_path = directory.path().join("root.pem");
+    let cert_path = directory.path().join("client.pem");
+    let key_path = directory.path().join("client.key");
+    std::fs::write(&ca_path, ca_cert.pem()).unwrap();
+    std::fs::write(&cert_path, client_cert.pem()).unwrap();
+    std::fs::write(&key_path, client_key.serialize_pem()).unwrap();
+    let values = [
+        ("GO_CONTROL_ADDR", "http://127.0.0.1:8090".to_string()),
+        (
+            "DEEPSEEK_GO_CONTROL_RPC_URL",
+            "https://127.0.0.1:8091".to_string(),
+        ),
+        (
+            "DEEPSEEK_GO_CONTROL_RPC_TLS_CA_FILE",
+            ca_path.to_string_lossy().into_owned(),
+        ),
+        (
+            "DEEPSEEK_GO_CONTROL_RPC_TLS_CERT_FILE",
+            cert_path.to_string_lossy().into_owned(),
+        ),
+        (
+            "DEEPSEEK_GO_CONTROL_RPC_TLS_KEY_FILE",
+            key_path.to_string_lossy().into_owned(),
+        ),
+        (
+            "DEEPSEEK_GO_CONTROL_RPC_TLS_SERVER_NAME",
+            "control.native".to_string(),
+        ),
+        ("DEEPSEEK_INTERNAL_BEARER", TOKEN.to_string()),
+    ];
+    (
+        directory,
+        values
+            .into_iter()
+            .map(|(name, value)| (name.to_string(), value))
+            .collect(),
+    )
+}
+
+#[test]
+fn dedicated_control_transport_selects_private_tls_without_replacing_public_http() {
+    let (_directory, values) = private_control_transport_fixture();
+    let selected = load_agent_execution_control_from_env(|name| {
+        values.get(name).cloned().ok_or(VarError::NotPresent)
+    })
+    .unwrap()
+    .expect("configured private RPC was ignored");
+    assert_eq!(selected.endpoint.uri().scheme_str(), Some("https"));
+    assert_eq!(
+        selected.endpoint.uri().authority().unwrap().as_str(),
+        "127.0.0.1:8091"
+    );
+    assert_eq!(
+        values.get("GO_CONTROL_ADDR").unwrap(),
+        "http://127.0.0.1:8090"
+    );
+}
+
+#[test]
+fn explicit_private_control_transport_never_falls_back_after_configuration_failure() {
+    for fault in [
+        "missing-url",
+        "missing-ca",
+        "missing-cert",
+        "missing-key",
+        "missing-name",
+        "cleartext",
+        "public-address",
+        "malformed-ca",
+    ] {
+        let (_directory, mut values) = private_control_transport_fixture();
+        match fault {
+            "missing-url" => {
+                values.remove("DEEPSEEK_GO_CONTROL_RPC_URL");
+            }
+            "missing-ca" => {
+                values.remove("DEEPSEEK_GO_CONTROL_RPC_TLS_CA_FILE");
+            }
+            "missing-cert" => {
+                values.remove("DEEPSEEK_GO_CONTROL_RPC_TLS_CERT_FILE");
+            }
+            "missing-key" => {
+                values.remove("DEEPSEEK_GO_CONTROL_RPC_TLS_KEY_FILE");
+            }
+            "missing-name" => {
+                values.remove("DEEPSEEK_GO_CONTROL_RPC_TLS_SERVER_NAME");
+            }
+            "cleartext" => {
+                values.insert(
+                    "DEEPSEEK_GO_CONTROL_RPC_URL".to_string(),
+                    "http://127.0.0.1:8091".to_string(),
+                );
+            }
+            "public-address" => {
+                values.insert(
+                    "DEEPSEEK_GO_CONTROL_RPC_URL".to_string(),
+                    "https://198.51.100.9:8091".to_string(),
+                );
+            }
+            "malformed-ca" => {
+                std::fs::write(
+                    values.get("DEEPSEEK_GO_CONTROL_RPC_TLS_CA_FILE").unwrap(),
+                    "not a certificate",
+                )
+                .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let result = load_agent_execution_control_from_env(|name| {
+            values.get(name).cloned().ok_or(VarError::NotPresent)
+        });
+        assert!(
+            result.is_err(),
+            "invalid private transport selected the legacy HTTP peer: {fault}"
+        );
+    }
+}
+
 #[derive(Clone)]
 struct Preview {
     context: AgentRunRecoveryContext,
