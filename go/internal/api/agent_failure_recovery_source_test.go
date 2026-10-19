@@ -84,6 +84,60 @@ func TestDriverExplicitSynthesisResumeUsesFreshActionAndPreservesOriginalFailure
 	}
 }
 
+func TestDriverExplicitPlanFailureResumeRetainsLeaderProofAndChoosesOnlyTasks(t *testing.T) {
+	driver, fixture, run := driverFailureFixture(t, "leader")
+	if err := driver.drive(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	run = driverFixtureRun(t, driver, run.RunID)
+	if run.Status != "failed" || strings.Join(fixture.calls, ",") != "leader" {
+		t.Fatal("leader rejection was not retained before recovery")
+	}
+	records, err := driver.service.control.ListAuthoritativeRecords("action")
+	if err != nil || len(records) != 1 || records[0].State != "FAILED" {
+		t.Fatal("missing original failed leader", err)
+	}
+	failed := records[0]
+	authority, err := driver.service.GetAuthority(context.Background(), &agentv1.AgentRunAuthorityInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := store.AgentRunRecoveryExpected{RunID: run.RunID,
+		Fence: &commonv1.ActionFence{ActionId: run.RunID, ExecutionEpoch: authority.MetadataEpoch}, ExpectedIndex: run.NextIndex,
+		ExpectedRuntimeRevision: run.RuntimeVersion(), ExpectedRequest: run.Request,
+		Selection: &agentv1.AgentRunRecoverySelection{Kind: agentv1.AgentRunRecoveryKind_AGENT_RUN_RECOVERY_KIND_RESUME}}
+	preview, err := driver.service.control.PreviewAgentRunRecovery(expected)
+	if err != nil || len(preview.Context.Execute) != 4 || !preview.Context.Synthesize {
+		t.Fatal("failed plan did not retain the legacy default task selection", err)
+	}
+	result, err := driver.service.control.CommitAgentRunRecovery(store.CommitAgentRunRecoveryRequest{AgentRunRecoveryExpected: expected,
+		OperationID: "resume-proved-leader-failure", Actor: agentDriverActor, ContextSHA256: preview.ContextSHA256,
+		Context: agent.ArtifactRef{SHA256: strings.Repeat("e", 64), Length: 500}, Request: agent.ArtifactRef{SHA256: strings.Repeat("d", 64), Length: 140},
+		EventBodies: []agent.ArtifactRef{{SHA256: strings.Repeat("1", 64), Length: 30}, {SHA256: strings.Repeat("2", 64), Length: 30}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	phase, existing, err := driver.phase(result.Run)
+	if err != nil || existing != nil || phase != agentv1.AgentRunExecutionPhase_AGENT_RUN_EXECUTION_PHASE_TASKS {
+		t.Fatal("proved leader failure blocked tasks or caused replanning", phase, err)
+	}
+	retained, found, err := driver.service.control.Get("action", failed.ID)
+	if err != nil || !found || !reflect.DeepEqual(retained, failed) || len(fixture.calls) != 1 {
+		t.Fatal("selecting explicit tasks rewrote or redispatched the failed leader", err)
+	}
+}
+
+func TestDriverCannotRetireAnOriginalFailureAfterLosingTheControlStore(t *testing.T) {
+	driver, fixture, run, failed := failedSynthesisResumeFixture(t)
+	before := len(fixture.calls)
+	if err := driver.service.control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := driver.verifiedPriorFailure(run, failed); err == nil || len(fixture.calls) != before {
+		t.Fatal("unavailable authoritative history admitted a provider retry", err)
+	}
+}
+
 func TestDriverCannotRetireFailedActionWithInventedOrReboundRecoveryMetadata(t *testing.T) {
 	for _, fault := range []string{"no-scope", "no-metadata", "source-index", "request", "context", "source-payload", "unknown-state", "task-phase"} {
 		t.Run(fault, func(t *testing.T) {

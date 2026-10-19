@@ -3,7 +3,9 @@ package store
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +32,11 @@ func failureProjectionSign(t *testing.T, receipt *agentv1.AgentFailureProjection
 }
 
 func failureSettlementFixture(t *testing.T, phase string) (*Control, AgentFailureSettlementRequest, ed25519.PrivateKey) {
+	t.Helper()
+	return failureSettlementOutcomeFixture(t, phase, "failure")
+}
+
+func failureSettlementOutcomeFixture(t *testing.T, phase, sourceKind string) (*Control, AgentFailureSettlementRequest, ed25519.PrivateKey) {
 	t.Helper()
 	var control *Control
 	var request AgentRunExecutionRequest
@@ -86,14 +93,31 @@ func failureSettlementFixture(t *testing.T, phase string) (*Control, AgentFailur
 			OutcomeSha256: strings.Repeat("a", 64), OutcomeLength: 112, PublicEvent: &agentv1.AgentArtifactReference{Sha256: strings.Repeat("b", 64), Length: 92},
 			Failure: &agentv1.AgentProviderFailureMetadata{SchemaVersion: 1, HttpStatus: 401, ResponseSha256: strings.Repeat("c", 64)},
 			FleetId: control.fleetID, Environment: control.environment}}
+	if sourceKind == "success" {
+		source.Evidence.Failure = nil
+		if phase == "synthesis" {
+			source.Evidence.TaskOutput = &agentv1.AgentTaskOutputMetadata{SchemaVersion: 1, PromptTokens: 13, CompletionTokens: 21, LatencyMs: 120}
+		}
+	}
 	agentOutcomeSign(t, source, private)
-	recorded, err := control.RecordAgentNodeOutcome(AgentNodeOutcomeRequest{OperationID: "failure-source", Actor: request.Actor,
-		ActionID: lease.ActionID, Epoch: lease.Epoch, RunID: request.RunID, NodeID: node, Receipt: source})
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(source)
 	if err != nil {
 		t.Fatal(err)
 	}
+	digest := sha256.Sum256(encoded)
+	sourceDigest := hex.EncodeToString(digest[:])
+	if sourceKind != "missing" {
+		recorded, err := control.RecordAgentNodeOutcome(AgentNodeOutcomeRequest{OperationID: "failure-source", Actor: request.Actor,
+			ActionID: lease.ActionID, Epoch: lease.Epoch, RunID: request.RunID, NodeID: node, Receipt: source})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if recorded.ReceiptSHA256 != sourceDigest {
+			t.Fatal("stored source identity changed")
+		}
+	}
 	p := &agentv1.AgentFailureProjectionReceipt{SchemaVersion: 1, SignerPublicKey: control.agentOutcomeSignerKey,
-		Evidence: &agentv1.AgentFailureProjectionEvidence{SchemaVersion: 1, SourceReceiptSha256: recorded.ReceiptSHA256,
+		Evidence: &agentv1.AgentFailureProjectionEvidence{SchemaVersion: 1, SourceReceiptSha256: sourceDigest,
 			SettlementFence: &commonv1.ActionFence{ActionId: lease.ActionID, ExecutionEpoch: lease.Epoch}, SettlementWriterToken: control.token,
 			RunId: request.RunID, Phase: i.Phase, MetadataEpoch: i.MetadataEpoch, ExpectedIndex: i.MetadataIndex,
 			ErrorBody: source.Evidence.PublicEvent, FleetId: control.fleetID, Environment: control.environment}}

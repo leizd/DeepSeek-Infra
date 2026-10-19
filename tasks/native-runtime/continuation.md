@@ -1,3 +1,45 @@
+## Final failure commit boundaries and exact-source evidence — 2026-10-19
+
+`FINAL_FAILURE_BOUNDARIES_20261019` is a test-only candidate on
+`9fb10c3aff89c79e39b3eff5afa76f5069b11979`; no production source, workflow,
+Proto, schema, coverage denominator or threshold changes are included.
+
+That exact parent now has a fully collected Rust push 39188443267 PASS:
+1560 workspace tests, zero failures, original Redis ignore1; line coverage
+86453/105335 = 82.07433426686286% against the original80% floor. All six
+terminal process cases passed with21 actual HTTP requests, including synthesis
+explicit resume to done/index12. The ordinary failed-task/public-browser and
+original signing/recovery process gates also passed within their bounded scope.
+
+The separate source workflow_dispatch39188536303 FAILED:33 successful jobs,
+three failures and one skipped. Default Go vet/tests passed; default coverage
+13988/14747 = 94.85319047941955% still misses the original95% floor by22 covered
+statements. Full Go race and Android Go checks were skipped after that failure.
+Python3.10/3.11/3.12 each passed6383 tests,1 skip and61 subtests, with original
+coverage95.57/95.51/95.58%. These are parent-source observations, not qualification
+of this new candidate or a PR merge candidate.
+
+New signed offline Go fixtures distinguish absent/successful source outcomes
+from conclusive failures; verify independent original checkpoint/custody; refuse
+stale public cursors and lost action authority; recheck action/writer deadlines
+and writer tokens at final commit and replay; and roll back final witness damage
+without losing the original receipt or reservation. Successful plan/synthesis
+settlements also refuse lost trust, rebound operation journals and missing run
+metadata. Driver coverage includes committed leader-failure resume choosing only
+tasks, unavailable authoritative history, and projection transport loss without
+retry. These fixtures do not replace actual Rust/provider acceptance.
+
+Correction: earlier prose saying the f9078db7 race gate passed was wrong; that
+gate and Android checks were skipped because coverage failed first. Frozen
+historical review artifacts remain preserved with a separate correction record.
+
+- [ ] Qualify this exact new source in cloud: full default/Android Go tests,
+      races and original95% floors, all Rust/process gates and all37 source-CI jobs.
+- [ ] Rebase and qualify the separately retained Android cloud/emulator candidate.
+- [ ] Complete Android/desktop production ownership, every retained capability,
+      successful zero-Python workload measurements and all15 native Evidence gates.
+      Whole-product readiness remains NOT_READY.
+
 <!-- BEGIN TERMINAL_CUSTODY_FIX_20261019 -->
 
 ## Proved synthesis failure across explicit recovery generations — 2026-10-19
@@ -33,10 +75,11 @@ offline fixtures do not qualify actual Rust/provider behavior.
 
 `FAILURE_COVERAGE_20261019` is the latest unqualified corrective candidate on
 `f9078db7459c2cf5dd1e4c7ba86c61ae7073f656`; the original root remains unchanged.
-The parent source dispatch 39184406764 completed with default Go tests and race
-passing, but statement coverage was 13924/14713 = 94.63739550057772%, below the
-original 95% floor. Evidence/RC failures are downstream; the Android Go profile
-was not reached. No exclusions, denominator changes or lower threshold are allowed.
+Correction: source dispatch 39184406764 passed default Go vet/tests, but
+statement coverage was 13924/14713 = 94.63739550057772%, below the original
+95% floor. Full Go race and Android checks occur after coverage and were
+SKIPPED, not passed. Evidence/RC failures are downstream. No exclusions,
+denominator changes or lower threshold are allowed.
 
 This candidate adds Go refusal and corruption regressions for malformed wire,
 rebound action/run/epoch/operation/owner, missing cutover and reservations, original

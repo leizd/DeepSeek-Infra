@@ -105,3 +105,22 @@ func TestFailureProjectionClientRequiresOriginalReceiptAndCurrentSettlementScope
 		t.Fatal("failure projection allowed plaintext", err)
 	}
 }
+
+func TestFailureProjectionTransportLossPreservesOriginalScopeAndDoesNotRetry(t *testing.T) {
+	for _, transportErr := range []error{context.DeadlineExceeded, context.Canceled} {
+		t.Run(transportErr.Error(), func(t *testing.T) {
+			fence := &commonv1.ActionFence{ActionId: "failed-plan", ExecutionEpoch: 2}
+			input := &agentv1.ProjectAgentFailureRequest{SchemaVersion: 1, Source: &agentv1.QueryAgentNodeEffectRequest{
+				OperationId: "agent-node-" + strings.Repeat("a", 64), Fence: proto.Clone(fence).(*commonv1.ActionFence),
+				RunId: "run", NodeId: "leader", ExpectedReceiptSha256: strings.Repeat("b", 64)},
+				SettlementFence: fence, SettlementWriterToken: 3, MetadataEpoch: 1, ExpectedIndex: 0}
+			original := proto.Clone(input)
+			rpc := &failureProjectionRPC{err: transportErr}
+			client := &Client{nodes: rpc, tlsSecured: true, bearerAttached: true}
+			result, err := client.ProjectAgentFailure(context.Background(), input)
+			if result != nil || !errors.Is(err, transportErr) || rpc.called != 1 || !proto.Equal(input, original) {
+				t.Fatal("transport loss fabricated a receipt, changed the original fence, or retried", err, rpc.called)
+			}
+		})
+	}
+}
