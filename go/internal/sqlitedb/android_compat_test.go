@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ncruces/go-sqlite3"
@@ -87,5 +88,20 @@ func TestAndroidUnavailableDatabaseDirectoryDoesNotCreateOrAdmitConnection(t *te
 	}
 	if _, err := os.Stat(parent); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("failed connection unexpectedly created the directory", err)
+	}
+}
+
+func TestAndroidConnectionFailureRetainsOriginalSQLiteCauseAndNumericDiagnostic(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "unavailable-parent")
+	connector, err := NewConnector(filepath.Join(parent, "control.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := connector.Connect(context.Background())
+	if connection != nil || !errors.Is(err, sqlite3.CANTOPEN) || !strings.Contains(err.Error(), "Android SQLite connection (code=14 errno=") {
+		t.Fatal("connection diagnostic lost the original failure identity", err)
+	}
+	if _, err := os.Stat(parent); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("connection diagnostics created unavailable control state", err)
 	}
 }

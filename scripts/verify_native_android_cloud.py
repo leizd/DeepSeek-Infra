@@ -124,13 +124,25 @@ def collect_runtime_logs(output: Path) -> list[dict[str, str]]:
     for service in ("gateway", "control", "worker"):
         path = output / f"runtime-{service}.log"
         try:
-            adb(["exec-out", "run-as", APPLICATION, "tail", "-c", "131072",
+            adb(["shell", "-T", "run-as", APPLICATION, "tail", "-c", "131072",
                  f"files/.native-runtime-logs/{service}.log"], path, timeout=15)
             state = "COLLECTED"
         except (ValueError, OSError, subprocess.SubprocessError):
             state = "UNAVAILABLE"
         results.append({"service": service, "status": state, "path": path.name})
     return results
+
+
+def collect_device_environment(output: Path) -> dict[str, dict[str, str]]:
+    """Collect fixed kernel facts without personal identifiers or app state."""
+    facts = {}
+    for name, option in (("kernelRelease", "-r"), ("kernelMachine", "-m")):
+        try:
+            value = adb(["shell", "-T", "uname", option], output / f"device-{name}.log", timeout=15)
+            facts[name] = {"status": "COLLECTED", "value": value[:512]} if value else {"status": "UNAVAILABLE"}
+        except (ValueError, OSError, subprocess.SubprocessError):
+            facts[name] = {"status": "UNAVAILABLE"}
+    return facts
 
 
 def run_device(args: argparse.Namespace) -> int:
@@ -172,6 +184,7 @@ def run_device(args: argparse.Namespace) -> int:
         # A bad source/APK must not authorize reading an existing app sandbox.
         # These files remain after the instrumentation runner stops its process.
         report["nativeRuntimeLogs"] = collect_runtime_logs(output) if sandbox_prepared else []
+        report["platformEnvironment"] = collect_device_environment(output) if sandbox_prepared else {}
         try:
             adb(["logcat", "-d", "-t", "2000"], output / "logcat.log", timeout=30)
         except (ValueError, OSError, subprocess.SubprocessError):

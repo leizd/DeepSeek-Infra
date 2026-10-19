@@ -1,3 +1,26 @@
+## API24 SQLite failure isolation — 2026-10-19
+
+Exactc36b5e0b lifecycle mTLS development39254502610 is collected PASS: nine
+required groups,41 finishes including subcases,zero failure/skip. This proves
+selected real lifecycle transport/race cases only. Full source39254613484 and
+Rust39254502629 remain separate pending qualifications; full product NOT_READY.
+
+Exact7d4497af Android39251758715 package and seven API34 methods passed; API24
+still failed. Actual Go child stderr repeats SQLite invalid_pragma disk I/O.
+New numeric extended-code/errno diagnostics preserve the original error chain
+and failed admission. Fixed kernel facts are collected without app data. No
+VFS/lock/journal/sync/schema change is made until the actual failed operation and
+kernel are known. The pinned VFS documents OFD Linux>=3.15 and incompatible lock
+families; guessing a flock switch would not establish safe existing-data use.
+
+The old collector mislabeled missing worker.log text as collected because
+exec-out lacked the remote failure status. Two offline RED cases now drive the
+shell-T and kernel-report correction, without upgrading failed instrumentation.
+Native compilation/tests/emulators remain cloud-only; original37 jobs and all
+coverage floors remain. Continue real API24 repair, Rust client/launcher wiring,
+Android worker/bootstrap/authority, all retained features and platform/Evidence
+gates. No PR mutation outside daily21:40, no main merge/release/real data action.
+
 ## Real control lifecycle mTLS — 2026-10-19
 
 `CONTROL_RPC_LIFECYCLE_MTLS_20261019` follows the executable cloud RED on

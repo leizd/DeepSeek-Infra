@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/ncruces/go-sqlite3"
 	sqlitedriver "github.com/ncruces/go-sqlite3/driver"
@@ -120,6 +121,14 @@ type configuredConnector struct {
 func (connector configuredConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	connection, err := connector.Connector.Connect(ctx)
 	if err != nil {
+		var failure *sqlite3.Error
+		if errors.As(err, &failure) {
+			var errno syscall.Errno
+			// Preserve the original SQLite/OS cause; report only numeric facts,
+			// never SQL, credential parameters or a new retry decision.
+			_ = errors.As(err, &errno)
+			return nil, fmt.Errorf("Android SQLite connection (code=%d errno=%d): %w", failure.ExtendedCode(), errno, err)
+		}
 		return nil, err
 	}
 	if err := connector.initialize(connection.(sqlitedriver.Conn).Raw()); err != nil {

@@ -12,14 +12,49 @@ from scripts import verify_native_android_cloud as android_cloud
 CASES = {"com.deepseek.mobile.OfflineTest#one", "com.deepseek.mobile.OfflineTest#two"}
 
 
+def test_missing_log_exit_status_cannot_be_mistaken_for_collected_child_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def execute(command: list[str], **_kwargs: object) -> object:
+        missing = command[-1].endswith("worker.log")
+        # exec-out can deliver the remote error as successful transport output.
+        code = 1 if missing and command[1:3] == ["shell", "-T"] else 0
+        body = b"tail: files/.native-runtime-logs/worker.log: No such file or directory\n" if missing else b"child stderr\n"
+        return android_cloud.subprocess.CompletedProcess(command, code, stdout=body, stderr=b"")
+
+    monkeypatch.setattr(android_cloud.subprocess, "run", execute)
+    rows = {row["service"]: row for row in android_cloud.collect_runtime_logs(tmp_path)}
+    assert rows["control"]["status"] == rows["gateway"]["status"] == "COLLECTED"
+    assert rows["worker"]["status"] == "UNAVAILABLE"
+
+
+def test_kernel_probe_retains_only_fixed_platform_facts_and_marks_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    collect = getattr(android_cloud, "collect_device_environment", None)
+    assert callable(collect), "actual Android kernel evidence is missing"
+    calls: list[list[str]] = []
+
+    def read(arguments: list[str], output: Path, timeout: int = 120) -> str:
+        calls.append(arguments)
+        assert arguments[:2] == ["shell", "-T"] and timeout <= 15
+        if arguments[2:] == ["uname", "-r"]:
+            output.write_bytes(b"3.10.0-test-fixture\n")
+            return "3.10.0-test-fixture"
+        output.write_bytes(b"unavailable\n")
+        raise ValueError("device fact unavailable")
+
+    monkeypatch.setattr(android_cloud, "adb", read)
+    facts = collect(tmp_path)
+    assert facts["kernelRelease"] == {"status": "COLLECTED", "value": "3.10.0-test-fixture"}
+    assert facts["kernelMachine"]["status"] == "UNAVAILABLE"
+    assert calls == [["shell", "-T", "uname", "-r"], ["shell", "-T", "uname", "-m"]]
+
+
 def test_child_diagnostics_read_only_bounded_logs_from_disposable_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls: list[list[str]] = []
 
     def read(arguments: list[str], output: Path, timeout: int = 120) -> str:
         calls.append(arguments)
-        assert arguments[:4] == ["exec-out", "run-as", "com.deepseek.mobile.nativeverify", "tail"]
-        assert arguments[4:6] == ["-c", "131072"] and timeout <= 30
-        assert arguments[6] in {"files/.native-runtime-logs/gateway.log", "files/.native-runtime-logs/control.log", "files/.native-runtime-logs/worker.log"}
+        assert arguments[:5] == ["shell", "-T", "run-as", "com.deepseek.mobile.nativeverify", "tail"]
+        assert arguments[5:7] == ["-c", "131072"] and timeout <= 30
+        assert arguments[7] in {"files/.native-runtime-logs/gateway.log", "files/.native-runtime-logs/control.log", "files/.native-runtime-logs/worker.log"}
         output.write_text("disposable child startup diagnostic\n", encoding="utf-8")
         return "disposable child startup diagnostic"
 
@@ -68,6 +103,7 @@ def test_invalid_source_binding_cannot_read_app_sandbox_or_qualify(monkeypatch: 
     result = json.loads((args.output / "result.json").read_text())
     assert result["status"] == "FAIL" and result["error"] == "rebound source binding"
     assert result["nativeRuntimeLogs"] == []
+    assert result["platformEnvironment"] == {}
     assert not result["deviceExecutionVerified"] and not result["fullMigrationQualified"]
 
 

@@ -81,3 +81,23 @@ API24 的原生进程就绪失败，整组设备验收仍失败。仅有 logcat 
 [Control RPC development workflow](../.github/workflows/control-rpc-development.yml)
 供 config/lifecycle 的选定回归在云端快速运行 race 检查；报告绑定精确提交并核对四组测试确实执行、未跳过。
 它不是完整 Go 或覆盖率资格；既有37项源码 CI、原始95%Go/Python及80%Rust门槛和各平台验收仍全部保留。
+
+
+## API24 SQLite 连接诊断
+
+精确7d4497af / Android39251758715再次在API34通过全部七项，在API24失败。
+子进程stderr首次证明Go control反复拒绝SQLite连接，消息为
+`sqlite3: invalid _pragma: sqlite3: disk I/O error`；此时不能把Rust linker的兼容警告当作退出根因。
+连接错误现在额外保留SQLite extended code和OS errno的数值，原错误链、连接拒绝及所有持久化配置不变。
+不改变WAL、同步、文件锁、控制schema或写入权，也不重试未知远端副作用。
+
+设备报告只增加`uname -r/-m`两项固定内核事实，用于区分运行内核和VFS失败位置；
+这些不是成功工作负载或平台验收。缺失内核事实明确标记不可用。
+调试沙盒日志改用带远端退出状态的`adb shell -T`；`exec-out`可把缺失文件的错误作为成功传输输出，
+因此旧7d报告中71字节的worker错误文本虽标记COLLECTED，不能证明worker存在。
+当前Android仍缺Rust worker，所有生产/ARM64/完整迁移资格保持false。
+
+参考：[固定SQLite VFS实现](https://github.com/ncruces/go-sqlite3/blob/v0.35.6/vfs/README.md)
+与[ADB shell选项](https://android.googlesource.com/platform/packages/modules/adb/+/refs/heads/main/docs/user/adb.1.md)。
+VFS文档要求OFD锁依赖Linux3.15且不同锁族并发访问不兼容；当前尚无本次设备内核和extended code，
+因此保留实际失败并收集证据，不能先换锁族、降低SDK或跳过API24来取得绿色结果。
