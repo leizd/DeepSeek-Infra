@@ -56,7 +56,10 @@ jobs:
           mkdir -p artifacts/android-build
           # All generated native output stays on this ephemeral cloud runner.
           echo ".cloud-android-target/" >> .git/info/exclude
-          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "ndk;27.3.13750724" < /dev/null
+          android_sdk_root="${ANDROID_SDK_ROOT:?Missing Android SDK location}"
+          android_sdkmanager="$android_sdk_root/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$android_sdkmanager"
+          "$android_sdkmanager" --sdk_root="$android_sdk_root" --install "platforms;android-34" "build-tools;34.0.0" "ndk;27.3.13750724" < /dev/null 2>&1 | tee artifacts/android-build/sdkmanager.log
           go version > artifacts/android-build/toolchains.log
           rustc +1.85.0 --version >> artifacts/android-build/toolchains.log
           java -version >> artifacts/android-build/toolchains.log 2>&1

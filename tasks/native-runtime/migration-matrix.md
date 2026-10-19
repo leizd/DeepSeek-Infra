@@ -1,3 +1,18 @@
+## Android runner SDK command discovery — 2026-10-19
+
+`ANDROID_SDK_PATH_FIX_20261019` corrects only the cloud workflow's SDK manager
+lookup. Exact Android push39211011146 on1334b6d8 failed package preparation with
+sdkmanager: command not found (exit127); no APK or emulator test ran. Native
+source CI39211115895 and Rust push39211011008 are independent and remain pending.
+
+The exact ubuntu24/20261012.334 image documentation and install-android-sdk.sh
+show ANDROID_SDK_ROOT and cmdline-tools/latest/bin/sdkmanager. Invoke that
+absolute executable, require it to exist, and retain SDK output in the report.
+This changes no tool/NDK pin, license acceptance, source/runtime behavior or
+coverage floor. Local native compilation remains prohibited. Package and both
+emulators must actually pass at this new source; Android production authority,
+missing Rust worker, ARM64 execution and full migration remain unqualified.
+
 ## Android cloud acceptance with corrected failure fixtures — 2026-10-19
 
 `ANDROID_FENCE_FIXTURE_FIX_20261019` combines the unuploaded Android cloud
