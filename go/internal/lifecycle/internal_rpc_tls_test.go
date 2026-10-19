@@ -9,12 +9,14 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -254,5 +256,201 @@ func TestActualLifecycleCancellationClosesBothListenersBeforeWriterSuccessor(t *
 	defer successor.Close()
 	if successor.Writer().FencingToken != 2 {
 		t.Fatal("transport restart reset the original fencing history")
+	}
+}
+
+func TestInternalRPCInvalidTLSMaterialCannotAcquireTheDurableWriter(t *testing.T) {
+	for _, fault := range []string{"missing-ca", "invalid-ca", "missing-key", "wrong-key"} {
+		t.Run(fault, func(t *testing.T) {
+			files := runtimeRPCPKI(t)
+			cfg := runtimeRPCConfig(t, files)
+			switch fault {
+			case "missing-ca":
+				t.Setenv("DEEPSEEKD_INTERNAL_RPC_TLS_CA_FILE", filepath.Join(t.TempDir(), "missing.pem"))
+			case "invalid-ca":
+				if err := os.WriteFile(files.ca, []byte("not a certificate"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "missing-key":
+				t.Setenv("DEEPSEEKD_INTERNAL_RPC_TLS_KEY_FILE", filepath.Join(t.TempDir(), "missing.key"))
+			case "wrong-key":
+				t.Setenv("DEEPSEEKD_INTERNAL_RPC_TLS_KEY_FILE", runtimeRPCPKI(t).serverKey)
+			}
+			var err error
+			cfg, err = config.Load()
+			if err != nil {
+				t.Fatal("material checks belong to startup, after configuration shape validation", err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			runtime, err := Start(ctx, cfg)
+			cancel()
+			if runtime != nil {
+				_ = awaitStopped(t, runtime)
+			}
+			if err == nil || runtime != nil {
+				t.Fatal("bad deployment trust material started an authoritative listener", fault)
+			}
+			if _, err := os.Stat(cfg.ProductionStoreDir); !os.IsNotExist(err) {
+				t.Fatal("rejected TLS material created or claimed a control store", err)
+			}
+		})
+	}
+}
+
+func TestInternalRPCOccupiedPortCannotClaimWriterOrStopItsExistingOwner(t *testing.T) {
+	files := runtimeRPCPKI(t)
+	runtimeRPCConfig(t, files)
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	t.Setenv("DEEPSEEKD_INTERNAL_RPC_LISTEN", occupied.Addr().String())
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime, err := Start(ctx, cfg)
+	if runtime != nil {
+		cancel()
+		_ = awaitStopped(t, runtime)
+	}
+	if err == nil || runtime != nil {
+		t.Fatal("occupied private RPC endpoint did not abort startup")
+	}
+	if _, err := os.Stat(cfg.ProductionStoreDir); !os.IsNotExist(err) {
+		t.Fatal("failed listener bind acquired durable writer state", err)
+	}
+	probe, err := net.DialTimeout("tcp", occupied.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal("startup failure closed another endpoint's listener", err)
+	}
+	_ = probe.Close()
+}
+
+func TestInternalRPCStartupFailureReleasesPrivateEndpointWithoutClaimingAnotherWriter(t *testing.T) {
+	for _, fault := range []string{"public-port-busy", "writer-held", "partial-direct-config", "conflicting-store-mode"} {
+		t.Run(fault, func(t *testing.T) {
+			cfg := runtimeRPCConfig(t, runtimeRPCPKI(t))
+			reserved, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.InternalRPCListen = reserved.Addr().String()
+			_ = reserved.Close()
+			var held *store.Control
+			switch fault {
+			case "public-port-busy":
+				occupied, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer occupied.Close()
+				cfg.Listen = occupied.Addr().String()
+			case "writer-held":
+				held, err = store.OpenControl(store.OpenOptions{Path: cfg.ProductionStoreDir, Owner: "original-owner"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer held.Close()
+			case "partial-direct-config":
+				cfg.InternalRPCTLSKeyFile = ""
+			case "conflicting-store-mode":
+				cfg.ShadowStoreDir = t.TempDir()
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			runtime, startErr := Start(ctx, cfg)
+			if runtime != nil {
+				cancel()
+				_ = awaitStopped(t, runtime)
+			}
+			if startErr == nil || runtime != nil {
+				t.Fatal("failed startup returned a live authoritative runtime", fault)
+			}
+			probe, err := net.Listen("tcp", cfg.InternalRPCListen)
+			if err != nil {
+				t.Fatal("failed startup leaked its private TLS listener", err)
+			}
+			_ = probe.Close()
+			if held != nil {
+				if !errors.Is(startErr, store.ErrWriterFenceHeld) || held.Writer().FencingToken != 1 {
+					t.Fatal("failed TLS startup replaced the existing writer", startErr)
+				}
+				if err := held.RenewWriter(context.Background()); err != nil {
+					t.Fatal("failed startup invalidated the original writer", err)
+				}
+			} else if _, err := os.Stat(cfg.ProductionStoreDir); !os.IsNotExist(err) {
+				t.Fatal("failed startup created a durable writer", err)
+			}
+		})
+	}
+}
+
+func TestActualLifecycleListenerOrWriterFailureClosesBothEndpointsBeforeSuccessor(t *testing.T) {
+	for _, fault := range []string{"public-listener", "private-listener", "writer-expiry"} {
+		t.Run(fault, func(t *testing.T) {
+			files := runtimeRPCPKI(t)
+			cfg := runtimeRPCConfig(t, files)
+			var now atomic.Int64
+			now.Store(1000)
+			control, err := store.OpenControl(store.OpenOptions{Path: cfg.ProductionStoreDir, Owner: cfg.Owner, Now: now.Load})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer control.Close()
+			public, err := net.Listen("tcp", cfg.Listen)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer public.Close()
+			private, err := listenInternalRPC(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer private.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			runtime := serve(ctx, cfg, public, control, 5*time.Millisecond, private)
+			t.Cleanup(func() { cancel(); _ = awaitStopped(t, runtime) })
+			secureAddress, publicAddress := runtime.InternalRPCAddr(), runtime.Addr()
+			connection := runtimeRPCClient(t, secureAddress, files.roots, []tls.Certificate{files.client})
+			request, stop := runtimeRPCContext(cfg.InternalAPIBearer, 3*time.Second)
+			defer stop()
+			if _, err := controlv1.NewControlPlaneClient(connection).Health(request, &controlv1.HealthRequest{}); err != nil {
+				t.Fatal("secure listener was not serving before the fault", err)
+			}
+			switch fault {
+			case "public-listener":
+				_ = public.Close()
+			case "private-listener":
+				_ = private.Close()
+			case "writer-expiry":
+				now.Store(1040)
+			}
+			terminal := awaitStopped(t, runtime)
+			if terminal == nil || (fault == "writer-expiry" && !errors.Is(terminal, store.ErrWriterFenceHeld)) {
+				t.Fatal("loss of listener or original writer was hidden", fault, terminal)
+			}
+			for _, address := range []string{publicAddress, secureAddress} {
+				probe, err := net.DialTimeout("tcp", address, time.Second)
+				if probe != nil {
+					_ = probe.Close()
+				}
+				if err == nil {
+					t.Fatal("faulted writer retained a healthy-looking endpoint", fault, address)
+				}
+			}
+			successor, err := store.OpenControl(store.OpenOptions{Path: cfg.ProductionStoreDir, Owner: "after-transport-failure"})
+			if err != nil {
+				t.Fatal("failed process retained the durable writer", err)
+			}
+			defer successor.Close()
+			if successor.Writer().FencingToken != 2 {
+				t.Fatal("fault handling reset the persisted writer history")
+			}
+		})
 	}
 }

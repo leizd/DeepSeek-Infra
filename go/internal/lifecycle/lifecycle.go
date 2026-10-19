@@ -45,12 +45,23 @@ func Start(ctx context.Context, cfg config.Config) (*Server, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	rpcListener, err := listenInternalRPC(cfg)
+	if err != nil {
+		return nil, err
+	}
+	closeRPC := func() {
+		if rpcListener != nil {
+			_ = rpcListener.Close()
+		}
+	}
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
+		closeRPC()
 		return nil, err
 	}
 	if cfg.Mode == config.ModeAuthoritative && (strings.TrimSpace(cfg.ProductionStoreDir) == "" || strings.TrimSpace(cfg.ShadowStoreDir) != "") {
 		_ = listener.Close()
+		closeRPC()
 		return nil, config.ErrInvalidConfig
 	}
 	var control *store.Control
@@ -80,14 +91,22 @@ func Start(ctx context.Context, cfg config.Config) (*Server, error) {
 		})
 		if err != nil {
 			_ = listener.Close()
+			closeRPC()
 			return nil, err
 		}
 	}
-	return serve(ctx, cfg, listener, control, 10*time.Second), nil
+	return serve(ctx, cfg, listener, control, 10*time.Second, rpcListener), nil
 }
 
-func serve(ctx context.Context, cfg config.Config, listener net.Listener, control *store.Control, renewEvery time.Duration) *Server {
+func serve(ctx context.Context, cfg config.Config, listener net.Listener, control *store.Control, renewEvery time.Duration, rpcListeners ...net.Listener) *Server {
 	runCtx, cancel := context.WithCancel(ctx)
+	listeners := []net.Listener{listener}
+	for _, secure := range rpcListeners {
+		if secure != nil {
+			listeners = append(listeners, secure)
+		}
+	}
+	secureRPC := len(listeners) > 1
 	mux := http.NewServeMux()
 	encodeStatus := func(writer http.ResponseWriter) {
 		writer.Header().Set("Content-Type", "application/json")
@@ -119,9 +138,16 @@ func serve(ctx context.Context, cfg config.Config, listener net.Listener, contro
 	agentDone := api.StartAgentRunDriver(runCtx, control, api.HealthFor(cfg))
 	protocols := new(http.Protocols)
 	protocols.SetHTTP1(true)
+	protocols.SetHTTP2(secureRPC)
+	// Existing public HTTP views retain H2C; RPC admission below still requires
+	// the mutually verified TLS session whenever the private endpoint is set.
 	protocols.SetUnencryptedHTTP2(true)
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.ProtoMajor == 2 && strings.HasPrefix(request.Header.Get("Content-Type"), "application/grpc") {
+			if secureRPC && (request.TLS == nil || len(request.TLS.VerifiedChains) == 0) {
+				http.Error(writer, "INTERNAL_RPC_TLS_REQUIRED", http.StatusForbidden)
+				return
+			}
 			rpc.ServeHTTP(writer, request)
 			return
 		}
@@ -129,10 +155,13 @@ func serve(ctx context.Context, cfg config.Config, listener net.Listener, contro
 	})
 	server := &http.Server{Handler: handler, Protocols: protocols, BaseContext: func(net.Listener) context.Context { return runCtx }}
 	runtime := &Server{address: listener.Addr().String(), done: make(chan error, 1), stopRPC: rpc.Stop, agentDone: agentDone}
-	served := make(chan error, 1)
-	go func() {
-		served <- server.Serve(listener)
-	}()
-	go runtime.supervise(runCtx, cancel, server, served, control, renewEvery)
+	if secureRPC {
+		runtime.rpcAddress = listeners[1].Addr().String()
+	}
+	served := make(chan error, len(listeners))
+	for _, owned := range listeners {
+		go func() { served <- server.Serve(owned) }()
+	}
+	go runtime.supervise(runCtx, cancel, server, served, control, renewEvery, len(listeners))
 	return runtime
 }

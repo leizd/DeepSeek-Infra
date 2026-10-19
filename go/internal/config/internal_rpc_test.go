@@ -46,3 +46,17 @@ func TestInternalRPCRequiresCompleteLoopbackTLSAndAuthenticatedDeployment(t *tes
 		})
 	}
 }
+
+func TestInternalRPCValidatesLiteralLoopbackAndBoundedPortForDirectConfiguration(t *testing.T) {
+	for _, address := range []string{"127.0.0.1:0", "[::1]:8091", "127.0.0.1:65535", "127.0.0.1", "127.0.0.1:", "127.0.0.1:-1", "127.0.0.1:65536", "[::]:8091", "example.invalid:8091"} {
+		t.Run(address, func(t *testing.T) {
+			cfg := Config{InternalRPCListen: address, InternalRPCTLSCAFile: "/private/root.pem",
+				InternalRPCTLSCertFile: "/private/server.pem", InternalRPCTLSKeyFile: "/private/server.key",
+				InternalAPIBearer: strings.Repeat("p", 48)}
+			valid := address == "127.0.0.1:0" || address == "[::1]:8091" || address == "127.0.0.1:65535"
+			if err := cfg.ValidateInternalRPC(); (err == nil) != valid {
+				t.Fatal("invalid direct native transport configuration", address, err)
+			}
+		})
+	}
+}

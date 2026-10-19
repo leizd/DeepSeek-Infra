@@ -1,3 +1,36 @@
+## Real control lifecycle mTLS — 2026-10-19
+
+`CONTROL_RPC_LIFECYCLE_MTLS_20261019` follows the executable cloud RED on
+d7d45e8c / run39252816884: all four expected groups ran and failed for ignored
+transport configuration or the missing actual lifecycle endpoint. Earlier9a1b
+had a fixture enum compile error and7d4497 had race/Cgo setup failure; neither
+was a semantic RED. Their raw evidence is retained.
+
+The actual deepseekd config/start/supervisor now supports a separate loopback
+TLS1.3 mutually authenticated RPC listener with the existing bearer and Proto
+services. No TLS configuration promotes a domain. Broken material, port conflicts
+and partial direct config fail before acquiring the writer. Both listeners must
+stop before the existing writer is released; faults preserve original fencing.
+Negative tests cover trust/authentication, plaintext bypass, startup cleanup,
+listener loss, writer expiry and the successor's persisted fence. Native testing
+of this implementation is CLOUD_PENDING; local formatting is not Go execution.
+See docs/NATIVE_CONTROL_RPC_TLS.md for deployment settings and scope.
+
+Exact1334b6d8 Rust39211011008 and source CI39211115895 are now collected PASS:
+1560 Rust passes, original1 ignore,86451/105335=82.07243556% against80%; all37
+source jobs, Go14012/14747=95.01593544%, Android Go13838/14557=95.06079549%
+against95%; Python6412 passes/1skip/61subtests per version with95.51–95.58%.
+Those results do not qualify this later implementation. Android286bd0e1 built
+both ABIs and passed7 API34 methods but failed4 API24 native-readiness cases.
+New7d4497 Android39251758715 retains child diagnostics and is still running.
+
+Next retain original95% Go/Python and80% Rust floors, qualify the exact source,
+wire Rust clients and isolated launcher environments to the private endpoint,
+complete Android worker/authority/bootstrap and fix actual API24 child startup.
+All retained capabilities, real desktop/ARM64/zero-Python workloads, frozen-wire
+parity and fifteen native Evidence gates remain required; NOT_READY. No main
+merge, release or production data action. PR processing remains daily21:40 once.
+
 ## Android runner SDK command discovery — 2026-10-19
 
 `ANDROID_SDK_PATH_FIX_20261019` corrects only the cloud workflow's SDK manager

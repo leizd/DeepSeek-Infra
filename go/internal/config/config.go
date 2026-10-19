@@ -29,6 +29,12 @@ type Config struct {
 	// InternalAPIBearer authenticates every /internal/* control request. When
 	// empty, the control plane is mounted but refuses every request.
 	InternalAPIBearer string
+	// Internal RPC can use a separate loopback TLS listener. All trust files and
+	// the existing bearer are required together; transport never grants a domain.
+	InternalRPCListen      string
+	InternalRPCTLSCAFile   string
+	InternalRPCTLSCertFile string
+	InternalRPCTLSKeyFile  string
 	// ControlAuthority lets this process promote a control domain past
 	// dual-evaluate. It requires an authenticated internal control plane, so the
 	// migration authority can never be claimed over an unauthenticated channel.
@@ -51,13 +57,17 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		Mode:               valueOr("DEEPSEEKD_MODE", ModeShadow),
-		Listen:             valueOr("DEEPSEEKD_LISTEN", "127.0.0.1:0"),
-		Owner:              valueOr("DEEPSEEKD_OWNER", "deepseekd"),
-		ProductionStoreDir: strings.TrimSpace(os.Getenv("DEEPSEEKD_PRODUCTION_STORE")),
-		ShadowStoreDir:     strings.TrimSpace(os.Getenv("DEEPSEEKD_SHADOW_STORE")),
-		InternalAPIBearer:  strings.TrimSpace(os.Getenv("DEEPSEEKD_INTERNAL_BEARER")),
-		ControlAuthority:   boolOr("DEEPSEEKD_CONTROL_AUTHORITY"),
+		Mode:                   valueOr("DEEPSEEKD_MODE", ModeShadow),
+		Listen:                 valueOr("DEEPSEEKD_LISTEN", "127.0.0.1:0"),
+		Owner:                  valueOr("DEEPSEEKD_OWNER", "deepseekd"),
+		ProductionStoreDir:     strings.TrimSpace(os.Getenv("DEEPSEEKD_PRODUCTION_STORE")),
+		ShadowStoreDir:         strings.TrimSpace(os.Getenv("DEEPSEEKD_SHADOW_STORE")),
+		InternalAPIBearer:      strings.TrimSpace(os.Getenv("DEEPSEEKD_INTERNAL_BEARER")),
+		InternalRPCListen:      strings.TrimSpace(os.Getenv("DEEPSEEKD_INTERNAL_RPC_LISTEN")),
+		InternalRPCTLSCAFile:   strings.TrimSpace(os.Getenv("DEEPSEEKD_INTERNAL_RPC_TLS_CA_FILE")),
+		InternalRPCTLSCertFile: strings.TrimSpace(os.Getenv("DEEPSEEKD_INTERNAL_RPC_TLS_CERT_FILE")),
+		InternalRPCTLSKeyFile:  strings.TrimSpace(os.Getenv("DEEPSEEKD_INTERNAL_RPC_TLS_KEY_FILE")),
+		ControlAuthority:       boolOr("DEEPSEEKD_CONTROL_AUTHORITY"),
 		// The signer key is the one setting whose *absence* is meaningful, so it is
 		// taken verbatim rather than defaulted.
 		MutationSignerPublicKey:     strings.TrimSpace(os.Getenv("DEEPSEEKD_MUTATION_SIGNER_KEY")),
@@ -93,6 +103,9 @@ func Load() (Config, error) {
 	}
 	if cfg.ControlAuthority && cfg.InternalAPIBearer == "" {
 		return Config{}, ErrInvalidConfig
+	}
+	if err := cfg.ValidateInternalRPC(); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }
