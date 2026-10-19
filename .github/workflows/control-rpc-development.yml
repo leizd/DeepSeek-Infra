@@ -1,0 +1,93 @@
+name: Native control RPC development checks
+
+on:
+  push:
+    branches:
+      - "codex/rust-cloud/android-platform-diagnostics-*"
+      - "codex/rust-cloud/control-rpc-mtls-*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: control-rpc-development-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: "0"
+      GOTOOLCHAIN: local
+      GIT_OPTIONAL_LOCKS: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - name: Install the same checksum-pinned Go used by full verification
+        run: |
+          archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+          curl --fail --location --silent --show-error --output "$archive" https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+          echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/control-go"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/control-go"
+          echo "$RUNNER_TEMP/control-go/go/bin" >> "$GITHUB_PATH"
+      - name: Exercise real control lifecycle regressions without release qualification
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          mkdir -p artifacts/control-rpc-development
+          cd go
+          set +e
+          go test -race -json -count=1 -timeout=3m -run 'TestActualLifecycle|TestInternalRPC' ./internal/config ./internal/lifecycle > ../artifacts/control-rpc-development/go-tests.jsonl 2>&1
+          go_status=$?
+          set -e
+          cd ..
+          export CONTROL_GO_STATUS="$go_status"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          required = {
+              "TestInternalRPCRequiresCompleteLoopbackTLSAndAuthenticatedDeployment",
+              "TestActualLifecycleServesMutuallyAuthenticatedRPCAndRetainsDomainRefusal",
+              "TestActualLifecycleRequiresBothTrustedClientCertificateAndBearer",
+              "TestActualLifecycleCancellationClosesBothListenersBeforeWriterSuccessor",
+          }
+          started, finished = set(), {}
+          for line in Path("artifacts/control-rpc-development/go-tests.jsonl").read_text().splitlines():
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              name, action = row.get("Test"), row.get("Action")
+              if name in required and action == "run":
+                  started.add(name)
+              if name in required and action in {"pass", "fail", "skip"}:
+                  finished[name] = action
+          code = int(os.environ["CONTROL_GO_STATUS"])
+          if code == 0 and (started != required or set(finished) != required or set(finished.values()) != {"pass"}):
+              code = 2
+          report = {"kind": "native-control-rpc-development-v1", "sourceCommit": os.environ["GITHUB_SHA"],
+                    "runId": os.environ["GITHUB_RUN_ID"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+                    "event": os.environ["GITHUB_EVENT_NAME"], "ref": os.environ["GITHUB_REF"],
+                    "scope": "selected config/lifecycle regression tests with race detection", "exitCode": code,
+                    "expectedTests": sorted(required), "startedExpectedTests": sorted(started), "finishedExpectedTests": finished,
+                    "fullGoSuiteQualified": False, "coverageQualified": False, "releaseQualified": False, "fullMigrationQualified": False}
+          Path("artifacts/control-rpc-development/result.json").write_text(json.dumps(report, indent=2) + "\n")
+          raise SystemExit(code)
+          PY
+      - name: Preserve development reports only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-control-rpc-development-${{ github.sha }}
+          path: artifacts/control-rpc-development/
+          if-no-files-found: warn
+          retention-days: 7

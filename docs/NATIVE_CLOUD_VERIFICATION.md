@@ -71,3 +71,13 @@ APK 仅在同次云端作业间传递，本机只收集 JSON/日志，不下载 
 当前 Android 包只有 Rust gateway 和 Go shadow control，尚无 Rust Agent worker。
 七项现有 skills/files/OCR/持久化/启动重启测试即使全绿，也不证明生产权威、完整 Agent、成功工作负载零 Python、ARM64 设备执行或发行资格。
 这些资格位在报告中保持 false；整个迁移的所有平台、功能和原始 Evidence 门槛仍须完成。
+
+2026-10-19 的精确源码 `286bd0e1` 已构建两 ABI APK，并在 API34 完成七项仪器测试；
+API24 的原生进程就绪失败，整组设备验收仍失败。仅有 logcat 和 Java 超时堆栈不足以定位子进程退出原因。
+后续运行在确认源码/APK并成功重置隔离 debug 沙盒后，额外读取该沙盒
+`.native-runtime-logs/{gateway,control,worker}.log` 的末尾各最多 128 KiB；缺失日志明确标记不可用。
+源绑定失败时不读取应用私有目录。APK、数据库、凭据、缓存和镜像均不下载。
+
+[Control RPC development workflow](../.github/workflows/control-rpc-development.yml)
+供 config/lifecycle 的选定回归在云端快速运行 race 检查；报告绑定精确提交并核对四组测试确实执行、未跳过。
+它不是完整 Go 或覆盖率资格；既有37项源码 CI、原始95%Go/Python及80%Rust门槛和各平台验收仍全部保留。

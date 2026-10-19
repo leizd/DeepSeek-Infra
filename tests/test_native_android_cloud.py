@@ -1,12 +1,74 @@
 """Offline negative report fixtures; these are never Android execution evidence."""
+import argparse
+import json
 from pathlib import Path
 
 import pytest
 
 from scripts.verify_native_android_cloud import cloud_context, instrumentation_cases, validate_instrumentation
+from scripts import verify_native_android_cloud as android_cloud
 
 
 CASES = {"com.deepseek.mobile.OfflineTest#one", "com.deepseek.mobile.OfflineTest#two"}
+
+
+def test_child_diagnostics_read_only_bounded_logs_from_disposable_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    def read(arguments: list[str], output: Path, timeout: int = 120) -> str:
+        calls.append(arguments)
+        assert arguments[:4] == ["exec-out", "run-as", "com.deepseek.mobile.nativeverify", "tail"]
+        assert arguments[4:6] == ["-c", "131072"] and timeout <= 30
+        assert arguments[6] in {"files/.native-runtime-logs/gateway.log", "files/.native-runtime-logs/control.log", "files/.native-runtime-logs/worker.log"}
+        output.write_text("disposable child startup diagnostic\n", encoding="utf-8")
+        return "disposable child startup diagnostic"
+
+    monkeypatch.setattr(android_cloud, "adb", read)
+    results = android_cloud.collect_runtime_logs(tmp_path)
+    assert len(calls) == 3 and {row["service"] for row in results} == {"gateway", "control", "worker"}
+    assert all(row["status"] == "COLLECTED" for row in results)
+
+
+def test_missing_child_log_preserves_other_runtime_diagnostics(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def read(arguments: list[str], output: Path, timeout: int = 120) -> str:
+        if arguments[-1].endswith("worker.log"):
+            output.write_text("tail: no such file\n", encoding="utf-8")
+            raise ValueError("ADB command failed")
+        output.write_text("native child error\n", encoding="utf-8")
+        return "native child error"
+
+    monkeypatch.setattr(android_cloud, "adb", read)
+    results = {row["service"]: row for row in android_cloud.collect_runtime_logs(tmp_path)}
+    assert results["worker"]["status"] == "UNAVAILABLE"
+    assert results["gateway"]["status"] == results["control"]["status"] == "COLLECTED"
+    assert (tmp_path / "runtime-gateway.log").read_text() == "native child error\n"
+
+
+def test_invalid_source_binding_cannot_read_app_sandbox_or_qualify(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    supplied = tmp_path / "build-context.json"
+    supplied.write_text("{}", encoding="utf-8")
+
+    def rejected(*args: object) -> None:
+        raise ValueError("rebound source binding")
+
+    def read(arguments: list[str], output: Path, timeout: int = 120) -> str:
+        assert arguments[:3] == ["logcat", "-d", "-t"]
+        output.write_text("bounded logcat\n", encoding="utf-8")
+        return "bounded logcat"
+
+    monkeypatch.setattr(android_cloud, "build_report", rejected)
+    monkeypatch.setattr(android_cloud, "adb", read)
+    def forbidden(output: Path) -> list[dict[str, str]]:
+        raise AssertionError("unverified source attempted to read an app sandbox")
+
+    monkeypatch.setattr(android_cloud, "collect_runtime_logs", forbidden, raising=False)
+    args = argparse.Namespace(output=tmp_path / "output", expected_commit="a" * 40, api_level=24,
+                              build_report=supplied, root=tmp_path, apk=tmp_path / "app.apk", test_apk=tmp_path / "test.apk")
+    assert android_cloud.run_device(args) == 1
+    result = json.loads((args.output / "result.json").read_text())
+    assert result["status"] == "FAIL" and result["error"] == "rebound source binding"
+    assert result["nativeRuntimeLogs"] == []
+    assert not result["deviceExecutionVerified"] and not result["fullMigrationQualified"]
 
 
 def sample() -> str:

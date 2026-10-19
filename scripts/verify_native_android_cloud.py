@@ -118,6 +118,21 @@ def adb(arguments: list[str], output: Path, timeout: int = 120) -> str:
     return result.stdout.decode("utf-8", errors="replace").strip()
 
 
+def collect_runtime_logs(output: Path) -> list[dict[str, str]]:
+    """Read bounded child stderr only from the installed disposable test app."""
+    results = []
+    for service in ("gateway", "control", "worker"):
+        path = output / f"runtime-{service}.log"
+        try:
+            adb(["exec-out", "run-as", APPLICATION, "tail", "-c", "131072",
+                 f"files/.native-runtime-logs/{service}.log"], path, timeout=15)
+            state = "COLLECTED"
+        except (ValueError, OSError, subprocess.SubprocessError):
+            state = "UNAVAILABLE"
+        results.append({"service": service, "status": state, "path": path.name})
+    return results
+
+
 def run_device(args: argparse.Namespace) -> int:
     output: Path = args.output
     output.mkdir(parents=True, exist_ok=True)
@@ -126,6 +141,7 @@ def run_device(args: argparse.Namespace) -> int:
                               "deviceExecutionVerified": False, "releaseQualified": False, "fullMigrationQualified": False,
                               "productionAuthorityQualified": False, "zeroPythonWorkloadsQualified": False,
                               "arm64DeviceExecutionVerified": False, "nativeCompilationOnCloudOnly": True}
+    sandbox_prepared = False
     try:
         supplied = json.loads(args.build_report.read_text(encoding="utf-8"))
         actual = build_report(args.root, args.apk, args.test_apk, args.expected_commit)
@@ -145,6 +161,7 @@ def run_device(args: argparse.Namespace) -> int:
         adb(["install", "-r", "-t", str(args.test_apk)], output / "install-tests.log")
         if adb(["shell", "pm", "clear", APPLICATION], output / "clear-disposable-app.log") != "Success":
             raise ValueError("Disposable cloud app sandbox was not reset")
+        sandbox_prepared = True
         text = adb(["shell", "am", "instrument", "-w", "-r", "-e", "disableAnalytics", "true", RUNNER],
                    output / "instrumentation.log", timeout=900)
         passed = validate_instrumentation(text, set(actual["instrumentationCases"]))
@@ -152,6 +169,9 @@ def run_device(args: argparse.Namespace) -> int:
     except (ValueError, OSError, subprocess.SubprocessError, KeyError, TypeError) as exc:
         report["error"] = str(exc)
     finally:
+        # A bad source/APK must not authorize reading an existing app sandbox.
+        # These files remain after the instrumentation runner stops its process.
+        report["nativeRuntimeLogs"] = collect_runtime_logs(output) if sandbox_prepared else []
         try:
             adb(["logcat", "-d", "-t", "2000"], output / "logcat.log", timeout=30)
         except (ValueError, OSError, subprocess.SubprocessError):

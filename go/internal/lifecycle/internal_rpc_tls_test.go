@@ -161,7 +161,7 @@ func TestActualLifecycleServesMutuallyAuthenticatedRPCAndRetainsDomainRefusal(t 
 	request, stop := runtimeRPCContext(cfg.InternalAPIBearer, 3*time.Second)
 	defer stop()
 	health, err := controlv1.NewControlPlaneClient(connection).Health(request, &controlv1.HealthRequest{})
-	if err != nil || !health.Ok || health.Mode != config.ModeAuthoritative || health.MutationAuthority != config.MutationAuthorityGo {
+	if err != nil || !health.Ok || health.Mode != controlv1.RuntimeMode_RUNTIME_MODE_AUTHORITATIVE || health.MutationAuthority != config.MutationAuthorityGo {
 		t.Fatal("actual process transport could not serve its configured control plane", err)
 	}
 	authority, err := agentv1.NewAgentRunControlClient(connection).GetAuthority(request, &agentv1.AgentRunAuthorityInput{})
