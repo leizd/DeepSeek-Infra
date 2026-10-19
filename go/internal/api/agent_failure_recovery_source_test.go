@@ -107,13 +107,18 @@ func TestDriverExplicitPlanFailureResumeRetainsLeaderProofAndChoosesOnlyTasks(t 
 		ExpectedRuntimeRevision: run.RuntimeVersion(), ExpectedRequest: run.Request,
 		Selection: &agentv1.AgentRunRecoverySelection{Kind: agentv1.AgentRunRecoveryKind_AGENT_RUN_RECOVERY_KIND_RESUME}}
 	preview, err := driver.service.control.PreviewAgentRunRecovery(expected)
-	if err != nil || len(preview.Context.Execute) != 4 || !preview.Context.Synthesize {
+	if err != nil || len(preview.Context.Execute) != 4 || len(preview.Context.ResetIds) != 4 || !preview.Context.Synthesize || !preview.Context.ResetFinal {
 		t.Fatal("failed plan did not retain the legacy default task selection", err)
 	}
 	result, err := driver.service.control.CommitAgentRunRecovery(store.CommitAgentRunRecoveryRequest{AgentRunRecoveryExpected: expected,
 		OperationID: "resume-proved-leader-failure", Actor: agentDriverActor, ContextSHA256: preview.ContextSHA256,
 		Context: agent.ArtifactRef{SHA256: strings.Repeat("e", 64), Length: 500}, Request: agent.ArtifactRef{SHA256: strings.Repeat("d", 64), Length: 140},
-		EventBodies: []agent.ArtifactRef{{SHA256: strings.Repeat("1", 64), Length: 30}, {SHA256: strings.Repeat("2", 64), Length: 30}}})
+		// Running, four default task resets and final reset are distinct public
+		// events. A synthesis-only resume has only two and is a different scope.
+		EventBodies: []agent.ArtifactRef{
+			{SHA256: strings.Repeat("1", 64), Length: 30}, {SHA256: strings.Repeat("2", 64), Length: 30},
+			{SHA256: strings.Repeat("3", 64), Length: 30}, {SHA256: strings.Repeat("4", 64), Length: 30},
+			{SHA256: strings.Repeat("5", 64), Length: 30}, {SHA256: strings.Repeat("6", 64), Length: 30}}})
 	if err != nil {
 		t.Fatal(err)
 	}

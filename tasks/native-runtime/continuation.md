@@ -1,3 +1,65 @@
+## Android cloud acceptance with corrected failure fixtures — 2026-10-19
+
+`ANDROID_FENCE_FIXTURE_FIX_20261019` combines the unuploaded Android cloud
+candidate with two test-only corrections on c6985bae. No production Go/Rust/
+Android source or native schema changes are included. The new workflow, strict
+source/APK/device report verifier and29 offline boundary cases are preserved.
+
+Exact source CI39209415516 failed default Go tests in two new fixtures:
+leader-failure resume supplied only two event artifact references even though
+its committed default scope emits running, four task resets and final reset;
+and attempted original witness corruption was correctly refused by SQLite's
+OPERATOR_MUTATION_IMMUTABLE guard before the expected final validator.
+
+The leader fixture now requires all four reset IDs and final reset and supplies
+six distinct event references, preserving the original public event contract.
+The custody test keeps that actual immutable-write refusal and separately injects
+a disposable conditional read fault withholding the original witness only after
+the final FAILED action row. It changes no immutable row or signature and still
+requires complete rollback, original reservation retention and successful
+reconciliation after the read fault is removed. No assertion or coverage floor
+is weakened. Other new17 Go regression groups reported no failure in that run.
+Coverage/race/Android gates of that failed source were not reached.
+
+All native builds/tests and APK/emulator execution remain cloud-only. A separate
+exact source dispatch, Rust push and Android push must qualify this new candidate.
+The seven existing Java device tests do not prove the missing Android Rust worker,
+production authority, successful zero-Python workload metrics or ARM64 device
+execution. Keep those qualification flags false and whole-product NOT_READY.
+
+## Cloud Android package and device acceptance — 2026-10-19
+
+`ANDROID_PLATFORM_CLOUD_20261019` adds a dedicated workflow and strict reports on
+c6985bae. Its push builds debug runtime/instrumentation APKs for both packaged
+ABIs in a disposable cloud runner, then installs and executes every existing Java
+instrumentation method on API24 and API34 x86_64 emulators. All seven existing
+methods are required. NDK, Gradle, Java, Go and Rust builds stay in GitHub Actions.
+APKs move only between jobs of the same run; local collection permits reports only.
+
+Runtime APK inspection verifies the exact clean source, asset digests, ABI payloads
+and absence of packaged Python entries. Device reports bind source, run/attempt,
+event/ref, both APK hashes and the entire source test inventory. Every method
+must start and finish successfully exactly once; skips, incomplete transcripts,
+duplicates and rebound contexts fail closed.
+
+This remains UNQUALIFIED until actual cloud build and both emulator jobs succeed.
+The existing app still packages Rust gateway plus Go shadow control, without the
+Rust Agent worker. These seven retained skills/files/OCR/persistence/lifecycle
+tests cannot qualify Android production authority, full Agent functionality,
+measured successful zero-Python workloads, ARM64 device execution or release
+readiness. Corresponding qualification flags stay false. Subsequent product work
+must close those gaps, not relabel a shadow result as a production migration.
+
+The parent's source CI and Rust push for17 new Go refusal groups are still running
+at preparation time; they need separate exact-source evidence. Original95% Go/
+Python and80% Rust floors and all previous process/cloud gates remain mandatory.
+No local native compilation. Whole-product readiness remains NOT_READY.
+
+- [ ] Collect the exact Android push: package, device(API24), device(API34).
+- [ ] Collect separate exact-source full CI and Rust/browser push.
+- [ ] Complete Android Rust worker/Go production ownership, all retained product
+      and platform behavior, and all15 native Evidence gates.
+
 ## Final failure commit boundaries and exact-source evidence — 2026-10-19
 
 `FINAL_FAILURE_BOUNDARIES_20261019` is a test-only candidate on

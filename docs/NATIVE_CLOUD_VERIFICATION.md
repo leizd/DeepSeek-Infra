@@ -55,3 +55,19 @@ Docker 已恢复关闭状态。详见 `artifacts/native-20261011-go-docker-cloud
 依据：[GitHub Go 验证文档](https://docs.github.com/en/actions/tutorials/build-and-test-code/go)，
 [GitHub 依赖缓存文档](https://docs.github.com/en/actions/concepts/workflows-and-actions/dependency-caching)，
 [Docker 的 GitHub Actions 指南](https://docs.docker.com/guides/gha/)。
+
+## Android 构建和模拟器验收
+
+[Native Android cloud workflow](../.github/workflows/native-android-cloud.yml)
+在已上传的 `codex/rust-cloud/android-platform-*` 分支 push、main 的 PR 候选或手动触发时执行。
+独立记录 APK 源码提交、事件、ref、run/attempt 和两份 APK 的 SHA256；源码 push 与 PR 合并候选分别验收。
+Go、Rust、Java/Gradle、NDK 和两 ABI APK 构建，以及 API24/API34 x86_64 模拟器都在云端。
+APK 仅在同次云端作业间传递，本机只收集 JSON/日志，不下载 APK、编译缓存或模拟器镜像。
+
+设备验收安装隔离的 debug applicationId，清空该云端测试沙盒，运行源码中全部七个现有 Java instrumentation 方法。
+[报告校验器](../scripts/verify_native_android_cloud.py) 逐一要求方法开始和成功结束，拒绝跳过、重复、缺失或只有成功摘要的日志。
+构建检查还核对两 ABI 载荷、产品资产哈希和 APK 中无 Python 文件。
+
+当前 Android 包只有 Rust gateway 和 Go shadow control，尚无 Rust Agent worker。
+七项现有 skills/files/OCR/持久化/启动重启测试即使全绿，也不证明生产权威、完整 Agent、成功工作负载零 Python、ARM64 设备执行或发行资格。
+这些资格位在报告中保持 false；整个迁移的所有平台、功能和原始 Evidence 门槛仍须完成。

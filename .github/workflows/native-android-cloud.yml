@@ -1,0 +1,137 @@
+name: Native Android cloud verification
+
+on:
+  push:
+    branches: ["codex/rust-cloud/android-platform-*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-android-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GIT_OPTIONAL_LOCKS: "0"
+      GOTOOLCHAIN: local
+      CGO_ENABLED: "0"
+      DEEPSEEK_ANDROID_CARGO_TARGET: ${{ github.workspace }}/.cloud-android-target
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        with:
+          gradle-version: "8.9"
+          cache-disabled: true
+      - uses: dtolnay/rust-toolchain@69084b241933c14c2fa24234c4596f11a2655339 # 1.85.0
+        with:
+          toolchain: "1.85.0"
+          targets: aarch64-linux-android,x86_64-linux-android
+      - name: Install checksum-pinned Go in the cloud
+        run: |
+          archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+          curl --fail --location --silent --show-error --output "$archive" https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+          echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/android-go"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/android-go"
+          echo "$RUNNER_TEMP/android-go/go/bin" >> "$GITHUB_PATH"
+      - name: Prepare task-owned cloud outputs and pinned SDK packages
+        run: |
+          mkdir -p artifacts/android-build
+          # All generated native output stays on this ephemeral cloud runner.
+          echo ".cloud-android-target/" >> .git/info/exclude
+          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "ndk;27.3.13750724" < /dev/null
+          go version > artifacts/android-build/toolchains.log
+          rustc +1.85.0 --version >> artifacts/android-build/toolchains.log
+          java -version >> artifacts/android-build/toolchains.log 2>&1
+          gradle --version >> artifacts/android-build/toolchains.log
+      - name: Build real two-ABI runtime and instrumentation APKs
+        run: |
+          npm ci --prefix frontend
+          gradle -p android --no-daemon --console=plain :app:assembleDebug :app:assembleDebugAndroidTest 2>&1 | tee artifacts/android-build/gradle.log
+          cp android/app/build/outputs/apk/debug/app-debug.apk artifacts/android-build/native-runtime.apk
+          cp android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk artifacts/android-build/native-tests.apk
+          python scripts/verify_native_android_cloud.py stage --expected-commit "$GITHUB_SHA" --apk artifacts/android-build/native-runtime.apk --test-apk artifacts/android-build/native-tests.apk --output artifacts/android-build/build-context.json
+      - name: Transfer debug APKs between cloud jobs only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-android-apks-${{ github.sha }}
+          path: |
+            artifacts/android-build/native-runtime.apk
+            artifacts/android-build/native-tests.apk
+            artifacts/android-build/build-context.json
+          if-no-files-found: error
+          retention-days: 2
+      - name: Preserve build reports without compiler caches
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-android-build-report-${{ github.sha }}
+          path: |
+            artifacts/android-build/*.json
+            artifacts/android-build/*.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  device:
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [24, 34]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: native-android-apks-${{ github.sha }}
+          path: artifacts/android-build
+      - name: Require hardware acceleration on the disposable cloud runner
+        run: |
+          test -c /dev/kvm
+          sudo chmod 666 /dev/kvm
+          test -r /dev/kvm
+          test -w /dev/kvm
+      - name: Run every existing packaged native integration test
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: ${{ matrix.api }}
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: true
+          emulator-boot-timeout: 300
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          disable-animations: true
+          script: python scripts/verify_native_android_cloud.py run --expected-commit "$GITHUB_SHA" --api-level ${{ matrix.api }} --apk artifacts/android-build/native-runtime.apk --test-apk artifacts/android-build/native-tests.apk --build-report artifacts/android-build/build-context.json --output artifacts/android-device-${{ matrix.api }}
+      - name: Preserve actual device reports and bounded logcat only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-android-device-api${{ matrix.api }}-${{ github.sha }}
+          path: artifacts/android-device-${{ matrix.api }}/
+          if-no-files-found: warn
+          retention-days: 7

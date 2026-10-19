@@ -233,26 +233,46 @@ func TestFailureRevalidatesActionCutoverBeforeReleasingCustody(t *testing.T) {
 }
 
 func TestFailureWitnessDamageDuringFinalWriteRollsBackTheWholeSettlement(t *testing.T) {
-	control, input, _ := failureSettlementFixture(t, "plan")
-	before := synthesisSnapshot(t, control)
-	// Simulate damage to the independent original witness at the final action
-	// write. The terminal history validator must catch it before commit.
-	if _, err := control.db.Exec(`CREATE TEMP TRIGGER damage_failure_witness AFTER INSERT ON control_events
-		WHEN NEW.domain='action' AND NEW.state='FAILED'
-		BEGIN UPDATE control_operator_mutations SET payload_digest=printf('%064d',0)
-		WHERE domain='agent_run' AND record_id='run_failure' AND record_revision=2; END`); err != nil {
-		t.Fatal(err)
-	}
-	_, err := control.SettleAgentFailure(input)
-	if _, dropErr := control.db.Exec("DROP TRIGGER temp.damage_failure_witness"); dropErr != nil {
-		t.Fatal(dropErr)
-	}
-	if !errors.Is(err, ErrCorruptRecord) || !strings.Contains(err.Error(), "failure settlement verification") {
-		t.Fatal("final verification ignored damaged original custody", err)
-	}
-	requireUnsettledFailureCustody(t, control, input, before)
-	if _, err := control.SettleAgentFailure(input); err != nil {
-		t.Fatal("rollback failed to restore the independent original witness", err)
+	for _, fault := range []string{"immutable-tamper", "witness-read-loss"} {
+		t.Run(fault, func(t *testing.T) {
+			control, input, _ := failureSettlementFixture(t, "plan")
+			before := synthesisSnapshot(t, control)
+			var restore func()
+			if fault == "immutable-tamper" {
+				// The real append-only protection must reject the attempted write
+				// before terminal verification can even observe altered custody.
+				if _, err := control.db.Exec(`CREATE TEMP TRIGGER damage_failure_witness AFTER INSERT ON control_events
+					WHEN NEW.domain='action' AND NEW.state='FAILED'
+					BEGIN UPDATE control_operator_mutations SET payload_digest=printf('%064d',0)
+					WHERE domain='agent_run' AND record_id='run_failure' AND record_revision=2; END`); err != nil {
+					t.Fatal(err)
+				}
+				restore = func() {
+					if _, err := control.db.Exec("DROP TRIGGER temp.damage_failure_witness"); err != nil {
+						t.Fatal(err)
+					}
+				}
+			} else {
+				// A test-only read fault withholds the original witness only after
+				// the final action write. No immutable row or signature is altered.
+				restore = failureBoundaryView(t, control, "control_operator_mutations", `SELECT * FROM main.control_operator_mutations
+					WHERE NOT (domain='agent_run' AND record_id='run_failure' AND record_revision=2 AND
+					EXISTS(SELECT 1 FROM main.control_events WHERE domain='action' AND state='FAILED'))`)
+			}
+			_, err := control.SettleAgentFailure(input)
+			restore()
+			if fault == "immutable-tamper" {
+				if err == nil || !strings.Contains(err.Error(), "OPERATOR_MUTATION_IMMUTABLE") {
+					t.Fatal("append-only protection allowed original custody tampering", err)
+				}
+			} else if !errors.Is(err, ErrCorruptRecord) || !strings.Contains(err.Error(), "failure settlement verification") {
+				t.Fatal("final verification ignored unavailable original custody", err)
+			}
+			requireUnsettledFailureCustody(t, control, input, before)
+			if _, err := control.SettleAgentFailure(input); err != nil {
+				t.Fatal("rollback lost the independent original witness", err)
+			}
+		})
 	}
 }
 
