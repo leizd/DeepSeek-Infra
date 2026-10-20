@@ -11,7 +11,7 @@ use deepseek_protocol::generated::deepseek::agent::v1::{
 };
 use std::sync::{
     Arc,
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicU8, AtomicUsize, Ordering},
 };
 use tonic::Response;
 
@@ -88,9 +88,14 @@ fn private_control_transport_fixture() -> (
 #[tokio::test]
 async fn dedicated_control_transport_selects_private_tls_without_replacing_public_http() {
     let (directory, mut values) = private_control_transport_fixture();
+    let public_socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let public_address = public_socket.local_addr().unwrap();
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = socket.local_addr().unwrap();
     drop(socket);
+    drop(public_socket);
+    let public_origin = format!("http://{public_address}");
+    values.insert("GO_CONTROL_ADDR".into(), public_origin.clone());
     values.insert(
         "DEEPSEEK_GO_CONTROL_RPC_URL".into(),
         format!("https://{address}"),
@@ -105,10 +110,7 @@ async fn dedicated_control_transport_selects_private_tls_without_replacing_publi
         selected.endpoint.uri().authority().unwrap().as_str(),
         address.to_string()
     );
-    assert_eq!(
-        values.get("GO_CONTROL_ADDR").unwrap(),
-        "http://127.0.0.1:8090"
-    );
+    assert_eq!(values.get("GO_CONTROL_ADDR").unwrap(), &public_origin);
     let context = AgentRunRecoveryContext {
         schema_version: 1,
         run_id: "run-private-recovery".into(),
@@ -127,9 +129,17 @@ async fn dedicated_control_transport_selects_private_tls_without_replacing_publi
         }),
         ..Default::default()
     };
+    let private_calls = Arc::new(AtomicUsize::new(0));
+    let public_calls = Arc::new(AtomicUsize::new(0));
     let service = Preview {
         context: context.clone(),
         mode: Arc::new(AtomicU8::new(0)),
+        calls: Arc::clone(&private_calls),
+    };
+    let public_service = Preview {
+        context: context.clone(),
+        mode: Arc::new(AtomicU8::new(0)),
+        calls: Arc::clone(&public_calls),
     };
     let tls = tonic::transport::ServerTlsConfig::new()
         .identity(tonic::transport::Identity::from_pem(
@@ -151,18 +161,41 @@ async fn dedicated_control_transport_selects_private_tls_without_replacing_publi
             .await
             .unwrap();
     });
+    let (stop_public, done_public) = tokio::sync::oneshot::channel();
+    let public_server = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(AgentRunRecoveryControlServer::new(public_service))
+            .serve_with_shutdown(public_address, async {
+                let _ = done_public.await;
+            })
+            .await
+            .unwrap();
+    });
     let mut ready = false;
     for _ in 0..100 {
-        if tokio::net::TcpStream::connect(address).await.is_ok() {
+        if tokio::net::TcpStream::connect(address).await.is_ok()
+            && tokio::net::TcpStream::connect(public_address).await.is_ok()
+        {
             ready = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert!(ready, "private fixture never bound its listener");
+    // Calibrate the successful public decoy before observing private traffic.
+    AgentExecutionControl::new(&public_origin, TOKEN)
+        .unwrap()
+        .validate_recovery_context(&context)
+        .await
+        .unwrap();
+    assert_eq!(public_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(private_calls.load(Ordering::SeqCst), 0);
+    public_calls.store(0, Ordering::SeqCst);
     // Exercise the production worker recovery RPC, including its bearer and
     // original metadata fence, through a mutually authenticated TLS fixture.
     selected.validate_recovery_context(&context).await.unwrap();
+    assert_eq!(private_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(public_calls.load(Ordering::SeqCst), 0);
     for fault in [
         "wrong-root",
         "wrong-name",
@@ -202,31 +235,64 @@ async fn dedicated_control_transport_selects_private_tls_without_replacing_publi
         })
         .unwrap()
         .unwrap();
+        let before = private_calls.load(Ordering::SeqCst);
         let error = client
             .validate_recovery_context(&context)
             .await
             .unwrap_err();
+        if fault == "untrusted-client" {
+            // TLS 1.3 client authentication can fail after channel creation.
+            // The public wrapper maps that later RPC refusal to custody denial.
+            assert!(matches!(
+                error.code(),
+                tonic::Code::Unavailable | tonic::Code::FailedPrecondition
+            ));
+        } else {
+            assert_eq!(
+                error.code(),
+                if fault == "wrong-bearer" {
+                    tonic::Code::FailedPrecondition
+                } else {
+                    tonic::Code::Unavailable
+                },
+                "{fault}"
+            );
+        }
+        let expected = before + if fault == "wrong-bearer" { 1 } else { 0 };
         assert_eq!(
-            error.code(),
-            if fault == "wrong-bearer" {
-                tonic::Code::FailedPrecondition
-            } else {
-                tonic::Code::Unavailable
-            },
-            "{fault}"
+            private_calls.load(Ordering::SeqCst),
+            expected,
+            "rejected transport reached the handler: {fault}"
         );
+        assert_eq!(
+            public_calls.load(Ordering::SeqCst),
+            0,
+            "private failure selected the public decoy: {fault}"
+        );
+        selected.validate_recovery_context(&context).await.unwrap();
+        assert_eq!(private_calls.load(Ordering::SeqCst), expected + 1);
     }
     let plaintext = AgentExecutionControl::new(&format!("http://{address}"), TOKEN).unwrap();
-    assert_eq!(
-        plaintext
-            .validate_recovery_context(&context)
-            .await
-            .unwrap_err()
-            .code(),
-        tonic::Code::Unavailable
-    );
+    let before = private_calls.load(Ordering::SeqCst);
+    let error = plaintext
+        .validate_recovery_context(&context)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error.code(),
+        tonic::Code::Unavailable | tonic::Code::FailedPrecondition
+    ));
+    assert_eq!(private_calls.load(Ordering::SeqCst), before);
+    assert_eq!(public_calls.load(Ordering::SeqCst), 0);
+    selected.validate_recovery_context(&context).await.unwrap();
+    assert_eq!(private_calls.load(Ordering::SeqCst), before + 1);
     stop.send(()).unwrap();
+    stop_public.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), public_server)
         .await
         .unwrap()
         .unwrap();
@@ -345,6 +411,7 @@ fn explicit_private_control_transport_never_falls_back_after_configuration_failu
 struct Preview {
     context: AgentRunRecoveryContext,
     mode: Arc<AtomicU8>,
+    calls: Arc<AtomicUsize>,
 }
 
 impl Preview {
@@ -427,6 +494,7 @@ impl AgentRunRecoveryControl for Preview {
         &self,
         request: Request<PreviewAgentRunRecoveryRequest>,
     ) -> Result<Response<PreviewAgentRunRecoveryResponse>, Status> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         if request
             .metadata()
             .get("authorization")
@@ -505,6 +573,7 @@ async fn recovery_context_is_rechecked_through_authenticated_authoritative_previ
     let fixture = Preview {
         context: context.clone(),
         mode: Arc::clone(&mode),
+        calls: Arc::new(AtomicUsize::new(0)),
     };
     let progress = fixture.progress();
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

@@ -78,6 +78,14 @@ not a Rust-to-Go production-process acceptance result. Go lifecycle tests cover
 the actual Go listener separately; the combined default bootstrap, all native
 peer paths and exact-source cloud qualification remain required.
 
+The worker fixture counts private handler entries and separately calibrates a
+successful public HTTP RPC decoy. Transport refusal must not enter the handler
+or contact that public service; bad bearer may reach authentication and must be
+rejected there. A valid private request must still succeed after each refusal.
+Client-certificate refusal during the later RPC phase may map to custody denial
+rather than connection unavailability; either result must retain the stronger
+no-handler/no-fallback guarantees. No production status mapping is changed.
+
 Android worker/bootstrap integration, API 24 SQLite compatibility, both device
 API levels, ARM64 execution, full product workloads and original CI/Evidence
 gates remain incomplete. Overall **NOT_READY**.
