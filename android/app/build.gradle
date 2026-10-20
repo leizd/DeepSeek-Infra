@@ -3,6 +3,7 @@ plugins {
 }
 
 def nativeBundleDir = layout.buildDirectory.dir("generated/native")
+def nativeProbeDir = layout.buildDirectory.dir("generated/native-test-probes")
 def configuredBuildPython = (findProperty("DEEPSEEK_BUILD_PYTHON") ?: System.getenv("DEEPSEEK_BUILD_PYTHON"))?.toString()?.trim()
 def configuredCargoTarget = (findProperty("DEEPSEEK_ANDROID_CARGO_TARGET") ?: System.getenv("DEEPSEEK_ANDROID_CARGO_TARGET"))?.toString()?.trim()
 def releaseStoreFilePath = findProperty("DEEPSEEK_RELEASE_STORE_FILE") ?: System.getenv("DEEPSEEK_RELEASE_STORE_FILE")
@@ -52,6 +53,15 @@ tasks.register("buildNativeRuntime", Exec) {
     }
 }
 
+tasks.register("buildNativeLockProbes", Exec) {
+    workingDir rootProject.projectDir.parentFile
+    inputs.file("src/androidTest/fixtures/lockprobe/main.go")
+    inputs.files("${rootProject.projectDir}/../scripts/build_android_native.py", "${rootProject.projectDir}/../go/go.mod", "${rootProject.projectDir}/../go/go.sum")
+    outputs.dir nativeProbeDir
+    def pythonCmd = configuredBuildPython ?: (org.gradle.internal.os.OperatingSystem.current().isWindows() ? "python" : "python3")
+    commandLine pythonCmd, "scripts/build_android_native.py", "--lock-probes-only", "--output", nativeProbeDir.get().asFile.absolutePath.replace('\\', '/')
+}
+
 android {
     namespace "com.deepseek.mobile"
     compileSdk 34
@@ -97,11 +107,14 @@ android {
             assets.srcDir nativeBundleDir.map { it.dir("assets") }
             jniLibs.srcDir nativeBundleDir.map { it.dir("jniLibs") }
         }
+        androidTest {
+            jniLibs.srcDir nativeProbeDir
+        }
     }
     packaging {
         jniLibs {
             useLegacyPackaging true
-            keepDebugSymbols += ["**/libdeepseek_gateway.so", "**/libdeepseek_control.so"]
+            keepDebugSymbols += ["**/libdeepseek_gateway.so", "**/libdeepseek_control.so", "**/libdeepseek_lock_probe.so"]
         }
     }
     androidResources {
@@ -125,3 +138,6 @@ dependencies {
 }
 
 preBuild.dependsOn buildNativeRuntime
+tasks.matching { it.name == "preDebugAndroidTestBuild" }.configureEach {
+    dependsOn("buildNativeLockProbes")
+}

@@ -12460,3 +12460,28 @@ Latest reviewed dedicated cloud commit `324821021bb3e68fccab1f5af5968ff84f4fe040
 
 
 Latest reviewed cloud commit `198f8e1c756929fff97f346ba5960ca7511b4ac2`, tree `4ccda334dd1116003235741dfc5ab20ea8ccedb2`, fourteenfiles +245/-3 adds v16 cancellation-terminal lease migration. Original v5 schema SQL is byte-identical; old rows and immutable journals retained; late migration faults roll back. Legacy fixtures materialize actual old lease constraints. Actual cloud job115247717322 has passed Go vet and full unit tests including migration/retained cancellation/replay/reopen/rollback; defaultGo95 coverage is running. Rust run38382901625 and CI38382962657 remain pending full qualification (observers79163/65594, reports only). Native888/all3659; Rust1480+originalignore and all37CI/all14Go-Docker/floors80/95/95 remain mandatory. Prior3248210 unit failure is the actual old terminal CHECK rejection; prior25179f5 failed invalid free-function receiver. All failure records are retained. No root native source applied or local native builds/tests/Docker execution. Full migration NOT_READY; continue exact-head recovery/provider/platform/ownership/zero-Python/Evidence acceptance.
+# Android SQLite lock-family regression before the production repair — 2026-10-20
+
+The exact source `95adf8c250f31cdb786be642e729bcc1bb4dc39a` passed Rust
+`39354035008` (1563 passed, one original ignored case, 82.1735% coverage) and
+all 37 jobs of full CI `39354290366`, including the original 80/95/95/95 floors.
+Android `39354302655` packaged both ABIs and passed all seven API 34 methods.
+The actual API 24 app on Linux `3.10.0+` failed with extended SQLite code 2314
+(`IOERR_RDLOCK`); its OS errno remains unavailable. The pinned VFS issues OFD
+read locks, documented upstream as requiring Linux 3.15. This is an observed
+device failure, separate from the preceding SDK archive installation failure.
+
+Before changing the production locking family, add an instrumentation-only Go
+syscall probe to the test APK. The new real-app test requires the running native
+control to exclude both POSIX and supported OFD readers, release exclusion after
+child shutdown, reject an already-running legacy lock holder, and reopen after
+that holder exits. The probe never opens SQLite or reads/writes database bytes;
+it is absent from product bundles. The current runtime has no cross-family
+exclusion, so the API 34 idle-reader assertion is expected to fail. API 24 still
+retains its existing startup failure. No production driver, PRAGMA, WAL,
+durability, authority or SDK minimum is changed by this regression candidate.
+
+Next: collect this exact device RED, then implement the supported file-locking
+family together with lifecycle-bound exclusion of legacy processes. Continue
+default secure bootstrap, Android Rust worker/Go production authority, desktop,
+all retained functions and the complete Evidence Assembly. `NOT_READY` remains.

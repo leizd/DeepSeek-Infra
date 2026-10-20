@@ -233,14 +233,39 @@ def build(root: Path, sdk: Path, output: Path, cargo_target: Path, toolchain: st
     return manifest
 
 
+def build_lock_probes(root: Path, output: Path) -> dict[str, Any]:
+    """Build test-APK-only syscall probes; these never enter a product bundle."""
+    expected = json.loads((root / "release/native_runtime_toolchain_v1.json").read_text())["go"]["version"]
+    env = dict(os.environ, CGO_ENABLED="0", GOTOOLCHAIN="local")
+    go = shutil.which("go") or "go"
+    if run([go, "version"], root / "go", env).split()[2] != f"go{expected}":
+        raise ValueError(f"Go must be pinned to {expected}")
+    source = root / "android/app/src/androidTest/fixtures/lockprobe/main.go"
+    probes = {}
+    for abi in TARGETS:
+        binary = output / abi / "libdeepseek_lock_probe.so"
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        target_env = dict(env, GOARCH="arm64" if abi == "arm64-v8a" else "amd64",
+                          GOOS="android" if abi == "arm64-v8a" else "linux")
+        run([go, "build", "-trimpath", "-o", binary.as_posix(), source.as_posix()], root / "go", target_env)
+        probes[abi] = inspect_executable(binary, abi, "go")
+    return probes
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=PROJECT_ROOT)
-    parser.add_argument("--sdk", type=Path, required=True)
+    parser.add_argument("--sdk", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cargo-target-dir", type=Path)
+    parser.add_argument("--lock-probes-only", action="store_true")
     parser.add_argument("--rust-toolchain", default=RUST_VERSION + ("-x86_64-pc-windows-gnu" if os.name == "nt" else ""))
     args = parser.parse_args()
+    if args.lock_probes_only:
+        print(json.dumps({"instrumentationOnly": True, "probes": build_lock_probes(args.root.resolve(), args.output.resolve())}))
+        return 0
+    if args.sdk is None:
+        parser.error("--sdk is required to build the native runtime")
     environment = cache_environment(args.root.resolve(), toolchain=args.rust_toolchain,
                                     target_dir=args.cargo_target_dir, kind="android")
     cargo_target = Path(environment["CARGO_TARGET_DIR"])

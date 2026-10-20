@@ -162,7 +162,8 @@ def test_ignored_status_or_runner_crash_never_counts_as_pass() -> None:
 def test_inventory_includes_every_existing_instrumentation_method() -> None:
     root = Path(__file__).resolve().parents[1]
     cases = instrumentation_cases(root)
-    assert len(cases) == 7
+    assert len(cases) == 8
+    assert "com.deepseek.mobile.NativeControlLockIntegrationTest#packagedControlExcludesLegacyLockFamiliesAndReleasesOnlyAfterShutdown" in cases
     assert "com.deepseek.mobile.NativeRuntimeIntegrationTest#packagedRuntimeCreatesRunsDownloadsAndRecoversPersistedState" in cases
     assert "com.deepseek.mobile.NativeFileOcrIntegrationTest#actualImageAndRasterPdfUploadReadRenderAndPersist" in cases
     assert "com.deepseek.mobile.PlatformOcrProtocolIntegrationTest#cancelledUploadAndRestartCleanOwnedTemporaryFilesAndRotateCredential" in cases
