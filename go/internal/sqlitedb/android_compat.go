@@ -121,13 +121,16 @@ type configuredConnector struct {
 func (connector configuredConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	connection, err := connector.Connector.Connect(ctx)
 	if err != nil {
-		var failure *sqlite3.Error
-		if errors.As(err, &failure) {
+		var code sqlite3.ExtendedErrorCode
+		if errors.As(err, &code) {
 			var errno syscall.Errno
-			// Preserve the original SQLite/OS cause; report only numeric facts,
-			// never SQL, credential parameters or a new retry decision.
-			_ = errors.As(err, &errno)
-			return nil, fmt.Errorf("Android SQLite connection (code=%d errno=%d): %w", failure.ExtendedCode(), errno, err)
+			osCause := "UNAVAILABLE"
+			// Full SQLite errors and code values both support ExtendedErrorCode.
+			// Missing OS evidence must remain unknown; it is not measured errno0.
+			if errors.As(err, &errno) {
+				osCause = strconv.FormatUint(uint64(errno), 10)
+			}
+			return nil, fmt.Errorf("Android SQLite connection (code=%d errno=%s): %w", code, osCause, err)
 		}
 		return nil, err
 	}

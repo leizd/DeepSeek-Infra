@@ -797,6 +797,13 @@ confirmation, cancellation, retries, resynthesis and platform requirements.
 [中文](../../README.md) / [English](../../README.en.md)
 <!-- docs-language-switcher:end -->
 
+<!-- native-20261020-android-sqlite-code-values checkpoint -->
+
+Exact fc5ef9c4 development39350633836 executed all original required7 race groups and4 Android-host SQLite groups successfully, then failed the new primary-value, extended-value and known-os-cause assertions as intended. The production connector now uses the documented ExtendedErrorCode errors.As interface, covering code values and full SQLite errors, and emits errnoUNAVAILABLE unless a real OS cause is retained. Original %w error identity remains, and opaque text is never reclassified. Ordered PRAGMAs, driver query_only caching, WAL, synchronization, VFS/locks, schemas, writer admission and retries are byte-identical. Documentation corrects the upstream string-loss hypothesis and records actual API24 kernel3.10.0+ with still-unobserved failing syscall. This is diagnostic repair, not an API24 compatibility fix.
+
+This exact source must pass all selected62 Go race cases and all15 Android-host cases including typed representations, Rust1563 plus original Redis ignore1, full37CI and original Rust80%/Go95%/Python95%, and actual Android build/API24/API34 reports. All native compilation/tests/Docker/emulators remain cloud-only; download reports only, never caches/images/volumes/APKs. Root163 files/HEAD/index stay intact. Original recovery identities, Rust custody and EFFECT_UNKNOWN remain unchanged. Default secure provisioning/real Go-Rust process chain, API24 repair, Android worker/bootstrap/authority, ARM64, complete retained product workloads and all15 Evidence gates remain incomplete: NOT_READY. PR is daily21:40 Asia/Shanghai once for the whole work; development pushes do not create PRs.
+
+
 <!-- native-20261020-control-rpc-mirror-and-sqlite-code-red checkpoint -->
 
 The exact e262acda Rust job118387340882 passed all-target/all-feature clippy, then executed the new sealed-mirror regression and failed it with NATIVE_MIRROR_RECIPIENT_SOURCE_UNAVAILABLE (334 observed passes,1 failure; later workspace binaries may not have run). The production backup recipient-source now selects the same pinned private TLS endpoint as worker, Agent Run reads and chat scheduling, retaining the public HTTP proxy and refusing explicit transport errors without fallback. Original snapshot/group validation remains unchanged; successful sealing/status/idempotent replay and all refusal cases must now execute on this exact descendant.

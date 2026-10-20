@@ -88,7 +88,9 @@ API24 的原生进程就绪失败，整组设备验收仍失败。仅有 logcat 
 精确7d4497af / Android39251758715再次在API34通过全部七项，在API24失败。
 子进程stderr首次证明Go control反复拒绝SQLite连接，消息为
 `sqlite3: invalid _pragma: sqlite3: disk I/O error`；此时不能把Rust linker的兼容警告当作退出根因。
-连接错误现在额外保留SQLite extended code和OS errno的数值，原错误链、连接拒绝及所有持久化配置不变。
+连接诊断识别SQLite错误对象、主错误码值和扩展错误码值，保留实际extended code。
+只有原始错误链包含OS原因时才记录errno数值；缺失OS证据明确为`errno=UNAVAILABLE`。
+原错误链、连接拒绝及所有持久化配置不变。
 不改变WAL、同步、文件锁、控制schema或写入权，也不重试未知远端副作用。
 
 设备报告只增加`uname -r/-m`两项固定内核事实，用于区分运行内核和VFS失败位置；
@@ -99,5 +101,13 @@ API24 的原生进程就绪失败，整组设备验收仍失败。仅有 logcat 
 
 参考：[固定SQLite VFS实现](https://github.com/ncruces/go-sqlite3/blob/v0.35.6/vfs/README.md)
 与[ADB shell选项](https://android.googlesource.com/platform/packages/modules/adb/+/refs/heads/main/docs/user/adb.1.md)。
-VFS文档要求OFD锁依赖Linux3.15且不同锁族并发访问不兼容；当前尚无本次设备内核和extended code，
-因此保留实际失败并收集证据，不能先换锁族、降低SDK或跳过API24来取得绿色结果。
+ad7131b9的实际API24镜像报告内核`3.10.0+`，API34报告Linux6.1，缺失worker日志已正确标记不可用。
+VFS文档要求OFD锁依赖Linux3.15且不同锁族并发访问不兼容；旧内核兼容性是有源码依据的线索，
+还不是实际失败syscall的观测。不能直接换锁族、降低SDK或跳过API24来取得绿色结果。
+
+固定版本的[连接实现](https://github.com/ncruces/go-sqlite3/blob/091633ebb62b0c78988d3e079149333b36337599/conn.go)
+以`%w`保留pragma错误链；没有附加消息或OS信息时可以返回错误码值。
+[错误类型实现](https://github.com/ncruces/go-sqlite3/blob/091633ebb62b0c78988d3e079149333b36337599/error.go)
+允许三种表示通过`errors.As`转换为`ExtendedErrorCode`。因此已撤回上游字符串抹除错误链的推断。
+fc5ef9c4/开发运行39350633836实际复现了旧诊断漏识别三条错误码值路径，其原有检查通过。
+修复后仍须核对新提交的Go回归、原覆盖率和真实设备报告，不能把错误诊断改进当作API24修复。
