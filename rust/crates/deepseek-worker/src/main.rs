@@ -97,11 +97,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_else(|| std::env::var(name))
     };
     let address = configured_listen_addr(environment("DEEPSEEK_WORKER_LISTEN"))?;
-    let transport = load_worker_transport(&environment)?;
+    let transport = load_worker_transport(environment)?;
     let agent_plan = deepseek_worker::load_agent_plan_executor_from_env()?;
     // Validate provider configuration before opening the durable authority store.
     #[cfg(feature = "s3")]
-    let storage = deepseek_worker::load_worker_storage_transport(&environment)?;
+    let storage = deepseek_worker::load_worker_storage_transport(environment)?;
     #[cfg(not(feature = "s3"))]
     if deepseek_worker::WORKER_S3_ENV_NAMES
         .iter()
@@ -113,8 +113,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
-    let worker = configured_worker(&environment)?;
-    let signer_config = authority_config_from_env(&environment).map_err(|_| {
+    let worker = configured_worker(environment)?;
+    let signer_config = authority_config_from_env(environment).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "worker control signer authority rejected",
@@ -122,7 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let signer_root = environment("DEEPSEEK_WORKER_STATE_ROOT").ok();
     let signer = deepseek_worker::load_control_signer_from_env(
-        &environment,
+        environment,
         signer_config.as_ref(),
         signer_root.as_deref().map(std::path::Path::new),
         transport.tls_identity.is_some(),
@@ -138,7 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "plaintext-loopback"
     };
     let agent_control = if signer.is_some() {
-        deepseek_worker::load_agent_execution_control_from_env(&environment)?
+        deepseek_worker::load_agent_execution_control_from_env(environment)?
     } else {
         None
     };

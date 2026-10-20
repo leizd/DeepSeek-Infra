@@ -85,3 +85,16 @@ downloaded. Tests of this slice do not remove any existing required gate.
 
 Reference APIs: [rcgen 0.13.2](https://docs.rs/rcgen/0.13.2/rcgen/)
 and [Go X.509](https://pkg.go.dev/crypto/x509).
+
+
+The first cloud execution of this source (d1422808) passed all 101 top-level
+config/lifecycle/launch tests, including authenticated fixture discovery and a
+whole-supervisor restart that retained the public pin and advanced the real Go
+writer fence. It did not qualify the Rust process. Its focused preview gate
+correctly exposed that the older shared Python-path denylist omitted core Python
+capability directories such as .memory. Both preview and writer now reject those
+paths before creation. The original .memory assertion is retained and an actual
+writer/no-created-files regression covers representative capability directories.
+Six Clippy needless-borrow errors in the new environment lookup are also removed
+without suppressions or lint changes. Cloud execution of this descendant is
+required; the earlier successes are not evidence for its exact revision.

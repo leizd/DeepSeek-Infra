@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,5 +63,27 @@ func TestNextWriterFencingTokenRejectsForeignAndMalformedStores(t *testing.T) {
 	}
 	if _, err := NextWriterFencingToken(filepath.Join(t.TempDir(), ".memory")); err == nil {
 		t.Fatal("Python store admitted")
+	}
+}
+
+func TestNextWriterFencingTokenAndControlWriterDenyPythonCapabilitiesBeforeCreation(t *testing.T) {
+	for _, source := range []string{".memory", ".projects", ".local-rag", ".skills", ".reminders", ".tools", ".backups", ".browser-profiles", ".MEMORY", ".agent-runs"} {
+		t.Run(source, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "parent", source, "nested")
+			if _, err := NextWriterFencingToken(path); !errors.Is(err, ErrPythonStorePath) {
+				t.Fatal("Python capability admitted by preview")
+			}
+			if control, err := OpenControl(OpenOptions{Path: path, Owner: "offline-legacy-path-fixture"}); !errors.Is(err, ErrPythonStorePath) || control != nil {
+				if control != nil {
+					control.Close()
+				}
+				t.Fatal("Python capability admitted by writer")
+			}
+			entries, err := os.ReadDir(root)
+			if err != nil || len(entries) != 0 {
+				t.Fatal("rejected Python path created files")
+			}
+		})
 	}
 }

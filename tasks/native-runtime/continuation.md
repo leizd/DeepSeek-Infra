@@ -12626,3 +12626,15 @@ Fresh native-origin domain genesis, safe long-running credential renewal and ful
 platform/product acceptance remain incomplete. Existing Python migration proofs,
 unknown-effect recovery identities and original coverage floors stay enforced.
 Readiness remains NOT_READY; no PR, merge, release or real-data operation occurs.
+
+
+The d1422808 bootstrap source Go development run39423126218 passed the complete
+101 top-level config/lifecycle/launch corpus, but failed the additional preview
+assertion for .memory. The shared legacy denylist had covered older backup/control
+domains and omitted core capability paths. The descendant expands that mechanical
+path denial, retains the failing assertion, and tests both preview and actual
+OpenControl refusal before creating any files. Rust run39423126275 failed strict
+Clippy on six unnecessary borrows of the new environment closure; these are
+removed without changing warnings, coverage or test gates. Rust coverage remained
+a separate live job at observation time. All failures and exact-source reports
+are retained. Neither source is a whole-product readiness qualification.
