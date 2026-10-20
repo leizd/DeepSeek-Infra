@@ -4,6 +4,13 @@
 [中文](../README.md) / [English](../README.en.md)
 <!-- docs-language-switcher:end -->
 
+Launch options and local authentication are applied to the actual isolated child
+environments as well as the shared plan. Updates retain child-specific entries
+and reapply the existing role restrictions, including Rust custody isolation and
+the existing provider-key policy. Applying an update copies the plan's slices so
+another prepared launch is unchanged. This fixes configuration propagation; it
+does not provision default certificates, signer custody or fresh Go ownership.
+
 The `deepseekd` executable reads the following deployment settings together:
 
 | Setting | Meaning |

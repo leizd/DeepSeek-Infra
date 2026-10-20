@@ -1,3 +1,35 @@
+## Native launcher shared settings reach scoped children — 2026-10-20
+
+The actual b0b6d825 empty-profile gate returned401 after launching all three
+native children. Source inspection found an independent concrete propagation
+bug: ProductionPlan creates role-specific Process.Env values first, whereas
+Options.Apply and WithLocalAuth subsequently changed only Plan.Env. Run prefers
+the existing child Env, so CLI auth-disabled/OCR/provider/host/port overrides and
+newly created local auth tokens never reached those already isolated children.
+The exact first401 body was not retained; do not assign its precise origin from
+the status alone. The source propagation gap is directly established.
+
+This descendant of30ead95f merges explicit shared updates into each child's own
+environment, then reapplies the existing role restrictions. Child-only settings
+remain. Parent/process/environment slices are copied to avoid changing another
+prepared plan. Nil child environments become explicit role-restricted copies.
+Existing operator tokens/auth-disabled behavior and create-exclusive token
+persistence remain, including zero file writes for supplied operator auth.
+No custody file is read by Go, no private Go/Rust TLS setting crosses its denied
+role, and provider keys remain subject to the existing gateway-only policy.
+
+Four new required Go regression groups cover CLI updates, generated/retained
+local tokens, operator bypasses and nil/duplicate environments. The development
+workflow now runs every config/lifecycle/launch test, including old launch and
+local-auth cases, with the unchanged3m Go timeout. This is not full Go/coverage
+qualification. FullCI39396010444 on the unchanged-Go race repair source30ead95f
+is separately pending and cannot qualify the new launcher code. Native builds
+and tests remain cloud-only. The actual default4-request/restart gate must still
+pass after full private transport, Rust custody and Go ownership initialization;
+this fix alone cannot claim default bootstrap or full migration: NOT_READY.
+Retain all product/platform/Evidence scope, original recovery identities and
+EFFECT_UNKNOWN. Preserve root163 changes. PR remains daily21:40 Shanghai once.
+
 ## Complete race corpus after the actual package deadline — 2026-10-20
 
 Exact712e81f9 full CI39379681848 reached the original90m store package deadline:

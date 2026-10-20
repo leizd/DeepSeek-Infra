@@ -16,12 +16,12 @@ func WithLocalAuth(plan Plan, dataRoot string) (Plan, error) {
 	for _, value := range plan.Env {
 		key, val, _ := strings.Cut(value, "=")
 		if key == "AUTH_TOKEN" && strings.TrimSpace(val) != "" {
-			return plan, nil
+			return withProductionEnvironment(plan, []string{"AUTH_TOKEN=" + val}), nil
 		}
 		if key == "AUTH_DISABLED" {
 			switch strings.ToLower(strings.TrimSpace(val)) {
 			case "1", "true", "yes", "on":
-				return plan, nil
+				return withProductionEnvironment(plan, []string{"AUTH_DISABLED=" + val}), nil
 			}
 		}
 	}
@@ -74,6 +74,5 @@ func WithLocalAuth(plan Plan, dataRoot string) (Plan, error) {
 	if token == "" || strings.ContainsAny(token, "\r\n\x00") {
 		return Plan{}, errors.New("invalid local authentication value")
 	}
-	plan.Env = append(append([]string(nil), plan.Env...), "AUTH_TOKEN="+token)
-	return plan, nil
+	return withProductionEnvironment(plan, []string{"AUTH_TOKEN=" + token}), nil
 }
