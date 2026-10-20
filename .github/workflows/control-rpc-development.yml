@@ -89,6 +89,50 @@ jobs:
           Path("artifacts/control-rpc-development/result.json").write_text(json.dumps(report, indent=2) + "\n")
           raise SystemExit(code)
           PY
+      - name: Check pure Go Android SQLite diagnostics without full-suite qualification
+        if: always()
+        run: |
+          mkdir -p artifacts/control-rpc-development
+          cd go
+          set +e
+          go test -tags=deepseek_android -json -count=1 -timeout=2m ./internal/sqlitedb > ../artifacts/control-rpc-development/android-sqlite-tests.jsonl 2>&1
+          go_status=$?
+          set -e
+          cd ..
+          export CONTROL_GO_STATUS="$go_status"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          required = {
+              "TestAndroidConnectionFailureRetainsOriginalSQLiteCauseAndNumericDiagnostic",
+              "TestAndroidInitializationFailureClosesRealConnectionBeforeAdmission",
+              "TestAndroidMalformedFileAuthorityRejectedBeforeOpen",
+              "TestAndroidUnavailableDatabaseDirectoryDoesNotCreateOrAdmitConnection",
+          }
+          started, finished = set(), {}
+          for line in Path("artifacts/control-rpc-development/android-sqlite-tests.jsonl").read_text().splitlines():
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              name, action = row.get("Test"), row.get("Action")
+              if name in required and action == "run":
+                  started.add(name)
+              if name in required and action in {"pass", "fail", "skip"}:
+                  finished[name] = action
+          code = int(os.environ["CONTROL_GO_STATUS"])
+          if code == 0 and (started != required or set(finished) != required or set(finished.values()) != {"pass"}):
+              code = 2
+          report = {"kind": "native-android-sqlite-development-v1", "sourceCommit": os.environ["GITHUB_SHA"],
+                    "runId": os.environ["GITHUB_RUN_ID"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+                    "event": os.environ["GITHUB_EVENT_NAME"], "ref": os.environ["GITHUB_REF"],
+                    "scope": "pure Go Android-tagged SQLite host tests; not Android device execution", "exitCode": code,
+                    "expectedTests": sorted(required), "startedExpectedTests": sorted(started), "finishedExpectedTests": finished,
+                    "fullGoSuiteQualified": False, "coverageQualified": False, "androidDeviceQualified": False,
+                    "releaseQualified": False, "fullMigrationQualified": False}
+          Path("artifacts/control-rpc-development/android-sqlite-result.json").write_text(json.dumps(report, indent=2) + "\n")
+          raise SystemExit(code)
+          PY
       - name: Preserve development reports only
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

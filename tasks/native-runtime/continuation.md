@@ -797,6 +797,15 @@ confirmation, cancellation, retries, resynthesis and platform requirements.
 [中文](../../README.md) / [English](../../README.en.md)
 <!-- docs-language-switcher:end -->
 
+<!-- native-20261020-control-rpc-clients checkpoint -->
+
+The current client implementation follows exact semantic RED on `9ca9ca43179619b33f2f088a993f1b26f6e31983` (three launcher groups and two Rust cases). The Go production launcher now validates the paired private transport and gives each native child only its role's transport, Rust custody paths and provider credentials. Rust worker recovery/dispatch, gateway Agent Run reads and multi-agent chat select a shared bounded, pinned mTLS endpoint; explicit configuration failures never select the public HTTP proxy. No action, epoch, operation, domain admission or unknown-effect semantics changed. Cargo manifests/lockfile are unchanged; certificate parsing reuses the existing pinned reqwest dependency.
+
+The retained positive Rust case now performs an actual worker recovery-preview RPC through a mutually authenticated Rust fixture, preserving its original metadata fence and bearer, and refuses wrong CA, server identity, client CA, bearer and cleartext. This is not an actual Rust-to-Go production-process result. Go lifecycle mTLS qualification remains separate: exact c36b5e0b selected41 cloud race cases PASS and full Rust1560/82.074334% PASS, while its full CI failed documentation navigation and a store-package90-minute race timeout. The later ad7131b9 default full race passed; its Android-tagged suite exposed a test incorrectly requiring primary code14 instead of actual extended CANTOPEN782. This batch compares the retained primary category, real typed extended code and OS cause; production SQLite locks/WAL are unchanged. The development workflow separately verifies the pure Go Android-tagged sqlitedb package, without claiming device acceptance. New documentation navigation is repaired.
+
+The combined exact source must still pass full37CI, original Go/Python95% and Rust80% floors, and all1562 Rust cases plus the original Redis ignore. Local execution is limited to source checks/offline Python; all native builds/tests/containers remain in cloud, reports only. The protected original163-file worktree is not applied or staged. API24 still reports kernel3.10.0+ and SQLite I/O failure; OFD-lock compatibility is a primary lead, not an observed failing syscall. Android worker/bootstrap, API24 repair, actual ARM64, default secure provisioning, full retained product workloads and all Evidence gates remain incomplete: NOT_READY. Continue the complete migration. Daily PR processing remains21:40 Asia/Shanghai once for the entire work; no PR is submitted by development pushes.
+
+
 ## 2026-10-11 exact cloud results and source-contract/package repair
 
 The authorized twelve-file tree is uploaded as `e416cf59` / tree `1f200669`.

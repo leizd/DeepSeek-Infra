@@ -6,9 +6,11 @@ import (
 	"context"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/ncruces/go-sqlite3"
@@ -98,8 +100,15 @@ func TestAndroidConnectionFailureRetainsOriginalSQLiteCauseAndNumericDiagnostic(
 		t.Fatal(err)
 	}
 	connection, err := connector.Connect(context.Background())
-	if connection != nil || !errors.Is(err, sqlite3.CANTOPEN) || !strings.Contains(err.Error(), "Android SQLite connection (code=14 errno=") {
+	var failure *sqlite3.Error
+	var errno syscall.Errno
+	if connection != nil || !errors.Is(err, sqlite3.CANTOPEN) || !errors.As(err, &failure) || !errors.As(err, &errno) {
 		t.Fatal("connection diagnostic lost the original failure identity", err)
+	}
+	// A platform may return extended CANTOPEN (for example 782), while the
+	// primary classification remains CANTOPEN. Preserve the actual numeric code.
+	if !strings.Contains(err.Error(), fmt.Sprintf("Android SQLite connection (code=%d errno=%d)", failure.ExtendedCode(), errno)) {
+		t.Fatal("connection diagnostic did not match its retained native cause", err)
 	}
 	if _, err := os.Stat(parent); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("connection diagnostics created unavailable control state", err)

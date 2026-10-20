@@ -86,9 +86,17 @@ struct Coordinator {
 
 impl Coordinator {
     async fn connect() -> Result<Self, AppError> {
-        let origin = crate::backup_mirror_routes::GO_CONTROL_ADDR_ENV
-            .iter()
-            .find_map(|key| std::env::var(key).ok())
+        let private =
+            crate::control_rpc_client::private_endpoint_from_lookup(|key| std::env::var(key))
+                .map_err(|_| control_error())?;
+        let origin = private
+            .as_ref()
+            .map(|endpoint| endpoint.uri().to_string())
+            .or_else(|| {
+                crate::backup_mirror_routes::GO_CONTROL_ADDR_ENV
+                    .iter()
+                    .find_map(|key| std::env::var(key).ok())
+            })
             .ok_or_else(control_error)?;
         let parsed = reqwest::Url::parse(origin.trim()).map_err(|_| control_error())?;
         let host = parsed.host_str().ok_or_else(control_error)?;
@@ -115,8 +123,12 @@ impl Coordinator {
         let authorization = format!("Bearer {}", bearer.trim())
             .parse()
             .map_err(|_| control_error())?;
-        let channel = tonic::transport::Endpoint::from_shared(origin.trim().to_string())
-            .map_err(|_| control_error())?
+        let endpoint = match private {
+            Some(endpoint) => endpoint,
+            None => tonic::transport::Endpoint::from_shared(origin.trim().to_string())
+                .map_err(|_| control_error())?,
+        };
+        let channel = endpoint
             .connect_timeout(Duration::from_secs(3))
             .timeout(Duration::from_secs(10))
             .connect()

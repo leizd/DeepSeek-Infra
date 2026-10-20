@@ -1,5 +1,9 @@
 # Native control RPC transport
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
 The `deepseekd` executable reads the following deployment settings together:
 
 | Setting | Meaning |
@@ -38,7 +42,42 @@ federation signing keys. No custody bundle or signing private key is read by thi
 implementation. Existing domain cutover proofs, immutable recovery identities,
 `EFFECT_UNKNOWN` behavior and authoritative-writer rules remain unchanged.
 
-This is a production lifecycle transport change, not whole-product acceptance.
-Launcher-specific environment isolation, Rust client endpoint selection, Android
-worker/bootstrap integration, both device API levels, ARM64 execution and all
-original CI/Evidence gates still require qualification. Overall **NOT_READY**.
+The native launcher forwards the server settings only to `deepseekd`. Rust
+gateway and worker children instead receive the following complete client set:
+
+| Setting | Meaning |
+| --- | --- |
+| `DEEPSEEK_GO_CONTROL_RPC_URL` | HTTPS literal loopback address with the same fixed port as the server |
+| `DEEPSEEK_GO_CONTROL_RPC_TLS_CA_FILE` | Pinned trust roots for the Go server |
+| `DEEPSEEK_GO_CONTROL_RPC_TLS_CERT_FILE` | Rust client transport certificate chain |
+| `DEEPSEEK_GO_CONTROL_RPC_TLS_KEY_FILE` | Matching Rust client transport private key |
+| `DEEPSEEK_GO_CONTROL_RPC_TLS_SERVER_NAME` | Expected server certificate identity |
+| `DEEPSEEK_INTERNAL_BEARER` | Must match the existing Go internal service bearer |
+
+When using the launcher, all nine transport settings must be provided together;
+the paired port must be nonzero. Partial or explicitly empty configuration,
+public addresses, cleartext URLs, user information, queries, paths and mismatched
+bearers fail before child launch. The public `GO_CONTROL_ADDR` proxy address
+remains HTTP on the separate public control port. Rust worker recovery and
+dispatch clients, gateway Agent Run reads and the chat scheduler use the private
+transport without replacing that HTTP proxy. Any explicit client setting
+requires all five transport values, bounded nonempty certificate files and a
+valid client identity; configuration or TLS authentication failure never retries
+through the public HTTP endpoint.
+
+Child environments keep Rust authority custody paths and S3 credentials with the
+worker, and model/search API credentials with the gateway. The launcher parent
+still constructs these environment entries; this change does not establish a
+whole-product credential isolation proof. Transport identity files remain
+separate from Ed25519 signing custody and require deployment provisioning.
+
+The worker regression test performs its real recovery-preview RPC through an
+isolated mutually authenticated Rust TLS fixture and refuses an untrusted server,
+wrong server name, untrusted client, wrong bearer and cleartext. This fixture is
+not a Rust-to-Go production-process acceptance result. Go lifecycle tests cover
+the actual Go listener separately; the combined default bootstrap, all native
+peer paths and exact-source cloud qualification remain required.
+
+Android worker/bootstrap integration, API 24 SQLite compatibility, both device
+API levels, ARM64 execution, full product workloads and original CI/Evidence
+gates remain incomplete. Overall **NOT_READY**.

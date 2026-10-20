@@ -246,16 +246,21 @@ impl AgentExecutionControl {
             .strip_prefix("http://")
             .and_then(|value| value.parse::<SocketAddr>().ok())
             .ok_or_else(unavailable)?;
-        if !address.ip().is_loopback()
-            || address.port() == 0
-            || !(32..=4096).contains(&bearer.len())
-            || !bearer.bytes().all(|b| b.is_ascii_graphic())
-        {
+        if !address.ip().is_loopback() || address.port() == 0 {
+            return Err(unavailable());
+        }
+        Self::from_endpoint(
+            Endpoint::from_shared(origin.to_string()).map_err(|_| unavailable())?,
+            bearer,
+        )
+    }
+
+    fn from_endpoint(endpoint: Endpoint, bearer: &str) -> Result<Self, Status> {
+        if !(32..=4096).contains(&bearer.len()) || !bearer.bytes().all(|b| b.is_ascii_graphic()) {
             return Err(unavailable());
         }
         Ok(Self {
-            endpoint: Endpoint::from_shared(origin.to_string())
-                .map_err(|_| unavailable())?
+            endpoint: endpoint
                 .connect_timeout(Duration::from_secs(3))
                 .timeout(Duration::from_secs(5)),
             authorization: format!("Bearer {bearer}")
@@ -413,6 +418,12 @@ pub(crate) fn validate_node_dispatch(
 pub fn load_agent_execution_control_from_env(
     get: impl Fn(&str) -> Result<String, VarError>,
 ) -> Result<Option<AgentExecutionControl>, Status> {
+    if let Some(endpoint) = deepseek_gateway::control_rpc_client::private_endpoint_from_lookup(&get)
+        .map_err(|_| unavailable())?
+    {
+        let bearer = get("DEEPSEEK_INTERNAL_BEARER").map_err(|_| unavailable())?;
+        return AgentExecutionControl::from_endpoint(endpoint, &bearer).map(Some);
+    }
     let mut origins = Vec::new();
     for name in ["GO_CONTROL_ADDR", "DEEPSEEK_GO_CONTROL_URL"] {
         match get(name) {

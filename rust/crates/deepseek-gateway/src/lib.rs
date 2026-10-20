@@ -42,6 +42,7 @@ pub mod chat_ndjson;
 pub mod chat_stream;
 pub mod chat_tool_loop;
 mod control_proxy;
+pub mod control_rpc_client;
 mod conversation_search;
 pub mod data_routes;
 pub mod download_route;

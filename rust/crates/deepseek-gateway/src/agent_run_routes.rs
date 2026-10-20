@@ -34,6 +34,7 @@ use runtime::{operator_event_with_runtime, prepare_runtime_update, request_crede
 #[derive(Clone)]
 struct ReadConfig {
     origin: String,
+    endpoint: Option<tonic::transport::Endpoint>,
     bearer: String,
     artifacts: PathBuf,
     credentials: Option<crate::agent_credential_client::WorkerConfig>,
@@ -238,8 +239,12 @@ impl ReadSession {
         let authorization = format!("Bearer {}", config.bearer.trim())
             .parse()
             .map_err(|_| control_unavailable())?;
-        let channel = tonic::transport::Endpoint::from_shared(config.origin.trim().to_string())
-            .map_err(|_| control_unavailable())?
+        let endpoint = match config.endpoint.clone() {
+            Some(endpoint) => endpoint,
+            None => tonic::transport::Endpoint::from_shared(config.origin.trim().to_string())
+                .map_err(|_| control_unavailable())?,
+        };
+        let channel = endpoint
             .connect_timeout(Duration::from_secs(3))
             .timeout(Duration::from_secs(10))
             .connect()
@@ -451,11 +456,20 @@ fn read_router(enabled: bool, config: Option<ReadConfig>) -> Router {
 }
 
 pub fn router() -> Router {
-    let origin = crate::backup_mirror_routes::GO_CONTROL_ADDR_ENV
-        .iter()
-        .find_map(|key| std::env::var(key).ok());
+    let (origin, endpoint) =
+        match crate::control_rpc_client::private_endpoint_from_lookup(|key| std::env::var(key)) {
+            Ok(Some(endpoint)) => (Some(endpoint.uri().to_string()), Some(endpoint)),
+            Ok(None) => (
+                crate::backup_mirror_routes::GO_CONTROL_ADDR_ENV
+                    .iter()
+                    .find_map(|key| std::env::var(key).ok()),
+                None,
+            ),
+            Err(_) => (None, None),
+        };
     let config = origin.map(|origin| ReadConfig {
         origin,
+        endpoint,
         bearer: std::env::var(crate::backup_mirror_routes::INTERNAL_BEARER_ENV).unwrap_or_default(),
         credentials: crate::agent_credential_client::WorkerConfig::from_env(),
         artifacts: std::env::var_os("DEEPSEEK_AGENT_ARTIFACT_DIR")

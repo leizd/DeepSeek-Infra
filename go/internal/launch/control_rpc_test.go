@@ -23,6 +23,9 @@ func productionRPCFixture(t *testing.T) map[string]string {
 		"DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE": "/isolated/rust-custody-passphrase",
 		"DEEPSEEK_API_KEY":                               strings.Repeat("a", 48),
 		"TAVILY_API_KEY":                                 strings.Repeat("b", 48),
+		"DEEPSEEK_WORKER_S3_ACCESS_KEY":                  strings.Repeat("c", 48),
+		"DEEPSEEK_WORKER_S3_SECRET_KEY":                  strings.Repeat("d", 48),
+		"DEEPSEEK_WORKER_S3_SESSION_TOKEN":               strings.Repeat("e", 48),
 	}
 	for key, value := range values {
 		t.Setenv(key, value)
@@ -71,7 +74,7 @@ func TestProductionRPCPlanForwardsBothTransportEndpoints(t *testing.T) {
 }
 
 func TestProductionRPCPlanRejectsPartialTransportBeforeLaunch(t *testing.T) {
-	for _, fault := range []string{"server-ca", "server-listen", "client-ca", "client-key", "client-name", "cleartext", "different-port", "public-listen", "bearer-mismatch"} {
+	for _, fault := range []string{"server-ca", "server-listen", "client-ca", "client-key", "client-name", "cleartext", "different-port", "public-listen", "bearer-mismatch", "bad-url", "bad-port", "zero-port", "userinfo", "query", "path", "bad-name", "non-header-bearer", "explicit-empty"} {
 		t.Run(fault, func(t *testing.T) {
 			productionRPCFixture(t)
 			switch fault {
@@ -93,6 +96,28 @@ func TestProductionRPCPlanRejectsPartialTransportBeforeLaunch(t *testing.T) {
 				t.Setenv("DEEPSEEKD_INTERNAL_RPC_LISTEN", "0.0.0.0:8091")
 			case "bearer-mismatch":
 				t.Setenv("DEEPSEEK_INTERNAL_BEARER", strings.Repeat("q", 48))
+			case "bad-url":
+				t.Setenv("DEEPSEEK_GO_CONTROL_RPC_URL", "https://%zz")
+			case "bad-port":
+				t.Setenv("DEEPSEEKD_INTERNAL_RPC_LISTEN", "127.0.0.1:invalid")
+			case "zero-port":
+				t.Setenv("DEEPSEEKD_INTERNAL_RPC_LISTEN", "127.0.0.1:0")
+			case "userinfo":
+				t.Setenv("DEEPSEEK_GO_CONTROL_RPC_URL", "https://caller@127.0.0.1:8091")
+			case "query":
+				t.Setenv("DEEPSEEK_GO_CONTROL_RPC_URL", "https://127.0.0.1:8091?peer=other")
+			case "path":
+				t.Setenv("DEEPSEEK_GO_CONTROL_RPC_URL", "https://127.0.0.1:8091/other")
+			case "bad-name":
+				t.Setenv("DEEPSEEK_GO_CONTROL_RPC_TLS_SERVER_NAME", "not a server name")
+			case "non-header-bearer":
+				value := strings.Repeat("p", 24) + "\n" + strings.Repeat("p", 24)
+				t.Setenv("DEEPSEEKD_INTERNAL_BEARER", value)
+				t.Setenv("DEEPSEEK_INTERNAL_BEARER", value)
+			case "explicit-empty":
+				for _, key := range privateControlSettings {
+					t.Setenv(key, "")
+				}
 			}
 			binDir := t.TempDir()
 			makeNativePlanBinaries(t, binDir)
@@ -119,6 +144,7 @@ func TestProductionRPCPlanIsolatesServerAndRustCustodyCredentials(t *testing.T) 
 			denied = denied || process.Name == "deepseekd" && strings.HasPrefix(key, "DEEPSEEK_GO_CONTROL_RPC_")
 			denied = denied || process.Name != "deepseek-worker" && strings.HasPrefix(key, "DEEPSEEK_WORKER_CONTROL_SIGNER_")
 			denied = denied || process.Name != "deepseek-gateway" && (key == "DEEPSEEK_API_KEY" || key == "TAVILY_API_KEY")
+			denied = denied || process.Name != "deepseek-worker" && (key == "DEEPSEEK_WORKER_S3_ACCESS_KEY" || key == "DEEPSEEK_WORKER_S3_SECRET_KEY" || key == "DEEPSEEK_WORKER_S3_SESSION_TOKEN")
 			if denied {
 				t.Errorf("unrelated child inherited a private capability: %s %s", process.Name, key)
 			}

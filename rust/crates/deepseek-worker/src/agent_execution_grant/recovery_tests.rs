@@ -35,12 +35,23 @@ fn private_control_transport_fixture() -> (
     client.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
     let client_key = rcgen::KeyPair::generate().unwrap();
     let client_cert = client.signed_by(&client_key, &ca_cert, &ca_key).unwrap();
+    let mut server = rcgen::CertificateParams::new(vec!["control.native".into()]).unwrap();
+    server.key_usages = vec![rcgen::KeyUsagePurpose::DigitalSignature];
+    server.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+    let server_key = rcgen::KeyPair::generate().unwrap();
+    let server_cert = server.signed_by(&server_key, &ca_cert, &ca_key).unwrap();
     let ca_path = directory.path().join("root.pem");
     let cert_path = directory.path().join("client.pem");
     let key_path = directory.path().join("client.key");
     std::fs::write(&ca_path, ca_cert.pem()).unwrap();
     std::fs::write(&cert_path, client_cert.pem()).unwrap();
     std::fs::write(&key_path, client_key.serialize_pem()).unwrap();
+    std::fs::write(directory.path().join("server.pem"), server_cert.pem()).unwrap();
+    std::fs::write(
+        directory.path().join("server.key"),
+        server_key.serialize_pem(),
+    )
+    .unwrap();
     let values = [
         ("GO_CONTROL_ADDR", "http://127.0.0.1:8090".to_string()),
         (
@@ -74,9 +85,16 @@ fn private_control_transport_fixture() -> (
     )
 }
 
-#[test]
-fn dedicated_control_transport_selects_private_tls_without_replacing_public_http() {
-    let (_directory, values) = private_control_transport_fixture();
+#[tokio::test]
+async fn dedicated_control_transport_selects_private_tls_without_replacing_public_http() {
+    let (directory, mut values) = private_control_transport_fixture();
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = socket.local_addr().unwrap();
+    drop(socket);
+    values.insert(
+        "DEEPSEEK_GO_CONTROL_RPC_URL".into(),
+        format!("https://{address}"),
+    );
     let selected = load_agent_execution_control_from_env(|name| {
         values.get(name).cloned().ok_or(VarError::NotPresent)
     })
@@ -85,12 +103,133 @@ fn dedicated_control_transport_selects_private_tls_without_replacing_public_http
     assert_eq!(selected.endpoint.uri().scheme_str(), Some("https"));
     assert_eq!(
         selected.endpoint.uri().authority().unwrap().as_str(),
-        "127.0.0.1:8091"
+        address.to_string()
     );
     assert_eq!(
         values.get("GO_CONTROL_ADDR").unwrap(),
         "http://127.0.0.1:8090"
     );
+    let context = AgentRunRecoveryContext {
+        schema_version: 1,
+        run_id: "run-private-recovery".into(),
+        generation: 1,
+        metadata_epoch: 3,
+        expected_index: 12,
+        expected_runtime_revision: 2,
+        expected_request: Some(AgentArtifactReference {
+            sha256: "a".repeat(64),
+            length: 30,
+        }),
+        selection: Some(AgentRunRecoverySelection {
+            kind: 1,
+            agent_id: String::new(),
+            resynthesize: None,
+        }),
+        ..Default::default()
+    };
+    let service = Preview {
+        context: context.clone(),
+        mode: Arc::new(AtomicU8::new(0)),
+    };
+    let tls = tonic::transport::ServerTlsConfig::new()
+        .identity(tonic::transport::Identity::from_pem(
+            std::fs::read(directory.path().join("server.pem")).unwrap(),
+            std::fs::read(directory.path().join("server.key")).unwrap(),
+        ))
+        .client_ca_root(tonic::transport::Certificate::from_pem(
+            std::fs::read(directory.path().join("root.pem")).unwrap(),
+        ));
+    let (stop, done) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .tls_config(tls)
+            .unwrap()
+            .add_service(AgentRunRecoveryControlServer::new(service))
+            .serve_with_shutdown(address, async {
+                let _ = done.await;
+            })
+            .await
+            .unwrap();
+    });
+    let mut ready = false;
+    for _ in 0..100 {
+        if tokio::net::TcpStream::connect(address).await.is_ok() {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(ready, "private fixture never bound its listener");
+    // Exercise the production worker recovery RPC, including its bearer and
+    // original metadata fence, through a mutually authenticated TLS fixture.
+    selected.validate_recovery_context(&context).await.unwrap();
+    for fault in [
+        "wrong-root",
+        "wrong-name",
+        "untrusted-client",
+        "wrong-bearer",
+    ] {
+        let (_other, other) = private_control_transport_fixture();
+        let mut rejected = values.clone();
+        match fault {
+            "wrong-root" => {
+                rejected.insert(
+                    "DEEPSEEK_GO_CONTROL_RPC_TLS_CA_FILE".into(),
+                    other["DEEPSEEK_GO_CONTROL_RPC_TLS_CA_FILE"].clone(),
+                );
+            }
+            "wrong-name" => {
+                rejected.insert(
+                    "DEEPSEEK_GO_CONTROL_RPC_TLS_SERVER_NAME".into(),
+                    "other.native".into(),
+                );
+            }
+            "untrusted-client" => {
+                for key in [
+                    "DEEPSEEK_GO_CONTROL_RPC_TLS_CERT_FILE",
+                    "DEEPSEEK_GO_CONTROL_RPC_TLS_KEY_FILE",
+                ] {
+                    rejected.insert(key.into(), other[key].clone());
+                }
+            }
+            "wrong-bearer" => {
+                rejected.insert("DEEPSEEK_INTERNAL_BEARER".into(), "q".repeat(48));
+            }
+            _ => unreachable!(),
+        }
+        let client = load_agent_execution_control_from_env(|name| {
+            rejected.get(name).cloned().ok_or(VarError::NotPresent)
+        })
+        .unwrap()
+        .unwrap();
+        let error = client
+            .validate_recovery_context(&context)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.code(),
+            if fault == "wrong-bearer" {
+                tonic::Code::FailedPrecondition
+            } else {
+                tonic::Code::Unavailable
+            },
+            "{fault}"
+        );
+    }
+    let plaintext = AgentExecutionControl::new(&format!("http://{address}"), TOKEN).unwrap();
+    assert_eq!(
+        plaintext
+            .validate_recovery_context(&context)
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Unavailable
+    );
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[test]
@@ -104,6 +243,15 @@ fn explicit_private_control_transport_never_falls_back_after_configuration_failu
         "cleartext",
         "public-address",
         "malformed-ca",
+        "missing-ca-file",
+        "empty-ca-file",
+        "oversized-ca-file",
+        "malformed-identity",
+        "invalid-server-name",
+        "url-userinfo",
+        "url-query",
+        "url-path",
+        "zero-port",
     ] {
         let (_directory, mut values) = private_control_transport_fixture();
         match fault {
@@ -140,6 +288,46 @@ fn explicit_private_control_transport_never_falls_back_after_configuration_failu
                     "not a certificate",
                 )
                 .unwrap();
+            }
+            "missing-ca-file" => {
+                values.insert(
+                    "DEEPSEEK_GO_CONTROL_RPC_TLS_CA_FILE".into(),
+                    "/missing-native-control-ca.pem".into(),
+                );
+            }
+            "empty-ca-file" | "oversized-ca-file" => {
+                let bytes = if fault == "empty-ca-file" {
+                    Vec::new()
+                } else {
+                    vec![b'a'; 1024 * 1024 + 1]
+                };
+                std::fs::write(
+                    values.get("DEEPSEEK_GO_CONTROL_RPC_TLS_CA_FILE").unwrap(),
+                    bytes,
+                )
+                .unwrap();
+            }
+            "malformed-identity" => {
+                std::fs::write(
+                    values.get("DEEPSEEK_GO_CONTROL_RPC_TLS_KEY_FILE").unwrap(),
+                    "not a private key",
+                )
+                .unwrap();
+            }
+            "invalid-server-name" => {
+                values.insert(
+                    "DEEPSEEK_GO_CONTROL_RPC_TLS_SERVER_NAME".into(),
+                    "invalid name".into(),
+                );
+            }
+            "url-userinfo" | "url-query" | "url-path" | "zero-port" => {
+                let url = match fault {
+                    "url-userinfo" => "https://caller@127.0.0.1:8091",
+                    "url-query" => "https://127.0.0.1:8091?other=peer",
+                    "url-path" => "https://127.0.0.1:8091/other",
+                    _ => "https://127.0.0.1:0",
+                };
+                values.insert("DEEPSEEK_GO_CONTROL_RPC_URL".into(), url.into());
             }
             _ => unreachable!(),
         }

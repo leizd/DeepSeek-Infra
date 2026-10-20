@@ -27,7 +27,7 @@ const (
 type Process struct {
 	Name string
 	Path string
-	// Env, when non-nil, isolates platform UI glue from control/provider secrets.
+	// Env, when non-nil, isolates native child roles and platform UI glue.
 	Env []string
 }
 
@@ -77,6 +77,12 @@ func ProductionPlanWithAddress(binDir, dataRoot, staticDir, address string) (Pla
 		return Plan{}, err
 	}
 	env := productionEnv(dataRoot, staticDir, controlListen, gatewayBind)
+	if err := validatePrivateControlDeployment(env); err != nil {
+		return Plan{}, err
+	}
+	for index := range processes {
+		processes[index].Env = productionChildEnvironment(processes[index].Name, env)
+	}
 	return Plan{
 		Processes:  processes,
 		Env:        env,
@@ -163,7 +169,8 @@ func productionEnv(dataRoot, staticDir, controlListen, gatewayBind string) []str
 	// public listener can authenticate and reach the model provider. Interpreter
 	// paths stay out: PATH was already filtered above.
 	for _, key := range operatorConfigKeys {
-		if strings.HasPrefix(key, "DEEPSEEK_WORKER_S3_") || strings.HasPrefix(key, "DEEPSEEK_WORKER_CONTROL_SIGNER_") {
+		if strings.HasPrefix(key, "DEEPSEEK_WORKER_S3_") || strings.HasPrefix(key, "DEEPSEEK_WORKER_CONTROL_SIGNER_") ||
+			strings.HasPrefix(key, "DEEPSEEKD_INTERNAL_RPC_") || strings.HasPrefix(key, "DEEPSEEK_GO_CONTROL_RPC_") {
 			// Preserve even blank or whitespace-containing values: the worker
 			// validates the complete configuration, and credentials are exact.
 			if value, exists := os.LookupEnv(key); exists {
@@ -216,6 +223,15 @@ var operatorConfigKeys = []string{
 	"RUST_LOG",
 	"DEEPSEEKD_INTERNAL_BEARER",
 	"DEEPSEEK_INTERNAL_BEARER",
+	"DEEPSEEKD_INTERNAL_RPC_LISTEN",
+	"DEEPSEEKD_INTERNAL_RPC_TLS_CA_FILE",
+	"DEEPSEEKD_INTERNAL_RPC_TLS_CERT_FILE",
+	"DEEPSEEKD_INTERNAL_RPC_TLS_KEY_FILE",
+	"DEEPSEEK_GO_CONTROL_RPC_URL",
+	"DEEPSEEK_GO_CONTROL_RPC_TLS_CA_FILE",
+	"DEEPSEEK_GO_CONTROL_RPC_TLS_CERT_FILE",
+	"DEEPSEEK_GO_CONTROL_RPC_TLS_KEY_FILE",
+	"DEEPSEEK_GO_CONTROL_RPC_TLS_SERVER_NAME",
 	"DEEPSEEKD_CONTROL_AUTHORITY",
 	"DEEPSEEKD_MUTATION_SIGNER_KEY",
 	"DEEPSEEKD_PROMOTION_SIGNER_KEY",
