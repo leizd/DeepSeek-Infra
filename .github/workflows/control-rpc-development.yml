@@ -95,7 +95,7 @@ jobs:
           mkdir -p artifacts/control-rpc-development
           cd go
           set +e
-          go test -tags=deepseek_android -json -count=1 -timeout=2m ./internal/sqlitedb > ../artifacts/control-rpc-development/android-sqlite-tests.jsonl 2>&1
+          go test -tags=deepseek_android,sqlite3_flock -json -count=1 -timeout=2m ./internal/sqlitedb > ../artifacts/control-rpc-development/android-sqlite-tests.jsonl 2>&1
           go_status=$?
           set -e
           cd ..

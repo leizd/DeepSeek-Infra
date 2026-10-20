@@ -111,3 +111,45 @@ VFS文档要求OFD锁依赖Linux3.15且不同锁族并发访问不兼容；旧�
 允许三种表示通过`errors.As`转换为`ExtendedErrorCode`。因此已撤回上游字符串抹除错误链的推断。
 fc5ef9c4/开发运行39350633836实际复现了旧诊断漏识别三条错误码值路径，其原有检查通过。
 修复后仍须核对新提交的Go回归、原覆盖率和真实设备报告，不能把错误诊断改进当作API24修复。
+
+## Android database locking on older kernels
+
+The APK and Linux Android-tagged Go gates use the pinned driver's official
+`sqlite3_flock` build variant, together with `deepseek_android`. The same
+WAL/shared-memory support, busy timeout, defensive configuration, `query_only`
+cache, schema, writer lease and coverage floors remain required. There is no
+no-lock/dot-lock fallback and the minimum Android API remains 24. The preceding
+real API24 run returned `SQLITE_IOERR_RDLOCK` (2314) on Linux 3.10.0+; the
+upstream default OFD implementation requires Linux 3.15. The original driver's
+OS errno was unavailable, so do not invent one from the kernel version.
+
+BSD locks are not compatible with concurrent POSIX/OFD SQLite users. Before
+spawning control, Android startup acquires a whole-database POSIX exclusive
+lock in the Java parent. The Go child uses the separate BSD family, while
+older POSIX/OFD readers and writers are mechanically excluded. This descriptor
+never executes SQL, checkpoints a WAL or writes a row. A process-wide canonical
+path registry prevents a second Java open/close from releasing the first
+process-owned POSIX lock. No other Java component opens the Go control database.
+The lease stays held until the actual bound child exits, including cancellation
+and delayed shutdown; new startup refuses an existing legacy holder. Final-file
+and control-directory symlinks fail before opening the database.
+
+Keep Android Auto Backup enabled. The existing manifest has no custom backup
+agent or foreground-backup override; Android documents that Auto Backup shuts
+down the app. This source fact does not substitute for complete backup/restore
+or process-group kill acceptance. The device suite must retain all seven
+original methods and qualify the two added lock methods, including real
+separate-process probes, duplicate JVM acquisition, premature close while a
+child lives, legacy-owner refusal and reopen after exit. A recreated supervisor
+waits at most three seconds for a registered bound child using a monitor
+notification; it never opens a duplicate descriptor during the wait. This
+handoff happens outside the spawn/shutdown monitor so UI cancellation stays
+available, and a late exit waiter must not release the successor's lease. Probe payloads are
+restricted to the test APK and never open SQLite or read/write database bytes.
+
+References: [pinned VFS locking contract](https://github.com/ncruces/go-sqlite3/blob/091633ebb62b0c78988d3e079149333b36337599/vfs/README.md),
+[Java file-lock descriptor lifetime](https://docs.oracle.com/javase/8/docs/api/java/nio/channels/FileLock.html),
+[Android Auto Backup lifecycle](https://developer.android.com/identity/data/autobackup).
+This repair does not qualify Rust worker availability, Go production ownership,
+ARM64 device execution or the complete zero-Python product. Keep `NOT_READY`
+until their original evidence gates pass.

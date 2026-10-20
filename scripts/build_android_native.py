@@ -222,7 +222,7 @@ def build(root: Path, sdk: Path, output: Path, cargo_target: Path, toolchain: st
                       GOOS="android" if abi == "arm64-v8a" else "linux")
         control = output / "bin" / abi / "deepseekd"
         control.parent.mkdir(parents=True, exist_ok=True)
-        run([go, "build", "-tags", "deepseek_android", "-trimpath", "-o", control.as_posix(), "./cmd/deepseekd"], root / "go", go_env)
+        run([go, "build", "-tags", "deepseek_android,sqlite3_flock", "-trimpath", "-o", control.as_posix(), "./cmd/deepseekd"], root / "go", go_env)
         binaries[abi] = {"rust": cargo_target / target / "release/deepseek-gateway", "go": control}
     if source_identity(root) != initial_identity:
         raise ValueError("Android source changed during native compilation")

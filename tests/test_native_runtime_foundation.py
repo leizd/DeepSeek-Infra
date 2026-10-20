@@ -88,7 +88,7 @@ def test_ci_has_native_go_and_protocol_gates() -> None:
     for command in race_commands:
         assert re.fullmatch(r"go test -race(?: -json)? -timeout=(?:30|60|90)m \./\.\.\.(?: > \S+ 2> \S+)?", command)
     android = next(step for step in native_go["steps"] if step.get("name") == "Android Go SQLite compatibility checks")
-    assert android["env"]["GOFLAGS"] == "-tags=deepseek_android"
+    assert android["env"]["GOFLAGS"] == "-tags=deepseek_android,sqlite3_flock"
     assert "scripts/check_go_coverage.py" in workflow
 
 

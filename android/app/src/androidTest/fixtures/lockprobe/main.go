@@ -30,6 +30,11 @@ func main() {
 	case "posix":
 	case "hold":
 		lock.Type, lock.Start, lock.Len = unix.F_WRLCK, 0, 0
+	case "wait":
+		fmt.Println("WAITING")
+		var command [1]byte
+		_, _ = os.Stdin.Read(command[:])
+		return
 	default:
 		os.Exit(64)
 	}
@@ -39,7 +44,7 @@ func main() {
 		os.Exit(73)
 	}
 	if os.Args[1] == "ofd" && (errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOSYS)) {
-		fmt.Println("UNSUPPORTED")
+		fmt.Printf("UNSUPPORTED errno=%d\n", err)
 		os.Exit(78)
 	}
 	if err != nil {

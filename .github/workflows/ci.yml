@@ -1470,7 +1470,7 @@ jobs:
       - name: Android Go SQLite compatibility checks
         env:
           # Propagate the same connector selection to process tests' child builds.
-          GOFLAGS: "-tags=deepseek_android"
+          GOFLAGS: "-tags=deepseek_android,sqlite3_flock"
         run: |
           go vet ./...
           mkdir -p ../artifacts/go-race

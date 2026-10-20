@@ -34,6 +34,7 @@ final class NativeRuntime {
     private volatile boolean stopped;
     private volatile Process gateway;
     private volatile Process control;
+    private volatile NativeControlStoreLock controlStoreLock;
     private volatile PlatformOcrServer platform;
     private String authToken;
     private JSONObject bundle;
@@ -180,36 +181,53 @@ final class NativeRuntime {
             }
             Thread.sleep(20);
         }
+        NativeControlStoreLock previousLock = controlStoreLock;
+        if (previousLock != null) previousLock.closeIfExited();
     }
 
     private void launchChildren(File libraries, File logs) throws IOException {
+        if (stopped) throw new IOException("App startup cancelled");
+        File controlDirectory = new File(root, "go-shadow");
+        if (!controlDirectory.getCanonicalFile().equals(new File(root.getCanonicalFile(), "go-shadow"))) {
+            throw new IOException("Control directory must not be a symbolic link");
+        }
+        // An earlier supervisor's child can still be draining. This bounded
+        // handoff must not hold childLock: stop() stays available on the UI.
+        NativeControlStoreLock storeLock = NativeControlStoreLock.acquire(new File(controlDirectory, "control.sqlite3"));
         // stop() may run on the UI thread during startup or recovery. Serialize
         // only spawn/registration with shutdown, never the readiness wait.
-        synchronized (childLock) {
-            if (stopped) {
-                throw new IOException("App startup cancelled");
+        try {
+            synchronized (childLock) {
+                if (stopped) {
+                    throw new IOException("App startup cancelled");
+                }
+                controlStoreLock = storeLock;
+                ProcessBuilder go = child(new File(libraries, "libdeepseek_control.so"));
+                go.environment().put("DEEPSEEKD_MODE", "shadow");
+                go.environment().put("DEEPSEEKD_LISTEN", "127.0.0.1:" + CONTROL_PORT);
+                go.environment().put("DEEPSEEKD_SHADOW_STORE", controlDirectory.getAbsolutePath());
+                control = go.start();
+                storeLock.bindTo(control);
+                pipeLog(control, new File(logs, "control.log"));
+                if (stopped) {
+                    throw new IOException("App startup cancelled");
+                }
+                ProcessBuilder rust = child(new File(libraries, "libdeepseek_gateway.so"));
+                Map<String, String> env = rust.environment();
+                env.put("GATEWAY_BIND_ADDR", "127.0.0.1:" + SERVER_PORT);
+                env.put("GO_CONTROL_ADDR", "http://127.0.0.1:" + CONTROL_PORT);
+                env.put("DEEPSEEK_ANDROID_PLATFORM_OCR_ADDR", platform.address());
+                env.put("DEEPSEEK_ANDROID_PLATFORM_OCR_TOKEN", platform.credential());
+                env.put("DEEPSEEK_INFRA_ROOT", root.getAbsolutePath());
+                env.put("DEEPSEEK_INFRA_STATIC_DIR", new File(root, "static").getAbsolutePath());
+                env.put("DEEPSEEK_RUNTIME_MODE", "python_disabled");
+                env.put("RUST_LOG", "error");
+                gateway = rust.start();
+                pipeLog(gateway, new File(logs, "gateway.log"));
             }
-            ProcessBuilder go = child(new File(libraries, "libdeepseek_control.so"));
-            go.environment().put("DEEPSEEKD_MODE", "shadow");
-            go.environment().put("DEEPSEEKD_LISTEN", "127.0.0.1:" + CONTROL_PORT);
-            go.environment().put("DEEPSEEKD_SHADOW_STORE", new File(root, "go-shadow").getAbsolutePath());
-            control = go.start();
-            pipeLog(control, new File(logs, "control.log"));
-            if (stopped) {
-                throw new IOException("App startup cancelled");
-            }
-            ProcessBuilder rust = child(new File(libraries, "libdeepseek_gateway.so"));
-            Map<String, String> env = rust.environment();
-            env.put("GATEWAY_BIND_ADDR", "127.0.0.1:" + SERVER_PORT);
-            env.put("GO_CONTROL_ADDR", "http://127.0.0.1:" + CONTROL_PORT);
-            env.put("DEEPSEEK_ANDROID_PLATFORM_OCR_ADDR", platform.address());
-            env.put("DEEPSEEK_ANDROID_PLATFORM_OCR_TOKEN", platform.credential());
-            env.put("DEEPSEEK_INFRA_ROOT", root.getAbsolutePath());
-            env.put("DEEPSEEK_INFRA_STATIC_DIR", new File(root, "static").getAbsolutePath());
-            env.put("DEEPSEEK_RUNTIME_MODE", "python_disabled");
-            env.put("RUST_LOG", "error");
-            gateway = rust.start();
-            pipeLog(gateway, new File(logs, "gateway.log"));
+        } catch (IOException | RuntimeException error) {
+            storeLock.closeIfExited();
+            throw error;
         }
     }
 
@@ -313,6 +331,14 @@ final class NativeRuntime {
             }
             if (go != null) {
                 go.destroy();
+            }
+            NativeControlStoreLock storeLock = controlStoreLock;
+            if (storeLock != null) {
+                try {
+                    storeLock.closeIfExited();
+                } catch (IOException error) {
+                    Log.w(TAG, "Control store lock close failed", error);
+                }
             }
         }
     }

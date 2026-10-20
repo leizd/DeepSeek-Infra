@@ -12485,3 +12485,35 @@ Next: collect this exact device RED, then implement the supported file-locking
 family together with lifecycle-bound exclusion of legacy processes. Continue
 default secure bootstrap, Android Rust worker/Go production authority, desktop,
 all retained functions and the complete Evidence Assembly. `NOT_READY` remains.
+
+# Android older-kernel locking and legacy-process exclusion repair — 2026-10-20
+
+The regression source `cc148e273947c68560c0c0846bcfd59acbd389cd` produced
+an actual API34 semantic RED in `39375073051` / job `118475054645`: eight
+methods started, seven original methods passed, and the new idle POSIX-reader
+assertion failed (actual exit0 ACQUIRED, expected73 BLOCKED). Both ABI probe
+payloads compiled into the test APK. This is distinct from the earlier exact
+API24 `2314 / IOERR_RDLOCK` result on Linux 3.10.0+ at source `95adf8c2`.
+
+The repair switches the APK and corresponding Linux Go gates together to the
+pinned official `sqlite3_flock` variant, retaining WAL and every original
+Go/Rust/Python threshold. Android startup holds a separate parent-process
+POSIX exclusive lock over its Go database to exclude older locking families.
+It checks a canonical-path registry before opening another Java descriptor,
+refuses an existing legacy lock owner, rejects path links, and binds release
+to actual child exit rather than a stop request. The added second lock method
+uses a real waiting child to verify early-close refusal and a duplicate JVM
+attempt cannot release the first lock. A recreated supervisor waits for the
+actual previous child, outside the spawn/shutdown monitor; the real-process
+test verifies notification/handoff and that an old exit waiter cannot release
+the successor's lease. Syscall probes report unsupported OFD
+errno separately; do not replace the original unavailable driver errno.
+
+Native compilation, tests and emulator work remain cloud-only. Collect this
+exact descendant's nine device methods on API24/API34, Rust and all 37 full-CI
+jobs, including both default and Android Go race and original coverage floors.
+Keep the source snapshots and original dirty checkout. Do not create a PR
+outside the single daily 21:40 Asia/Shanghai batch. Android worker/Go production
+authority, secure default bootstrap, real ARM64 execution, all retained server/
+desktop/background capabilities and all original Evidence gates remain open;
+the full-product status stays `NOT_READY`.

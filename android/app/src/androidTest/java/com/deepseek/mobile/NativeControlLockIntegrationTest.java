@@ -1,6 +1,7 @@
 package com.deepseek.mobile;
 
 import android.content.Context;
+import android.util.Log;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 import org.junit.Test;
@@ -10,6 +11,9 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.*;
 
@@ -33,8 +37,11 @@ public class NativeControlLockIntegrationTest {
                     int code = process.exitValue();
                     BufferedReader output = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
                     String line = output.readLine();
-                    assertEquals("kernel probe result: " + line, code == 0 ? "ACQUIRED" : code == 73 ? "BLOCKED" : "UNSUPPORTED", line);
+                    assertNotNull("kernel probe produced no result", line);
+                    Log.i("DeepSeekLockProbe", mode + " exit=" + code + " " + line);
+                    assertEquals("kernel probe result: " + line, code == 0 ? "ACQUIRED" : code == 73 ? "BLOCKED" : "UNSUPPORTED", line.split(" ", 2)[0]);
                     assertTrue("unexpected kernel probe failure: " + code, code == 0 || code == 73 || (mode.equals("ofd") && code == 78));
+                    if (code == 78) assertTrue(line, line.matches("UNSUPPORTED errno=(22|38)"));
                     return code;
                 } catch (IllegalThreadStateException running) {
                     if (System.nanoTime() > deadline) throw new AssertionError("kernel probe timed out");
@@ -53,6 +60,78 @@ public class NativeControlLockIntegrationTest {
             Thread.sleep(20);
         }
         assertTrue("OFD family did not drain", completedProbe("ofd", database) != 73);
+    }
+
+    @Test
+    public void storeLeaseExcludesDuplicateJvmChannelsUntilActualChildExit() throws Exception {
+        Context app = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File database = File.createTempFile("native-control-lock", ".sqlite3", app.getCacheDir());
+        assertEquals(0, completedProbe("posix", database));
+        int ofd = completedProbe("ofd", database);
+        assertTrue(ofd == 0 || ofd == 78);
+        NativeControlStoreLock lease = NativeControlStoreLock.acquire(database);
+        Process child = null;
+        Thread handoff = null;
+        AtomicReference<NativeControlStoreLock> successor = new AtomicReference<>();
+        AtomicReference<Throwable> handoffError = new AtomicReference<>();
+        try {
+            try {
+                NativeControlStoreLock.acquire(database);
+                fail("duplicate JVM lease was admitted");
+            } catch (java.io.IOException expected) {
+                assertTrue(expected.toString(), expected.getMessage().contains("Control store is in use"));
+            }
+            assertEquals("duplicate open/close released the original POSIX lock", 73, completedProbe("posix", database));
+            child = probe("wait", database);
+            BufferedReader output = new BufferedReader(new InputStreamReader(child.getInputStream(), StandardCharsets.UTF_8));
+            assertEquals("WAITING", output.readLine());
+            lease.bindTo(child);
+            lease.closeIfExited();
+            try {
+                child.exitValue();
+                fail("lifetime probe exited before its explicit release");
+            } catch (IllegalThreadStateException alive) {
+                assertEquals("close released a living child's database lock", 73, completedProbe("posix", database));
+            }
+            CountDownLatch attempting = new CountDownLatch(1);
+            handoff = new Thread(() -> {
+                attempting.countDown();
+                try {
+                    successor.set(NativeControlStoreLock.acquire(database));
+                } catch (Throwable error) {
+                    handoffError.set(error);
+                }
+            }, "control-lock-handoff-test");
+            handoff.start();
+            assertTrue(attempting.await(2, TimeUnit.SECONDS));
+            Thread.sleep(100);
+            assertTrue("successor refused instead of waiting for the bound child", handoff.isAlive());
+            assertNull(handoffError.get());
+            child.getOutputStream().close();
+            child.waitFor();
+            handoff.join(5000);
+            assertFalse("successor did not complete after actual child exit", handoff.isAlive());
+            assertNull(handoffError.get());
+            assertNotNull("successor did not receive the lease", successor.get());
+            assertEquals("old exit waiter released the successor's lease", 73, completedProbe("posix", database));
+        } finally {
+            try {
+                if (child != null) child.getOutputStream().close();
+            } finally {
+                if (child != null) {
+                    child.destroy();
+                    child.waitFor();
+                }
+                if (handoff != null) {
+                    handoff.interrupt();
+                    handoff.join(5000);
+                }
+                if (successor.get() != null) successor.get().closeIfExited();
+                lease.closeIfExited();
+            }
+        }
+        awaitReleased(database);
+        assertTrue(database.delete());
     }
 
     @Test
@@ -84,9 +163,12 @@ public class NativeControlLockIntegrationTest {
             }
             assertEquals("failed native startup released another process's lock", 73, completedProbe("posix", database));
         } finally {
-            legacy.getOutputStream().close();
-            legacy.destroy();
-            legacy.waitFor();
+            try {
+                legacy.getOutputStream().close();
+            } finally {
+                legacy.destroy();
+                legacy.waitFor();
+            }
         }
         awaitReleased(database);
         try {
