@@ -1,3 +1,38 @@
+## Complete race corpus after the actual package deadline — 2026-10-20
+
+Exact712e81f9 full CI39379681848 reached the original90m store package deadline:
+568 top-level store cases completed before Go timed out while initializing a
+fresh fixture; the active nested case was only1s old. No assertion failure or
+data race was reported before that deadline. This is not a successful full Go
+qualification: Android checks and later native boundaries were not executed.
+Go source bytes are identical to qualified95adf8c2, whose retained race artifact
+12239309163 has1339 default/1323 Android top-level cases, including716/717 store
+cases and the single original vector-generator skip in each variant.
+
+The CI repair builds one race-instrumented store binary per variant, obtains its
+actual top-level catalog, and assigns every Test/Fuzz seed/Example to exactly one
+of four anchored groups, at most two concurrent. It disables result caching,
+retains the original90m Go invocation timeout and adds a150m whole-variant bound.
+This changes the old package-wide budget into per-group budgets; it does not
+claim the old total90m boundary remains. Non-store packages run unfiltered once.
+Original package/test names and the one existing skip are retained from exact
+qualified report bytes. Every started parent/child test must finish exactly once;
+partial groups, new skips, missing names or package terminals fail closed.
+Original Go default/Android95%, Python95%, Rust80%, full37-job structure and all
+business behavior remain unchanged. No local Go/Cargo/Docker execution occurs.
+
+Default bootstrap probe b0b6d825 has now produced actual semantic RED in
+cloud39389511985: the real three Go/Rust children started from an absent profile,
+but the public Agent request returned401 with zero provider requests. The worker
+logged authority=uninitialized and plaintext-loopback. The response body was not
+retained, so the precise401 source is not yet proven. All prior Rust workflow
+steps and the separate coverage job passed; the new default gate failed. Fix
+this observed full-race gate before changing production bootstrap. Whole-product
+server/desktop/Android/background, Rust custody, original recovery identities,
+EFFECT_UNKNOWN, ARM64, all retained features and15 Evidence gates remain required:
+NOT_READY. Original root163 changes are preserved. User standing authorization
+covers reviewed dedicated-branch pushes; PR only daily21:40 Shanghai once.
+
 ## Default native launcher acceptance, before implementation — 2026-10-20
 
 This test-first descendant of712e81f9 adds a real empty-profile launcher gate.

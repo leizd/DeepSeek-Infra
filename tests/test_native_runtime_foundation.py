@@ -82,11 +82,21 @@ def test_ci_has_native_go_and_protocol_gates() -> None:
         line.strip()
         for step in native_go["steps"]
         for line in step.get("run", "").splitlines()
-        if line.strip().startswith("go test -race ")
+        if line.strip().startswith("python ../scripts/run_native_go_race.py ")
     ]
     assert len(race_commands) == 2
-    for command in race_commands:
-        assert re.fullmatch(r"go test -race(?: -json)? -timeout=(?:30|60|90)m \./\.\.\.(?: > \S+ 2> \S+)?", command)
+    assert set(race_commands) == {
+        f"python ../scripts/run_native_go_race.py --variant {variant} --out ../artifacts/go-race/{variant} --store-shards 4 --max-parallel 2"
+        for variant in ("default", "android")
+    }
+    race_runner = _read("scripts/run_native_go_race.py")
+    assert 'GO_TIMEOUT = "90m"' in race_runner
+    assert '"-test.count=1"' in race_runner
+    assert '"-test.paniconexit0"' in race_runner
+    assert '"go", "test", "-race", "-json", "-count=1"' in race_runner
+    assert "TEST_CORPUS_INCOMPLETE_OR_FILTER_LEAK" in race_runner
+    assert "SUBTEST_TERMINAL_MISSING_OR_DUPLICATED" in race_runner
+    assert "UNREVIEWED_TEST_SKIP" in race_runner
     android = next(step for step in native_go["steps"] if step.get("name") == "Android Go SQLite compatibility checks")
     assert android["env"]["GOFLAGS"] == "-tags=deepseek_android,sqlite3_flock"
     assert "scripts/check_go_coverage.py" in workflow
