@@ -1,3 +1,26 @@
+## Default native launcher acceptance, before implementation — 2026-10-20
+
+This test-first descendant of712e81f9 adds a real empty-profile launcher gate.
+It builds the actual Go launcher/control binaries in the cloud and launches
+them with the packaged Rust worker/gateway and built React frontend. It does
+not seed a control store, invoke the offline signer provisioner, provide a
+signer public key, or manually supply private RPC/TLS credentials. The required
+behavior is public Agent creation, a plan-confirmation pause, whole-launcher
+restart with an advanced Go writer fence and identical pending run, then two
+dependent tasks and synthesis through four actual controlled provider requests.
+It checks actual native child processes and refuses Rust custody environment
+paths in the Go control child. This environment check alone is not a complete
+private-key custody proof. Existing process, recovery and coverage gates remain.
+
+Production bootstrap is deliberately unchanged until this probe produces an
+actual semantic failure. Build/setup failures do not qualify as the required
+public-API RED. Original runtime snapshot712e81f9 has18 Android device methods
+and Rust1563/original Redis ignore1 qualified; its full37-job source CI remains
+separate and pending. Android worker/Go production authority, ARM64 execution,
+desktop/server/default provisioning, all retained features and15 Evidence gates
+remain NOT_READY. No local native compilation, source-root application, daily
+PR submission, merge, release or real production data operation is introduced.
+
 ## Private RPC client and launcher TDD — 2026-10-19
 
 `CONTROL_RPC_CLIENT_RED_20261019` adds executable regression cases only. The

@@ -204,6 +204,12 @@ jobs:
         run: |
           set -o pipefail
           python scripts/verify_native_agent_terminal_failures.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-native-terminal-failure 2>&1 | tee artifacts/rust-cloud/agent-native-terminal-failure.log
+      - name: Verify default native startup from an empty profile without offline seeding
+        if: matrix.mode == 'checks'
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          python scripts/verify_native_default_bootstrap.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/default-bootstrap 2>&1 | tee artifacts/rust-cloud/default-bootstrap.log
       - name: Install pinned coverage tooling on the cloud runner
         if: matrix.mode == 'coverage'
         run: |
