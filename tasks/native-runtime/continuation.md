@@ -797,6 +797,11 @@ confirmation, cancellation, retries, resynthesis and platform requirements.
 [中文](../../README.md) / [English](../../README.en.md)
 <!-- docs-language-switcher:end -->
 
+<!-- native-20261020-control-rpc-mirror-red checkpoint -->
+
+Exact source9518b3dbf400d987b3d753ed194ebceadc2a81bf passed its selected Go race/launch/lifecycle and pure Go Android-tagged SQLite diagnostics workflow39347207978. Its Rust checks job118382580314 instead found E0063: the retained Agent Run read fixture omitted the newly introduced endpoint field. This test-only batch sets that fixture to explicit legacy endpointNone and adds a real sealed-mirror route regression using a private mTLS recipient service plus a decoy public HTTP service. The regression requires successful encrypted publication/status/idempotent replay, refuses malformed CA, wrong server identity, cleartext and bad bearer without modifying HEAD, and verifies no request reaches the public decoy. It preserves every original test; expected Rust total1563 plus the original Redis ignore1. Production backup recipient-source code is deliberately unchanged until this executable test yields semantic RED; a compiler or setup failure is not a valid RED. Native execution remains cloud-only, reports only. Full37CI and original80/95/95 floors remain required after implementation. API24, native platform/default bootstrap, all retained capabilities and full Evidence remain incomplete: NOT_READY. Preserve original163 changes and one PR daily21:40 Asia/Shanghai.
+
+
 <!-- native-20261020-control-rpc-clients checkpoint -->
 
 The current client implementation follows exact semantic RED on `9ca9ca43179619b33f2f088a993f1b26f6e31983` (three launcher groups and two Rust cases). The Go production launcher now validates the paired private transport and gives each native child only its role's transport, Rust custody paths and provider credentials. Rust worker recovery/dispatch, gateway Agent Run reads and multi-agent chat select a shared bounded, pinned mTLS endpoint; explicit configuration failures never select the public HTTP proxy. No action, epoch, operation, domain admission or unknown-effect semantics changed. Cargo manifests/lockfile are unchanged; certificate parsing reuses the existing pinned reqwest dependency.

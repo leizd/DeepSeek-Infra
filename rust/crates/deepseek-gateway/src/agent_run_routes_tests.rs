@@ -349,6 +349,7 @@ async fn running_fixture_with_authority(authoritative: bool) -> RunningFixture {
     });
     let config = ReadConfig {
         origin,
+        endpoint: None,
         bearer: BEARER.into(),
         artifacts: directory.path().to_path_buf(),
         credentials: None,
