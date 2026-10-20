@@ -12607,3 +12607,22 @@ outside the single daily 21:40 Asia/Shanghai batch. Android worker/Go production
 authority, secure default bootstrap, real ARM64 execution, all retained server/
 desktop/background capabilities and all original Evidence gates remain open;
 the full-product status stays `NOT_READY`.
+
+
+## 2026-10-20 — default managed transport/custody implementation
+
+The faaf0945 source workflow_dispatch CI passed all 37 jobs, while its independent
+Rust push workflow still failed the mandatory empty-profile startup gate with
+HTTP503, an uninitialized/plaintext worker and zero provider requests. These are
+different scopes, not a complete product qualification. The prior CLI propagation
+repair changed the observed 401 to503; the exact earlier401 body was not retained.
+
+The next source implements default supervised Rust custody initialization,
+private worker/control transport, typed public-binding discovery, a retained
+public pin, role-isolated key paths, a profile lifetime lock and an actual writer
+fence admission check. See docs/NATIVE_MANAGED_BOOTSTRAP.md for acceptance and
+remaining work. It must be compiled and executed at its own exact cloud revision.
+Fresh native-origin domain genesis, safe long-running credential renewal and full
+platform/product acceptance remain incomplete. Existing Python migration proofs,
+unknown-effect recovery identities and original coverage floors stay enforced.
+Readiness remains NOT_READY; no PR, merge, release or real-data operation occurs.

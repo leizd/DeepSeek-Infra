@@ -77,6 +77,9 @@ func ProductionPlanWithAddress(binDir, dataRoot, staticDir, address string) (Pla
 		return Plan{}, err
 	}
 	env := productionEnv(dataRoot, staticDir, controlListen, gatewayBind)
+	if !managedOperatorConfiguration(env) {
+		env = append(env, managedRequired+"=1")
+	}
 	if err := validatePrivateControlDeployment(env); err != nil {
 		return Plan{}, err
 	}
@@ -306,10 +309,17 @@ type supervisorFence interface {
 }
 
 func Run(ctx context.Context, processes []Process, env []string, output io.Writer) error {
+	if launchEnvironmentValue(env, managedRequired) == "1" {
+		return runManagedRuntime(ctx, processes, env, output)
+	}
 	return runWithFence(ctx, processes, env, output, func() (supervisorFence, error) { return newProcessFence() })
 }
 
 func runWithFence(ctx context.Context, processes []Process, env []string, output io.Writer, createFence func() (supervisorFence, error)) error {
+	return runWithFenceAfterStart(ctx, processes, env, output, createFence, nil)
+}
+
+func runWithFenceAfterStart(ctx context.Context, processes []Process, env []string, output io.Writer, createFence func() (supervisorFence, error), afterStart func(int) error) error {
 	if len(processes) == 0 {
 		return errors.New("no production processes")
 	}
@@ -359,6 +369,14 @@ func runWithFence(ctx context.Context, processes []Process, env []string, output
 			waitAll(commands)
 			return fmt.Errorf("fence %s: %w", process.Name, err)
 		}
+		if afterStart != nil {
+			if err := afterStart(len(commands) - 1); err != nil {
+				cancel()
+				waitAll(commands)
+				return err
+			}
+		}
+
 	}
 	errorsCh := make(chan processExit, len(commands))
 	for index, cmd := range commands {

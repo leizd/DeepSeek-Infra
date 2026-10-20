@@ -80,8 +80,12 @@ func productionChildEnvironment(name string, environment []string) []string {
 	for _, entry := range environment {
 		key, _, _ := strings.Cut(entry, "=")
 		denied := name != "deepseekd" && strings.HasPrefix(key, "DEEPSEEKD_INTERNAL_RPC_")
-		denied = denied || name == "deepseekd" && strings.HasPrefix(key, "DEEPSEEK_GO_CONTROL_RPC_")
+		denied = denied || name != "deepseek-worker" && name != "deepseek-gateway" && strings.HasPrefix(key, "DEEPSEEK_GO_CONTROL_RPC_")
 		denied = denied || name != "deepseek-worker" && strings.HasPrefix(key, "DEEPSEEK_WORKER_CONTROL_SIGNER_")
+		denied = denied || name != "deepseek-worker" && strings.HasPrefix(key, "DEEPSEEK_WORKER_MANAGED_")
+		denied = denied || name != "deepseek-worker" && (key == "DEEPSEEK_WORKER_TLS_CERT_FILE" || key == "DEEPSEEK_WORKER_TLS_KEY_FILE")
+		denied = denied || name != "deepseekd" && key == "DEEPSEEKD_EXPECTED_WRITER_FENCE"
+
 		denied = denied || name != "deepseek-gateway" && (key == "DEEPSEEK_API_KEY" || key == "TAVILY_API_KEY")
 		denied = denied || name != "deepseek-worker" && (key == "DEEPSEEK_WORKER_S3_ACCESS_KEY" || key == "DEEPSEEK_WORKER_S3_SECRET_KEY" || key == "DEEPSEEK_WORKER_S3_SESSION_TOKEN")
 		if !denied {

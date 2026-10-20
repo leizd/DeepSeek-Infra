@@ -148,3 +148,6 @@ go/$out
 .resilience-optimizer/
 .federation/
 .tools/
+
+# Managed native worker custody and journals (Rust-owned runtime state).
+/rust-worker/

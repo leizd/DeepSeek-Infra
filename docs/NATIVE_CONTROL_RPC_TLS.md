@@ -8,8 +8,9 @@ Launch options and local authentication are applied to the actual isolated child
 environments as well as the shared plan. Updates retain child-specific entries
 and reapply the existing role restrictions, including Rust custody isolation and
 the existing provider-key policy. Applying an update copies the plan's slices so
-another prepared launch is unchanged. This fixes configuration propagation; it
-does not provision default certificates, signer custody or fresh Go ownership.
+another prepared launch is unchanged. The propagation repair itself does not
+provision authority. The default managed transport/custody implementation is
+described below; fresh native-origin Go domain ownership remains incomplete.
 
 The `deepseekd` executable reads the following deployment settings together:
 
@@ -96,3 +97,9 @@ no-handler/no-fallback guarantees. No production status mapping is changed.
 Android worker/bootstrap integration, API 24 SQLite compatibility, both device
 API levels, ARM64 execution, full product workloads and original CI/Evidence
 gates remain incomplete. Overall **NOT_READY**.
+
+
+The default managed bootstrap under implementation is described in
+[Default native managed bootstrap](NATIVE_MANAGED_BOOTSTRAP.md). It provisions
+private transport and Rust custody for a new native profile, retains the existing
+per-domain ownership refusals and does not establish whole-product readiness.

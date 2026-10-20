@@ -186,6 +186,18 @@ func TestNativeAgentSigningProcess(t *testing.T) {
 		defer cancel()
 		return operation(ctx)
 	}
+	if err := call(func(ctx context.Context) error {
+		actual, err := rust.ReadControlSignerBinding(ctx, worker.ControlSignerBindingQuery{
+			FleetID: binding.FleetID, Environment: binding.Environment, PublicKey: binding.PublicKey,
+			FencingToken: control.Writer().FencingToken,
+		})
+		if err == nil && actual != binding {
+			return errors.New("authenticated public signer binding changed")
+		}
+		return err
+	}); err != nil {
+		t.Fatal("actual private Rust public-binding discovery failed", err)
+	}
 	if err := call(func(ctx context.Context) error { _, err := rust.SignControl(ctx, input, binding); return err }); status.Code(err) != codes.FailedPrecondition {
 		t.Fatal("an uninstalled execution epoch received a Rust grant")
 	}
@@ -194,6 +206,15 @@ func TestNativeAgentSigningProcess(t *testing.T) {
 		code            codes.Code
 	}{{bearer + "-wrong", "localhost", codes.Unauthenticated}, {bearer, "wrong-hostname.invalid", codes.Unavailable}} {
 		unauthorized := nativeSigningWorker(t, ready, credentials.token, credentials.hostname)
+		if err := call(func(ctx context.Context) error {
+			_, err := unauthorized.ReadControlSignerBinding(ctx, worker.ControlSignerBindingQuery{
+				FleetID: binding.FleetID, Environment: binding.Environment, PublicKey: binding.PublicKey,
+				FencingToken: control.Writer().FencingToken,
+			})
+			return err
+		}); status.Code(err) != credentials.code {
+			t.Fatal("public signer binding accepted invalid peer authentication")
+		}
 		if err := call(func(ctx context.Context) error {
 			_, err := unauthorized.AuthorizeAgentExecution(ctx, claim, input.RequestId, input.Nonce, binding)
 			return err

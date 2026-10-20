@@ -69,6 +69,15 @@ jobs:
               "TestProductionRPCLocalAuthReachesEveryChildWithoutReplacingStoredToken",
               "TestProductionRPCOperatorAuthAndDisabledModeReachExistingChildrenWithoutDiskWrites",
               "TestProductionRPCOptionsScopeNilChildEnvironmentsAndDoNotMutateOriginalPlan",
+              "TestManagedNativeStartupUsesAuthenticatedBindingAndRetainsWriterFence",
+              "TestManagedMissingKeysNeverTriggerInitializer",
+              "TestManagedProfileRejectsRedirectedPrivateDirectories",
+              "TestManagedProfileRequiresOriginalMetadataAndExclusiveOwner",
+              "TestManagedProfileNeverRecreatesLostCustodyOrGoState",
+              "TestManagedGoTransportIdentityIsBoundToOwnServer",
+              "TestManagedRoleScopesAndExplicitOperatorProvisioning",
+              "TestManagedExpectedWriterFenceIsExplicitAndStrict",
+              "TestManagedLifecycleRejectsChangedWriterFenceBeforeServing",
           }
           started, finished = set(), {}
           for line in Path("artifacts/control-rpc-development/go-tests.jsonl").read_text().splitlines():
@@ -93,6 +102,45 @@ jobs:
           Path("artifacts/control-rpc-development/result.json").write_text(json.dumps(report, indent=2) + "\n")
           raise SystemExit(code)
           PY
+      - name: Exercise managed binding and writer preview regressions
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          cd go
+          set +e
+          go test -race -json -count=1 -timeout=3m ./internal/worker ./internal/store -run '^(TestReadControlSignerBinding.*|TestNextWriterFencingToken.*)$' > ../artifacts/control-rpc-development/managed-binding-tests.jsonl 2>&1
+          status=$?
+          set -e
+          cd ..
+          export MANAGED_GO_STATUS="$status"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          required = {"TestReadControlSignerBindingValidatesPublicMetadata", "TestReadControlSignerBindingRejectsMalformedResponses",
+                      "TestReadControlSignerBindingRefusesUntrustedDiscovery", "TestNextWriterFencingTokenReadsActualWALWithoutClaiming",
+                      "TestNextWriterFencingTokenRejectsForeignAndMalformedStores"}
+          rows = []
+          for line in Path("artifacts/control-rpc-development/managed-binding-tests.jsonl").read_text().splitlines():
+              try:
+                  rows.append(json.loads(line))
+              except json.JSONDecodeError:
+                  continue
+          started = {row.get("Test") for row in rows if row.get("Action") == "run" and row.get("Test") in required}
+          finished = {row["Test"]: row["Action"] for row in rows if row.get("Test") in required and row.get("Action") in {"pass", "fail", "skip"}}
+          code = int(os.environ["MANAGED_GO_STATUS"])
+          if code == 0 and (started != required or set(finished) != required or set(finished.values()) != {"pass"}):
+              code = 2
+          report = {"kind": "native-managed-binding-development-v1", "sourceCommit": os.environ["GITHUB_SHA"],
+                    "runId": os.environ["GITHUB_RUN_ID"], "event": os.environ["GITHUB_EVENT_NAME"], "exitCode": code,
+                    "expectedTests": sorted(required), "startedExpectedTests": sorted(started), "finishedExpectedTests": finished,
+                    "fullGoSuiteQualified": False, "coverageQualified": False, "fullMigrationQualified": False}
+          Path("artifacts/control-rpc-development/managed-binding-result.json").write_text(json.dumps(report, indent=2)+"\n")
+          raise SystemExit(code)
+          PY
+      - name: Compile Windows native launch and control surfaces in the cloud
+        run: |
+          cd go
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./cmd/deepseek-launch ./cmd/deepseekd
       - name: Check pure Go Android SQLite diagnostics without full-suite qualification
         if: always()
         run: |

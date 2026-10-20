@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
@@ -21,6 +22,9 @@ const (
 )
 
 type Config struct {
+	// Managed launcher prediction. OpenControl remains the only authority.
+	ExpectedWriterFence int64
+
 	Mode               string
 	Listen             string
 	Owner              string
@@ -100,6 +104,13 @@ func Load() (Config, error) {
 	}
 	if cfg.InternalAPIBearer != "" && len(cfg.InternalAPIBearer) < MinInternalAPIBearerLength {
 		return Config{}, ErrInvalidConfig
+	}
+	if value, exists := os.LookupEnv("DEEPSEEKD_EXPECTED_WRITER_FENCE"); exists {
+		fence, parseErr := strconv.ParseInt(value, 10, 64)
+		if parseErr != nil || fence <= 0 || cfg.Mode != ModeAuthoritative {
+			return Config{}, errors.New("invalid expected native writer fence")
+		}
+		cfg.ExpectedWriterFence = fence
 	}
 	if cfg.ControlAuthority && cfg.InternalAPIBearer == "" {
 		return Config{}, ErrInvalidConfig

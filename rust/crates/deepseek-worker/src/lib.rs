@@ -1,3 +1,4 @@
+pub mod managed_profile;
 use std::collections::{HashMap, HashSet};
 use std::env::VarError;
 

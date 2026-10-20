@@ -271,3 +271,48 @@ def test_frozen_descriptor_baseline_cannot_be_rewritten_in_place(tmp_path: Path)
 
     with pytest.raises(ContractError, match="baseline digest changed"):
         check_descriptor(tampered)
+
+
+def _bootstrap_binding_contract() -> dict[str, Any]:
+    descriptors = load_binary_descriptor()
+    action = next(item for item in descriptors.file if item.package == "deepseek.action.v1")
+    if not any(item.name == "ControlSignerBindingRequest" for item in action.message_type):
+        for name, fields in {
+            "ControlSignerBindingRequest": [("schema_version", 13), ("fleet_id", 9), ("environment", 9), ("fencing_token", 4), ("expected_signer_public_key", 9)],
+            "ControlSignerBindingResponse": [("schema_version", 13), ("signer_public_key", 9), ("signer_key_id", 9), ("fleet_id", 9), ("environment", 9), ("fencing_token", 4)],
+        }.items():
+            message = action.message_type.add(name=name)
+            for number, (field, kind) in enumerate(fields, 1):
+                message.field.add(name=field, number=number, label=1, type=kind)
+        service = action.service.add(name="ControlSignerBootstrap")
+        service.method.add(name="GetBinding", input_type=".deepseek.action.v1.ControlSignerBindingRequest", output_type=".deepseek.action.v1.ControlSignerBindingResponse")
+    return descriptor_set_to_contract(descriptors)
+
+
+def test_binding_discovery_is_read_only_without_an_action_identity() -> None:
+    validate_descriptor_invariants(_bootstrap_binding_contract())
+
+
+@pytest.mark.parametrize("alteration", ["field", "method", "response", "stream", "options", "extra-method", "extra-field"])
+def test_binding_discovery_exception_requires_exact_read_only_shape(alteration: str) -> None:
+    contract = _bootstrap_binding_contract()
+    action = next(item for item in contract["files"] if item["package"] == "deepseek.action.v1")
+    request = next(item for item in action["messages"] if item["name"] == "ControlSignerBindingRequest")
+    service = next(item for item in action["services"] if item["name"] == "ControlSignerBootstrap")
+    rpc = service["rpcs"][0]
+    if alteration == "field":
+        request["fields"][0]["type"] = "uint64"
+    elif alteration == "method":
+        rpc["name"] = "InstallBinding"
+    elif alteration == "response":
+        rpc["response"] = ".deepseek.action.v1.SignControlResponse"
+    elif alteration == "stream":
+        rpc["server_streaming"] = True
+    elif alteration == "options":
+        request["options_hex"] = "1801"
+    elif alteration == "extra-method":
+        service["rpcs"].append(dict(rpc, name="Write"))
+    else:
+        request["fields"].append({"name": "canonical_document", "number": 99, "type": "bytes", "label": "singular"})
+    with pytest.raises(ContractError, match="ActionFence"):
+        validate_descriptor_invariants(contract)

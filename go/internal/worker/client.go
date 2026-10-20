@@ -27,6 +27,7 @@ type Client struct {
 	tlsSecured     bool
 	bearerAttached bool
 	signer         actionv1.ControlSignerClient
+	bootstrap      actionv1.ControlSignerBootstrapClient
 	nodes          agentNodeClient
 }
 

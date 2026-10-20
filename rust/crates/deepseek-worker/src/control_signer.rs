@@ -6,7 +6,9 @@ use crate::{
 };
 use deepseek_federation::{ControlSigningKey, load_control_signer};
 use deepseek_protocol::generated::deepseek::action::v1::{
-    ControlSigningPurpose, SignControlRequest, SignControlResponse, StorageConditionType,
+    ControlSignerBindingRequest, ControlSignerBindingResponse, ControlSigningPurpose,
+    SignControlRequest, SignControlResponse, StorageConditionType,
+    control_signer_bootstrap_server::ControlSignerBootstrap as BootstrapRpc,
     control_signer_server::ControlSigner as SignerRpc,
 };
 use serde_json::{Value, json};
@@ -402,6 +404,63 @@ pub fn load_control_signer_from_env(
 }
 fn request_error() -> Status {
     Status::invalid_argument("CONTROL_SIGNER_REQUEST_INVALID")
+}
+
+#[tonic::async_trait]
+impl BootstrapRpc for WorkerRpcService {
+    async fn get_binding(
+        &self,
+        request: Request<ControlSignerBindingRequest>,
+    ) -> Result<Response<ControlSignerBindingResponse>, Status> {
+        let identity = self
+            .authenticator
+            .authenticate(request.metadata())
+            .map_err(|error| Status::unauthenticated(error.code()))?;
+        if identity.service_name != "go-control-plane" || identity.role != "controller" {
+            return Err(Status::permission_denied("CONTROL_SIGNER_CALLER_DENIED"));
+        }
+        let input = request.into_inner();
+        if input.schema_version != 1
+            || input.fleet_id.is_empty()
+            || input.environment.is_empty()
+            || input.fencing_token == 0
+            || input.fencing_token > i64::MAX as u64
+        {
+            return Err(Status::invalid_argument("CONTROL_SIGNER_BINDING_INVALID"));
+        }
+        let signer = self
+            .control_signer
+            .as_ref()
+            .ok_or_else(|| Status::unavailable("CONTROL_SIGNER_UNAVAILABLE"))?;
+        // Keep the existing worker -> signer lock order. This reads already
+        // loaded public metadata and never signs, admits, or writes a journal.
+        let worker = self.worker.lock().await;
+        let authority = worker
+            .authority
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("CONTROL_SIGNER_BINDING_UNAVAILABLE"))?;
+        let signer = signer.lock().await;
+        let public = signer.key.public_key();
+        if input.fleet_id != authority.fleet_id
+            || input.environment != authority.environment
+            || input.fencing_token as i64 != authority.fencing_token
+            || public != authority.signer_public_key
+            || (!input.expected_signer_public_key.is_empty()
+                && input.expected_signer_public_key != public)
+        {
+            return Err(Status::failed_precondition(
+                "CONTROL_SIGNER_BINDING_MISMATCH",
+            ));
+        }
+        Ok(Response::new(ControlSignerBindingResponse {
+            schema_version: 1,
+            signer_public_key: public,
+            signer_key_id: authority.signer_key_id.clone(),
+            fleet_id: authority.fleet_id.clone(),
+            environment: authority.environment.clone(),
+            fencing_token: authority.fencing_token as u64,
+        }))
+    }
 }
 fn digest(value: &Value) -> Result<String, Status> {
     Ok(format!(

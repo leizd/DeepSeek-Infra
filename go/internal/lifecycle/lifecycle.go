@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -94,6 +95,14 @@ func Start(ctx context.Context, cfg config.Config) (*Server, error) {
 			closeRPC()
 			return nil, err
 		}
+	}
+	if cfg.ExpectedWriterFence != 0 && (control == nil || control.Writer().FencingToken != cfg.ExpectedWriterFence) {
+		if control != nil {
+			_ = control.Close()
+		}
+		_ = listener.Close()
+		closeRPC()
+		return nil, errors.New("native writer fence changed during startup")
 	}
 	return serve(ctx, cfg, listener, control, 10*time.Second, rpcListener), nil
 }

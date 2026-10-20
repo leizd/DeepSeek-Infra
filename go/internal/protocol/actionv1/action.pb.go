@@ -1236,6 +1236,168 @@ func (x *SignControlResponse) GetSignerKeyId() string {
 	return ""
 }
 
+// Read-only startup binding over the same authenticated private worker TLS
+// transport. No key bytes, arbitrary documents or effect admission are exposed.
+type ControlSignerBindingRequest struct {
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion           uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	FleetId                 string                 `protobuf:"bytes,2,opt,name=fleet_id,json=fleetId,proto3" json:"fleet_id,omitempty"`
+	Environment             string                 `protobuf:"bytes,3,opt,name=environment,proto3" json:"environment,omitempty"`
+	FencingToken            uint64                 `protobuf:"varint,4,opt,name=fencing_token,json=fencingToken,proto3" json:"fencing_token,omitempty"`
+	ExpectedSignerPublicKey string                 `protobuf:"bytes,5,opt,name=expected_signer_public_key,json=expectedSignerPublicKey,proto3" json:"expected_signer_public_key,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *ControlSignerBindingRequest) Reset() {
+	*x = ControlSignerBindingRequest{}
+	mi := &file_action_v1_action_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ControlSignerBindingRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ControlSignerBindingRequest) ProtoMessage() {}
+
+func (x *ControlSignerBindingRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ControlSignerBindingRequest.ProtoReflect.Descriptor instead.
+func (*ControlSignerBindingRequest) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ControlSignerBindingRequest) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *ControlSignerBindingRequest) GetFleetId() string {
+	if x != nil {
+		return x.FleetId
+	}
+	return ""
+}
+
+func (x *ControlSignerBindingRequest) GetEnvironment() string {
+	if x != nil {
+		return x.Environment
+	}
+	return ""
+}
+
+func (x *ControlSignerBindingRequest) GetFencingToken() uint64 {
+	if x != nil {
+		return x.FencingToken
+	}
+	return 0
+}
+
+func (x *ControlSignerBindingRequest) GetExpectedSignerPublicKey() string {
+	if x != nil {
+		return x.ExpectedSignerPublicKey
+	}
+	return ""
+}
+
+type ControlSignerBindingResponse struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion   uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	SignerPublicKey string                 `protobuf:"bytes,2,opt,name=signer_public_key,json=signerPublicKey,proto3" json:"signer_public_key,omitempty"`
+	SignerKeyId     string                 `protobuf:"bytes,3,opt,name=signer_key_id,json=signerKeyId,proto3" json:"signer_key_id,omitempty"`
+	FleetId         string                 `protobuf:"bytes,4,opt,name=fleet_id,json=fleetId,proto3" json:"fleet_id,omitempty"`
+	Environment     string                 `protobuf:"bytes,5,opt,name=environment,proto3" json:"environment,omitempty"`
+	FencingToken    uint64                 `protobuf:"varint,6,opt,name=fencing_token,json=fencingToken,proto3" json:"fencing_token,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ControlSignerBindingResponse) Reset() {
+	*x = ControlSignerBindingResponse{}
+	mi := &file_action_v1_action_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ControlSignerBindingResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ControlSignerBindingResponse) ProtoMessage() {}
+
+func (x *ControlSignerBindingResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ControlSignerBindingResponse.ProtoReflect.Descriptor instead.
+func (*ControlSignerBindingResponse) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ControlSignerBindingResponse) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *ControlSignerBindingResponse) GetSignerPublicKey() string {
+	if x != nil {
+		return x.SignerPublicKey
+	}
+	return ""
+}
+
+func (x *ControlSignerBindingResponse) GetSignerKeyId() string {
+	if x != nil {
+		return x.SignerKeyId
+	}
+	return ""
+}
+
+func (x *ControlSignerBindingResponse) GetFleetId() string {
+	if x != nil {
+		return x.FleetId
+	}
+	return ""
+}
+
+func (x *ControlSignerBindingResponse) GetEnvironment() string {
+	if x != nil {
+		return x.Environment
+	}
+	return ""
+}
+
+func (x *ControlSignerBindingResponse) GetFencingToken() uint64 {
+	if x != nil {
+		return x.FencingToken
+	}
+	return 0
+}
+
 var File_action_v1_action_proto protoreflect.FileDescriptor
 
 const file_action_v1_action_proto_rawDesc = "" +
@@ -1322,7 +1484,20 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\x05fence\x18\x01 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12-\n" +
 	"\x12canonical_document\x18\x02 \x01(\fR\x11canonicalDocument\x12*\n" +
 	"\x11signer_public_key\x18\x03 \x01(\tR\x0fsignerPublicKey\x12\"\n" +
-	"\rsigner_key_id\x18\x04 \x01(\tR\vsignerKeyId*\x81\x02\n" +
+	"\rsigner_key_id\x18\x04 \x01(\tR\vsignerKeyId\"\xe3\x01\n" +
+	"\x1bControlSignerBindingRequest\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12\x19\n" +
+	"\bfleet_id\x18\x02 \x01(\tR\afleetId\x12 \n" +
+	"\venvironment\x18\x03 \x01(\tR\venvironment\x12#\n" +
+	"\rfencing_token\x18\x04 \x01(\x04R\ffencingToken\x12;\n" +
+	"\x1aexpected_signer_public_key\x18\x05 \x01(\tR\x17expectedSignerPublicKey\"\xf7\x01\n" +
+	"\x1cControlSignerBindingResponse\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12*\n" +
+	"\x11signer_public_key\x18\x02 \x01(\tR\x0fsignerPublicKey\x12\"\n" +
+	"\rsigner_key_id\x18\x03 \x01(\tR\vsignerKeyId\x12\x19\n" +
+	"\bfleet_id\x18\x04 \x01(\tR\afleetId\x12 \n" +
+	"\venvironment\x18\x05 \x01(\tR\venvironment\x12#\n" +
+	"\rfencing_token\x18\x06 \x01(\x04R\ffencingToken*\x81\x02\n" +
 	"\vCommandKind\x12\x1c\n" +
 	"\x18COMMAND_KIND_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bCOMMAND_KIND_EXECUTE_BACKUP\x10\x01\x12 \n" +
@@ -1359,7 +1534,10 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\x16ExecuteStorageMutation\x12*.deepseek.action.v1.StorageMutationRequest\x1a+.deepseek.action.v1.StorageMutationResponse\x12p\n" +
 	"\x12QueryStorageEffect\x12-.deepseek.action.v1.QueryStorageEffectRequest\x1a+.deepseek.action.v1.StorageMutationResponse2o\n" +
 	"\rControlSigner\x12^\n" +
-	"\vSignControl\x12&.deepseek.action.v1.SignControlRequest\x1a'.deepseek.action.v1.SignControlResponseBHZFgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1;actionv1b\x06proto3"
+	"\vSignControl\x12&.deepseek.action.v1.SignControlRequest\x1a'.deepseek.action.v1.SignControlResponse2\x89\x01\n" +
+	"\x16ControlSignerBootstrap\x12o\n" +
+	"\n" +
+	"GetBinding\x12/.deepseek.action.v1.ControlSignerBindingRequest\x1a0.deepseek.action.v1.ControlSignerBindingResponseBHZFgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1;actionv1b\x06proto3"
 
 var (
 	file_action_v1_action_proto_rawDescOnce sync.Once
@@ -1374,7 +1552,7 @@ func file_action_v1_action_proto_rawDescGZIP() []byte {
 }
 
 var file_action_v1_action_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_action_v1_action_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_action_v1_action_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_action_v1_action_proto_goTypes = []any{
 	(CommandKind)(0),                          // 0: deepseek.action.v1.CommandKind
 	(AdmitStatus)(0),                          // 1: deepseek.action.v1.AdmitStatus
@@ -1393,52 +1571,56 @@ var file_action_v1_action_proto_goTypes = []any{
 	(*QueryStorageEffectRequest)(nil),         // 14: deepseek.action.v1.QueryStorageEffectRequest
 	(*SignControlRequest)(nil),                // 15: deepseek.action.v1.SignControlRequest
 	(*SignControlResponse)(nil),               // 16: deepseek.action.v1.SignControlResponse
-	(*commonv1.ActionFence)(nil),              // 17: deepseek.common.v1.ActionFence
-	(commonv1.EffectState)(0),                 // 18: deepseek.common.v1.EffectState
-	(*commonv1.ErrorDetail)(nil),              // 19: deepseek.common.v1.ErrorDetail
-	(*agentv1.AgentRunExecutionClaim)(nil),    // 20: deepseek.agent.v1.AgentRunExecutionClaim
+	(*ControlSignerBindingRequest)(nil),       // 17: deepseek.action.v1.ControlSignerBindingRequest
+	(*ControlSignerBindingResponse)(nil),      // 18: deepseek.action.v1.ControlSignerBindingResponse
+	(*commonv1.ActionFence)(nil),              // 19: deepseek.common.v1.ActionFence
+	(commonv1.EffectState)(0),                 // 20: deepseek.common.v1.EffectState
+	(*commonv1.ErrorDetail)(nil),              // 21: deepseek.common.v1.ErrorDetail
+	(*agentv1.AgentRunExecutionClaim)(nil),    // 22: deepseek.agent.v1.AgentRunExecutionClaim
 }
 var file_action_v1_action_proto_depIdxs = []int32{
 	0,  // 0: deepseek.action.v1.AdmitCommandRequest.kind:type_name -> deepseek.action.v1.CommandKind
-	17, // 1: deepseek.action.v1.AdmitCommandRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	19, // 1: deepseek.action.v1.AdmitCommandRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	1,  // 2: deepseek.action.v1.AdmitCommandResponse.status:type_name -> deepseek.action.v1.AdmitStatus
-	18, // 3: deepseek.action.v1.AdmitCommandResponse.state:type_name -> deepseek.common.v1.EffectState
-	19, // 4: deepseek.action.v1.AdmitCommandResponse.error:type_name -> deepseek.common.v1.ErrorDetail
-	17, // 5: deepseek.action.v1.QueryEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	17, // 6: deepseek.action.v1.EffectResult.fence:type_name -> deepseek.common.v1.ActionFence
-	18, // 7: deepseek.action.v1.EffectResult.state:type_name -> deepseek.common.v1.EffectState
-	19, // 8: deepseek.action.v1.EffectResult.error:type_name -> deepseek.common.v1.ErrorDetail
-	17, // 9: deepseek.action.v1.InstallAuthoritativeEpochRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	20, // 3: deepseek.action.v1.AdmitCommandResponse.state:type_name -> deepseek.common.v1.EffectState
+	21, // 4: deepseek.action.v1.AdmitCommandResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	19, // 5: deepseek.action.v1.QueryEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	19, // 6: deepseek.action.v1.EffectResult.fence:type_name -> deepseek.common.v1.ActionFence
+	20, // 7: deepseek.action.v1.EffectResult.state:type_name -> deepseek.common.v1.EffectState
+	21, // 8: deepseek.action.v1.EffectResult.error:type_name -> deepseek.common.v1.ErrorDetail
+	19, // 9: deepseek.action.v1.InstallAuthoritativeEpochRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	1,  // 10: deepseek.action.v1.InstallAuthoritativeEpochResponse.status:type_name -> deepseek.action.v1.AdmitStatus
-	17, // 11: deepseek.action.v1.InstallAuthoritativeEpochResponse.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 12: deepseek.action.v1.InstallAuthoritativeEpochResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	19, // 11: deepseek.action.v1.InstallAuthoritativeEpochResponse.fence:type_name -> deepseek.common.v1.ActionFence
+	21, // 12: deepseek.action.v1.InstallAuthoritativeEpochResponse.error:type_name -> deepseek.common.v1.ErrorDetail
 	3,  // 13: deepseek.action.v1.StoragePrecondition.condition_type:type_name -> deepseek.action.v1.StorageConditionType
-	17, // 14: deepseek.action.v1.StorageMutationRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	19, // 14: deepseek.action.v1.StorageMutationRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	11, // 15: deepseek.action.v1.StorageMutationRequest.precondition:type_name -> deepseek.action.v1.StoragePrecondition
 	2,  // 16: deepseek.action.v1.StorageMutationResponse.status:type_name -> deepseek.action.v1.StorageMutationStatus
-	18, // 17: deepseek.action.v1.StorageMutationResponse.state:type_name -> deepseek.common.v1.EffectState
-	17, // 18: deepseek.action.v1.StorageMutationResponse.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 19: deepseek.action.v1.StorageMutationResponse.error:type_name -> deepseek.common.v1.ErrorDetail
-	17, // 20: deepseek.action.v1.QueryStorageEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	20, // 17: deepseek.action.v1.StorageMutationResponse.state:type_name -> deepseek.common.v1.EffectState
+	19, // 18: deepseek.action.v1.StorageMutationResponse.fence:type_name -> deepseek.common.v1.ActionFence
+	21, // 19: deepseek.action.v1.StorageMutationResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	19, // 20: deepseek.action.v1.QueryStorageEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	4,  // 21: deepseek.action.v1.SignControlRequest.purpose:type_name -> deepseek.action.v1.ControlSigningPurpose
-	17, // 22: deepseek.action.v1.SignControlRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	19, // 22: deepseek.action.v1.SignControlRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	12, // 23: deepseek.action.v1.SignControlRequest.storage_intent:type_name -> deepseek.action.v1.StorageMutationRequest
-	20, // 24: deepseek.action.v1.SignControlRequest.agent_intent:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
-	17, // 25: deepseek.action.v1.SignControlResponse.fence:type_name -> deepseek.common.v1.ActionFence
+	22, // 24: deepseek.action.v1.SignControlRequest.agent_intent:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
+	19, // 25: deepseek.action.v1.SignControlResponse.fence:type_name -> deepseek.common.v1.ActionFence
 	5,  // 26: deepseek.action.v1.Worker.AdmitCommand:input_type -> deepseek.action.v1.AdmitCommandRequest
 	7,  // 27: deepseek.action.v1.Worker.QueryEffect:input_type -> deepseek.action.v1.QueryEffectRequest
 	9,  // 28: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:input_type -> deepseek.action.v1.InstallAuthoritativeEpochRequest
 	12, // 29: deepseek.action.v1.Worker.ExecuteStorageMutation:input_type -> deepseek.action.v1.StorageMutationRequest
 	14, // 30: deepseek.action.v1.Worker.QueryStorageEffect:input_type -> deepseek.action.v1.QueryStorageEffectRequest
 	15, // 31: deepseek.action.v1.ControlSigner.SignControl:input_type -> deepseek.action.v1.SignControlRequest
-	6,  // 32: deepseek.action.v1.Worker.AdmitCommand:output_type -> deepseek.action.v1.AdmitCommandResponse
-	8,  // 33: deepseek.action.v1.Worker.QueryEffect:output_type -> deepseek.action.v1.EffectResult
-	10, // 34: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:output_type -> deepseek.action.v1.InstallAuthoritativeEpochResponse
-	13, // 35: deepseek.action.v1.Worker.ExecuteStorageMutation:output_type -> deepseek.action.v1.StorageMutationResponse
-	13, // 36: deepseek.action.v1.Worker.QueryStorageEffect:output_type -> deepseek.action.v1.StorageMutationResponse
-	16, // 37: deepseek.action.v1.ControlSigner.SignControl:output_type -> deepseek.action.v1.SignControlResponse
-	32, // [32:38] is the sub-list for method output_type
-	26, // [26:32] is the sub-list for method input_type
+	17, // 32: deepseek.action.v1.ControlSignerBootstrap.GetBinding:input_type -> deepseek.action.v1.ControlSignerBindingRequest
+	6,  // 33: deepseek.action.v1.Worker.AdmitCommand:output_type -> deepseek.action.v1.AdmitCommandResponse
+	8,  // 34: deepseek.action.v1.Worker.QueryEffect:output_type -> deepseek.action.v1.EffectResult
+	10, // 35: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:output_type -> deepseek.action.v1.InstallAuthoritativeEpochResponse
+	13, // 36: deepseek.action.v1.Worker.ExecuteStorageMutation:output_type -> deepseek.action.v1.StorageMutationResponse
+	13, // 37: deepseek.action.v1.Worker.QueryStorageEffect:output_type -> deepseek.action.v1.StorageMutationResponse
+	16, // 38: deepseek.action.v1.ControlSigner.SignControl:output_type -> deepseek.action.v1.SignControlResponse
+	18, // 39: deepseek.action.v1.ControlSignerBootstrap.GetBinding:output_type -> deepseek.action.v1.ControlSignerBindingResponse
+	33, // [33:40] is the sub-list for method output_type
+	26, // [26:33] is the sub-list for method input_type
 	26, // [26:26] is the sub-list for extension type_name
 	26, // [26:26] is the sub-list for extension extendee
 	0,  // [0:26] is the sub-list for field type_name
@@ -1455,9 +1637,9 @@ func file_action_v1_action_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_action_v1_action_proto_rawDesc), len(file_action_v1_action_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   12,
+			NumMessages:   14,
 			NumExtensions: 0,
-			NumServices:   2,
+			NumServices:   3,
 		},
 		GoTypes:           file_action_v1_action_proto_goTypes,
 		DependencyIndexes: file_action_v1_action_proto_depIdxs,

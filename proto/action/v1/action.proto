@@ -161,3 +161,26 @@ message SignControlResponse {
 service ControlSigner {
   rpc SignControl(SignControlRequest) returns (SignControlResponse);
 }
+
+// Read-only startup binding over the same authenticated private worker TLS
+// transport. No key bytes, arbitrary documents or effect admission are exposed.
+message ControlSignerBindingRequest {
+  uint32 schema_version = 1;
+  string fleet_id = 2;
+  string environment = 3;
+  uint64 fencing_token = 4;
+  string expected_signer_public_key = 5;
+}
+
+message ControlSignerBindingResponse {
+  uint32 schema_version = 1;
+  string signer_public_key = 2;
+  string signer_key_id = 3;
+  string fleet_id = 4;
+  string environment = 5;
+  uint64 fencing_token = 6;
+}
+
+service ControlSignerBootstrap {
+  rpc GetBinding(ControlSignerBindingRequest) returns (ControlSignerBindingResponse);
+}
