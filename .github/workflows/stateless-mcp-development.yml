@@ -41,6 +41,7 @@ jobs:
         assert not subprocess.check_output(["git", "status", "--porcelain"]).strip()
         Path("artifacts/stateless-mcp-development/source-context.json").write_text(json.dumps({"sourceCommit": os.environ["GITHUB_SHA"], "sourceTree": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip(), "runId": os.environ["GITHUB_RUN_ID"], "event": os.environ["GITHUB_EVENT_NAME"], "fullMigrationQualified": False, "readiness": "NOT_READY"}, indent=2))
         PY
+    - run: sudo apt-get update && sudo apt-get install -y ripgrep
     - name: Install the pinned SDK and existing dependency graph
       run: npm ci --prefix stateless-mcp
     - name: Typecheck and run every retained MCP test plus security regressions
