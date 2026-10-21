@@ -77,36 +77,47 @@ func TestManagedGatewayWaitsForActualControlReadiness(t *testing.T) {
 	for i := range processes {
 		processes[i].Env = append(processes[i].Env, "DEEPSEEK_MANAGED_FIXTURE_DELAY_CONTROL=1")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	done := make(chan error, 1)
+	started := time.Now()
+	finished := false
 	go func() { done <- Run(ctx, processes, environment, io.Discard) }()
 	defer func() {
 		cancel()
+		if finished {
+			return
+		}
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
 			t.Error("managed subprocess cleanup timed out")
 		}
 	}()
+	// Match the original managed-launch test's bounded startup window. The
+	// readiness observation follows custody initialization, TLS binding and
+	// the real Go database open; it has no independent five-second budget.
+	deadline := time.NewTimer(20 * time.Second)
+	defer deadline.Stop()
 	waitFile := func(name string) {
 		t.Helper()
-		deadline := time.NewTimer(5 * time.Second)
-		defer deadline.Stop()
 		ticker := time.NewTicker(20 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-deadline.C:
-				t.Fatalf("missing readiness observation %s", name)
+				t.Fatalf("missing readiness observation %s after %s", name, time.Since(started))
 			case err := <-done:
+				finished = true
 				t.Fatalf("managed launch stopped before %s: %v", name, err)
 			case <-ticker.C:
 				if _, err := os.Stat(filepath.Join(root, name)); err == nil {
+					t.Logf("observed %s after %s", name, time.Since(started))
 					return
 				}
 			}
 		}
 	}
+	waitFile("fixture-control-ready")
 	waitFile("fixture-readiness-probed")
 	if _, err := os.Stat(filepath.Join(root, "fixture-gateway-ready")); !os.IsNotExist(err) {
 		t.Fatal("gateway started before the actual Go endpoint was ready")
