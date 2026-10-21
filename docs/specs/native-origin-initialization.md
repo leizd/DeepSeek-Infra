@@ -1,5 +1,10 @@
 # New native profile initialization
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 This implements the new-profile path of ADR-0049. Existing Python or Go stores
 retain the signed export/import/promotion procedure, including attestation of an
 empty Python inventory. A mode flag, empty SQLite file, missing database, or
