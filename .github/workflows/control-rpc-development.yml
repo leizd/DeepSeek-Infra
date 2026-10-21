@@ -85,6 +85,7 @@ jobs:
               "TestManagedExpectedWriterFenceIsExplicitAndStrict",
               "TestManagedNativeOriginRequiresPinnedAuthoritativeDeployment",
               "TestManagedControlReadinessRequiresTheExpectedLiveWriter",
+              "TestProductionAgentCredentialsAndBodyCustodyStayInRustRoles",
               "TestManagedControlReadinessRefusesForeignTargetsAndCancellation",
               "TestManagedGatewayWaitsForActualControlReadiness",
               "TestManagedLifecycleRejectsChangedWriterFenceBeforeServing",

@@ -143,7 +143,7 @@ func TestProductionRPCPlanIsolatesServerAndRustCustodyCredentials(t *testing.T) 
 			denied := process.Name != "deepseekd" && strings.HasPrefix(key, "DEEPSEEKD_INTERNAL_RPC_")
 			denied = denied || process.Name == "deepseekd" && strings.HasPrefix(key, "DEEPSEEK_GO_CONTROL_RPC_")
 			denied = denied || process.Name != "deepseek-worker" && strings.HasPrefix(key, "DEEPSEEK_WORKER_CONTROL_SIGNER_")
-			denied = denied || process.Name != "deepseek-gateway" && (key == "DEEPSEEK_API_KEY" || key == "TAVILY_API_KEY")
+			denied = denied || process.Name != "deepseek-gateway" && process.Name != "deepseek-worker" && (key == "DEEPSEEK_API_KEY" || key == "TAVILY_API_KEY")
 			denied = denied || process.Name != "deepseek-worker" && (key == "DEEPSEEK_WORKER_S3_ACCESS_KEY" || key == "DEEPSEEK_WORKER_S3_SECRET_KEY" || key == "DEEPSEEK_WORKER_S3_SESSION_TOKEN")
 			if denied {
 				t.Errorf("unrelated child inherited a private capability: %s %s", process.Name, key)

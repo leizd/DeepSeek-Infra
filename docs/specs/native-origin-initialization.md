@@ -42,6 +42,14 @@ TLS RPC admission. A delayed real control subprocess is tested with an endpoint
 that refuses readiness until explicitly released; the gateway must stay absent
 while that endpoint is unavailable.
 
+Managed startup also configures the edge's existing private TLS credential
+delivery to that same Rust worker and enables the worker's Agent executor.
+Both Rust processes use the profile's `.native-agent-artifacts` directory in
+`python_disabled` mode. Provider fallback keys reach these Rust roles only;
+Go receives neither the body-custody settings nor the credential-delivery
+configuration. The request's sealed credential continues to override the
+configured server fallback. This wiring does not relax grant or epoch checks.
+
 The Rust publication receipt is immutable. Reads never mint certificates or
 signatures. A lost response is recovered by reading the original receipt using
 the successor's current writer fence, retaining the original birth action,

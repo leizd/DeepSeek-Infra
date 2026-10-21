@@ -120,6 +120,19 @@ func TestV17FailureMigrationPreservesRowsThenSettlesVerifiedPhase(t *testing.T) 
 			if control.SchemaVersion() != SchemaV17 || failureMigrationRows(t, control.db) != before {
 				t.Fatal("migration changed original leases, custody, witnesses or domain history")
 			}
+			// The historical v17 transition is proved independently above. Live
+			// business writers require the current schema before settlement.
+			tx, err = control.db.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			if err := control.migrateTx(tx); err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
 			result, err := control.SettleAgentFailure(input)
 			if err != nil || result.Action.State != "FAILED" || result.Run.Status != "failed" {
 				t.Fatalf("migrated phase did not settle its original signed evidence: %v", err)

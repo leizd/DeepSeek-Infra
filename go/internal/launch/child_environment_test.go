@@ -8,6 +8,47 @@ import (
 	"testing"
 )
 
+func TestProductionAgentCredentialsAndBodyCustodyStayInRustRoles(t *testing.T) {
+	environment := []string{
+		"DEEPSEEK_AGENT_ARTIFACT_DIR=/native-profile/.native-agent-artifacts",
+		"DEEPSEEK_AGENT_DATA_MODE=python_disabled",
+		"DEEPSEEK_API_KEY=model-provider-fixture", "TAVILY_API_KEY=search-provider-fixture",
+		"DEEPSEEK_AGENT_CREDENTIAL_WORKER_ORIGIN=https://127.0.0.1:50052",
+		"DEEPSEEK_AGENT_CREDENTIAL_WORKER_CA_FILE=/native-profile/public-ca.pem",
+		"DEEPSEEK_AGENT_CREDENTIAL_WORKER_SERVER_NAME=deepseek-worker.local",
+		"DEEPSEEK_AGENT_CREDENTIAL_WORKER_BEARER=private-worker-transport-fixture",
+		"DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE=/rust-only/signing.bundle",
+	}
+	before := append([]string(nil), environment...)
+	for _, role := range []string{"deepseekd", "deepseek-worker", "deepseek-gateway", "deepseek-desktop"} {
+		child := productionChildEnvironment(role, environment)
+		for _, setting := range environment {
+			key, expected, _ := strings.Cut(setting, "=")
+			allowed := role == "deepseek-worker" || role == "deepseek-gateway"
+			if strings.HasPrefix(key, "DEEPSEEK_AGENT_CREDENTIAL_WORKER_") {
+				allowed = role == "deepseek-gateway"
+			}
+			if key == "DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE" {
+				allowed = role == "deepseek-worker"
+			}
+			if allowed && launchEnvironmentValue(child, key) != expected {
+				t.Errorf("native role lost its required configuration: %s %s", role, key)
+			}
+			if !allowed {
+				for _, value := range child {
+					name, _, _ := strings.Cut(value, "=")
+					if name == key {
+						t.Errorf("configuration reached a denied child: %s %s", role, key)
+					}
+				}
+			}
+		}
+	}
+	if !reflect.DeepEqual(environment, before) {
+		t.Fatal("child credential scoping mutated the parent environment")
+	}
+}
+
 func productionEnvironmentPlan(t *testing.T, root string) Plan {
 	t.Helper()
 	productionRPCFixture(t)
@@ -40,9 +81,9 @@ func TestProductionRPCOptionsReachEveryChildWithRoleIsolation(t *testing.T) {
 				t.Fatalf("CLI override or child-specific value lost: %s %s", process.Name, key)
 			}
 		}
-		if process.Name == "deepseek-gateway" {
+		if process.Name == "deepseek-gateway" || process.Name == "deepseek-worker" {
 			if env["DEEPSEEK_API_KEY"] != options.APIKey || env["TAVILY_API_KEY"] != options.TavilyAPIKey {
-				t.Fatal("gateway did not receive current CLI provider configuration")
+				t.Fatal("Rust provider role did not receive current CLI provider configuration")
 			}
 		} else if env["DEEPSEEK_API_KEY"] != "" || env["TAVILY_API_KEY"] != "" {
 			t.Fatal("provider configuration crossed a denied child role")
@@ -132,10 +173,10 @@ func TestProductionRPCOptionsScopeNilChildEnvironmentsAndDoNotMutateOriginalPlan
 		if process.Name != "deepseek-worker" && env["DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE"] != "" {
 			t.Fatal("nil child environment bypassed Rust custody separation")
 		}
-		if process.Name != "deepseek-gateway" && env["DEEPSEEK_API_KEY"] != "" {
+		if process.Name != "deepseek-gateway" && process.Name != "deepseek-worker" && env["DEEPSEEK_API_KEY"] != "" {
 			t.Fatal("nil child environment bypassed provider credential separation")
 		}
-		if process.Name == "deepseek-gateway" && (env["DEEPSEEK_API_KEY"] != "current-model-fixture" || strings.Count(strings.Join(process.Env, "\n"), "DEEPSEEK_API_KEY=") != 1) {
+		if (process.Name == "deepseek-gateway" || process.Name == "deepseek-worker") && (env["DEEPSEEK_API_KEY"] != "current-model-fixture" || strings.Count(strings.Join(process.Env, "\n"), "DEEPSEEK_API_KEY=") != 1) {
 			t.Fatal("explicit CLI override did not replace all stale duplicates")
 		}
 	}

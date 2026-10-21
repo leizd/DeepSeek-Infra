@@ -509,6 +509,16 @@ func runManagedRuntimeWith(ctx context.Context, processes []Process, environment
 		"DEEPSEEK_WORKER_TARGET="+launchEnvironmentValue(environment, "DEEPSEEK_WORKER_LISTEN"), "DEEPSEEK_WORKER_TLS_CA_FILE="+trustPath,
 		"DEEPSEEK_WORKER_TLS_SERVER_NAME=deepseek-worker.local", "DEEPSEEK_WORKER_SERVICE_BEARER="+bearer, "DEEPSEEK_WORKER_SERVICE_BEARER_EXPIRES_AT="+expires.Format("2006-01-02T15:04:05Z"),
 		"DEEPSEEK_WORKER_SERVICE_NAME=go-control-plane", "DEEPSEEK_WORKER_SERVICE_ROLE=controller")
+	// Rust owns both provider credential delivery and Agent body/effect custody.
+	// Use this launch's verified private worker transport and one artifact root;
+	// an otherwise configured worker must not silently omit its Agent executor.
+	values = append(values,
+		"DEEPSEEK_AGENT_ARTIFACT_DIR="+filepath.Join(profile.root, ".native-agent-artifacts"),
+		"DEEPSEEK_AGENT_DATA_MODE=python_disabled",
+		"DEEPSEEK_AGENT_CREDENTIAL_WORKER_ORIGIN=https://"+launchEnvironmentValue(environment, "DEEPSEEK_WORKER_LISTEN"),
+		"DEEPSEEK_AGENT_CREDENTIAL_WORKER_CA_FILE="+trustPath,
+		"DEEPSEEK_AGENT_CREDENTIAL_WORKER_SERVER_NAME=deepseek-worker.local",
+		"DEEPSEEK_AGENT_CREDENTIAL_WORKER_BEARER="+bearer)
 	plan = withProductionEnvironment(plan, values)
 	if err = validatePrivateControlDeployment(plan.Env); err != nil {
 		return err

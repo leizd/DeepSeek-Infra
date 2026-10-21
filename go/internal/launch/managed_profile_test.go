@@ -104,6 +104,30 @@ func runManagedFixtureHelper(role string) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	credentialFields := []string{"DEEPSEEK_AGENT_CREDENTIAL_WORKER_ORIGIN", "DEEPSEEK_AGENT_CREDENTIAL_WORKER_CA_FILE", "DEEPSEEK_AGENT_CREDENTIAL_WORKER_SERVER_NAME", "DEEPSEEK_AGENT_CREDENTIAL_WORKER_BEARER"}
+	if role == "deepseekd" {
+		for _, name := range append(credentialFields, "DEEPSEEK_AGENT_ARTIFACT_DIR", "DEEPSEEK_AGENT_DATA_MODE") {
+			if _, exists := os.LookupEnv(name); exists {
+				return 102
+			}
+		}
+	} else {
+		if os.Getenv("DEEPSEEK_AGENT_ARTIFACT_DIR") != filepath.Join(root, ".native-agent-artifacts") || os.Getenv("DEEPSEEK_AGENT_DATA_MODE") != "python_disabled" {
+			return 103
+		}
+		if role == "deepseek-worker" {
+			for _, name := range credentialFields {
+				if _, exists := os.LookupEnv(name); exists {
+					return 104
+				}
+			}
+		} else if os.Getenv(credentialFields[0]) != "https://"+os.Getenv("DEEPSEEK_WORKER_LISTEN") ||
+			os.Getenv(credentialFields[1]) != filepath.Join(root, "rust-worker", "custody", "transport-ca.pem") ||
+			os.Getenv(credentialFields[2]) != "deepseek-worker.local" ||
+			os.Getenv(credentialFields[3]) != os.Getenv("DEEPSEEK_WORKER_SERVICE_BEARER") || len(os.Getenv(credentialFields[3])) < 32 {
+			return 105
+		}
+	}
 	if role == "deepseek-worker" {
 		custody := filepath.Join(os.Getenv("DEEPSEEK_WORKER_MANAGED_ROOT"), "custody")
 		pair, err := tls.LoadX509KeyPair(filepath.Join(custody, "worker-cert.pem"), filepath.Join(custody, "worker-key.pem"))
