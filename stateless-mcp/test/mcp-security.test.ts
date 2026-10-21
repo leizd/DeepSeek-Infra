@@ -75,10 +75,10 @@ test("SDK refuses oversized structured arguments before durable task creation", 
 test("HTTP body limit refuses an oversized request and retains normal serving", async () => {
   const handler = createServiceMcpHandler(new MemoryTaskStore(), config, telemetry, () => undefined);
   try {
-    const rejected = await handler(initialization("oversized", "x".repeat(1024 * 1024)));
+    const rejected = await handler.fetch(initialization("oversized", "x".repeat(1024 * 1024)));
     assert.equal(rejected.status, 413);
     await rejected.text();
-    assert.equal(await responseId(await handler(initialization("after-refusal"))), "after-refusal");
+    assert.equal(await responseId(await handler.fetch(initialization("after-refusal"))), "after-refusal");
   } finally {
     await handler.close();
   }
@@ -88,10 +88,10 @@ test("parallel stateless requests retain their own response identities", async (
   const handler = createServiceMcpHandler(new MemoryTaskStore(), config, telemetry, () => undefined);
   try {
     const [first, second] = await Promise.all([
-      handler(initialization("client-one", "one")), handler(initialization("client-two", "two")),
+      handler.fetch(initialization("client-one", "one")), handler.fetch(initialization("client-two", "two")),
     ]);
     assert.deepEqual(await Promise.all([responseId(first), responseId(second)]), ["client-one", "client-two"]);
-    assert.equal(await responseId(await handler(initialization("third-request"))), "third-request");
+    assert.equal(await responseId(await handler.fetch(initialization("third-request"))), "third-request");
   } finally {
     await handler.close();
   }
