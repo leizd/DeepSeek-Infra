@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 
 use deepseek_protocol::generated::deepseek::action::v1::control_signer_bootstrap_server::ControlSignerBootstrapServer;
 use deepseek_protocol::generated::deepseek::action::v1::control_signer_server::ControlSignerServer;
+use deepseek_protocol::generated::deepseek::action::v1::native_origin_custody_server::NativeOriginCustodyServer;
 use deepseek_protocol::generated::deepseek::action::v1::worker_server::WorkerServer;
 use deepseek_protocol::generated::deepseek::agent::v1::agent_node_worker_server::AgentNodeWorkerServer;
 use deepseek_worker::{Worker, WorkerRpcService, authority_config_from_env, load_worker_transport};
@@ -169,6 +170,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     builder
         .add_service(ControlSignerBootstrapServer::new(service.clone()))
+        .add_service(NativeOriginCustodyServer::new(service.clone()))
         .add_service(ControlSignerServer::new(service.clone()))
         .add_service(AgentNodeWorkerServer::new(service.clone()))
         .add_service(WorkerServer::new(service))

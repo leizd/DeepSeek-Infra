@@ -2,6 +2,7 @@
 //! The Go supervisor sees public X.509 transport certificates and the typed
 //! GetBinding RPC. This module never initializes a Go store or adopts legacy data.
 use deepseek_federation::{create_control_signer_bundle, load_control_signer};
+use prost::Message as _;
 use rcgen::{
     BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
 };
@@ -54,7 +55,7 @@ fn denied() -> io::Error {
 fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
-fn read(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+pub(crate) fn read(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     let info = fs::symlink_metadata(path)?;
     if !info.is_file() || info.len() == 0 || info.len() > limit {
         return Err(denied());
@@ -65,7 +66,7 @@ fn read(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-fn publish(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn publish(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -86,7 +87,7 @@ fn directory(path: &Path) -> io::Result<()> {
     }
     builder.create(path)
 }
-fn sync_directory(path: &Path) -> io::Result<()> {
+pub(crate) fn sync_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         fs::File::open(path)?.sync_all()?;
@@ -105,17 +106,29 @@ fn validate(root: &Path, id: &str) -> io::Result<Manifest> {
     let manifest: Manifest =
         serde_json::from_slice(&read(&custody.join("manifest.json"), 64 * 1024)?)
             .map_err(|_| denied())?;
-    if manifest.schema != "native-managed-rust-custody-v1"
+    let native = manifest.schema == "native-managed-rust-custody-v2";
+    if (!native && manifest.schema != "native-managed-rust-custody-v1")
         || manifest.profile_id != id
         || manifest.fleet_id != format!("native-{id}")
         || manifest.environment != "local"
-        || manifest.files.len() != FILES.len() + 1
+        || manifest.files.len() != FILES.len() + 1 + usize::from(native)
     {
         return Err(denied());
     }
     for name in FILES.into_iter().chain([PASSWORD]) {
         let bytes = Zeroizing::new(read(&custody.join(name), 128 * 1024)?);
         if manifest.files.get(name) != Some(&digest(&bytes)) {
+            return Err(denied());
+        }
+    }
+    if native {
+        let bytes = read(&custody.join("native-origin.pb"), 16 * 1024)?;
+        if manifest.files.get("native-origin.pb") != Some(&digest(&bytes)) {
+            return Err(denied());
+        }
+        let origin = crate::native_origin::decode_origin(&bytes)?;
+        let evidence = origin.evidence.as_ref().ok_or_else(denied)?;
+        if evidence.profile_id != id || evidence.signer_public_key != manifest.signer_public_key {
             return Err(denied());
         }
     }
@@ -195,6 +208,18 @@ fn initialize(root: &Path, id: &str) -> io::Result<()> {
         "signer.encrypted.json",
         Zeroizing::new(serde_json::to_vec(&bundle).map_err(|_| denied())?),
     );
+    let key =
+        load_control_signer(&bundle, &password, &fleet, "local", &public).map_err(|_| denied())?;
+    let incarnation = digest(&KeyPair::generate().map_err(|_| denied())?.public_key_der());
+    let created_at = time::OffsetDateTime::now_utc()
+        .replace_nanosecond(0)
+        .map_err(|_| denied())?
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|_| denied())?;
+    let origin = key
+        .create_native_origin(id, &incarnation, &created_at)
+        .map_err(|_| denied())?;
+    values.insert("native-origin.pb", Zeroizing::new(origin.encode_to_vec()));
     values.insert(PASSWORD, password);
     let mut hashes = HashMap::new();
     for (name, bytes) in &values {
@@ -202,7 +227,7 @@ fn initialize(root: &Path, id: &str) -> io::Result<()> {
         hashes.insert((*name).to_owned(), digest(bytes));
     }
     let manifest = Manifest {
-        schema: "native-managed-rust-custody-v1".into(),
+        schema: "native-managed-rust-custody-v2".into(),
         profile_id: id.into(),
         fleet_id: fleet,
         environment: "local".into(),
@@ -381,6 +406,30 @@ mod tests {
             "2"
         );
         assert!(!root.path().join("state").exists());
+    }
+    #[test]
+    fn native_birth_is_sealed_once_and_old_custody_never_gains_it_on_upgrade() {
+        let root = tempfile::tempdir().unwrap();
+        call(&env(root.path(), true)).unwrap();
+        let birth = read(&root.path().join("custody/native-origin.pb"), 16384).unwrap();
+        let original = crate::native_origin::decode_origin(&birth).unwrap();
+        assert_eq!(original.evidence.unwrap().profile_id, PROFILE);
+        call(&env(root.path(), true)).unwrap();
+        assert_eq!(
+            read(&root.path().join("custody/native-origin.pb"), 16384).unwrap(),
+            birth
+        );
+        // Materialize the actual older manifest shape, not an absent v2 proof.
+        let manifest_path = root.path().join("custody/manifest.json");
+        let mut manifest: Manifest =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest.schema = "native-managed-rust-custody-v1".into();
+        manifest.files.remove("native-origin.pb");
+        fs::remove_file(root.path().join("custody/native-origin.pb")).unwrap();
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        call(&env(root.path(), true)).unwrap();
+        call(&env(root.path(), false)).unwrap();
+        assert!(!root.path().join("custody/native-origin.pb").exists());
     }
     #[test]
     fn missing_or_partial_custody_is_never_regenerated() {

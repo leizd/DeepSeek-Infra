@@ -26,8 +26,9 @@ use zeroize::Zeroizing;
 pub const BUNDLE_FILE: &str = "DEEPSEEK_WORKER_CONTROL_SIGNER_BUNDLE_FILE";
 pub const PASSPHRASE_FILE: &str = "DEEPSEEK_WORKER_CONTROL_SIGNER_PASSPHRASE_FILE";
 pub struct ControlSigner {
-    key: ControlSigningKey,
+    pub(crate) key: ControlSigningKey,
     journal: SignatureJournal,
+    pub(crate) native_origin: Option<crate::native_origin::NativeOriginCustody>,
 }
 
 #[cfg(test)]
@@ -400,7 +401,16 @@ pub fn load_control_signer_from_env(
     let bound = canonical_json_bytes(key.binding()).map_err(|_| invalid())?;
     let journal_binding = String::from_utf8(bound).map_err(|_| invalid())?;
     let journal = SignatureJournal::open(root, &journal_binding).map_err(|_| invalid())?;
-    Ok(Some(ControlSigner { key, journal }))
+    let native_origin = match get("DEEPSEEK_WORKER_MANAGED_ROOT") {
+        Ok(path) => crate::native_origin::NativeOriginCustody::load(Path::new(&path), &key)?,
+        Err(VarError::NotPresent) => None,
+        Err(_) => return Err(invalid()),
+    };
+    Ok(Some(ControlSigner {
+        key,
+        journal,
+        native_origin,
+    }))
 }
 fn request_error() -> Status {
     Status::invalid_argument("CONTROL_SIGNER_REQUEST_INVALID")

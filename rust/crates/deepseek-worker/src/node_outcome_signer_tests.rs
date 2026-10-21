@@ -18,6 +18,7 @@ fn recovery_progress_signature_keeps_its_canonical_receipt_after_signer_restart(
     let public = bundle["binding"]["signerPublicKey"].as_str().unwrap();
     let bound = String::from_utf8(canonical_json_bytes(&bundle["binding"]).unwrap()).unwrap();
     let reopen = || ControlSigner {
+        native_origin: None,
         key: load_control_signer(&bundle, password, "fleet-a", "test", public).unwrap(),
         journal: SignatureJournal::open(root.path(), &bound).unwrap(),
     };
@@ -80,6 +81,7 @@ fn plan_projection_journal_preserves_derived_signature_after_restart() {
     let public = bundle["binding"]["signerPublicKey"].as_str().unwrap();
     let bound = String::from_utf8(canonical_json_bytes(&bundle["binding"]).unwrap()).unwrap();
     let reopen = || ControlSigner {
+        native_origin: None,
         key: load_control_signer(&bundle, password, "fleet-a", "test", public).unwrap(),
         journal: SignatureJournal::open(root.path(), &bound).unwrap(),
     };
@@ -149,6 +151,7 @@ fn outcome_signature_journal_is_idempotent_after_restart_and_refuses_corrupt_rec
     let public = bundle["binding"]["signerPublicKey"].as_str().unwrap();
     let bound = String::from_utf8(canonical_json_bytes(&bundle["binding"]).unwrap()).unwrap();
     let reopen = |directory: &Path| ControlSigner {
+        native_origin: None,
         key: load_control_signer(&bundle, password, "fleet-a", "test", public).unwrap(),
         journal: SignatureJournal::open(directory, &bound).unwrap(),
     };
@@ -251,6 +254,7 @@ fn synthesis_test_custody(root: &Path) -> ControlSigner {
     let public = bundle["binding"]["signerPublicKey"].as_str().unwrap();
     let binding = String::from_utf8(canonical_json_bytes(&bundle["binding"]).unwrap()).unwrap();
     ControlSigner {
+        native_origin: None,
         key: load_control_signer(&bundle, password, "fleet-a", "test", public).unwrap(),
         journal: SignatureJournal::open(root, &binding).unwrap(),
     }

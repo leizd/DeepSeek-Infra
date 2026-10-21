@@ -1398,6 +1398,475 @@ func (x *ControlSignerBindingResponse) GetFencingToken() uint64 {
 	return 0
 }
 
+// A birth certificate exists only for an actually new managed Rust profile.
+// It does not attest a Python inventory, migrate existing state, or admit an
+// effect. The fixed generation-one checkpoint retains control-authority-v1.
+type NativeOriginEvidence struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion        uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Fence                *commonv1.ActionFence  `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
+	ProfileId            string                 `protobuf:"bytes,3,opt,name=profile_id,json=profileId,proto3" json:"profile_id,omitempty"`
+	IncarnationId        string                 `protobuf:"bytes,4,opt,name=incarnation_id,json=incarnationId,proto3" json:"incarnation_id,omitempty"`
+	FleetId              string                 `protobuf:"bytes,5,opt,name=fleet_id,json=fleetId,proto3" json:"fleet_id,omitempty"`
+	Environment          string                 `protobuf:"bytes,6,opt,name=environment,proto3" json:"environment,omitempty"`
+	SignerPublicKey      string                 `protobuf:"bytes,7,opt,name=signer_public_key,json=signerPublicKey,proto3" json:"signer_public_key,omitempty"`
+	CreatedAt            string                 `protobuf:"bytes,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	ControlSchemaVersion uint32                 `protobuf:"varint,9,opt,name=control_schema_version,json=controlSchemaVersion,proto3" json:"control_schema_version,omitempty"`
+	AuthorityDigest      string                 `protobuf:"bytes,10,opt,name=authority_digest,json=authorityDigest,proto3" json:"authority_digest,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *NativeOriginEvidence) Reset() {
+	*x = NativeOriginEvidence{}
+	mi := &file_action_v1_action_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NativeOriginEvidence) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NativeOriginEvidence) ProtoMessage() {}
+
+func (x *NativeOriginEvidence) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NativeOriginEvidence.ProtoReflect.Descriptor instead.
+func (*NativeOriginEvidence) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *NativeOriginEvidence) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *NativeOriginEvidence) GetFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *NativeOriginEvidence) GetProfileId() string {
+	if x != nil {
+		return x.ProfileId
+	}
+	return ""
+}
+
+func (x *NativeOriginEvidence) GetIncarnationId() string {
+	if x != nil {
+		return x.IncarnationId
+	}
+	return ""
+}
+
+func (x *NativeOriginEvidence) GetFleetId() string {
+	if x != nil {
+		return x.FleetId
+	}
+	return ""
+}
+
+func (x *NativeOriginEvidence) GetEnvironment() string {
+	if x != nil {
+		return x.Environment
+	}
+	return ""
+}
+
+func (x *NativeOriginEvidence) GetSignerPublicKey() string {
+	if x != nil {
+		return x.SignerPublicKey
+	}
+	return ""
+}
+
+func (x *NativeOriginEvidence) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
+func (x *NativeOriginEvidence) GetControlSchemaVersion() uint32 {
+	if x != nil {
+		return x.ControlSchemaVersion
+	}
+	return 0
+}
+
+func (x *NativeOriginEvidence) GetAuthorityDigest() string {
+	if x != nil {
+		return x.AuthorityDigest
+	}
+	return ""
+}
+
+type NativeOriginReceipt struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Evidence      *NativeOriginEvidence  `protobuf:"bytes,1,opt,name=evidence,proto3" json:"evidence,omitempty"`
+	Signature     []byte                 `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NativeOriginReceipt) Reset() {
+	*x = NativeOriginReceipt{}
+	mi := &file_action_v1_action_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NativeOriginReceipt) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NativeOriginReceipt) ProtoMessage() {}
+
+func (x *NativeOriginReceipt) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NativeOriginReceipt.ProtoReflect.Descriptor instead.
+func (*NativeOriginReceipt) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *NativeOriginReceipt) GetEvidence() *NativeOriginEvidence {
+	if x != nil {
+		return x.Evidence
+	}
+	return nil
+}
+
+func (x *NativeOriginReceipt) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+type NativeOriginPublication struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion   uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Fence           *commonv1.ActionFence  `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
+	OriginSha256    string                 `protobuf:"bytes,3,opt,name=origin_sha256,json=originSha256,proto3" json:"origin_sha256,omitempty"`
+	AuthorityDigest string                 `protobuf:"bytes,4,opt,name=authority_digest,json=authorityDigest,proto3" json:"authority_digest,omitempty"`
+	Signature       []byte                 `protobuf:"bytes,5,opt,name=signature,proto3" json:"signature,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *NativeOriginPublication) Reset() {
+	*x = NativeOriginPublication{}
+	mi := &file_action_v1_action_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NativeOriginPublication) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NativeOriginPublication) ProtoMessage() {}
+
+func (x *NativeOriginPublication) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NativeOriginPublication.ProtoReflect.Descriptor instead.
+func (*NativeOriginPublication) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *NativeOriginPublication) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *NativeOriginPublication) GetFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *NativeOriginPublication) GetOriginSha256() string {
+	if x != nil {
+		return x.OriginSha256
+	}
+	return ""
+}
+
+func (x *NativeOriginPublication) GetAuthorityDigest() string {
+	if x != nil {
+		return x.AuthorityDigest
+	}
+	return ""
+}
+
+func (x *NativeOriginPublication) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+// The original birth action/epoch remains fixed across writer takeover. The
+// separate writer fence must match the currently authenticated worker binding.
+type ReadNativeOriginRequest struct {
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion           uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Fence                   *commonv1.ActionFence  `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
+	ProfileId               string                 `protobuf:"bytes,3,opt,name=profile_id,json=profileId,proto3" json:"profile_id,omitempty"`
+	ExpectedSignerPublicKey string                 `protobuf:"bytes,4,opt,name=expected_signer_public_key,json=expectedSignerPublicKey,proto3" json:"expected_signer_public_key,omitempty"`
+	WriterFencingToken      uint64                 `protobuf:"varint,5,opt,name=writer_fencing_token,json=writerFencingToken,proto3" json:"writer_fencing_token,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *ReadNativeOriginRequest) Reset() {
+	*x = ReadNativeOriginRequest{}
+	mi := &file_action_v1_action_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadNativeOriginRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadNativeOriginRequest) ProtoMessage() {}
+
+func (x *ReadNativeOriginRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadNativeOriginRequest.ProtoReflect.Descriptor instead.
+func (*ReadNativeOriginRequest) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ReadNativeOriginRequest) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *ReadNativeOriginRequest) GetFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *ReadNativeOriginRequest) GetProfileId() string {
+	if x != nil {
+		return x.ProfileId
+	}
+	return ""
+}
+
+func (x *ReadNativeOriginRequest) GetExpectedSignerPublicKey() string {
+	if x != nil {
+		return x.ExpectedSignerPublicKey
+	}
+	return ""
+}
+
+func (x *ReadNativeOriginRequest) GetWriterFencingToken() uint64 {
+	if x != nil {
+		return x.WriterFencingToken
+	}
+	return 0
+}
+
+type PublishNativeOriginRequest struct {
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion           uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Fence                   *commonv1.ActionFence  `protobuf:"bytes,2,opt,name=fence,proto3" json:"fence,omitempty"`
+	ProfileId               string                 `protobuf:"bytes,3,opt,name=profile_id,json=profileId,proto3" json:"profile_id,omitempty"`
+	ExpectedSignerPublicKey string                 `protobuf:"bytes,4,opt,name=expected_signer_public_key,json=expectedSignerPublicKey,proto3" json:"expected_signer_public_key,omitempty"`
+	WriterFencingToken      uint64                 `protobuf:"varint,5,opt,name=writer_fencing_token,json=writerFencingToken,proto3" json:"writer_fencing_token,omitempty"`
+	OriginSha256            string                 `protobuf:"bytes,6,opt,name=origin_sha256,json=originSha256,proto3" json:"origin_sha256,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *PublishNativeOriginRequest) Reset() {
+	*x = PublishNativeOriginRequest{}
+	mi := &file_action_v1_action_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PublishNativeOriginRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PublishNativeOriginRequest) ProtoMessage() {}
+
+func (x *PublishNativeOriginRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PublishNativeOriginRequest.ProtoReflect.Descriptor instead.
+func (*PublishNativeOriginRequest) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *PublishNativeOriginRequest) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *PublishNativeOriginRequest) GetFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *PublishNativeOriginRequest) GetProfileId() string {
+	if x != nil {
+		return x.ProfileId
+	}
+	return ""
+}
+
+func (x *PublishNativeOriginRequest) GetExpectedSignerPublicKey() string {
+	if x != nil {
+		return x.ExpectedSignerPublicKey
+	}
+	return ""
+}
+
+func (x *PublishNativeOriginRequest) GetWriterFencingToken() uint64 {
+	if x != nil {
+		return x.WriterFencingToken
+	}
+	return 0
+}
+
+func (x *PublishNativeOriginRequest) GetOriginSha256() string {
+	if x != nil {
+		return x.OriginSha256
+	}
+	return ""
+}
+
+type NativeOriginState struct {
+	state         protoimpl.MessageState   `protogen:"open.v1"`
+	SchemaVersion uint32                   `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	Origin        *NativeOriginReceipt     `protobuf:"bytes,2,opt,name=origin,proto3" json:"origin,omitempty"`
+	Publication   *NativeOriginPublication `protobuf:"bytes,3,opt,name=publication,proto3" json:"publication,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NativeOriginState) Reset() {
+	*x = NativeOriginState{}
+	mi := &file_action_v1_action_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NativeOriginState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NativeOriginState) ProtoMessage() {}
+
+func (x *NativeOriginState) ProtoReflect() protoreflect.Message {
+	mi := &file_action_v1_action_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NativeOriginState.ProtoReflect.Descriptor instead.
+func (*NativeOriginState) Descriptor() ([]byte, []int) {
+	return file_action_v1_action_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *NativeOriginState) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *NativeOriginState) GetOrigin() *NativeOriginReceipt {
+	if x != nil {
+		return x.Origin
+	}
+	return nil
+}
+
+func (x *NativeOriginState) GetPublication() *NativeOriginPublication {
+	if x != nil {
+		return x.Publication
+	}
+	return nil
+}
+
 var File_action_v1_action_proto protoreflect.FileDescriptor
 
 const file_action_v1_action_proto_rawDesc = "" +
@@ -1497,7 +1966,49 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\rsigner_key_id\x18\x03 \x01(\tR\vsignerKeyId\x12\x19\n" +
 	"\bfleet_id\x18\x04 \x01(\tR\afleetId\x12 \n" +
 	"\venvironment\x18\x05 \x01(\tR\venvironment\x12#\n" +
-	"\rfencing_token\x18\x06 \x01(\x04R\ffencingToken*\x81\x02\n" +
+	"\rfencing_token\x18\x06 \x01(\x04R\ffencingToken\"\xa3\x03\n" +
+	"\x14NativeOriginEvidence\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x125\n" +
+	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12\x1d\n" +
+	"\n" +
+	"profile_id\x18\x03 \x01(\tR\tprofileId\x12%\n" +
+	"\x0eincarnation_id\x18\x04 \x01(\tR\rincarnationId\x12\x19\n" +
+	"\bfleet_id\x18\x05 \x01(\tR\afleetId\x12 \n" +
+	"\venvironment\x18\x06 \x01(\tR\venvironment\x12*\n" +
+	"\x11signer_public_key\x18\a \x01(\tR\x0fsignerPublicKey\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\b \x01(\tR\tcreatedAt\x124\n" +
+	"\x16control_schema_version\x18\t \x01(\rR\x14controlSchemaVersion\x12)\n" +
+	"\x10authority_digest\x18\n" +
+	" \x01(\tR\x0fauthorityDigest\"y\n" +
+	"\x13NativeOriginReceipt\x12D\n" +
+	"\bevidence\x18\x01 \x01(\v2(.deepseek.action.v1.NativeOriginEvidenceR\bevidence\x12\x1c\n" +
+	"\tsignature\x18\x02 \x01(\fR\tsignature\"\xe5\x01\n" +
+	"\x17NativeOriginPublication\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x125\n" +
+	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12#\n" +
+	"\rorigin_sha256\x18\x03 \x01(\tR\foriginSha256\x12)\n" +
+	"\x10authority_digest\x18\x04 \x01(\tR\x0fauthorityDigest\x12\x1c\n" +
+	"\tsignature\x18\x05 \x01(\fR\tsignature\"\x85\x02\n" +
+	"\x17ReadNativeOriginRequest\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x125\n" +
+	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12\x1d\n" +
+	"\n" +
+	"profile_id\x18\x03 \x01(\tR\tprofileId\x12;\n" +
+	"\x1aexpected_signer_public_key\x18\x04 \x01(\tR\x17expectedSignerPublicKey\x120\n" +
+	"\x14writer_fencing_token\x18\x05 \x01(\x04R\x12writerFencingToken\"\xad\x02\n" +
+	"\x1aPublishNativeOriginRequest\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x125\n" +
+	"\x05fence\x18\x02 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12\x1d\n" +
+	"\n" +
+	"profile_id\x18\x03 \x01(\tR\tprofileId\x12;\n" +
+	"\x1aexpected_signer_public_key\x18\x04 \x01(\tR\x17expectedSignerPublicKey\x120\n" +
+	"\x14writer_fencing_token\x18\x05 \x01(\x04R\x12writerFencingToken\x12#\n" +
+	"\rorigin_sha256\x18\x06 \x01(\tR\foriginSha256\"\xca\x01\n" +
+	"\x11NativeOriginState\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12?\n" +
+	"\x06origin\x18\x02 \x01(\v2'.deepseek.action.v1.NativeOriginReceiptR\x06origin\x12M\n" +
+	"\vpublication\x18\x03 \x01(\v2+.deepseek.action.v1.NativeOriginPublicationR\vpublication*\x81\x02\n" +
 	"\vCommandKind\x12\x1c\n" +
 	"\x18COMMAND_KIND_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bCOMMAND_KIND_EXECUTE_BACKUP\x10\x01\x12 \n" +
@@ -1537,7 +2048,10 @@ const file_action_v1_action_proto_rawDesc = "" +
 	"\vSignControl\x12&.deepseek.action.v1.SignControlRequest\x1a'.deepseek.action.v1.SignControlResponse2\x89\x01\n" +
 	"\x16ControlSignerBootstrap\x12o\n" +
 	"\n" +
-	"GetBinding\x12/.deepseek.action.v1.ControlSignerBindingRequest\x1a0.deepseek.action.v1.ControlSignerBindingResponseBHZFgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1;actionv1b\x06proto3"
+	"GetBinding\x12/.deepseek.action.v1.ControlSignerBindingRequest\x1a0.deepseek.action.v1.ControlSignerBindingResponse2\xd3\x01\n" +
+	"\x13NativeOriginCustody\x12Z\n" +
+	"\x04Read\x12+.deepseek.action.v1.ReadNativeOriginRequest\x1a%.deepseek.action.v1.NativeOriginState\x12`\n" +
+	"\aPublish\x12..deepseek.action.v1.PublishNativeOriginRequest\x1a%.deepseek.action.v1.NativeOriginStateBHZFgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1;actionv1b\x06proto3"
 
 var (
 	file_action_v1_action_proto_rawDescOnce sync.Once
@@ -1552,7 +2066,7 @@ func file_action_v1_action_proto_rawDescGZIP() []byte {
 }
 
 var file_action_v1_action_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_action_v1_action_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_action_v1_action_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_action_v1_action_proto_goTypes = []any{
 	(CommandKind)(0),                          // 0: deepseek.action.v1.CommandKind
 	(AdmitStatus)(0),                          // 1: deepseek.action.v1.AdmitStatus
@@ -1573,57 +2087,74 @@ var file_action_v1_action_proto_goTypes = []any{
 	(*SignControlResponse)(nil),               // 16: deepseek.action.v1.SignControlResponse
 	(*ControlSignerBindingRequest)(nil),       // 17: deepseek.action.v1.ControlSignerBindingRequest
 	(*ControlSignerBindingResponse)(nil),      // 18: deepseek.action.v1.ControlSignerBindingResponse
-	(*commonv1.ActionFence)(nil),              // 19: deepseek.common.v1.ActionFence
-	(commonv1.EffectState)(0),                 // 20: deepseek.common.v1.EffectState
-	(*commonv1.ErrorDetail)(nil),              // 21: deepseek.common.v1.ErrorDetail
-	(*agentv1.AgentRunExecutionClaim)(nil),    // 22: deepseek.agent.v1.AgentRunExecutionClaim
+	(*NativeOriginEvidence)(nil),              // 19: deepseek.action.v1.NativeOriginEvidence
+	(*NativeOriginReceipt)(nil),               // 20: deepseek.action.v1.NativeOriginReceipt
+	(*NativeOriginPublication)(nil),           // 21: deepseek.action.v1.NativeOriginPublication
+	(*ReadNativeOriginRequest)(nil),           // 22: deepseek.action.v1.ReadNativeOriginRequest
+	(*PublishNativeOriginRequest)(nil),        // 23: deepseek.action.v1.PublishNativeOriginRequest
+	(*NativeOriginState)(nil),                 // 24: deepseek.action.v1.NativeOriginState
+	(*commonv1.ActionFence)(nil),              // 25: deepseek.common.v1.ActionFence
+	(commonv1.EffectState)(0),                 // 26: deepseek.common.v1.EffectState
+	(*commonv1.ErrorDetail)(nil),              // 27: deepseek.common.v1.ErrorDetail
+	(*agentv1.AgentRunExecutionClaim)(nil),    // 28: deepseek.agent.v1.AgentRunExecutionClaim
 }
 var file_action_v1_action_proto_depIdxs = []int32{
 	0,  // 0: deepseek.action.v1.AdmitCommandRequest.kind:type_name -> deepseek.action.v1.CommandKind
-	19, // 1: deepseek.action.v1.AdmitCommandRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	25, // 1: deepseek.action.v1.AdmitCommandRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	1,  // 2: deepseek.action.v1.AdmitCommandResponse.status:type_name -> deepseek.action.v1.AdmitStatus
-	20, // 3: deepseek.action.v1.AdmitCommandResponse.state:type_name -> deepseek.common.v1.EffectState
-	21, // 4: deepseek.action.v1.AdmitCommandResponse.error:type_name -> deepseek.common.v1.ErrorDetail
-	19, // 5: deepseek.action.v1.QueryEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 6: deepseek.action.v1.EffectResult.fence:type_name -> deepseek.common.v1.ActionFence
-	20, // 7: deepseek.action.v1.EffectResult.state:type_name -> deepseek.common.v1.EffectState
-	21, // 8: deepseek.action.v1.EffectResult.error:type_name -> deepseek.common.v1.ErrorDetail
-	19, // 9: deepseek.action.v1.InstallAuthoritativeEpochRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	26, // 3: deepseek.action.v1.AdmitCommandResponse.state:type_name -> deepseek.common.v1.EffectState
+	27, // 4: deepseek.action.v1.AdmitCommandResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	25, // 5: deepseek.action.v1.QueryEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	25, // 6: deepseek.action.v1.EffectResult.fence:type_name -> deepseek.common.v1.ActionFence
+	26, // 7: deepseek.action.v1.EffectResult.state:type_name -> deepseek.common.v1.EffectState
+	27, // 8: deepseek.action.v1.EffectResult.error:type_name -> deepseek.common.v1.ErrorDetail
+	25, // 9: deepseek.action.v1.InstallAuthoritativeEpochRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	1,  // 10: deepseek.action.v1.InstallAuthoritativeEpochResponse.status:type_name -> deepseek.action.v1.AdmitStatus
-	19, // 11: deepseek.action.v1.InstallAuthoritativeEpochResponse.fence:type_name -> deepseek.common.v1.ActionFence
-	21, // 12: deepseek.action.v1.InstallAuthoritativeEpochResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	25, // 11: deepseek.action.v1.InstallAuthoritativeEpochResponse.fence:type_name -> deepseek.common.v1.ActionFence
+	27, // 12: deepseek.action.v1.InstallAuthoritativeEpochResponse.error:type_name -> deepseek.common.v1.ErrorDetail
 	3,  // 13: deepseek.action.v1.StoragePrecondition.condition_type:type_name -> deepseek.action.v1.StorageConditionType
-	19, // 14: deepseek.action.v1.StorageMutationRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	25, // 14: deepseek.action.v1.StorageMutationRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	11, // 15: deepseek.action.v1.StorageMutationRequest.precondition:type_name -> deepseek.action.v1.StoragePrecondition
 	2,  // 16: deepseek.action.v1.StorageMutationResponse.status:type_name -> deepseek.action.v1.StorageMutationStatus
-	20, // 17: deepseek.action.v1.StorageMutationResponse.state:type_name -> deepseek.common.v1.EffectState
-	19, // 18: deepseek.action.v1.StorageMutationResponse.fence:type_name -> deepseek.common.v1.ActionFence
-	21, // 19: deepseek.action.v1.StorageMutationResponse.error:type_name -> deepseek.common.v1.ErrorDetail
-	19, // 20: deepseek.action.v1.QueryStorageEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	26, // 17: deepseek.action.v1.StorageMutationResponse.state:type_name -> deepseek.common.v1.EffectState
+	25, // 18: deepseek.action.v1.StorageMutationResponse.fence:type_name -> deepseek.common.v1.ActionFence
+	27, // 19: deepseek.action.v1.StorageMutationResponse.error:type_name -> deepseek.common.v1.ErrorDetail
+	25, // 20: deepseek.action.v1.QueryStorageEffectRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	4,  // 21: deepseek.action.v1.SignControlRequest.purpose:type_name -> deepseek.action.v1.ControlSigningPurpose
-	19, // 22: deepseek.action.v1.SignControlRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	25, // 22: deepseek.action.v1.SignControlRequest.fence:type_name -> deepseek.common.v1.ActionFence
 	12, // 23: deepseek.action.v1.SignControlRequest.storage_intent:type_name -> deepseek.action.v1.StorageMutationRequest
-	22, // 24: deepseek.action.v1.SignControlRequest.agent_intent:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
-	19, // 25: deepseek.action.v1.SignControlResponse.fence:type_name -> deepseek.common.v1.ActionFence
-	5,  // 26: deepseek.action.v1.Worker.AdmitCommand:input_type -> deepseek.action.v1.AdmitCommandRequest
-	7,  // 27: deepseek.action.v1.Worker.QueryEffect:input_type -> deepseek.action.v1.QueryEffectRequest
-	9,  // 28: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:input_type -> deepseek.action.v1.InstallAuthoritativeEpochRequest
-	12, // 29: deepseek.action.v1.Worker.ExecuteStorageMutation:input_type -> deepseek.action.v1.StorageMutationRequest
-	14, // 30: deepseek.action.v1.Worker.QueryStorageEffect:input_type -> deepseek.action.v1.QueryStorageEffectRequest
-	15, // 31: deepseek.action.v1.ControlSigner.SignControl:input_type -> deepseek.action.v1.SignControlRequest
-	17, // 32: deepseek.action.v1.ControlSignerBootstrap.GetBinding:input_type -> deepseek.action.v1.ControlSignerBindingRequest
-	6,  // 33: deepseek.action.v1.Worker.AdmitCommand:output_type -> deepseek.action.v1.AdmitCommandResponse
-	8,  // 34: deepseek.action.v1.Worker.QueryEffect:output_type -> deepseek.action.v1.EffectResult
-	10, // 35: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:output_type -> deepseek.action.v1.InstallAuthoritativeEpochResponse
-	13, // 36: deepseek.action.v1.Worker.ExecuteStorageMutation:output_type -> deepseek.action.v1.StorageMutationResponse
-	13, // 37: deepseek.action.v1.Worker.QueryStorageEffect:output_type -> deepseek.action.v1.StorageMutationResponse
-	16, // 38: deepseek.action.v1.ControlSigner.SignControl:output_type -> deepseek.action.v1.SignControlResponse
-	18, // 39: deepseek.action.v1.ControlSignerBootstrap.GetBinding:output_type -> deepseek.action.v1.ControlSignerBindingResponse
-	33, // [33:40] is the sub-list for method output_type
-	26, // [26:33] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	28, // 24: deepseek.action.v1.SignControlRequest.agent_intent:type_name -> deepseek.agent.v1.AgentRunExecutionClaim
+	25, // 25: deepseek.action.v1.SignControlResponse.fence:type_name -> deepseek.common.v1.ActionFence
+	25, // 26: deepseek.action.v1.NativeOriginEvidence.fence:type_name -> deepseek.common.v1.ActionFence
+	19, // 27: deepseek.action.v1.NativeOriginReceipt.evidence:type_name -> deepseek.action.v1.NativeOriginEvidence
+	25, // 28: deepseek.action.v1.NativeOriginPublication.fence:type_name -> deepseek.common.v1.ActionFence
+	25, // 29: deepseek.action.v1.ReadNativeOriginRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	25, // 30: deepseek.action.v1.PublishNativeOriginRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	20, // 31: deepseek.action.v1.NativeOriginState.origin:type_name -> deepseek.action.v1.NativeOriginReceipt
+	21, // 32: deepseek.action.v1.NativeOriginState.publication:type_name -> deepseek.action.v1.NativeOriginPublication
+	5,  // 33: deepseek.action.v1.Worker.AdmitCommand:input_type -> deepseek.action.v1.AdmitCommandRequest
+	7,  // 34: deepseek.action.v1.Worker.QueryEffect:input_type -> deepseek.action.v1.QueryEffectRequest
+	9,  // 35: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:input_type -> deepseek.action.v1.InstallAuthoritativeEpochRequest
+	12, // 36: deepseek.action.v1.Worker.ExecuteStorageMutation:input_type -> deepseek.action.v1.StorageMutationRequest
+	14, // 37: deepseek.action.v1.Worker.QueryStorageEffect:input_type -> deepseek.action.v1.QueryStorageEffectRequest
+	15, // 38: deepseek.action.v1.ControlSigner.SignControl:input_type -> deepseek.action.v1.SignControlRequest
+	17, // 39: deepseek.action.v1.ControlSignerBootstrap.GetBinding:input_type -> deepseek.action.v1.ControlSignerBindingRequest
+	22, // 40: deepseek.action.v1.NativeOriginCustody.Read:input_type -> deepseek.action.v1.ReadNativeOriginRequest
+	23, // 41: deepseek.action.v1.NativeOriginCustody.Publish:input_type -> deepseek.action.v1.PublishNativeOriginRequest
+	6,  // 42: deepseek.action.v1.Worker.AdmitCommand:output_type -> deepseek.action.v1.AdmitCommandResponse
+	8,  // 43: deepseek.action.v1.Worker.QueryEffect:output_type -> deepseek.action.v1.EffectResult
+	10, // 44: deepseek.action.v1.Worker.InstallAuthoritativeEpoch:output_type -> deepseek.action.v1.InstallAuthoritativeEpochResponse
+	13, // 45: deepseek.action.v1.Worker.ExecuteStorageMutation:output_type -> deepseek.action.v1.StorageMutationResponse
+	13, // 46: deepseek.action.v1.Worker.QueryStorageEffect:output_type -> deepseek.action.v1.StorageMutationResponse
+	16, // 47: deepseek.action.v1.ControlSigner.SignControl:output_type -> deepseek.action.v1.SignControlResponse
+	18, // 48: deepseek.action.v1.ControlSignerBootstrap.GetBinding:output_type -> deepseek.action.v1.ControlSignerBindingResponse
+	24, // 49: deepseek.action.v1.NativeOriginCustody.Read:output_type -> deepseek.action.v1.NativeOriginState
+	24, // 50: deepseek.action.v1.NativeOriginCustody.Publish:output_type -> deepseek.action.v1.NativeOriginState
+	42, // [42:51] is the sub-list for method output_type
+	33, // [33:42] is the sub-list for method input_type
+	33, // [33:33] is the sub-list for extension type_name
+	33, // [33:33] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_action_v1_action_proto_init() }
@@ -1637,9 +2168,9 @@ func file_action_v1_action_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_action_v1_action_proto_rawDesc), len(file_action_v1_action_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   14,
+			NumMessages:   20,
 			NumExtensions: 0,
-			NumServices:   3,
+			NumServices:   4,
 		},
 		GoTypes:           file_action_v1_action_proto_goTypes,
 		DependencyIndexes: file_action_v1_action_proto_depIdxs,

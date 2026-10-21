@@ -29,8 +29,11 @@ func NextWriterFencingToken(path string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if !info.Mode().IsRegular() || info.Size() == 0 {
+	if !info.Mode().IsRegular() {
 		return 0, ErrForeignRuntimeStore
+	}
+	if info.Size() == 0 {
+		return nativePendingWriterPreview(path)
 	}
 	query := hardenedControlQuery()
 	query.Set("mode", "ro")
@@ -44,6 +47,12 @@ func NextWriterFencingToken(path string) (int64, error) {
 	var runtimeName, mode, writer string
 	var schema, userVersion, migrations int
 	if err = db.QueryRow("SELECT runtime,mode,schema_version,unique_writer FROM control_store_meta WHERE singleton=1").Scan(&runtimeName, &mode, &schema, &writer); err != nil {
+		if token, previewErr := nativePendingWriterPreview(path); previewErr == nil {
+			initialized, markerErr := validateExistingControlMarker(database)
+			if markerErr == nil && !initialized {
+				return token, nil
+			}
+		}
 		return 0, fmt.Errorf("%w: writer preview metadata", ErrForeignRuntimeStore)
 	}
 	if runtimeName != RuntimeGo || mode != ModeShadow || writer != RuntimeGo || schema < 1 || schema > CurrentSchema {

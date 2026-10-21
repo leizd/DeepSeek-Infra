@@ -29,6 +29,7 @@ mod authority_request;
 mod authority_store;
 mod control_signer;
 mod mutation_request;
+mod native_origin;
 mod operation_grant;
 #[cfg(test)]
 mod operation_grant_replay_tests;

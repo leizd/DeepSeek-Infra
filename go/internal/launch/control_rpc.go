@@ -85,6 +85,7 @@ func productionChildEnvironment(name string, environment []string) []string {
 		denied = denied || name != "deepseek-worker" && strings.HasPrefix(key, "DEEPSEEK_WORKER_MANAGED_")
 		denied = denied || name != "deepseek-worker" && (key == "DEEPSEEK_WORKER_TLS_CERT_FILE" || key == "DEEPSEEK_WORKER_TLS_KEY_FILE")
 		denied = denied || name != "deepseekd" && key == "DEEPSEEKD_EXPECTED_WRITER_FENCE"
+		denied = denied || name != "deepseekd" && key == "DEEPSEEKD_NATIVE_PROFILE_ID"
 
 		denied = denied || name != "deepseek-gateway" && (key == "DEEPSEEK_API_KEY" || key == "TAVILY_API_KEY")
 		denied = denied || name != "deepseek-worker" && (key == "DEEPSEEK_WORKER_S3_ACCESS_KEY" || key == "DEEPSEEK_WORKER_S3_SECRET_KEY" || key == "DEEPSEEK_WORKER_S3_SESSION_TOKEN")

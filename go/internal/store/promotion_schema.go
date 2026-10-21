@@ -87,6 +87,10 @@ func verifyPromotionArtifactSchemaTx(tx *sql.Tx) error {
 // signed artifact that were committed with its transition. Schema checks alone
 // cannot detect rows removed after temporarily disabling immutability triggers.
 func verifyCurrentPromotionBindingsTx(tx *sql.Tx) error {
+	nativeTransfer, err := verifyNativeOriginTx(tx)
+	if err != nil {
+		return err
+	}
 	var missing int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM control_cutover AS cutover
 		LEFT JOIN control_cutover_authorizations AS authorization
@@ -94,9 +98,12 @@ func verifyCurrentPromotionBindingsTx(tx *sql.Tx) error {
 		LEFT JOIN control_promotion_artifacts AS artifact
 		  ON artifact.domain=cutover.domain AND artifact.transfer_id=cutover.transfer_id
 		WHERE cutover.state IN ('go_authoritative','python_shadow','python_disabled')
+		  AND NOT (cutover.transfer_id=? AND cutover.state='python_disabled'
+		    AND cutover.revision=2 AND cutover.epoch=1 AND cutover.fencing_token=1
+		    AND cutover.previous_owner='go' AND cutover.owner='go')
 		  AND (authorization.domain IS NULL OR artifact.domain IS NULL
 		    OR authorization.to_state<>cutover.state OR authorization.revision<>cutover.revision
-		    OR authorization.epoch<>cutover.epoch OR authorization.fencing_token<>cutover.fencing_token)`).Scan(&missing); err != nil {
+		    OR authorization.epoch<>cutover.epoch OR authorization.fencing_token<>cutover.fencing_token)`, nativeTransfer).Scan(&missing); err != nil {
 		return err
 	}
 	if missing != 0 {

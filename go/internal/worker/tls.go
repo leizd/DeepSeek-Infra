@@ -149,6 +149,7 @@ func DialTLS(cfg TLSDialConfig) (*Client, error) {
 		rpc:            actionv1.NewWorkerClient(connection),
 		signer:         actionv1.NewControlSignerClient(connection),
 		bootstrap:      actionv1.NewControlSignerBootstrapClient(connection),
+		origin:         actionv1.NewNativeOriginCustodyClient(connection),
 		nodes:          agentv1.NewAgentNodeWorkerClient(connection),
 		connection:     connection,
 		tlsSecured:     true,

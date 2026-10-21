@@ -184,3 +184,62 @@ message ControlSignerBindingResponse {
 service ControlSignerBootstrap {
   rpc GetBinding(ControlSignerBindingRequest) returns (ControlSignerBindingResponse);
 }
+
+// A birth certificate exists only for an actually new managed Rust profile.
+// It does not attest a Python inventory, migrate existing state, or admit an
+// effect. The fixed generation-one checkpoint retains control-authority-v1.
+message NativeOriginEvidence {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string profile_id = 3;
+  string incarnation_id = 4;
+  string fleet_id = 5;
+  string environment = 6;
+  string signer_public_key = 7;
+  string created_at = 8;
+  uint32 control_schema_version = 9;
+  string authority_digest = 10;
+}
+
+message NativeOriginReceipt {
+  NativeOriginEvidence evidence = 1;
+  bytes signature = 2;
+}
+
+message NativeOriginPublication {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string origin_sha256 = 3;
+  string authority_digest = 4;
+  bytes signature = 5;
+}
+
+// The original birth action/epoch remains fixed across writer takeover. The
+// separate writer fence must match the currently authenticated worker binding.
+message ReadNativeOriginRequest {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string profile_id = 3;
+  string expected_signer_public_key = 4;
+  uint64 writer_fencing_token = 5;
+}
+
+message PublishNativeOriginRequest {
+  uint32 schema_version = 1;
+  deepseek.common.v1.ActionFence fence = 2;
+  string profile_id = 3;
+  string expected_signer_public_key = 4;
+  uint64 writer_fencing_token = 5;
+  string origin_sha256 = 6;
+}
+
+message NativeOriginState {
+  uint32 schema_version = 1;
+  NativeOriginReceipt origin = 2;
+  NativeOriginPublication publication = 3;
+}
+
+service NativeOriginCustody {
+  rpc Read(ReadNativeOriginRequest) returns (NativeOriginState);
+  rpc Publish(PublishNativeOriginRequest) returns (NativeOriginState);
+}

@@ -33,6 +33,7 @@ tonic = { workspace = true, features = ["tls"] }
 rcgen = "0.13"
 rustls-pemfile = "2"
 zeroize = "=1.9.0"
+time = { version = "=0.3.45", features = ["formatting"] }
 
 [[bin]]
 name = "deepseek-worker"
@@ -52,7 +53,6 @@ required-features = ["s3-e2e"]
 
 [dev-dependencies]
 tempfile = "3.27.0"
-time = { version = "=0.3.45", features = ["formatting"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true

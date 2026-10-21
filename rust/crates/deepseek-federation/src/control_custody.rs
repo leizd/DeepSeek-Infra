@@ -13,6 +13,10 @@ const BUNDLE_SCHEMA: &str = "native-control-signer-bundle-v1";
 const BINDING_SCHEMA: &str = "native-control-signer-binding-v1";
 const ENVELOPE_DOMAIN: &[u8] = b"deepseek-infra:federation-private-key-envelope-v1\0";
 
+#[path = "native_origin.rs"]
+mod native_origin;
+pub use native_origin::{verify_native_origin, verify_native_origin_publication};
+
 pub struct ControlSigningKey {
     key: SigningKey,
     binding: Value,

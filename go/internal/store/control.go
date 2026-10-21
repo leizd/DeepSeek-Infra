@@ -42,6 +42,7 @@ var controlDomainOrder = [...]string{
 }
 
 type OpenOptions struct {
+	NativeOrigin *NativeOriginBootstrap
 	Path         string
 	Owner        string
 	Now          func() int64
@@ -88,6 +89,8 @@ type Snapshot struct {
 }
 
 type Control struct {
+	nativeOrigin          *nativeOriginPreparation
+	nativeNew             bool
 	mu                    sync.Mutex
 	path                  string
 	databasePath          string
@@ -156,12 +159,21 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 	if statErr == nil && info.IsDir() {
 		return nil, fmt.Errorf("%w: database path is a directory", ErrForeignRuntimeStore)
 	}
+	nativeOrigin, err := prepareNativeOrigin(opts, resolved, databasePath, statErr)
+	if err != nil {
+		return nil, err
+	}
 	if databaseExisted {
 		initialized, err := validateExistingControlMarker(databasePath)
 		if err != nil {
 			return nil, err
 		}
 		databaseExisted = initialized
+		if initialized && nativeOrigin != nil {
+			if err := validateNativeExisting(databasePath, nativeOrigin); err != nil {
+				return nil, err
+			}
+		}
 	} else if statErr != nil {
 		file, err := os.OpenFile(databasePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 		if err != nil {
@@ -197,6 +209,8 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 		leaseSeconds = 30
 	}
 	store := &Control{
+		nativeOrigin:          nativeOrigin,
+		nativeNew:             nativeOrigin != nil && !databaseExisted,
 		path:                  resolved,
 		databasePath:          databasePath,
 		owner:                 opts.Owner,
@@ -211,6 +225,10 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 	}
 	if err := store.bootstrapAndClaim(databaseExisted); err != nil {
 		_ = db.Close()
+		return nil, err
+	}
+	if err := store.finishNativeOrigin(nativeOrigin); err != nil {
+		_ = store.Close()
 		return nil, err
 	}
 	return store, nil
@@ -453,6 +471,11 @@ func expectedControlUserObjects(schema int) map[string]string {
 			}
 			objects[name] = kind
 		}
+	}
+	if schema >= SchemaV18 {
+		objects["control_native_origin"] = "table"
+		objects["control_native_origin_no_delete"] = "trigger"
+		objects["control_native_origin_publication_once"] = "trigger"
 	}
 	return objects
 }
@@ -747,6 +770,11 @@ func (store *Control) migrateTx(tx *sql.Tx) error {
 			return err
 		}
 	}
+	if store.schema == SchemaV17 {
+		if err := store.migrateToV18Tx(tx); err != nil {
+			return err
+		}
+	}
 	return verifySchemaTx(tx, store.schema)
 }
 
@@ -819,6 +847,14 @@ func (store *Control) migrateToV2Tx(tx *sql.Tx) error {
 		return ErrWriterFenceHeld
 	}
 	for _, domain := range controlDomainOrder {
+		previousOwner, transfer := OwnerPython, CutoverGenesisTransferID
+		if store.nativeNew {
+			previousOwner = RuntimeGo
+			transfer = nativeTransfer(store.nativeOrigin.receipt) + "-pending"
+			if store.token != 1 {
+				return ErrNativeOrigin
+			}
+		}
 		if _, err := tx.Exec(
 			`INSERT INTO control_cutover(
 				domain, state, revision, epoch, fencing_token, previous_owner, owner,
@@ -827,9 +863,9 @@ func (store *Control) migrateToV2Tx(tx *sql.Tx) error {
 			domain,
 			string(CutoverShadow),
 			store.token,
-			OwnerPython,
-			OwnerPython,
-			CutoverGenesisTransferID,
+			previousOwner,
+			previousOwner,
+			transfer,
 			store.token,
 			now,
 		); err != nil {
@@ -842,11 +878,11 @@ func (store *Control) migrateToV2Tx(tx *sql.Tx) error {
 				previous_owner, owner, writer_fencing_token, recorded_at
 			) VALUES(?, ?, '', ?, 0, 1, 0, 1, 0, ?, ?, ?, ?, ?)`,
 			domain,
-			CutoverGenesisTransferID,
+			transfer,
 			string(CutoverShadow),
 			store.token,
-			OwnerPython,
-			OwnerPython,
+			previousOwner,
+			previousOwner,
 			store.token,
 			now,
 		); err != nil {
@@ -1064,6 +1100,11 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 	}
 	if schema < SchemaV1 || schema > CurrentSchema {
 		return ErrForeignRuntimeStore
+	}
+	if schema >= SchemaV18 {
+		if err := verifyNativeOriginSchemaTx(tx); err != nil {
+			return err
+		}
 	}
 	tables := append(append([]string(nil), controlTableNames[:]...), "control_events")
 	if schema >= SchemaV2 {

@@ -83,6 +83,7 @@ jobs:
               "TestManagedGoTransportIdentityIsBoundToOwnServer",
               "TestManagedRoleScopesAndExplicitOperatorProvisioning",
               "TestManagedExpectedWriterFenceIsExplicitAndStrict",
+              "TestManagedNativeOriginRequiresPinnedAuthoritativeDeployment",
               "TestManagedLifecycleRejectsChangedWriterFenceBeforeServing",
           }
           started, finished = set(), {}
@@ -114,7 +115,7 @@ jobs:
         run: |
           cd go
           set +e
-          go test -race -json -count=1 -timeout=3m -covermode=atomic -coverprofile=../artifacts/control-rpc-development/managed-binding-scoped-coverage.out ./internal/worker ./internal/store -run '^(TestReadControlSignerBinding.*|TestNextWriterFencingToken.*)$' > ../artifacts/control-rpc-development/managed-binding-tests.jsonl 2>&1
+          go test -race -json -count=1 -timeout=3m -covermode=atomic -coverprofile=../artifacts/control-rpc-development/managed-binding-scoped-coverage.out ./internal/worker ./internal/store -run '^(TestReadControlSignerBinding.*|TestNextWriterFencingToken.*|TestNativeOrigin.*|TestEmptyPythonInventoryStillRequiresAttestedSource)$' > ../artifacts/control-rpc-development/managed-binding-tests.jsonl 2>&1
           status=$?
           set -e
           cd ..
@@ -127,7 +128,18 @@ jobs:
                       "TestNextWriterFencingTokenRejectsForeignAndMalformedStores",
                       "TestNextWriterFencingTokenAndControlWriterDenyPythonCapabilitiesBeforeCreation",
                       "TestNextWriterFencingTokenRejectsCorruptionWithoutRepairingDatabase",
-                      "TestNextWriterFencingTokenCannotCreateRelativeStoreAfterWorkingDirectoryLoss"}
+                      "TestNextWriterFencingTokenCannotCreateRelativeStoreAfterWorkingDirectoryLoss",
+                      "TestNativeOriginCreatesGoOwnedDomainsAndRetainsBirthAcrossTakeover",
+                      "TestNativeOriginLostPublicationResponseRecoversOriginalAtSuccessorFence",
+                      "TestNativeOriginPublishedCustodyNeverRecreatesLostGoDatabase",
+                      "TestNativeOriginRejectsExistingEmptyAndLegacyStoresWithoutTouchingThem",
+                      "TestNativeOriginRejectsTamperedBirthBeforeDatabaseCreation",
+                      "TestNativeOriginTornIntentResumesOnlyBeforeDatabaseCreation",
+                      "TestNativeOriginMissingRustPublicationNeverReissuesACommittedReceipt",
+                      "TestNativeOriginPreviewOfInterruptedCreationIsReadOnlyAndPinned",
+                      "TestNativeOriginClientRequiresAuthenticatedTLSAndOriginalBirthFence",
+                      "TestNativeOriginClientBoundsResponsesAndRefusesUnscopedPublication",
+                      "TestEmptyPythonInventoryStillRequiresAttestedSource"}
           rows = []
           for line in Path("artifacts/control-rpc-development/managed-binding-tests.jsonl").read_text().splitlines():
               try:

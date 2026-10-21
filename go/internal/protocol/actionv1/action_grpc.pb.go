@@ -476,3 +476,143 @@ var ControlSignerBootstrap_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "action/v1/action.proto",
 }
+
+const (
+	NativeOriginCustody_Read_FullMethodName    = "/deepseek.action.v1.NativeOriginCustody/Read"
+	NativeOriginCustody_Publish_FullMethodName = "/deepseek.action.v1.NativeOriginCustody/Publish"
+)
+
+// NativeOriginCustodyClient is the client API for NativeOriginCustody service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type NativeOriginCustodyClient interface {
+	Read(ctx context.Context, in *ReadNativeOriginRequest, opts ...grpc.CallOption) (*NativeOriginState, error)
+	Publish(ctx context.Context, in *PublishNativeOriginRequest, opts ...grpc.CallOption) (*NativeOriginState, error)
+}
+
+type nativeOriginCustodyClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewNativeOriginCustodyClient(cc grpc.ClientConnInterface) NativeOriginCustodyClient {
+	return &nativeOriginCustodyClient{cc}
+}
+
+func (c *nativeOriginCustodyClient) Read(ctx context.Context, in *ReadNativeOriginRequest, opts ...grpc.CallOption) (*NativeOriginState, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NativeOriginState)
+	err := c.cc.Invoke(ctx, NativeOriginCustody_Read_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nativeOriginCustodyClient) Publish(ctx context.Context, in *PublishNativeOriginRequest, opts ...grpc.CallOption) (*NativeOriginState, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NativeOriginState)
+	err := c.cc.Invoke(ctx, NativeOriginCustody_Publish_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// NativeOriginCustodyServer is the server API for NativeOriginCustody service.
+// All implementations must embed UnimplementedNativeOriginCustodyServer
+// for forward compatibility.
+type NativeOriginCustodyServer interface {
+	Read(context.Context, *ReadNativeOriginRequest) (*NativeOriginState, error)
+	Publish(context.Context, *PublishNativeOriginRequest) (*NativeOriginState, error)
+	mustEmbedUnimplementedNativeOriginCustodyServer()
+}
+
+// UnimplementedNativeOriginCustodyServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedNativeOriginCustodyServer struct{}
+
+func (UnimplementedNativeOriginCustodyServer) Read(context.Context, *ReadNativeOriginRequest) (*NativeOriginState, error) {
+	return nil, status.Error(codes.Unimplemented, "method Read not implemented")
+}
+func (UnimplementedNativeOriginCustodyServer) Publish(context.Context, *PublishNativeOriginRequest) (*NativeOriginState, error) {
+	return nil, status.Error(codes.Unimplemented, "method Publish not implemented")
+}
+func (UnimplementedNativeOriginCustodyServer) mustEmbedUnimplementedNativeOriginCustodyServer() {}
+func (UnimplementedNativeOriginCustodyServer) testEmbeddedByValue()                             {}
+
+// UnsafeNativeOriginCustodyServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to NativeOriginCustodyServer will
+// result in compilation errors.
+type UnsafeNativeOriginCustodyServer interface {
+	mustEmbedUnimplementedNativeOriginCustodyServer()
+}
+
+func RegisterNativeOriginCustodyServer(s grpc.ServiceRegistrar, srv NativeOriginCustodyServer) {
+	// If the following call panics, it indicates UnimplementedNativeOriginCustodyServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&NativeOriginCustody_ServiceDesc, srv)
+}
+
+func _NativeOriginCustody_Read_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadNativeOriginRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NativeOriginCustodyServer).Read(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NativeOriginCustody_Read_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NativeOriginCustodyServer).Read(ctx, req.(*ReadNativeOriginRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NativeOriginCustody_Publish_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PublishNativeOriginRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NativeOriginCustodyServer).Publish(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NativeOriginCustody_Publish_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NativeOriginCustodyServer).Publish(ctx, req.(*PublishNativeOriginRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// NativeOriginCustody_ServiceDesc is the grpc.ServiceDesc for NativeOriginCustody service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var NativeOriginCustody_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "deepseek.action.v1.NativeOriginCustody",
+	HandlerType: (*NativeOriginCustodyServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Read",
+			Handler:    _NativeOriginCustody_Read_Handler,
+		},
+		{
+			MethodName: "Publish",
+			Handler:    _NativeOriginCustody_Publish_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "action/v1/action.proto",
+}

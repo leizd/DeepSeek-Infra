@@ -24,6 +24,7 @@ const (
 type Config struct {
 	// Managed launcher prediction. OpenControl remains the only authority.
 	ExpectedWriterFence int64
+	NativeProfileID     string
 
 	Mode               string
 	Listen             string
@@ -114,6 +115,12 @@ func Load() (Config, error) {
 	}
 	if cfg.ControlAuthority && cfg.InternalAPIBearer == "" {
 		return Config{}, ErrInvalidConfig
+	}
+	if value, exists := os.LookupEnv("DEEPSEEKD_NATIVE_PROFILE_ID"); exists {
+		if len(value) != 32 || strings.Trim(value, "0123456789abcdef") != "" || cfg.ExpectedWriterFence <= 0 || !cfg.ControlAuthority || cfg.Mode != ModeAuthoritative {
+			return Config{}, errors.New("invalid native origin profile binding")
+		}
+		cfg.NativeProfileID = value
 	}
 	if err := cfg.ValidateInternalRPC(); err != nil {
 		return Config{}, err

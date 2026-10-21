@@ -264,7 +264,9 @@ func openManagedProfile(root string) (*managedProfile, error) {
 	}
 	_, dbErr := os.Lstat(filepath.Join(root, "go-control", store.ControlDatabaseFilename))
 	if (profile.pin != "") != (dbErr == nil) {
-		return nil, errManagedProfile
+		if profile.pin == "" || !errors.Is(dbErr, os.ErrNotExist) || !store.NativeOriginCreationIntentMatches(filepath.Join(root, "go-control"), profile.id, profile.pin) {
+			return nil, errManagedProfile
+		}
 	}
 	if dbErr != nil && !errors.Is(dbErr, os.ErrNotExist) {
 		return nil, dbErr
@@ -495,6 +497,9 @@ func runManagedRuntimeWith(ctx context.Context, processes []Process, environment
 	expires := now.Add(55 * time.Minute)
 	values := append(base,
 		"DEEPSEEKD_EXPECTED_WRITER_FENCE="+strconv.FormatInt(fence, 10),
+		"DEEPSEEKD_NATIVE_PROFILE_ID="+profile.id,
+		"DEEPSEEKD_OWNER=deepseekd-"+profile.id+"-"+strconv.FormatInt(fence, 10),
+		"DEEPSEEKD_CONTROL_AUTHORITY=1",
 		"DEEPSEEKD_INTERNAL_BEARER="+controlBearer, "DEEPSEEK_INTERNAL_BEARER="+controlBearer,
 		"DEEPSEEKD_INTERNAL_RPC_LISTEN=127.0.0.1:8091", "DEEPSEEKD_INTERNAL_RPC_TLS_CA_FILE="+trustPath,
 		"DEEPSEEKD_INTERNAL_RPC_TLS_CERT_FILE="+filepath.Join(session, "go-server.pem"), "DEEPSEEKD_INTERNAL_RPC_TLS_KEY_FILE="+filepath.Join(session, "go-server-key.pem"),

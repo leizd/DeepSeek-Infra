@@ -12,6 +12,7 @@ import (
 	"github.com/leizd/DeepSeek-Infra/go/internal/api"
 	"github.com/leizd/DeepSeek-Infra/go/internal/config"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+	"github.com/leizd/DeepSeek-Infra/go/internal/worker"
 )
 
 type Status struct {
@@ -74,6 +75,30 @@ func Start(ctx context.Context, cfg config.Config) (*Server, error) {
 		storeDir = cfg.ShadowStoreDir
 	}
 	if storeDir != "" {
+		var origin *store.NativeOriginBootstrap
+		if cfg.NativeProfileID != "" {
+			if cfg.Mode != config.ModeAuthoritative || !cfg.ControlAuthority || cfg.ExpectedWriterFence <= 0 {
+				_ = listener.Close()
+				closeRPC()
+				return nil, config.ErrInvalidConfig
+			}
+			dial, dialErr := worker.TLSDialConfigFromEnv()
+			if dialErr != nil {
+				_ = listener.Close()
+				closeRPC()
+				return nil, dialErr
+			}
+			peer, dialErr := worker.DialTLS(dial)
+			if dialErr != nil {
+				_ = listener.Close()
+				closeRPC()
+				return nil, dialErr
+			}
+			defer peer.Close()
+			bootstrapContext, cancelBootstrap := context.WithTimeout(ctx, 30*time.Second)
+			defer cancelBootstrap()
+			origin = &store.NativeOriginBootstrap{Context: bootstrapContext, ProfileID: cfg.NativeProfileID, WriterFence: cfg.ExpectedWriterFence, Peer: peer}
+		}
 		owner := cfg.Owner
 		if owner == "" {
 			owner = "deepseekd"
@@ -82,6 +107,7 @@ func Start(ctx context.Context, cfg config.Config) (*Server, error) {
 		// it without an authenticated internal control plane, so a process can
 		// never authorize a promotion over an unauthenticated channel.
 		control, err = store.OpenControl(store.OpenOptions{
+			NativeOrigin:                origin,
 			Path:                        storeDir,
 			Owner:                       owner,
 			AuthorizeCutover:            cfg.ControlAuthority,

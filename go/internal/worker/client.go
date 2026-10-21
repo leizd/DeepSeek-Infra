@@ -28,6 +28,7 @@ type Client struct {
 	bearerAttached bool
 	signer         actionv1.ControlSignerClient
 	bootstrap      actionv1.ControlSignerBootstrapClient
+	origin         actionv1.NativeOriginCustodyClient
 	nodes          agentNodeClient
 }
 

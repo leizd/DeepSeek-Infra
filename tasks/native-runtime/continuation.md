@@ -12733,3 +12733,32 @@ replace complete source CI, original coverage floors or the default native
 startup gate. Rust/Go/Proto remain unchanged. Native-origin authority/recovery,
 credential renewal and whole-product/platform acceptance remain required;
 readiness stays NOT_READY. No PR, main merge, release or real-data action occurs.
+
+
+## 2026-10-21: native origin candidate and exact-source CI
+
+Source `0992fc6aa631f54e6d92caca239aabcaf48ff8df` completed all 37 original
+workflow-dispatch CI jobs in run `39528399911`. Replayed race reports cover all
+37 Go packages in both variants, original skips only, with Go coverage
+95.03462694368223% / 95.0747058045749%, Rust 82.22526930698648%, and Python
+6479 passed plus the original skip in each of 3.10/3.11/3.12. Independent Rust
+push run `39528276980` still failed the actual empty-profile bootstrap gate.
+A successful source CI is not a successful default launcher or PR merge candidate.
+
+The next connected candidate adds typed native birth/publication custody and
+Go schema 18 initialization described in [the native-origin specification](../../docs/specs/native-origin-initialization.md).
+It keeps v1 custody and existing stores on their original migration path, calls
+the existing sole Go authority-head claim, keeps the original initialization
+action/epoch on a lost response, and refuses a missing Go database after Rust
+publication. Test fixtures use isolated stores and fake keys; the mandatory
+actual launcher/Go/Rust/edge provider-and-restart probe remains the acceptance
+path. Native tests and platform acceptance are pending until exact-source cloud
+reports are collected. No production fallback, feature removal, coverage-floor
+change, release, main merge, or whole-migration qualification is implied.
+
+A crash after the public signer pin is retained but before a Go creation intent
+is persisted still fails closed; automatic recovery of that earlier boundary
+remains to be completed. Custody corruption also remains a refusal, never
+permission to recreate private keys. Keep the complete server, desktop, Android,
+background, provider recovery, credential renewal and Evidence requirements;
+readiness remains `NOT_READY`.
