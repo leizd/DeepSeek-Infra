@@ -12674,3 +12674,35 @@ gate remain required at this descendant's exact revision. No whole-product
 readiness, fresh native-origin domain authority, credential renewal, platform
 execution or production-provider qualification is claimed. No PR is handled
 outside the daily21:40 batch; no merge/release or real-data operation occurs.
+
+
+## 2026-10-21 — patch frontend security advisories without audit exceptions
+
+Source71387d27 Go development run39520023153 passed all107 config/lifecycle/
+launch tests plus96 subtests, all8 binding/preview groups plus24 subtests,
+Android-host SQLite8+7 and pure-Go Windows cross-compilation. Scoped coverage is
+only diagnostic; original full95% and complete race gates remain required.
+
+Its source workflow_dispatch39520571002 exposed a separate security failure:
+Vite8.1.5 is in the affected range for GHSA-587h-7wmj-h5pm,
+GHSA-698v-4r3x-3vcv and GHSA-r825-w8mm-5pxw. The maintainer-patched8.1.6 release
+is applied without changing major/minor versions. React Router's7.18.2 backport
+also removes GHSA-qwww-vcr4-c8h2, satisfying the old exception's removal
+condition; the exception is deleted and its direct/transitive refusal regression
+is retained. Vitest4.1.11 fixes GHSA-82fw-gwwq-j7x9 in the test toolchain. The
+matching package-lock is updated; the high/critical audit gate is unchanged and
+has no current exceptions. Live lockfile audit reports zero vulnerabilities.
+
+Authoritative patch references:
+- https://github.com/advisories/GHSA-587h-7wmj-h5pm
+- https://github.com/advisories/GHSA-698v-4r3x-3vcv
+- https://github.com/advisories/GHSA-r825-w8mm-5pxw
+- https://github.com/advisories/GHSA-qwww-vcr4-c8h2
+- https://github.com/advisories/GHSA-82fw-gwwq-j7x9
+
+Local work resolves lockfiles without installing node_modules, executing package
+scripts or compiling Rust/Go. Frontend type/tests/build/bundle and complete CI
+must run against this exact descendant in the cloud. No parent success, scoped
+projection or unrelated PR candidate qualifies the new source. Native-origin
+initialization/recovery, credential renewal and full platform/product acceptance
+remain open; readiness stays NOT_READY. The original dirty checkout is preserved.

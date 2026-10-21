@@ -17,14 +17,8 @@ GATED_SEVERITIES = ("high", "critical")
 
 # Documented exceptions: GHSA id -> (justification, removal condition). Keep entries
 # actionable — an exception is a reviewed risk acceptance, not a mute button.
-ADVISORY_EXCEPTIONS = {
-    "GHSA-qwww-vcr4-c8h2": (
-        "react-router RSC-mode CSRF (published 2026-07-24). The advisory only affects "
-        "React Router's RSC/framework mode; this frontend is a client-only Vite SPA "
-        "(no @react-router/dev, no ServerRouter), so it is not exploitable here. "
-        "Remove once react-router is upgraded to >= 8.3.0 or a fixed 7.x backport lands."
-    ),
-}
+# The React Router RSC exception was retired after applying its 7.18.2 backport.
+ADVISORY_EXCEPTIONS: dict[str, str] = {}
 
 
 def _advisory_id(url: str) -> str:
