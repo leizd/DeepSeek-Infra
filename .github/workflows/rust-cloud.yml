@@ -116,6 +116,22 @@ jobs:
         if: matrix.mode == 'checks'
         run: |
           python scripts/rust_build.py --toolchain 1.85.0 -- build --locked -p deepseek-worker -p deepseek-gateway --bins --all-features 2>&1 | tee artifacts/rust-cloud/agent-worker-build.log
+      - name: Verify default native startup from an empty profile without offline seeding
+        if: matrix.mode == 'checks'
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          python scripts/verify_native_default_bootstrap.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/default-bootstrap 2>&1 | tee artifacts/rust-cloud/default-bootstrap.log
+      - name: Preserve early default native startup evidence
+        if: always() && matrix.mode == 'checks'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-cloud-default-bootstrap-${{ github.sha }}
+          path: |
+            artifacts/rust-cloud/default-bootstrap
+            artifacts/rust-cloud/source-context.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Verify real UTC Go authority and Rust custody signing over TLS and process restart
         if: matrix.mode == 'checks'
         run: |
@@ -204,12 +220,6 @@ jobs:
         run: |
           set -o pipefail
           python scripts/verify_native_agent_terminal_failures.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --provisioner "$CARGO_TARGET_DIR/debug/deepseek-control-signer-init" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/agent-native-terminal-failure 2>&1 | tee artifacts/rust-cloud/agent-native-terminal-failure.log
-      - name: Verify default native startup from an empty profile without offline seeding
-        if: matrix.mode == 'checks'
-        timeout-minutes: 15
-        run: |
-          set -o pipefail
-          python scripts/verify_native_default_bootstrap.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/default-bootstrap 2>&1 | tee artifacts/rust-cloud/default-bootstrap.log
       - name: Install pinned coverage tooling on the cloud runner
         if: matrix.mode == 'coverage'
         run: |

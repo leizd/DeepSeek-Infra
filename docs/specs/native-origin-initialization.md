@@ -50,6 +50,11 @@ Go receives neither the body-custody settings nor the credential-delivery
 configuration. The request's sealed credential continues to override the
 configured server fallback. This wiring does not relax grant or epoch checks.
 
+The complete public signer binding (key, fleet and environment) reaches Go's
+execution authorizer and must agree with its control-store realm. Configuration
+failure diagnostics distinguish an invalid signer binding from an invalid
+worker transport using fixed codes, without logging error text or credentials.
+
 The optional native desktop is retained as a fourth supervised process after
 worker, control and edge. Its already prepared UI environment is copied without
 backend overrides; an absent UI environment becomes empty, never the parent's

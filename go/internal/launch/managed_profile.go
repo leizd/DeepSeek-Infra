@@ -552,7 +552,12 @@ func runManagedRuntimeWith(ctx context.Context, processes []Process, environment
 		if err = operations.publish(filepath.Join(profile.metadata, "signer-public-pin"), []byte(binding.PublicKey)); err != nil {
 			return err
 		}
-		updated := withProductionEnvironment(plan, []string{"DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY=" + binding.PublicKey, "DEEPSEEKD_MUTATION_SIGNER_KEY=" + binding.PublicKey, "DEEPSEEKD_PROMOTION_SIGNER_KEY=" + binding.PublicKey, "DEEPSEEKD_FLEET_ID=" + binding.FleetID, "DEEPSEEKD_ENVIRONMENT=" + binding.Environment})
+		updated := withProductionEnvironment(plan, []string{
+			"DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY=" + binding.PublicKey,
+			"DEEPSEEK_WORKER_AUTHORITY_FLEET_ID=" + binding.FleetID,
+			"DEEPSEEK_WORKER_AUTHORITY_ENVIRONMENT=" + binding.Environment,
+			"DEEPSEEKD_MUTATION_SIGNER_KEY=" + binding.PublicKey, "DEEPSEEKD_PROMOTION_SIGNER_KEY=" + binding.PublicKey,
+			"DEEPSEEKD_FLEET_ID=" + binding.FleetID, "DEEPSEEKD_ENVIRONMENT=" + binding.Environment})
 		for i := range plan.Processes {
 			plan.Processes[i].Env = updated.Processes[i].Env
 		}

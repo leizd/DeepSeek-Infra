@@ -167,13 +167,62 @@ jobs:
               "onlyTemporaryCopyModified": True, "removedGuardSha256": hashlib.sha256(removed.encode()).hexdigest(),
               "fullMigrationQualified": False, "realPlatformUIQualified": False}, indent=2) + "\n")
           PY
+      - name: Prove managed startup refuses an omitted public signer realm
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          import json, os, shutil, subprocess, tempfile
+          from pathlib import Path
+          required = {"TestManagedNativeStartupUsesAuthenticatedBindingAndRetainsWriterFence"}
+          fields = {'"DEEPSEEK_WORKER_AUTHORITY_FLEET_ID=" + binding.FleetID,',
+                    '"DEEPSEEK_WORKER_AUTHORITY_ENVIRONMENT=" + binding.Environment,'}
+          log = Path("artifacts/control-rpc-development/signer-realm-negative-tests.jsonl")
+          with tempfile.TemporaryDirectory(prefix="signer-realm-negative-", dir=os.environ["RUNNER_TEMP"]) as directory:
+              negative = Path(directory) / "go"
+              shutil.copytree("go", negative, ignore=shutil.ignore_patterns("*.exe", "*.out", "coverage*", "bin"))
+              path = negative / "internal/launch/managed_profile.go"
+              lines = path.read_text().splitlines(keepends=True)
+              removed = [line for line in lines if line.strip() in fields]
+              assert len(removed) == 2 and {line.strip() for line in removed} == fields
+              path.write_text("".join(line for line in lines if line.strip() not in fields))
+              with log.open("wb") as output:
+                  result = subprocess.run(["go", "test", "-race", "-json", "-count=1", "-timeout=3m",
+                                           "./internal/launch", "-run", "^TestManagedNativeStartupUsesAuthenticatedBindingAndRetainsWriterFence$"],
+                                          cwd=negative, stdout=output, stderr=subprocess.STDOUT)
+          started, failed = Counter(), Counter()
+          packages = {}
+          for line in log.read_text().splitlines():
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError:
+                  assert line.startswith("go: downloading ")
+                  continue
+              name, action = row.get("Test"), row.get("Action")
+              if name and action == "run":
+                  started[name] += 1
+              if name and action in {"pass", "fail", "skip"}:
+                  assert action == "fail", name
+                  failed[name] += 1
+              if not name and action in {"pass", "fail", "skip"}:
+                  packages[row["Package"]] = action
+          assert result.returncode == 1 and started == failed and set(failed) == required and all(v == 1 for v in failed.values())
+          assert packages == {"github.com/leizd/DeepSeek-Infra/go/internal/launch": "fail"}
+          subprocess.run(["git", "diff", "--exit-code", "--", "go"], check=True)
+          Path("artifacts/control-rpc-development/signer-realm-negative-result.json").write_text(json.dumps({
+              "status": "PASS", "sourceCommit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
+              "event": os.environ["GITHUB_EVENT_NAME"], "expectedAssertionFailuresObserved": sorted(failed),
+              "omittedPublicRealmFields": sorted(fields), "onlyTemporaryCopyModified": True,
+              "fullMigrationQualified": False}, indent=2) + "\n")
+          PY
       - name: Exercise managed binding and writer preview regressions
         env:
           CGO_ENABLED: "1"
         run: |
           cd go
           set +e
-          go test -race -json -count=1 -timeout=3m -covermode=atomic -coverprofile=../artifacts/control-rpc-development/managed-binding-scoped-coverage.out ./internal/worker ./internal/store -run '^(TestReadControlSignerBinding.*|TestNextWriterFencingToken.*|TestNativeOrigin.*|TestEmptyPythonInventoryStillRequiresAttestedSource)$' > ../artifacts/control-rpc-development/managed-binding-tests.jsonl 2>&1
+          go test -race -json -count=1 -timeout=3m -covermode=atomic -coverprofile=../artifacts/control-rpc-development/managed-binding-scoped-coverage.out ./internal/worker ./internal/store ./internal/api -run '^(TestReadControlSignerBinding.*|TestNextWriterFencingToken.*|TestNativeOrigin.*|TestEmptyPythonInventoryStillRequiresAttestedSource|TestAgentDriverSafeConfigurationFailuresRemainRedacted|TestAgentDriverLoopSuppressesCredentialErrorsAndStopsCancelledWork)$' > ../artifacts/control-rpc-development/managed-binding-tests.jsonl 2>&1
           status=$?
           set -e
           cd ..
@@ -201,6 +250,8 @@ jobs:
                       "TestNativeOriginLegacyV17UpgradeRetainsEveryProtectedRow",
                       "TestNativeOriginClientRequiresAuthenticatedTLSAndOriginalBirthFence",
                       "TestNativeOriginClientBoundsResponsesAndRefusesUnscopedPublication",
+                      "TestAgentDriverSafeConfigurationFailuresRemainRedacted",
+                      "TestAgentDriverLoopSuppressesCredentialErrorsAndStopsCancelledWork",
                       "TestEmptyPythonInventoryStillRequiresAttestedSource"}
           rows = []
           for line in Path("artifacts/control-rpc-development/managed-binding-tests.jsonl").read_text().splitlines():

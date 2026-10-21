@@ -25,6 +25,26 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestAgentDriverSafeConfigurationFailuresRemainRedacted(t *testing.T) {
+	const secret = "private-provider-credential-fixture"
+	for _, entry := range []struct {
+		err  error
+		want string
+	}{
+		{worker.ErrControlSignerResponse, "AGENT_DRIVER_SIGNER_BINDING_INVALID"},
+		{worker.ErrWorkerTLSConfigInvalid, "AGENT_DRIVER_WORKER_TRANSPORT_INVALID"},
+		{errAgentDriverUnknown, "AGENT_DRIVER_EFFECT_UNCONFIRMED"},
+		{errors.Join(errAgentDriverUnknown, worker.ErrControlSignerResponse), "AGENT_DRIVER_EFFECT_UNCONFIRMED"},
+		{context.Canceled, "AGENT_DRIVER_CANCELLED"},
+		{errors.New("unclassified"), "AGENT_DRIVER_AUTHORITY_OR_TRANSPORT_UNAVAILABLE"},
+	} {
+		code := driverErrorCode(errors.Join(entry.err, errors.New(secret)))
+		if code != entry.want || strings.Contains(code, secret) {
+			t.Fatal("safe diagnostic changed effect semantics or exposed a credential")
+		}
+	}
+}
+
 func TestDriverRecoveryKeepsCancellationHistoryAndCompletesOnlySelectedTasks(t *testing.T) {
 	run := agent.RunMetadata{Status: "running", Cancelled: true, CancellationGeneration: 0,
 		Plan:      []agent.RunPlanNode{{ID: "coder", Task: "write"}, {ID: "critic", Task: "review"}},

@@ -16,6 +16,7 @@ import (
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
+	"github.com/leizd/DeepSeek-Infra/go/internal/worker"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -134,6 +135,10 @@ func driverErrorCode(err error) string {
 		return errAgentDriverTools.Error()
 	case errors.Is(err, context.Canceled):
 		return "AGENT_DRIVER_CANCELLED"
+	case errors.Is(err, worker.ErrControlSignerResponse):
+		return "AGENT_DRIVER_SIGNER_BINDING_INVALID"
+	case errors.Is(err, worker.ErrWorkerTLSConfigInvalid):
+		return "AGENT_DRIVER_WORKER_TRANSPORT_INVALID"
 	default:
 		return "AGENT_DRIVER_AUTHORITY_OR_TRANSPORT_UNAVAILABLE"
 	}

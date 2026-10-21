@@ -169,11 +169,23 @@ func runManagedFixtureHelper(role string) int {
 		if os.Getenv("DEEPSEEKD_MUTATION_SIGNER_KEY") != managedFixturePublicKey() {
 			return 95
 		}
-		control, err := store.OpenControl(store.OpenOptions{Path: os.Getenv("DEEPSEEKD_PRODUCTION_STORE"), Owner: os.Getenv("DEEPSEEKD_OWNER"), LeaseSeconds: 1})
+		if os.Getenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY") != managedFixturePublicKey() ||
+			os.Getenv("DEEPSEEK_WORKER_AUTHORITY_FLEET_ID") != "native-"+os.Getenv("DEEPSEEKD_NATIVE_PROFILE_ID") ||
+			os.Getenv("DEEPSEEK_WORKER_AUTHORITY_FLEET_ID") != os.Getenv("DEEPSEEKD_FLEET_ID") ||
+			os.Getenv("DEEPSEEK_WORKER_AUTHORITY_ENVIRONMENT") != "local" ||
+			os.Getenv("DEEPSEEK_WORKER_AUTHORITY_ENVIRONMENT") != os.Getenv("DEEPSEEKD_ENVIRONMENT") {
+			return 108
+		}
+		control, err := store.OpenControl(store.OpenOptions{Path: os.Getenv("DEEPSEEKD_PRODUCTION_STORE"), Owner: os.Getenv("DEEPSEEKD_OWNER"), LeaseSeconds: 1,
+			FleetID: os.Getenv("DEEPSEEKD_FLEET_ID"), Environment: os.Getenv("DEEPSEEKD_ENVIRONMENT")})
 		if err != nil {
 			return 96
 		}
 		defer control.Close()
+		fleet, environment := control.AgentExecutionRealm()
+		if fleet != os.Getenv("DEEPSEEK_WORKER_AUTHORITY_FLEET_ID") || environment != os.Getenv("DEEPSEEK_WORKER_AUTHORITY_ENVIRONMENT") {
+			return 108
+		}
 		expected, err := strconv.ParseInt(os.Getenv("DEEPSEEKD_EXPECTED_WRITER_FENCE"), 10, 64)
 		if err != nil || control.Writer().FencingToken != expected {
 			return 97
