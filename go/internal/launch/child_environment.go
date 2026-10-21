@@ -25,6 +25,12 @@ func withProductionEnvironment(plan Plan, overrides []string) Plan {
 	updated.Env = merge(plan.Env)
 	updated.Processes = append([]Process(nil), plan.Processes...)
 	for index, process := range plan.Processes {
+		// WithDesktop already built a reduced UI environment. Backend changes
+		// must never replace it or make a nil UI inherit the parent's secrets.
+		if process.Name == "deepseek-desktop" {
+			updated.Processes[index].Env = append([]string{}, process.Env...)
+			continue
+		}
 		current := process.Env
 		if current == nil {
 			current = plan.Env

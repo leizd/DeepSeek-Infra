@@ -104,6 +104,21 @@ func runManagedFixtureHelper(role string) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if role == "deepseek-desktop" {
+		for _, entry := range os.Environ() {
+			name, _, _ := strings.Cut(entry, "=")
+			if strings.HasPrefix(name, "DEEPSEEK_WORKER_") || strings.HasPrefix(name, "DEEPSEEKD_") ||
+				strings.HasPrefix(name, "DEEPSEEK_GO_CONTROL_RPC_") || strings.HasPrefix(name, "DEEPSEEK_AGENT_") ||
+				name == "DEEPSEEK_INTERNAL_BEARER" || name == "DEEPSEEK_API_KEY" || name == "TAVILY_API_KEY" {
+				return 106
+			}
+		}
+		if err := os.WriteFile(filepath.Join(root, "fixture-desktop-ready"), []byte("ready"), 0o600); err != nil {
+			return 107
+		}
+		<-ctx.Done()
+		return 0
+	}
 	credentialFields := []string{"DEEPSEEK_AGENT_CREDENTIAL_WORKER_ORIGIN", "DEEPSEEK_AGENT_CREDENTIAL_WORKER_CA_FILE", "DEEPSEEK_AGENT_CREDENTIAL_WORKER_SERVER_NAME", "DEEPSEEK_AGENT_CREDENTIAL_WORKER_BEARER"}
 	if role == "deepseekd" {
 		for _, name := range append(credentialFields, "DEEPSEEK_AGENT_ARTIFACT_DIR", "DEEPSEEK_AGENT_DATA_MODE") {

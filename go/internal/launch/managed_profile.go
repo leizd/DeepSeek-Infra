@@ -523,20 +523,18 @@ func runManagedRuntimeWith(ctx context.Context, processes []Process, environment
 	if err = validatePrivateControlDeployment(plan.Env); err != nil {
 		return err
 	}
-	first := plan.Processes[workerIndex]
-	plan.Processes = append(plan.Processes[:workerIndex], plan.Processes[workerIndex+1:]...)
-	plan.Processes = append([]Process{first}, plan.Processes...)
-	// The control process must be started before the public edge even when a
-	// caller supplied the three roles in a different order.
-	if len(plan.Processes) != 3 {
-		return errManagedProfile
+	// Initial admission already requires the three native services and rejects
+	// duplicate or foreign roles. Retain the optional prepared UI as the fourth
+	// supervised child, regardless of the caller's original order.
+	ordered := make([]Process, 0, len(plan.Processes))
+	for _, role := range []string{"deepseek-worker", "deepseekd", "deepseek-gateway", "deepseek-desktop"} {
+		for _, process := range plan.Processes {
+			if process.Name == role {
+				ordered = append(ordered, process)
+			}
+		}
 	}
-	if plan.Processes[1].Name != "deepseekd" {
-		plan.Processes[1], plan.Processes[2] = plan.Processes[2], plan.Processes[1]
-	}
-	if plan.Processes[1].Name != "deepseekd" || plan.Processes[2].Name != "deepseek-gateway" {
-		return errManagedProfile
-	}
+	plan.Processes = ordered
 	query := worker.ControlSignerBindingQuery{FleetID: "native-" + profile.id, Environment: "local", PublicKey: profile.pin, FencingToken: fence}
 	dial := worker.TLSDialConfig{Target: launchEnvironmentValue(environment, "DEEPSEEK_WORKER_LISTEN"), TrustRootFile: trustPath, ServerName: "deepseek-worker.local", BearerToken: bearer, ExpiresAt: expires}
 	afterStart := func(index int) error {

@@ -85,6 +85,8 @@ jobs:
               "TestManagedExpectedWriterFenceIsExplicitAndStrict",
               "TestManagedNativeOriginRequiresPinnedAuthoritativeDeployment",
               "TestManagedControlReadinessRequiresTheExpectedLiveWriter",
+              "TestManagedDesktopKeepsItsPreparedEnvironmentPrivate",
+              "TestManagedDesktopAndEdgeWaitForActualControlReadiness",
               "TestProductionAgentCredentialsAndBodyCustodyStayInRustRoles",
               "TestManagedControlReadinessRefusesForeignTargetsAndCancellation",
               "TestManagedGatewayWaitsForActualControlReadiness",
@@ -112,6 +114,58 @@ jobs:
                     "fullGoSuiteQualified": False, "coverageQualified": False, "releaseQualified": False, "fullMigrationQualified": False}
           Path("artifacts/control-rpc-development/result.json").write_text(json.dumps(report, indent=2) + "\n")
           raise SystemExit(code)
+          PY
+      - name: Prove desktop regressions reject temporary UI capability leakage
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          import hashlib, json, os, re, shutil, subprocess, tempfile
+          from pathlib import Path
+          required = {"TestManagedDesktopKeepsItsPreparedEnvironmentPrivate",
+                      "TestManagedDesktopAndEdgeWaitForActualControlReadiness"}
+          log = Path("artifacts/control-rpc-development/desktop-negative-tests.jsonl")
+          with tempfile.TemporaryDirectory(prefix="desktop-negative-", dir=os.environ["RUNNER_TEMP"]) as directory:
+              negative = Path(directory) / "go"
+              shutil.copytree("go", negative, ignore=shutil.ignore_patterns("*.exe", "*.out", "coverage*", "bin"))
+              path = negative / "internal/launch/child_environment.go"
+              source = path.read_text()
+              start = source.index("\t\t// WithDesktop already built a reduced UI environment.")
+              end = source.index("\t\tcurrent := process.Env", start)
+              removed = source[start:end]
+              assert removed.count('if process.Name == "deepseek-desktop"') == 1
+              assert 'updated.Processes[index].Env = append([]string{}, process.Env...)' in removed
+              assert removed.count("continue") == 1
+              path.write_text(source[:start] + source[end:])
+              pattern = "^(" + "|".join(re.escape(name) for name in sorted(required)) + ")$"
+              with log.open("wb") as output:
+                  result = subprocess.run(["go", "test", "-race", "-json", "-count=1", "-timeout=3m",
+                                           "./internal/launch", "-run", pattern], cwd=negative, stdout=output, stderr=subprocess.STDOUT)
+          started, failed = Counter(), Counter()
+          packages = {}
+          for line in log.read_text().splitlines():
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError:
+                  assert line.startswith("go: downloading ")
+                  continue
+              name, action = row.get("Test"), row.get("Action")
+              if name and action == "run":
+                  started[name] += 1
+              if name and action in {"pass", "fail", "skip"}:
+                  assert action == "fail", name
+                  failed[name] += 1
+              if not name and action in {"pass", "fail", "skip"}:
+                  packages[row["Package"]] = action
+          assert result.returncode == 1 and started == failed and set(failed) == required and all(v == 1 for v in failed.values())
+          assert packages == {"github.com/leizd/DeepSeek-Infra/go/internal/launch": "fail"}
+          subprocess.run(["git", "diff", "--exit-code", "--", "go"], check=True)
+          Path("artifacts/control-rpc-development/desktop-negative-result.json").write_text(json.dumps({
+              "status": "PASS", "sourceCommit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
+              "event": os.environ["GITHUB_EVENT_NAME"], "expectedAssertionFailuresObserved": sorted(failed),
+              "onlyTemporaryCopyModified": True, "removedGuardSha256": hashlib.sha256(removed.encode()).hexdigest(),
+              "fullMigrationQualified": False, "realPlatformUIQualified": False}, indent=2) + "\n")
           PY
       - name: Exercise managed binding and writer preview regressions
         env:

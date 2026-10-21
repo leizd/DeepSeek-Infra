@@ -49,6 +49,26 @@ func TestProductionAgentCredentialsAndBodyCustodyStayInRustRoles(t *testing.T) {
 	}
 }
 
+func TestManagedDesktopKeepsItsPreparedEnvironmentPrivate(t *testing.T) {
+	prepared := []string{"DEEPSEEK_DESKTOP_URL=http://127.0.0.1:8000/#private-entry", "DEEPSEEK_DESKTOP_PROFILE=/private-ui/profile", "DISPLAY=:1"}
+	plan := Plan{Env: []string{"DEEPSEEK_INTERNAL_BEARER=parent-control-fixture"},
+		Processes: []Process{{Name: "deepseek-desktop", Env: prepared}}}
+	overrides := []string{"DEEPSEEK_INTERNAL_BEARER=new-control-fixture", "DEEPSEEK_WORKER_SERVICE_BEARER=new-worker-fixture", "DEEPSEEK_API_KEY=provider-fixture"}
+	updated := withProductionEnvironment(plan, overrides)
+	if !reflect.DeepEqual(updated.Processes[0].Env, prepared) {
+		t.Fatal("managed overrides changed the private UI environment or granted a backend capability")
+	}
+	updated.Processes[0].Env[0] = "changed-copy"
+	if prepared[0] != "DEEPSEEK_DESKTOP_URL=http://127.0.0.1:8000/#private-entry" {
+		t.Fatal("managed UI environment aliases its earlier plan")
+	}
+	plan.Processes[0].Env = nil
+	updated = withProductionEnvironment(plan, overrides)
+	if updated.Processes[0].Env == nil || len(updated.Processes[0].Env) != 0 {
+		t.Fatal("a missing UI environment inherited the private parent configuration")
+	}
+}
+
 func productionEnvironmentPlan(t *testing.T, root string) Plan {
 	t.Helper()
 	productionRPCFixture(t)

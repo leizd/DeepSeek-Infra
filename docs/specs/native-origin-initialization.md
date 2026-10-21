@@ -50,6 +50,15 @@ Go receives neither the body-custody settings nor the credential-delivery
 configuration. The request's sealed credential continues to override the
 configured server fallback. This wiring does not relax grant or epoch checks.
 
+The optional native desktop is retained as a fourth supervised process after
+worker, control and edge. Its already prepared UI environment is copied without
+backend overrides; an absent UI environment becomes empty, never the parent's
+private configuration. Actual four-child Go tests hold control unavailable and
+require both edge and UI to remain absent, then release control and observe all
+roles. A separate cloud-only temporary copy removes the UI isolation guard and
+must fail both the environment and subprocess regressions. These tests do not
+replace platform window or WebView acceptance.
+
 The Rust publication receipt is immutable. Reads never mint certificates or
 signatures. A lost response is recovered by reading the original receipt using
 the successor's current writer fence, retaining the original birth action,

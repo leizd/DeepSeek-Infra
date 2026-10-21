@@ -71,11 +71,29 @@ func TestManagedControlReadinessRefusesForeignTargetsAndCancellation(t *testing.
 	}
 }
 func TestManagedGatewayWaitsForActualControlReadiness(t *testing.T) {
+	managedReadinessFixture(t, false)
+}
+
+func TestManagedDesktopAndEdgeWaitForActualControlReadiness(t *testing.T) {
+	managedReadinessFixture(t, true)
+}
+
+func managedReadinessFixture(t *testing.T, desktop bool) {
+	t.Helper()
 	root := t.TempDir()
 	processes, environment := managedFailurePlan(t, root)
 	environment = append(environment, "DEEPSEEK_MANAGED_FIXTURE_DELAY_CONTROL=1")
 	for i := range processes {
 		processes[i].Env = append(processes[i].Env, "DEEPSEEK_MANAGED_FIXTURE_DELAY_CONTROL=1")
+	}
+	if desktop {
+		// Deliberately supply the UI first. Managed launch must retain it after
+		// the native services without adding their private environment to it.
+		ui := Process{Name: "deepseek-desktop", Path: processes[0].Path, Env: []string{
+			"DEEPSEEK_INFRA_ROOT=" + root, "DEEPSEEK_LAUNCH_HELPER=1", "DEEPSEEK_MANAGED_FIXTURE_ROLE=deepseek-desktop",
+			"DEEPSEEK_DESKTOP_URL=http://127.0.0.1:8000/", "DEEPSEEK_DESKTOP_PROFILE=" + filepath.Join(root, ".desktop-webview"),
+		}}
+		processes = append([]Process{ui}, processes...)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	done := make(chan error, 1)
@@ -122,8 +140,14 @@ func TestManagedGatewayWaitsForActualControlReadiness(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "fixture-gateway-ready")); !os.IsNotExist(err) {
 		t.Fatal("gateway started before the actual Go endpoint was ready")
 	}
+	if _, err := os.Stat(filepath.Join(root, "fixture-desktop-ready")); !os.IsNotExist(err) {
+		t.Fatal("desktop started before the actual Go endpoint was ready")
+	}
 	if err := os.WriteFile(filepath.Join(root, "fixture-release-control"), []byte("release"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	waitFile("fixture-gateway-ready")
+	if desktop {
+		waitFile("fixture-desktop-ready")
+	}
 }
