@@ -216,6 +216,52 @@ jobs:
               "omittedPublicRealmFields": sorted(fields), "onlyTemporaryCopyModified": True,
               "fullMigrationQualified": False}, indent=2) + "\n")
           PY
+      - name: Prove read-only native restart regressions detect ignored committed WAL
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          import json, os, shutil, subprocess, tempfile
+          from pathlib import Path
+          required = {"TestNativeOriginRestartRetainsCommittedWALWithReadOnlyObserver",
+                      "TestNativeOriginWALMarkerRejectsCommittedForeignSchemaWithoutWrites"}
+          log = Path("artifacts/control-rpc-development/native-wal-negative-tests.jsonl")
+          with tempfile.TemporaryDirectory(prefix="native-wal-negative-", dir=os.environ["RUNNER_TEMP"]) as directory:
+              negative = Path(directory) / "go"
+              shutil.copytree("go", negative, ignore=shutil.ignore_patterns("*.exe", "*.out", "coverage*", "bin"))
+              path = negative / "internal/store/control.go"
+              source = path.read_text()
+              marker = source.index("func validateExistingControlMarker(")
+              first = source.index('\tdsn := readOnlyControlDatabaseDSN(databasePath)\n', marker)
+              last = source.index('\tif err != nil {', source.index('\tdb, err := sqlitedb.Open(dsn)\n', first))
+              path.write_text(source[:first] + '\tdb, err := sqlitedb.Open(readOnlyControlDatabaseDSN(databasePath))\n' + source[last:])
+              with log.open("wb") as output:
+                  result = subprocess.run(["go", "test", "-race", "-json", "-count=1", "-timeout=3m", "./internal/store",
+                      "-run", "^TestNativeOrigin(RestartRetainsCommittedWALWithReadOnlyObserver|WALMarkerRejectsCommittedForeignSchemaWithoutWrites)$"],
+                      cwd=negative, stdout=output, stderr=subprocess.STDOUT)
+          started, failed = Counter(), Counter()
+          packages = {}
+          for line in log.read_text().splitlines():
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError:
+                  assert line.startswith("go: downloading ")
+                  continue
+              name, action = row.get("Test"), row.get("Action")
+              if name and action == "run": started[name] += 1
+              if name and action in {"pass", "fail", "skip"}:
+                  assert action == "fail"
+                  failed[name] += 1
+              if not name and action in {"pass", "fail", "skip"}: packages[row["Package"]] = action
+          assert result.returncode == 1 and started == failed and set(failed) == required and all(v == 1 for v in failed.values())
+          assert packages == {"github.com/leizd/DeepSeek-Infra/go/internal/store": "fail"}
+          subprocess.run(["git", "diff", "--exit-code", "--", "go"], check=True)
+          Path("artifacts/control-rpc-development/native-wal-negative-result.json").write_text(json.dumps({
+              "status": "PASS", "sourceCommit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
+              "event": os.environ["GITHUB_EVENT_NAME"], "expectedAssertionFailuresObserved": sorted(failed),
+              "onlyTemporaryCopyModified": True, "originalImmutableMarkerRestored": True, "fullMigrationQualified": False}, indent=2) + "\n")
+          PY
       - name: Exercise managed binding and writer preview regressions
         env:
           CGO_ENABLED: "1"
@@ -250,6 +296,8 @@ jobs:
                       "TestNativeOriginLegacyV17UpgradeRetainsEveryProtectedRow",
                       "TestNativeOriginClientRequiresAuthenticatedTLSAndOriginalBirthFence",
                       "TestNativeOriginClientBoundsResponsesAndRefusesUnscopedPublication",
+                      "TestNativeOriginRestartRetainsCommittedWALWithReadOnlyObserver",
+                      "TestNativeOriginWALMarkerRejectsCommittedForeignSchemaWithoutWrites",
                       "TestAgentDriverSafeConfigurationFailuresRemainRedacted",
                       "TestAgentDriverLoopSuppressesCredentialErrorsAndStopsCancelledWork",
                       "TestEmptyPythonInventoryStillRequiresAttestedSource"}

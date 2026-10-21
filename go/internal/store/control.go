@@ -287,7 +287,27 @@ func controlDatabaseURLForOS(databasePath string, query url.Values, goos string)
 func validateExistingControlMarker(databasePath string) (bool, error) {
 	// Identity checks stay on a read-only connection so a foreign database cannot
 	// be mutated by WAL or writer-lease side effects before it is rejected.
-	db, err := sqlitedb.Open(readOnlyControlDatabaseDSN(databasePath))
+	dsn := readOnlyControlDatabaseDSN(databasePath)
+	if info, err := os.Lstat(databasePath + "-wal"); err == nil {
+		if !info.Mode().IsRegular() {
+			return false, ErrForeignRuntimeStore
+		}
+		if shm, err := os.Lstat(databasePath + "-shm"); err == nil && !shm.Mode().IsRegular() {
+			return false, ErrForeignRuntimeStore
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+		// A retained reader can keep committed schema and provenance in the WAL
+		// after the writer exits. immutable=1 would silently ignore those commits.
+		// Preserve that WAL and read it through SQLite's ordinary read-only path.
+		query := hardenedControlQuery()
+		query.Set("mode", "ro")
+		query.Set("_query_only", "1")
+		dsn = controlDatabaseURL(databasePath, query)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	db, err := sqlitedb.Open(dsn)
 	if err != nil {
 		return false, err
 	}
