@@ -3,10 +3,9 @@ import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
 import { hostHeaderValidation, toNodeHandler } from "@modelcontextprotocol/node";
-import { createMcpHandler } from "@modelcontextprotocol/server";
 
 import { loadConfig } from "./config.js";
-import { createServiceMcp } from "./mcp-server.js";
+import { createServiceMcpHandler } from "./mcp-handler.js";
 import { RedisTaskStore } from "./redis-task-store.js";
 import { initializeTelemetry } from "./telemetry.js";
 import { TaskWorker } from "./test-runner.js";
@@ -63,15 +62,9 @@ async function main(): Promise<void> {
     console.error("task_worker_failed", error);
     process.exitCode = 1;
   });
-  const mcpHandler = createMcpHandler(
-    () => createServiceMcp(store, config, telemetry),
-    {
-      legacy: "stateless",
-      onerror: (error) => {
-        console.error("mcp_request_failed", error);
-      },
-    },
-  );
+  const mcpHandler = createServiceMcpHandler(store, config, telemetry, (error) => {
+    console.error("mcp_request_failed", error);
+  });
   const nodeMcpHandler = toNodeHandler(mcpHandler);
   const validateHost = hostHeaderValidation(config.allowedHostnames);
 

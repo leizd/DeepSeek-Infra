@@ -12706,3 +12706,30 @@ must run against this exact descendant in the cloud. No parent success, scoped
 projection or unrelated PR candidate qualifies the new source. Native-origin
 initialization/recovery, credential renewal and full platform/product acceptance
 remain open; readiness stays NOT_READY. The original dirty checkout is preserved.
+
+
+## 2026-10-21 — complete the MCP SDK security configuration
+
+The frontend npm audit passed on06291448 in source CI39523187056; its next
+security step exposed @modelcontextprotocol/server2.0.0 advisories
+GHSA-jm63-cq47-j5jp, GHSA-46jr-4wx8-v453 and GHSA-rvq5-wwqv-78pq. The SDK is
+pinned to2.3.1, and its official-registry lockfile audit has zero vulnerabilities.
+The published SDK archive's SHA512 integrity and option declarations were checked.
+
+The service already uses a new server per request through createMcpHandler;
+that isolation is retained. The new SDK's input-count option is explicitly set
+to10000 elements before schema validation, and only the MCP HTTP route receives
+a1MiB request bound. Internal backup/restore streaming retains its separate
+limits. The service uses its existing constant-time opaque-token check, not the
+SDK OAuth requireBearerAuth helper; no OAuth flow or audience acceptance is added.
+Actual SDK regressions must reject oversized input before durable task creation,
+keep normal serving after413, and keep concurrent client response identities
+separate. A disposable cloud copy without both bounds must fail the two relevant
+assertions; the reviewed source and its complete retained test suite must pass.
+
+The development workflow also executes the original CI security job's commands
+without omitting npm, pip-audit, Bandit or baseline secret scanning. It does not
+replace complete source CI, original coverage floors or the default native
+startup gate. Rust/Go/Proto remain unchanged. Native-origin authority/recovery,
+credential renewal and whole-product/platform acceptance remain required;
+readiness stays NOT_READY. No PR, main merge, release or real-data action occurs.

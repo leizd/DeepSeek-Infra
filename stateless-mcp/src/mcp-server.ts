@@ -32,6 +32,8 @@ export function createServiceMcp(
   const server = new McpServer(
     { name: "deepseek-infra-stateless-mcp", version: "1.0.0" },
     {
+      // Count raw input before schema validation strips unknown fields.
+      maxToolInputElements: 10_000,
       capabilities: {
         tools: { listChanged: false },
       },
