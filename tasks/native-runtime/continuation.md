@@ -12638,3 +12638,39 @@ Clippy on six unnecessary borrows of the new environment closure; these are
 removed without changing warnings, coverage or test gates. Rust coverage remained
 a separate live job at observation time. All failures and exact-source reports
 are retained. Neither source is a whole-product readiness qualification.
+
+## 2026-10-21 — managed bootstrap failure recovery and original coverage gates
+
+At source 32b5e177, Go development run39425177578 passed its complete 101-case
+config/lifecycle/launch corpus, six focused binding/preview groups and the eight
+Android-tagged host SQLite cases. Independent Rust push run39425177512 passed
+coverage and all checks before the mandatory empty-profile public startup gate,
+which still returned HTTP503. Native builds succeeded, all three production
+processes were present, no offline store/custody/private-transport seeding was
+used, and the full-product gate correctly stayed NOT_READY.
+
+Source workflow_dispatch run39426623878 failed: native-go coverage was
+14483/15300 statements (94.660131%, below the unchanged 95% floor), so its later
+race and Android steps did not execute. Python3.10/3.11/3.12 each failed the same
+three source-isolation assertions because the bounded Rust custody initializer
+was absent from the static process contract. Downstream Evidence/readiness
+failures do not supply missing upstream qualification.
+
+This descendant retains the original assertions and adds a narrowly checked
+initializer contract: Rust-worker target, absolute non-interpreter path, bounded
+deadline, native process fence/guardian lifetime, explicit environment and
+observed child exit. Adversarial source mutations must fail. Startup fault tests
+exercise actual child initialization/TLS discovery and isolated I/O/permission
+failures. A failed permission change now removes the already-owned Go transport
+session; bounded metadata reads also reject files truncated after their stat.
+No failed startup may start Go control/gateway or replace Rust custody. Writer
+preflight tests corrupt real closed SQLite stores and verify refusal without
+repairing their bytes or claiming a writer.
+
+Development coverage profiles are diagnostics for the selected packages; they
+do not replace the full unfiltered Go coverage/race corpus. All original 95% Go
+and Python and 80% Rust floors, complete CI, and the mandatory default startup
+gate remain required at this descendant's exact revision. No whole-product
+readiness, fresh native-origin domain authority, credential renewal, platform
+execution or production-provider qualification is claimed. No PR is handled
+outside the daily21:40 batch; no merge/release or real-data operation occurs.

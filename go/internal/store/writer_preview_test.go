@@ -1,7 +1,9 @@
 package store
 
 import (
+	"crypto/sha256"
 	"errors"
+	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
 	"os"
 	"path/filepath"
 	"testing"
@@ -85,5 +87,54 @@ func TestNextWriterFencingTokenAndControlWriterDenyPythonCapabilitiesBeforeCreat
 				t.Fatal("rejected Python path created files")
 			}
 		})
+	}
+}
+
+func TestNextWriterFencingTokenRejectsCorruptionWithoutRepairingDatabase(t *testing.T) {
+	for name, mutation := range map[string]string{
+		"foreign-marker":     "UPDATE control_store_meta SET unique_writer='foreign'",
+		"missing-migrations": "DROP TABLE schema_migrations",
+		"version-gap":        "PRAGMA user_version=0",
+		"foreign-object":     "CREATE TABLE injected_object(id INTEGER)",
+		"missing-writer":     "DELETE FROM control_writer",
+		"writer-overflow":    "UPDATE control_writer SET fencing_token=9223372036854775807",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			control, err := OpenControl(OpenOptions{Path: root, Owner: "offline-corruption-fixture"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = control.Close(); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, ControlDatabaseFilename)
+			db, err := sqlitedb.Open(controlDatabaseDSN(path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = db.Exec(mutation); err != nil {
+				db.Close()
+				t.Fatal(err)
+			}
+			if err = db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			original, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := sha256.Sum256(original)
+			if fence, err := NextWriterFencingToken(root); err == nil || fence != 0 {
+				t.Fatal("corrupt retained state was accepted")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || sha256.Sum256(after) != before {
+				t.Fatal("read-only preflight repaired or rewrote corrupt state")
+			}
+		})
+	}
+	if _, err := NextWriterFencingToken(string([]byte{0})); err == nil {
+		t.Fatal("invalid filesystem path was accepted")
 	}
 }

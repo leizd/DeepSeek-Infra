@@ -71,17 +71,22 @@ func managedFile(path string, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	defer file.Close()
+	return readManagedValue(file, limit)
+}
+
+func readManagedValue(file io.Reader, limit int64) ([]byte, error) {
 	bytes, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(bytes)) > limit {
+	if len(bytes) == 0 || int64(len(bytes)) > limit {
 		return nil, errManagedProfile
 	}
 	return bytes, nil
 }
-func sameManagedPath(a, b string) bool {
-	if runtime.GOOS == "windows" {
+func sameManagedPath(a, b string) bool { return managedPathsEqualForOS(a, b, runtime.GOOS) }
+func managedPathsEqualForOS(a, b, goos string) bool {
+	if goos == "windows" {
 		return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
 	}
 	return filepath.Clean(a) == filepath.Clean(b)
@@ -302,12 +307,16 @@ func managedGoIdentity(now time.Time) ([]byte, []byte, []byte, error) {
 	return rootPEM, certPEM, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), nil
 }
 func runManagedInitializer(ctx context.Context, process Process, environment []string, output io.Writer) error {
+	return runManagedInitializerWithFence(ctx, process, environment, output, func() (supervisorFence, error) { return newProcessFence() })
+}
+
+func runManagedInitializerWithFence(ctx context.Context, process Process, environment []string, output io.Writer, createFence func() (supervisorFence, error)) error {
 	if process.Name != "deepseek-worker" || !filepath.IsAbs(process.Path) || legacyCommand(process.Path) {
 		return errManagedProfile
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	fence, err := newProcessFence()
+	fence, err := createFence()
 	if err != nil {
 		return err
 	}
@@ -365,7 +374,32 @@ func waitManagedBinding(ctx context.Context, cfg worker.TLSDialConfig, query wor
 		}
 	}
 }
+
+// Each launch owns its primitives. Production always uses the native defaults;
+// tests inject storage/transport failures without global hooks or runtime flags.
+type managedRuntimeOperations struct {
+	initialize       func(context.Context, Process, []string, io.Writer) error
+	identity         func(time.Time) ([]byte, []byte, []byte, error)
+	random           func(int) (string, error)
+	session          func(string, string) (string, error)
+	privateDirectory func(string) error
+	writeFile        func(string, []byte, os.FileMode) error
+	binding          func(context.Context, worker.TLSDialConfig, worker.ControlSignerBindingQuery) (worker.ControlSignerBinding, error)
+	publish          func(string, []byte) error
+}
+
+func nativeManagedOperations() managedRuntimeOperations {
+	return managedRuntimeOperations{
+		initialize: runManagedInitializer, identity: managedGoIdentity, random: randomManagedHex,
+		session: os.MkdirTemp, privateDirectory: managedDirectory, writeFile: os.WriteFile,
+		binding: waitManagedBinding, publish: publishManagedValue,
+	}
+}
+
 func runManagedRuntime(ctx context.Context, processes []Process, environment []string, output io.Writer) error {
+	return runManagedRuntimeWith(ctx, processes, environment, output, nativeManagedOperations())
+}
+func runManagedRuntimeWith(ctx context.Context, processes []Process, environment []string, output io.Writer, operations managedRuntimeOperations) error {
 	seen := map[string]bool{}
 	for _, process := range processes {
 		if seen[process.Name] || !filepath.IsAbs(process.Path) || legacyCommand(process.Path) {
@@ -411,7 +445,7 @@ func runManagedRuntime(ctx context.Context, processes []Process, environment []s
 	// An existing Go database/public pin can never trigger custody creation.
 	// In particular, missing Rust keys after a crash stay a hard failure.
 	if profile.pin == "" {
-		if err = runManagedInitializer(ctx, initializer.Processes[workerIndex], initializer.Processes[workerIndex].Env, output); err != nil {
+		if err = operations.initialize(ctx, initializer.Processes[workerIndex], initializer.Processes[workerIndex].Env, output); err != nil {
 			return err
 		}
 	}
@@ -426,11 +460,8 @@ func runManagedRuntime(ctx context.Context, processes []Process, environment []s
 	if !pool.AppendCertsFromPEM(publicCA) {
 		return errManagedProfile
 	}
-	session, err := os.MkdirTemp(profile.metadata, "transport-")
+	session, err := operations.session(profile.metadata, "transport-")
 	if err != nil {
-		return err
-	}
-	if err = managedDirectory(session); err != nil {
 		return err
 	}
 	files := []string{"go-ca.pem", "go-server.pem", "go-server-key.pem"}
@@ -440,21 +471,24 @@ func runManagedRuntime(ctx context.Context, processes []Process, environment []s
 		}
 		_ = os.Remove(session)
 	}()
+	if err = operations.privateDirectory(session); err != nil {
+		return err
+	}
 	now := time.Now().UTC().Truncate(time.Second)
-	ca, cert, key, err := managedGoIdentity(now)
+	ca, cert, key, err := operations.identity(now)
 	if err != nil {
 		return err
 	}
 	for i, bytes := range [][]byte{ca, cert, key} {
-		if err = os.WriteFile(filepath.Join(session, files[i]), bytes, 0o600); err != nil {
+		if err = operations.writeFile(filepath.Join(session, files[i]), bytes, 0o600); err != nil {
 			return err
 		}
 	}
-	bearer, err := randomManagedHex(32)
+	bearer, err := operations.random(32)
 	if err != nil {
 		return err
 	}
-	controlBearer, err := randomManagedHex(32)
+	controlBearer, err := operations.random(32)
 	if err != nil {
 		return err
 	}
@@ -483,11 +517,11 @@ func runManagedRuntime(ctx context.Context, processes []Process, environment []s
 		if index != 0 {
 			return nil
 		}
-		binding, err := waitManagedBinding(ctx, dial, query)
+		binding, err := operations.binding(ctx, dial, query)
 		if err != nil {
 			return err
 		}
-		if err = publishManagedValue(filepath.Join(profile.metadata, "signer-public-pin"), []byte(binding.PublicKey)); err != nil {
+		if err = operations.publish(filepath.Join(profile.metadata, "signer-public-pin"), []byte(binding.PublicKey)); err != nil {
 			return err
 		}
 		updated := withProductionEnvironment(plan, []string{"DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY=" + binding.PublicKey, "DEEPSEEKD_MUTATION_SIGNER_KEY=" + binding.PublicKey, "DEEPSEEKD_PROMOTION_SIGNER_KEY=" + binding.PublicKey, "DEEPSEEKD_FLEET_ID=" + binding.FleetID, "DEEPSEEKD_ENVIRONMENT=" + binding.Environment})

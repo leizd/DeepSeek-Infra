@@ -478,6 +478,47 @@ def _native_supervisor_contract(path: Path, root: Path, text: str) -> bool:
             and "return true" in legacy.group(1) and 'runtimeMode = "python_disabled"' in text)
 
 
+def _native_managed_initializer_contract(path: Path, root: Path, text: str) -> bool:
+    """Permit only the Rust custody initializer under the native process fence.
+
+    This is a source contract, not evidence that the built process tree is safe.
+    The executable, deadline, inherited guardian lifetime and exit status remain
+    mandatory; merely importing exec from the launch package is not sufficient.
+    """
+    if path.relative_to(root).as_posix() != "go/internal/launch/managed_profile.go":
+        return False
+    calls = re.findall(r"exec\.Command(?:Context)?\s*\(([^)]*)\)", text)
+    if [re.sub(r"\s+", "", call) for call in calls] != ["ctx,prepared.path,prepared.args[1:]..."]:
+        return False
+    wrapper = re.search(r"func runManagedInitializer\([^\n]*\) error\s*\{(.*?)\n\}", text, re.DOTALL)
+    initializer = re.search(r"func runManagedInitializerWithFence\([^\n]*\) error\s*\{(.*?)\n\}", text, re.DOTALL)
+    plan = root / "go/internal/launch/plan.go"
+    if wrapper is None or initializer is None or not plan.is_file():
+        return False
+    if ("return runManagedInitializerWithFence(ctx, process, environment, output," not in wrapper.group(1)
+            or "return newProcessFence()" not in wrapper.group(1)
+            or not _native_supervisor_contract(plan, root, plan.read_text(encoding="utf-8"))):
+        return False
+    body = initializer.group(1)
+    ordered = [
+        'if process.Name != "deepseek-worker" || !filepath.IsAbs(process.Path) || legacyCommand(process.Path)',
+        "context.WithTimeout(ctx, 45*time.Second)", "fence, err := createFence()",
+        "defer fence.close()", "prepared, err := fence.prepare(process, environment)",
+        "exec.CommandContext(ctx, prepared.path, prepared.args[1:]...)",
+        "cmd.SysProcAttr = fence.attributes()", "cmd.Env = prepared.env", "cmd.ExtraFiles = prepared.files",
+        "if prepared.cancel != nil", "cmd.Cancel = prepared.cancel", "if err = cmd.Start(); err != nil",
+        "if err = fence.admit(cmd.Process.Pid); err != nil", "cancel()", "_ = cmd.Wait()",
+        "if err = cmd.Wait(); err != nil",
+    ]
+    position = 0
+    for token in ordered:
+        found = body.find(token, position)
+        if found < 0:
+            return False
+        position = found + len(token)
+    return not re.search(r"cmd\.(?:Args|Path)\s*=", body)
+
+
 def _native_linux_guardian_contract(path: Path, root: Path, text: str) -> bool:
     """A same-binary guardian admits the same four native targets only."""
     if path.relative_to(root).as_posix() != "go/internal/launch/guardian_linux.go":
@@ -570,6 +611,7 @@ def check_process_tree_isolation(root: Path) -> GateCheckResult:
         text = go_file.read_text(encoding="utf-8")
         if '"os/exec"' in text:
             if (_native_supervisor_contract(go_file, root, text)
+                    or _native_managed_initializer_contract(go_file, root, text)
                     or _native_linux_guardian_contract(go_file, root, text)):
                 native_supervisors += 1
             elif _native_browser_hook_contract(go_file, root, text):
