@@ -132,6 +132,7 @@ jobs:
                       "TestNativeOriginCreatesGoOwnedDomainsAndRetainsBirthAcrossTakeover",
                       "TestNativeOriginLostPublicationResponseRecoversOriginalAtSuccessorFence",
                       "TestNativeOriginPublishedCustodyNeverRecreatesLostGoDatabase",
+                      "TestNativeOriginRejectsTruncatedPublishedGoDatabaseWithoutRepair",
                       "TestNativeOriginRejectsExistingEmptyAndLegacyStoresWithoutTouchingThem",
                       "TestNativeOriginRejectsTamperedBirthBeforeDatabaseCreation",
                       "TestNativeOriginTornIntentResumesOnlyBeforeDatabaseCreation",
@@ -158,6 +159,47 @@ jobs:
           Path("artifacts/control-rpc-development/managed-binding-result.json").write_text(json.dumps(report, indent=2)+"\n")
           raise SystemExit(code)
           PY
+      - name: Prove truncated-store refusals fail without the publication-loss guard
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          negative="$RUNNER_TEMP/native-origin-negative-go"
+          cp -a go "$negative"
+          export NATIVE_ORIGIN_NEGATIVE_GO="$negative"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          target = Path(os.environ["NATIVE_ORIGIN_NEGATIVE_GO"]) / "internal/store/control.go"
+          source = target.read_text()
+          guard = '\tif nativeOrigin != nil && nativeOrigin.state.Publication != nil && !databaseExisted {\n\t\treturn nil, ErrNativeOrigin\n\t}\n'
+          assert source.count(guard) == 1
+          target.write_text(source.replace(guard, "", 1))
+          PY
+          set +e
+          (cd "$negative" && go test -race -json -count=1 -timeout=2m ./internal/store -run '^TestNativeOriginRejectsTruncatedPublishedGoDatabaseWithoutRepair$') > artifacts/control-rpc-development/native-origin-negative-tests.jsonl 2>&1
+          code=$?
+          set -e
+          export NATIVE_ORIGIN_NEGATIVE_EXIT="$code"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          name = "TestNativeOriginRejectsTruncatedPublishedGoDatabaseWithoutRepair"
+          failed = set()
+          for line in Path("artifacts/control-rpc-development/native-origin-negative-tests.jsonl").read_text().splitlines():
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              if row.get("Action") == "fail" and row.get("Test"):
+                  failed.add(row["Test"])
+          required = {name, name + "/zero-byte", name + "/empty-sqlite"}
+          assert int(os.environ["NATIVE_ORIGIN_NEGATIVE_EXIT"]) == 1 and failed == required, (failed, required)
+          Path("artifacts/control-rpc-development/native-origin-negative-result.json").write_text(json.dumps({
+              "status": "PASS", "sourceCommit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
+              "event": os.environ["GITHUB_EVENT_NAME"], "expectedRefusalFailuresObserved": sorted(failed),
+              "onlyTemporaryCopyModified": True, "fullMigrationQualified": False}, indent=2) + "\n")
+          PY
+          test -z "$(git status --porcelain --untracked-files=all)"
       - name: Compile Windows native launch and control surfaces in the cloud
         run: |
           cd go

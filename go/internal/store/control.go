@@ -184,6 +184,12 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 		}
 	}
 
+	// A retained Rust publication proves that an initialized Go database
+	// already existed. Truncation or an empty SQLite container is loss of
+	// authority, never the crash-before-creation recovery case.
+	if nativeOrigin != nil && nativeOrigin.state.Publication != nil && !databaseExisted {
+		return nil, ErrNativeOrigin
+	}
 	db, err := sqlitedb.Open(controlDatabaseDSN(databasePath))
 	if err != nil {
 		return nil, err

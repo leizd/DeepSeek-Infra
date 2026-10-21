@@ -15,6 +15,7 @@ import (
 
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
+	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -153,6 +154,58 @@ func TestNativeOriginPublishedCustodyNeverRecreatesLostGoDatabase(t *testing.T) 
 	}
 	if _, err = os.Stat(database); !errors.Is(err, os.ErrNotExist) || peer.publications != 1 {
 		t.Fatal("lost database was recreated")
+	}
+}
+
+func TestNativeOriginRejectsTruncatedPublishedGoDatabaseWithoutRepair(t *testing.T) {
+	for _, kind := range []string{"zero-byte", "empty-sqlite"} {
+		t.Run(kind, func(t *testing.T) {
+			opts, peer := nativeFixture(t, filepath.Join(t.TempDir(), "go-control"))
+			control, err := OpenControl(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = control.Close(); err != nil {
+				t.Fatal(err)
+			}
+			database := filepath.Join(opts.Path, ControlDatabaseFilename)
+			if kind == "zero-byte" {
+				if err = os.WriteFile(database, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err = os.Remove(database); err != nil {
+					t.Fatal(err)
+				}
+				empty, err := sqlitedb.Open(controlDatabaseDSN(database))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = empty.Exec("CREATE TABLE empty_fixture(value INTEGER)"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = empty.Exec("DROP TABLE empty_fixture"); err != nil {
+					t.Fatal(err)
+				}
+				if err = empty.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := os.ReadFile(database)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reopened, err := OpenControl(opts); !errors.Is(err, ErrNativeOrigin) || reopened != nil {
+				if reopened != nil {
+					_ = reopened.Close()
+				}
+				t.Fatalf("published authority loss admitted as fresh genesis: %v", err)
+			}
+			after, err := os.ReadFile(database)
+			if err != nil || !bytes.Equal(before, after) || peer.publications != 1 {
+				t.Fatal("rejected authority loss changed retained bytes or custody")
+			}
+		})
 	}
 }
 func TestNativeOriginRejectsExistingEmptyAndLegacyStoresWithoutTouchingThem(t *testing.T) {
