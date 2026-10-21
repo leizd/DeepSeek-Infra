@@ -110,7 +110,7 @@ func TestV17FailureMigrationPreservesRowsThenSettlesVerifiedPhase(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := control.migrateTx(tx); err != nil {
+			if err := control.migrateToV17Tx(tx); err != nil {
 				_ = tx.Rollback()
 				t.Fatal(err)
 			}
@@ -153,8 +153,24 @@ func TestV16StoreOpenMigratesFailureLeaseAndPreservesOriginalCustody(t *testing.
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	if reopened.SchemaVersion() != SchemaV17 {
+	if reopened.SchemaVersion() != CurrentSchema {
 		t.Fatal("open did not advance historical metadata, journal and user_version together")
+	}
+	var metadata, version, migrations, origins int
+	if err := reopened.db.QueryRow(`SELECT schema_version FROM control_store_meta`).Scan(&metadata); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.db.QueryRow(`SELECT count(*) FROM schema_migrations`).Scan(&migrations); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.db.QueryRow(`SELECT count(*) FROM control_native_origin`).Scan(&origins); err != nil {
+		t.Fatal(err)
+	}
+	if metadata != int(CurrentSchema) || version != int(CurrentSchema) || migrations != int(CurrentSchema) || origins != 0 {
+		t.Fatal("historical open advanced versions inconsistently or invented native provenance")
 	}
 	lease, active, err := reopened.GetActionLease(input.ActionID)
 	if err != nil || !active || lease.Epoch != input.Epoch || lease.ClaimToken != input.ClaimToken {
@@ -163,6 +179,53 @@ func TestV16StoreOpenMigratesFailureLeaseAndPreservesOriginalCustody(t *testing.
 	_, _, receipt, found, err := reopened.AgentNodeOutcomeSnapshot(input.ActionID, agentFailureNode("plan"))
 	if err != nil || !found || receipt == nil {
 		t.Fatal("opening v16 lost retained independently signed evidence", err)
+	}
+}
+
+func TestNativeOriginLegacyV17UpgradeRetainsEveryProtectedRow(t *testing.T) {
+	for _, phase := range []string{"plan", "synthesis"} {
+		t.Run(phase, func(t *testing.T) {
+			control, _, _ := failureSettlementFixture(t, phase)
+			materializeFailureV16Fixture(t, control)
+			tx, err := control.db.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			if err := control.migrateToV17Tx(tx); err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			before := failureMigrationRows(t, control.db)
+			tx, err = control.db.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			if err := control.migrateToV18Tx(tx); err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			var expected, actual map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(before), &expected); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal([]byte(failureMigrationRows(t, control.db)), &actual); err != nil {
+				t.Fatal(err)
+			}
+			origin, exists := actual["control_native_origin"]
+			if control.SchemaVersion() != SchemaV18 || !exists || string(origin) != "null" {
+				t.Fatal("legacy v18 migration omitted its empty table or invented native provenance")
+			}
+			delete(actual, "control_native_origin")
+			if !reflect.DeepEqual(expected, actual) {
+				t.Fatal("v18 migration changed retained leases, custody, witnesses or domain history")
+			}
+		})
 	}
 }
 
