@@ -30,6 +30,7 @@ func managedFailurePlan(t *testing.T, root string) ([]Process, []string) {
 	address := listener.Addr().String()
 	listener.Close()
 	env := []string{managedRequired + "=1", "DEEPSEEK_RUNTIME_MODE=python_disabled", "DEEPSEEKD_MODE=authoritative", "DEEPSEEK_INFRA_ROOT=" + root, "DEEPSEEKD_PRODUCTION_STORE=" + filepath.Join(root, "go-control"), "DEEPSEEK_WORKER_LISTEN=" + address, "DEEPSEEK_LAUNCH_HELPER=1"}
+	env = managedFixtureControlEnvironment(t, env)
 	processes := []Process{}
 	for _, role := range []string{"deepseekd", "deepseek-worker", "deepseek-gateway"} {
 		processes = append(processes, Process{Name: role, Path: executable, Env: append(append([]string(nil), env...), "DEEPSEEK_MANAGED_FIXTURE_ROLE="+role)})
@@ -329,6 +330,7 @@ func TestManagedInitializerRequiresFenceAndReportsRealChildFailure(t *testing.T)
 			fence.admission = func(int) error { return fault }
 		}
 		env := []string{"DEEPSEEK_LAUNCH_HELPER=1", "DEEPSEEK_MANAGED_FIXTURE_ROLE=deepseek-worker", "DEEPSEEK_WORKER_MANAGED_INITIALIZE=1", "DEEPSEEK_WORKER_MANAGED_ROOT=" + filepath.Join(t.TempDir(), "absent-parent")}
+		env = managedFixtureControlEnvironment(t, env)
 		if err = runManagedInitializerWithFence(context.Background(), process, env, io.Discard, func() (supervisorFence, error) { return fence, nil }); !errors.Is(err, fault) || !fence.closed {
 			t.Fatal("initializer bypassed mechanical fence")
 		}
@@ -339,6 +341,7 @@ func TestManagedInitializerRequiresFenceAndReportsRealChildFailure(t *testing.T)
 		t.Fatal("cancelled initializer started")
 	}
 	env := []string{"DEEPSEEK_LAUNCH_HELPER=1", "DEEPSEEK_MANAGED_FIXTURE_ROLE=deepseek-worker", "DEEPSEEK_WORKER_MANAGED_INITIALIZE=1", "DEEPSEEK_WORKER_MANAGED_ROOT=" + filepath.Join(t.TempDir(), "absent-parent")}
+	env = managedFixtureControlEnvironment(t, env)
 	if err = runManagedInitializer(context.Background(), process, env, io.Discard); err == nil {
 		t.Fatal("failed custody process accepted")
 	}

@@ -84,6 +84,9 @@ jobs:
               "TestManagedRoleScopesAndExplicitOperatorProvisioning",
               "TestManagedExpectedWriterFenceIsExplicitAndStrict",
               "TestManagedNativeOriginRequiresPinnedAuthoritativeDeployment",
+              "TestManagedControlReadinessRequiresTheExpectedLiveWriter",
+              "TestManagedControlReadinessRefusesForeignTargetsAndCancellation",
+              "TestManagedGatewayWaitsForActualControlReadiness",
               "TestManagedLifecycleRejectsChangedWriterFenceBeforeServing",
           }
           started, finished = set(), {}
@@ -138,6 +141,8 @@ jobs:
                       "TestNativeOriginTornIntentResumesOnlyBeforeDatabaseCreation",
                       "TestNativeOriginMissingRustPublicationNeverReissuesACommittedReceipt",
                       "TestNativeOriginPreviewOfInterruptedCreationIsReadOnlyAndPinned",
+                      "TestNativeOriginRollbackCannotErasePublishedOrPendingBirth",
+                      "TestNativeOriginLegacyEmptyRollbackRetainsOriginalReopenBehavior",
                       "TestNativeOriginClientRequiresAuthenticatedTLSAndOriginalBirthFence",
                       "TestNativeOriginClientBoundsResponsesAndRefusesUnscopedPublication",
                       "TestEmptyPythonInventoryStillRequiresAttestedSource"}
@@ -158,6 +163,46 @@ jobs:
                     "fullGoSuiteQualified": False, "coverageQualified": False, "fullMigrationQualified": False}
           Path("artifacts/control-rpc-development/managed-binding-result.json").write_text(json.dumps(report, indent=2)+"\n")
           raise SystemExit(code)
+          PY
+      - name: Verify original historical migration and rollback regressions
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          import json, os, re, subprocess
+          from pathlib import Path
+          spec = json.loads(Path("tests/native/native_origin_legacy_regressions_v1.json").read_text())
+          required = set(spec["tests"])
+          assert len(required) == len(spec["tests"]) == 23 and spec["originalAssertionsRetained"] is True
+          pattern = "^(" + "|".join(re.escape(name) for name in sorted(required)) + ")$"
+          log = Path("artifacts/control-rpc-development/legacy-migration-tests.jsonl")
+          with log.open("wb") as output:
+              result = subprocess.run(["go", "test", "-race", "-json", "-count=1", "-timeout=3m",
+                                       "./internal/store", "-run", pattern], cwd="go", stdout=output, stderr=subprocess.STDOUT)
+          started, finished = Counter(), Counter()
+          packages = {}
+          for line in log.read_text().splitlines():
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              name, action = row.get("Test"), row.get("Action")
+              if name and action == "run":
+                  started[name] += 1
+              if name and action in {"pass", "fail", "skip"}:
+                  assert action == "pass", name
+                  finished[name] += 1
+              if not name and action in {"pass", "fail", "skip"}:
+                  packages[row["Package"]] = action
+          assert result.returncode == 0 and started == finished and all(v == 1 for v in started.values())
+          assert {name for name in started if "/" not in name} == required
+          assert packages == {"github.com/leizd/DeepSeek-Infra/go/internal/store": "pass"}
+          Path("artifacts/control-rpc-development/legacy-migration-result.json").write_text(json.dumps({
+              "status": "PASS", "sourceCommit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
+              "event": os.environ["GITHUB_EVENT_NAME"], "expectedTests": sorted(required),
+              "passedTests": sorted(finished), "originalAssertionsRetained": True,
+              "fullGoSuiteQualified": False, "coverageQualified": False, "fullMigrationQualified": False}, indent=2) + "\n")
           PY
       - name: Prove truncated-store refusals fail without the publication-loss guard
         env:

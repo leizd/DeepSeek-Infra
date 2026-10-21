@@ -20,6 +20,7 @@ import (
 )
 
 var ErrNativeOrigin = errors.New("NATIVE_ORIGIN_INCONSISTENT_OR_STATE_LOST")
+var ErrNativeOriginHistoryRetained = errors.New("NATIVE_ORIGIN_HISTORY_RETAINED")
 
 type NativeOriginPeer interface {
 	ReadNativeOrigin(context.Context, *actionv1.ReadNativeOriginRequest) (*actionv1.NativeOriginState, error)

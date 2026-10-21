@@ -18,6 +18,7 @@ func materializeFailureV16Fixture(t *testing.T, control *Control) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
+	dropEmptyNativeOriginFixture(t, tx)
 	for _, statement := range []string{
 		`CREATE TEMP TABLE failure_lease_v16_fixture AS SELECT * FROM action_leases`,
 		`DROP TABLE action_leases`, actionCancellationLeaseSchema,

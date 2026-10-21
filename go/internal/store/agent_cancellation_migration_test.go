@@ -11,6 +11,7 @@ import (
 // history, and the legacy CHECK constraint still rejects the new terminal state.
 func materializeLegacyActionLeasesFixture(t *testing.T, tx *sql.Tx) {
 	t.Helper()
+	dropEmptyNativeOriginFixture(t, tx)
 	for _, statement := range []string{
 		`CREATE TEMP TABLE legacy_action_leases_fixture AS SELECT * FROM action_leases`,
 		`DROP TABLE action_leases`, actionAdmissionSchemaObjects["action_leases"],

@@ -516,9 +516,24 @@ func runManagedRuntimeWith(ctx context.Context, processes []Process, environment
 	first := plan.Processes[workerIndex]
 	plan.Processes = append(plan.Processes[:workerIndex], plan.Processes[workerIndex+1:]...)
 	plan.Processes = append([]Process{first}, plan.Processes...)
+	// The control process must be started before the public edge even when a
+	// caller supplied the three roles in a different order.
+	if len(plan.Processes) != 3 {
+		return errManagedProfile
+	}
+	if plan.Processes[1].Name != "deepseekd" {
+		plan.Processes[1], plan.Processes[2] = plan.Processes[2], plan.Processes[1]
+	}
+	if plan.Processes[1].Name != "deepseekd" || plan.Processes[2].Name != "deepseek-gateway" {
+		return errManagedProfile
+	}
 	query := worker.ControlSignerBindingQuery{FleetID: "native-" + profile.id, Environment: "local", PublicKey: profile.pin, FencingToken: fence}
 	dial := worker.TLSDialConfig{Target: launchEnvironmentValue(environment, "DEEPSEEK_WORKER_LISTEN"), TrustRootFile: trustPath, ServerName: "deepseek-worker.local", BearerToken: bearer, ExpiresAt: expires}
 	afterStart := func(index int) error {
+		if index == 1 {
+			return waitManagedControl(ctx, launchEnvironmentValue(plan.Env, "GO_CONTROL_ADDR"), fence,
+				launchEnvironmentValue(plan.Env, "DEEPSEEKD_OWNER"))
+		}
 		if index != 0 {
 			return nil
 		}

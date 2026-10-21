@@ -12,10 +12,12 @@ import (
 var ErrInvalidConfig = errors.New("INVALID_CONFIG")
 
 const (
-	ModeShadow          = "shadow"
-	ModeAuthoritative   = "authoritative"
-	MutationAuthority   = "python"
-	MutationAuthorityGo = "go"
+	ControlWriterFenceHeader = "X-DeepSeek-Writer-Fence"
+	ControlWriterOwnerHeader = "X-DeepSeek-Writer-Owner"
+	ModeShadow               = "shadow"
+	ModeAuthoritative        = "authoritative"
+	MutationAuthority        = "python"
+	MutationAuthorityGo      = "go"
 	// MinInternalAPIBearerLength refuses a control-plane credential short enough
 	// to be guessed or brute-forced.
 	MinInternalAPIBearerLength = 32

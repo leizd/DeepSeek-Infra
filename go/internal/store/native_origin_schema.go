@@ -66,3 +66,19 @@ func verifyNativeOriginSchemaTx(tx *sql.Tx) error {
 	_, err := verifyNativeOriginTx(tx)
 	return err
 }
+
+func retireEmptyNativeOriginTx(tx *sql.Tx) error {
+	if err := verifyNativeOriginSchemaTx(tx); err != nil {
+		return err
+	}
+	var count int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM control_native_origin").Scan(&count); err != nil {
+		return err
+	}
+	if count != 0 {
+		return ErrNativeOriginHistoryRetained
+	}
+	// SQLite drops only this empty table's attached immutability triggers.
+	_, err := tx.Exec("DROP TABLE control_native_origin")
+	return err
+}

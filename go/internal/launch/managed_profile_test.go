@@ -14,6 +14,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leizd/DeepSeek-Infra/go/internal/config"
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"google.golang.org/grpc"
@@ -128,7 +130,7 @@ func runManagedFixtureHelper(role string) int {
 		if os.Getenv("DEEPSEEKD_MUTATION_SIGNER_KEY") != managedFixturePublicKey() {
 			return 95
 		}
-		control, err := store.OpenControl(store.OpenOptions{Path: os.Getenv("DEEPSEEKD_PRODUCTION_STORE"), Owner: "managed-offline-fixture", LeaseSeconds: 1})
+		control, err := store.OpenControl(store.OpenOptions{Path: os.Getenv("DEEPSEEKD_PRODUCTION_STORE"), Owner: os.Getenv("DEEPSEEKD_OWNER"), LeaseSeconds: 1})
 		if err != nil {
 			return 96
 		}
@@ -140,6 +142,28 @@ func runManagedFixtureHelper(role string) int {
 		if err = os.WriteFile(filepath.Join(root, "fixture-control-ready"), []byte(strconv.FormatInt(expected, 10)), 0o600); err != nil {
 			return 98
 		}
+		listener, err := net.Listen("tcp", os.Getenv("DEEPSEEKD_LISTEN"))
+		if err != nil {
+			return 101
+		}
+		defer listener.Close()
+		mux := http.NewServeMux()
+		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+			lease := control.Writer()
+			w.Header().Set(config.ControlWriterFenceHeader, strconv.FormatInt(lease.FencingToken, 10))
+			w.Header().Set(config.ControlWriterOwnerHeader, lease.OwnerInstanceID)
+			if os.Getenv("DEEPSEEK_MANAGED_FIXTURE_DELAY_CONTROL") == "1" {
+				_ = os.WriteFile(filepath.Join(root, "fixture-readiness-probed"), []byte("observed"), 0o600)
+				if _, err := os.Stat(filepath.Join(root, "fixture-release-control")); err != nil {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+		server := &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
+		go func() { <-ctx.Done(); _ = server.Close() }()
+		_ = server.Serve(listener)
 	} else if role == "deepseek-gateway" {
 		if err := os.WriteFile(filepath.Join(root, "fixture-gateway-ready"), []byte("ready"), 0o600); err != nil {
 			return 99
@@ -171,6 +195,7 @@ func TestManagedNativeStartupUsesAuthenticatedBindingAndRetainsWriterFence(t *te
 		address := listener.Addr().String()
 		_ = listener.Close()
 		env := []string{managedRequired + "=1", "DEEPSEEK_RUNTIME_MODE=python_disabled", "DEEPSEEKD_MODE=authoritative", "DEEPSEEK_INFRA_ROOT=" + root, "DEEPSEEKD_PRODUCTION_STORE=" + filepath.Join(root, "go-control"), "DEEPSEEK_WORKER_LISTEN=" + address, "DEEPSEEK_LAUNCH_HELPER=1"}
+		env = managedFixtureControlEnvironment(t, env)
 		processes := []Process{}
 		for _, role := range []string{"deepseekd", "deepseek-worker", "deepseek-gateway"} {
 			processes = append(processes, Process{Name: role, Path: executable, Env: append(append([]string(nil), env...), "DEEPSEEK_MANAGED_FIXTURE_ROLE="+role)})
@@ -380,6 +405,7 @@ func TestManagedMissingKeysNeverTriggerInitializer(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := []string{managedRequired + "=1", "DEEPSEEK_RUNTIME_MODE=python_disabled", "DEEPSEEKD_MODE=authoritative", "DEEPSEEK_INFRA_ROOT=" + root, "DEEPSEEK_WORKER_LISTEN=127.0.0.1:50052", "DEEPSEEK_LAUNCH_HELPER=1"}
+	env = managedFixtureControlEnvironment(t, env)
 	processes := []Process{}
 	for _, role := range []string{"deepseekd", "deepseek-worker", "deepseek-gateway"} {
 		processes = append(processes, Process{Name: role, Path: executable, Env: append(append([]string(nil), env...), "DEEPSEEK_MANAGED_FIXTURE_ROLE="+role)})

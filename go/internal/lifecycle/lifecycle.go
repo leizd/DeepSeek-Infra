@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -145,6 +146,11 @@ func serve(ctx context.Context, cfg config.Config, listener net.Listener, contro
 	mux := http.NewServeMux()
 	encodeStatus := func(writer http.ResponseWriter) {
 		writer.Header().Set("Content-Type", "application/json")
+		if control != nil {
+			lease := control.Writer()
+			writer.Header().Set(config.ControlWriterFenceHeader, strconv.FormatInt(lease.FencingToken, 10))
+			writer.Header().Set(config.ControlWriterOwnerHeader, lease.OwnerInstanceID)
+		}
 		_ = json.NewEncoder(writer).Encode(StatusFrom(cfg, control != nil))
 	}
 	mux.HandleFunc("/healthz", func(writer http.ResponseWriter, _ *http.Request) {

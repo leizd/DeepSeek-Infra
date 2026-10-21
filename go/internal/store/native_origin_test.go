@@ -345,3 +345,59 @@ func TestNativeOriginPreviewOfInterruptedCreationIsReadOnlyAndPinned(t *testing.
 		t.Fatal("changed public pin admitted")
 	}
 }
+
+func TestNativeOriginRollbackCannotErasePublishedOrPendingBirth(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		t.Run(map[bool]string{false: "published", true: "pending"}[pending], func(t *testing.T) {
+			opts, peer := nativeFixture(t, filepath.Join(t.TempDir(), "go-control"))
+			peer.lostResponse = pending
+			control, err := OpenControl(opts)
+			if pending {
+				if !errors.Is(err, io.ErrUnexpectedEOF) {
+					t.Fatal(err)
+				}
+				control, err = OpenControl(OpenOptions{Path: opts.Path, Owner: "pending-inspector", Now: func() int64 { return 1000 }})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer control.Close()
+			var before, after []byte
+			if err = control.db.QueryRow("SELECT origin FROM control_native_origin WHERE singleton=1").Scan(&before); err != nil {
+				t.Fatal(err)
+			}
+			if err = control.Rollback(0); !errors.Is(err, ErrNativeOriginHistoryRetained) {
+				t.Fatalf("retained native history erased: %v", err)
+			}
+			if err = control.db.QueryRow("SELECT origin FROM control_native_origin WHERE singleton=1").Scan(&after); err != nil || !bytes.Equal(before, after) || control.SchemaVersion() != CurrentSchema {
+				t.Fatal("refused rollback changed native provenance")
+			}
+		})
+	}
+}
+
+func TestNativeOriginLegacyEmptyRollbackRetainsOriginalReopenBehavior(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "go-control")
+	control, err := OpenControl(OpenOptions{Path: path, Owner: "legacy", Now: func() int64 { return 1000 }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = control.Rollback(0); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err = control.db.QueryRow("SELECT COUNT(*) FROM sqlite_schema WHERE name LIKE 'control_native_origin%'").Scan(&count); err != nil || count != 0 {
+		t.Fatal("empty rollback retained v18 objects")
+	}
+	if err = control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	control, err = OpenControl(OpenOptions{Path: path, Owner: "reopened", Now: func() int64 { return 1000 }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	if err = control.db.QueryRow("SELECT COUNT(*) FROM control_native_origin").Scan(&count); err != nil || count != 0 {
+		t.Fatal("legacy reopen manufactured native origin")
+	}
+}

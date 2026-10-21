@@ -17,6 +17,7 @@ func prepareDispatchV3Fixture(t *testing.T, control *Control) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
+	dropEmptyNativeOriginFixture(t, tx)
 	oldMetadata := strings.Replace(bootstrapSchemaStatements[0], "CREATE TABLE IF NOT EXISTS control_store_meta", "CREATE TABLE control_meta_v3_fixture", 1)
 	for _, statement := range []string{
 		"DROP TABLE IF EXISTS control_operator_mutations",

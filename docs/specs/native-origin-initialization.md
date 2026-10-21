@@ -33,6 +33,15 @@ private keys. Only after verification of the retained receipt does a fenced Go
 transaction activate the twelve native domains and retain their provenance.
 The control listener does not serve business requests before this completes.
 
+The supervisor starts worker, control, then edge in that order. It waits for
+the existing Go loopback health endpoint to return the actual expected writer
+fence and owner before starting the public edge. A stale process, an unavailable
+endpoint, or a different writer cannot satisfy this readiness observation.
+This Go-only startup read does not grant authority or replace private Go/Rust
+TLS RPC admission. A delayed real control subprocess is tested with an endpoint
+that refuses readiness until explicitly released; the gateway must stay absent
+while that endpoint is unavailable.
+
 The Rust publication receipt is immutable. Reads never mint certificates or
 signatures. A lost response is recovered by reading the original receipt using
 the successor's current writer fence, retaining the original birth action,

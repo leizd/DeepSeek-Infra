@@ -2325,6 +2325,11 @@ func (store *Control) Rollback(version int) error {
 	if err != nil {
 		return err
 	}
+	if store.schema >= SchemaV18 {
+		if err := retireEmptyNativeOriginTx(tx); err != nil {
+			return err
+		}
+	}
 	if store.schema >= SchemaV5 {
 		if err := retireEmptyActionAdmissionTx(tx); err != nil {
 			return err
