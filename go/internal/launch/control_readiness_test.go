@@ -101,12 +101,21 @@ func managedReadinessFixture(t *testing.T, desktop bool) {
 	finished := false
 	go func() { done <- Run(ctx, processes, environment, io.Discard) }()
 	defer func() {
+		if t.Failed() {
+			t.Logf("fixture worker=%s control=%s", launchEnvironmentValue(environment, "DEEPSEEK_WORKER_LISTEN"), launchEnvironmentValue(environment, "DEEPSEEKD_LISTEN"))
+			if _, err := os.Stat(filepath.Join(root, "fixture-control-listen-failed")); err == nil {
+				t.Log("fixture control listener failed before serving health")
+			}
+		}
 		cancel()
 		if finished {
 			return
 		}
 		select {
-		case <-done:
+		case err := <-done:
+			if t.Failed() {
+				t.Logf("managed fixture cleanup result: %v", err)
+			}
 		case <-time.After(5 * time.Second):
 			t.Error("managed subprocess cleanup timed out")
 		}

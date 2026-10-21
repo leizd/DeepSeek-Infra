@@ -190,14 +190,15 @@ func runManagedFixtureHelper(role string) int {
 		if err != nil || control.Writer().FencingToken != expected {
 			return 97
 		}
-		if err = os.WriteFile(filepath.Join(root, "fixture-control-ready"), []byte(strconv.FormatInt(expected, 10)), 0o600); err != nil {
-			return 98
-		}
 		listener, err := net.Listen("tcp", os.Getenv("DEEPSEEKD_LISTEN"))
 		if err != nil {
+			_ = os.WriteFile(filepath.Join(root, "fixture-control-listen-failed"), []byte("control-listen-failed"), 0o600)
 			return 101
 		}
 		defer listener.Close()
+		if err = os.WriteFile(filepath.Join(root, "fixture-control-ready"), []byte(strconv.FormatInt(expected, 10)), 0o600); err != nil {
+			return 98
+		}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 			lease := control.Writer()

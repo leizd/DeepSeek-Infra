@@ -28,7 +28,9 @@ func managedFailurePlan(t *testing.T, root string) ([]Process, []string) {
 		t.Fatal(err)
 	}
 	address := listener.Addr().String()
-	listener.Close()
+	// Retain the worker reservation until the control address is chosen. Closing
+	// it first lets a later :0 allocation select the same port for both roles.
+	defer listener.Close()
 	env := []string{managedRequired + "=1", "DEEPSEEK_RUNTIME_MODE=python_disabled", "DEEPSEEKD_MODE=authoritative", "DEEPSEEK_INFRA_ROOT=" + root, "DEEPSEEKD_PRODUCTION_STORE=" + filepath.Join(root, "go-control"), "DEEPSEEK_WORKER_LISTEN=" + address, "DEEPSEEK_LAUNCH_HELPER=1"}
 	env = managedFixtureControlEnvironment(t, env)
 	processes := []Process{}

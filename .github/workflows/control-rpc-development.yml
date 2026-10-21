@@ -298,6 +298,13 @@ jobs:
                       "TestNativeOriginClientBoundsResponsesAndRefusesUnscopedPublication",
                       "TestNativeOriginRestartRetainsCommittedWALWithReadOnlyObserver",
                       "TestNativeOriginWALMarkerRejectsCommittedForeignSchemaWithoutWrites",
+                      "TestNativeOriginFaultBootstrapRefusalsCannotCreateAuthority",
+                      "TestNativeOriginFaultPublicationResponseRetainsOriginalRecovery",
+                      "TestNativeOriginFaultActivationRollsBackEveryDomainAndKeepsReceipt",
+                      "TestNativeOriginFaultClosedOrExpiredWriterCannotActivate",
+                      "TestNativeOriginFaultVerifierRejectsClosedTransaction",
+                      "TestNativeOriginFaultRetainedProvenanceReadCannotMaskCorruption",
+                      "TestNativeOriginFaultIntentPreviewNeverRepairsForeignMetadata",
                       "TestAgentDriverSafeConfigurationFailuresRemainRedacted",
                       "TestAgentDriverLoopSuppressesCredentialErrorsAndStopsCancelledWork",
                       "TestEmptyPythonInventoryStillRequiresAttestedSource"}
