@@ -7,6 +7,7 @@ Native compilation and execution are restricted to GitHub-hosted verification.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -75,7 +76,7 @@ def wait_run(origin: str, run_id: str, expected: str) -> dict[str, Any]:
     raise ProbeFailure("DEFAULT_NATIVE_AGENT_TIMED_OUT_BEFORE_" + expected.upper(), semantic=True)
 
 
-def process_roles(parent: int) -> list[dict[str, Any]]:
+def process_roles(parent: int, required: set[str] | None = None) -> list[dict[str, Any]]:
     """Observe actual executable names and only credential variable names."""
     pending, result, seen = [parent], [], set()
     while pending:
@@ -104,7 +105,8 @@ def process_roles(parent: int) -> list[dict[str, Any]]:
             raise ProbeFailure("RUST_PRIVATE_CUSTODY_CONFIGURATION_ENTERED_GO", semantic=True)
         result.append({"pid": pid, "executable": executable})
         pending.extend(int(value) for value in children)
-    if not {"deepseekd", "deepseek-worker", "deepseek-gateway"} <= {row["executable"] for row in result}:
+    expected = {"deepseekd", "deepseek-worker", "deepseek-gateway"} if required is None else required
+    if not expected <= {row["executable"] for row in result}:
         raise ProbeFailure("DEFAULT_NATIVE_PRODUCTION_PROCESS_MISSING", semantic=True)
     return result
 
@@ -197,10 +199,14 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
         process: subprocess.Popen[bytes] | None = None
         origin = f"http://127.0.0.1:{port}"
 
-        def start(label: str) -> subprocess.Popen[bytes]:
+        def launch(label: str) -> subprocess.Popen[bytes]:
             with (args.out / (label + ".log")).open("wb") as log:
                 child = subprocess.Popen([str(binaries / "deepseek-launch"), "--server", "--no-prompt",
                     "--auth-disabled", "--port", str(port)], cwd=scratch, env=environment, stdout=log, stderr=subprocess.STDOUT)
+            return child
+
+        def start(label: str) -> subprocess.Popen[bytes]:
+            child = launch(label)
             try:
                 wait_public(origin, child)
                 return child
@@ -209,7 +215,67 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 raise
 
         try:
+            # Hold only control admission, after the real Rust worker has supplied
+            # its public binding. The isolated Go fixture cannot create a database
+            # or perform a provider request. No production crash hook is added.
+            holder = scratch / "control-holder.go"
+            holder.write_text('''package main
+import ("os"; "path/filepath"; "strconv"; "time")
+func main() {
+    path := filepath.Join(filepath.Dir(os.Args[0]), "control-held")
+    if os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0600) != nil { os.Exit(1) }
+    for { time.Sleep(time.Second) }
+}
+''', encoding="utf-8")
+            actual_control = binaries / "deepseekd-original"
+            (binaries / "deepseekd").replace(actual_control)
+            signing.record_command(["go", "build", "-p=2", "-o", str(binaries / "deepseekd"), str(holder)],
+                                   ROOT / "go", build_env, args.out, "build-control-holder", timeout=300)
+            process = launch("interrupted-before-control")
+            metadata = profile / "go-control/native-profile"
+            preparation = metadata / "signer-public-preparation"
+            pin_path = metadata / "signer-public-pin"
+            birth_path = profile / "rust-worker/custody/native-origin.pb"
+            control = profile / "go-control/control.sqlite3"
+            intent = profile / "go-control/native-origin-intent.pb"
+            publication = profile / "rust-worker/native-origin-publication.pb"
+            held = binaries / "control-held"
+            deadline = time.monotonic() + 30
+            while not (held.is_file() and pin_path.is_file() and preparation.is_file() and birth_path.is_file()):
+                if process.poll() is not None or time.monotonic() >= deadline:
+                    raise ProbeFailure("EARLY_NATIVE_PUBLIC_PIN_BOUNDARY_NOT_OBSERVED", semantic=True)
+                time.sleep(0.025)
+            original_pin, original_birth = pin_path.read_bytes(), birth_path.read_bytes()
+            if preparation.read_bytes() != original_pin or control.exists() or intent.exists() or publication.exists() or exchanges:
+                raise ProbeFailure("EARLY_NATIVE_INTERRUPTION_ALREADY_CREATED_CONTROL", semantic=True)
+            held_pid = int(held.read_text())
+            interrupted_processes = process_roles(process.pid, {"deepseek-worker", "deepseekd"})
+            if not any(row["pid"] == held_pid and row["executable"] == "deepseekd" for row in interrupted_processes):
+                raise ProbeFailure("EARLY_NATIVE_CONTROL_HOLDER_IDENTITY_DIFFERS", semantic=True)
+            process.kill()  # Actual SIGKILL; guardian EOF must fence every child.
+            process.wait(timeout=10)
+            process = None
+            deadline = time.monotonic() + 5
+            while any(Path(f"/proc/{row['pid']}").exists() for row in interrupted_processes):
+                if time.monotonic() >= deadline:
+                    raise ProbeFailure("EARLY_NATIVE_CONTROL_HOLDER_SURVIVED_SUPERVISION", semantic=True)
+                time.sleep(0.025)
+            actual_control.replace(binaries / "deepseekd")
+            report.update(earlyPinInterruptionObserved=True, earlyControlAdmissionHeldByIsolatedGoFixture=True,
+                          actualRustBindingBeforeInterruption=True, earlyGoDatabaseAbsent=True,
+                          earlyGoCreationIntentAbsent=True, earlyProviderRequests=0,
+                          earlyInterruptionUsedSIGKILL=True, interruptedNativeChildrenFenced=True,
+                          originalEarlyBirthSha256=hashlib.sha256(original_birth).hexdigest())
             process = start("first-launch")
+            original_publication = publication.read_bytes()
+            with closing(sqlite3.connect(control.as_uri() + "?mode=ro", uri=True)) as db:
+                native_origin = db.execute("SELECT origin,state,publication FROM control_native_origin WHERE singleton=1").fetchone()
+            if pin_path.read_bytes() != original_pin or birth_path.read_bytes() != original_birth or \
+                    intent.read_bytes() != original_birth or preparation.exists() or not original_publication or \
+                    native_origin != (original_birth, "published", original_publication):
+                raise ProbeFailure("EARLY_NATIVE_RECOVERY_REPLACED_OR_LOST_ORIGINAL_CUSTODY", semantic=True)
+            report.update(earlyPinRecoveryQualified=True, originalEarlyBirthAndIntentRetained=True,
+                          publicPreparationRemovedAfterControlReady=True, powerLossRecoveryQualified=False)
             report["actualProductionProcesses"] = process_roles(process.pid)
             created = request(origin, "/api/agent-runs", {"payload": {"messages": [{"role": "user", "content":
                 "Prepare an isolated default bootstrap verification plan"}], "apiKey": REQUEST_KEY, "model": "deepseek-chat"},
@@ -226,6 +292,9 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             stop(process)
             process = None
             process = start("second-launch")
+            if birth_path.read_bytes() != original_birth or publication.read_bytes() != original_publication:
+                raise ProbeFailure("NATIVE_RESTART_REPLACED_EARLY_ORIGIN_OR_PUBLICATION", semantic=True)
+            report["originalEarlyPublicationRetained"] = True
             report["restartedProductionProcesses"] = process_roles(process.pid)
             with sqlite3.connect(control.as_uri() + "?mode=ro", uri=True) as db:
                 after_writer = db.execute("SELECT fencing_token,owner_instance_id FROM control_writer WHERE singleton=1").fetchone()

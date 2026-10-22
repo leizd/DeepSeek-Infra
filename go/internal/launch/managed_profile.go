@@ -27,11 +27,13 @@ import (
 )
 
 const managedRequired = "DEEPSEEK_NATIVE_MANAGED_BOOTSTRAP"
+const managedPublicPreparation = "signer-public-preparation"
 
 var errManagedProfile = errors.New("native managed profile is incomplete, foreign or already active")
 
 type managedProfile struct {
 	root, metadata, rust, id, pin string
+	preparation                   string
 	lock                          *os.File
 }
 
@@ -262,16 +264,29 @@ func openManagedProfile(root string) (*managedProfile, error) {
 			return nil, errManagedProfile
 		}
 	}
+	prepared, err := managedFile(filepath.Join(profile.metadata, managedPublicPreparation), 4096)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	profile.preparation = string(prepared)
+	if profile.preparation != "" {
+		if _, err = store.SignerKeyIDForPublicKey(profile.preparation); err != nil || profile.pin != "" && profile.preparation != profile.pin {
+			return nil, errManagedProfile
+		}
+	}
 	_, dbErr := os.Lstat(filepath.Join(root, "go-control", store.ControlDatabaseFilename))
 	if (profile.pin != "") != (dbErr == nil) {
-		if profile.pin == "" || !errors.Is(dbErr, os.ErrNotExist) || !store.NativeOriginCreationIntentMatches(filepath.Join(root, "go-control"), profile.id, profile.pin) {
+		// Preparation permits resuming only the original public binding before
+		// control admission. Go still verifies the signed Rust birth/publication;
+		// this marker never authorizes replacing a published database.
+		if profile.pin == "" || !errors.Is(dbErr, os.ErrNotExist) || profile.preparation != profile.pin && !store.NativeOriginCreationIntentMatches(filepath.Join(root, "go-control"), profile.id, profile.pin) {
 			return nil, errManagedProfile
 		}
 	}
 	if dbErr != nil && !errors.Is(dbErr, os.ErrNotExist) {
 		return nil, dbErr
 	}
-	if _, err = os.Lstat(profile.rust); errors.Is(err, os.ErrNotExist) && profile.pin != "" {
+	if _, err = os.Lstat(profile.rust); errors.Is(err, os.ErrNotExist) && (profile.pin != "" || profile.preparation != "") {
 		return nil, errManagedProfile
 	}
 	if err = managedDirectory(profile.rust); err != nil {
@@ -446,7 +461,7 @@ func runManagedRuntimeWith(ctx context.Context, processes []Process, environment
 	initializer := withProductionEnvironment(plan, append(append([]string(nil), base...), "DEEPSEEK_WORKER_MANAGED_INITIALIZE=1"))
 	// An existing Go database/public pin can never trigger custody creation.
 	// In particular, missing Rust keys after a crash stay a hard failure.
-	if profile.pin == "" {
+	if profile.pin == "" && profile.preparation == "" {
 		if err = operations.initialize(ctx, initializer.Processes[workerIndex], initializer.Processes[workerIndex].Env, output); err != nil {
 			return err
 		}
@@ -535,12 +550,27 @@ func runManagedRuntimeWith(ctx context.Context, processes []Process, environment
 		}
 	}
 	plan.Processes = ordered
-	query := worker.ControlSignerBindingQuery{FleetID: "native-" + profile.id, Environment: "local", PublicKey: profile.pin, FencingToken: fence}
+	public := profile.pin
+	if public == "" {
+		public = profile.preparation
+	}
+	query := worker.ControlSignerBindingQuery{FleetID: "native-" + profile.id, Environment: "local", PublicKey: public, FencingToken: fence}
 	dial := worker.TLSDialConfig{Target: launchEnvironmentValue(environment, "DEEPSEEK_WORKER_LISTEN"), TrustRootFile: trustPath, ServerName: "deepseek-worker.local", BearerToken: bearer, ExpiresAt: expires}
 	afterStart := func(index int) error {
 		if index == 1 {
-			return waitManagedControl(ctx, launchEnvironmentValue(plan.Env, "GO_CONTROL_ADDR"), fence,
-				launchEnvironmentValue(plan.Env, "DEEPSEEKD_OWNER"))
+			if err := waitManagedControl(ctx, launchEnvironmentValue(plan.Env, "GO_CONTROL_ADDR"), fence,
+				launchEnvironmentValue(plan.Env, "DEEPSEEKD_OWNER")); err != nil {
+				return err
+			}
+			if profile.preparation != "" {
+				path := filepath.Join(profile.metadata, managedPublicPreparation)
+				value, err := managedFile(path, 4096)
+				if err != nil || string(value) != profile.preparation {
+					return errManagedProfile
+				}
+				return os.Remove(path)
+			}
+			return nil
 		}
 		if index != 0 {
 			return nil
@@ -548,6 +578,12 @@ func runManagedRuntimeWith(ctx context.Context, processes []Process, environment
 		binding, err := operations.binding(ctx, dial, query)
 		if err != nil {
 			return err
+		}
+		if profile.pin == "" {
+			if err = operations.publish(filepath.Join(profile.metadata, managedPublicPreparation), []byte(binding.PublicKey)); err != nil {
+				return err
+			}
+			profile.preparation = binding.PublicKey
 		}
 		if err = operations.publish(filepath.Join(profile.metadata, "signer-public-pin"), []byte(binding.PublicKey)); err != nil {
 			return err

@@ -70,7 +70,16 @@ the successor's current writer fence, retaining the original birth action,
 epoch, incarnation and checkpoint. A committed Rust publication with a missing
 Go database is a loss of authoritative state, not permission to create an empty
 replacement. Missing or inconsistent custody, intent or origin records fail
-closed. Interrupted preparation may resume only the original retained intent.
+closed. Interrupted control preparation may resume only the original retained
+intent. Before first publishing its signer pin, the launcher also retains the
+same public key as `signer-public-preparation`. A process crash before Go writes
+its creation intent may resume this exact authenticated binding without invoking
+the custody initializer again. Missing custody or a different pin is refused.
+This public preparation is removed only after the exact Go writer becomes ready;
+it grants no domain authority. Go independently refuses a missing published
+database even if an old public preparation remains. Neither a launch marker nor
+an absent publication response permits replacing or re-signing the original
+birth, receipt or operation.
 
 Activation checks the complete main SQLite catalog before enabling any domain;
 an unexpected table is not empty native state. A hard-ended old Go process can

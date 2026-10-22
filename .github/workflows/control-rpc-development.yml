@@ -86,6 +86,9 @@ jobs:
               "TestManagedNativeOriginRequiresPinnedAuthoritativeDeployment",
               "TestManagedControlReadinessRequiresTheExpectedLiveWriter",
               "TestManagedControlReadinessWaitsForRetainedWriterLease",
+              "TestManagedPublicPinPreparationRecoversOriginalCustody",
+              "TestManagedPublicPreparationNeverRepairsForeignOrLostState",
+              "TestManagedPreparationCleanupRefusalPreservesControlWithoutStartingEdge",
               "TestNativeLifecycleRefusesIncompleteAuthorityBeforeCreatingStore",
               "TestNativeLifecycleOriginRPCRefusalClosesListenersWithoutPublication",
               "TestManagedDesktopKeepsItsPreparedEnvironmentPrivate",
@@ -117,6 +120,54 @@ jobs:
                     "fullGoSuiteQualified": False, "coverageQualified": False, "releaseQualified": False, "fullMigrationQualified": False}
           Path("artifacts/control-rpc-development/result.json").write_text(json.dumps(report, indent=2) + "\n")
           raise SystemExit(code)
+          PY
+      - name: Prove original signer-pin interruption is detected without preparation admission
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          python - <<'PY'
+          import json, os, shutil, subprocess, tempfile
+          from pathlib import Path
+          report = Path("artifacts/control-rpc-development")
+          with tempfile.TemporaryDirectory(prefix="native-pin-negative-") as temporary:
+              copy = Path(temporary) / "go"
+              shutil.copytree("go", copy, ignore=shutil.ignore_patterns("bin", "*.exe", "coverage*", "cov-*"))
+              source = copy / "internal/launch/managed_profile.go"
+              text = source.read_text()
+              needle = '\t_, dbErr := os.Lstat(filepath.Join(root, "go-control", store.ControlDatabaseFilename))\n'
+              assert text.count(needle) == 1
+              guard = ('\tif profile.pin != "" && errors.Is(dbErr, os.ErrNotExist) && '
+                       '!store.NativeOriginCreationIntentMatches(filepath.Join(root, "go-control"), profile.id, profile.pin) {\n'
+                       '\t\treturn nil, errManagedProfile\n\t}\n')
+              source.write_text(text.replace(needle, needle + guard))
+              command = ["go", "test", "-json", "-count=1", "-timeout=60s", "-run",
+                         "^(TestManagedPublicPinPreparationRecoversOriginalCustody|TestManagedPublicPreparationNeverRepairsForeignOrLostState|TestManagedProfileNeverRecreatesLostCustodyOrGoState)$",
+                         "./internal/launch"]
+              result = subprocess.run(command, cwd=copy, capture_output=True)
+              raw = result.stdout + result.stderr
+              (report / "pin-preparation-negative-tests.jsonl").write_bytes(raw)
+              events = []
+              for line in raw.decode(errors="replace").splitlines():
+                  try:
+                      events.append(json.loads(line))
+                  except json.JSONDecodeError:
+                      pass
+              failed = {row["Test"] for row in events if row.get("Action") == "fail" and row.get("Test")}
+              expected = {"TestManagedPublicPinPreparationRecoversOriginalCustody",
+                          "TestManagedPublicPinPreparationRecoversOriginalCustody/pin-published"}
+              passed = {row["Test"] for row in events if row.get("Action") == "pass" and row.get("Test")}
+              retained = {"TestManagedPublicPinPreparationRecoversOriginalCustody/preparation-published",
+                          "TestManagedPublicPreparationNeverRepairsForeignOrLostState",
+                          "TestManagedProfileNeverRecreatesLostCustodyOrGoState"}
+              assert result.returncode != 0 and failed == expected and retained <= passed
+              assert not any(row.get("Action") == "skip" for row in events)
+          subprocess.run(["git", "diff", "--exit-code", "--", "go"], check=True)
+          proof = {"status": "PASS", "sourceCommit": os.environ["GITHUB_SHA"],
+                   "runId": os.environ["GITHUB_RUN_ID"], "expectedFailures": sorted(expected),
+                   "observedFailures": sorted(failed), "retainedPassingGroups": sorted(retained),
+                   "temporaryCopyOnly": True, "originalCheckoutUnchanged": True,
+                   "fullMigrationQualified": False}
+          (report / "pin-preparation-negative-result.json").write_text(json.dumps(proof, indent=2) + "\n")
           PY
       - name: Prove desktop regressions reject temporary UI capability leakage
         env:
