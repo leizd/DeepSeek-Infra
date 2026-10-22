@@ -256,7 +256,14 @@ def test_go_schema_matches_catalog_and_rejects_python_paths() -> None:
     assert '"database/sql"' in control
     assert '"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"' in control
     assert "sqlitedb.Open(controlDatabaseDSN(databasePath))" in control
-    assert "sqlitedb.Open(readOnlyControlDatabaseDSN(databasePath))" in control
+    # Committed WAL requires an ordinary read-only connection. Native Go WAL
+    # regressions prove the behavior; this contract also permits a selected DSN.
+    preflight = control.split("func validateExistingControlMarker(", 1)[1].split("\nfunc ", 1)[0]
+    readonly = re.search(r"\b(\w+)\s*:=\s*readOnlyControlDatabaseDSN\(databasePath\)", preflight)
+    assert readonly is not None
+    assert f"sqlitedb.Open({readonly[1]})" in preflight
+    assert re.search(r'\b\w+\.Set\("mode",\s*"ro"\)', preflight)
+    assert re.search(r'\b\w+\.Set\("_query_only",\s*"1"\)', preflight)
     connector = (ROOT / "go/internal/sqlitedb/open.go").read_text(encoding="utf-8")
     default = (ROOT / "go/internal/sqlitedb/default.go").read_text(encoding="utf-8")
     android = (ROOT / "go/internal/sqlitedb/android_compat.go").read_text(encoding="utf-8")
