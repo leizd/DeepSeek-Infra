@@ -381,7 +381,7 @@ jobs:
           set +e
           # All original groups plus 54 custody/transaction fault cases; bounded
           # above their measured combined runtime, with no skipped assertions.
-          go test -race -json -count=1 -timeout=5m -covermode=atomic -coverprofile=../artifacts/control-rpc-development/managed-binding-scoped-coverage.out ./internal/worker ./internal/store ./internal/api -run '^(TestReadControlSignerBinding.*|TestNextWriterFencingToken.*|TestNativeOrigin.*|TestEmptyPythonInventoryStillRequiresAttestedSource|TestAgentDriverSafeConfigurationFailuresRemainRedacted|TestAgentDriverLoopSuppressesCredentialErrorsAndStopsCancelledWork)$' > ../artifacts/control-rpc-development/managed-binding-tests.jsonl 2>&1
+          go test -race -json -count=1 -timeout=5m -covermode=atomic -coverprofile=../artifacts/control-rpc-development/managed-binding-scoped-coverage.out ./internal/worker ./internal/store ./internal/api -run '^(TestReadControlSignerBinding.*|TestNextWriterFencingToken.*|TestNativeOrigin.*|TestNativeControlRollback.*|TestNativeAgentSettlementReadFaultRetainsOriginalProof|TestEmptyPythonInventoryStillRequiresAttestedSource|TestAgentDriverSafeConfigurationFailuresRemainRedacted|TestAgentDriverLoopSuppressesCredentialErrorsAndStopsCancelledWork)$' > ../artifacts/control-rpc-development/managed-binding-tests.jsonl 2>&1
           status=$?
           set -e
           cd ..
@@ -407,6 +407,10 @@ jobs:
                       "TestNativeOriginRollbackCannotErasePublishedOrPendingBirth",
                       "TestNativeOriginLegacyEmptyRollbackRetainsOriginalReopenBehavior",
                       "TestNativeOriginLegacyV17UpgradeRetainsEveryProtectedRow",
+                      "TestNativeOriginV18MigrationFaultRetainsOriginalSignedStore",
+                      "TestNativeControlRollbackStorageFaultKeepsOriginalSchema",
+                      "TestNativeControlRollbackRetainsImportedHealthHistory",
+                      "TestNativeAgentSettlementReadFaultRetainsOriginalProof",
                       "TestNativeOriginClientRequiresAuthenticatedTLSAndOriginalBirthFence",
                       "TestNativeOriginClientBoundsResponsesAndRefusesUnscopedPublication",
                       "TestNativeOriginRestartRetainsCommittedWALWithReadOnlyObserver",
