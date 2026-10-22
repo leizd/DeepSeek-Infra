@@ -30,7 +30,10 @@ func waitManagedControl(ctx context.Context, target string, fence int64, owner s
 	transport := &http.Transport{Proxy: nil, ResponseHeaderTimeout: time.Second}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	wait, cancel := context.WithTimeout(ctx, 20*time.Second)
+	// A guardian can end the old process without releasing its durable lease.
+	// Let Go complete its existing bounded lease wait before declaring failure;
+	// only the matching live owner/fence below can admit edge or desktop.
+	wait, cancel := context.WithTimeout(ctx, config.ControlWriterStartupWait+5*time.Second)
 	defer cancel()
 	timer := time.NewTicker(50 * time.Millisecond)
 	defer timer.Stop()

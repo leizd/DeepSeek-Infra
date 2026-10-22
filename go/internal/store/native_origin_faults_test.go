@@ -233,8 +233,12 @@ func TestNativeOriginFaultClosedOrExpiredWriterCannotActivate(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := control.activateNativeOrigin(peer.state.Origin, peer.state.Publication); err == nil || peer.publications != 1 {
+			err := control.activateNativeOrigin(peer.state.Origin, peer.state.Publication)
+			if err == nil || peer.publications != 1 {
 				t.Fatal("invalid writer or schema activated native authority", err)
+			}
+			if name == "foreign-schema" && !errors.Is(err, ErrForeignRuntimeStore) {
+				t.Fatal("foreign schema did not fail at the main catalog boundary", err)
 			}
 		})
 	}

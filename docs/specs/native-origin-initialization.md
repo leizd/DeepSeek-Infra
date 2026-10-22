@@ -72,6 +72,15 @@ Go database is a loss of authoritative state, not permission to create an empty
 replacement. Missing or inconsistent custody, intent or origin records fail
 closed. Interrupted preparation may resume only the original retained intent.
 
+Activation checks the complete main SQLite catalog before enabling any domain;
+an unexpected table is not empty native state. A hard-ended old Go process can
+retain its writer lease. The launcher observes the same 35-second startup wait
+used by Go, plus five seconds for the health response, while still requiring the
+exact successor owner and fencing token. It never clears a lease or advances a
+fence itself to shorten that wait. Cloud regressions retain a stale HTTP writer
+for thirty seconds and require the original shorter observation budget to fail
+in an isolated temporary copy.
+
 Required qualification includes actual empty-profile launcher/Go/worker/edge
 startup, four controlled provider requests through the public Agent API, whole
 launcher restart at the awaiting-plan boundary, writer takeover, lost-response

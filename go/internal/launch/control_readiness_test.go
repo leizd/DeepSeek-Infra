@@ -70,6 +70,37 @@ func TestManagedControlReadinessRefusesForeignTargetsAndCancellation(t *testing.
 		t.Fatal("missing context admitted")
 	}
 }
+
+func TestManagedControlReadinessWaitsForRetainedWriterLease(t *testing.T) {
+	// The retained default writer lease is thirty seconds. A hard-ended child
+	// must not be replaced early, nor killed by a shorter launcher deadline.
+	delay := config.ControlWriterStartupWait - 5*time.Second
+	started := time.Now()
+	readyAt := started.Add(delay)
+	var staleObservations atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/healthz" || r.Header.Get("Authorization") != "" {
+			t.Error("writer readiness changed its method, path or credential boundary")
+		}
+		if time.Now().Before(readyAt) {
+			staleObservations.Add(1)
+			w.Header().Set(config.ControlWriterFenceHeader, "1")
+			w.Header().Set(config.ControlWriterOwnerHeader, "previous-owner")
+			return
+		}
+		w.Header().Set(config.ControlWriterFenceHeader, "2")
+		w.Header().Set(config.ControlWriterOwnerHeader, "successor-owner")
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), config.ControlWriterStartupWait+5*time.Second)
+	defer cancel()
+	if err := waitManagedControl(ctx, server.URL, 2, "successor-owner"); err != nil {
+		t.Fatal("launcher refused the existing bounded writer-lease wait", err)
+	}
+	if time.Since(started) < delay || staleObservations.Load() == 0 {
+		t.Fatal("stale writer admitted before lease takeover")
+	}
+}
 func TestManagedGatewayWaitsForActualControlReadiness(t *testing.T) {
 	managedReadinessFixture(t, false)
 }

@@ -85,6 +85,7 @@ jobs:
               "TestManagedExpectedWriterFenceIsExplicitAndStrict",
               "TestManagedNativeOriginRequiresPinnedAuthoritativeDeployment",
               "TestManagedControlReadinessRequiresTheExpectedLiveWriter",
+              "TestManagedControlReadinessWaitsForRetainedWriterLease",
               "TestManagedDesktopKeepsItsPreparedEnvironmentPrivate",
               "TestManagedDesktopAndEdgeWaitForActualControlReadiness",
               "TestProductionAgentCredentialsAndBodyCustodyStayInRustRoles",
@@ -262,13 +263,72 @@ jobs:
               "event": os.environ["GITHUB_EVENT_NAME"], "expectedAssertionFailuresObserved": sorted(failed),
               "onlyTemporaryCopyModified": True, "originalImmutableMarkerRestored": True, "fullMigrationQualified": False}, indent=2) + "\n")
           PY
+      - name: Prove catalog activation and retained writer lease regressions fail without their guards
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          import json, os, shutil, subprocess, tempfile
+          from pathlib import Path
+          launch = "TestManagedControlReadinessWaitsForRetainedWriterLease"
+          store = "TestNativeOriginFaultClosedOrExpiredWriterCannotActivate"
+          expected_failures = {launch, store, store + "/foreign-schema"}
+          expected_passes = {store + "/" + case for case in ("closed-store", "closed-database", "expired-writer")}
+          log = Path("artifacts/control-rpc-development/native-activation-lease-negative-tests.jsonl")
+          with tempfile.TemporaryDirectory(prefix="native-activation-lease-negative-", dir=os.environ["RUNNER_TEMP"]) as directory:
+              negative = Path(directory) / "go"
+              shutil.copytree("go", negative, ignore=shutil.ignore_patterns("*.exe", "*.out", "coverage*", "bin"))
+              path = negative / "internal/store/native_origin.go"
+              source = path.read_text()
+              guard = ('\t// Pending native provenance permits only the known control schema. Check\n'
+                       '\t// the complete main catalog before any domain can become authoritative.\n'
+                       '\tif err = validateControlUserObjects(tx, store.schema); err != nil {\n'
+                       '\t\treturn err\n\t}\n')
+              assert source.count(guard) == 1
+              path.write_text(source.replace(guard, "", 1))
+              path = negative / "internal/launch/control_readiness.go"
+              source = path.read_text()
+              before = "context.WithTimeout(ctx, config.ControlWriterStartupWait+5*time.Second)"
+              assert source.count(before) == 1
+              path.write_text(source.replace(before, "context.WithTimeout(ctx, 20*time.Second)", 1))
+              with log.open("wb") as output:
+                  result = subprocess.run(["go", "test", "-race", "-json", "-count=1", "-timeout=2m", "./internal/store", "./internal/launch",
+                      "-run", "^(" + launch + "|" + store + ")$"], cwd=negative, stdout=output, stderr=subprocess.STDOUT)
+          started, terminal = Counter(), Counter()
+          failed, passed, packages = set(), set(), {}
+          for line in log.read_text().splitlines():
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError:
+                  assert line.startswith("go: downloading ")
+                  continue
+              name, action = row.get("Test"), row.get("Action")
+              if name and action == "run": started[name] += 1
+              if name and action in {"pass", "fail", "skip"}:
+                  assert action != "skip"
+                  terminal[name] += 1
+                  (failed if action == "fail" else passed).add(name)
+              if not name and action in {"pass", "fail", "skip"}: packages[row["Package"]] = action
+          assert result.returncode == 1 and started == terminal and all(n == 1 for n in started.values())
+          assert failed == expected_failures and passed == expected_passes
+          assert packages == {"github.com/leizd/DeepSeek-Infra/go/internal/" + name: "fail" for name in ("store", "launch")}
+          subprocess.run(["git", "diff", "--exit-code", "--", "go"], check=True)
+          Path("artifacts/control-rpc-development/native-activation-lease-negative-result.json").write_text(json.dumps({
+              "status": "PASS", "sourceCommit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
+              "event": os.environ["GITHUB_EVENT_NAME"], "expectedAssertionFailuresObserved": sorted(failed),
+              "unrelatedRefusalsRetained": sorted(passed), "original20SecondBudgetRestored": True,
+              "catalogPreflightOmitted": True, "onlyTemporaryCopyModified": True, "fullMigrationQualified": False}, indent=2) + "\n")
+          PY
       - name: Exercise managed binding and writer preview regressions
         env:
           CGO_ENABLED: "1"
         run: |
           cd go
           set +e
-          go test -race -json -count=1 -timeout=3m -covermode=atomic -coverprofile=../artifacts/control-rpc-development/managed-binding-scoped-coverage.out ./internal/worker ./internal/store ./internal/api -run '^(TestReadControlSignerBinding.*|TestNextWriterFencingToken.*|TestNativeOrigin.*|TestEmptyPythonInventoryStillRequiresAttestedSource|TestAgentDriverSafeConfigurationFailuresRemainRedacted|TestAgentDriverLoopSuppressesCredentialErrorsAndStopsCancelledWork)$' > ../artifacts/control-rpc-development/managed-binding-tests.jsonl 2>&1
+          # All original groups plus 54 custody/transaction fault cases; bounded
+          # above their measured combined runtime, with no skipped assertions.
+          go test -race -json -count=1 -timeout=5m -covermode=atomic -coverprofile=../artifacts/control-rpc-development/managed-binding-scoped-coverage.out ./internal/worker ./internal/store ./internal/api -run '^(TestReadControlSignerBinding.*|TestNextWriterFencingToken.*|TestNativeOrigin.*|TestEmptyPythonInventoryStillRequiresAttestedSource|TestAgentDriverSafeConfigurationFailuresRemainRedacted|TestAgentDriverLoopSuppressesCredentialErrorsAndStopsCancelledWork)$' > ../artifacts/control-rpc-development/managed-binding-tests.jsonl 2>&1
           status=$?
           set -e
           cd ..

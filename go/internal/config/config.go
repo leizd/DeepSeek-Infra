@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 )
@@ -14,6 +15,9 @@ var ErrInvalidConfig = errors.New("INVALID_CONFIG")
 const (
 	ControlWriterFenceHeader = "X-DeepSeek-Writer-Fence"
 	ControlWriterOwnerHeader = "X-DeepSeek-Writer-Owner"
+	// ControlWriterStartupWait retains the existing lease-expiry wait shared by
+	// deepseekd startup and the launcher's live-writer readiness observation.
+	ControlWriterStartupWait = 35 * time.Second
 	ModeShadow               = "shadow"
 	ModeAuthoritative        = "authoritative"
 	MutationAuthority        = "python"

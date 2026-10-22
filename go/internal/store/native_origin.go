@@ -345,6 +345,11 @@ func (store *Control) activateNativeOrigin(origin *actionv1.NativeOriginReceipt,
 	if err != nil {
 		return err
 	}
+	// Pending native provenance permits only the known control schema. Check
+	// the complete main catalog before any domain can become authoritative.
+	if err = validateControlUserObjects(tx, store.schema); err != nil {
+		return err
+	}
 	if err = verifySchemaTx(tx, store.schema); err != nil {
 		return err
 	}
