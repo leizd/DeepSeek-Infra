@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -211,6 +212,47 @@ func TestNativeAgentSettlementReadFaultRetainsOriginalProof(t *testing.T) {
 						t.Fatal("same settlement did not replay without new durable effects", err)
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestNativeAgentSettlementCommitFaultRetainsOriginalProof(t *testing.T) {
+	for _, phase := range []string{"plan", "task", "synthesis", "failure-plan", "failure-synthesis"} {
+		t.Run(phase, func(t *testing.T) {
+			control, settle := nativeSettlementReadFixture(t, phase)
+			defer control.Close()
+			before, versions := failureMigrationRows(t, control.db), nativeV18VersionRows(t, control.db)
+			catalog, writer := nativeRecoveryCatalog(t, control.db), control.Writer()
+			for _, statement := range []string{
+				"CREATE TEMP TABLE native_settlement_parent(id INTEGER PRIMARY KEY)",
+				"CREATE TEMP TABLE native_settlement_child(id INTEGER REFERENCES native_settlement_parent(id) DEFERRABLE INITIALLY DEFERRED)",
+				"CREATE TEMP TRIGGER native_settlement_commit_fault AFTER INSERT ON " + operatorMutationTable + " BEGIN INSERT INTO native_settlement_child VALUES(1); END",
+			} {
+				if _, err := control.db.Exec(statement); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The independently signed outcome is valid. Only COMMIT fails, after
+			// tentative run/action/receipt and reservation changes in that transaction.
+			if applied, err := settle(); err == nil || applied || !strings.Contains(err.Error(), "FOREIGN KEY") {
+				t.Fatal("settlement did not reach the required failed commit boundary", err)
+			}
+			if failureMigrationRows(t, control.db) != before || nativeV18VersionRows(t, control.db) != versions ||
+				nativeRecoveryCatalog(t, control.db) != catalog || control.Writer() != writer {
+				t.Fatal("failed commit changed original proof, action/epoch, leases, journal, writer or schema")
+			}
+			for _, statement := range []string{"DROP TRIGGER temp.native_settlement_commit_fault", "DROP TABLE temp.native_settlement_child", "DROP TABLE temp.native_settlement_parent"} {
+				if _, err := control.db.Exec(statement); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if replayed, err := settle(); err != nil || replayed {
+				t.Fatal("original signed input could not settle after only the commit fault was removed", err)
+			}
+			after := failureMigrationRows(t, control.db)
+			if replayed, err := settle(); err != nil || !replayed || failureMigrationRows(t, control.db) != after {
+				t.Fatal("successful original settlement did not replay without new durable effects", err)
 			}
 		})
 	}
