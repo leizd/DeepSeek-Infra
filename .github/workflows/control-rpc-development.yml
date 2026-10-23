@@ -132,6 +132,101 @@ jobs:
           Path("artifacts/control-rpc-development/android-observer-negative-result.json").write_text(json.dumps(report, indent=2) + "\n")
           PY
           test -z "$(git status --porcelain --untracked-files=all)"
+      - name: Check Android native guardian custody without pidfds
+        timeout-minutes: 5
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          mkdir -p artifacts/control-rpc-development
+          cd go
+          set +e
+          GOFLAGS=-tags=deepseek_android,sqlite3_flock go test -race -json -count=1 -timeout=3m ./internal/launch -run '^(TestAndroidGuardianRootKillCleansEscapedDescendantsWithoutPidfds|TestAndroidGuardianCoreSettlesRealExitAndCancellation|TestAndroidGuardianRefusesMissingPipeAndForeignImage)$' > ../artifacts/control-rpc-development/android-guardian-tests.jsonl 2>&1
+          guardian_status=$?
+          set -e
+          cd ..
+          export ANDROID_GUARDIAN_STATUS="$guardian_status"
+          python - <<'PY'
+          import json, os
+          from collections import Counter
+          from pathlib import Path
+          required = {"TestAndroidGuardianRootKillCleansEscapedDescendantsWithoutPidfds",
+                      "TestAndroidGuardianCoreSettlesRealExitAndCancellation",
+                      "TestAndroidGuardianRefusesMissingPipeAndForeignImage"}
+          starts, terminals, packages = Counter(), {}, {}
+          for line in Path("artifacts/control-rpc-development/android-guardian-tests.jsonl").read_text().splitlines():
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              name, action = row.get("Test"), row.get("Action")
+              if name and action == "run": starts[name] += 1
+              if name and action in {"pass", "fail", "skip"}:
+                  assert name not in terminals
+                  terminals[name] = action
+              if not name and action in {"pass", "fail", "skip"}: packages[row["Package"]] = action
+          code = int(os.environ["ANDROID_GUARDIAN_STATUS"])
+          if code == 0 and (set(starts) != set(terminals) or set(starts.values()) != {1} or
+                            set(terminals.values()) != {"pass"} or
+                            {name for name in starts if "/" not in name} != required or
+                            packages != {"github.com/leizd/DeepSeek-Infra/go/internal/launch": "pass"}):
+              code = 2
+          report = {"sourceCommit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
+                    "event": os.environ["GITHUB_EVENT_NAME"], "exitCode": code,
+                    "expectedTests": sorted(required), "finishedTests": terminals,
+                    "goFlags": "-tags=deepseek_android,sqlite3_flock", "raceEnabled": True,
+                    "pidfdsDeniedInActualLauncherTree": True,
+                    "inheritedIgnoredSIGCHLDRetainedAsWaitableChildren": True,
+                    "scope": "Android-tagged Linux host process custody with actual seccomp denial only",
+                    "androidDeviceQualified": False, "allAndroidFeaturesQualified": False,
+                    "fullGoSuiteQualified": False, "coverageQualified": False,
+                    "fullMigrationQualified": False}
+          Path("artifacts/control-rpc-development/android-guardian-result.json").write_text(json.dumps(report, indent=2) + "\n")
+          raise SystemExit(code)
+          PY
+      - name: Prove Android guardian regression rejects the original unfenced launch
+        timeout-minutes: 4
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          python - <<'PY'
+          import json, os, shutil, subprocess, tempfile
+          from pathlib import Path
+          regression = "TestAndroidGuardianRootKillCleansEscapedDescendantsWithoutPidfds"
+          with tempfile.TemporaryDirectory(prefix="android-no-guardian-") as directory:
+              target = Path(directory) / "go"
+              shutil.copytree("go", target)
+              path = target / "internal/launch/process_fence_linux.go"
+              source = path.read_text()
+              marker = "func (f processFence) prepare(process Process, env []string) (fencedProcess, error) {"
+              assert source.count(marker) == 1 and source.rstrip().endswith("}")
+              path.write_text(source.split(marker)[0] + marker + '\n\treturn fencedProcess{path: process.Path, args: []string{process.Path}, env: env}, nil\n}\n')
+              env = dict(os.environ, GOFLAGS="-tags=deepseek_android,sqlite3_flock")
+              command = ["go", "test", "-race", "-json", "-count=1", "-timeout=2m", "./internal/launch", "-run", "^" + regression + "$"]
+              completed = subprocess.run(command, cwd=target, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=160)
+          raw = Path("artifacts/control-rpc-development/android-guardian-negative-tests.jsonl")
+          raw.write_bytes(completed.stdout)
+          started, finished, packages, messages = [], [], [], []
+          for line in completed.stdout.decode().splitlines():
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              if row.get("Test"):
+                  assert row["Test"] == regression
+                  if row["Action"] == "run": started.append(regression)
+                  if row["Action"] in {"pass", "fail", "skip"}: finished.append(row["Action"])
+                  messages.append(row.get("Output", ""))
+              elif row.get("Action") in {"pass", "fail", "skip"}: packages.append(row["Action"])
+          assert completed.returncode == 1 and started == [regression] and finished == ["fail"] and packages == ["fail"]
+          assert "survived launcher SIGKILL without pidfds" in "".join(messages)
+          assert "cooperative fixture cleanup did not stop listener" not in "".join(messages)
+          report = {"status": "PASS", "sourceCommit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
+                    "event": os.environ["GITHUB_EVENT_NAME"], "expectedAssertionFailuresObserved": [regression],
+                    "onlyTemporaryCopyModified": True, "originalUnfencedLaunchReintroduced": True,
+                    "fixtureDescendantsCooperativelyStopped": True, "androidDeviceQualified": False,
+                    "fullMigrationQualified": False}
+          Path("artifacts/control-rpc-development/android-guardian-negative-result.json").write_text(json.dumps(report, indent=2) + "\n")
+          PY
       - name: Exercise real control lifecycle regressions without release qualification
         env:
           # Go race instrumentation requires Cgo; production builds remain pure Go.

@@ -578,6 +578,37 @@ def _native_browser_hook_contract(path: Path, root: Path, text: str) -> bool:
                                                      "number < 1 || number > 65535", "strings.ContainsAny(raw"]))
 
 
+def _native_android_guardian_contract(path: Path, root: Path, text: str) -> bool:
+    """The old-kernel guardian alone may start a bounded child without Cmd.Wait."""
+    if path.relative_to(root).as_posix() != "go/internal/launch/guardian_android_compat.go":
+        return False
+    if (len(re.findall(r"\bos\.StartProcess\s*\(", text)) != 1
+            or '"os/exec"' in text or re.search(r"\.\s*Wait\s*\(", text)):
+        return False
+    positions = [text.find(token) for token in [
+        "if !guardianProcessAllowed(process)", "unix.Prctl(unix.PR_SET_CHILD_SUBREAPER",
+        "signal.Notify(children, syscall.SIGCHLD)", "os.StartProcess(process.Path, []string{process.Path}",
+    ]]
+    if any(position < 0 for position in positions) or positions != sorted(positions):
+        return False
+    fence = root / "go/internal/launch/process_fence_linux.go"
+    plan = root / "go/internal/launch/plan.go"
+    if not fence.is_file() or not plan.is_file():
+        return False
+    fence_text = fence.read_text(encoding="utf-8")
+    cases = re.search(r"case ([^:]+):", fence_text)
+    names = re.findall(r'"([^\"]+)"', cases.group(1)) if cases else []
+    return (names == ["deepseekd", "deepseek-worker", "deepseek-gateway", "deepseek-desktop"]
+            and _native_supervisor_contract(plan, root, plan.read_text(encoding="utf-8"))
+            and "filepath.IsAbs(process.Path) && !legacyCommand(process.Path)" in fence_text
+            and text.count("unix.Wait4(") == 1
+            and all(token in text for token in [
+                'os.NewFile(3, "native-root-lifetime")', "unix.CloseOnExec(int(pipe.Fd()))",
+                "if err != nil || !guardianChild(pid)", "unix.Kill(pid, unix.SIGKILL)",
+                "defer child.Release()", "errors.Is(err, unix.ECHILD)", "Setsid: true",
+            ]))
+
+
 def check_process_tree_isolation(root: Path) -> GateCheckResult:
     # 1. Audit Rust crates for forbidden process invocations
     rust_root = root / "rust" / "crates"
@@ -609,8 +640,13 @@ def check_process_tree_isolation(root: Path) -> GateCheckResult:
         if "_test.go" in go_file.name:
             continue
         text = go_file.read_text(encoding="utf-8")
-        if '"os/exec"' in text:
-            if (_native_supervisor_contract(go_file, root, text)
+        if '"os/exec"' in text or re.search(r"\bos\.StartProcess\s*\(", text):
+            if re.search(r"\bos\.StartProcess\s*\(", text):
+                if _native_android_guardian_contract(go_file, root, text):
+                    native_supervisors += 1
+                else:
+                    go_violations.append(f"{go_file.relative_to(root)} starts a process outside the bounded Android guardian")
+            elif (_native_supervisor_contract(go_file, root, text)
                     or _native_managed_initializer_contract(go_file, root, text)
                     or _native_linux_guardian_contract(go_file, root, text)):
                 native_supervisors += 1

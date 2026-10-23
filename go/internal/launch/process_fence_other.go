@@ -1,4 +1,4 @@
-//go:build !windows && (!linux || android || deepseek_android)
+//go:build !windows && !linux
 
 package launch
 
