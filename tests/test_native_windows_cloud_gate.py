@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import subprocess
 
 import pytest
+import yaml
 
 from scripts.verify_native_windows_cloud import active_owned_pids, canonical_source, inspect_window_events, require_cloud_windows, validate_window_receipt
 
@@ -121,3 +123,12 @@ def test_platform_source_gate_refuses_checkout_newline_conversion(tmp_path: Path
     path.write_bytes(b"package fixture\r\n")
     with pytest.raises(RuntimeError, match="WINDOWS_SOURCE_BYTES_DIFFER_FROM_COMMIT"):
         canonical_source(tmp_path, tree)
+
+
+def test_windows_job_environment_uses_contexts_available_before_runner_assignment() -> None:
+    workflow = Path(__file__).resolve().parents[1] / ".github/workflows/native-windows-cloud.yml"
+    environment = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]["windows-app"]["env"]
+    allowed = {"github", "needs", "strategy", "matrix", "vars", "secrets", "inputs"}
+    for name, value in environment.items():
+        references = set(re.findall(r"\$\{\{\s*([a-zA-Z_][a-zA-Z_0-9]*)\.", str(value)))
+        assert references <= allowed, f"{name} uses a context unavailable in jobs.env: {sorted(references - allowed)}"

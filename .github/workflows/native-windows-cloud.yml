@@ -34,9 +34,9 @@ jobs:
       GOTOOLCHAIN: local
       CARGO_BUILD_JOBS: "2"
       CARGO_INCREMENTAL: "0"
-      CARGO_TARGET_DIR: ${{ runner.temp }}/deepseek-windows-rust-target
-      GOCACHE: ${{ runner.temp }}/deepseek-windows-go-cache
-      GOMODCACHE: ${{ runner.temp }}/deepseek-windows-go-modules
+      CARGO_TARGET_DIR: ${{ github.workspace }}/artifacts/windows-native-rust-target
+      GOCACHE: ${{ github.workspace }}/artifacts/windows-native-go-cache
+      GOMODCACHE: ${{ github.workspace }}/artifacts/windows-native-go-modules
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
