@@ -1,0 +1,114 @@
+name: Native Windows app platform verification
+
+on:
+  push:
+    branches: ["codex/rust-cloud/control-rpc-mtls-*"]
+    paths:
+      - ".github/workflows/native-windows-cloud.yml"
+      - "scripts/verify_native_windows_cloud.py"
+      - "go/internal/desktop/**"
+      - "tests/test_native_windows_cloud_gate.py"
+      - "docs/NATIVE_WINDOWS_CLOUD_VERIFICATION.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-windows-cloud-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  windows-app:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      CGO_ENABLED: "0"
+      GOTOOLCHAIN: local
+      CARGO_BUILD_JOBS: "2"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ runner.temp }}/deepseek-windows-rust-target
+      GOCACHE: ${{ runner.temp }}/deepseek-windows-go-cache
+      GOMODCACHE: ${{ runner.temp }}/deepseek-windows-go-modules
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Install the repository checksum-pinned Windows Go toolchain
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pin = (Get-Content -LiteralPath release/native_runtime_toolchain_v1.json -Raw | ConvertFrom-Json).go
+          $artifact = $pin.artifacts.windows_amd64
+          $archive = Join-Path $env:RUNNER_TEMP $artifact.filename
+          Invoke-WebRequest -Uri ('https://go.dev/dl/' + $artifact.filename) -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $artifact.sha256) { throw 'Windows Go checksum mismatch' }
+          $installation = Join-Path $env:RUNNER_TEMP 'deepseek-windows-go'
+          Expand-Archive -LiteralPath $archive -DestinationPath $installation
+          $goBin = Join-Path $installation 'go/bin'
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $goBin
+          $version = & (Join-Path $goBin 'go.exe') version
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch ('go' + [regex]::Escape($pin.version) + ' windows/amd64')) { throw 'Unexpected Windows Go toolchain' }
+      - name: Restore cloud-only Windows compilation caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.CARGO_TARGET_DIR }}
+            ${{ env.GOCACHE }}
+            ${{ env.GOMODCACHE }}
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: native-windows-v1-1.85.0-1.27.1-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock', 'go/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            native-windows-v1-1.85.0-1.27.1-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock', 'go/go.sum') }}-
+      - name: Build the original React application
+        run: |
+          npm ci --prefix frontend
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed' }
+          npm run build --prefix frontend
+          if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed' }
+      - name: Prepare exact-source platform evidence
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/windows-native-cloud | Out-Null
+          python scripts/capture_evidence_context.py --out artifacts/windows-native-cloud/source-context.json
+          if ($LASTEXITCODE -ne 0) { throw 'Source context capture failed' }
+      - name: Build actual Windows Rust worker and public edge
+        run: |
+          python scripts/rust_build.py --toolchain 1.85.0 --target-dir $env:CARGO_TARGET_DIR -- build --locked -p deepseek-worker -p deepseek-gateway --bins 2>&1 | Tee-Object -FilePath artifacts/windows-native-cloud/rust-build.log
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Rust build failed' }
+      - name: Build actual Windows Go control, launcher and WebView2 host
+        run: |
+          $bin = Join-Path $env:RUNNER_TEMP 'deepseek-windows-bin'
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          Copy-Item -LiteralPath (Join-Path $env:CARGO_TARGET_DIR 'debug/deepseek-worker.exe') -Destination $bin
+          Copy-Item -LiteralPath (Join-Path $env:CARGO_TARGET_DIR 'debug/deepseek-gateway.exe') -Destination $bin
+          Push-Location go
+          try {
+            foreach ($name in @('deepseekd', 'deepseek-launch', 'deepseek-desktop')) {
+              go build -trimpath -o (Join-Path $bin ($name + '.exe')) ('./cmd/' + $name)
+              if ($LASTEXITCODE -ne 0) { throw ('Windows Go build failed: ' + $name) }
+            }
+          } finally { Pop-Location }
+      - name: Exercise actual app window, native provenance, file workload and close/restart
+        run: |
+          python scripts/verify_native_windows_cloud.py --bin (Join-Path $env:RUNNER_TEMP 'deepseek-windows-bin') --profile (Join-Path $env:RUNNER_TEMP 'deepseek-windows-disposable-profile') --out artifacts/windows-native-cloud
+          if ($LASTEXITCODE -ne 0) { throw 'Windows app platform gate failed' }
+      - name: Preserve bounded platform reports without binaries or caches
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-windows-platform-${{ github.sha }}
+          path: |
+            artifacts/windows-native-cloud/*.json
+            artifacts/windows-native-cloud/*.jsonl
+            artifacts/windows-native-cloud/*.log
+          if-no-files-found: warn
+          retention-days: 7
