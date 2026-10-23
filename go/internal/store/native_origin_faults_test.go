@@ -165,6 +165,73 @@ func pendingNativeOriginFaultFixture(t *testing.T) (*Control, *nativeOriginTestP
 	return control, peer
 }
 
+func assertPendingNativeStateRefusal(t *testing.T, control *Control, peer *nativeOriginTestPeer, restore func()) {
+	t.Helper()
+	// The retained schema is valid: refusal must come from the pending-state
+	// invariant, rather than an unrelated catalog or migration failure.
+	tx, err := control.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := validateControlUserObjects(tx, control.schema); err != nil {
+		t.Fatal("fixture changed the trusted catalog", err)
+	}
+	if err := verifySchemaTx(tx, control.schema); err != nil {
+		t.Fatal("fixture failed before the pending-state boundary", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	before, lease := failureMigrationRows(t, control.db), control.Writer()
+	origin, publication := nativeBytes(peer.state.Origin), nativeBytes(peer.state.Publication)
+	if err := control.activateNativeOrigin(peer.state.Origin, peer.state.Publication); !errors.Is(err, ErrNativeOrigin) {
+		t.Fatal("contaminated pending state activated native authority", err)
+	}
+	if failureMigrationRows(t, control.db) != before || control.Writer() != lease || peer.publications != 1 ||
+		!bytes.Equal(origin, nativeBytes(peer.state.Origin)) || !bytes.Equal(publication, nativeBytes(peer.state.Publication)) {
+		t.Fatal("refusal rewrote retained state, lease, or original signed custody")
+	}
+	restore() // Remove only the injected fixture corruption, without creating a new proof.
+	if err := control.activateNativeOrigin(peer.state.Origin, peer.state.Publication); err != nil {
+		t.Fatal("original publication could not activate after fixture restoration", err)
+	}
+	assertNativeDomains(t, control, peer.state.Origin)
+	if peer.publications != 1 || !bytes.Equal(origin, nativeBytes(peer.state.Origin)) || !bytes.Equal(publication, nativeBytes(peer.state.Publication)) {
+		t.Fatal("recovery replaced the original signed custody")
+	}
+}
+
+func TestNativeOriginFaultPendingStateCannotActivate(t *testing.T) {
+	for _, table := range controlTableNames {
+		t.Run("business-"+table, func(t *testing.T) {
+			control, peer := pendingNativeOriginFaultFixture(t)
+			if _, err := control.db.Exec(`INSERT INTO `+table+`(id,revision,execution_epoch,state,payload_json,record_digest,writer_fencing_token,updated_at) VALUES('pending-contamination',1,0,'PENDING','{}',?,1,1000)`, strings.Repeat("a", 64)); err != nil {
+				t.Fatal(err)
+			}
+			assertPendingNativeStateRefusal(t, control, peer, func() {
+				if _, err := control.db.Exec(`DELETE FROM ` + table + ` WHERE id='pending-contamination'`); err != nil {
+					t.Fatal(err)
+				}
+			})
+		})
+	}
+	for _, domain := range controlDomainOrder {
+		t.Run("cutover-"+domain, func(t *testing.T) {
+			control, peer := pendingNativeOriginFaultFixture(t)
+			original := nativeTransfer(peer.state.Origin) + "-pending"
+			if _, err := control.db.Exec(`UPDATE control_cutover SET transfer_id=? WHERE domain=?`, original+"-foreign", domain); err != nil {
+				t.Fatal(err)
+			}
+			assertPendingNativeStateRefusal(t, control, peer, func() {
+				if _, err := control.db.Exec(`UPDATE control_cutover SET transfer_id=? WHERE domain=?`, original, domain); err != nil {
+					t.Fatal(err)
+				}
+			})
+		})
+	}
+}
+
 func TestNativeOriginFaultActivationRollsBackEveryDomainAndKeepsReceipt(t *testing.T) {
 	for _, name := range []string{"last-event", "last-domain", "publication", "publication-ignored", "deferred-commit"} {
 		t.Run(name, func(t *testing.T) {

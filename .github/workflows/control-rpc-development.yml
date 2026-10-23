@@ -420,6 +420,7 @@ jobs:
                       "TestNativeOriginWALMarkerRejectsCommittedForeignSchemaWithoutWrites",
                       "TestNativeOriginFaultBootstrapRefusalsCannotCreateAuthority",
                       "TestNativeOriginFaultPublicationResponseRetainsOriginalRecovery",
+            "TestNativeOriginFaultPendingStateCannotActivate",
                       "TestNativeOriginFaultActivationRollsBackEveryDomainAndKeepsReceipt",
                       "TestNativeOriginFaultClosedOrExpiredWriterCannotActivate",
                       "TestNativeOriginFaultVerifierRejectsClosedTransaction",
