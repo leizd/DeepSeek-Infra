@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import importlib
+import json
 import struct
+import zipfile
 import subprocess
 from pathlib import Path
 
@@ -53,7 +57,7 @@ def test_native_bundle_omits_python_and_preserves_input_files(tmp_path: Path) ->
     (root / "VERSION").write_text(f"{VERSION}\n", encoding="utf-8")
     rust = elf(tmp_path / "rust")
     go = elf(tmp_path / "go")
-    manifest = stage_bundle(root, output, {"arm64-v8a": {"rust": rust, "go": go}})
+    manifest = stage_bundle(root, output, {"arm64-v8a": {"rust": rust, "go": go, "worker": rust, "launcher": go}})
     assert manifest["version"] == VERSION
     assert {entry["path"] for entry in manifest["assets"]} == {
         "skills/builtin/example.json", "static/ui/index.html", "static/ui/.vite/manifest.json",
@@ -74,7 +78,7 @@ def test_native_bundle_requires_the_runtime_evaluation_corpus_before_staging(tmp
     (root / "VERSION").write_text(f"{VERSION}\n", encoding="utf-8")
     rust, go = elf(tmp_path / "rust"), elf(tmp_path / "go")
     with pytest.raises(ValueError, match="evaluation corpus"):
-        stage_bundle(root, output, {"arm64-v8a": {"rust": rust, "go": go}})
+        stage_bundle(root, output, {"arm64-v8a": {"rust": rust, "go": go, "worker": rust, "launcher": go}})
     assert not output.exists()
 
 
@@ -90,7 +94,7 @@ def test_native_bundle_rebuild_replaces_stale_assets_and_preserves_siblings(tmp_
     golden.write_text('{"caseId":"one"}\n', encoding="utf-8")
     (root / "VERSION").write_text(f"{VERSION}\n", encoding="utf-8")
     rust, go = elf(tmp_path / "rust"), elf(tmp_path / "go")
-    binaries = {"arm64-v8a": {"rust": rust, "go": go}}
+    binaries = {"arm64-v8a": {"rust": rust, "go": go, "worker": rust, "launcher": go}}
     stage_bundle(root, output, binaries)
     sibling = output / "assets/retained.txt"
     sibling.write_bytes(b"unrelated output")
@@ -159,7 +163,7 @@ def test_native_bundle_persistent_publication_refusal_restores_previous_assets(
     monkeypatch.setattr(Path, "rename", deny_publication)
     monkeypatch.setattr("scripts.build_android_native.time.sleep", waits.append)
     with pytest.raises(PermissionError):
-        stage_bundle(root, output, {"arm64-v8a": {"rust": tmp_path / "rust", "go": tmp_path / "go"}})
+        stage_bundle(root, output, {"arm64-v8a": {"rust": tmp_path / "rust", "go": tmp_path / "go", "worker": tmp_path / "rust", "launcher": tmp_path / "go"}})
     assert refused == (4 if winerror is not None else 1)
     assert len(waits) == (3 if winerror is not None else 0) and sum(waits) <= 0.301
     assert {path.relative_to(destination).as_posix(): path.read_bytes() for path in destination.rglob("*") if path.is_file()} == prior
@@ -186,7 +190,7 @@ def test_native_bundle_failed_restore_keeps_previous_assets_for_recovery(
     monkeypatch.setattr(Path, "rename", deny_publish_and_restore)
     monkeypatch.setattr("scripts.build_android_native.time.sleep", lambda _: None)
     with pytest.raises(RuntimeError, match="prior assets remain for recovery"):
-        stage_bundle(root, output, {"arm64-v8a": {"rust": tmp_path / "rust", "go": tmp_path / "go"}})
+        stage_bundle(root, output, {"arm64-v8a": {"rust": tmp_path / "rust", "go": tmp_path / "go", "worker": tmp_path / "rust", "launcher": tmp_path / "go"}})
     retired = list(output.glob(".native-stage-*/previous"))
     assert len(retired) == 1 and not destination.exists()
     assert {path.relative_to(retired[0]).as_posix(): path.read_bytes() for path in retired[0].rglob("*") if path.is_file()} == prior
@@ -218,7 +222,7 @@ def test_native_bundle_refused_retirement_does_not_leak_staged_resources(
     monkeypatch.setattr(Path, "rename", deny_retirement)
     monkeypatch.setattr("scripts.build_android_native.time.sleep", waits.append)
     with pytest.raises(PermissionError):
-        stage_bundle(root, output, {"arm64-v8a": {"rust": tmp_path / "rust", "go": tmp_path / "go"}})
+        stage_bundle(root, output, {"arm64-v8a": {"rust": tmp_path / "rust", "go": tmp_path / "go", "worker": tmp_path / "rust", "launcher": tmp_path / "go"}})
     assert refused == (4 if winerror is not None else 1)
     assert len(waits) == (3 if winerror is not None else 0) and sum(waits) <= 0.301
     assert {path.relative_to(destination).as_posix(): path.read_bytes() for path in destination.rglob("*") if path.is_file()} == prior
@@ -262,3 +266,102 @@ def test_native_source_identity_binds_runtime_contracts_and_evaluation_inputs(tm
         assert after["commit"] == before["commit"] and after["dirty"] is True
         assert after["sourceSha256"] != before["sourceSha256"]
         path.write_bytes(old)
+
+
+@pytest.mark.parametrize("missing", ["rust", "go", "worker", "launcher"])
+def test_native_bundle_refuses_an_incomplete_managed_process_tree(tmp_path: Path, missing: str) -> None:
+    root, output = managed_bundle_fixture(tmp_path)
+    binaries = {role: elf(tmp_path / role) for role in ("rust", "go", "worker", "launcher")}
+    del binaries[missing]
+    with pytest.raises(ValueError, match="complete native process tree"):
+        stage_bundle(root, output, {"arm64-v8a": binaries})
+    assert not output.exists(), "incomplete process tree published staged output"
+
+
+def managed_bundle_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    root, output = tmp_path / "repo", tmp_path / "output"
+    (root / "static/ui").mkdir(parents=True)
+    (root / "static/ui/index.html").write_text("<html>native</html>", encoding="utf-8")
+    (root / "skills").mkdir()
+    golden = root / "evals/golden/skills/skill_eval_cases.jsonl"
+    golden.parent.mkdir(parents=True)
+    golden.write_text('{"caseId":"native-managed"}\n', encoding="utf-8")
+    (root / "VERSION").write_text(f"{VERSION}\n", encoding="utf-8")
+    return root, output
+
+
+def test_native_bundle_packages_every_managed_role_with_its_original_bytes(tmp_path: Path) -> None:
+    root, output = managed_bundle_fixture(tmp_path)
+    binaries = {role: elf(tmp_path / role) for role in ("rust", "go", "worker", "launcher")}
+    for role, path in binaries.items():
+        path.write_bytes(path.read_bytes() + role.encode())
+    manifest = stage_bundle(root, output, {"arm64-v8a": binaries})
+    assert set(manifest["binaries"]["arm64-v8a"]) == set(binaries)
+    filenames = {"rust": "gateway", "go": "control", "worker": "worker", "launcher": "launch"}
+    for role, label in filenames.items():
+        assert (output / f"jniLibs/arm64-v8a/libdeepseek_{label}.so").read_bytes() == binaries[role].read_bytes()
+
+
+def test_native_bundle_checks_worker_loader_before_publishing_any_role(tmp_path: Path) -> None:
+    root, output = managed_bundle_fixture(tmp_path)
+    binaries = {role: elf(tmp_path / role) for role in ("rust", "go", "worker", "launcher")}
+    elf(binaries["worker"], interpreter="/lib64/ld-linux-x86-64.so.2")
+    with pytest.raises(ValueError, match="Android PIE loader"):
+        stage_bundle(root, output, {"arm64-v8a": binaries})
+    assert not output.exists(), "unloadable worker partially published other roles"
+
+
+def managed_apk_entries(tmp_path: Path) -> dict[str, bytes]:
+    root, output = managed_bundle_fixture(tmp_path)
+    roles = ("rust", "go", "worker", "launcher")
+    binaries = {abi: {role: elf(tmp_path / f"{abi}-{role}", machine=machine) for role in roles}
+                for abi, machine in (("arm64-v8a", 183), ("x86_64", 62))}
+    manifest = stage_bundle(root, output, binaries)
+    manifest.update(toolchains={}, sourceIdentity={"commit": "a" * 40, "sourceSha256": "b" * 64})
+    entries = {}
+    for path in output.rglob("*"):
+        if path.is_file():
+            relative = path.relative_to(output).as_posix()
+            entries[relative.replace("jniLibs/", "lib/", 1)] = path.read_bytes()
+    entries["assets/native/bundle.json"] = json.dumps(manifest).encode()
+    return entries
+
+
+def write_apk_fixture(path: Path, entries: dict[str, bytes]) -> None:
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, data in entries.items():
+            archive.writestr(name, data)
+
+
+def test_built_apk_inspection_requires_all_four_original_managed_images(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    inspector = importlib.import_module("check_native_android_package")
+    entries = managed_apk_entries(tmp_path)
+    apk = tmp_path / "managed.apk"
+    write_apk_fixture(apk, entries)
+    result = inspector.inspect_package(apk)
+    for abi in ("arm64-v8a", "x86_64"):
+        assert set(result["binaries"][abi]) == {"rust", "go", "worker", "launcher"}
+    assert not result["releaseQualified"] and not result["deviceExecutionVerified"]
+
+
+@pytest.mark.parametrize("fault", ["missing-role", "changed-worker-bytes", "foreign-worker-loader"])
+def test_built_apk_inspection_refuses_a_missing_or_changed_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    inspector = importlib.import_module("check_native_android_package")
+    entries = managed_apk_entries(tmp_path)
+    manifest = json.loads(entries["assets/native/bundle.json"])
+    key = "lib/arm64-v8a/libdeepseek_worker.so"
+    if fault == "missing-role":
+        del manifest["binaries"]["arm64-v8a"]["worker"]
+    elif fault == "changed-worker-bytes":
+        entries[key] += b"changed after manifest signing"
+    else:
+        path = elf(tmp_path / "foreign-worker", interpreter="/lib64/ld-linux-x86-64.so.2")
+        entries[key] = path.read_bytes()
+        manifest["binaries"]["arm64-v8a"]["worker"]["sha256"] = hashlib.sha256(entries[key]).hexdigest()
+    entries["assets/native/bundle.json"] = json.dumps(manifest).encode()
+    apk = tmp_path / "refused.apk"
+    write_apk_fixture(apk, entries)
+    with pytest.raises(ValueError):
+        inspector.inspect_package(apk)

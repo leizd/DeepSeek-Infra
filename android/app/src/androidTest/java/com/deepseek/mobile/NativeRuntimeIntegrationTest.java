@@ -76,9 +76,10 @@ public class NativeRuntimeIntegrationTest {
             assertTrue(config.getJSONArray("models").length() > 0);
             assertEquals(200_000_000, config.getJSONObject("uploadLimits").getInt("fileMaxBytes"));
             JSONObject authority = json("GET", "/api/control/status", null, 200);
-            assertEquals("shadow", authority.getString("mode"));
-            assertTrue(authority.getBoolean("shadowStore"));
-            assertFalse(authority.getBoolean("productionMutation"));
+            assertEquals("authoritative", authority.getString("mode"));
+            assertEquals("go", authority.getString("mutationAuthority"));
+            assertFalse(authority.getBoolean("shadowStore"));
+            assertTrue(authority.getBoolean("productionMutation"));
             String savedToken = token;
             token = null;
             request("POST", "/api/skills", new JSONObject("{\"action\":\"list\"}"), 401);

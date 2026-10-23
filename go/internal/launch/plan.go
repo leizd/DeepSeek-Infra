@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -137,6 +136,7 @@ func productionEnv(dataRoot, staticDir, controlListen, gatewayBind string) []str
 		"PATHEXT":                    os.Getenv("PATHEXT"),
 		"TEMP":                       os.Getenv("TEMP"),
 		"TMP":                        os.Getenv("TMP"),
+		"TMPDIR":                     os.Getenv("TMPDIR"),
 	}
 	order := []string{
 		"DEEPSEEK_INFRA_ROOT",
@@ -156,6 +156,7 @@ func productionEnv(dataRoot, staticDir, controlListen, gatewayBind string) []str
 		"PATHEXT",
 		"TEMP",
 		"TMP",
+		"TMPDIR",
 	}
 	env := make([]string, 0, len(order)+len(operatorConfigKeys))
 	for _, key := range order {
@@ -197,6 +198,8 @@ var operatorConfigKeys = []string{
 	"DEEPSEEK_DEFAULT_MODEL",
 	"TAVILY_API_KEY",
 	"OCR_MODE",
+	"DEEPSEEK_ANDROID_PLATFORM_OCR_ADDR",
+	"DEEPSEEK_ANDROID_PLATFORM_OCR_TOKEN",
 	"DEEPSEEK_APP_VERSION",
 	"AUTH_ALLOWED_HOSTS",
 	"DEEPSEEK_API_URL",
@@ -275,10 +278,7 @@ func filteredPath(raw string) string {
 }
 
 func resolveBinary(binDir, name string) (string, error) {
-	candidates := []string{name}
-	if runtime.GOOS == "windows" {
-		candidates = []string{name + ".exe", name}
-	}
+	candidates := platformBinaryCandidates(name)
 	if strings.TrimSpace(binDir) != "" {
 		for _, candidate := range candidates {
 			path := filepath.Join(binDir, candidate)

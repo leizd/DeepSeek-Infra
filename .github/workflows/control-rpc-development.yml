@@ -167,6 +167,85 @@ jobs:
                     "actualAndroidDeviceQualified": False, "fullMigrationQualified": False}
           Path("artifacts/control-rpc-development/android-control-guard-negative-result.json").write_text(json.dumps(result, indent=2) + "\n")
           PY
+      - name: Check Android JVM lifetime pipe and required packaged native roles
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          cd go
+          GOFLAGS=-tags=deepseek_android,sqlite3_flock go test -race -json -count=1 -timeout=2m ./cmd/deepseek-launch ./internal/launch -run '^(TestAndroidParentPipeActualEOFEndsNativeLifetime|TestAndroidParentLifetimeRefusesNonPipeOrChangedProtocol|TestAndroidParentLifetimeAllowsCLIAndStopsWithoutCooperatingParent|TestAndroidParentLifetimeDescriptorExhaustionRefusesAdmission|TestAndroidPackagedNativeRoleResolutionRetainsEveryRequiredProcess|TestAndroidPlatformOcrCredentialReachesOnlyGateway)$' > ../artifacts/control-rpc-development/android-parent-lifetime-tests.jsonl 2>&1
+          cd ..
+          python - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import hashlib,json,os
+          path=Path('artifacts/control-rpc-development/android-parent-lifetime-tests.jsonl')
+          required={'TestAndroidParentPipeActualEOFEndsNativeLifetime','TestAndroidParentLifetimeRefusesNonPipeOrChangedProtocol','TestAndroidParentLifetimeAllowsCLIAndStopsWithoutCooperatingParent','TestAndroidParentLifetimeDescriptorExhaustionRefusesAdmission','TestAndroidPackagedNativeRoleResolutionRetainsEveryRequiredProcess','TestAndroidPlatformOcrCredentialReachesOnlyGateway'}
+          packages={'github.com/leizd/DeepSeek-Infra/go/cmd/deepseek-launch','github.com/leizd/DeepSeek-Infra/go/internal/launch'}
+          started,finished=Counter(),Counter()
+          terminals={}
+          for line in path.read_text().splitlines():
+              try: row=json.loads(line)
+              except json.JSONDecodeError:
+                  assert line.startswith('go: downloading ')
+                  continue
+              test,action=row.get('Test'),row.get('Action')
+              assert action not in {'fail','skip'} and '(cached)' not in row.get('Output','')
+              if not row.get('Package'): continue
+              assert row['Package'] in packages
+              if action in {'run','pass'}: assert row.get('Time')
+              if test:
+                  assert test in required
+                  if action=='run': started[test]+=1
+                  if action=='pass': finished[test]+=1
+              elif action=='pass': terminals.setdefault(row['Package'],[]).append(action)
+          assert set(started)==required and started==finished and all(n==1 for n in started.values())
+          assert set(terminals)==packages and all(value==['pass'] for value in terminals.values())
+          result={'status':'PASS','sourceCommit':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'event':os.environ['GITHUB_EVENT_NAME'],'raceEnabled':True,'expectedTests':sorted(required),'actualKernelPipeEOFQualified':True,'descriptorExhaustionRefusalQualified':True,'actualJVMDeathQualified':False,'actualAndroidDeviceQualified':False,'fullMigrationQualified':False,'rawSha256':hashlib.sha256(path.read_bytes()).hexdigest()}
+          Path('artifacts/control-rpc-development/android-parent-lifetime-result.json').write_text(json.dumps(result,indent=2))
+          PY
+
+      - name: Prove Android parent EOF regression cannot retain native lifetime
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json,os,shutil,subprocess,tempfile,hashlib
+          root=Path.cwd()
+          raw=root/'artifacts/control-rpc-development/android-parent-lifetime-negative-tests.jsonl'
+          name='TestAndroidParentPipeActualEOFEndsNativeLifetime'
+          package='github.com/leizd/DeepSeek-Infra/go/cmd/deepseek-launch'
+          with tempfile.TemporaryDirectory(prefix='android-parent-lifetime-negative-') as directory:
+              copy=Path(directory)/'go'
+              shutil.copytree(root/'go',copy)
+              file=copy/'cmd/deepseek-launch/parent_android_compat.go'
+              body=file.read_text()
+              before=chr(9)*2+'cancel()'
+              assert body.count(before)==1
+              file.write_text(body.replace(before,chr(9)*2+'// Deliberately omit JVM EOF cancellation in this temporary copy.'))
+              environment=dict(os.environ,GOFLAGS='-tags=deepseek_android,sqlite3_flock',CGO_ENABLED='1')
+              with raw.open('wb') as output:
+                  execution=subprocess.run(['go','test','-race','-json','-count=1','-timeout=40s','./cmd/deepseek-launch','-run','^'+name+'$'],cwd=copy,env=environment,stdout=output,stderr=subprocess.STDOUT,timeout=120)
+              assert execution.returncode==1
+          started,finished,terminal,messages=[],[],[],[]
+          for line in raw.read_text().splitlines():
+              try: row=json.loads(line)
+              except json.JSONDecodeError:
+                  assert line.startswith('go: downloading ')
+                  continue
+              assert row.get('Package') in {None,package}
+              if row.get('Test'):
+                  assert row['Test']==name
+                  if row['Action']=='run': started.append(name)
+                  if row['Action'] in {'pass','fail','skip'}: finished.append(row['Action'])
+                  messages.append(row.get('Output',''))
+              elif row['Action'] in {'pass','fail','skip'}: terminal.append(row['Action'])
+          assert started==[name] and finished==terminal==['fail']
+          assert 'actual parent EOF did not end native lifetime' in ''.join(messages)
+          result={'status':'PASS','sourceCommit':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'event':os.environ['GITHUB_EVENT_NAME'],'expectedAssertionFailuresObserved':[name],'onlyTemporaryCopyModified':True,'parentEOFCancellationRemoved':True,'actualJVMDeathQualified':False,'actualAndroidDeviceQualified':False,'fullMigrationQualified':False,'rawSha256':hashlib.sha256(raw.read_bytes()).hexdigest()}
+          (root/'artifacts/control-rpc-development/android-parent-lifetime-negative-result.json').write_text(json.dumps(result,indent=2))
+          PY
+
       - name: Check actual Android-tagged process recovery and bounded lease observation
         timeout-minutes: 7
         env:

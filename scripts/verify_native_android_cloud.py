@@ -121,7 +121,7 @@ def adb(arguments: list[str], output: Path, timeout: int = 120) -> str:
 def collect_runtime_logs(output: Path) -> list[dict[str, str]]:
     """Read bounded child stderr only from the installed disposable test app."""
     results = []
-    for service in ("gateway", "control", "worker"):
+    for service in ("native-launcher", "gateway", "control", "worker"):
         path = output / f"runtime-{service}.log"
         try:
             adb(["shell", "-T", "run-as", APPLICATION, "tail", "-c", "131072",
@@ -204,7 +204,7 @@ def main() -> int:
     parser.add_argument("--test-apk", type=Path, required=True)
     parser.add_argument("--expected-commit", required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--api-level", type=int, choices=(24, 34))
+    parser.add_argument("--api-level", type=int, choices=(24, 26, 28, 30, 34))
     parser.add_argument("--build-report", type=Path)
     args = parser.parse_args()
     if args.mode == "stage":

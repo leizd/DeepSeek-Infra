@@ -89,6 +89,7 @@ func productionChildEnvironment(name string, environment []string) []string {
 
 		denied = denied || name != "deepseek-worker" && name != "deepseek-gateway" && (key == "DEEPSEEK_API_KEY" || key == "TAVILY_API_KEY")
 		denied = denied || name != "deepseek-gateway" && strings.HasPrefix(key, "DEEPSEEK_AGENT_CREDENTIAL_WORKER_")
+		denied = denied || name != "deepseek-gateway" && strings.HasPrefix(key, "DEEPSEEK_ANDROID_PLATFORM_OCR_")
 		denied = denied || name != "deepseek-worker" && name != "deepseek-gateway" && (key == "DEEPSEEK_AGENT_ARTIFACT_DIR" || key == "DEEPSEEK_AGENT_DATA_MODE")
 		denied = denied || name != "deepseek-worker" && (key == "DEEPSEEK_WORKER_S3_ACCESS_KEY" || key == "DEEPSEEK_WORKER_S3_SECRET_KEY" || key == "DEEPSEEK_WORKER_S3_SESSION_TOKEN")
 		if !denied {

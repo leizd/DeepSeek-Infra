@@ -101,6 +101,14 @@ def source_identity(root: Path) -> dict[str, Any]:
             "sourceSha256": digest.hexdigest(), "sourceFiles": len(source_paths), "releaseQualified": False}
 
 
+STAGED_EXECUTABLES = {
+    "rust": ("rust", "libdeepseek_gateway.so"),
+    "go": ("go", "libdeepseek_control.so"),
+    "worker": ("rust", "libdeepseek_worker.so"),
+    "launcher": ("go", "libdeepseek_launch.so"),
+}
+
+
 def stage_bundle(root: Path, output: Path, binaries: dict[str, dict[str, Path]]) -> dict[str, Any]:
     if not (root / "static/ui/index.html").is_file():
         raise ValueError("React frontend build is missing")
@@ -116,10 +124,15 @@ def stage_bundle(root: Path, output: Path, binaries: dict[str, dict[str, Path]])
                               "binaries": {}, "assets": []}
     # Validate the complete binary set before writing any staged output.
     for abi, executables in binaries.items():
-        manifest["binaries"][abi] = {kind: inspect_executable(executables[kind], abi, kind) for kind in ("rust", "go")}
+        if abi not in TARGETS or set(executables) != set(STAGED_EXECUTABLES):
+            raise ValueError("Android bundle requires the complete native process tree")
+        manifest["binaries"][abi] = {
+            role: inspect_executable(executables[role], abi, kind)
+            for role, (kind, _) in STAGED_EXECUTABLES.items()
+        }
     for abi, executables in binaries.items():
-        for kind, filename in (("rust", "libdeepseek_gateway.so"), ("go", "libdeepseek_control.so")):
-            copy_file(executables[kind], output / "jniLibs" / abi / filename)
+        for role, (_, filename) in STAGED_EXECUTABLES.items():
+            copy_file(executables[role], output / "jniLibs" / abi / filename)
     # Publish a complete resource set. Copying over the previous generation leaves
     # old Vite chunks in the APK even though they are absent from the new manifest.
     # The temporary directory is under this explicit build output; only its own
@@ -217,13 +230,17 @@ def build(root: Path, sdk: Path, output: Path, cargo_target: Path, toolchain: st
         rust_env.update({f"CARGO_TARGET_{key.upper()}_LINKER": compiler.as_posix(), f"CC_{key}": compiler.as_posix(),
                          f"AR_{key}": ar.as_posix(), f"CARGO_TARGET_{key.upper()}_RUSTFLAGS": "-C link-arg=-Wl,-z,max-page-size=16384",
                          "CARGO_TARGET_DIR": cargo_target.as_posix()})
-        run([cargo, f"+{toolchain}", "build", "--release", "--locked", "--target", target, "-p", "deepseek-gateway"], root / "rust", rust_env)
+        run([cargo, f"+{toolchain}", "build", "--release", "--locked", "--target", target, "-p", "deepseek-gateway", "-p", "deepseek-worker"], root / "rust", rust_env)
         go_env = dict(env, CGO_ENABLED="0", GOTOOLCHAIN="local", GOARCH="arm64" if abi == "arm64-v8a" else "amd64",
                       GOOS="android" if abi == "arm64-v8a" else "linux")
-        control = output / "bin" / abi / "deepseekd"
-        control.parent.mkdir(parents=True, exist_ok=True)
-        run([go, "build", "-tags", "deepseek_android,sqlite3_flock", "-trimpath", "-o", control.as_posix(), "./cmd/deepseekd"], root / "go", go_env)
-        binaries[abi] = {"rust": cargo_target / target / "release/deepseek-gateway", "go": control}
+        go_binaries = {}
+        for role, command in (("go", "deepseekd"), ("launcher", "deepseek-launch")):
+            binary = output / "bin" / abi / command
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            run([go, "build", "-tags", "deepseek_android,sqlite3_flock", "-trimpath", "-o", binary.as_posix(), "./cmd/" + command], root / "go", go_env)
+            go_binaries[role] = binary
+        binaries[abi] = {"rust": cargo_target / target / "release/deepseek-gateway",
+                         "worker": cargo_target / target / "release/deepseek-worker", **go_binaries}
     if source_identity(root) != initial_identity:
         raise ValueError("Android source changed during native compilation")
     manifest = stage_bundle(root, output, binaries)

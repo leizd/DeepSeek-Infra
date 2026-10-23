@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from build_android_native import PYTHON_SUFFIXES, inspect_executable
+from build_android_native import PYTHON_SUFFIXES, STAGED_EXECUTABLES, inspect_executable
 
 
 def inspect_package(apk: Path) -> dict[str, Any]:
@@ -44,14 +44,16 @@ def inspect_package(apk: Path) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="deepseek-apk-inspect-") as temp:
             for abi in manifest["binaries"]:
                 binaries[abi] = {}
-                for kind, filename in (("rust", "libdeepseek_gateway.so"), ("go", "libdeepseek_control.so")):
+                if set(manifest["binaries"][abi]) != set(STAGED_EXECUTABLES):
+                    raise ValueError("APK requires the complete native process tree")
+                for role, (kind, filename) in STAGED_EXECUTABLES.items():
                     content = archive.read(f"lib/{abi}/{filename}")
                     path = Path(temp) / filename
                     path.write_bytes(content)
                     inspected = inspect_executable(path, abi, kind)
-                    if inspected["sha256"] != manifest["binaries"][abi][kind]["sha256"]:
-                        raise ValueError(f"Packaged executable hash mismatch: {abi}/{kind}")
-                    binaries[abi][kind] = inspected
+                    if inspected["sha256"] != manifest["binaries"][abi][role]["sha256"]:
+                        raise ValueError(f"Packaged executable hash mismatch: {abi}/{role}")
+                    binaries[abi][role] = inspected
         return {"status": "PASS", "checkedAt": datetime.now(timezone.utc).isoformat(), "releaseQualified": False,
                 "apkSha256": hashlib.sha256(apk.read_bytes()).hexdigest(), "apkBytes": apk.stat().st_size,
                 "pythonEntries": [], "pythonDexBridge": False, "assets": len(declared_assets), "binaries": binaries,

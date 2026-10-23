@@ -54,13 +54,13 @@ def test_child_diagnostics_read_only_bounded_logs_from_disposable_app(monkeypatc
         calls.append(arguments)
         assert arguments[:5] == ["shell", "-T", "run-as", "com.deepseek.mobile.nativeverify", "tail"]
         assert arguments[5:7] == ["-c", "131072"] and timeout <= 30
-        assert arguments[7] in {"files/.native-runtime-logs/gateway.log", "files/.native-runtime-logs/control.log", "files/.native-runtime-logs/worker.log"}
+        assert arguments[7] in {"files/.native-runtime-logs/native-launcher.log", "files/.native-runtime-logs/gateway.log", "files/.native-runtime-logs/control.log", "files/.native-runtime-logs/worker.log"}
         output.write_text("disposable child startup diagnostic\n", encoding="utf-8")
         return "disposable child startup diagnostic"
 
     monkeypatch.setattr(android_cloud, "adb", read)
     results = android_cloud.collect_runtime_logs(tmp_path)
-    assert len(calls) == 3 and {row["service"] for row in results} == {"gateway", "control", "worker"}
+    assert len(calls) == 4 and {row["service"] for row in results} == {"native-launcher", "gateway", "control", "worker"}
     assert all(row["status"] == "COLLECTED" for row in results)
 
 
@@ -75,8 +75,9 @@ def test_missing_child_log_preserves_other_runtime_diagnostics(monkeypatch: pyte
     monkeypatch.setattr(android_cloud, "adb", read)
     results = {row["service"]: row for row in android_cloud.collect_runtime_logs(tmp_path)}
     assert results["worker"]["status"] == "UNAVAILABLE"
-    assert results["gateway"]["status"] == results["control"]["status"] == "COLLECTED"
+    assert results["native-launcher"]["status"] == results["gateway"]["status"] == results["control"]["status"] == "COLLECTED"
     assert (tmp_path / "runtime-gateway.log").read_text() == "native child error\n"
+    assert (tmp_path / "runtime-native-launcher.log").read_text() == "native child error\n"
 
 
 def test_invalid_source_binding_cannot_read_app_sandbox_or_qualify(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

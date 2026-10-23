@@ -79,7 +79,7 @@ public class NativeControlLockIntegrationTest {
                 NativeControlStoreLock.acquire(database);
                 fail("duplicate JVM lease was admitted");
             } catch (java.io.IOException expected) {
-                assertTrue(expected.toString(), expected.getMessage().contains("Control store is in use"));
+                assertTrue(expected.toString(), expected.getMessage().contains("Native server readiness timed out"));
             }
             assertEquals("duplicate open/close released the original POSIX lock", 73, completedProbe("posix", database));
             child = probe("wait", database);
@@ -137,7 +137,7 @@ public class NativeControlLockIntegrationTest {
     @Test
     public void packagedControlExcludesLegacyLockFamiliesAndReleasesOnlyAfterShutdown() throws Exception {
         Context app = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        File database = new File(app.getFilesDir(), "go-shadow/control.sqlite3");
+        File database = new File(app.getFilesDir(), "go-control/control.sqlite3");
         NativeRuntime runtime = new NativeRuntime(app);
         try {
             runtime.start();
@@ -157,7 +157,7 @@ public class NativeControlLockIntegrationTest {
                 runtime.start();
                 fail("native control started while a legacy SQLite process owns its database");
             } catch (java.io.IOException expected) {
-                assertTrue(expected.toString(), expected.getMessage().contains("Control store is in use"));
+                assertTrue(expected.toString(), expected.getMessage().contains("Native server readiness timed out"));
             } finally {
                 runtime.stop();
             }

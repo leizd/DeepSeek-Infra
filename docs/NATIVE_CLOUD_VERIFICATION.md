@@ -97,7 +97,7 @@ APK 仅在同次云端作业间传递，本机只收集 JSON/日志，不下载 
 2026-10-19 的精确源码 `286bd0e1` 已构建两 ABI APK，并在 API34 完成七项仪器测试；
 API24 的原生进程就绪失败，整组设备验收仍失败。仅有 logcat 和 Java 超时堆栈不足以定位子进程退出原因。
 后续运行在确认源码/APK并成功重置隔离 debug 沙盒后，额外读取该沙盒
-`.native-runtime-logs/{gateway,control,worker}.log` 的末尾各最多 128 KiB；缺失日志明确标记不可用。
+`.native-runtime-logs/{native-launcher,gateway,control,worker}.log` 的末尾各最多 128 KiB；缺失日志明确标记不可用。
 源绑定失败时不读取应用私有目录。APK、数据库、凭据、缓存和镜像均不下载。
 
 [Control RPC development workflow](../.github/workflows/control-rpc-development.yml)
@@ -119,7 +119,7 @@ API24 的原生进程就绪失败，整组设备验收仍失败。仅有 logcat 
 这些不是成功工作负载或平台验收。缺失内核事实明确标记不可用。
 调试沙盒日志改用带远端退出状态的`adb shell -T`；`exec-out`可把缺失文件的错误作为成功传输输出，
 因此旧7d报告中71字节的worker错误文本虽标记COLLECTED，不能证明worker存在。
-当前Android仍缺Rust worker，所有生产/ARM64/完整迁移资格保持false。
+该次Android快照仍缺Rust worker；其报告不能证明生产/ARM64/完整迁移资格。
 
 参考：[固定SQLite VFS实现](https://github.com/ncruces/go-sqlite3/blob/v0.35.6/vfs/README.md)
 与[ADB shell选项](https://android.googlesource.com/platform/packages/modules/adb/+/refs/heads/main/docs/user/adb.1.md)。
@@ -144,6 +144,10 @@ no-lock/dot-lock fallback and the minimum Android API remains 24. The preceding
 real API24 run returned `SQLITE_IOERR_RDLOCK` (2314) on Linux 3.10.0+; the
 upstream default OFD implementation requires Linux 3.15. The original driver's
 OS errno was unavailable, so do not invent one from the kernel version.
+
+The JVM-owned lease in the following paragraph describes the earlier shadow
+APK. The helper is now instrumentation-only; the current managed entry uses
+the Go-owned control-file guard described below.
 
 BSD locks are not compatible with concurrent POSIX/OFD SQLite users. Before
 spawning control, Android startup acquires a whole-database POSIX exclusive
@@ -203,5 +207,24 @@ The development workflow requires actual independent-process lock probes,
 recovery after owner SIGKILL, and a temporary eager-close copy that must fail
 at the lost-lock assertion. These host checks do not qualify Android devices,
 the default authoritative APK, ARM64, VM-lifetime recovery, or all product features.
-The default APK still needs its managed Go launcher and Rust worker wiring,
-and remains `NOT_READY` until the complete platform gates pass.
+The default APK now requires four signed packaged images: the managed Go
+launcher, Go control process, Rust worker and Rust gateway. Both the staging
+and final-APK inspectors verify every role before accepting the artifact. The
+Java entry starts only the Go launcher; it never opens or precreates a control
+database. The Go launcher resolves the APK's immutable native-library filenames
+and performs its existing signed native-origin bootstrap and private RPC setup.
+The public readiness response must report Go authoritative ownership and an
+active production writer; a shadow backend cannot satisfy APK startup.
+
+The JVM retains the write end of the launcher's standard-input lifetime pipe.
+Actual EOF cancels the Go root context, after which its guardians stop the native
+child tree. Unknown protocols, non-pipe inputs and descriptor exhaustion refuse
+admission. A host pipe test and a temporary omitted-cancellation negative copy
+are required in the development workflow. These tests are not actual JVM-death
+or device proof. The Android cache directory reaches native children through
+TMPDIR; the ML Kit bridge address/credential reaches only the Rust gateway.
+
+Real API24/API34 and ARM64 managed startup, JVM SIGKILL with native descendants,
+intermediate API/seccomp behavior, all retained features, long-lived credential
+renewal, complete recovery and release Evidence remain unqualified. Keep
+`NOT_READY` until their original platform and whole-product gates pass.

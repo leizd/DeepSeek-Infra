@@ -37,6 +37,11 @@ func run(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	closeParent, err := bindPlatformParent(ctx, stop)
+	if err != nil {
+		return err
+	}
+	defer closeParent()
 	options, err = options.PromptAPIKey(term.IsTerminal(int(os.Stdin.Fd())), func() ([]byte, error) {
 		value, err := readConsoleSecret(ctx)
 		if errors.Is(err, context.Canceled) {
