@@ -21,7 +21,7 @@ concurrency:
 jobs:
   regressions:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       CGO_ENABLED: "0"
       GOTOOLCHAIN: local
@@ -379,9 +379,11 @@ jobs:
         run: |
           cd go
           set +e
-          # All original groups plus 54 custody/transaction fault cases; bounded
-          # above their measured combined runtime, with no skipped assertions.
-          go test -race -json -count=1 -timeout=5m -covermode=atomic -coverprofile=../artifacts/control-rpc-development/managed-binding-scoped-coverage.out ./internal/worker ./internal/store ./internal/api -run '^(TestReadControlSignerBinding.*|TestNextWriterFencingToken.*|TestNativeOrigin.*|TestNativeControlRollback.*|TestNativeAgentSettlementReadFaultRetainsOriginalProof|TestEmptyPythonInventoryStillRequiresAttestedSource|TestAgentDriverSafeConfigurationFailuresRemainRedacted|TestAgentDriverLoopSuppressesCredentialErrorsAndStopsCancelledWork)$' > ../artifacts/control-rpc-development/managed-binding-tests.jsonl 2>&1
+          # Retain every original group and the complete recovery fault corpus.
+          # Exact 41445553 exhausted 300s after 35 top-level passes and 113 subtests;
+          # the new rollback cases were still making progress at about 3s each.
+          # Bound the enlarged race corpus without changing release CI or floors.
+          go test -race -json -count=1 -timeout=10m -covermode=atomic -coverprofile=../artifacts/control-rpc-development/managed-binding-scoped-coverage.out ./internal/worker ./internal/store ./internal/api -run '^(TestReadControlSignerBinding.*|TestNextWriterFencingToken.*|TestNativeOrigin.*|TestNativeControlRollback.*|TestNativeAgentSettlementReadFaultRetainsOriginalProof|TestEmptyPythonInventoryStillRequiresAttestedSource|TestAgentDriverSafeConfigurationFailuresRemainRedacted|TestAgentDriverLoopSuppressesCredentialErrorsAndStopsCancelledWork)$' > ../artifacts/control-rpc-development/managed-binding-tests.jsonl 2>&1
           status=$?
           set -e
           cd ..

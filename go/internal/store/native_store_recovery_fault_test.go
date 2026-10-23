@@ -170,13 +170,29 @@ func nativeSettlementReadFixture(t *testing.T, phase string) (*Control, func() (
 func TestNativeAgentSettlementReadFaultRetainsOriginalProof(t *testing.T) {
 	for _, phase := range []string{"plan", "task", "synthesis", "failure-plan", "failure-synthesis"} {
 		t.Run(phase, func(t *testing.T) {
-			for _, table := range []string{"control_cutover", "action_lease_events"} {
-				t.Run(table, func(t *testing.T) {
+			for _, fault := range []string{"control_cutover", "action_lease_events", "action-cutover"} {
+				t.Run(fault, func(t *testing.T) {
 					control, settle := nativeSettlementReadFixture(t, phase)
 					defer control.Close()
 					before, versions := failureMigrationRows(t, control.db), nativeV18VersionRows(t, control.db)
-					if _, err := control.db.Exec("CREATE TEMP VIEW " + table + " AS SELECT * FROM main." + table + " WHERE json_extract('broken','$')=1"); err != nil {
+					table, predicate := fault, "json_extract('broken','$')=1"
+					if fault == "action-cutover" {
+						// The agent-run authority remains readable. Settlement must also
+						// independently read the action domain before consuming its proof.
+						table = "control_cutover"
+						predicate = "CASE WHEN domain='action' THEN json_extract('broken','$') ELSE 1 END=1"
+					}
+					if _, err := control.db.Exec("CREATE TEMP VIEW " + table + " AS SELECT * FROM main." + table + " WHERE " + predicate); err != nil {
 						t.Fatal(err)
+					}
+					if fault == "action-cutover" {
+						var count int
+						if err := control.db.QueryRow("SELECT COUNT(*) FROM control_cutover WHERE domain='agent_run'").Scan(&count); err != nil || count != 1 {
+							t.Fatal("isolated action read fault also damaged the agent-run authority", err)
+						}
+						if err := control.db.QueryRow("SELECT COUNT(*) FROM control_cutover WHERE domain='action'").Scan(&count); err == nil {
+							t.Fatal("fixture did not interrupt the independent action authority read")
+						}
 					}
 					if applied, err := settle(); err == nil || applied {
 						t.Fatal("unreadable original authority or admission was accepted as settled", err)
