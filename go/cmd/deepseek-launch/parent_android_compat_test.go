@@ -120,7 +120,9 @@ func TestAndroidParentLifetimeDescriptorExhaustionRefusesAdmission(t *testing.T)
 		t.Fatal(err)
 	}
 	limited := original
-	limited.Cur = 0
+	// F_DUPFD starts at3: keep that index valid but occupied by the runtime
+	// or the already-open pipe, so exhaustion returns EMFILE rather than EINVAL.
+	limited.Cur = 4
 	if err := unix.Setrlimit(unix.RLIMIT_NOFILE, &limited); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +135,7 @@ func TestAndroidParentLifetimeDescriptorExhaustionRefusesAdmission(t *testing.T)
 		t.Fatal(restoreErr)
 	}
 	if !errors.Is(admissionErr, unix.EMFILE) {
-		t.Fatalf("descriptor exhaustion admitted parent lifetime: %v", admissionErr)
+		t.Fatalf("descriptor exhaustion returned an unexpected refusal: %v", admissionErr)
 	}
 	if ctx.Err() != nil {
 		t.Fatal("failed pipe setup changed an unrelated context")
