@@ -41,6 +41,8 @@ jobs:
           echo "$RUNNER_TEMP/control-go/go/bin" >> "$GITHUB_PATH"
       - name: Check actual Android-tagged process recovery and bounded lease observation
         timeout-minutes: 7
+        env:
+          CGO_ENABLED: "1"
         run: |
           mkdir -p artifacts/control-rpc-development
           cd go
@@ -82,6 +84,8 @@ jobs:
           PY
       - name: Prove the Android lease observer regression rejects the original zero-timeout query
         timeout-minutes: 3
+        env:
+          CGO_ENABLED: "1"
         run: |
           mkdir -p artifacts/control-rpc-development
           negative="$(mktemp -d)"
