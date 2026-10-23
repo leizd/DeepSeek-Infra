@@ -39,6 +39,95 @@ jobs:
           mkdir -p "$RUNNER_TEMP/control-go"
           tar -xzf "$archive" -C "$RUNNER_TEMP/control-go"
           echo "$RUNNER_TEMP/control-go/go/bin" >> "$GITHUB_PATH"
+      - name: Check actual Android-tagged process recovery and bounded lease observation
+        timeout-minutes: 7
+        run: |
+          mkdir -p artifacts/control-rpc-development
+          cd go
+          set +e
+          GOFLAGS=-tags=deepseek_android,sqlite3_flock go test -race -json -count=1 -timeout=5m ./cmd/deepseekd -run '^(TestDeepseekdKilledProcessPreservesAcknowledgedStateAndWriterFence|TestPersistedProcessLeaseObservesTemporaryAndroidContentionWithoutMutation)$' > ../artifacts/control-rpc-development/android-process-tests.jsonl 2>&1
+          process_status=$?
+          set -e
+          cd ..
+          export ANDROID_PROCESS_STATUS="$process_status"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          required = {"TestDeepseekdKilledProcessPreservesAcknowledgedStateAndWriterFence",
+                      "TestPersistedProcessLeaseObservesTemporaryAndroidContentionWithoutMutation"}
+          started, finished = set(), {}
+          for line in Path("artifacts/control-rpc-development/android-process-tests.jsonl").read_text().splitlines():
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              name, action = row.get("Test"), row.get("Action")
+              if name in required and action == "run":
+                  started.add(name)
+              if name in required and action in {"pass", "fail", "skip"}:
+                  assert name not in finished
+                  finished[name] = action
+          code = int(os.environ["ANDROID_PROCESS_STATUS"])
+          if code == 0 and (started != required or set(finished) != required or set(finished.values()) != {"pass"}):
+              code = 2
+          report = {"sourceCommit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
+                    "event": os.environ["GITHUB_EVENT_NAME"], "exitCode": code,
+                    "goFlags": "-tags=deepseek_android,sqlite3_flock", "expectedTests": sorted(required),
+                    "startedExpectedTests": sorted(started), "finishedExpectedTests": finished,
+                    "scope": "Android-tagged host race/process recovery; not Android device execution",
+                    "androidDeviceQualified": False, "fullGoSuiteQualified": False,
+                    "coverageQualified": False, "fullMigrationQualified": False}
+          Path("artifacts/control-rpc-development/android-process-result.json").write_text(json.dumps(report, indent=2) + "\n")
+          raise SystemExit(code)
+          PY
+      - name: Prove the Android lease observer regression rejects the original zero-timeout query
+        timeout-minutes: 3
+        run: |
+          mkdir -p artifacts/control-rpc-development
+          negative="$(mktemp -d)"
+          trap 'rm -rf "$negative"' EXIT
+          cp -a go "$negative/go"
+          export ANDROID_OBSERVER_NEGATIVE_ROOT="$negative"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path(os.environ["ANDROID_OBSERVER_NEGATIVE_ROOT"]) / "go/cmd/deepseekd/process_test.go"
+          source = path.read_text()
+          guarded = 'RawQuery: "mode=ro&_query_only=1&_busy_timeout=1000"'
+          assert source.count(guarded) == 1
+          path.write_text(source.replace(guarded, 'RawQuery: "mode=ro"'))
+          PY
+          set +e
+          (cd "$negative/go" && GOFLAGS=-tags=deepseek_android,sqlite3_flock go test -race -json -count=1 -timeout=2m ./cmd/deepseekd -run '^TestPersistedProcessLeaseObservesTemporaryAndroidContentionWithoutMutation$') > artifacts/control-rpc-development/android-observer-negative-tests.jsonl 2>&1
+          negative_status=$?
+          set -e
+          export ANDROID_OBSERVER_NEGATIVE_STATUS="$negative_status"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          name = "TestPersistedProcessLeaseObservesTemporaryAndroidContentionWithoutMutation"
+          started, failed, output = [], [], []
+          for line in Path("artifacts/control-rpc-development/android-observer-negative-tests.jsonl").read_text().splitlines():
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              if row.get("Test") == name:
+                  if row.get("Action") == "run":
+                      started.append(name)
+                  if row.get("Action") in {"pass", "fail", "skip"}:
+                      assert row["Action"] == "fail"
+                      failed.append(name)
+                  output.append(row.get("Output", ""))
+          assert int(os.environ["ANDROID_OBSERVER_NEGATIVE_STATUS"]) == 1
+          assert started == failed == [name] and "database is locked" in "".join(output)
+          report = {"status": "PASS", "sourceCommit": os.environ["GITHUB_SHA"],
+                    "runId": os.environ["GITHUB_RUN_ID"], "event": os.environ["GITHUB_EVENT_NAME"],
+                    "expectedAssertionFailuresObserved": failed, "onlyTemporaryCopyModified": True,
+                    "originalFenceAndExpiryAssertionsRetained": True, "fullMigrationQualified": False}
+          Path("artifacts/control-rpc-development/android-observer-negative-result.json").write_text(json.dumps(report, indent=2) + "\n")
+          PY
+          test -z "$(git status --porcelain --untracked-files=all)"
       - name: Exercise real control lifecycle regressions without release qualification
         env:
           # Go race instrumentation requires Cgo; production builds remain pure Go.
