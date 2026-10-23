@@ -175,3 +175,33 @@ References: [pinned VFS locking contract](https://github.com/ncruces/go-sqlite3/
 This repair does not qualify Rust worker availability, Go production ownership,
 ARM64 device execution or the complete zero-Python product. Keep `NOT_READY`
 until their original evidence gates pass.
+
+For managed native Android control, Go must own the legacy SQLite exclusion;
+the JVM lock used by the shadow APK cannot authorize native database creation.
+`store.OpenControl` first performs the original signed-origin and read-only
+foreign-store checks, then acquires the process guard and repeats admission
+before opening the writer. The required Android build tags remain
+`deepseek_android,sqlite3_flock`. A native authority build without the BSD tag
+fails before creating its database.
+
+The tracked VFS keeps one full-file POSIX guard in the actual Go writer process.
+Its bounded physical-file pool defers same-inode descriptor closes until the
+guard and remaining SQLite connections finish. Each logical connection receives
+fresh SHM, mmap and file-control state; the OS IO handle is reused only after its
+SQLite lock is released. Native readonly observers do not claim a writer guard.
+The wrapper preserves the pinned Linux VFS's F2FS atomic file-control interface.
+Pending atomic state is aborted before a handle can be reused. A failed abort
+quarantines that inode, refuses new native opens and remains visible at guard
+release even when SQLite's close API drops the original VFS error. Adapter fault
+fixtures are distinct from qualification on an actual F2FS device.
+Other Go code must use the SQLite adapter to access a live control database;
+raw same-process database reads followed by `close()` would invalidate POSIX
+locks. See [SQLite's descriptor-close warning](https://sqlite.org/howtocorrupt.html#_posix_advisory_locks_canceled_by_a_separate_thread_doing_close_).
+
+The development workflow requires actual independent-process lock probes,
+64 readonly open/close cycles with bounded descriptor growth, acknowledged-row
+recovery after owner SIGKILL, and a temporary eager-close copy that must fail
+at the lost-lock assertion. These host checks do not qualify Android devices,
+the default authoritative APK, ARM64, VM-lifetime recovery, or all product features.
+The default APK still needs its managed Go launcher and Rust worker wiring,
+and remains `NOT_READY` until the complete platform gates pass.

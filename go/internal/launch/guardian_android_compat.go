@@ -27,6 +27,9 @@ func init() {
 }
 
 func runGuardian(process Process) (int, error) {
+	if !guardianProcessAllowed(process) {
+		return 125, errors.New("invalid native guardian process")
+	}
 	pipe := os.NewFile(3, "native-root-lifetime")
 	defer pipe.Close()
 	return superviseGuardian(process, pipe)

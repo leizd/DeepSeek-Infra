@@ -301,4 +301,85 @@ func TestAndroidGuardianRefusesMissingPipeAndForeignImage(t *testing.T) {
 	if code, err := superviseGuardian(process, read); code != 125 || err == nil {
 		t.Fatal("foreign process admitted")
 	}
+	var previous int32
+	if err := unix.Prctl(unix.PR_GET_CHILD_SUBREAPER, uintptr(unsafe.Pointer(&previous)), 0, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, uintptr(previous), 0, 0, 0) })
+	process = Process{Name: "deepseekd", Path: filepath.Join(t.TempDir(), "missing-native")}
+	if code, err := superviseGuardian(process, read); code != 125 || !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("missing image admitted a child or hid the startup error", code, err)
+	}
+}
+
+func TestAndroidGuardianCustodyParsesParenthesizedNames(t *testing.T) {
+	for _, raw := range []string{"12 (worker ( ) )) S 42 1", "12 (worker) Z 42 1"} {
+		if !guardianStatChild([]byte(raw), 42) || guardianStatChild([]byte(raw), 4) {
+			t.Fatalf("custody parsed incorrectly: %s", raw)
+		}
+	}
+	for _, raw := range []string{"", "12 worker S 42", "12 (worker)", "12 (worker) S"} {
+		if guardianStatChild([]byte(raw), 42) {
+			t.Fatalf("malformed custody accepted: %s", raw)
+		}
+	}
+	if guardianChild(os.Getpid()) || guardianChild(-1) {
+		t.Fatal("non-child admitted to guardian custody")
+	}
+}
+
+func TestAndroidGuardianRejectsInterpreterAndForeignProcessNames(t *testing.T) {
+	for _, process := range []Process{
+		{Name: "deepseekd", Path: "/usr/bin/python"},
+		{Name: "deepseek-worker", Path: "/usr/bin/node"},
+		{Name: "shell", Path: "/bin/sh"},
+		{Name: "deepseekd", Path: "relative"},
+	} {
+		if guardianProcessAllowed(process) {
+			t.Fatalf("foreign process admitted: %s", process.Name)
+		}
+		if code, err := runGuardian(process); code != 125 || err == nil {
+			t.Fatalf("invalid guardian target: %d %v", code, err)
+		}
+	}
+}
+
+func TestAndroidGuardianPrepareKeepsOnlyRootPipeAndOriginalEnvironment(t *testing.T) {
+	fence, err := newProcessFence()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fence.close()
+	env := []string{"ONLY_UI_CONFIGURATION=retained"}
+	prepared, err := fence.prepare(Process{Name: "deepseek-desktop", Path: os.Args[0]}, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.files) != 1 || len(prepared.args) != 4 || prepared.args[1] != guardianArgument || prepared.env[0] != env[0] {
+		t.Fatal("guardian changed native entry or environment")
+	}
+	if err := prepared.cancel(); err != nil {
+		t.Fatal(err)
+	}
+	var buffer [1]byte
+	if _, err := prepared.files[0].Read(buffer[:]); !errors.Is(err, io.EOF) {
+		t.Fatalf("root lifetime pipe retained by another owner: %v", err)
+	}
+	if fence.attributes() != nil || fence.admit(1) != nil {
+		t.Fatal("guardian unexpectedly changes root process attributes")
+	}
+	missing := filepath.Join(t.TempDir(), "missing-worker")
+	if _, err := fence.prepare(Process{Name: "deepseek-worker", Path: missing}, nil); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing native binary admitted: %v", err)
+	}
+	plain := filepath.Join(t.TempDir(), "native")
+	if err := os.WriteFile(plain, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fence.prepare(Process{Name: "deepseekd", Path: plain}, nil); err == nil {
+		t.Fatal("non-executable target admitted")
+	}
+	if _, err := fence.prepare(Process{Name: "foreign", Path: os.Args[0]}, nil); err == nil {
+		t.Fatal("foreign target admitted")
+	}
 }

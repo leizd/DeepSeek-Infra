@@ -89,6 +89,9 @@ func NewConnector(dsn string) (driver.Connector, error) {
 	query.Del("_defensive")
 	query.Del("_dqs")
 	query["_pragma"] = pragmas
+	if err := configureAndroidVFS(query); err != nil {
+		return nil, err
+	}
 	uri.RawQuery = query.Encode()
 	connector, err := (&sqlitedriver.SQLite{}).OpenConnector(uri.String())
 	if err != nil {

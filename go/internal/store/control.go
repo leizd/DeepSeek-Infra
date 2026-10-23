@@ -90,6 +90,7 @@ type Snapshot struct {
 
 type Control struct {
 	nativeOrigin          *nativeOriginPreparation
+	fileGuard             sqlitedb.NativeControlGuard
 	nativeNew             bool
 	mu                    sync.Mutex
 	path                  string
@@ -174,14 +175,6 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 				return nil, err
 			}
 		}
-	} else if statErr != nil {
-		file, err := os.OpenFile(databasePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
-		if err != nil {
-			return nil, err
-		}
-		if err := file.Close(); err != nil {
-			return nil, err
-		}
 	}
 
 	// A retained Rust publication proves that an initialized Go database
@@ -189,6 +182,33 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 	// authority, never the crash-before-creation recovery case.
 	if nativeOrigin != nil && nativeOrigin.state.Publication != nil && !databaseExisted {
 		return nil, ErrNativeOrigin
+	}
+	fileGuard, err := sqlitedb.PrepareControlFile(databasePath, opts.AuthorizeCutover || opts.NativeOrigin != nil, errors.Is(statErr, os.ErrNotExist))
+	if err != nil {
+		return nil, err
+	}
+	opened := false
+	defer func() {
+		if !opened {
+			_ = fileGuard.Close()
+		}
+	}()
+	// Preserve the original read-only foreign-store refusal before acquiring a
+	// writable descriptor, then repeat admission under the native file guard.
+	// A legacy writer could have changed the file between preflight and locking.
+	if databaseExisted {
+		initialized, err := validateExistingControlMarker(databasePath)
+		if err != nil {
+			return nil, err
+		}
+		if !initialized {
+			return nil, ErrForeignRuntimeStore
+		}
+		if nativeOrigin != nil {
+			if err := validateNativeExisting(databasePath, nativeOrigin); err != nil {
+				return nil, err
+			}
+		}
 	}
 	db, err := sqlitedb.Open(controlDatabaseDSN(databasePath))
 	if err != nil {
@@ -216,6 +236,7 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 	}
 	store := &Control{
 		nativeOrigin:          nativeOrigin,
+		fileGuard:             fileGuard,
 		nativeNew:             nativeOrigin != nil && !databaseExisted,
 		path:                  resolved,
 		databasePath:          databasePath,
@@ -237,6 +258,7 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 		_ = store.Close()
 		return nil, err
 	}
+	opened = true
 	return store, nil
 }
 
@@ -1334,7 +1356,7 @@ func (store *Control) Close() error {
 		store.token,
 	)
 	closeErr := store.db.Close()
-	return errors.Join(releaseErr, closeErr)
+	return errors.Join(releaseErr, closeErr, store.fileGuard.Close())
 }
 
 func (store *Control) Writer() WriterLease {

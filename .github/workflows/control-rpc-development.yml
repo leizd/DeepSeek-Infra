@@ -39,6 +39,134 @@ jobs:
           mkdir -p "$RUNNER_TEMP/control-go"
           tar -xzf "$archive" -C "$RUNNER_TEMP/control-go"
           echo "$RUNNER_TEMP/control-go/go/bin" >> "$GITHUB_PATH"
+      - name: Check native Android control file exclusion and descriptor lifetime
+        timeout-minutes: 8
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          mkdir -p artifacts/control-rpc-development
+          cd go
+          set +e
+          GOFLAGS=-tags=deepseek_android,sqlite3_flock go test -race -json -count=1 -timeout=5m -covermode=atomic -coverprofile=../artifacts/control-rpc-development/android-control-guard-scoped-coverage.out ./internal/sqlitedb ./internal/store ./internal/launch -run '^(TestAndroidControlGuardSurvivesReaderCloseAndBoundedDescriptorChurn|TestAndroidControlGuardReleasedOnlyAfterActualOwnerKill|TestAndroidNativeOriginRetainsProcessOwnedControlFileGuard|TestControlFileCreationNeverOverwritesAnExistingDatabase|TestControlFileNoncreatingPreparationLeavesMissingFilesAbsent|TestControlBirthRefusesTheNoncreatableOwnProcDirectory|TestAndroidControlGuardPreservesAtomicFileControlLifecycle|TestAndroidControlGuardFilesystemAdmissionRefusals|TestAndroidGuardianCustodyParsesParenthesizedNames|TestAndroidGuardianRejectsInterpreterAndForeignProcessNames|TestAndroidGuardianPrepareKeepsOnlyRootPipeAndOriginalEnvironment|TestLinuxCancelledLaunchAndInvalidGuardianPlanAdmitNoChild|TestLinuxRemovedWorkingDirectoryCannotCreateRelativeRuntimeState|TestLinuxUnavailableDescriptorBudgetFailsBeforeStartingGuardian|TestLinuxLegacyCommandAfterNativeAdmissionSettlesOwnedChildren|TestLinuxWaitForChildrenHasBoundedMissingResult)$' > ../artifacts/control-rpc-development/android-control-guard-tests.jsonl 2>&1
+          guard_status=$?
+          set -e
+          cd ..
+          export ANDROID_CONTROL_GUARD_STATUS="$guard_status"
+          python - <<'PY'
+          import json, os
+          from collections import Counter
+          from pathlib import Path
+          required = {"TestAndroidControlGuardSurvivesReaderCloseAndBoundedDescriptorChurn",
+                      "TestAndroidControlGuardReleasedOnlyAfterActualOwnerKill",
+                      "TestAndroidNativeOriginRetainsProcessOwnedControlFileGuard",
+                      "TestControlFileCreationNeverOverwritesAnExistingDatabase",
+                      "TestControlFileNoncreatingPreparationLeavesMissingFilesAbsent",
+                      "TestControlBirthRefusesTheNoncreatableOwnProcDirectory",
+                      "TestAndroidControlGuardPreservesAtomicFileControlLifecycle",
+                      "TestAndroidControlGuardFilesystemAdmissionRefusals",
+                      "TestAndroidGuardianCustodyParsesParenthesizedNames",
+                      "TestAndroidGuardianRejectsInterpreterAndForeignProcessNames",
+                      "TestAndroidGuardianPrepareKeepsOnlyRootPipeAndOriginalEnvironment",
+                      "TestLinuxCancelledLaunchAndInvalidGuardianPlanAdmitNoChild",
+                      "TestLinuxRemovedWorkingDirectoryCannotCreateRelativeRuntimeState",
+                      "TestLinuxUnavailableDescriptorBudgetFailsBeforeStartingGuardian",
+                      "TestLinuxLegacyCommandAfterNativeAdmissionSettlesOwnedChildren",
+                      "TestLinuxWaitForChildrenHasBoundedMissingResult"}
+          started, finished, packages = Counter(), {}, {}
+          for line in Path("artifacts/control-rpc-development/android-control-guard-tests.jsonl").read_text().splitlines():
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              name, action = row.get("Test"), row.get("Action")
+              if name and action == "run": started[name] += 1
+              if name and action in {"pass", "fail", "skip"}:
+                  assert name not in finished
+                  finished[name] = action
+              if not name and action in {"pass", "fail", "skip"}: packages[row["Package"]] = action
+          atomic_subcases = {"TestAndroidControlGuardPreservesAtomicFileControlLifecycle/" + name
+                             for name in ["commit", "rollback", "close-pending", "begin-refusal", "commit-refusal", "abort-refusal", "unsupported"]}
+          filesystem_subcases = {"TestAndroidControlGuardFilesystemAdmissionRefusals/" + name
+                                 for name in ['missing', 'directory', 'symlink', 'existing-birth', 'shared-handles', 'hardlink', 'moved', 'custom-vfs', 'modeof', 'connection-budget']}
+          all_required = required | atomic_subcases | filesystem_subcases
+          code = int(os.environ["ANDROID_CONTROL_GUARD_STATUS"])
+          expected_packages = {"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb": "pass",
+                               "github.com/leizd/DeepSeek-Infra/go/internal/store": "pass",
+                               "github.com/leizd/DeepSeek-Infra/go/internal/launch": "pass"}
+          if code == 0 and (set(started) != all_required or set(finished) != all_required or
+                            set(started.values()) != {1} or set(finished.values()) != {"pass"} or packages != expected_packages):
+              code = 2
+          result = {"sourceCommit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
+                    "event": os.environ["GITHUB_EVENT_NAME"], "exitCode": code,
+                    "expectedTests": sorted(required), "finishedTests": finished,
+                    "goFlags": "-tags=deepseek_android,sqlite3_flock", "raceEnabled": True,
+                    "scope": "actual native store plus host independent lock/readonly peers and SIGKILL only",
+                    "readerCloseIterations": 64, "physicalDescriptorGrowthBound": 2,
+                    "expectedAtomicAdapterSubcases": sorted(atomic_subcases), "actualF2FSDeviceQualified": False,
+                    "expectedFilesystemSubcases": sorted(filesystem_subcases),
+                    "scopedCoverageProfile": "android-control-guard-scoped-coverage.out", "scopedCoverageOnly": True,
+                    "actualAndroidDeviceQualified": False, "defaultAndroidAuthorityQualified": False,
+                    "fullGoSuiteQualified": False, "coverageQualified": False, "fullMigrationQualified": False}
+          Path("artifacts/control-rpc-development/android-control-guard-result.json").write_text(json.dumps(result, indent=2) + "\n")
+          raise SystemExit(code)
+          PY
+      - name: Prove native control guard regression rejects premature physical close
+        timeout-minutes: 5
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          python - <<'PY'
+          import json, os, shutil, subprocess, tempfile
+          from pathlib import Path
+          regression = "TestAndroidControlGuardSurvivesReaderCloseAndBoundedDescriptorChurn"
+          with tempfile.TemporaryDirectory(prefix="native-guard-eager-close-") as directory:
+              target = Path(directory) / "go"
+              shutil.copytree("go", target)
+              path = target / "internal/sqlitedb/control_file_android_flock.go"
+              source = path.read_text()
+              marker = "func (file *trackedControlFile) Close() error {"
+              tail_marker = "\n// Connection-specific SHM"
+              assert source.count(marker) == source.count(tail_marker) == 1
+              before, remainder = source.split(marker)
+              old, after = remainder.split(tail_marker)
+              assert old.rstrip().endswith("}")
+              replacement = "\n".join([
+                  marker,
+                  " file.closed.Do(func() {",
+                  "  r := &controlFiles; r.mu.Lock(); defer r.mu.Unlock()",
+                  "  if file.shm != nil { file.closeError = errors.Join(file.closeError, file.shm.Close()) }",
+                  "  if file.mapper != nil { file.closeError = errors.Join(file.closeError, file.mapper.Close()) }",
+                  "  file.closeError = errors.Join(file.closeError, file.slot.mapping.Close(), file.File.Close())",
+                  "  entry := file.entry; entry.active--; file.slot.inUse = false",
+                  "  for i, slot := range entry.slots { if slot == file.slot { entry.slots = append(entry.slots[:i], entry.slots[i+1:]...); break } }",
+                  "  if entry.refs == 0 && entry.active == 0 { file.closeError = errors.Join(file.closeError, r.retire(entry)) }",
+                  " })",
+                  " return file.closeError",
+                  "}", ""])
+              path.write_text(before + replacement + tail_marker + after)
+              command = ["go", "test", "-race", "-json", "-count=1", "-timeout=2m", "./internal/sqlitedb", "-run", "^" + regression + "$"]
+              completed = subprocess.run(command, cwd=target, env=dict(os.environ, GOFLAGS="-tags=deepseek_android,sqlite3_flock"), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=180)
+          Path("artifacts/control-rpc-development/android-control-guard-negative-tests.jsonl").write_bytes(completed.stdout)
+          started, finished, packages, messages = [], [], [], []
+          for line in completed.stdout.decode().splitlines():
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              if row.get("Test"):
+                  assert row["Test"] == regression
+                  if row["Action"] == "run": started.append(regression)
+                  if row["Action"] in {"pass", "fail", "skip"}: finished.append(row["Action"])
+                  messages.append(row.get("Output", ""))
+              elif row.get("Action") in {"pass", "fail", "skip"}: packages.append(row["Action"])
+          assert completed.returncode == 1 and started == [regression] and finished == packages == ["fail"]
+          assert "reader close released the process-owned legacy lock" in "".join(messages)
+          result = {"status": "PASS", "sourceCommit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
+                    "event": os.environ["GITHUB_EVENT_NAME"], "expectedAssertionFailuresObserved": [regression],
+                    "onlyTemporaryCopyModified": True, "prematurePhysicalCloseReintroduced": True,
+                    "actualAndroidDeviceQualified": False, "fullMigrationQualified": False}
+          Path("artifacts/control-rpc-development/android-control-guard-negative-result.json").write_text(json.dumps(result, indent=2) + "\n")
+          PY
       - name: Check actual Android-tagged process recovery and bounded lease observation
         timeout-minutes: 7
         env:
