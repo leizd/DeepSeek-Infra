@@ -325,6 +325,19 @@ func TestAndroidControlGuardPreservesAtomicFileControlLifecycle(t *testing.T) {
 				if err != nil {
 					return err
 				}
+				// The driver's public file pointer includes its checksum layer.
+				// Traverse only the public wrapper contract; retain every actual
+				// SQLite layer and all atomic forwarding/refusal assertions.
+				for depth := 0; depth < 8; depth++ {
+					if _, ok := file.(*trackedControlFile); ok {
+						break
+					}
+					wrapper, ok := file.(vfs.FileUnwrap)
+					if !ok {
+						break
+					}
+					file = wrapper.Unwrap()
+				}
 				var ok bool
 				logical, ok = file.(*trackedControlFile)
 				if !ok {
