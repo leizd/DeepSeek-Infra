@@ -199,7 +199,8 @@ jobs:
               source = path.read_text()
               marker = "func (f processFence) prepare(process Process, env []string) (fencedProcess, error) {"
               assert source.count(marker) == 1 and source.rstrip().endswith("}")
-              path.write_text(source.split(marker)[0] + marker + '\n\treturn fencedProcess{path: process.Path, args: []string{process.Path}, env: env}, nil\n}\n')
+              assert source.count('\t"errors"\n') == 1
+              path.write_text(source.split(marker)[0].replace('\t"errors"\n', '', 1) + marker + '\n\treturn fencedProcess{path: process.Path, args: []string{process.Path}, env: env}, nil\n}\n')
               env = dict(os.environ, GOFLAGS="-tags=deepseek_android,sqlite3_flock")
               command = ["go", "test", "-race", "-json", "-count=1", "-timeout=2m", "./internal/launch", "-run", "^" + regression + "$"]
               completed = subprocess.run(command, cwd=target, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=160)
