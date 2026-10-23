@@ -12,6 +12,9 @@ Compiler outputs and caches remain on the cloud runner; only reports return.
 The [runner image inventory](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md)
 describes the hosted image. Runtime availability is established by the actual
 production WebView2 loader, rather than inferred from the inventory.
+The job uses `core.autocrlf=false` through [Git runtime configuration](https://git-scm.com/docs/git-config#ENVIRONMENT).
+Before launching the app, the verifier compares every tracked file's actual
+blob hash with the exact committed tree and records a source-index digest.
 
 The production `deepseek-launch --app` starts a genuinely absent profile without
 offline authority seeding. The gate observes its five native processes, a visible

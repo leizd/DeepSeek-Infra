@@ -27,6 +27,9 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 60
     env:
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: "false"
       CGO_ENABLED: "0"
       GOTOOLCHAIN: local
       CARGO_BUILD_JOBS: "2"

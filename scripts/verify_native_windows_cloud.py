@@ -42,6 +42,31 @@ def require_cloud_windows(environment: dict[str, str], system: str) -> None:
         raise RuntimeError("WINDOWS_CLOUD_HOST_REQUIRED")
 
 
+def canonical_source(root: Path, revision: str = "HEAD") -> dict[str, Any]:
+    root = root.resolve()
+    rows = subprocess.check_output(["git", "ls-tree", "-r", "-z", revision], cwd=root).split(b"\0")
+    index, native = [], 0
+    for row in rows:
+        if not row:
+            continue
+        metadata, encoded_name = row.split(b"\t", 1)
+        mode, kind, expected = metadata.split()
+        name = encoded_name.decode()
+        path = root / name
+        if mode not in {b"100644", b"100755"} or kind != b"blob" or not path.resolve().is_relative_to(root) or path.is_symlink():
+            raise RuntimeError("WINDOWS_CANONICAL_SOURCE_PATH_INVALID")
+        data = path.read_bytes()
+        actual = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest().encode()
+        if actual != expected:
+            raise RuntimeError("WINDOWS_SOURCE_BYTES_DIFFER_FROM_COMMIT")
+        index.append([name, hashlib.sha256(data).hexdigest()])
+        native += name.startswith(("go/", "rust/", "proto/"))
+    if not index:
+        raise RuntimeError("WINDOWS_CANONICAL_SOURCE_EMPTY")
+    return dict(sourceFilesVerified=len(index), nativeInputsVerified=native,
+                sourceIndexSha256=hashlib.sha256(json.dumps(index, separators=(",", ":")).encode()).hexdigest())
+
+
 def validate_window_receipt(receipt: dict[str, Any]) -> str:
     checks = receipt.get("checks", {})
     if not isinstance(checks, dict):
@@ -239,6 +264,7 @@ def main() -> int:
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip()
     if sha != os.environ["GITHUB_SHA"] or subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT).strip():
         raise RuntimeError("WINDOWS_EXACT_CLEAN_SOURCE_REQUIRED")
+    source = canonical_source(ROOT)
     for port in (8090, 50052):
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", port))
@@ -255,6 +281,7 @@ def main() -> int:
                                   allDesktopFeaturesQualified=False, fullMigrationQualified=False, readiness="NOT_READY")
     report["binarySha256"] = {name: hashlib.sha256((binaries / (name + ".exe")).read_bytes()).hexdigest() for name in sorted(NATIVE_ROLES)}
     report["runnerImage"] = {key: os.environ.get(key) for key in ("ImageOS", "ImageVersion", "RUNNER_ARCH")}
+    report["canonicalSource"] = source
     process = None
     tokens: list[str] = []
     try:

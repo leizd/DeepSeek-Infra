@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
-from scripts.verify_native_windows_cloud import active_owned_pids, inspect_window_events, require_cloud_windows, validate_window_receipt
+from scripts.verify_native_windows_cloud import active_owned_pids, canonical_source, inspect_window_events, require_cloud_windows, validate_window_receipt
 
 
 def cloud_environment() -> dict[str, str]:
@@ -96,3 +97,27 @@ def test_native_shutdown_cannot_hide_a_retained_child_after_its_parent_exits() -
                  {"pid": 900, "parent": 800, "executable": "unrelated-process"}]
     assert active_owned_pids(known_tree, inventory) == {102}
     assert active_owned_pids(known_tree, inventory[1:]) == set()
+
+
+def source_tree(tmp_path: Path) -> tuple[Path, str]:
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], capture_output=True, check=True)
+    subprocess.run(["git", "config", "--local", "core.autocrlf", "false"], cwd=tmp_path, capture_output=True, check=True)
+    path = tmp_path / "go/fixture.go"
+    path.parent.mkdir()
+    path.write_bytes(b"package fixture\n")
+    subprocess.run(["git", "add", "--", "go/fixture.go"], cwd=tmp_path, capture_output=True, check=True)
+    tree = subprocess.check_output(["git", "write-tree"], cwd=tmp_path).decode().strip()
+    return path, tree
+
+
+def test_platform_source_gate_checks_actual_committed_bytes(tmp_path: Path) -> None:
+    _, tree = source_tree(tmp_path)
+    observed = canonical_source(tmp_path, tree)
+    assert observed["sourceFilesVerified"] == observed["nativeInputsVerified"] == 1
+
+
+def test_platform_source_gate_refuses_checkout_newline_conversion(tmp_path: Path) -> None:
+    path, tree = source_tree(tmp_path)
+    path.write_bytes(b"package fixture\r\n")
+    with pytest.raises(RuntimeError, match="WINDOWS_SOURCE_BYTES_DIFFER_FROM_COMMIT"):
+        canonical_source(tmp_path, tree)
