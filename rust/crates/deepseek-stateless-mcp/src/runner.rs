@@ -141,3 +141,56 @@ fn read_limited(pipe: &mut impl std::io::Read, limit: usize) -> Option<String> {
     }
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::read_limited;
+    use std::io::Cursor;
+
+    #[test]
+    fn task_output_keeps_draining_after_the_storage_limit() {
+        let input = vec![b'x'; 128 * 1024];
+        let mut pipe = Cursor::new(input.clone());
+        let captured = read_limited(&mut pipe, 17).unwrap();
+        assert_eq!(captured, "x".repeat(17));
+        assert_eq!(pipe.position(), input.len() as u64);
+    }
+
+    #[test]
+    fn zero_output_limit_still_drains_the_child_pipe() {
+        let input = vec![b'x'; 128 * 1024];
+        let mut pipe = Cursor::new(input.clone());
+        assert_eq!(read_limited(&mut pipe, 0).unwrap(), "");
+        assert_eq!(pipe.position(), input.len() as u64);
+    }
+
+    #[test]
+    fn task_output_storage_limit_is_also_a_utf8_byte_limit() {
+        for input in ["界🤖".as_bytes(), &[0xff, 0xff, 0xff]] {
+            for limit in 0..=8 {
+                let captured = read_limited(&mut Cursor::new(input), limit).unwrap();
+                assert!(captured.len() <= limit, "limit={limit}, value={captured:?}");
+                assert!(std::str::from_utf8(captured.as_bytes()).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn task_output_preserves_empty_and_complete_streams() {
+        for input in ["", "complete", "界🤖"] {
+            let captured = read_limited(&mut Cursor::new(input.as_bytes()), 64).unwrap();
+            assert_eq!(captured, input);
+        }
+    }
+
+    #[test]
+    fn task_output_read_failure_is_not_a_successful_capture() {
+        struct FailedPipe;
+        impl std::io::Read for FailedPipe {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("controlled pipe failure"))
+            }
+        }
+        assert!(read_limited(&mut FailedPipe, 64).is_none());
+    }
+}
