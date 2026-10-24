@@ -54,14 +54,17 @@ COPY --from=go-builder /out/deepseekd /usr/local/bin/deepseekd
 COPY --from=go-builder /out/deepseek-launch /usr/local/bin/deepseek-launch
 COPY packaging/native/entrypoint.sh /usr/local/bin/deepseek-infra-entrypoint
 COPY static /app/static
+COPY skills /app/bundle/skills
+COPY evals/golden/skills/skill_eval_cases.jsonl /app/bundle/evals/golden/skills/skill_eval_cases.jsonl
 COPY --from=frontend-builder /build/static/ui ./static/ui
 RUN test -f /app/static/ui/index.html \
     && chmod 755 /usr/local/bin/deepseek-infra-entrypoint \
-    && mkdir -p /data/go-control /data/worker \
+    && mkdir -p /data \
     && chown -R deepseek:deepseek /data
 
 ENV DEEPSEEK_INFRA_ROOT=/data \
     DEEPSEEK_INFRA_STATIC_DIR=/app/static \
+    DEEPSEEK_INFRA_BUNDLE_ROOT=/app/bundle \
     GATEWAY_BIND_ADDR=0.0.0.0:8000 \
     GO_CONTROL_ADDR=http://127.0.0.1:8090 \
     DEEPSEEKD_MODE=authoritative \

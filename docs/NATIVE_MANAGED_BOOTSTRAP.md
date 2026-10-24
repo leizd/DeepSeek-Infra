@@ -188,3 +188,28 @@ must fail the admission regression. Successful instrumented child probes emit
 their own coverage counters; killed children are not represented by synthetic
 counters. These checks do not prove physical power-loss recovery or Windows
 directory durability, and they do not replace the Android device gates.
+
+
+## Native container resource and data roots
+
+A newly created `/data` volume must remain empty until Go admits its first
+native profile. Image setup and the entrypoint must not precreate a legacy
+`/data/worker` directory: that is correctly treated as retained foreign state
+by the native genesis preflight. Go creates its own control metadata and Rust
+initializes its own custody after that admission. Existing unknown volume
+contents remain preserved and refused; this change never deletes or reclassifies
+a foreign directory as native.
+
+The main native image and standalone Rust gateway carry all 18 built-in skill
+definitions, four packs, and the static skills golden JSONL under `/app/bundle`.
+`DEEPSEEK_INFRA_BUNDLE_ROOT` selects those immutable packaged inputs while
+`DEEPSEEK_INFRA_ROOT=/data` retains custom definitions, cases, runs and mutation
+fences in the data volume. Runtime images do not copy Python evaluation runners.
+The standalone gateway also has a writable owned `/data` directory and a volume
+boundary; packaged definitions never seed the native user-data root.
+
+These source changes still require an actual image startup, authenticated built-in
+catalog and golden-case reads, custom-value writes and a retained-volume restart
+at their exact cloud revision. A successful image build alone is insufficient.
+The original Windows, Android, full coverage and evidence gates remain required;
+product readiness remains NOT_READY.

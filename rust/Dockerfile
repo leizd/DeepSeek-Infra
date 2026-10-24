@@ -70,14 +70,22 @@ COPY --from=builder \
     /app/rust/target/release/deepseek-gateway \
     /usr/local/bin/deepseek-gateway
 COPY static ./static
+COPY skills /app/bundle/skills
+COPY evals/golden/skills/skill_eval_cases.jsonl /app/bundle/evals/golden/skills/skill_eval_cases.jsonl
 COPY --from=frontend-builder /build/static/ui ./static/ui
-RUN test -f /app/static/ui/index.html
+RUN test -f /app/static/ui/index.html \
+    && mkdir -p /data \
+    && chown deepseek:deepseek /data
 
 ENV GATEWAY_BIND_ADDR=0.0.0.0:8787 \
     DEEPSEEK_INFRA_STATIC_DIR=/app/static \
+    DEEPSEEK_INFRA_ROOT=/data \
+    DEEPSEEK_INFRA_BUNDLE_ROOT=/app/bundle \
     DEEPSEEK_RUNTIME_MODE=python_disabled
 
 USER deepseek
+
+VOLUME ["/data"]
 
 EXPOSE 8787
 

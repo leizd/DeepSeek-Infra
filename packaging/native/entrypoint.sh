@@ -1,13 +1,15 @@
 #!/bin/sh
 # Production process tree: Go control, Rust worker, Rust public listener.
 set -eu
-mkdir -p /data/go-control /data/worker
 export DEEPSEEK_INFRA_ROOT="${DEEPSEEK_INFRA_ROOT:-/data}"
+# Only create the volume root; Go performs exclusive native profile admission.
+mkdir -p "$DEEPSEEK_INFRA_ROOT"
+export DEEPSEEK_INFRA_BUNDLE_ROOT="${DEEPSEEK_INFRA_BUNDLE_ROOT:-/app/bundle}"
 export DEEPSEEK_INFRA_STATIC_DIR="${DEEPSEEK_INFRA_STATIC_DIR:-/app/static}"
 export DEEPSEEK_RUNTIME_MODE="${DEEPSEEK_RUNTIME_MODE:-python_disabled}"
 export DEEPSEEKD_MODE="${DEEPSEEKD_MODE:-authoritative}"
 export DEEPSEEKD_LISTEN="${DEEPSEEKD_LISTEN:-127.0.0.1:8090}"
-export DEEPSEEKD_PRODUCTION_STORE="${DEEPSEEKD_PRODUCTION_STORE:-/data/go-control}"
+export DEEPSEEKD_PRODUCTION_STORE="${DEEPSEEKD_PRODUCTION_STORE:-${DEEPSEEK_INFRA_ROOT}/go-control}"
 export DEEPSEEKD_SHADOW_STORE=
 export DEEPSEEKD_OWNER="${DEEPSEEKD_OWNER:-deepseekd}"
 export GO_CONTROL_ADDR="${GO_CONTROL_ADDR:-http://127.0.0.1:8090}"

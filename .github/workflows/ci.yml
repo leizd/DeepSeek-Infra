@@ -698,7 +698,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t deepseek-infra:test .
+      - run: docker build --build-arg VCS_REF=${{ github.sha }} -t deepseek-infra:test .
+      - name: Verify default native container resources, authority and restart
+        run: python3 scripts/verify_native_default_image.py --image deepseek-infra:test
+      - name: Preserve native default image workload reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-default-image-${{ github.sha }}
+          path: artifacts/native-default-image/
+          if-no-files-found: warn
+          retention-days: 7
       - run: docker build -f stateless-mcp/Dockerfile -t deepseek-infra-stateless-mcp:test .
       - run: cp .env.example .env && docker compose config
       - run: docker compose -f docker-compose.stateless-mcp.yml config
