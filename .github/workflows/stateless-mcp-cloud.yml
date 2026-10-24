@@ -1,0 +1,78 @@
+name: Native stateless MCP recovery verification
+
+on:
+  push:
+    branches: ["codex/rust-cloud/stateless-restore-*"]
+    paths:
+      - ".github/workflows/stateless-mcp-cloud.yml"
+      - "rust/crates/deepseek-stateless-mcp/**"
+      - "stateless-mcp/**"
+      - "docker-compose.stateless-mcp.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-stateless-mcp-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GIT_OPTIONAL_LOCKS: "0"
+      COMPOSE_PROJECT_NAME: deepseek-mcp-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: stateless-mcp/package-lock.json
+      - name: Prepare independent disposable authentication and report directory
+        run: |
+          node --input-type=module <<'JS'
+          import { randomBytes } from 'node:crypto';
+          import { appendFileSync, mkdirSync } from 'node:fs';
+          mkdirSync('artifacts/native-stateless-mcp', { recursive: true });
+          for (const name of ['MCP_AUTH_TOKEN', 'MCP_INTERNAL_BACKUP_TOKEN']) {
+            appendFileSync(process.env.GITHUB_ENV, `${name}=${randomBytes(32).toString('hex')}\n`);
+          }
+          JS
+      - run: npm ci --prefix stateless-mcp
+      - name: Preserve all original reference type and unit checks
+        run: npm run check --prefix stateless-mcp
+      - name: Preserve the original dependency security floor
+        run: npm audit --prefix stateless-mcp --audit-level=high
+      - name: Preserve original native instance-loss and idempotency workload
+        run: |
+          set -o pipefail
+          npm run smoke:failover --prefix stateless-mcp 2>&1 | tee artifacts/native-stateless-mcp/original-failover.log
+      - name: Reset only this job's disposable qualification stack
+        run: docker compose -f docker-compose.stateless-mcp.yml -f stateless-mcp/compose.failover.yml down --volumes --remove-orphans
+      - name: Retain a completed native outcome through a real Redis restore fence
+        run: |
+          set -o pipefail
+          npm run smoke:restore-completion --prefix stateless-mcp 2>&1 | tee artifacts/native-stateless-mcp/restore-completion.log
+      - name: Preserve bounded native service diagnostics
+        if: failure()
+        run: docker compose -f docker-compose.stateless-mcp.yml -f stateless-mcp/compose.failover.yml logs --no-color --tail 400 > artifacts/native-stateless-mcp/container.log 2>&1
+      - name: Preserve reports without compiler outputs, images or volumes
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-stateless-mcp-${{ github.sha }}
+          path: artifacts/native-stateless-mcp/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Release only this job's disposable qualification stack
+        if: always()
+        run: docker compose -f docker-compose.stateless-mcp.yml -f stateless-mcp/compose.failover.yml down --volumes --remove-orphans
