@@ -72,10 +72,13 @@ func (fs *controlRefusalVFS) OpenFilename(name *vfs.Filename, flags vfs.OpenFlag
 	var opened vfs.OpenFlag
 	var err error
 	if fs.redirect != "" {
-		file, opened, err = fs.VFS.Open(fs.redirect, flags)
-	} else {
-		file, opened, err = fs.VFS.(vfs.VFSFilename).OpenFilename(name, flags)
+		// Change the directory entry after the control VFS preflight, then
+		// use the pinned OS VFS's public Filename-aware open contract.
+		if err := os.Link(fs.redirect, name.String()); err != nil {
+			return nil, flags, err
+		}
 	}
+	file, opened, err = fs.VFS.(vfs.VFSFilename).OpenFilename(name, flags)
 	if err != nil {
 		return nil, opened, err
 	}
@@ -213,7 +216,10 @@ func TestAndroidControlGuardQuarantinesAnInodeChangedDuringActualVFSOpen(t *test
 	if err := openRefusingControlVFS(t, filepath.Join(directory, "requested.db"), backend); err == nil {
 		t.Fatal("post-open inode change bypassed native file admission")
 	}
-	if len(backend.files) != 1 || backend.files[0].closes != 0 {
+	if len(backend.files) != 1 {
+		t.Fatalf("redirected open did not reach the actual OS file: %d descriptors", len(backend.files))
+	}
+	if backend.files[0].closes != 0 {
 		t.Fatal("a redirected guarded descriptor was closed prematurely")
 	}
 	if probe := probeControlGuard(t, guardedPath, "probe"); !probe.Refused || probe.Owner != int32(os.Getpid()) {
