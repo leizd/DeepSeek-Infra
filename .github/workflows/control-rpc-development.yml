@@ -247,6 +247,8 @@ jobs:
           PY
 
       - name: Check separate bundled resources and authoritative data roots
+        env:
+          CGO_ENABLED: "1"
         run: |
           cd go
           GOFLAGS=-tags=deepseek_android,sqlite3_flock go test -race -json -count=1 -timeout=2m ./internal/launch -run '^(TestProductionPlanSeparatesBundledResourcesFromManagedData|TestProductionPlanRejectsInvalidBundleRootsBeforeBinarySelection|TestSeparateBundleDoesNotAdmitForeignOrNonemptyData|TestProductionPlanRejectsSymlinkedBundleWithoutChangingItsTarget)$' > ../artifacts/control-rpc-development/bundled-resources-tests.jsonl 2>&1
