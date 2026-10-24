@@ -53,6 +53,7 @@ def post(origin: str, token: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 def wait_ready(container: str, origin: str) -> None:
     deadline = time.monotonic() + 100
+    last_error = "no health response"
     while time.monotonic() < deadline:
         status = command("docker", "inspect", "--format", "{{.State.Status}}", container).stdout.strip()
         if status != "running":
@@ -63,10 +64,10 @@ def wait_ready(container: str, origin: str) -> None:
                     return
         # Docker can publish the port before the gateway accepts connections.
         # Only this read-only health probe is retried; mutations stay single-shot.
-        except (URLError, TimeoutError, ConnectionError):
-            pass
+        except (URLError, TimeoutError, ConnectionError) as error:
+            last_error = type(error).__name__ + ": " + str(getattr(error, "code", "no HTTP status"))
         time.sleep(0.5)
-    raise RuntimeError("NATIVE_IMAGE_READINESS_TIMEOUT")
+    raise RuntimeError("NATIVE_IMAGE_READINESS_TIMEOUT: " + origin + " (" + last_error + ")")
 
 
 def copy_file(container: str, relative: str, target: Path, *, required: bool = True) -> bool:
@@ -129,16 +130,30 @@ class Scratch:
         if legacy_seed:
             args += ["-c", "mkdir -p /data/worker; exec /usr/local/bin/deepseek-infra-entrypoint"]
         command(*args)
+        return self.published_origin(allow_exited=legacy_seed)
+
+    def published_origin(self, *, allow_exited: bool = False) -> str:
         inspected = json.loads(command("docker", "inspect", self.name).stdout)[0]
         bindings = inspected["NetworkSettings"]["Ports"].get("8000/tcp")
-        if legacy_seed and inspected["State"]["Status"] == "exited" and not bindings:
+        if allow_exited and inspected["State"]["Status"] == "exited" and not bindings:
             return "http://127.0.0.1:1"  # wait_ready checks the exited state before any request.
         if not bindings or len(bindings) != 1 or bindings[0]["HostIp"] != "127.0.0.1":
             raise RuntimeError("NATIVE_IMAGE_PORT_NOT_ISOLATED")
         port = int(bindings[0]["HostPort"])
         if not 1 <= port <= 65535:
             raise RuntimeError("NATIVE_IMAGE_PORT_INVALID")
-        return "http://127.0.0.1:" + str(port)
+        origin = "http://127.0.0.1:" + str(port)
+        record = self.output / (self.name + "-network.jsonl")
+        with record.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(dict(container=self.name, sourceCommit=self.source,
+                                         observedAt=datetime.now(timezone.utc).isoformat(),
+                                         state=inspected["State"]["Status"], origin=origin)) + "\n")
+        return origin
+
+    def restart(self) -> str:
+        command("docker", "start", self.name)
+        # An ephemeral published host port may be allocated again on start.
+        return self.published_origin()
 
     def close(self) -> None:
         observed = command("docker", "inspect", self.name, check=False)
@@ -201,6 +216,7 @@ def positive(image: str, source: str, output: Path, scratch: Path) -> dict[str, 
     expected = expected_catalog()
     try:
         origin = case.start()
+        first_origin = origin
         wait_ready(case.name, origin)
         command("docker", "exec", case.name, "/bin/sh", "-c",
                 'for binary in python python3 node nodejs; do if command -v "$binary" >/dev/null 2>&1; then exit 1; fi; done')
@@ -245,7 +261,7 @@ def positive(image: str, source: str, output: Path, scratch: Path) -> dict[str, 
         custom_bytes = custom_path.read_bytes()
         if json.loads(custom_bytes)["skillId"] != skill_id:
             raise RuntimeError("NATIVE_IMAGE_CUSTOM_SKILL_NOT_IN_DATA_VOLUME")
-        command("docker", "start", case.name)
+        origin = case.restart()
         wait_ready(case.name, origin)
         assert_catalog(origin, case.token, expected)
         retained = [s for s in post(origin, case.token, {"action": "list", "includeDisabled": True})["skills"] if s["skillId"] == skill_id]
@@ -268,7 +284,8 @@ def positive(image: str, source: str, output: Path, scratch: Path) -> dict[str, 
                     customSkillRetained=True, customCaseRetained=True, packagedInputsUnchanged=True,
                     originalSignedOriginRetained=True, writerFences=[1, 2], originSha256=initial["originSha256"],
                     retainedCustomSha256=digest(custom_bytes), requiredNativeRoles=sorted(required_roles),
-                    PythonAndNodeRuntimeExecutablesAbsent=True, reactEntryAndScriptsServed=True)
+                    PythonAndNodeRuntimeExecutablesAbsent=True, reactEntryAndScriptsServed=True,
+                    firstPublishedOrigin=first_origin, restartPublishedOrigin=origin)
     finally:
         case.close()
 

@@ -1,5 +1,7 @@
 """Offline client boundaries; actual native image workloads remain cloud gates."""
 from contextlib import nullcontext
+import json
+from pathlib import Path
 import subprocess
 from types import SimpleNamespace
 from typing import Any
@@ -84,3 +86,38 @@ def test_image_process_list_cannot_qualify_without_valid_pids(monkeypatch: pytes
     monkeypatch.setattr(probe, "command", lambda *args: subprocess.CompletedProcess(args, 0, listing, ""))
     with pytest.raises(RuntimeError, match="NATIVE_IMAGE_PROCESS_LIST_"):
         probe.container_process_roles("task-owned-container")
+
+
+def test_container_restart_refreshes_its_actual_published_port(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    case = probe.Scratch("sha256:" + "a" * 64, "b" * 40, tmp_path, "offline-fixture")
+    case.token = "disposable-credential-not-for-reports"
+    ports = iter(["32101", "32102"])
+    calls: list[tuple[str, ...]] = []
+
+    def inspect(*args: str) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        if args[:2] == ("docker", "start"):
+            return subprocess.CompletedProcess(args, 0, case.name, "")
+        assert args == ("docker", "inspect", case.name)
+        value = [{"State": {"Status": "running"}, "NetworkSettings": {"Ports": {
+            "8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": next(ports)}]}}}]
+        return subprocess.CompletedProcess(args, 0, json.dumps(value), "")
+
+    monkeypatch.setattr(probe, "command", inspect)
+    assert case.published_origin() == "http://127.0.0.1:32101"
+    assert case.restart() == "http://127.0.0.1:32102"
+    assert calls == [("docker", "inspect", case.name), ("docker", "start", case.name), ("docker", "inspect", case.name)]
+    raw = (tmp_path / (case.name + "-network.jsonl")).read_text()
+    observations = [json.loads(line) for line in raw.splitlines()]
+    assert [r["origin"] for r in observations] == ["http://127.0.0.1:32101", "http://127.0.0.1:32102"]
+    assert all(set(r) == {"container", "sourceCommit", "observedAt", "state", "origin"} for r in observations)
+    assert case.token not in raw
+
+
+@pytest.mark.parametrize("binding", [None, [{"HostIp": "0.0.0.0", "HostPort": "32101"}], [{"HostIp": "127.0.0.1", "HostPort": "0"}]])
+def test_container_address_refresh_preserves_port_isolation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, binding: Any) -> None:
+    case = probe.Scratch("sha256:" + "a" * 64, "b" * 40, tmp_path, "offline-fixture")
+    value = [{"State": {"Status": "running"}, "NetworkSettings": {"Ports": {"8000/tcp": binding}}}]
+    monkeypatch.setattr(probe, "command", lambda *args: subprocess.CompletedProcess(args, 0, json.dumps(value), ""))
+    with pytest.raises(RuntimeError, match="NATIVE_IMAGE_PORT_"):
+        case.published_origin()
