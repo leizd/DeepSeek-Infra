@@ -61,7 +61,9 @@ def wait_ready(container: str, origin: str) -> None:
             with urlopen(origin + "/healthz", timeout=2) as response:
                 if response.status == 200:
                     return
-        except (URLError, TimeoutError):
+        # Docker can publish the port before the gateway accepts connections.
+        # Only this read-only health probe is retried; mutations stay single-shot.
+        except (URLError, TimeoutError, ConnectionError):
             pass
         time.sleep(0.5)
     raise RuntimeError("NATIVE_IMAGE_READINESS_TIMEOUT")
