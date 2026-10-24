@@ -238,3 +238,10 @@ proving broad signal suppression was not introduced. This host check does not
 replace the full nine original packaged tests on all five Android API levels.
 See the [Go pidfd Android issue](https://github.com/golang/go/issues/69065)
 and the [Go build overlay contract](https://pkg.go.dev/cmd/go#hdr-Compile_packages_and_dependencies).
+
+Cloud APK reports retain the exact original bundle-manifest digest and its
+effective Go compatibility metadata. Cloud staging refuses a missing or changed
+SDK/overlay hash, version, ABI scope, probe/sandbox setting, or unreviewed field;
+JSON `0` cannot stand in for `false`. Basic archive inspection alone remains
+insufficient for cloud qualification. This keeps the declared standard-library
+variant visible alongside the actual APK and per-role executable hashes.

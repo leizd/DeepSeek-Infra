@@ -462,6 +462,22 @@ def test_built_apk_inspection_requires_all_four_original_managed_images(tmp_path
     assert not result["releaseQualified"] and not result["deviceExecutionVerified"]
 
 
+def test_built_apk_report_binds_the_effective_go_variant_to_original_manifest_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    inspector = importlib.import_module("check_native_android_package")
+    builder = importlib.import_module("scripts.build_android_native")
+    entries = managed_apk_entries(tmp_path)
+    manifest = json.loads(entries["assets/native/bundle.json"])
+    manifest["goCompatibility"] = builder.expected_android_go_compatibility()
+    entries["assets/native/bundle.json"] = json.dumps(manifest).encode()
+    apk = tmp_path / "managed-variant.apk"
+    write_apk_fixture(apk, entries)
+    result = inspector.inspect_package(apk)
+    assert result["goCompatibility"] == manifest["goCompatibility"]
+    assert result["bundleManifestSha256"] == hashlib.sha256(entries["assets/native/bundle.json"]).hexdigest()
+    assert not result["releaseQualified"] and not result["productionAuthorityQualified"]
+
+
 @pytest.mark.parametrize("fault", ["missing-role", "changed-worker-bytes", "foreign-worker-loader"])
 def test_built_apk_inspection_refuses_a_missing_or_changed_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str) -> None:
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))

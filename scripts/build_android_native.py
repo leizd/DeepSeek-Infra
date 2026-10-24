@@ -28,6 +28,18 @@ TARGETS = {"arm64-v8a": ("aarch64-linux-android", 183), "x86_64": ("x86_64-linux
 PYTHON_SUFFIXES = {".py", ".pyc", ".pyo", ".pyd", ".whl"}
 ANDROID_AMD64_GO_VERSION = "1.27.1"
 ANDROID_AMD64_PIDFD_SOURCE_SHA256 = "f2a7c0e31bda943d4e2151a61f6a9eb2084815ed5c887cc8aa4fd7506805de33"
+ANDROID_AMD64_PIDFD_OVERLAY_SHA256 = "088985fc4797f0207363a57264717c95620ce6450ae817781be8d4cb6274ff72"
+
+
+def expected_android_go_compatibility() -> dict[str, Any]:
+    """Exact effective standard-library variant admitted by cloud APK evidence."""
+    return {
+        "x86_64": dict(mode="android-linux-amd64-pidwait-v1", baseGoVersion=ANDROID_AMD64_GO_VERSION,
+                       sdkFile="src/os/pidfd_linux.go", sdkSourceSha256=ANDROID_AMD64_PIDFD_SOURCE_SHA256,
+                       overlaySourceSha256=ANDROID_AMD64_PIDFD_OVERLAY_SHA256, replacedFunctions=["pidfdWorks"],
+                       pidfdProbeEnabled=False, sandboxModified=False, sourceSDKModified=False),
+        "arm64-v8a": dict(mode="official-android-arm64", sourceSDKModified=False),
+    }
 
 
 def android_amd64_go_overlay(goroot: Path, output: Path) -> tuple[Path, dict[str, Any]]:

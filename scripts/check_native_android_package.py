@@ -26,7 +26,8 @@ def inspect_package(apk: Path) -> dict[str, Any]:
         for name in names:
             if name.endswith(".dex") and any(value in archive.read(name) for value in (b"com/chaquo/python/", b"Lorg/python/")):
                 raise ValueError(f"Python bridge in {name}")
-        manifest = json.loads(archive.read("assets/native/bundle.json"))
+        manifest_bytes = archive.read("assets/native/bundle.json")
+        manifest = json.loads(manifest_bytes)
         if manifest["schemaVersion"] != 1 or manifest["runtime"] != "rust-go":
             raise ValueError("Unexpected native bundle manifest")
         if set(manifest["binaries"]) != {"arm64-v8a", "x86_64"}:
@@ -58,6 +59,7 @@ def inspect_package(apk: Path) -> dict[str, Any]:
                 "apkSha256": hashlib.sha256(apk.read_bytes()).hexdigest(), "apkBytes": apk.stat().st_size,
                 "pythonEntries": [], "pythonDexBridge": False, "assets": len(declared_assets), "binaries": binaries,
                 "toolchains": manifest["toolchains"], "sourceIdentity": manifest["sourceIdentity"],
+                "bundleManifestSha256": hashlib.sha256(manifest_bytes).hexdigest(), "goCompatibility": manifest.get("goCompatibility"),
                 "productionAuthorityQualified": manifest["productionAuthorityQualified"], "deviceExecutionVerified": False}
 
 

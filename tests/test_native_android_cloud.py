@@ -2,6 +2,7 @@
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -10,6 +11,60 @@ from scripts import verify_native_android_cloud as android_cloud
 
 
 CASES = {"com.deepseek.mobile.OfflineTest#one", "com.deepseek.mobile.OfflineTest#two"}
+
+
+def build_report_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, dict[str, Any]]:
+    apk, test_apk = tmp_path / "runtime.apk", tmp_path / "tests.apk"
+    apk.write_bytes(b"offline package-inspector fixture")
+    test_apk.write_bytes(b"offline instrumentation fixture")
+    identity = dict(commit="a" * 40, dirty=False, sourceSha256="b" * 64, sourceFiles=1)
+    package = dict(sourceIdentity=identity, goCompatibility=android_cloud.expected_android_go_compatibility())
+    monkeypatch.setattr(android_cloud, "source_identity", lambda root: identity)
+    monkeypatch.setattr(android_cloud, "inspect_package", lambda path: package)
+    monkeypatch.setattr(android_cloud, "cloud_context", lambda commit: dict(event="workflow_dispatch", sourceCommit=commit))
+    monkeypatch.setattr(android_cloud, "instrumentation_cases", lambda root: CASES)
+    return apk, test_apk, package
+
+
+def test_cloud_build_report_retains_the_exact_effective_go_variant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    apk, test_apk, package = build_report_fixture(tmp_path, monkeypatch)
+    result = android_cloud.build_report(tmp_path, apk, test_apk, "a" * 40)
+    assert result["packageInspection"]["goCompatibility"] == package["goCompatibility"]
+    assert result["runtimeApkSha256"] == android_cloud.digest(apk)
+    assert result["instrumentationCases"] == sorted(CASES)
+    assert not result["deviceExecutionVerified"] and not result["releaseQualified"] and not result["fullMigrationQualified"]
+
+
+@pytest.mark.parametrize("fault", ["missing", "sdk-source", "overlay-source", "go-version", "architecture-scope", "probe-enabled",
+                                  "sandbox-modified", "source-sdk-modified", "false-as-zero", "extra-abi", "unknown-field"])
+def test_cloud_build_cannot_qualify_missing_or_unreviewed_go_variants(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str) -> None:
+    apk, test_apk, package = build_report_fixture(tmp_path, monkeypatch)
+    compatibility = package["goCompatibility"]
+    x86 = compatibility["x86_64"]
+    if fault == "missing":
+        del package["goCompatibility"]
+    elif fault == "sdk-source":
+        x86["sdkSourceSha256"] = "0" * 64
+    elif fault == "overlay-source":
+        x86["overlaySourceSha256"] = "0" * 64
+    elif fault == "go-version":
+        x86["baseGoVersion"] = "foreign-version"
+    elif fault == "architecture-scope":
+        compatibility["arm64-v8a"] = x86
+    elif fault == "probe-enabled":
+        x86["pidfdProbeEnabled"] = True
+    elif fault == "sandbox-modified":
+        x86["sandboxModified"] = True
+    elif fault == "source-sdk-modified":
+        x86["sourceSDKModified"] = True
+    elif fault == "false-as-zero":
+        x86["pidfdProbeEnabled"] = 0
+    elif fault == "extra-abi":
+        compatibility["foreign"] = x86
+    else:
+        x86["unknown"] = "unreviewed"
+    with pytest.raises(ValueError, match="standard-library variant is missing or unreviewed"):
+        android_cloud.build_report(tmp_path, apk, test_apk, "a" * 40)
 
 
 def test_missing_log_exit_status_cannot_be_mistaken_for_collected_child_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

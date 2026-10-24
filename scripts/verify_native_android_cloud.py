@@ -17,7 +17,7 @@ for directory in (ROOT, ROOT / "scripts"):
     if str(directory) not in sys.path:
         sys.path.insert(0, str(directory))
 
-from scripts.build_android_native import source_identity  # noqa: E402
+from scripts.build_android_native import expected_android_go_compatibility, source_identity  # noqa: E402
 from scripts.check_native_android_package import inspect_package  # noqa: E402
 
 APPLICATION = "com.deepseek.mobile.nativeverify"
@@ -104,6 +104,10 @@ def build_report(root: Path, apk: Path, test_apk: Path, commit: str) -> dict[str
     package = inspect_package(apk)
     if package["sourceIdentity"] != identity:
         raise ValueError("Packaged native source differs from the exact checkout")
+    # Canonical JSON also distinguishes false from numeric zero. The runtime
+    # APK hash binds this exact manifest and every retained executable hash.
+    if json.dumps(package.get("goCompatibility"), sort_keys=True) != json.dumps(expected_android_go_compatibility(), sort_keys=True):
+        raise ValueError("Packaged Android Go standard-library variant is missing or unreviewed")
     return {"schemaVersion": 1, "kind": "native-android-cloud-build-v1", "status": "PASS", "sourceCommit": commit,
             "sourceIdentity": identity, "workflow": cloud_context(commit), "runtimeApkSha256": digest(apk), "testApkSha256": digest(test_apk),
             "instrumentationCases": sorted(instrumentation_cases(root)), "packageInspection": package,
