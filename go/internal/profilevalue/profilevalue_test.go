@@ -73,12 +73,24 @@ func TestProfileValueRetainsRegularIdentityAndRejectsInvalidEntries(t *testing.T
 			} else if err == nil || errors.Is(err, os.ErrNotExist) {
 				t.Fatal("invalid retained entry appeared valid or absent", err)
 			}
+			// Admission must recheck retained metadata before acknowledging
+			// durability; a readable name alone is not an authority proof.
+			if kind == "regular" {
+				if err := ConfirmDurable(path, []byte("a different identity")); err == nil {
+					t.Fatal("different retained identity confirmed durable")
+				}
+			} else if err := ConfirmDurable(path, []byte(strings.Repeat("a", 32))); err == nil || errors.Is(err, os.ErrNotExist) {
+				t.Fatal("invalid retained entry confirmed durable or treated as absent", err)
+			}
 			if err := Publish(path, []byte("a different identity")); err == nil {
 				t.Fatal("retained entry overwritten")
 			}
 			after, err := os.Lstat(path)
 			if err != nil || !os.SameFile(before, after) {
 				t.Fatal("retained inode replaced", err)
+			}
+			if before.Mode() != after.Mode() || before.Size() != after.Size() {
+				t.Fatal("retained entry changed during refusal")
 			}
 		})
 	}
