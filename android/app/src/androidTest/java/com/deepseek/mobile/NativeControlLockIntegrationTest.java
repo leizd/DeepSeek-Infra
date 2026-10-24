@@ -79,7 +79,7 @@ public class NativeControlLockIntegrationTest {
                 NativeControlStoreLock.acquire(database);
                 fail("duplicate JVM lease was admitted");
             } catch (java.io.IOException expected) {
-                assertTrue(expected.toString(), expected.getMessage().contains("Native server readiness timed out"));
+                assertTrue(expected.toString(), expected.getMessage().contains("Control store is in use by another process or native runtime"));
             }
             assertEquals("duplicate open/close released the original POSIX lock", 73, completedProbe("posix", database));
             child = probe("wait", database);

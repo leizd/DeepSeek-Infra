@@ -169,7 +169,9 @@ public class NativeRuntimeIntegrationTest {
         });
         try (ServerSocket blockedGateway = new ServerSocket(8000, 1, InetAddress.getByName("127.0.0.1"))) {
             startup.start();
-            long deadline = System.nanoTime() + 10_000_000_000L;
+            // Keep the original Go 35-second writer acquisition window plus
+            // five seconds of health observation within the 45-second app start.
+            long deadline = System.nanoTime() + 40_000_000_000L;
             boolean controlReady = false;
             while (System.nanoTime() < deadline) {
                 controlReady = controlRunning();
