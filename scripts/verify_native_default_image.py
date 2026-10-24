@@ -180,6 +180,22 @@ def assert_catalog(origin: str, token: str, expected: tuple[set[str], set[str], 
         raise RuntimeError("NATIVE_IMAGE_GOLDEN_CASES_MISSING")
 
 
+def container_process_roles(container: str) -> set[str]:
+    # Docker uses the PID column to select this container's host processes.
+    rows = command("docker", "top", container, "-eo", "pid,args").stdout.splitlines()
+    if not rows or rows[0].split()[:1] != ["PID"]:
+        raise RuntimeError("NATIVE_IMAGE_PROCESS_LIST_HAS_NO_PID_COLUMN")
+    roles: set[str] = set()
+    for row in rows[1:]:
+        if not row.strip():
+            continue
+        fields = shlex.split(row)
+        if len(fields) < 2 or not fields[0].isdecimal() or int(fields[0]) <= 0:
+            raise RuntimeError("NATIVE_IMAGE_PROCESS_LIST_INVALID")
+        roles.add(Path(fields[1]).name)
+    return roles
+
+
 def positive(image: str, source: str, output: Path, scratch: Path) -> dict[str, Any]:
     case = Scratch(image, source, output, "positive")
     expected = expected_catalog()
@@ -188,8 +204,7 @@ def positive(image: str, source: str, output: Path, scratch: Path) -> dict[str, 
         wait_ready(case.name, origin)
         command("docker", "exec", case.name, "/bin/sh", "-c",
                 'for binary in python python3 node nodejs; do if command -v "$binary" >/dev/null 2>&1; then exit 1; fi; done')
-        rows = command("docker", "top", case.name, "-eo", "args").stdout.splitlines()[1:]
-        roles = {Path(shlex.split(row)[0]).name for row in rows if row.strip()}
+        roles = container_process_roles(case.name)
         required_roles = {"deepseek-launch", "deepseekd", "deepseek-worker", "deepseek-gateway"}
         if not required_roles <= roles:
             raise RuntimeError("NATIVE_IMAGE_REQUIRED_PROCESSES_MISSING")

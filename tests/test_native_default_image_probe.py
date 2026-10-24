@@ -60,3 +60,27 @@ def test_image_mutation_response_loss_never_retries(monkeypatch: pytest.MonkeyPa
     with pytest.raises(ConnectionResetError):
         probe.post("http://127.0.0.1:1234", "disposable-fixture-token", {"action": "create"})
     assert len(requests) == 1
+
+
+def test_image_process_list_requests_pids_and_retains_all_native_roles(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, ...]] = []
+    listing = "PID COMMAND\n 101 /usr/local/bin/deepseek-launch --server\n 102 /usr/local/bin/deepseekd\n 103 /usr/local/bin/deepseek-worker\n 104 /usr/local/bin/deepseek-gateway\n"
+
+    def top(*args: str) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, listing, "")
+
+    monkeypatch.setattr(probe, "command", top)
+    assert probe.container_process_roles("task-owned-container") == {"deepseek-launch", "deepseekd", "deepseek-worker", "deepseek-gateway"}
+    assert calls == [("docker", "top", "task-owned-container", "-eo", "pid,args")]
+
+
+@pytest.mark.parametrize("listing", [
+    "ARGS\n/usr/local/bin/deepseek-launch --server\n",
+    "PID COMMAND\nmissing /usr/local/bin/deepseek-launch\n",
+    "PID COMMAND\n0 /usr/local/bin/deepseek-launch\n",
+])
+def test_image_process_list_cannot_qualify_without_valid_pids(monkeypatch: pytest.MonkeyPatch, listing: str) -> None:
+    monkeypatch.setattr(probe, "command", lambda *args: subprocess.CompletedProcess(args, 0, listing, ""))
+    with pytest.raises(RuntimeError, match="NATIVE_IMAGE_PROCESS_LIST_"):
+        probe.container_process_roles("task-owned-container")
