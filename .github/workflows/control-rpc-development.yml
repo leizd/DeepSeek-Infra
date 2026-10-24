@@ -254,9 +254,26 @@ jobs:
           import collections, json, os, subprocess
           from pathlib import Path
           required = ['TestAndroidProfileValueActualKillNeverExposesPartialHead', 'TestAndroidProfileValueAdmissionRetainsIdentityAcrossOrdinaryReopen', 'TestAndroidProfileValuePeer', 'TestAndroidProfileValuePendingPreviewRequiresOriginalSignedIntent', 'TestAndroidProfileValueRefusesUnsafeOrExhaustedPublicationPools', 'TestAndroidProfileValueRejectsForgedPointersAndUnsafeRecords', 'TestAndroidProfileValueRelativeLayoutSurvivesMoveAndStagesStayUnowned', 'TestAndroidProfileValueUnpublishedStagesNeverAdmitForeignDurableState', 'TestAndroidProfileValueWorksWithoutLinksOrRenameat2', 'TestManagedBootstrapRejectsCorruptMetadataBeforeInitialization', 'TestManagedFreshnessRequiresReadableExclusiveNativeMetadata', 'TestManagedPublicPinPreparationRecoversOriginalCustody', 'TestManagedPublicPreparationNeverRepairsForeignOrLostState', 'TestNativeOriginFaultIntentPreviewNeverRepairsForeignMetadata', 'TestNativeOriginPreviewOfInterruptedCreationIsReadOnlyAndPinned', 'TestProfileValueRetainsRegularIdentityAndRejectsInvalidEntries', 'TestProfileValueScopesBoundsAndConcurrentWinners']
+          normal_log = Path("artifacts/control-rpc-development/default-profile-publication-tests.jsonl")
+          with normal_log.open("w") as output:
+              normal = subprocess.run(["go", "test", "-race", "-covermode=atomic", "-coverprofile=../artifacts/control-rpc-development/default-profile-publication-coverage.out", "-json", "-count=1", "-timeout=2m", "./internal/profilevalue"], cwd="go", stdout=output, stderr=subprocess.STDOUT)
+          normal_started, normal_passed = collections.Counter(), collections.Counter()
+          for line in normal_log.read_text().splitlines():
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              if row.get("Action") == "run" and row.get("Test"):
+                  normal_started[row["Test"]] += 1
+              if row.get("Action") in {"pass", "fail", "skip"}:
+                  assert row["Action"] == "pass", row
+                  if row.get("Test"):
+                      normal_passed[row["Test"]] += 1
+          assert normal.returncode == 0 and normal_started == normal_passed and all(n == 1 for n in normal_started.values())
+          assert {name for name in normal_started if "/" not in name} == {"TestProfileValueRetainsRegularIdentityAndRejectsInvalidEntries", "TestProfileValueScopesBoundsAndConcurrentWinners"}
           log = Path("artifacts/control-rpc-development/android-profile-publication-tests.jsonl")
           with log.open("w") as output:
-              result = subprocess.run(["go", "test", "-race", "-tags=deepseek_android,sqlite3_flock", "-json", "-count=1", "-timeout=5m", "./internal/profilevalue", "./internal/launch", "./internal/store", "-run", "^(TestAndroidProfileValueActualKillNeverExposesPartialHead|TestAndroidProfileValueAdmissionRetainsIdentityAcrossOrdinaryReopen|TestAndroidProfileValuePeer|TestAndroidProfileValuePendingPreviewRequiresOriginalSignedIntent|TestAndroidProfileValueRefusesUnsafeOrExhaustedPublicationPools|TestAndroidProfileValueRejectsForgedPointersAndUnsafeRecords|TestAndroidProfileValueRelativeLayoutSurvivesMoveAndStagesStayUnowned|TestAndroidProfileValueUnpublishedStagesNeverAdmitForeignDurableState|TestAndroidProfileValueWorksWithoutLinksOrRenameat2|TestManagedBootstrapRejectsCorruptMetadataBeforeInitialization|TestManagedFreshnessRequiresReadableExclusiveNativeMetadata|TestManagedPublicPinPreparationRecoversOriginalCustody|TestManagedPublicPreparationNeverRepairsForeignOrLostState|TestNativeOriginFaultIntentPreviewNeverRepairsForeignMetadata|TestNativeOriginPreviewOfInterruptedCreationIsReadOnlyAndPinned|TestProfileValueRetainsRegularIdentityAndRejectsInvalidEntries|TestProfileValueScopesBoundsAndConcurrentWinners)$"], cwd="go", stdout=output, stderr=subprocess.STDOUT)
+              result = subprocess.run(["go", "test", "-race", "-covermode=atomic", "-coverprofile=../artifacts/control-rpc-development/android-profile-publication-coverage.out", "-tags=deepseek_android,sqlite3_flock", "-json", "-count=1", "-timeout=5m", "./internal/profilevalue", "./internal/launch", "./internal/store", "-run", "^(TestAndroidProfileValueActualKillNeverExposesPartialHead|TestAndroidProfileValueAdmissionRetainsIdentityAcrossOrdinaryReopen|TestAndroidProfileValuePeer|TestAndroidProfileValuePendingPreviewRequiresOriginalSignedIntent|TestAndroidProfileValueRefusesUnsafeOrExhaustedPublicationPools|TestAndroidProfileValueRejectsForgedPointersAndUnsafeRecords|TestAndroidProfileValueRelativeLayoutSurvivesMoveAndStagesStayUnowned|TestAndroidProfileValueUnpublishedStagesNeverAdmitForeignDurableState|TestAndroidProfileValueWorksWithoutLinksOrRenameat2|TestManagedBootstrapRejectsCorruptMetadataBeforeInitialization|TestManagedFreshnessRequiresReadableExclusiveNativeMetadata|TestManagedPublicPinPreparationRecoversOriginalCustody|TestManagedPublicPreparationNeverRepairsForeignOrLostState|TestNativeOriginFaultIntentPreviewNeverRepairsForeignMetadata|TestNativeOriginPreviewOfInterruptedCreationIsReadOnlyAndPinned|TestProfileValueRetainsRegularIdentityAndRejectsInvalidEntries|TestProfileValueScopesBoundsAndConcurrentWinners)$"], cwd="go", stdout=output, stderr=subprocess.STDOUT)
           started, finished, packages = collections.Counter(), collections.Counter(), {}
           for line in log.read_text().splitlines():
               try:

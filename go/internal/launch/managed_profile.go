@@ -63,7 +63,11 @@ func managedOperatorConfiguration(environment []string) bool {
 }
 func managedFile(path string, limit int64) ([]byte, error) {
 	if profilevalue.IsPath(path) {
-		return profilevalue.Read(path, limit)
+		value, err := profilevalue.Read(path, limit)
+		if errors.Is(err, profilevalue.ErrInvalid) {
+			return nil, errManagedProfile
+		}
+		return value, err
 	}
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -138,7 +142,11 @@ func managedDirectory(path string) error {
 }
 func publishManagedValue(path string, value []byte) error {
 	if profilevalue.IsPath(path) {
-		return profilevalue.Publish(path, value)
+		err := profilevalue.Publish(path, value)
+		if errors.Is(err, profilevalue.ErrInvalid) {
+			return errManagedProfile
+		}
+		return err
 	}
 	file, err := os.CreateTemp(filepath.Dir(path), ".native-pending-")
 	if err != nil {
