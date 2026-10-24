@@ -18,6 +18,10 @@ COPY proto ./proto
 # `VERSION` the single source of truth and keeps this build context as narrow as the two lines
 # above; without it the whole workspace compiles and then the last crate fails to read it.
 COPY VERSION ./VERSION
+# Compile-time inputs of the bundled-resource workspace regression.
+COPY skills/builtin/study_tutor.json ./skills/builtin/study_tutor.json
+COPY skills/packs/study.json ./skills/packs/study.json
+COPY evals/golden/skills/skill_eval_cases.jsonl ./evals/golden/skills/skill_eval_cases.jsonl
 
 RUN cargo build \
     --locked \
