@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone)]
 pub struct Registry {
     pub root: PathBuf,
+    pub bundle_root: PathBuf,
     pub data: PathBuf,
     pub builtin: PathBuf,
     pub packs: PathBuf,
@@ -263,9 +264,18 @@ impl Registry {
             data: root.join(".skills"),
             builtin: root.join("skills/builtin"),
             packs: root.join("skills/packs"),
+            bundle_root: root.clone(),
             root,
             clock: None,
         }
+    }
+    /// Read packaged definitions and the golden corpus from a separate root.
+    /// User definitions, cases, runs and mutation fences stay in the data root.
+    pub fn with_bundle_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.bundle_root = root.into();
+        self.builtin = self.bundle_root.join("skills/builtin");
+        self.packs = self.bundle_root.join("skills/packs");
+        self
     }
     pub fn from_env() -> Self {
         let mut registry = Self::new(
@@ -273,6 +283,10 @@ impl Registry {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from(".")),
         );
+        if let Some(root) = std::env::var_os("DEEPSEEK_INFRA_BUNDLE_ROOT").filter(|v| !v.is_empty())
+        {
+            registry = registry.with_bundle_root(root);
+        }
         for (target, keys) in [
             (&mut registry.data, ["SKILLS_DIR", "DEEPSEEK_SKILLS_DIR"]),
             (

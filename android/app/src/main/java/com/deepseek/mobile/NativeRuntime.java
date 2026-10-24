@@ -39,11 +39,13 @@ final class NativeRuntime {
     private volatile PlatformOcrServer platform;
     private String authToken;
     private JSONObject bundle;
+    private File bundleRoot;
     private final AtomicLong generation = new AtomicLong();
 
     NativeRuntime(Context context) {
         this.context = context.getApplicationContext();
-        // Keep the legacy app's data root. Bundled resources never overwrite dot stores.
+        // Retain the legacy app's authoritative data root. Resources and logs
+        // live in sibling app directories, outside native profile admission.
         this.root = context.getFilesDir();
     }
 
@@ -80,6 +82,7 @@ final class NativeRuntime {
     }
 
     private void installAssets() throws Exception {
+        bundleRoot = outsideDataDirectory("native-assets");
         try (InputStream stream = context.getAssets().open("native/bundle.json")) {
             bundle = new JSONObject(new String(readAll(stream), StandardCharsets.UTF_8));
         }
@@ -98,8 +101,8 @@ final class NativeRuntime {
                 || relative.contains("..") || relative.contains("\\")) {
                 throw new IOException("Invalid bundled resource path");
             }
-            File output = new File(root, relative);
-            if (!output.getCanonicalPath().startsWith(root.getCanonicalPath() + File.separator)) {
+            File output = new File(bundleRoot, relative);
+            if (!output.getCanonicalPath().startsWith(bundleRoot.getPath() + File.separator)) {
                 throw new IOException("Bundled resource escapes app storage");
             }
             String expected = entry.getString("sha256");
@@ -119,6 +122,16 @@ final class NativeRuntime {
             }
             writeAtomic(output, contents);
         }
+    }
+
+    private File outsideDataDirectory(String name) throws IOException {
+        File directory = context.getDir(name, Context.MODE_PRIVATE).getCanonicalFile();
+        File data = root.getCanonicalFile();
+        if (!directory.isDirectory() || directory.equals(data)
+                || directory.getPath().startsWith(data.getPath() + File.separator)) {
+            throw new IOException("Native resources and logs must remain outside runtime data");
+        }
+        return directory;
     }
 
     private String loadAuthToken() throws IOException {
@@ -148,10 +161,7 @@ final class NativeRuntime {
             }
         }
         File libraries = new File(context.getApplicationInfo().nativeLibraryDir);
-        File logs = new File(root, ".native-runtime-logs");
-        if (!logs.isDirectory() && !logs.mkdirs()) {
-            throw new IOException("Cannot create native runtime log directory");
-        }
+        File logs = outsideDataDirectory("native-logs");
         // A killed control process leaves a durable writer lease. Restart the
         // executables within a bounded readiness window; Go alone decides when
         // a successor may claim that lease. Never edit or bypass its journal.
@@ -199,8 +209,10 @@ final class NativeRuntime {
                 "--server", "--no-open", "--no-prompt", "--ocr", "--host", "127.0.0.1", "--port", String.valueOf(SERVER_PORT));
             Map<String, String> env = nativeRoot.environment();
             env.put("DEEPSEEK_NATIVE_BIN", libraries.getAbsolutePath());
-            env.put("DEEPSEEK_INFRA_ROOT", root.getAbsolutePath());
-            env.put("DEEPSEEK_INFRA_STATIC_DIR", new File(root, "static").getAbsolutePath());
+            // Android's /data/user/0 alias is not a canonical native custody path.
+            env.put("DEEPSEEK_INFRA_ROOT", root.getCanonicalPath());
+            env.put("DEEPSEEK_INFRA_BUNDLE_ROOT", bundleRoot.getPath());
+            env.put("DEEPSEEK_INFRA_STATIC_DIR", new File(bundleRoot, "static").getPath());
             env.put("DEEPSEEK_ANDROID_PARENT_PIPE", "stdin-v1");
             env.put("DEEPSEEK_ANDROID_PLATFORM_OCR_ADDR", platform.address());
             env.put("DEEPSEEK_ANDROID_PLATFORM_OCR_TOKEN", platform.credential());
@@ -223,10 +235,10 @@ final class NativeRuntime {
         command.add(binary.getAbsolutePath());
         for (String argument : arguments) command.add(argument);
         ProcessBuilder builder = new ProcessBuilder(command);
-        builder.directory(root);
+        builder.directory(root.getCanonicalFile());
         builder.redirectErrorStream(true);
         builder.environment().put("AUTH_TOKEN", authToken);
-        builder.environment().put("TMPDIR", context.getCacheDir().getAbsolutePath());
+        builder.environment().put("TMPDIR", context.getCacheDir().getCanonicalPath());
         builder.environment().remove("AUTH_DISABLED");
         return builder;
     }

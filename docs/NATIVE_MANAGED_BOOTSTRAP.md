@@ -45,6 +45,29 @@ retained WAL when predicting the next writer fencing token. Only OpenControl
 claims the writer, and lifecycle startup refuses to serve if its actual token
 differs. The prediction is never an ownership proof or a writer claim.
 
+## Android resources and data
+
+Android keeps its original `Context.getFilesDir()` as the authoritative data root.
+Bundled `static/`, `skills/` and golden eval inputs are installed under the sibling
+`Context.getDir("native-assets", MODE_PRIVATE)` directory; runtime logs use the
+separate `native-logs` app directory. Neither is placed inside a fresh data root.
+The JVM supplies canonical paths so Android's `/data/user/0` alias cannot redirect
+native custody. It does not create, migrate, erase or replace a control database.
+
+The optional `DEEPSEEK_INFRA_BUNDLE_ROOT` selects packaged Skill definitions,
+Packs and golden eval inputs. Go requires an existing canonical absolute directory
+when it is configured and forwards it to native children. Rust retains
+`DEEPSEEK_INFRA_ROOT` for writable stores, custom Skills, runs, user eval cases and
+mutation fences. Existing explicit Skill-directory overrides retain precedence;
+unset or empty bundle configuration retains the previous resource layout.
+
+Separating resources does not admit legacy or foreign data. A nonempty data root
+without valid native provenance still fails closed and requires the existing
+signed migration path. Actual packaged device tests must prove resource reads,
+custom Skill persistence and unchanged golden bytes across restart; host tests
+and an APK build alone do not qualify Android. The full migration remains
+`NOT_READY`, including all original coverage floors and platform requirements.
+
 ## Recovery boundaries
 
 An existing Go database or public pin never triggers Rust custody creation.

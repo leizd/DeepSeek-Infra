@@ -17,7 +17,7 @@ def test_missing_log_exit_status_cannot_be_mistaken_for_collected_child_output(m
         missing = command[-1].endswith("worker.log")
         # exec-out can deliver the remote error as successful transport output.
         code = 1 if missing and command[1:3] == ["shell", "-T"] else 0
-        body = b"tail: files/.native-runtime-logs/worker.log: No such file or directory\n" if missing else b"child stderr\n"
+        body = b"tail: app_native-logs/worker.log: No such file or directory\n" if missing else b"child stderr\n"
         return android_cloud.subprocess.CompletedProcess(command, code, stdout=body, stderr=b"")
 
     monkeypatch.setattr(android_cloud.subprocess, "run", execute)
@@ -54,7 +54,7 @@ def test_child_diagnostics_read_only_bounded_logs_from_disposable_app(monkeypatc
         calls.append(arguments)
         assert arguments[:5] == ["shell", "-T", "run-as", "com.deepseek.mobile.nativeverify", "tail"]
         assert arguments[5:7] == ["-c", "131072"] and timeout <= 30
-        assert arguments[7] in {"files/.native-runtime-logs/native-launcher.log", "files/.native-runtime-logs/gateway.log", "files/.native-runtime-logs/control.log", "files/.native-runtime-logs/worker.log"}
+        assert arguments[7] in {"app_native-logs/native-launcher.log", "app_native-logs/gateway.log", "app_native-logs/control.log", "app_native-logs/worker.log"}
         output.write_text("disposable child startup diagnostic\n", encoding="utf-8")
         return "disposable child startup diagnostic"
 

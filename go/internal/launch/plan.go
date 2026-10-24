@@ -61,6 +61,9 @@ func ProductionPlanWithAddress(binDir, dataRoot, staticDir, address string) (Pla
 	if err != nil {
 		return Plan{}, fmt.Errorf("resolve static dir: %w", err)
 	}
+	if err := validateBundledResourceRoot(os.Getenv("DEEPSEEK_INFRA_BUNDLE_ROOT")); err != nil {
+		return Plan{}, err
+	}
 	names := []string{"deepseekd", "deepseek-worker", "deepseek-gateway"}
 	processes := make([]Process, 0, len(names))
 	for _, name := range names {
@@ -121,6 +124,7 @@ func productionEnv(dataRoot, staticDir, controlListen, gatewayBind string) []str
 	values := map[string]string{
 		"DEEPSEEK_INFRA_ROOT":        dataRoot,
 		"DEEPSEEK_INFRA_STATIC_DIR":  staticDir,
+		"DEEPSEEK_INFRA_BUNDLE_ROOT": os.Getenv("DEEPSEEK_INFRA_BUNDLE_ROOT"),
 		"DEEPSEEK_RUNTIME_MODE":      runtimeMode,
 		"DEEPSEEKD_MODE":             controlMode,
 		"DEEPSEEKD_LISTEN":           controlListen,
@@ -141,6 +145,7 @@ func productionEnv(dataRoot, staticDir, controlListen, gatewayBind string) []str
 	order := []string{
 		"DEEPSEEK_INFRA_ROOT",
 		"DEEPSEEK_INFRA_STATIC_DIR",
+		"DEEPSEEK_INFRA_BUNDLE_ROOT",
 		"DEEPSEEK_RUNTIME_MODE",
 		"DEEPSEEKD_MODE",
 		"DEEPSEEKD_LISTEN",

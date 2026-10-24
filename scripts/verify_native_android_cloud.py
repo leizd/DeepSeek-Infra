@@ -125,7 +125,7 @@ def collect_runtime_logs(output: Path) -> list[dict[str, str]]:
         path = output / f"runtime-{service}.log"
         try:
             adb(["shell", "-T", "run-as", APPLICATION, "tail", "-c", "131072",
-                 f"files/.native-runtime-logs/{service}.log"], path, timeout=15)
+                 f"app_native-logs/{service}.log"], path, timeout=15)
             state = "COLLECTED"
         except (ValueError, OSError, subprocess.SubprocessError):
             state = "UNAVAILABLE"
