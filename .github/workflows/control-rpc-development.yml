@@ -299,6 +299,10 @@ jobs:
               "originalAssertionsRetained": True, "fullGoSuiteQualified": False,
               "coverageQualified": False, "androidDeviceQualified": False, "fullMigrationQualified": False}, indent=2) + "\n")
           PY
+      - name: Prove Android x86 Go pidfd compatibility with actual fatal syscall traps
+        run: |
+          ulimit -c 0
+          python scripts/verify_android_go_pidfd_compat.py
       - name: Prove old hard-link publication fails on the old-kernel regression
         env:
           CGO_ENABLED: "1"

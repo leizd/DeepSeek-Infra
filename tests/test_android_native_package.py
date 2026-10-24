@@ -18,6 +18,123 @@ from scripts.build_android_native import inspect_executable, source_identity, st
 VERSION = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
 
 
+def fake_pidfd_sdk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, bytes]:
+    builder = importlib.import_module("scripts.build_android_native")
+    source = b"package os\nfunc pidfdWorks() bool {\n\treturn checkPidfdOnce() == nil\n}\n"
+    sdk = tmp_path / "go-sdk"
+    path = sdk / "src/os/pidfd_linux.go"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(source)
+    monkeypatch.setattr(builder, "ANDROID_AMD64_PIDFD_SOURCE_SHA256", hashlib.sha256(source).hexdigest())
+    return sdk, source
+
+
+def test_android_go_overlay_is_scoped_and_preserves_the_sdk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    builder = importlib.import_module("scripts.build_android_native")
+    sdk, before = fake_pidfd_sdk(tmp_path, monkeypatch)
+    overlay, metadata = builder.android_amd64_go_overlay(sdk, tmp_path / "private-build")
+    replacements = json.loads(overlay.read_text())["Replace"]
+    original = sdk / "src/os/pidfd_linux.go"
+    assert set(replacements) == {original.as_posix()}
+    patched = Path(replacements[original.as_posix()]).read_bytes()
+    assert b"return false" in patched and b"return checkPidfdOnce()" not in patched
+    assert original.read_bytes() == before
+    assert metadata["replacedFunctions"] == ["pidfdWorks"]
+    assert metadata["overlaySourceSha256"] == hashlib.sha256(patched).hexdigest()
+    assert metadata["sourceSDKModified"] is metadata["sandboxModified"] is metadata["pidfdProbeEnabled"] is False
+    assert builder.android_amd64_go_overlay(sdk, overlay.parent) == (overlay, metadata)
+
+
+def test_android_go_overlay_preserves_foreign_existing_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    builder = importlib.import_module("scripts.build_android_native")
+    sdk, original = fake_pidfd_sdk(tmp_path, monkeypatch)
+    output = tmp_path / "private-build"
+    output.mkdir()
+    retained = output / "pidfd_linux.go"
+    retained.write_bytes(b"foreign retained file")
+    with pytest.raises(ValueError, match="foreign Android Go compatibility output"):
+        builder.android_amd64_go_overlay(sdk, output)
+    assert retained.read_bytes() == b"foreign retained file"
+    assert (sdk / "src/os/pidfd_linux.go").read_bytes() == original
+
+
+def test_android_go_overlay_refuses_an_unknown_sdk_without_output(tmp_path: Path) -> None:
+    builder = importlib.import_module("scripts.build_android_native")
+    sdk = tmp_path / "unknown-sdk"
+    original = sdk / "src/os/pidfd_linux.go"
+    original.parent.mkdir(parents=True)
+    original.write_bytes(b"foreign SDK source")
+    output = tmp_path / "output"
+    with pytest.raises(ValueError, match="exact pinned SDK source"):
+        builder.android_amd64_go_overlay(sdk, output)
+    assert not output.exists() and original.read_bytes() == b"foreign SDK source"
+
+
+@pytest.mark.parametrize("copies", [0, 2])
+def test_android_go_overlay_refuses_a_changed_function_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, copies: int) -> None:
+    builder = importlib.import_module("scripts.build_android_native")
+    sdk, original = fake_pidfd_sdk(tmp_path, monkeypatch)
+    changed = original * copies
+    (sdk / "src/os/pidfd_linux.go").write_bytes(changed)
+    monkeypatch.setattr(builder, "ANDROID_AMD64_PIDFD_SOURCE_SHA256", hashlib.sha256(changed).hexdigest())
+    with pytest.raises(ValueError, match="source shape changed"):
+        builder.android_amd64_go_overlay(sdk, tmp_path / "output")
+    assert not (tmp_path / "output").exists()
+
+
+def test_android_go_overlay_cannot_write_into_the_sdk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    builder = importlib.import_module("scripts.build_android_native")
+    sdk, original = fake_pidfd_sdk(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="outside the SDK"):
+        builder.android_amd64_go_overlay(sdk, sdk / "compat")
+    assert (sdk / "src/os/pidfd_linux.go").read_bytes() == original
+    assert not (sdk / "compat").exists()
+
+
+def test_android_builder_applies_the_overlay_to_both_x86_roles_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    builder = importlib.import_module("scripts.build_android_native")
+    sdk, original = fake_pidfd_sdk(tmp_path, monkeypatch)
+    root, output = tmp_path / "repo", tmp_path / "output"
+    (root / "release").mkdir(parents=True)
+    (root / "release/native_runtime_toolchain_v1.json").write_text(json.dumps({"go": {"version": "1.27.1"}}))
+    android_sdk = tmp_path / "android-sdk"
+    ndk = android_sdk / "ndk" / builder.NDK_VERSION
+    host = "windows-x86_64" if builder.os.name == "nt" else "darwin-x86_64" if builder.platform.system() == "Darwin" else "linux-x86_64"
+    (ndk / "toolchains/llvm/prebuilt" / host / "bin").mkdir(parents=True)
+    (ndk / "source.properties").write_text("Pkg.Revision = " + builder.NDK_VERSION)
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def record(args: list[str], cwd: Path, env: dict[str, str]) -> str:
+        if "--version" in args:
+            return "rustc 1.85.0 fixture"
+        if args[1:] == ["version"]:
+            return "go version go1.27.1 fixture"
+        if args[1:] == ["env", "GOROOT"]:
+            return sdk.as_posix()
+        calls.append((args, env))
+        return ""
+
+    def stage(*args: object) -> dict[str, object]:
+        (output / "assets/native").mkdir(parents=True)
+        return {}
+
+    monkeypatch.setattr(builder, "check_existing", lambda root: None)
+    monkeypatch.setattr(builder, "source_identity", lambda root: {"commit": "fixture"})
+    monkeypatch.setattr(builder, "cache_environment", lambda *args, **kwargs: {})
+    monkeypatch.setattr(builder, "run", record)
+    monkeypatch.setattr(builder, "stage_bundle", stage)
+    result = builder.build(root, android_sdk, output, tmp_path / "cargo-output", "1.85.0")
+    go_calls = [(args, env) for args, env in calls if args[-1].startswith("./cmd/")]
+    assert len(go_calls) == 4
+    for args, env in go_calls:
+        assert env["CGO_ENABLED"] == "0"
+        assert ("-overlay" in args) is (env["GOARCH"] == "amd64")
+        assert env["GOOS"] == ("linux" if env["GOARCH"] == "amd64" else "android")
+    assert result["goCompatibility"]["x86_64"]["pidfdProbeEnabled"] is False
+    assert result["goCompatibility"]["arm64-v8a"]["mode"] == "official-android-arm64"
+    assert (sdk / "src/os/pidfd_linux.go").read_bytes() == original
+
+
 def elf(path: Path, *, machine: int = 183, interpreter: str = "/system/bin/linker64", alignment: int = 16384) -> Path:
     interp = interpreter.encode() + b"\0" if interpreter else b""
     ident = b"\x7fELF\x02\x01\x01" + bytes(9)

@@ -213,3 +213,28 @@ catalog and golden-case reads, custom-value writes and a retained-volume restart
 at their exact cloud revision. A successful image build alone is insufficient.
 The original Windows, Android, full coverage and evidence gates remain required;
 product readiness remains NOT_READY.
+
+The pure-Go x86_64 Android payload uses `GOOS=linux`; Go 1.27.1 otherwise
+requires external/cgo linking for `android/amd64`. On API 26/28 its optional
+`pidfd_open` availability probe receives SIGSYS, and on API 30 the subsequent
+`pidfd_send_signal` probe receives SIGSYS. API 24 and 34 have separate actual
+passing nine-test results; that does not qualify the intervening APIs.
+
+The Android x86 build therefore uses Go's documented build overlay to select
+the existing PID/wait implementation, replacing only `os.pidfdWorks` with
+`return false`. The generator requires the exact Go 1.27.1 SDK source hash and
+function shape, preserves installed SDK files, refuses foreign output, and
+records the original and overlay hashes in the APK bundle manifest. Both Go
+roles receive the overlay only for x86_64. arm64 retains official `GOOS=android`.
+Signal handlers, app seccomp, native guardians, wait/reap and writer fences are
+unchanged. There is no new runtime interpreter or cgo dependency.
+
+A required cloud probe compiles original and overlaid pure-Go executables,
+installs real kernel TRAP filters for open/send/both pidfd syscalls, and requires
+the original availability probe to fail. The compatible executable must start
+and reap eight real concurrent children and cancel an already-ready child.
+A direct forbidden syscall must still terminate that executable with SIGSYS,
+proving broad signal suppression was not introduced. This host check does not
+replace the full nine original packaged tests on all five Android API levels.
+See the [Go pidfd Android issue](https://github.com/golang/go/issues/69065)
+and the [Go build overlay contract](https://pkg.go.dev/cmd/go#hdr-Compile_packages_and_dependencies).

@@ -26,6 +26,45 @@ NDK_VERSION = "27.3.13750724"
 RUST_VERSION = "1.85.0"
 TARGETS = {"arm64-v8a": ("aarch64-linux-android", 183), "x86_64": ("x86_64-linux-android", 62)}
 PYTHON_SUFFIXES = {".py", ".pyc", ".pyo", ".pyd", ".whl"}
+ANDROID_AMD64_GO_VERSION = "1.27.1"
+ANDROID_AMD64_PIDFD_SOURCE_SHA256 = "f2a7c0e31bda943d4e2151a61f6a9eb2084815ed5c887cc8aa4fd7506805de33"
+
+
+def android_amd64_go_overlay(goroot: Path, output: Path) -> tuple[Path, dict[str, Any]]:
+    """Select Go's PID/wait implementation for the pure-Go Android x86 build.
+
+    Android <12 can trap the availability probe itself. This ABI is built with
+    GOOS=linux because Go requires external/cgo linking for android/amd64.
+    The private build overlay changes only pidfdWorks; SDK files, signal
+    handlers, seccomp and the existing native guardian remain unchanged.
+    """
+    goroot, output = goroot.resolve(), output.resolve()
+    if output.is_relative_to(goroot):
+        raise ValueError("Android Go compatibility output must be outside the SDK")
+    source = goroot / "src/os/pidfd_linux.go"
+    original = source.read_bytes()
+    if hashlib.sha256(original).hexdigest() != ANDROID_AMD64_PIDFD_SOURCE_SHA256:
+        raise ValueError("Android Go compatibility requires the exact pinned SDK source")
+    before = b"func pidfdWorks() bool {\n\treturn checkPidfdOnce() == nil\n}"
+    after = b"func pidfdWorks() bool {\n\t// Android linux/amd64 uses the existing PID/wait implementation.\n\treturn false\n}"
+    if original.count(before) != 1:
+        raise ValueError("Android Go compatibility source shape changed")
+    patched = original.replace(before, after, 1)
+    output.mkdir(parents=True, exist_ok=True)
+    backing, overlay = output / "pidfd_linux.go", output / "overlay.json"
+    config = (json.dumps({"Replace": {source.as_posix(): backing.as_posix()}}, indent=2) + "\n").encode()
+    for path, value in [(backing, patched), (overlay, config)]:
+        try:
+            with path.open("xb") as destination:
+                destination.write(value)
+        except FileExistsError:
+            if path.is_symlink() or path.read_bytes() != value:
+                raise ValueError("Refuse a foreign Android Go compatibility output") from None
+    metadata = dict(mode="android-linux-amd64-pidwait-v1", baseGoVersion=ANDROID_AMD64_GO_VERSION,
+                    sdkFile="src/os/pidfd_linux.go", sdkSourceSha256=hashlib.sha256(original).hexdigest(),
+                    overlaySourceSha256=hashlib.sha256(patched).hexdigest(), replacedFunctions=["pidfdWorks"],
+                    pidfdProbeEnabled=False, sandboxModified=False, sourceSDKModified=False)
+    return overlay, metadata
 
 
 def inspect_executable(path: Path, abi: str, kind: str) -> dict[str, Any]:
@@ -216,6 +255,10 @@ def build(root: Path, sdk: Path, output: Path, cargo_target: Path, toolchain: st
     expected_go = json.loads((root / "release/native_runtime_toolchain_v1.json").read_text())['go']['version']
     if run([go, "version"], root / "go", env).split()[2] != f"go{expected_go}":
         raise ValueError(f"Go must be pinned to {expected_go}")
+    if expected_go != ANDROID_AMD64_GO_VERSION:
+        raise ValueError("Review the Android Go compatibility overlay before changing Go")
+    goroot = Path(run([go, "env", "GOROOT"], root / "go", env))
+    overlay, go_compatibility = android_amd64_go_overlay(goroot, output / "go-android-amd64-compat")
     ndk = sdk / "ndk" / NDK_VERSION
     host = "windows-x86_64" if os.name == "nt" else "darwin-x86_64" if platform.system() == "Darwin" else "linux-x86_64"
     compiler_dir = ndk / "toolchains/llvm/prebuilt" / host / "bin"
@@ -237,15 +280,19 @@ def build(root: Path, sdk: Path, output: Path, cargo_target: Path, toolchain: st
         for role, command in (("go", "deepseekd"), ("launcher", "deepseek-launch")):
             binary = output / "bin" / abi / command
             binary.parent.mkdir(parents=True, exist_ok=True)
-            run([go, "build", "-tags", "deepseek_android,sqlite3_flock", "-trimpath", "-o", binary.as_posix(), "./cmd/" + command], root / "go", go_env)
+            compatibility = ["-overlay", overlay.as_posix()] if abi == "x86_64" else []
+            run([go, "build", *compatibility, "-tags", "deepseek_android,sqlite3_flock", "-trimpath", "-o", binary.as_posix(), "./cmd/" + command], root / "go", go_env)
             go_binaries[role] = binary
         binaries[abi] = {"rust": cargo_target / target / "release/deepseek-gateway",
                          "worker": cargo_target / target / "release/deepseek-worker", **go_binaries}
     if source_identity(root) != initial_identity:
         raise ValueError("Android source changed during native compilation")
+    if hashlib.sha256((goroot / "src/os/pidfd_linux.go").read_bytes()).hexdigest() != go_compatibility["sdkSourceSha256"]:
+        raise ValueError("Android Go compilation changed the SDK source")
     manifest = stage_bundle(root, output, binaries)
     manifest["toolchains"] = {"rust": RUST_VERSION, "go": expected_go, "ndk": NDK_VERSION, "minimumAndroidApi": 24}
     manifest["sourceIdentity"] = initial_identity
+    manifest["goCompatibility"] = {"x86_64": go_compatibility, "arm64-v8a": {"mode": "official-android-arm64", "sourceSDKModified": False}}
     (output / "assets/native/bundle.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
 
