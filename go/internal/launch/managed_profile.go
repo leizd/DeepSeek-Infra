@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/leizd/DeepSeek-Infra/go/internal/profilevalue"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"github.com/leizd/DeepSeek-Infra/go/internal/worker"
 	"google.golang.org/grpc/codes"
@@ -61,6 +62,9 @@ func managedOperatorConfiguration(environment []string) bool {
 	return false
 }
 func managedFile(path string, limit int64) ([]byte, error) {
+	if profilevalue.IsPath(path) {
+		return profilevalue.Read(path, limit)
+	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
@@ -133,6 +137,9 @@ func managedDirectory(path string) error {
 	return nil
 }
 func publishManagedValue(path string, value []byte) error {
+	if profilevalue.IsPath(path) {
+		return profilevalue.Publish(path, value)
+	}
 	file, err := os.CreateTemp(filepath.Dir(path), ".native-pending-")
 	if err != nil {
 		return err
@@ -193,6 +200,9 @@ func initiallyEmptyNativeProfile(root, metadata string) bool {
 		return false
 	}
 	for _, entry := range entries {
+		if entry.IsDir() && profilevalue.UnpublishedPool(filepath.Join(metadata, entry.Name())) {
+			continue
+		}
 		if entry.Name() != "launch.lock" || !entry.Type().IsRegular() {
 			return false
 		}

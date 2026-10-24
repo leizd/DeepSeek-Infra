@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/leizd/DeepSeek-Infra/go/internal/profilevalue"
 	actionv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/actionv1"
 	commonv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/commonv1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb"
@@ -239,11 +240,7 @@ func nativePendingWriterPreview(path string) (int64, error) {
 	}
 	for name, expected := range map[string]string{"profile-id": origin.Evidence.ProfileId, "signer-public-pin": origin.Evidence.SignerPublicKey} {
 		file := filepath.Join(path, "native-profile", name)
-		info, err := os.Lstat(file)
-		if err != nil || !info.Mode().IsRegular() || info.Size() != int64(len(expected)) {
-			return 0, ErrForeignRuntimeStore
-		}
-		retained, err := os.ReadFile(file)
+		retained, err := profilevalue.Read(file, int64(len(expected)))
 		if err != nil || string(retained) != expected {
 			return 0, ErrForeignRuntimeStore
 		}

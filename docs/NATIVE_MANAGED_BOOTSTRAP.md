@@ -121,3 +121,53 @@ writer/no-created-files regression covers representative capability directories.
 Six Clippy needless-borrow errors in the new environment lookup are also removed
 without suppressions or lint changes. Cloud execution of this descendant is
 required; the earlier successes are not evidence for its exact revision.
+
+
+## Android private public-value publication
+
+Android app storage can deny hard links, while the minimum supported API 24
+kernel cannot be assumed to implement `renameat2`. The three small public values
+under `go-control/native-profile` (`profile-id`, `signer-public-pin`, and
+`signer-public-preparation`) use the versioned `.values-v1` layout on Android.
+Other platforms retain their exclusive regular-file publication. Existing regular
+profile files remain readable without conversion.
+
+A publisher writes an exclusive 0600 record named
+`<scope>.<payload-sha256>.<random-128-bit-suffix>`, syncs and closes the record,
+and syncs the private pool and owned directory entries before creating the
+relative head with exclusive `symlinkat`. It syncs the head directory before
+acknowledging publication. An existing file, directory, symlink or damaged head
+is never replaced. A same-value replay only reads the retained value. Records
+survive ambiguous errors and process death; they are never unconditionally
+removed after a head has referenced them.
+
+The shared Go reader recognizes only these three exact paths, a single relative
+`.values-v1/<record>` target, matching scope/hash, a private current-owner directory
+and regular current-owner 0600-or-stricter record without extra hard links. Descriptor-relative
+opens refuse nested symlinks, unsafe modes, nonregular/oversized records, absolute
+or escaping references, wrong-scope hashes, and missing records. A damaged head
+is invalid; it never becomes `not found`. Rust custody and general metadata readers
+retain their existing symlink denial. A content hash is an integrity check, not
+proof of native authority: the original signed Rust origin, public binding and
+Go writer admission remain mandatory.
+
+Before the first head exists, a bounded pool of at most 255 private profile-id
+stages may be left by interrupted pre-admission publication. The bytes remain
+non-authoritative and are preserved. Such stages cannot admit a fresh profile
+when Rust custody, a Go database, Python state, unknown metadata or a pin stage
+is retained. Referenced records remain immutable. The relative layout permits a
+complete data-root move without changing its identity. Authentication token
+creation and the Rust mirror's regular-file handoff are separate paths and are
+not changed by this metadata format.
+
+Cloud regressions exercise real hard-link denial plus unavailable `renameat2`,
+six actual SIGKILL boundaries, concurrent publication, unsafe/foreign pointers,
+regular-file compatibility, relative-layout restoration, and original signed
+intent prediction. A deliberate old hard-link implementation must fail the
+positive kernel regression. These host results do not qualify packaged Android:
+all original API 24/26/28/30/34 device gates and original coverage floors still
+apply. Product readiness remains NOT_READY.
+
+The exclusion and durability rules follow the Linux
+[symlinkat contract](https://man7.org/linux/man-pages/man2/symlink.2.html)
+and [file/directory fsync contract](https://man7.org/linux/man-pages/man2/fsync.2.html).

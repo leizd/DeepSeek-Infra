@@ -246,6 +246,83 @@ jobs:
           (root/'artifacts/control-rpc-development/android-parent-lifetime-negative-result.json').write_text(json.dumps(result,indent=2))
           PY
 
+      - name: Check API24-compatible private metadata publication and signed recovery
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          python - <<'PY'
+          import collections, json, os, subprocess
+          from pathlib import Path
+          required = ['TestAndroidProfileValueActualKillNeverExposesPartialHead', 'TestAndroidProfileValueAdmissionRetainsIdentityAcrossOrdinaryReopen', 'TestAndroidProfileValuePeer', 'TestAndroidProfileValuePendingPreviewRequiresOriginalSignedIntent', 'TestAndroidProfileValueRefusesUnsafeOrExhaustedPublicationPools', 'TestAndroidProfileValueRejectsForgedPointersAndUnsafeRecords', 'TestAndroidProfileValueRelativeLayoutSurvivesMoveAndStagesStayUnowned', 'TestAndroidProfileValueUnpublishedStagesNeverAdmitForeignDurableState', 'TestAndroidProfileValueWorksWithoutLinksOrRenameat2', 'TestManagedBootstrapRejectsCorruptMetadataBeforeInitialization', 'TestManagedFreshnessRequiresReadableExclusiveNativeMetadata', 'TestManagedPublicPinPreparationRecoversOriginalCustody', 'TestManagedPublicPreparationNeverRepairsForeignOrLostState', 'TestNativeOriginFaultIntentPreviewNeverRepairsForeignMetadata', 'TestNativeOriginPreviewOfInterruptedCreationIsReadOnlyAndPinned', 'TestProfileValueRetainsRegularIdentityAndRejectsInvalidEntries', 'TestProfileValueScopesBoundsAndConcurrentWinners']
+          log = Path("artifacts/control-rpc-development/android-profile-publication-tests.jsonl")
+          with log.open("w") as output:
+              result = subprocess.run(["go", "test", "-race", "-tags=deepseek_android,sqlite3_flock", "-json", "-count=1", "-timeout=5m", "./internal/profilevalue", "./internal/launch", "./internal/store", "-run", "^(TestAndroidProfileValueActualKillNeverExposesPartialHead|TestAndroidProfileValueAdmissionRetainsIdentityAcrossOrdinaryReopen|TestAndroidProfileValuePeer|TestAndroidProfileValuePendingPreviewRequiresOriginalSignedIntent|TestAndroidProfileValueRefusesUnsafeOrExhaustedPublicationPools|TestAndroidProfileValueRejectsForgedPointersAndUnsafeRecords|TestAndroidProfileValueRelativeLayoutSurvivesMoveAndStagesStayUnowned|TestAndroidProfileValueUnpublishedStagesNeverAdmitForeignDurableState|TestAndroidProfileValueWorksWithoutLinksOrRenameat2|TestManagedBootstrapRejectsCorruptMetadataBeforeInitialization|TestManagedFreshnessRequiresReadableExclusiveNativeMetadata|TestManagedPublicPinPreparationRecoversOriginalCustody|TestManagedPublicPreparationNeverRepairsForeignOrLostState|TestNativeOriginFaultIntentPreviewNeverRepairsForeignMetadata|TestNativeOriginPreviewOfInterruptedCreationIsReadOnlyAndPinned|TestProfileValueRetainsRegularIdentityAndRejectsInvalidEntries|TestProfileValueScopesBoundsAndConcurrentWinners)$"], cwd="go", stdout=output, stderr=subprocess.STDOUT)
+          started, finished, packages = collections.Counter(), collections.Counter(), {}
+          for line in log.read_text().splitlines():
+              try:
+                  row = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              name, action = row.get("Test"), row.get("Action")
+              if name and action == "run":
+                  started[(row["Package"], name)] += 1
+              if name and action in {"pass", "fail", "skip"}:
+                  assert action == "pass", (name, action)
+                  finished[(row["Package"], name)] += 1
+              if not name and action in {"pass", "fail", "skip"}:
+                  packages[row["Package"]] = action
+          assert result.returncode == 0 and started == finished and all(v == 1 for v in started.values())
+          assert {name for package, name in started if "/" not in name} == set(required)
+          assert packages == {"github.com/leizd/DeepSeek-Infra/go/internal/" + name: "pass" for name in ["profilevalue", "launch", "store"]}
+          Path("artifacts/control-rpc-development/android-profile-publication-result.json").write_text(json.dumps({
+              "status": "PASS", "sourceCommit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
+              "event": os.environ["GITHUB_EVENT_NAME"], "requiredTests": required,
+              "passedTopLevel": len(required), "passedSubtests": sum("/" in name for package, name in finished),
+              "scope": "real host syscalls, denied hard links/unavailable renameat2, six actual SIGKILL stages, signed Go preview; not packaged Android",
+              "originalAssertionsRetained": True, "fullGoSuiteQualified": False,
+              "coverageQualified": False, "androidDeviceQualified": False, "fullMigrationQualified": False}, indent=2) + "\n")
+          PY
+      - name: Prove old hard-link publication fails on the old-kernel regression
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          negative="$RUNNER_TEMP/native-profile-publication-negative-go"
+          cp -a go "$negative"
+          export PROFILE_PUBLICATION_NEGATIVE_GO="$negative"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path(os.environ["PROFILE_PUBLICATION_NEGATIVE_GO"]) / "internal/profilevalue/publication_android_compat.go"
+          source = path.read_text()
+          current = 'return publishAt(path, value, func(string) {})'
+          original = 'return func() error { file, err := os.CreateTemp(filepath.Dir(path), ".native-pending-"); if err != nil { return err }; defer os.Remove(file.Name()); _, writeErr := file.Write(value); syncErr := file.Sync(); closeErr := file.Close(); if err := errors.Join(writeErr, syncErr, closeErr); err != nil { return err }; return os.Link(file.Name(), path) }()'
+          assert source.count(current) == 1
+          path.write_text(source.replace(current, original, 1))
+          PY
+          set +e
+          (cd "$negative" && go test -race -tags=deepseek_android,sqlite3_flock -json -count=1 -timeout=2m ./internal/profilevalue -run '^TestAndroidProfileValueWorksWithoutLinksOrRenameat2$') > artifacts/control-rpc-development/android-profile-publication-negative-tests.jsonl 2>&1
+          code=$?
+          set -e
+          export PROFILE_PUBLICATION_NEGATIVE_EXIT="$code"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          log = Path("artifacts/control-rpc-development/android-profile-publication-negative-tests.jsonl").read_text()
+          name = "TestAndroidProfileValueWorksWithoutLinksOrRenameat2"
+          rows = []
+          for line in log.splitlines():
+              try:
+                  rows.append(json.loads(line))
+              except json.JSONDecodeError:
+                  continue
+          assert os.environ["PROFILE_PUBLICATION_NEGATIVE_EXIT"] == "1"
+          assert any(row.get("Test") == name and row.get("Action") == "fail" for row in rows)
+          assert "publication still requires unavailable kernel operations" in log
+          assert "[build failed]" not in log and "no tests to run" not in log
+          Path("artifacts/control-rpc-development/android-profile-publication-negative-result.json").write_text(json.dumps({
+              "status": "PASS", "sourceCommit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
+              "failedExpectedTest": name, "negativeExitCode": 1, "fullMigrationQualified": False}, indent=2) + "\n")
+          PY
       - name: Check separate bundled resources and authoritative data roots
         env:
           CGO_ENABLED: "1"
