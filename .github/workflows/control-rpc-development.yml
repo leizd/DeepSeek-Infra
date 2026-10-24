@@ -280,6 +280,40 @@ jobs:
           result={'status':'PASS','sourceCommit':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'event':os.environ['GITHUB_EVENT_NAME'],'raceEnabled':True,'expectedTests':sorted(required),'startedTests':sorted(started),'bundledResourcesSeparateFromAuthority':True,'nonemptyDataStillRefused':True,'actualAndroidDeviceQualified':False,'fullGoSuiteQualified':False,'coverageQualified':False,'fullMigrationQualified':False,'rawSha256':hashlib.sha256(path.read_bytes()).hexdigest()}
           Path('artifacts/control-rpc-development/bundled-resources-result.json').write_text(json.dumps(result,indent=2))
           PY
+      - name: Check native control descriptor refusal, legacy exclusion and file controls
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          cd go
+          GOFLAGS=-tags=deepseek_android,sqlite3_flock go test -race -json -count=1 -timeout=3m ./internal/sqlitedb -run '^(TestAndroidControlFileControlsResetAndReportActualPathMovement|TestAndroidControlFileTemporaryOpenAndLostWorkingDirectory|TestAndroidControlGuardBoundsUnidentifiedDescriptorsAndRecoversCapacity|TestAndroidControlGuardCannotDisplaceAnActualLegacyOwner|TestAndroidControlGuardQuarantinesAnInodeChangedDuringActualVFSOpen|TestAndroidControlGuardQuarantinesUnidentifiedAndFailedDescriptors|TestAndroidControlLegacyOwnerPeer)$' > ../artifacts/control-rpc-development/control-file-failures-tests.jsonl 2>&1
+          cd ..
+          python - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import hashlib,json,os
+          path=Path('artifacts/control-rpc-development/control-file-failures-tests.jsonl')
+          required={'TestAndroidControlLegacyOwnerPeer', 'TestAndroidControlFileTemporaryOpenAndLostWorkingDirectory', 'TestAndroidControlGuardBoundsUnidentifiedDescriptorsAndRecoversCapacity', 'TestAndroidControlGuardQuarantinesUnidentifiedAndFailedDescriptors', 'TestAndroidControlGuardQuarantinesAnInodeChangedDuringActualVFSOpen', 'TestAndroidControlFileControlsResetAndReportActualPathMovement', 'TestAndroidControlGuardCannotDisplaceAnActualLegacyOwner'}
+          package='github.com/leizd/DeepSeek-Infra/go/internal/sqlitedb'
+          started,finished=Counter(),Counter()
+          terminals=[]
+          for line in path.read_text().splitlines():
+              try: row=json.loads(line)
+              except json.JSONDecodeError:
+                  assert line.startswith('go: downloading ')
+                  continue
+              assert row.get('Action') not in {'fail','skip'} and '(cached)' not in row.get('Output','')
+              assert row.get('Package') in {None,package}
+              test,action=row.get('Test'),row.get('Action')
+              if test:
+                  assert test.split('/')[0] in required
+                  if action=='run': started[test]+=1
+                  if action=='pass': finished[test]+=1
+              elif action=='pass': terminals.append(package)
+          assert {name for name in started if '/' not in name}==required and started==finished and all(count==1 for count in started.values())
+          assert terminals==[package]
+          result={'status':'PASS','sourceCommit':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'event':os.environ['GITHUB_EVENT_NAME'],'raceEnabled':True,'expectedTests':sorted(required),'startedTests':sorted(started),'failedDescriptorsQuarantined':True,'legacyLockOwnerRetained':True,'actualAndroidDeviceQualified':False,'fullGoSuiteQualified':False,'coverageQualified':False,'fullMigrationQualified':False,'rawSha256':hashlib.sha256(path.read_bytes()).hexdigest()}
+          Path('artifacts/control-rpc-development/control-file-failures-result.json').write_text(json.dumps(result,indent=2))
+          PY
       - name: Check actual Android-tagged process recovery and bounded lease observation
         timeout-minutes: 7
         env:

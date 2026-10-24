@@ -27,7 +27,7 @@
     "@opentelemetry/sdk-trace-node": "2.10.0",
     "@opentelemetry/semantic-conventions": "1.43.0",
     "redis": "6.1.0",
-    "zod": "4.2.0"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@types/node": "24.10.0",
