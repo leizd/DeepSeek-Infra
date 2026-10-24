@@ -47,6 +47,10 @@ jobs:
             appendFileSync(process.env.GITHUB_ENV, `${name}=${randomBytes(32).toString('hex')}\n`);
           }
           JS
+      - name: Install the native search tool used by the original reference tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends ripgrep
       - run: npm ci --prefix stateless-mcp
       - name: Preserve all original reference type and unit checks
         run: npm run check --prefix stateless-mcp
