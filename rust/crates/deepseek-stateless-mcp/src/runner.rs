@@ -100,8 +100,8 @@ pub fn execute_configured_task(
             }
         }
     };
-    let mut stdout = stdout_handle.join().unwrap_or_default();
-    let mut stderr = stderr_handle.join().unwrap_or_default();
+    let stdout = stdout_handle.join().unwrap_or_default();
+    let stderr = stderr_handle.join().unwrap_or_default();
     if let Some(error) = wait_error {
         return TaskOutcome {
             stdout,
@@ -109,12 +109,6 @@ pub fn execute_configured_task(
             exit_code: None,
             error: Some(error),
         };
-    }
-    if stdout.len() > max_output_bytes {
-        stdout.truncate(max_output_bytes);
-    }
-    if stderr.len() > max_output_bytes {
-        stderr.truncate(max_output_bytes);
     }
     TaskOutcome {
         stdout,
@@ -131,15 +125,25 @@ pub fn execute_configured_task(
 fn read_limited(pipe: &mut impl std::io::Read, limit: usize) -> Option<String> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
-    while buf.len() < limit {
+    loop {
         let read = pipe.read(&mut chunk).ok()?;
         if read == 0 {
             break;
         }
-        let room = limit - buf.len();
+        // Keep draining after the storage limit so a healthy child cannot be
+        // failed by a closed stdout/stderr pipe or blocked by a full one.
+        let room = limit.saturating_sub(buf.len());
         buf.extend_from_slice(&chunk[..read.min(room)]);
     }
-    Some(String::from_utf8_lossy(&buf).into_owned())
+    let mut text = String::from_utf8_lossy(&buf).into_owned();
+    // Replacing an incomplete or invalid sequence can expand it. Apply the
+    // byte limit to valid UTF-8 as well, without splitting a character.
+    let mut end = text.len().min(limit);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    Some(text)
 }
 
 #[cfg(test)]
@@ -192,5 +196,24 @@ mod tests {
             }
         }
         assert!(read_limited(&mut FailedPipe, 64).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_native_child_can_finish_after_exceeding_the_output_storage_limit() {
+        use std::process::{Command, Stdio};
+
+        // The cloud runner's native coreutils producer writes far beyond pipe
+        // capacity. Closing its reader at the storage limit causes SIGPIPE.
+        let mut child = Command::new("head")
+            .args(["-c", "1048576", "/dev/zero"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let captured = read_limited(&mut child.stdout.take().unwrap(), 17).unwrap();
+        assert_eq!(captured.as_bytes(), &[0; 17]);
+        assert!(child.wait().unwrap().success());
     }
 }
