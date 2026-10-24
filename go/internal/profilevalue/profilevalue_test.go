@@ -86,13 +86,16 @@ func TestProfileValueRetainsRegularIdentityAndRejectsInvalidEntries(t *testing.T
 
 func TestProfileValueScopesBoundsAndConcurrentWinners(t *testing.T) {
 	path := profilePath(t)
+	if UnpublishedPool(path) || UnpublishedPool(filepath.Dir(path)) {
+		t.Fatal("a metadata head or directory was accepted as an unpublished pool")
+	}
 	for _, bad := range []string{"relative", filepath.Join(t.TempDir(), "profile-id"), filepath.Join(filepath.Dir(path), "foreign"), path + string(filepath.Separator)} {
-		if IsPath(bad) || Publish(bad, []byte("x")) == nil {
+		if IsPath(bad) || Publish(bad, []byte("x")) == nil || ConfirmDurable(bad, []byte("x")) == nil {
 			t.Fatal("foreign scope admitted", bad)
 		}
 	}
 	for _, value := range [][]byte{nil, bytes.Repeat([]byte("x"), 4097)} {
-		if Publish(path, value) == nil {
+		if Publish(path, value) == nil || ConfirmDurable(path, value) == nil {
 			t.Fatal("invalid publication bound admitted")
 		}
 	}
@@ -100,6 +103,9 @@ func TestProfileValueScopesBoundsAndConcurrentWinners(t *testing.T) {
 		if _, err := Read(path, limit); err == nil {
 			t.Fatal("invalid read bound admitted")
 		}
+	}
+	if err := ConfirmDurable(path, []byte("x")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("missing value confirmed durable", err)
 	}
 	if _, err := Read(path, 64); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("missing head not reported", err)
@@ -127,11 +133,45 @@ func TestProfileValueScopesBoundsAndConcurrentWinners(t *testing.T) {
 	if err != nil || string(value) != strings.Repeat("a", 32) && string(value) != strings.Repeat("b", 32) {
 		t.Fatal("partial winner", err)
 	}
+	if err = ConfirmDurable(path, []byte("wrong-value")); err == nil {
+		t.Fatal("different value confirmed durable")
+	}
 	if err = Publish(path, value); err != nil {
 		t.Fatal("same identity was not idempotent", err)
 	}
 	missing := filepath.Join(t.TempDir(), "go-control", "native-profile", "profile-id")
 	if Publish(missing, []byte("x")) == nil {
 		t.Fatal("missing parent was silently created")
+	}
+}
+
+func TestProfileValueConcurrentWinnerIsNeverReplaced(t *testing.T) {
+	for _, same := range []bool{true, false} {
+		path := profilePath(t)
+		original := []byte(strings.Repeat("a", 32))
+		if err := os.WriteFile(path, original, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value := original
+		if !same {
+			value = []byte(strings.Repeat("b", 32))
+		}
+		// A competing writer won after our optimistic pre-read. The exclusive
+		// kernel publish must handle that real existing entry without replacing it.
+		err = publishNew(path, value)
+		if same && err != nil || !same && err == nil {
+			t.Fatal("concurrent winner contract changed", err)
+		}
+		after, err := os.Lstat(path)
+		if err != nil || !os.SameFile(before, after) {
+			t.Fatal("concurrent winner inode replaced", err)
+		}
+		if raw, err := Read(path, 64); err != nil || !bytes.Equal(raw, original) {
+			t.Fatal("concurrent winner bytes replaced", err)
+		}
 	}
 }

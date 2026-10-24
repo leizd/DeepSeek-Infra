@@ -253,7 +253,7 @@ jobs:
           python - <<'PY'
           import collections, json, os, subprocess
           from pathlib import Path
-          required = ['TestAndroidProfileValueActualKillNeverExposesPartialHead', 'TestAndroidProfileValueAdmissionRetainsIdentityAcrossOrdinaryReopen', 'TestAndroidProfileValuePeer', 'TestAndroidProfileValuePendingPreviewRequiresOriginalSignedIntent', 'TestAndroidProfileValueRefusesUnsafeOrExhaustedPublicationPools', 'TestAndroidProfileValueRejectsForgedPointersAndUnsafeRecords', 'TestAndroidProfileValueRelativeLayoutSurvivesMoveAndStagesStayUnowned', 'TestAndroidProfileValueUnpublishedStagesNeverAdmitForeignDurableState', 'TestAndroidProfileValueWorksWithoutLinksOrRenameat2', 'TestManagedBootstrapRejectsCorruptMetadataBeforeInitialization', 'TestManagedFreshnessRequiresReadableExclusiveNativeMetadata', 'TestManagedPublicPinPreparationRecoversOriginalCustody', 'TestManagedPublicPreparationNeverRepairsForeignOrLostState', 'TestNativeOriginFaultIntentPreviewNeverRepairsForeignMetadata', 'TestNativeOriginPreviewOfInterruptedCreationIsReadOnlyAndPinned', 'TestProfileValueRetainsRegularIdentityAndRejectsInvalidEntries', 'TestProfileValueScopesBoundsAndConcurrentWinners']
+          required = ['TestAndroidProfileValueActualKillNeverExposesPartialHead', 'TestAndroidProfileValueAdmissionRequiresDurableMetadata', 'TestAndroidProfileValueAdmissionRetainsIdentityAcrossOrdinaryReopen', 'TestAndroidProfileValueFilesystemFailuresNeverAcknowledgeNewAuthority', 'TestAndroidProfileValueLostSyncAcknowledgementMustBeReconfirmed', 'TestAndroidProfileValuePeer', 'TestAndroidProfileValuePendingPreviewRequiresOriginalSignedIntent', 'TestAndroidProfileValueRefusesUnsafeOrExhaustedPublicationPools', 'TestAndroidProfileValueRejectsForgedPointersAndUnsafeRecords', 'TestAndroidProfileValueRelativeLayoutSurvivesMoveAndStagesStayUnowned', 'TestAndroidProfileValueSyncFailurePeer', 'TestAndroidProfileValueUnpublishedStagesNeverAdmitForeignDurableState', 'TestAndroidProfileValueWorksWithoutLinksOrRenameat2', 'TestManagedBootstrapRejectsCorruptMetadataBeforeInitialization', 'TestManagedFreshnessRequiresReadableExclusiveNativeMetadata', 'TestManagedPublicPinPreparationRecoversOriginalCustody', 'TestManagedPublicPreparationNeverRepairsForeignOrLostState', 'TestNativeOriginFaultIntentPreviewNeverRepairsForeignMetadata', 'TestNativeOriginPreviewOfInterruptedCreationIsReadOnlyAndPinned', 'TestProfileValueConcurrentWinnerIsNeverReplaced', 'TestProfileValueFailedRecordSyncNeverPublishesAHead', 'TestProfileValueKernelIOPeer', 'TestProfileValueRejectsChangedIdentityAndActualReadFailure', 'TestProfileValueRetainsRegularIdentityAndRejectsInvalidEntries', 'TestProfileValueScopesBoundsAndConcurrentWinners']
           normal_log = Path("artifacts/control-rpc-development/default-profile-publication-tests.jsonl")
           with normal_log.open("w") as output:
               normal = subprocess.run(["go", "test", "-race", "-covermode=atomic", "-coverprofile=../artifacts/control-rpc-development/default-profile-publication-coverage.out", "-json", "-count=1", "-timeout=2m", "./internal/profilevalue"], cwd="go", stdout=output, stderr=subprocess.STDOUT)
@@ -270,10 +270,10 @@ jobs:
                   if row.get("Test"):
                       normal_passed[row["Test"]] += 1
           assert normal.returncode == 0 and normal_started == normal_passed and all(n == 1 for n in normal_started.values())
-          assert {name for name in normal_started if "/" not in name} == {"TestProfileValueRetainsRegularIdentityAndRejectsInvalidEntries", "TestProfileValueScopesBoundsAndConcurrentWinners"}
+          assert {name for name in normal_started if "/" not in name} == {'TestProfileValueConcurrentWinnerIsNeverReplaced', 'TestProfileValueFailedRecordSyncNeverPublishesAHead', 'TestProfileValueKernelIOPeer', 'TestProfileValueRejectsChangedIdentityAndActualReadFailure', 'TestProfileValueRetainsRegularIdentityAndRejectsInvalidEntries', 'TestProfileValueScopesBoundsAndConcurrentWinners'}
           log = Path("artifacts/control-rpc-development/android-profile-publication-tests.jsonl")
           with log.open("w") as output:
-              result = subprocess.run(["go", "test", "-race", "-covermode=atomic", "-coverprofile=../artifacts/control-rpc-development/android-profile-publication-coverage.out", "-tags=deepseek_android,sqlite3_flock", "-json", "-count=1", "-timeout=5m", "./internal/profilevalue", "./internal/launch", "./internal/store", "-run", "^(TestAndroidProfileValueActualKillNeverExposesPartialHead|TestAndroidProfileValueAdmissionRetainsIdentityAcrossOrdinaryReopen|TestAndroidProfileValuePeer|TestAndroidProfileValuePendingPreviewRequiresOriginalSignedIntent|TestAndroidProfileValueRefusesUnsafeOrExhaustedPublicationPools|TestAndroidProfileValueRejectsForgedPointersAndUnsafeRecords|TestAndroidProfileValueRelativeLayoutSurvivesMoveAndStagesStayUnowned|TestAndroidProfileValueUnpublishedStagesNeverAdmitForeignDurableState|TestAndroidProfileValueWorksWithoutLinksOrRenameat2|TestManagedBootstrapRejectsCorruptMetadataBeforeInitialization|TestManagedFreshnessRequiresReadableExclusiveNativeMetadata|TestManagedPublicPinPreparationRecoversOriginalCustody|TestManagedPublicPreparationNeverRepairsForeignOrLostState|TestNativeOriginFaultIntentPreviewNeverRepairsForeignMetadata|TestNativeOriginPreviewOfInterruptedCreationIsReadOnlyAndPinned|TestProfileValueRetainsRegularIdentityAndRejectsInvalidEntries|TestProfileValueScopesBoundsAndConcurrentWinners)$"], cwd="go", stdout=output, stderr=subprocess.STDOUT)
+              result = subprocess.run(["go", "test", "-race", "-covermode=atomic", "-coverprofile=../artifacts/control-rpc-development/android-profile-publication-coverage.out", "-tags=deepseek_android,sqlite3_flock", "-json", "-count=1", "-timeout=5m", "./internal/profilevalue", "./internal/launch", "./internal/store", "-run", "^(TestAndroidProfileValueActualKillNeverExposesPartialHead|TestAndroidProfileValueAdmissionRequiresDurableMetadata|TestAndroidProfileValueAdmissionRetainsIdentityAcrossOrdinaryReopen|TestAndroidProfileValueFilesystemFailuresNeverAcknowledgeNewAuthority|TestAndroidProfileValueLostSyncAcknowledgementMustBeReconfirmed|TestAndroidProfileValuePeer|TestAndroidProfileValuePendingPreviewRequiresOriginalSignedIntent|TestAndroidProfileValueRefusesUnsafeOrExhaustedPublicationPools|TestAndroidProfileValueRejectsForgedPointersAndUnsafeRecords|TestAndroidProfileValueRelativeLayoutSurvivesMoveAndStagesStayUnowned|TestAndroidProfileValueSyncFailurePeer|TestAndroidProfileValueUnpublishedStagesNeverAdmitForeignDurableState|TestAndroidProfileValueWorksWithoutLinksOrRenameat2|TestManagedBootstrapRejectsCorruptMetadataBeforeInitialization|TestManagedFreshnessRequiresReadableExclusiveNativeMetadata|TestManagedPublicPinPreparationRecoversOriginalCustody|TestManagedPublicPreparationNeverRepairsForeignOrLostState|TestNativeOriginFaultIntentPreviewNeverRepairsForeignMetadata|TestNativeOriginPreviewOfInterruptedCreationIsReadOnlyAndPinned|TestProfileValueConcurrentWinnerIsNeverReplaced|TestProfileValueFailedRecordSyncNeverPublishesAHead|TestProfileValueKernelIOPeer|TestProfileValueRejectsChangedIdentityAndActualReadFailure|TestProfileValueRetainsRegularIdentityAndRejectsInvalidEntries|TestProfileValueScopesBoundsAndConcurrentWinners)$"], cwd="go", stdout=output, stderr=subprocess.STDOUT)
           started, finished, packages = collections.Counter(), collections.Counter(), {}
           for line in log.read_text().splitlines():
               try:
@@ -295,7 +295,7 @@ jobs:
               "status": "PASS", "sourceCommit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
               "event": os.environ["GITHUB_EVENT_NAME"], "requiredTests": required,
               "passedTopLevel": len(required), "passedSubtests": sum("/" in name for package, name in finished),
-              "scope": "real host syscalls, denied hard links/unavailable renameat2, six actual SIGKILL stages, signed Go preview; not packaged Android",
+              "scope": "real host syscalls, denied hard links/unavailable renameat2, six actual SIGKILL stages, actual EIO/permission failures and durable admission, signed Go preview; not packaged Android",
               "originalAssertionsRetained": True, "fullGoSuiteQualified": False,
               "coverageQualified": False, "androidDeviceQualified": False, "fullMigrationQualified": False}, indent=2) + "\n")
           PY
@@ -339,6 +339,47 @@ jobs:
           Path("artifacts/control-rpc-development/android-profile-publication-negative-result.json").write_text(json.dumps({
               "status": "PASS", "sourceCommit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
               "failedExpectedTest": name, "negativeExitCode": 1, "fullMigrationQualified": False}, indent=2) + "\n")
+          PY
+      - name: Prove native admission rejects the missing metadata durability barrier
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          negative="$RUNNER_TEMP/native-profile-sync-negative-go"
+          cp -a go "$negative"
+          export PROFILE_SYNC_NEGATIVE_GO="$negative"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          path = Path(os.environ["PROFILE_SYNC_NEGATIVE_GO"]) / "internal/launch/managed_profile.go"
+          source = path.read_text()
+          barrier = '\t// Recover an interrupted metadata acknowledgement before Rust or Go effects.\n\t// Read-only writer preview remains free of this admission/durability barrier.\n\tfor name, value := range map[string]string{"profile-id": profile.id, "signer-public-pin": profile.pin, managedPublicPreparation: profile.preparation} {\n\t\tif value != "" {\n\t\t\tif err = profilevalue.ConfirmDurable(filepath.Join(profile.metadata, name), []byte(value)); err != nil {\n\t\t\t\treturn nil, err\n\t\t\t}\n\t\t}\n\t}\n'
+          assert source.count(barrier) == 1
+          path.write_text(source.replace(barrier, "", 1))
+          PY
+          set +e
+          (cd "$negative" && go test -race -tags=deepseek_android,sqlite3_flock -json -count=1 -timeout=2m ./internal/launch -run '^TestAndroidProfileValueAdmissionRequiresDurableMetadata$') > artifacts/control-rpc-development/android-profile-sync-negative-tests.jsonl 2>&1
+          code=$?
+          set -e
+          export PROFILE_SYNC_NEGATIVE_EXIT="$code"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          name = "TestAndroidProfileValueAdmissionRequiresDurableMetadata"
+          log = Path("artifacts/control-rpc-development/android-profile-sync-negative-tests.jsonl").read_text()
+          rows = []
+          for line in log.splitlines():
+              try:
+                  rows.append(json.loads(line))
+              except json.JSONDecodeError:
+                  continue
+          assert os.environ["PROFILE_SYNC_NEGATIVE_EXIT"] == "1"
+          assert {r["Test"] for r in rows if r.get("Test") and r.get("Action") == "fail"} == {name}
+          assert "native profile admission ignored failed metadata durability" in log
+          assert "[build failed]" not in log and "no tests to run" not in log
+          Path("artifacts/control-rpc-development/android-profile-sync-negative-result.json").write_text(json.dumps({
+              "status": "PASS", "sourceCommit": os.environ["GITHUB_SHA"], "runId": os.environ["GITHUB_RUN_ID"],
+              "failedExpectedTest": name, "negativeExitCode": 1, "sourceAssertionsRetained": True,
+              "fullMigrationQualified": False}, indent=2) + "\n")
           PY
       - name: Check separate bundled resources and authoritative data roots
         env:

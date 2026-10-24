@@ -76,12 +76,19 @@ func recordParts(name, scope string) (string, bool) {
 	return parts[1], true
 }
 
-func readPointer(path string, limit int64) ([]byte, error) {
+func openPointerRecord(path string, limit int64) (*pointerRecord, error) {
+	record := &pointerRecord{}
+	success := false
+	defer func() {
+		if !success {
+			_ = record.close()
+		}
+	}()
 	parent, err := openDirectory(filepath.Dir(path))
 	if err != nil {
 		return nil, ErrInvalid
 	}
-	defer parent.Close()
+	record.parent = parent
 	var head unix.Stat_t
 	if err = unix.Fstatat(int(parent.Fd()), filepath.Base(path), &head, unix.AT_SYMLINK_NOFOLLOW); err != nil || head.Mode&unix.S_IFMT != unix.S_IFLNK || head.Uid != uint32(os.Geteuid()) {
 		return nil, ErrInvalid
@@ -104,23 +111,88 @@ func readPointer(path string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, ErrInvalid
 	}
-	defer pool.Close()
+	record.pool = pool
 	fd, err := unix.Openat(int(pool.Fd()), name, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, ErrInvalid
 	}
 	file := os.NewFile(uintptr(fd), name)
-	defer file.Close()
+	record.file = file
 	var stat unix.Stat_t
 	if err = unix.Fstat(fd, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0o077 != 0 || stat.Uid != uint32(os.Geteuid()) || stat.Nlink != 1 || stat.Size <= 0 || stat.Size > limit {
 		return nil, ErrInvalid
 	}
-	value, err := io.ReadAll(io.LimitReader(file, limit+1))
+	record.digest = digest
+	success = true
+	return record, nil
+}
+
+type pointerRecord struct {
+	parent, pool, file *os.File
+	digest             string
+}
+
+func (record *pointerRecord) close() error {
+	var result error
+	for _, file := range []*os.File{record.file, record.pool, record.parent} {
+		if file != nil {
+			result = errors.Join(result, file.Close())
+		}
+	}
+	return result
+}
+func (record *pointerRecord) read(limit int64) ([]byte, error) {
+	value, err := io.ReadAll(io.LimitReader(record.file, limit+1))
 	sum := sha256.Sum256(value)
-	if err != nil || len(value) == 0 || int64(len(value)) > limit || hex.EncodeToString(sum[:]) != digest {
+	if err != nil || len(value) == 0 || int64(len(value)) > limit || hex.EncodeToString(sum[:]) != record.digest {
 		return nil, ErrInvalid
 	}
 	return value, nil
+}
+func readPointer(path string, limit int64) ([]byte, error) {
+	record, err := openPointerRecord(path, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer record.close()
+	return record.read(limit)
+}
+func confirmDurable(path string, expected []byte) (err error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		var record *pointerRecord
+		record, err = openPointerRecord(path, 4096)
+		if err != nil {
+			return err
+		}
+		defer func() { err = errors.Join(err, record.close()) }()
+		value, readErr := record.read(4096)
+		if readErr != nil || !bytes.Equal(value, expected) {
+			return ErrInvalid
+		}
+		return errors.Join(record.file.Sync(), record.pool.Sync(), record.parent.Sync(), syncOwnedAncestors(filepath.Dir(path)))
+	}
+	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 4096 {
+		return ErrInvalid
+	}
+	file, err := openRegular(path)
+	if err != nil {
+		return err
+	}
+	value, err := readRegularDescriptor(file, info, 4096)
+	if err != nil || !bytes.Equal(value, expected) {
+		file.Close()
+		return ErrInvalid
+	}
+	parent, err := openDirectory(filepath.Dir(path))
+	if err != nil {
+		file.Close()
+		return err
+	}
+	return errors.Join(file.Sync(), file.Close(), parent.Sync(), parent.Close(), syncOwnedAncestors(filepath.Dir(path)))
 }
 
 func publishNew(path string, value []byte) error { return publishAt(path, value, func(string) {}) }
@@ -149,9 +221,8 @@ func publishAt(path string, value []byte, checkpoint func(string)) error {
 		return ErrInvalid
 	}
 	salt := make([]byte, 16)
-	if _, err = rand.Read(salt); err != nil {
-		return err
-	}
+	// Pinned Go 1.27 rand.Read fills the buffer or terminates on entropy failure.
+	rand.Read(salt)
 	sum := sha256.Sum256(value)
 	name := filepath.Base(path) + "." + hex.EncodeToString(sum[:]) + "." + hex.EncodeToString(salt)
 	fd, err := unix.Openat(int(pool.Fd()), name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
@@ -160,10 +231,7 @@ func publishAt(path string, value []byte, checkpoint func(string)) error {
 	}
 	file := os.NewFile(uintptr(fd), name)
 	checkpoint("record-created")
-	n, writeErr := file.Write(value)
-	if n != len(value) && writeErr == nil {
-		writeErr = io.ErrShortWrite
-	}
+	_, writeErr := file.Write(value)
 	checkpoint("record-written")
 	if err = errors.Join(writeErr, file.Sync(), file.Close()); err != nil {
 		return err
@@ -172,25 +240,16 @@ func publishAt(path string, value []byte, checkpoint func(string)) error {
 	if err = errors.Join(pool.Sync(), parent.Sync()); err != nil {
 		return err
 	}
-	// Persist metadata/go-control/root directory entries before native effects.
-	for ancestor := filepath.Dir(parentPath); ; ancestor = filepath.Dir(ancestor) {
-		dir, openErr := os.Open(ancestor)
-		if openErr != nil {
-			return openErr
-		}
-		if err = errors.Join(dir.Sync(), dir.Close()); err != nil {
-			return err
-		}
-		if filepath.Base(ancestor) != "go-control" {
-			break
-		}
+	if err = syncOwnedAncestors(parentPath); err != nil {
+		return err
 	}
+
 	checkpoint("record-directory-synced")
 	if err = unix.Symlinkat(poolName+"/"+name, int(parent.Fd()), filepath.Base(path)); err != nil {
 		if errors.Is(err, unix.EEXIST) {
 			prior, readErr := Read(path, 4096)
 			if readErr == nil && bytes.Equal(prior, value) {
-				return nil
+				return ConfirmDurable(path, value)
 			}
 			return ErrInvalid
 		}
@@ -230,4 +289,18 @@ func UnpublishedPool(path string) bool {
 		}
 	}
 	return true
+}
+
+// Persist metadata/go-control/root directory entries before native effects.
+func syncOwnedAncestors(parentPath string) error {
+	for _, ancestor := range []string{filepath.Dir(parentPath), filepath.Dir(filepath.Dir(parentPath))} {
+		dir, openErr := os.Open(ancestor)
+		if openErr != nil {
+			return openErr
+		}
+		if err := errors.Join(dir.Sync(), dir.Close()); err != nil {
+			return err
+		}
+	}
+	return nil
 }

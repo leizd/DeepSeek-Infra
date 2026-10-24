@@ -307,6 +307,15 @@ func openManagedProfile(root string) (*managedProfile, error) {
 	if _, err = os.Lstat(profile.rust); errors.Is(err, os.ErrNotExist) && (profile.pin != "" || profile.preparation != "") {
 		return nil, errManagedProfile
 	}
+	// Recover an interrupted metadata acknowledgement before Rust or Go effects.
+	// Read-only writer preview remains free of this admission/durability barrier.
+	for name, value := range map[string]string{"profile-id": profile.id, "signer-public-pin": profile.pin, managedPublicPreparation: profile.preparation} {
+		if value != "" {
+			if err = profilevalue.ConfirmDurable(filepath.Join(profile.metadata, name), []byte(value)); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if err = managedDirectory(profile.rust); err != nil {
 		return nil, err
 	}

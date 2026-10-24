@@ -47,6 +47,29 @@ func denyNewPublicationSyscalls() error {
 	return nil
 }
 
+func denyProfileValueSync() error {
+	filter := []unix.SockFilter{
+		{Code: unix.BPF_LD | unix.BPF_W | unix.BPF_ABS},
+		{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, K: unix.SYS_FSYNC, Jf: 1},
+		{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ERRNO | uint32(unix.EIO)},
+		{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ALLOW},
+	}
+	program := unix.SockFprog{Len: uint16(len(filter)), Filter: &filter[0]}
+	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+		return err
+	}
+	result, _, errno := unix.Syscall(unix.SYS_SECCOMP, unix.SECCOMP_SET_MODE_FILTER, unix.SECCOMP_FILTER_FLAG_TSYNC, uintptr(unsafe.Pointer(&program)))
+	runtime.KeepAlive(program)
+	runtime.KeepAlive(filter)
+	if errno != 0 {
+		return errno
+	}
+	if result != 0 {
+		return fmt.Errorf("sync seccomp synchronization stopped at thread %d", result)
+	}
+	return nil
+}
+
 func TestAndroidProfileValuePeer(t *testing.T) {
 	mode := os.Getenv("DEEPSEEK_PROFILE_VALUE_TEST_MODE")
 	if mode == "" {
@@ -54,6 +77,68 @@ func TestAndroidProfileValuePeer(t *testing.T) {
 	}
 	path := os.Getenv("DEEPSEEK_PROFILE_VALUE_TEST_PATH")
 	value := []byte(strings.Repeat("a", 32))
+	if mode == "winner-sync-ack" {
+		if err := Publish(path, value); err != nil {
+			t.Fatal(err)
+		}
+		err := publishAt(path, value, func(stage string) {
+			if stage == "record-directory-synced" {
+				if err := denyProfileValueSync(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+		if !errors.Is(err, unix.EIO) {
+			t.Fatal("competing winner bypassed durability confirmation", err)
+		}
+		return
+	}
+	if mode == "early-directory-sync" {
+		err := publishAt(path, value, func(stage string) {
+			if stage == "record-synced" {
+				if err := denyProfileValueSync(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+		if !errors.Is(err, unix.EIO) {
+			t.Fatal("actual pre-head directory sync failure missing", err)
+		}
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatal("failed directory sync published head", err)
+		}
+		return
+	}
+	if mode == "lost-sync-ack" {
+		err := publishAt(path, value, func(stage string) {
+			if stage == "head-created" {
+				if err := denyProfileValueSync(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+		if !errors.Is(err, unix.EIO) {
+			t.Fatal("actual final-sync failure not installed", err)
+		}
+		before, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if raw, err := Read(path, 64); err != nil || string(raw) != string(value) {
+			t.Fatal("unacknowledged complete head lost", err)
+		}
+		if err := Publish(path, value); !errors.Is(err, unix.EIO) {
+			t.Fatal("visible unacknowledged head bypassed durability barrier", err)
+		}
+		if err := ConfirmDurable(path, value); !errors.Is(err, unix.EIO) {
+			t.Fatal("sync failure was acknowledged during admission", err)
+		}
+		after, err := os.Lstat(path)
+		if err != nil || !os.SameFile(before, after) {
+			t.Fatal("sync failure replaced original head", err)
+		}
+		return
+	}
 	if mode == "old-kernel" {
 		if err := denyNewPublicationSyscalls(); err != nil {
 			t.Fatal(err)
@@ -93,7 +178,8 @@ func publicationChild(t *testing.T, path, mode string, killed bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	child := exec.CommandContext(ctx, executable, "-test.run=^TestAndroidProfileValuePeer$")
+	args := append([]string{"-test.run=^TestAndroidProfileValuePeer$"}, profileCoverageArguments()...)
+	child := exec.CommandContext(ctx, executable, args...)
 	child.Env = append(os.Environ(), "DEEPSEEK_PROFILE_VALUE_TEST_MODE="+mode, "DEEPSEEK_PROFILE_VALUE_TEST_PATH="+path)
 	output, err := child.CombinedOutput()
 	if killed {
@@ -111,6 +197,35 @@ func TestAndroidProfileValueWorksWithoutLinksOrRenameat2(t *testing.T) {
 	publicationChild(t, path, "old-kernel", false)
 	if raw, err := Read(path, 64); err != nil || string(raw) != strings.Repeat("a", 32) {
 		t.Fatal("original value absent", err)
+	}
+}
+
+func TestAndroidProfileValueLostSyncAcknowledgementMustBeReconfirmed(t *testing.T) {
+	for _, mode := range []string{"lost-sync-ack", "winner-sync-ack"} {
+		t.Run(mode, func(t *testing.T) {
+
+			path := profilePath(t)
+			publicationChild(t, path, mode, false)
+			before, err := os.Lstat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			value := []byte(strings.Repeat("a", 32))
+			if err := ConfirmDurable(path, value); err != nil {
+				t.Fatal("recovery could not confirm original bytes", err)
+			}
+			if err := Publish(path, value); err != nil {
+				t.Fatal(err)
+			}
+			after, err := os.Lstat(path)
+			if err != nil || !os.SameFile(before, after) {
+				t.Fatal("recovery replaced original head", err)
+			}
+			if raw, err := Read(path, 64); err != nil || string(raw) != string(value) {
+				t.Fatal("recovery replaced original value", err)
+			}
+
+		})
 	}
 }
 
@@ -350,4 +465,94 @@ func TestAndroidProfileValueRefusesUnsafeOrExhaustedPublicationPools(t *testing.
 			}
 		})
 	}
+}
+
+func TestAndroidProfileValueFilesystemFailuresNeverAcknowledgeNewAuthority(t *testing.T) {
+	for _, kind := range []string{"parent-readonly", "pool-readonly", "ancestor-unreadable", "head-create-denied"} {
+		t.Run(kind, func(t *testing.T) {
+			path := profilePath(t)
+			parent := filepath.Dir(path)
+			root := filepath.Dir(filepath.Dir(parent))
+			defer os.Chmod(parent, 0o700)
+			defer os.Chmod(root, 0o700)
+			switch kind {
+			case "parent-readonly":
+				if err := os.Chmod(parent, 0o500); err != nil {
+					t.Fatal(err)
+				}
+			case "pool-readonly":
+				pool := filepath.Join(parent, poolName)
+				if err := os.Mkdir(pool, 0o500); err != nil {
+					t.Fatal(err)
+				}
+				defer os.Chmod(pool, 0o700)
+			case "ancestor-unreadable":
+				if err := os.Chmod(root, 0o111); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := publishAt(path, []byte(strings.Repeat("a", 32)), func(stage string) {
+				if kind == "head-create-denied" && stage == "record-directory-synced" {
+					if err := os.Chmod(parent, 0o500); err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+			if !errors.Is(err, os.ErrPermission) {
+				t.Fatal("actual filesystem refusal not preserved", kind, err)
+			}
+			if _, err := os.Lstat(path); !os.IsNotExist(err) {
+				t.Fatal("failed publication acquired an authoritative head", err)
+			}
+		})
+	}
+	t.Run("pre-head-directory-sync", func(t *testing.T) {
+		path := profilePath(t)
+		publicationChild(t, path, "early-directory-sync", false)
+		if _, err := Read(path, 64); !os.IsNotExist(err) {
+			t.Fatal("unacknowledged directory acquired a head", err)
+		}
+		if err := Publish(path, []byte(strings.Repeat("b", 32))); err != nil {
+			t.Fatal("restored IO could not resume before admission", err)
+		}
+	})
+	for _, legacy := range []bool{true, false} {
+		t.Run(fmt.Sprintf("unsafe-parent-legacy-%v", legacy), func(t *testing.T) {
+			path := profilePath(t)
+			value := []byte(strings.Repeat("a", 32))
+			if legacy {
+				if err := os.WriteFile(path, value, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := Publish(path, value); err != nil {
+				t.Fatal(err)
+			}
+			parent := filepath.Dir(path)
+			if err := os.Chmod(parent, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			defer os.Chmod(parent, 0o700)
+			if _, err := Read(path, 64); !errors.Is(err, ErrInvalid) {
+				t.Fatal("unsafe parent read admitted", err)
+			}
+		})
+	}
+	t.Run("head-type-changed-after-observation", func(t *testing.T) {
+		path := profilePath(t)
+		if err := os.WriteFile(path, []byte(strings.Repeat("a", 32)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readPointer(path, 64); !errors.Is(err, ErrInvalid) {
+			t.Fatal("changed head type accepted as pointer", err)
+		}
+	})
+	t.Run("overlong-pointer", func(t *testing.T) {
+		path := profilePath(t)
+		if err := os.Symlink(strings.Repeat("a", 300), path); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Read(path, 64); !errors.Is(err, ErrInvalid) {
+			t.Fatal("overlong pointer was read", err)
+		}
+	})
 }

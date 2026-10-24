@@ -171,3 +171,20 @@ apply. Product readiness remains NOT_READY.
 The exclusion and durability rules follow the Linux
 [symlinkat contract](https://man7.org/linux/man-pages/man2/symlink.2.html)
 and [file/directory fsync contract](https://man7.org/linux/man-pages/man2/fsync.2.html).
+
+A visible Android head is not by itself an acknowledged durable publication.
+An I/O error after head creation preserves that head and its immutable record;
+it must not mint a replacement identity. Before admitting native effects, the
+launcher reopens and validates each retained public metadata value, then syncs
+its held record, pool, metadata directory and owned root ancestors. Replaying
+the same value, including a concurrent publication winner, requires the same
+barrier. A failed barrier retains the original bytes and prevents Rust-state
+creation. The read-only Go writer preview performs no sync or repair.
+
+Host regressions deny actual `fsync` and descriptor reads with per-child kernel
+filters, exercise real permission failures, and restore I/O before admitting
+the original identity. A temporary copy with only the launcher barrier removed
+must fail the admission regression. Successful instrumented child probes emit
+their own coverage counters; killed children are not represented by synthetic
+counters. These checks do not prove physical power-loss recovery or Windows
+directory durability, and they do not replace the Android device gates.

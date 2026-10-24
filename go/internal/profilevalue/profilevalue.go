@@ -49,6 +49,11 @@ func readRegular(path string, expected os.FileInfo, limit int64) ([]byte, error)
 		return nil, err
 	}
 	defer file.Close()
+	return readRegularDescriptor(file, expected, limit)
+}
+
+// Validate the held descriptor against the pre-open identity and bounded bytes.
+func readRegularDescriptor(file *os.File, expected os.FileInfo, limit int64) ([]byte, error) {
 	actual, err := file.Stat()
 	if err != nil || !os.SameFile(expected, actual) {
 		return nil, ErrInvalid
@@ -68,7 +73,7 @@ func Publish(path string, value []byte) error {
 	prior, err := Read(path, 4096)
 	if err == nil {
 		if bytes.Equal(prior, value) {
-			return nil
+			return ConfirmDurable(path, value)
 		}
 		return ErrInvalid
 	}
@@ -76,4 +81,13 @@ func Publish(path string, value []byte) error {
 		return err
 	}
 	return publishNew(path, value)
+}
+
+// ConfirmDurable is a writer-admission barrier, not part of a read-only preview.
+// A visible head may belong to a previously interrupted, unacknowledged sync.
+func ConfirmDurable(path string, value []byte) error {
+	if !IsPath(path) || len(value) == 0 || len(value) > 4096 {
+		return ErrInvalid
+	}
+	return confirmDurable(path, value)
 }

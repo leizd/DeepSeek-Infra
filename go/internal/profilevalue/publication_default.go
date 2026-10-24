@@ -5,7 +5,6 @@ package profilevalue
 import (
 	"bytes"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 )
@@ -21,17 +20,15 @@ func publishNew(path string, value []byte) error {
 		return err
 	}
 	defer os.Remove(file.Name())
-	n, writeErr := file.Write(value)
-	if n != len(value) && writeErr == nil {
-		writeErr = io.ErrShortWrite
-	}
+	// os.File.Write already returns a non-nil error on a short write.
+	_, writeErr := file.Write(value)
 	if err = errors.Join(writeErr, file.Sync(), file.Close()); err != nil {
 		return err
 	}
 	if err = os.Link(file.Name(), path); errors.Is(err, os.ErrExist) {
 		prior, readErr := Read(path, 4096)
 		if readErr == nil && bytes.Equal(prior, value) {
-			return nil
+			return ConfirmDurable(path, value)
 		}
 		return ErrInvalid
 	}
@@ -40,3 +37,15 @@ func publishNew(path string, value []byte) error {
 
 // No unpublished Android pool is recognized on other platforms.
 func UnpublishedPool(string) bool { return false }
+
+// Preserve existing regular-file behavior outside the Android pointer layout.
+func confirmDurable(path string, expected []byte) error {
+	value, err := Read(path, 4096)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(value, expected) {
+		return ErrInvalid
+	}
+	return nil
+}
