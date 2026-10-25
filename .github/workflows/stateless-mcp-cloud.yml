@@ -78,6 +78,23 @@ jobs:
         run: |
           set -o pipefail
           npm run smoke:process-lifecycle --prefix stateless-mcp 2>&1 | tee artifacts/native-stateless-mcp/process-lifecycle.log
+      - name: Prepare offline Python oracle without adding it to production images
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+      - name: Install only the repository pytest requirement for the offline oracle
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess, sys
+          matches = [line.strip() for line in Path('requirements-dev.txt').read_text().splitlines() if line.startswith('pytest>=')]
+          assert len(matches) == 1
+          subprocess.run([sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', matches[0]], check=True)
+          PY
+      - name: Require the stock native image to complete the retained test-tool success workload
+        run: |
+          set -o pipefail
+          npm run smoke:default-test-engine --prefix stateless-mcp 2>&1 | tee artifacts/native-stateless-mcp/default-test-engine.log
       - name: Preserve bounded native service diagnostics
         if: failure()
         run: docker compose -f docker-compose.stateless-mcp.yml -f stateless-mcp/compose.failover.yml logs --no-color --tail 400 > artifacts/native-stateless-mcp/container.log 2>&1
