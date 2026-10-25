@@ -94,7 +94,9 @@ async function measure(service: Service, workspace: string, rows: Record<string,
     observation.serviceAliveAtHealthObservation = isLive(service);
   } finally { if (writer !== undefined) closeSync(writer); }
   const pipeResult = await search; assert.equal(pendingError, undefined); assert.notEqual(pipeResult, null);
-  assert.deepEqual(pipeResult, { matches: ["1:1:needle controlled pipe"], truncated: false });
+  const visiblePipe = service.name === "native-rust" ? "/workspace/slow.pipe" : fifo;
+  observation.visiblePipe = visiblePipe;
+  assert.deepEqual(pipeResult, { matches: [`${visiblePipe}:1:1:needle controlled pipe`], truncated: false });
   observation.realPipeSearchResult = pipeResult;
   const before = service.hwm();
   const large = await call(service, "large.txt");
