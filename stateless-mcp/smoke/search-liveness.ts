@@ -24,6 +24,7 @@ interface SearchResult { matches: string[]; truncated: boolean }
 interface Service { name: string; instanceId: string; base: string; hwm: () => number; pid: number; container?: string; child?: ReturnType<typeof spawn> }
 const services: Service[] = [];
 let redis: string | undefined;
+let extraction: string | undefined;
 let descriptor: number | undefined;
 const delay = async (ms: number) => await new Promise<void>((resolve) => setTimeout(resolve, ms));
 function docker(args: string[]): string {
@@ -93,11 +94,15 @@ async function measure(service: Service, workspace: string, rows: Record<string,
     observation.searchStillInFlightAtHealthObservation = !settled;
     observation.serviceAliveAtHealthObservation = isLive(service);
   } finally { if (writer !== undefined) closeSync(writer); }
-  const pipeResult = await search; assert.equal(pendingError, undefined); assert.notEqual(pipeResult, null);
+  const pipeResult = await search; assert.equal(pendingError, undefined); assert.ok(pipeResult, "actual rg search did not return a result");
   const visiblePipe = service.name === "native-rust" ? "/workspace/slow.pipe" : fifo;
   observation.visiblePipe = visiblePipe;
-  assert.deepEqual(pipeResult, { matches: [`${visiblePipe}:1:1:needle controlled pipe`], truncated: false });
+  assert.equal(pipeResult.truncated, false);
+  assert.equal(pipeResult.matches.length, 1);
+  assert.ok(["1:1:needle controlled pipe", `${visiblePipe}:1:1:needle controlled pipe`].includes(pipeResult.matches[0]!));
   observation.realPipeSearchResult = pipeResult;
+  observation.pipeSearchCanonical = { matches: pipeResult.matches.map((line) => line.startsWith(visiblePipe + ":")
+    ? "<workspace>/slow.pipe" + line.slice(visiblePipe.length) : line), truncated: pipeResult.truncated };
   const before = service.hwm();
   const large = await call(service, "large.txt");
   const after = service.hwm();
@@ -130,6 +135,20 @@ async function main(): Promise<void> {
   report.interpreterProbeStderr = foreign.stderr.slice(0, 1024);
   assert.equal(foreign.status, 0, "stock image interpreter absence probe did not complete");
   report.productionImageContainsNodeOrPython = false;
+  // Both implementations use the actual production-image rg executable. The
+  // original production Node image also used bookworm, not the runner's rg.
+  const tools = path.join(temporary, "production-tools"); mkdirSync(tools);
+  const sharedRg = path.join(tools, "rg");
+  extraction = docker(["create", image]);
+  docker(["cp", `${extraction}:/usr/bin/rg`, sharedRg]); chmodSync(sharedRg, 0o755);
+  docker(["rm", "--volumes", extraction]); extraction = undefined;
+  const toolHash = createHash("sha256").update(readFileSync(sharedRg)).digest("hex");
+  assert.equal(toolHash, docker(["run", "--rm", "--network", "none", "--entrypoint", "sha256sum", image, "/usr/bin/rg"]).split(/\s+/u)[0]);
+  const toolVersion = spawnSync(sharedRg, ["--version"], { encoding: "utf8", timeout: 5000 });
+  assert.equal(toolVersion.status, 0, toolVersion.stderr);
+  report.sharedProductionRipgrepSha256 = toolHash;
+  report.sharedProductionRipgrepVersion = toolVersion.stdout.trim();
+  report.originalUsesActualProductionRipgrep = true;
   report.originalServerSourceSha256 = createHash("sha256").update(readFileSync(path.join(repo, "stateless-mcp/src/server.ts"))).digest("hex");
   report.originalSearchSourceSha256 = createHash("sha256").update(readFileSync(path.join(repo, "stateless-mcp/src/code-search.ts"))).digest("hex");
   const existingRedis = docker(["compose", "-f", "docker-compose.stateless-mcp.yml", "-f", "stateless-mcp/compose.failover.yml", "ps", "-q", "redis"]);
@@ -160,7 +179,7 @@ async function main(): Promise<void> {
     const listen = await port();
     const environment = { ...process.env, REDIS_URL: `redis://${redisAddress}`, REDIS_PREFIX: `native-search:${run}:${randomUUID()}`,
       MCP_HOST: "127.0.0.1", MCP_PORT: String(listen), MCP_WORKSPACE_ROOT: workspace, MCP_INSTANCE_ID: `search-${name}-${run}`,
-      MCP_MAX_OUTPUT_BYTES: "4096", TOKIO_WORKER_THREADS: "1" };
+      MCP_MAX_OUTPUT_BYTES: "4096", TOKIO_WORKER_THREADS: "1", PATH: tools + path.delimiter + (process.env.PATH || "") };
     let service: Service;
     if (name === "original-typescript") {
       descriptor = openSync(path.join(output, "search-original-service.log"), "w");
@@ -190,6 +209,7 @@ async function main(): Promise<void> {
   const native = services.find((s) => s.name === "native-rust")!;
   assert.equal(docker(["inspect", "--format", "{{.State.OOMKilled}}", native.container!]), "false");
   report.actualOOM = false;
+  assert.deepEqual(rows[1]!.pipeSearchCanonical, rows[0]!.pipeSearchCanonical, "same production engine returned different native FIFO results");
   assert.equal(rows[1]!.healthRespondedDuringHeldOpenSearch, true, "native HTTP worker was blocked by actual code_search");
   assert.equal(rows[1]!.memoryGrowthWithinBound, true, "native search collected output beyond the configured cap before truncation");
   report.status = "PASS";
@@ -219,6 +239,10 @@ finally {
   }
   report.cleanupErrors = cleanupErrors;
   if (cleanupErrors.length) { report.status = "FAIL"; process.exitCode = 1; }
+  if (extraction !== undefined) {
+    try { docker(["rm", "--force", "--volumes", extraction]); }
+    catch (error) { cleanupErrors.push(error instanceof Error ? error.message : String(error)); }
+  }
   if (descriptor !== undefined) closeSync(descriptor);
   writeFileSync(path.join(output, "search-liveness.json"), `${JSON.stringify(report, null, 2)}\n`);
   console.log(JSON.stringify({ status: report.status, sourceCommit: sha, error: report.error, observations: report.observations }));

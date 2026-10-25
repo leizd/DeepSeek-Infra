@@ -1,3 +1,37 @@
+## Native MCP observed HTTP blocking and matched production search engine — 2026-10-25
+
+Actual source7375921d run40189313715/job121156717093 passed original semantic
+search controls and short native search. With an actual rg FIFO held open,
+original health responded0.878ms; native did not succeed within500ms (502.924ms)
+while still alive. This is a scoped real HTTP liveness RED. Native memory was
+not reached: host rg14 includes FIFO filenames while stock bookworm rg13 omits
+them. Preserve http-liveness-red-evidence.json as HTTP-only; no memory claim.
+Legacy Node VmHWM remains an observation; native32MiB budget is unchanged.
+
+The original Node production image used node:24-bookworm-slim with apt ripgrep
+(7fe490d6e parent). Both test services now use the exact actual stock-image rg
+binary: its SHA is checked inside the image and after cloud-only extraction,
+and its real version is retained. Only the original offline service PATH is
+set to this native tool; no script/fake rg or new SDK is introduced. Native image
+is unchanged. FIFO results validate exact selected-file/line/column/payload and
+compare every byte after only replacing each configured workspace prefix.
+Thus CLI version differences do not masquerade as Rust implementation failures.
+All500ms/32MiB/4096-byte/64MiB bounds and functional controls remain. Actual
+complete memory/HTTP RED on this source is PENDING. Production Rust/Go unchanged.
+
+Earlier3d7 interpreter exit-status and9cb FIFO shape assumptions andd27 legacy
+V8-budget precondition are retained as NOT_REACHED, never native failures.
+Source934 strict70 real Android tests/25 app-UID custody cases with zero late
+effects plus1605 Rust tests/82.119328% >=80%/26 checks/52 reports passed. Olderb73b
+full37 source CI and both95% Go floors passed separately, no PR merge candidate.
+
+The user retained original arbitrary pytest compatibility and zero production
+Python; test engine unfinished. Whole server/desktop/Android/background/provider/
+Fleet/recovery/upgrade/sandbox/resource/env/path-race/package/release scope remains
+NOT_READY. Root163 bytes preserved. All native compile/test/tools/caches/images
+stay cloud-only; reports only return. Unified daily PR09:00 Asia/Shanghai once/day;
+no PR, main merge, release or real data operation now.
+
 ## Native MCP real code-search concurrency/output reproduction — 2026-10-25
 
 Current Rust invokes Command::output synchronously from an async tools/call
