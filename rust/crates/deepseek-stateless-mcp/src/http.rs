@@ -227,7 +227,7 @@ async fn mcp(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> 
     let result = match method {
         "initialize" => initialize_result(&state),
         "tools/list" => tools_list(),
-        "tools/call" => tools_call(&state, &params),
+        "tools/call" => tools_call(&state, &params).await,
         "ping" => json!({}),
         _ => return rpc_error(id, -32601, "method not found"),
     };
@@ -271,7 +271,7 @@ fn tool_schema(
     })
 }
 
-fn tools_call(state: &AppState, params: &Value) -> Value {
+async fn tools_call(state: &AppState, params: &Value) -> Value {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let arguments = params
         .get("arguments")
@@ -283,7 +283,7 @@ fn tools_call(state: &AppState, params: &Value) -> Value {
             "clientSessionState": "none",
             "durableTaskState": state.config.durable_task_state,
         })),
-        "code_search" => match code_search(state, &arguments) {
+        "code_search" => match code_search(state, &arguments).await {
             Ok(value) => tool_ok(value),
             Err(error) => tool_err(error),
         },
@@ -418,7 +418,7 @@ fn query_logs(state: &AppState, arguments: &Value) -> Result<Value, String> {
     )
 }
 
-fn code_search(state: &AppState, arguments: &Value) -> Result<Value, String> {
+async fn code_search(state: &AppState, arguments: &Value) -> Result<Value, String> {
     let query = required_len(arguments, "query", 1, 500)?;
     let path = arguments.get("path").and_then(Value::as_str).unwrap_or(".");
     if path.is_empty() {
@@ -445,6 +445,7 @@ fn code_search(state: &AppState, arguments: &Value) -> Result<Value, String> {
         max_results as usize,
         state.config.max_output_bytes,
     )
+    .await
 }
 
 fn required_len(value: &Value, field: &str, min: usize, max: usize) -> Result<String, String> {

@@ -1,3 +1,10 @@
+
+<!-- native-20261025-search-resource-fix -->
+2026-10-25: matched actual production rg13 in source d20997126aa59bc4b1dd4ea5177b34d789ceec38/run40190828477 proved both code-search defects: native health did not respond within500ms while a valid FIFO search remained in flight, and native parent VmHWM grew65368KiB for a64MiB corpus despite a4096-byte response cap. Original Node functional controls passed; its physical peak remains an observation, not a native memory-budget pass. Preserve the raw RED and all earlier setup/partial failures.
+
+The follow-up uses Tokio subprocess I/O and concurrently drains stdout/stderr while retaining only each configured output prefix; the HTTP tools/call path awaits search without blocking the runtime worker. Existing rg arguments, exit0/1 handling, raw byte-prefix/lossy UTF-8 decoding and response schema remain. Normal stderr errors retain their format; oversized diagnostics now carry an explicit truncation marker. Five new reader tests cover complete draining, exact/exceeded/zero limits, raw UTF-8 boundaries and interruption/error handling. No dependency, workflow, benchmark, coverage floor or task-custody change. The unchanged actual-image500ms/32MiB/4096-byte/64MiB GREEN and exact-source Rust/platform checks remain pending.
+
+Human decision retains arbitrary pytest compatibility and zero production Python together; start_test_run remains unfinished. Source934's1605 Rust tests/82.119328% and70 Android tests/25 app-UID custody cases, and olderb73's37-job CI/original Go95% results qualify only their own revisions. Whole server/desktop/Android/background/provider/recovery/sandbox/package/release scope stays NOT_READY. Native builds/caches/images stay in GitHub Actions; local source/head/index remain preserved. Daily PR only09:00 Asia/Shanghai, once/day.
 ## Native MCP observed HTTP blocking and matched production search engine — 2026-10-25
 
 Actual source7375921d run40189313715/job121156717093 passed original semantic
