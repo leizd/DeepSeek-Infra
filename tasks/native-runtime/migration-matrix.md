@@ -1,3 +1,31 @@
+## Native MCP process identity and remaining production scope — 2026-10-25
+
+Actual production-image run 40149022139 on 916bf5b9 reproduced shared default
+owner identities in three configurations: unset, empty and whitespace. Each
+configuration used two independently observed native Rust PID 1 containers and
+a real restart. All three observations reused the same identity; the explicit
+operator-identity control remained stable. Original Redis startup refusal,
+instance-loss/idempotency and committed-restore outcome retention passed first.
+
+The native entry point now normalizes missing/blank instance settings and uses
+an OS-entropy UUID v4 for each new process. A provided nonempty identity remains
+stable. Entropy failure propagates before admission; there is no PID or clock
+fallback. The exact existing getrandom 0.2.17 pin/checksum is reused. New tests
+cover UUID version/variant bits with known entropy and refusal when entropy is
+unavailable. The unchanged production-image probe requires nine distinct UUIDs
+across the three configurations and their real restarts. New exact-source cloud
+qualification is pending; no old commit's CI is counted as this source passing.
+
+This is a native instance-ownership repair, not full MCP or whole-product
+acceptance. The public test-run feature still defaults to a pytest-shaped child
+command; the native failover fixture proves runner/recovery mechanics only.
+A successful retained test-tool workload with no production Python dependency
+is still required, along with workspace confinement and descendant lifecycle.
+Retain every server/desktop/Android/background capability, original provider
+identities, EFFECT_UNKNOWN, platform and release Evidence requirements: NOT_READY.
+Builds and caches remain cloud-only; download reports only. Preserve original
+root worktree bytes. PR handling is one unified daily 09:00 Asia/Shanghai batch.
+
 ## Android runner SDK command discovery — 2026-10-19
 
 `ANDROID_SDK_PATH_FIX_20261019` corrects only the cloud workflow's SDK manager

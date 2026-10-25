@@ -1,3 +1,5 @@
+mod instance_identity;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,8 +15,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let redis_url = env_string("REDIS_URL", "redis://127.0.0.1:6379");
     let host = env_string("MCP_HOST", "0.0.0.0");
     let port: u16 = env_string("MCP_PORT", "8010").parse()?;
-    let instance_id =
-        std::env::var("MCP_INSTANCE_ID").unwrap_or_else(|_| format!("mcp-{}", std::process::id()));
+    let instance_id = match nonempty("MCP_INSTANCE_ID") {
+        Some(value) => value,
+        None => instance_identity::new_instance_id()?,
+    };
     let workspace_root = PathBuf::from(env_string("MCP_WORKSPACE_ROOT", "."));
     let allowed_hosts = env_string("MCP_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1],mcp-lb")
         .split(',')
