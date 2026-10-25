@@ -110,6 +110,13 @@ fn main() {
         println!("native lifecycle root started; child={}", child.id());
         std::io::stdout().flush().unwrap();
         if kind == "parent-exit" {
+            // The observer confirms both live identities before authorizing the
+            // normal root exit. A correct reaper may otherwise win that race.
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !trace.join("root-release").is_file() {
+                assert!(Instant::now() < deadline, "root exit was not released");
+                std::thread::sleep(Duration::from_millis(10));
+            }
             println!("native lifecycle root completed");
             return;
         }

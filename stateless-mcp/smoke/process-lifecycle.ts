@@ -185,6 +185,12 @@ async function main(): Promise<void> {
       row.rootIdentity = rootIdentity;
       row.descendantIdentity = descendant;
       row.taskBeforeInterruption = await call("get_task", { taskId: created.taskId });
+      if (kind === "parent-exit") {
+        assert.ok(alive(rootIdentity));
+        assert.ok(alive(descendant));
+        writeFileSync(path.join(trace, "root-release"), "observer confirmed both native processes\n");
+        row.normalRootExitReleased = true;
+      }
       if (kind === "server-crash") {
         assert.ok(service.kill("SIGKILL"));
         row.actualServiceSIGKILL = true;
