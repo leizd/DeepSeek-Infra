@@ -1,3 +1,35 @@
+## Native MCP workspace file boundaries — 2026-10-25
+
+Actual run 40151342282 on b486bbb8 confirmed four forbidden native task targets
+read the outside fixture: parent traversal, absolute outside path, sibling-prefix
+path and external symlink. Code search independently returned outside content
+through that symlink. Six legitimate task targets and inside code search passed.
+All observations used copied synthetic files, actual native processes and Redis,
+without host mounts, published ports or user data. This was semantic RED.
+
+Task execution and code search now share path policy. Relative workspace roots
+are anchored before lexical checks; existing filesystem ancestry is checked for
+external or dangling links. Task arguments become absolute, with selectors and
+valid internal symlink names retained. Durable original arguments and request
+hashing remain unchanged. Forbidden tasks still settle through the original
+journal, with one attempt and no child spawn. The old lexical HTTP helper remains
+available through its existing public re-export. The qualification child's old
+fixed-target expectation now uses the absolute reference argument contract;
+its original lease, completion latch, SHA-256 and timing controls are retained.
+Nine new Rust regressions cover boundaries, relative roots, option-like file
+names, selectors, nulls, missing paths and link behavior. New cloud GREEN is
+pending and cannot be inferred from parent2606's1591 tests/82.276123% coverage.
+
+This is current-path validation, not race-resistant process sandbox acceptance.
+Filesystem swaps after validation, descendant cleanup and resource/environment
+confinement remain required. The stock test-run feature requires MCP_TASK_PROGRAM
+and always passes pytest-shaped arguments; a working retained native test engine
+without production Python is still unqualified. Retain every server, desktop,
+Android and background capability, unique writers, original recovery identities,
+EFFECT_UNKNOWN, provider and release/platform Evidence requirements: NOT_READY.
+Native execution/caches stay cloud-only; reports return. Preserve root163 bytes.
+PR handling is one unified daily09:00 Asia/Shanghai batch.
+
 ## Native MCP process identity and remaining production scope — 2026-10-25
 
 Actual production-image run 40149022139 on 916bf5b9 reproduced shared default

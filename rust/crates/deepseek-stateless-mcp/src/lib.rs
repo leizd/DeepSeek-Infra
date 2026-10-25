@@ -8,5 +8,6 @@ pub mod runner;
 pub mod search;
 pub mod snapshot;
 pub mod store;
+pub mod workspace;
 
 pub use memory::MemoryTaskStore;

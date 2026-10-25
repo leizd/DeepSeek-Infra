@@ -39,6 +39,17 @@ pub fn execute_configured_task(
     max_output_bytes: usize,
     cancel: &AtomicBool,
 ) -> TaskOutcome {
+    let target = match crate::workspace::resolve_task_target(workspace, target) {
+        Ok(target) => target,
+        Err(error) => {
+            return TaskOutcome {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: None,
+                error: Some(error),
+            };
+        }
+    };
     let Ok(program) = std::env::var("MCP_TASK_PROGRAM") else {
         return TaskOutcome {
             stdout: String::new(),

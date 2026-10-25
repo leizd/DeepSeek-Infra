@@ -1,4 +1,4 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -13,6 +13,8 @@ use crate::model::{
     BackupFence, CreateTaskInput, RestoreJournal, StoreError, TaskArguments, TaskStatus,
 };
 use crate::store::TaskBackend;
+use crate::workspace::resolve_workspace_io_path;
+pub use crate::workspace::resolve_workspace_path;
 
 #[derive(Clone)]
 pub struct ServiceConfig {
@@ -433,47 +435,16 @@ fn code_search(state: &AppState, arguments: &Value) -> Result<Value, String> {
     if !(1..=200).contains(&max_results) {
         return Err("maxResults is out of range".to_string());
     }
-    let root = resolve_workspace_path(&state.config.workspace_root, path)?;
+    let workspace = resolve_workspace_path(&state.config.workspace_root, ".")?;
+    let root = resolve_workspace_io_path(&workspace, path)?;
     crate::search::search_code(
-        &state.config.workspace_root,
+        &workspace,
         &root,
         &query,
         glob.as_deref(),
         max_results as usize,
         state.config.max_output_bytes,
     )
-}
-
-pub fn resolve_workspace_path(workspace_root: &Path, candidate: &str) -> Result<PathBuf, String> {
-    if candidate.contains('\0') {
-        return Err("path contains a null byte".to_string());
-    }
-    let candidate_path = Path::new(candidate);
-    let joined = if candidate_path.is_absolute() {
-        candidate_path.to_path_buf()
-    } else {
-        workspace_root.join(candidate_path)
-    };
-    let normalized = normalize_lexical(&joined);
-    let root = normalize_lexical(workspace_root);
-    if normalized != root && !normalized.starts_with(root.join("")) {
-        return Err("path must stay within the configured workspace".to_string());
-    }
-    Ok(normalized)
-}
-
-fn normalize_lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
 }
 
 fn required_len(value: &Value, field: &str, min: usize, max: usize) -> Result<String, String> {
@@ -754,6 +725,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
+    use std::path::Path;
     use tower::ServiceExt;
 
     fn state() -> AppState {

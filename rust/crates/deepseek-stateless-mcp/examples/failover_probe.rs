@@ -21,10 +21,13 @@ fn marker(path: &str, value: &str) {
 fn main() {
     // Exercise the existing test-executor argument contract without an
     // interpreter. This fixture is included only in the qualification image.
+    let target = std::env::current_dir()
+        .unwrap()
+        .join("rust/crates/deepseek-stateless-mcp/examples/failover_probe.rs");
     let expected = [
         "-m",
         "pytest",
-        "rust/crates/deepseek-stateless-mcp/examples/failover_probe.rs",
+        target.to_str().unwrap(),
         "--no-cov",
         "-q",
         "-p",
