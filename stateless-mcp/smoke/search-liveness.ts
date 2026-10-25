@@ -122,9 +122,11 @@ async function main(): Promise<void> {
   const files = docker(["run", "--rm", "--network", "none", "--entrypoint", "ls", image, "/usr/local/bin"]).split(/\r?\n/u);
   assert.deepEqual(files, ["deepseek-stateless-mcp"]); report.actualProductionLocalExecutables = files;
   const foreign = spawnSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "sh", image,
-    "-c", "command -v python || command -v python3 || command -v node"], { encoding: "utf8", timeout: 5000 });
+    "-c", 'for name in python python3 node; do if command -v "$name"; then exit 42; fi; done; exit 0'], { encoding: "utf8", timeout: 5000 });
   report.actualInterpreterProbeExitCode = foreign.status;
-  assert.equal(foreign.status, 1, "foreign interpreter found in stock native image");
+  report.interpreterProbeStdout = foreign.stdout.slice(0, 1024);
+  report.interpreterProbeStderr = foreign.stderr.slice(0, 1024);
+  assert.equal(foreign.status, 0, "stock image interpreter absence probe did not complete");
   report.productionImageContainsNodeOrPython = false;
   report.originalServerSourceSha256 = createHash("sha256").update(readFileSync(path.join(repo, "stateless-mcp/src/server.ts"))).digest("hex");
   report.originalSearchSourceSha256 = createHash("sha256").update(readFileSync(path.join(repo, "stateless-mcp/src/code-search.ts"))).digest("hex");
