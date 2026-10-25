@@ -10,7 +10,7 @@ use deepseek_stateless_mcp::store::TaskBackend;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let redis_url = nonempty("REDIS_URL");
+    let redis_url = env_string("REDIS_URL", "redis://127.0.0.1:6379");
     let host = env_string("MCP_HOST", "0.0.0.0");
     let port: u16 = env_string("MCP_PORT", "8010").parse()?;
     let instance_id =
@@ -27,8 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         allowed_hosts,
         auth_token: nonempty("MCP_AUTH_TOKEN"),
         internal_backup_token: nonempty("MCP_INTERNAL_BACKUP_TOKEN"),
-        durable_task_state: TaskBackend::advertised_durable_task_state(redis_url.is_some())
-            .to_string(),
+        durable_task_state: TaskBackend::advertised_durable_task_state(true).to_string(),
         max_output_bytes: env_string("MCP_MAX_OUTPUT_BYTES", "262144")
             .parse()
             .unwrap_or(262_144),
@@ -45,12 +44,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(250);
     let timeout_seconds = config.task_timeout_seconds;
     let max_output_bytes = config.max_output_bytes;
-    let store = Arc::new(match redis_url {
-        Some(url) => {
-            TaskBackend::connect_redis(&url, &env_string("REDIS_PREFIX", "deepseek-infra:mcp:v1"))?
-        }
-        None => TaskBackend::memory(),
-    });
+    let store = Arc::new(TaskBackend::connect_redis(
+        &redis_url,
+        &env_string("REDIS_PREFIX", "deepseek-infra:mcp:v1"),
+    )?);
     let worker_store = Arc::clone(&store);
     let worker_root = workspace_root.clone();
     tokio::spawn(async move {

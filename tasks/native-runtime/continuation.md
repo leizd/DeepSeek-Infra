@@ -1,3 +1,30 @@
+## Native MCP default durable startup — 2026-10-25
+
+Actual production-image run40147633992 on f23dd9a7 reproduced a retained-contract
+violation in all three default Redis configurations: unset, empty and whitespace
+REDIS_URL. With network none, no mounts or published ports, each actual Rust
+service returned ready200 and server_info reported memory. The original26
+reference tests, native instance-loss/idempotency and committed-restore-fence
+completion workloads passed first; this was a semantic RED, not a setup failure.
+The production target contained no native qualification fixture.
+
+The native entry point now uses the existing documented localhost Redis default
+and must connect before binding HTTP or admitting work. Explicit Redis settings
+are retained; MemoryTaskStore remains available to isolated library/unit fixtures.
+The exact production-image regression covers all three missing/blank settings.
+Its new cloud result is required before declaring this repair qualified.
+The prior5545d30a source separately passed both Rust-cloud jobs, all26 named check
+steps,1589 tests plus the original Redis ignore, and82.278988% lines against the
+unchanged80% floor. Original full CI37/37 and both95% Go profiles are qualified on
+a6d1387a only; these are not the new source or a PR merge candidate.
+
+Full server/desktop/Android/background migration, all retained functionality,
+original provider/recovery identities, EFFECT_UNKNOWN and release/platform
+Evidence remain required: NOT_READY. Native execution and caches remain cloud
+only, with reports returned. Preserve the original root163 changes. The latest
+human schedule is one unified PR daily at09:00 Asia/Shanghai, superseding older
+21:40 notes below; do not create or update PRs between scheduled daily batches.
+
 ## Native launcher shared settings reach scoped children — 2026-10-20
 
 The actual b0b6d825 empty-profile gate returned401 after launching all three
