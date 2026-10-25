@@ -50,6 +50,34 @@ fn main() {
         marker(RELEASED, "release\n");
         return;
     }
+    if arguments.len() == expected.len() + 2
+        && arguments[expected.len()..] == ["-k", "native-workspace-boundary"]
+    {
+        assert_eq!(arguments[..2], expected[..2]);
+        assert_eq!(arguments[3..expected.len()], expected[3..]);
+        let target = &arguments[2];
+        let (file_target, selector) = target
+            .split_once("::")
+            .map(|(path, selector)| (path, Some(selector)))
+            .unwrap_or((target, None));
+        let invocation = serde_json::json!({
+            "pid": std::process::id(),
+            "cwd": std::env::current_dir().unwrap(),
+            "target": target,
+        });
+        let mut journal = std::fs::OpenOptions::new()
+            .append(true)
+            .open(std::env::var("MCP_BOUNDARY_INVOCATIONS").unwrap())
+            .unwrap();
+        writeln!(journal, "{invocation}").unwrap();
+        journal.sync_all().unwrap();
+        let contents = std::fs::read_to_string(file_target).unwrap();
+        println!(
+            "{}",
+            serde_json::json!({"target": target, "selector": selector, "contents": contents})
+        );
+        return;
+    }
     let completion_probe = arguments.len() == expected.len() + 2;
     if completion_probe {
         assert_eq!(arguments[..expected.len()], expected);

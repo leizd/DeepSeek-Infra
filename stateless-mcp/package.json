@@ -14,6 +14,7 @@
     "smoke:failover": "npm run build && node dist/smoke/failover.js",
     "smoke:restore-completion": "npm run build && node dist/smoke/restore-completion.js",
     "smoke:default-durability": "npm run build && node dist/smoke/default-durability.js",
+    "smoke:workspace-boundary": "npm run build && node dist/smoke/workspace-boundary.js",
     "start": "node dist/src/server.js"
   },
   "dependencies": {
