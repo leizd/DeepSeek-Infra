@@ -66,6 +66,10 @@ jobs:
         run: |
           set -o pipefail
           npm run smoke:restore-completion --prefix stateless-mcp 2>&1 | tee artifacts/native-stateless-mcp/restore-completion.log
+      - name: Require durable storage at default production-image startup
+        run: |
+          set -o pipefail
+          npm run smoke:default-durability --prefix stateless-mcp 2>&1 | tee artifacts/native-stateless-mcp/default-durability.log
       - name: Preserve bounded native service diagnostics
         if: failure()
         run: docker compose -f docker-compose.stateless-mcp.yml -f stateless-mcp/compose.failover.yml logs --no-color --tail 400 > artifacts/native-stateless-mcp/container.log 2>&1
