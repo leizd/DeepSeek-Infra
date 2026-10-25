@@ -47,6 +47,20 @@ public class NativeMcpCustodyIntegrationTest {
         }
         throw new AssertionError("native identity never appeared: " + file.getName());
     }
+    private static void awaitRootOutput(File marker) throws Exception {
+        long deadline = SystemClock.elapsedRealtime() + 5000;
+        while (!marker.isFile() && SystemClock.elapsedRealtime() < deadline) Thread.sleep(10);
+        assertTrue("root stdout was not flushed before the observer trigger", marker.isFile());
+    }
+    private static String expectedLoaderStderr(File binary, int copies) {
+        // API24's actual linker reports the NDK's DF_1_PIE flag. Preserve and
+        // validate this exact diagnostic; never filter arbitrary task stderr.
+        if (Build.VERSION.SDK_INT != 24) return "";
+        String line = "WARNING: linker: " + binary.getAbsolutePath() + ": unsupported flags DT_FLAGS_1=0x8000001\n";
+        StringBuilder result = new StringBuilder();
+        for (int index = 0; index < copies; index++) result.append(line);
+        return result.toString();
+    }
     private static boolean alive(JSONObject identity) throws Exception {
         File stat = new File("/proc/" + identity.getInt("pid") + "/stat");
         try {
@@ -110,6 +124,7 @@ public class NativeMcpCustodyIntegrationTest {
         write(new File(trace, "input.txt"), "synthetic custody workload; never user input\n");
         JSONObject result = new JSONObject();
         result.put("kind", kind).put("api", Build.VERSION.SDK_INT).put("appUid", android.os.Process.myUid());
+        result.put("probePath", binary.getAbsolutePath());
         result.put("binarySha256", hash(binary)).put("fixtureOnly", true).put("fullSandboxQualified", false);
         Process control = null;
         Process driver = null;
@@ -122,6 +137,7 @@ public class NativeMcpCustodyIntegrationTest {
             assertTrue(shortOutcome.toString(), shortOutcome.isNull("error"));
             assertEquals("native Android short control completed\n", shortOutcome.getString("stdout"));
             assertEquals(0, shortOutcome.getInt("exitCode"));
+            assertEquals(expectedLoaderStderr(binary, 1), shortOutcome.getString("stderr"));
             assertTrue(shortOutcome.isNull("error"));
             result.put("shortControlPassed", true);
             // Each native role publishes once, so use an independent case directory.
@@ -131,6 +147,8 @@ public class NativeMcpCustodyIntegrationTest {
             JSONObject driverId = awaitIdentity(new File(workload, "driver.json"));
             JSONObject root = awaitIdentity(new File(workload, "root.json"));
             JSONObject descendant = awaitIdentity(new File(workload, "descendant.json"));
+            awaitRootOutput(new File(workload, "root-ready"));
+            result.put("rootOutputReadyBeforeTrigger", true);
             result.put("driver", driverId).put("root", root).put("descendant", descendant);
             assertTrue(alive(root) && alive(descendant));
             if (!kind.equals("timeout-regular")) {
@@ -161,7 +179,7 @@ public class NativeMcpCustodyIntegrationTest {
                 assertNotEquals(0, driver.exitValue());
             } else {
                 assertEquals(0, driver.exitValue()); assertNotNull(outcome);
-                assertEquals("", outcome.getString("stderr"));
+                assertEquals(expectedLoaderStderr(binary, 2), outcome.getString("stderr"));
                 assertTrue(outcome.getString("stdout").contains("native Android root started"));
                 if (kind.startsWith("timeout")) {
                     assertEquals("test run exceeded 2 seconds", outcome.getString("error"));

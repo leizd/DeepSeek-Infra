@@ -131,6 +131,10 @@ mod android {
         await_file(&trace.join("descendant.json"), 5);
         println!("native Android root started; child={}", child.id());
         std::io::stdout().flush().unwrap();
+        publish(
+            &trace.join("root-ready"),
+            b"root stdout flushed before observer release\n",
+        );
         if kind == "parent-exit" {
             await_file(&trace.join("root-release"), 10);
             println!("native Android root completed");

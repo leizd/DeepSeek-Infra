@@ -130,7 +130,7 @@ def collect_custody_reports(output: Path, expected_hash: str, api_level: int) ->
     cases = []
     for kind in MCP_CUSTODY_KINDS:
         name = f"mcp-custody-{kind}.json"
-        text = adb(["exec-out", "run-as", APPLICATION, "head", "-c", "65537", "files/" + name], output / name, timeout=15)
+        text = adb(["shell", "-T", "run-as", APPLICATION, "tail", "-c", "65537", "files/" + name], output / name, timeout=15)
         if len(text.encode("utf-8")) > 65536:
             raise ValueError("Custody observation exceeded the bound")
         case = json.loads(text)
@@ -142,6 +142,15 @@ def collect_custody_reports(output: Path, expected_hash: str, api_level: int) ->
                 or not isinstance(case.get("appUid"), int) or case["appUid"] < 10000
                 or case.get("sampleElapsedMs", 0) < 3000 or case.get("lateEffectElapsedMs", 0) < 6500):
             raise ValueError("Actual Android custody observation did not qualify: " + kind)
+        probe_path = case.get("probePath", "")
+        if (not re.fullmatch(r"/data/app/[A-Za-z0-9_./=+~\-]+/lib/x86_64/libdeepseek_mcp_custody_probe\.so", probe_path)
+                or "/" + APPLICATION + ".test" not in probe_path or case.get("rootOutputReadyBeforeTrigger") is not True):
+            raise ValueError("Native output barrier or actual test-APK probe path is missing")
+        loader_warning = f"WARNING: linker: {probe_path}: unsupported flags DT_FLAGS_1=0x8000001\n" if api_level == 24 else ""
+        short = case.get("shortOutcome")
+        if (not isinstance(short, dict) or short.get("stdout") != "native Android short control completed\n"
+                or short.get("stderr") != loader_warning or short.get("exitCode") != 0 or short.get("error") is not None):
+            raise ValueError("Actual short control or exact platform loader diagnostic did not qualify")
         identities = [case[role] for role in ("driver", "root", "descendant")]
         if len({identity["pid"] for identity in identities}) != 3:
             raise ValueError("Reused Android fixture identities")
@@ -158,7 +167,7 @@ def collect_custody_reports(output: Path, expected_hash: str, api_level: int) ->
             if outcome is not None or not isinstance(case.get("driverExitCode"), int) or case["driverExitCode"] == 0:
                 raise ValueError("Actual Android parent death was not observed")
         else:
-            if case.get("driverExitCode") != 0 or not isinstance(outcome, dict) or outcome.get("stderr") != "":
+            if case.get("driverExitCode") != 0 or not isinstance(outcome, dict) or outcome.get("stderr") != loader_warning * 2:
                 raise ValueError("Android native runner did not complete normally")
             if "native Android root started" not in outcome.get("stdout", ""):
                 raise ValueError("Android root output was lost")
@@ -281,7 +290,7 @@ def run_device(args: argparse.Namespace) -> int:
                 path = output / name
                 try:
                     if not path.exists():
-                        adb(["shell", "-T", "run-as", APPLICATION, "head", "-c", "65537", "files/" + name], path, timeout=15)
+                        adb(["shell", "-T", "run-as", APPLICATION, "tail", "-c", "65537", "files/" + name], path, timeout=15)
                     value = json.loads(path.read_text(encoding="utf-8"))
                     custody_diagnostics.append(dict(kind=kind, status="COLLECTED", observationStatus=value.get("status", "FAIL")))
                 except (ValueError, OSError, subprocess.SubprocessError):

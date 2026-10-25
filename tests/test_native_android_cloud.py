@@ -310,13 +310,13 @@ def test_source_branch_and_pr_merge_candidate_context_cannot_be_confused(
             cloud_context("a" * 40)
 
 
-@pytest.mark.parametrize("fault", ["none", "binary", "api", "uid", "unreaped", "late-write", "no-control", "no-death", "cancel-result", "root-result"])
+@pytest.mark.parametrize("fault", ["none", "binary", "api", "uid", "unreaped", "late-write", "no-control", "no-death", "cancel-result", "root-result", "output-barrier", "probe-path", "unexpected-stderr", "short-stderr"])
 def test_custody_observations_cannot_rebind_binaries_uid_or_actual_outcomes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str,
 ) -> None:
     # Offline report-validator fixtures; no native process or device claim.
     def read(arguments: list[str], output: Path, timeout: int = 120) -> str:
-        assert arguments[:6] == ["exec-out", "run-as", android_cloud.APPLICATION, "head", "-c", "65537"]
+        assert arguments[:7] == ["shell", "-T", "run-as", android_cloud.APPLICATION, "tail", "-c", "65537"]
         assert timeout == 15
         kind = arguments[-1].removeprefix("files/mcp-custody-").removesuffix(".json")
         outcome: dict[str, Any] = dict(stdout="native Android root started; native Android root completed", stderr="", exitCode=0, error=None)
@@ -324,7 +324,12 @@ def test_custody_observations_cannot_rebind_binaries_uid_or_actual_outcomes(
             outcome.update(exitCode=None, error="test run exceeded 2 seconds")
         elif kind == "cancel":
             outcome.update(exitCode=None, cancelRequested=True)
+        probe_path = "/data/app/" + android_cloud.APPLICATION + ".test-1/lib/x86_64/libdeepseek_mcp_custody_probe.so"
+        loader = f"WARNING: linker: {probe_path}: unsupported flags DT_FLAGS_1=0x8000001\n"
+        outcome["stderr"] = loader * 2
         case: dict[str, Any] = dict(kind=kind, api=24, appUid=12345, status="PASS", binarySha256="a" * 64,
+                    probePath=probe_path, rootOutputReadyBeforeTrigger=True,
+                    shortOutcome=dict(stdout="native Android short control completed\n", stderr=loader, exitCode=0, error=None),
                     fixtureOnly=True, fullSandboxQualified=False, shortControlPassed=True, rootReaped=True,
                     descendantReaped=True, driverExited=True, lateEffectPresent=False, sampleElapsedMs=3001,
                     lateEffectElapsedMs=6501, driverExitCode=143 if kind == "driver-death" else 0,
@@ -346,6 +351,14 @@ def test_custody_observations_cannot_rebind_binaries_uid_or_actual_outcomes(
                 case["shortControlPassed"] = False
             elif fault == "cancel-result":
                 outcome["cancelRequested"] = False
+            elif fault == "output-barrier":
+                case["rootOutputReadyBeforeTrigger"] = False
+            elif fault == "probe-path":
+                case["probePath"] = "/foreign/location/probe.so"
+            elif fault == "unexpected-stderr":
+                outcome["stderr"] = loader * 2 + "unexpected task error\n"
+            elif fault == "short-stderr":
+                case["shortOutcome"]["stderr"] = "unexpected control error\n"
         if kind == "driver-death" and fault == "no-death":
             case["driverExitCode"] = 0
         if kind == "parent-exit" and fault == "root-result":

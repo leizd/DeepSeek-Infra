@@ -1,3 +1,37 @@
+## Android MCP fixture compatibility and observation barrier — 2026-10-25
+
+Actual source198224e6 run40174691281 built both ABIs, then API28/34 passed all14
+methods; API26 passed14 methods but report collection failed. API24 passed the
+original9 methods and driver-death case; four new assertions rejected actual
+NDK linker warnings. API30 reaped root/descendant with no late writes, but its
+cancel case observed empty stdout because cancellation could precede the root's
+println. The original workload is unchanged; do not relabel this failed run PASS.
+
+Three fixture/collector corrections retain all14 cases and original9 methods.
+Bounded report retrieval uses the already proven tail -c through shell -T,
+with actual remote exit status; Android24/26 head does not support -c. The
+native fixture now publishes an output-ready marker only after root stdout is
+flushed. Java requires it before triggering cancellation/death/root exit.
+API24's exact loader diagnostic for this test-APK executable and flag0x8000001
+is preserved and matched byte-for-byte (one root for the short control, root+
+descendant for task stderr); other APIs require empty stderr. Arbitrary stderr
+is never filtered or ignored. Probe path, hash, UID, real outcomes and output
+barrier are independently checked in the report validator. Full5-API rerun is
+PENDING. No production Rust/Go/Proto/frontend/TS, build toolchain or floors change.
+
+Parent198224e6 complete Rust1605/original80% coverage passed; full workflow is
+source-bound and being collected. Olderb73b37-job CI stays a separate live run.
+An unpublished six-file code-search concurrency/memory reproduction draft exists;
+it must be moved onto this cumulative line before any later upload, avoiding a
+remote branch fork. No actual code-search RED has yet been claimed.
+
+Original arbitrary pytest compatibility plus zero production Python remain
+jointly required; the user left that feature unfinished. Entire product server,
+desktop, Android, background, provider/recovery/Fleet, upgrade, sandbox/resource/
+env/path-race and package/release scope remains NOT_READY. Root163 bytes preserved.
+Native builds/tests/caches/images stay cloud-only; reports only return. Daily
+unified PR09:00 Asia/Shanghai once/day; no PR, merge, release or real data now.
+
 ## Android MCP app-UID custody qualification — 2026-10-25
 
 The user explicitly retained both original arbitrary pytest compatibility and
