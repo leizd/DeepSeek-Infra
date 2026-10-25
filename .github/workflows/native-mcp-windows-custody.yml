@@ -1,0 +1,59 @@
+name: Native MCP Windows descendant custody
+
+on:
+  push:
+    branches:
+      - "codex/native-mcp-windows-custody-*"
+      - "codex/rust-cloud/stateless-restore-windows-custody-*"
+    paths:
+      - ".github/workflows/native-mcp-windows-custody.yml"
+      - "rust/crates/deepseek-stateless-mcp/**"
+      - "scripts/verify_native_mcp_windows_custody.ps1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-mcp-windows-custody-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  custody:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_TARGET_DIR: ${{ runner.temp }}/native-mcp-windows-target
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: "false"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install the existing pinned Rust toolchain on the cloud host
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows Rust installation failed' }
+          New-Item -ItemType Directory -Force -Path artifacts/native-mcp-windows-custody | Out-Null
+      - name: Build the actual native executor and offline Windows fixture
+        run: |
+          cargo +1.85.0 build --manifest-path rust/Cargo.toml --locked -p deepseek-stateless-mcp --example task_custody_probe 2>&1 | Tee-Object -FilePath artifacts/native-mcp-windows-custody/build.log
+          if ($LASTEXITCODE -ne 0) { throw 'Windows native fixture build failed' }
+      - name: Bound actual Windows descendants after timeout and parent death
+        run: |
+          & ./scripts/verify_native_mcp_windows_custody.ps1 -Binary (Join-Path $env:CARGO_TARGET_DIR 'debug/examples/task_custody_probe.exe') -Output artifacts/native-mcp-windows-custody
+      - name: Preserve only reports without executable or compiler outputs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-mcp-windows-custody-${{ github.sha }}
+          path: artifacts/native-mcp-windows-custody/
+          if-no-files-found: error
+          retention-days: 7
