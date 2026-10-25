@@ -74,6 +74,10 @@ jobs:
         run: |
           set -o pipefail
           npm run smoke:workspace-boundary --prefix stateless-mcp 2>&1 | tee artifacts/native-stateless-mcp/workspace-boundary.log
+      - name: Bound actual native descendants after timeout and authority loss
+        run: |
+          set -o pipefail
+          npm run smoke:process-lifecycle --prefix stateless-mcp 2>&1 | tee artifacts/native-stateless-mcp/process-lifecycle.log
       - name: Preserve bounded native service diagnostics
         if: failure()
         run: docker compose -f docker-compose.stateless-mcp.yml -f stateless-mcp/compose.failover.yml logs --no-color --tail 400 > artifacts/native-stateless-mcp/container.log 2>&1

@@ -18,6 +18,22 @@ fn marker(path: &str, value: &str) {
     file.sync_all().unwrap();
 }
 
+#[cfg(target_os = "linux")]
+fn process_identity() -> serde_json::Value {
+    let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+    let (_, fields) = stat.rsplit_once(") ").unwrap();
+    let fields: Vec<&str> = fields.split_whitespace().collect();
+    serde_json::json!({
+        "pid": std::process::id(),
+        "parent": fields[1].parse::<u32>().unwrap(),
+        "group": fields[2].parse::<u32>().unwrap(),
+        "session": fields[3].parse::<u32>().unwrap(),
+        "startTicks": fields[19],
+    })
+}
+
+// The negative lifecycle fixture deliberately leaves its descendant to the owner.
+#[allow(clippy::zombie_processes)]
 fn main() {
     // Exercise the existing test-executor argument contract without an
     // interpreter. This fixture is included only in the qualification image.
@@ -34,6 +50,72 @@ fn main() {
         "no:cacheprovider",
     ];
     let arguments: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(target_os = "linux")]
+    if arguments
+        .first()
+        .is_some_and(|arg| arg == "--lifecycle-descendant")
+    {
+        assert_eq!(arguments.len(), 3);
+        if arguments[2] == "detached" {
+            unsafe extern "C" {
+                fn setsid() -> i32;
+            }
+            assert_ne!(unsafe { setsid() }, -1);
+        }
+        let trace = Path::new(&arguments[1]);
+        marker(
+            trace.join("descendant.json").to_str().unwrap(),
+            &process_identity().to_string(),
+        );
+        std::thread::sleep(Duration::from_secs(4));
+        marker(
+            trace.join("late-effect.txt").to_str().unwrap(),
+            "native descendant late effect\n",
+        );
+        std::thread::sleep(Duration::from_secs(2));
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    if arguments.len() == expected.len() + 2
+        && arguments[expected.len()] == "-k"
+        && arguments[expected.len() + 1].starts_with("native-lifecycle-")
+    {
+        assert_eq!(arguments[..2], expected[..2]);
+        assert_eq!(arguments[3..expected.len()], expected[3..]);
+        let kind = arguments[expected.len() + 1]
+            .strip_prefix("native-lifecycle-")
+            .unwrap();
+        let trace = std::env::var("MCP_LIFECYCLE_TRACE_ROOT").unwrap();
+        let trace = Path::new(&trace);
+        marker(
+            trace.join("root.json").to_str().unwrap(),
+            &process_identity().to_string(),
+        );
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--lifecycle-descendant")
+            .arg(trace)
+            .arg(if kind == "timeout-regular" {
+                "regular"
+            } else {
+                "detached"
+            })
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !trace.join("descendant.json").is_file() {
+            assert!(Instant::now() < deadline, "native descendant did not start");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        println!("native lifecycle root started; child={}", child.id());
+        std::io::stdout().flush().unwrap();
+        if kind == "parent-exit" {
+            println!("native lifecycle root completed");
+            return;
+        }
+        std::thread::sleep(Duration::from_secs(30));
+        return;
+    }
     if arguments == ["--completion-status"] {
         let pid = std::fs::read_to_string(STARTED)
             .ok()
