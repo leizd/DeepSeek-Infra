@@ -10,8 +10,18 @@ use deepseek_stateless_mcp::model::TaskOutcome;
 use deepseek_stateless_mcp::runner::{complete_when_unfenced, execute_configured_task};
 use deepseek_stateless_mcp::store::TaskBackend;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    if let Some(code) = deepseek_stateless_mcp::task_process::maybe_run_supervisor() {
+        std::process::exit(code);
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(serve())
+}
+
+async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let redis_url = env_string("REDIS_URL", "redis://127.0.0.1:6379");
     let host = env_string("MCP_HOST", "0.0.0.0");
     let port: u16 = env_string("MCP_PORT", "8010").parse()?;

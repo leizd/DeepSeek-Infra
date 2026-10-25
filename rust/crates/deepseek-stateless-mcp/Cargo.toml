@@ -15,6 +15,10 @@ sha2 = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }
 
+# Existing locked libc, also supported by the oldest Android subreaper path.
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+libc = "=0.2.186"
+
 [[bin]]
 name = "deepseek-stateless-mcp"
 path = "src/main.rs"

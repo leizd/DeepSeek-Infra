@@ -1,3 +1,41 @@
+## Native MCP task descendant custody — 2026-10-25
+
+Actual source1728419 run40155708941 reproduced surviving descendants and real
+late-effect files in all5 cases: ordinary timeout, detached timeout, successful
+root exit, server SIGKILL and real Redis/lease loss. Original durability, identity,
+restore and workspace gates passed first. The normal-exit observer now has an
+explicit live-process release barrier; corrected RED onbf095b97 run40164662168
+again confirmed all5 surviving descendants and all5 real late effects.
+
+Linux/Android task execution now reexecutes a dedicated native supervisor before
+Tokio starts. It alone reaps that task's descendants, resets inherited SIGCHLD
+no-wait disposition, enables the kernel subreaper and checks a service-owned
+lifetime pipe. Timeout, cancellation, lost parent or normal root exit terminates
+verified immediate children and adopted descendants until kernel ECHILD. It
+never signals an already-reaped PID or abandons custody at a cleanup deadline.
+No Android pidfd syscall or Go/Rust bridge is introduced. The supervisor frames
+captured bytes separately from cleanup/exit/error metadata; user output cannot
+forge control frames. Both output caps keep draining and retain UTF-8 byte limits,
+original root exit/signal semantics and native spawn failures. Five new Rust
+regressions cover framing, limits, malformed input and kernel parent parsing.
+The existing11 completion/output regressions are byte-identical.
+
+Actual corrected5-case GREEN and current1605 expected Rust tests/80% are pending.
+Parent501a complete Rust1600/82.292606% and26 named checks/52 controlled reports
+passed. Older2606 andd81f original37-job CI and both original95% Go coverage floors
+passed; those different commits do not qualify this revision. No release or PR
+merge candidate qualification is implied. Other operating systems retain their
+existing runner and still need descendant-custody repair/platform evidence.
+
+Full hostile-code/resource/environment/filesystem-race sandboxing and a working
+retained native test-tool engine without production Python remain open. The
+stock task program is not configured and forwards pytest-shaped arguments;
+qualification fixtures do not prove that feature migrated. Retain every server,
+desktop, Android and background feature, unique writers, original effect/recovery
+identities, EFFECT_UNKNOWN, provider and platform/package/release Evidence.
+Whole migration NOT_READY. Native builds/caches stay cloud-only, reports return.
+Preserve root163 source bytes. Daily PR09:00 Asia/Shanghai, once/day; no PR now.
+
 ## Native MCP workspace file boundaries — 2026-10-25
 
 Actual run 40151342282 on b486bbb8 confirmed four forbidden native task targets

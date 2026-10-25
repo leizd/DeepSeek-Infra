@@ -1,7 +1,9 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+use std::time::Instant;
 
 use crate::model::{StoreError, TaskOutcome, TaskRecord};
 
@@ -87,6 +89,32 @@ pub fn execute_configured_task(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command.env("PYTHONHASHSEED", "0");
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        let capture =
+            crate::task_process::execute(&command, timeout_seconds, max_output_bytes, cancel);
+        TaskOutcome {
+            stdout: read_limited(&mut std::io::Cursor::new(capture.stdout), max_output_bytes)
+                .unwrap_or_default(),
+            stderr: read_limited(&mut std::io::Cursor::new(capture.stderr), max_output_bytes)
+                .unwrap_or_default(),
+            exit_code: capture.exit_code,
+            error: capture.error,
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        execute_direct(command, timeout_seconds, max_output_bytes, cancel)
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn execute_direct(
+    mut command: Command,
+    timeout_seconds: u64,
+    max_output_bytes: usize,
+    cancel: &AtomicBool,
+) -> TaskOutcome {
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
