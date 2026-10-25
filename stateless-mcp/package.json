@@ -18,6 +18,7 @@
     "smoke:process-lifecycle": "npm run build && node dist/smoke/process-lifecycle.js",
     "smoke:default-test-engine": "npm run build && node dist/smoke/default-test-engine.js",
     "smoke:search-liveness": "npm run build && node dist/smoke/search-liveness.js",
+    "smoke:unicode-input-parity": "npm run build && node dist/smoke/unicode-input-parity.js",
     "start": "node dist/src/server.js"
   },
   "dependencies": {
