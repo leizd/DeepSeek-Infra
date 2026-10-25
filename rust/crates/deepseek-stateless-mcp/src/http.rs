@@ -453,7 +453,8 @@ fn required_len(value: &Value, field: &str, min: usize, max: usize) -> Result<St
         .get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| format!("{field} is required"))?;
-    if text.len() < min || text.len() > max {
+    let length = text.chars().count();
+    if length < min || length > max {
         return Err(format!("{field} length is out of range"));
     }
     Ok(text.to_string())
@@ -462,7 +463,7 @@ fn required_len(value: &Value, field: &str, min: usize, max: usize) -> Result<St
 fn optional_len(value: &Value, field: &str, max: usize) -> Result<Option<String>, String> {
     match value.get(field).and_then(Value::as_str) {
         None => Ok(None),
-        Some(text) if text.len() <= max && !text.is_empty() => Ok(Some(text.to_string())),
+        Some(text) if text.chars().count() <= max && !text.is_empty() => Ok(Some(text.to_string())),
         Some(_) => Err(format!("{field} length is out of range")),
     }
 }
@@ -869,5 +870,77 @@ mod tests {
     fn workspace_path_rejects_parent_escape() {
         let error = resolve_workspace_path(Path::new("D:/workspace"), "../outside").unwrap_err();
         assert_eq!(error, "path must stay within the configured workspace");
+    }
+
+    #[test]
+    fn query_length_preserves_original_unicode_code_point_limits() {
+        for character in ["x", "汉", "🔬"] {
+            let accepted = character.repeat(500);
+            assert_eq!(
+                required_len(&json!({"query": &accepted}), "query", 1, 500).unwrap(),
+                accepted
+            );
+            assert_eq!(
+                required_len(&json!({"query": character.repeat(501)}), "query", 1, 500),
+                Err("query length is out of range".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn short_multibyte_idempotency_keys_cannot_bypass_the_minimum() {
+        for key in [
+            "a".repeat(7),
+            "汉".repeat(7),
+            "🔬".repeat(4),
+            "🔬".repeat(7),
+        ] {
+            assert!(
+                required_len(&json!({"idempotencyKey": key}), "idempotencyKey", 8, 200).is_err()
+            );
+        }
+        for character in ["a", "汉", "🔬"] {
+            let key = character.repeat(8);
+            assert_eq!(
+                required_len(&json!({"idempotencyKey": &key}), "idempotencyKey", 8, 200).unwrap(),
+                key
+            );
+        }
+    }
+
+    #[test]
+    fn idempotency_key_maximum_counts_characters_instead_of_storage_bytes() {
+        for character in ["a", "汉", "🔬"] {
+            let key = character.repeat(200);
+            assert_eq!(
+                required_len(&json!({"idempotencyKey": &key}), "idempotencyKey", 8, 200).unwrap(),
+                key
+            );
+            assert!(
+                required_len(
+                    &json!({"idempotencyKey": character.repeat(201)}),
+                    "idempotencyKey",
+                    8,
+                    200
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn optional_test_filters_preserve_unicode_boundaries_and_nonempty_values() {
+        for field in ["keyword", "markers"] {
+            assert_eq!(optional_len(&json!({}), field, 200).unwrap(), None);
+            assert!(optional_len(&json!({"keyword": "", "markers": ""}), field, 200).is_err());
+            for character in ["x", "汉", "🔬"] {
+                let text = character.repeat(200);
+                assert_eq!(
+                    optional_len(&json!({"keyword": &text, "markers": &text}), field, 200).unwrap(),
+                    Some(text)
+                );
+                assert!(optional_len(&json!({"keyword": character.repeat(201), "markers": character.repeat(201)}), field, 200).is_err());
+            }
+        }
     }
 }
