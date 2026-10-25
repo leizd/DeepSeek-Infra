@@ -1,7 +1,2530 @@
 <!-- BEGIN CURRENT_NATIVE_CLOUD_CHECKPOINT -->
-## Current cloud verification checkpoint
+## Current checkpoint — 2026-10-16
 
-2026-10-14: latest reviewed snapshot `9c38f1dd9e68238f6cc5b06274e405004b567b1b`
+Branch `codex/native-runtime-pr/20261014`, HEAD `b0316d09811d66ae3e47fbc4bbea3b4ddc43d4ca`.
+That commit is docs-only (`docs/ARCHITECTURE.md` and the architecture diagrams).
+`372c30451dfa7137ca81acd326a309285226dcaa` is its parent. Uncommitted work is
+the earlier credential-transport repair plus this runtime admission slice.
+No push, merge, release, or production-data operation.
+
+Cloud runs for snapshot `9c38f1dd9e68238f6cc5b06274e405004b567b1b` remain
+failures and do not qualify this tree:
+
+- https://github.com/leizd/DeepSeek-Infra/actions/runs/38501431635 failed the
+  Rust public driver because the credential origin was a bare listen address.
+- https://github.com/leizd/DeepSeek-Infra/actions/runs/38501553143 failed the
+  three Python jobs on the 30/60-minute race budget. Local commit `2c84f61c`
+  accepts the measured 90-minute budget and is on this HEAD, not on that SHA.
+
+Finished locally, not accepted:
+
+- Credential probes map `127.0.0.1:<port>` to `https://127.0.0.1:<port>` and
+  require `Bearer request-only-credential`. Pytest: 107 passed in
+  `tests/test_native_agent_public_driver.py`. This is not a worker restart.
+- Runtime admission. The shared contract is
+  `rust/crates/deepseek-policy/src/agent_runtime_admission_v1.json`. Rust
+  `admit` records a completed resume, an incomplete reset, a synthesis-only
+  resume, a payload revision bump, a rerun, and a same-effect tool
+  continuation. `EFFECT_UNKNOWN`, a dead lease, a stale epoch, a promoted
+  epoch, and an invalid identity refuse every operation, including tool
+  continuation. The worker vault accepts the first seal at the metadata
+  revision and then only a replay or exactly the next revision. Public
+  `POST /api/agent-runs/:run_id/resume` and `/rerun` call that decision.
+  Go `DispatchAllowed` refuses an unknown effect and a tool wait before a new
+  provider call. A `retrying` node keeps its original operation id.
+  `SuccessorBinding` stores `agent-successor-` plus the shared digest beside
+  that id. The same fence returns `AGENT_RUNTIME_SUCCESSOR_HELD` and does not
+  call the worker. `SuccessorExecution` returns the stored id and the
+  authority epoch only when claim or takeover has already issued a newer
+  epoch. `EFFECT_UNKNOWN`, a stale presented epoch, and `workerPromoted`
+  refuse before `BindAgentNodeSuccessor` or `ExecuteAgentTask`.
+
+Local evidence for the persist slice was 79 passed. The public-effect slice
+then reached 93 passed in the same file. The journal-projection slice reached
+96 passed. The tool-result slice reached 99 collected and the run exited 0.
+The workspace slice reached 100 collected and the run exited 0. The resume
+stored-result slice reached 103 collected and the run exited 0. The driver
+stored-result slice reached 106 collected and the run exited 0. The model-turn
+slice reached 109 collected and the run exited 0. Ruff and
+`mypy` on the oracle and that test passed. `gofmt -w` formatted
+`go/internal/agent/runtime_admission.go` and `go/internal/api/agent_run_driver.go`.
+The tests call the Python oracle and read the Rust/Go sources. They do not
+compile or run Rust or Go, do not reopen a vault, and do not call a provider.
+
+Also finished locally, not accepted:
+
+- Public resume, rerun, and the payload update that shares `runtime_decision`
+  call `retained_effect` on the loaded event stream. The route now passes that
+  result into `resume_stored_tools`, which calls `admit`. A settled stream or
+  a complete stream with no outstanding effect stays `none`, and a completed
+  resume still returns `running` then `done`. `EFFECT_UNKNOWN`, `DISPATCHING`,
+  `NOT_APPLIED`, a timeout, a missing record, an absent log, and an
+  unconfirmed `agent` running event refuse resume, rerun, and `runtime_update`
+  with 409 `EFFECT_UNKNOWN` and no appended events. An open
+  `agent_tool_request` without stored results is `awaiting_tools`. Tool
+  continuation admits only as `same-effect`. This is not 完成验收.
+- Journal projection. `project_journal_observation` in the Python oracle, the
+  Rust policy crate, and Go `ProjectJournalObservation` map a queried
+  `EFFECT_UNKNOWN`, `DISPATCHING`, or empty state onto `node_effect`. The Go
+  driver calls it after `QueryAgentNodeEffect` in `node` and
+  `recoverCancellation`, and before `ExecuteAgentTask`. It appends only an
+  unknown or waiting observation, using the agent_run metadata fence. A
+  missing row, a timeout, and an absent log are observations. A journal
+  `NOT_APPLIED` is observation `not_applied`, not state `NOT_APPLIED`. A
+  `CONFIRMED` read is not appended, and that event still completes resume.
+  `runtime_decision` calls `materialize_node_effects` before `bodies` and
+  `retained_effect`. Rust `put` is the artifact writer. Offline: 96 passed.
+  This is not 完成验收.
+- Tool result on the same effect. `continue_retained_tools` admits first,
+  then calls the existing tool dispatcher for calls already on
+  `toolContinuation`. A legal `generate_chart` continuation returns that
+  call's envelope, stays `dispatch=same-effect`, and does not bump the
+  revision. A call with no name returns the dispatcher's unsupported
+  envelope. A public event with only `toolCount` invents no call. Before
+  confirm, and only while the send lease is still live, the worker calls
+  this and stores `toolResults`. Publish copies those results onto the
+  public event and keeps `AWAITING_TOOLS`. A missing row, a timeout, and an
+  absent log refuse with no tool result and are not state `NOT_APPLIED`.
+  A later `agent_output` still completes resume. Offline: 99 collected, the
+  run exited 0. Ruff and two-file mypy passed. This is not 完成验收.
+- Workspace on the same effect. The worker confirms the tool request before
+  `retain_workspace_tool_results`. That call uses
+  `with_chat_execution_context` and `for_workspace(executor.workspace_root)`.
+  A retained `list_reminders` call reads the supplied root and does not change
+  the file. A dead lease and a missing row return no result and are not state
+  `NOT_APPLIED`. A chart call with no root still matches `execute_tool_call`.
+  Results are stored beside the artifact root, not in the confirmed SQL row.
+  Publish reads them and keeps `AWAITING_TOOLS`. A confirmed replay does not
+  dispatch. Offline: 100 collected, the run exited 0. Rust was not compiled.
+  This is not 完成验收.
+- Resume of a stored tool result. `resume_stored_tools` copies
+  `agent_tool_result` objects already on the public `agent_tool_request`.
+  Resume and rerun return that copy with `dispatch=none` and do not call the
+  tool or append `CONFIRMED`. A result already present as its own event is
+  not copied again. A request with no `toolResults` stays
+  `AGENT_TOOL_CONTINUATION_REQUIRED` and is not state `NOT_APPLIED`.
+  `runtime_update`, a dead lease, a stale or promoted epoch, an invalid
+  identity, a bad revision, and an unknown stream do not return the objects.
+  A later `agent_output` still completes resume. Offline: 103 collected, the
+  run exited 0. Rust was not compiled. This is not 完成验收.
+- Driver observation of a stored tool result. `retained_driver_tool_results`
+  returns copies when the public request already holds `agent_tool_result`
+  objects, or when a `retained_tool_results` marker names the same public
+  artifact and result headers are present. It does not call the tool.
+  `node` and `successorExecute` return the waiting effect only when that
+  list is non-empty. They do not `RecordOutcome` or append `CONFIRMED`.
+  A missing result stays `errAgentDriverTools` and is not state
+  `NOT_APPLIED`. `successorHold` still refuses. Plan, tasks, and synthesis
+  return before the receipt. Publish projects scheduling headers only when
+  `AgentExecutionControl` is present. Result bytes stay in Rust. If that
+  client is absent, no marker is written and the driver stays on the error.
+  At that checkpoint the copies were not consumed by a model round. Offline:
+  106 collected, the run exited 0. Rust was not compiled. Go tests were not
+  run. This is not 完成验收.
+- Next model turn. `next_model_turn` builds the provider body from
+  `toolResults` already stored on the waiting request and does not call the
+  tool. A missing result, an empty array, a non-result object, a mismatched
+  id, a null output, a non-array, and a toolCount-only request stay
+  `AGENT_DRIVER_TOOLS_PENDING` and are not state `NOT_APPLIED`. An empty
+  event list and a later `agent_output` stay idle. An unknown observation
+  returns `EFFECT_UNKNOWN` and does not leak the stored output. The worker
+  reads `retained-tool-results` before that decision. The second
+  `exchange_fenced_turn` runs only when the file starts the turn and the
+  clock is before the deadline. A provider error on that exchange is not
+  `EFFECT_UNKNOWN`. The follow-up is stored once under `retained-model-turns`
+  only when it has no further tool calls. That slice does not confirm the
+  file and does not append `CONFIRMED`. Publication is the next bullet.
+  Offline: 109 collected, the
+  run exited 0. Rust was not compiled. Go was not edited. This is not
+  完成验收.
+- Published model answer. `published_model_answer` returns the saved
+  `agent_output` when the waiting request has no further tool calls. It does
+  not call the tool. `publish_known` inserts that object as `publishedAnswer`
+  and sets metadata `ANSWER_PUBLISHED`. A missing file leaves
+  `AWAITING_TOOLS`, is not state `NOT_APPLIED`, and does not append
+  `CONFIRMED` or confirm the tool request again. Resume of the public event
+  returns running then done. `publish_attested_node` returns without an
+  outcome receipt. The driver returns the effect and does not `RecordOutcome`
+  or `SettleTask`, so the run stays running. `DispatchAllowed` is unchanged.
+  A missing control client still writes no marker. Offline: 112 collected,
+  the run exited 0. Rust was not compiled. Go tests were not run. This is
+  not 完成验收.
+- Published answer settlement. `settle_published_answer` admits the saved
+  answer only when the presented epoch is the installed epoch. A larger
+  epoch is `FENCE_MISMATCH` and is not installed. A smaller epoch is
+  `STALE_EXECUTION_EPOCH`. A missing file, a missing `publishedAnswer`, a
+  mismatched answer, an answer without `latencyMs`, and a wrong or empty
+  task stay unsettled and are not state `NOT_APPLIED`. The worker reads the
+  unchanged confirmed tool-request row, signs that evidence with the existing
+  custody signer, and does not confirm again or install an epoch. A missing
+  file downgrades metadata to `AWAITING_TOOLS` and clears the receipt. The Go
+  client accepts `ANSWER_PUBLISHED` only when the receipt and `TaskOutput`
+  are present, and only after a nil result check. `tasks` calls
+  `RecordOutcome` and then `SettleTask` only in that case. A missing receipt
+  returns first, so the run stays running. `node` and `successorExecute` do
+  not `RecordOutcome`. Plan and synthesis still return before their
+  projections. `AppendEvent` still refuses `agent_output` during the
+  reservation. Offline: 114 collected, the run exited 0. `gofmt` formatted
+  the driver and the worker client. Rust was not compiled. Go tests were not
+  run. The Go transaction and the signature were not executed. This is not
+  完成验收.
+- Published dependency output. `published_dependency_output` copies a direct
+  `agent_output`. A tool request contributes the saved follow-up only when
+  that follow-up publishes, and does not call the tool. A missing file, a
+  non-object, further tool calls, a phase mismatch, a wrong task, and a wrong
+  run stay unresolved and are not state `NOT_APPLIED`. A tool request without
+  `toolCount` is `EFFECT_UNKNOWN`. The store calls that decision.
+  `agent_task_prior_outputs` still passes no saved answer, so a bare tool
+  request still fails. The executor reads `retained-model-turns` and passes
+  the outputs into `worker_payload` and `synthesis_payload` before
+  `exchange_fenced_turn`. A prior-output error returns
+  `AGENT_DEPENDENCY_UNPUBLISHED` and does not mark the node unknown. Other
+  errors still do. Offline: 116 collected, the run exited 0. Rust was not
+  compiled. Go was not edited. Go tests were not run. The payload builders
+  were not executed. This is not 完成验收.
+- Dependency provider body. `dependency_provider_body` places a published
+  output into the worker and synthesis bodies. The Python oracle calls
+  `build_prior_context`, `agent_messages`, and `synthesis_messages`. The
+  saved answer text is in both, including the synthesis output heading. A
+  direct answer does not include a saved secret. A missing file, the
+  missing-file marker, and further tool calls return
+  `AGENT_DEPENDENCY_UNPUBLISHED` with both bodies empty, and those builders
+  are not entered. A tool request without `toolCount` stays
+  `EFFECT_UNKNOWN`. The decision does not call the tool.
+  `provider_body_from_outputs` calls `worker_payload` and
+  `synthesis_payload` only when outputs are present. The executor uses that
+  helper after the unpublished return and before `exchange_fenced_turn`, and
+  passes that body. An empty output list still uses the direct payload
+  calls. Offline: 117 collected, the run exited 0. Rust was not compiled, so
+  the Rust builders were not executed. Go was not edited. The provider
+  exchange was not executed. This is not 完成验收.
+- Execution send lease. `execution_send_lease` denies a deadline that has
+  arrived, a non-positive clock, a bool, and a value above the i64 maximum
+  with `AGENT_EXECUTION_LEASE_DENIED`, `markUnknown` true, and
+  `providerEffect` false. That refusal is not state `NOT_APPLIED` and stores
+  no provider effect. A later deadline is allowed and does not mark unknown.
+  The task executor calls the decision after the body is built and before
+  `exchange_fenced_turn`, and returns before `confirm_agent_node_effect`.
+  The error arm marks the node unknown because the code is not
+  `AGENT_DEPENDENCY_UNPUBLISHED`. The plan executor calls the same decision
+  before its exchange. Offline: 118 collected, the run exited 0.
+  `rustfmt --edition 2024` was applied and `--check` passed on the policy
+  admission file and the task executor. Rust was not compiled, so the Rust
+  decision was not executed. The Python function was executed. Go was not
+  edited. The provider exchange was not executed. This is not 完成验收.
+- Provider send admission. `admitted_provider_send` forwards the shaped body
+  only for a clean live `execution_send_lease` result. A deadline that has
+  arrived, a lease that also carries an epoch, a lease that marks unknown,
+  and a lease that claims a provider effect return
+  `AGENT_EXECUTION_LEASE_DENIED` and store no effect. That refusal is not
+  state `NOT_APPLIED`. `provider_exchange_unknown` returns
+  `AGENT_PROVIDER_RESULT_UNKNOWN` for a missing receipt, a timeout, a missing
+  object, an absent log, and any observation other than an explicit receipt
+  flag. The caller marks the admitted node unknown. An explicit receipt flag
+  stores no effect either. The task executor calls `admitted_provider_send`
+  after `execution_send_lease` and before `exchange_fenced_turn`, and passes
+  the shaped body only on that exchange. The exchange error calls
+  `provider_exchange_unknown(false)` before `confirm_agent_node_effect`.
+  The plan executor uses the same two decisions. Offline: 119 collected, the
+  run exited 0. `rustfmt --edition 2024 --check` passed on the policy
+  admission file and the task executor. Rust was not compiled, so the Rust
+  decisions were not executed. The Python functions were executed. Go was
+  not edited. The provider exchange was not executed. The second follow-up
+  exchange still uses a raw clock check and ignores a provider error. This
+  is not 完成验收.
+- Follow-up send. `follow_up_exchange` stores the second answer only when
+  the lease is allowed and a receipt is present. A dead lease, including a
+  non-positive clock, does not store and does not mark the confirmed row
+  unknown. A missing receipt, a timeout, a missing object, and an absent log
+  return `AGENT_PROVIDER_RESULT_UNKNOWN` with `store` false. The task
+  executor calls `execution_send_lease` and `admitted_provider_send` before
+  the second `exchange_fenced_turn`. The success arm calls
+  `follow_up_exchange(true, true)` before `store_model_turn`. The error arm
+  calls `follow_up_exchange(true, false)` and does not store, confirm, or
+  mark the node unknown. Offline: 120 collected, the run exited 0.
+  `rustfmt --edition 2024 --check` passed on the policy admission file and
+  the task executor. Rust was not compiled, so the Rust decision was not
+  executed. The Python function was executed. Go was not edited. The provider
+  exchange was not executed. This is not 完成验收.
+- Workspace tool lease. `workspace_tool_lease` passes the live flag only
+  from `admitted_provider_send(execution_send_lease(...))`. A later deadline
+  returns `leaseLive` true. `continue_retained_tools` with that lease returns
+  the chart result. A deadline that has arrived, a non-positive clock, a
+  bool, and a value above the i64 maximum return `expired` and
+  `AGENT_EXECUTION_LEASE_DENIED`. The expired lease returns
+  `LEASE_NOT_HELD` and does not call the tool. That refusal is not state
+  `NOT_APPLIED`. The task executor sets `lease_live` from
+  `admitted_provider_send(execution_send_lease(deadline, current)).allowed`
+  after confirm and before `retain_workspace_tool_results`.
+  `deadline > current` is gone. Offline: 121 collected, the run exited 0.
+  `rustfmt --edition 2024 --check` passed on the policy admission file and
+  the task executor. Rust was not compiled, so the Rust call was not
+  executed. The Python function was executed. Go was not edited. The provider
+  exchange was not executed. This is not 完成验收.
+- Send deadline. `agent_node_send_deadline` returns the minimum of the grant
+  expiry, the claim lease, and the writer lease. A later minimum passes
+  `execution_send_lease`. `workspace_tool_lease` returns `live`, and
+  `continue_retained_tools` returns the chart result. An elapsed minimum,
+  zero, and a negative minimum are refused by `execution_send_lease` with
+  `AGENT_EXECUTION_LEASE_DENIED` before that live flag. The expired flag
+  returns `LEASE_NOT_HELD` and does not call the tool. A bool, a non-integer,
+  and a value outside i64 produce no deadline, and the same lease decision
+  refuses that empty clock. Those refusals are not state `NOT_APPLIED`.
+  The store calls the shared function after `validate_scope`. The task
+  executor and the plan executor pass that deadline to `execution_send_lease`
+  before `exchange_fenced_turn`. The task path also does so before the live
+  workspace flag. Offline: 122 collected, the run exited 0.
+  `rustfmt --edition 2024 --check` passed on the policy admission file and
+  the task executor. Rust was not compiled, so the Rust function was not
+  executed. The Python function was executed. Go was not edited. The provider
+  exchange was not executed. This is not 完成验收.
+- Send budget. `execution_send_budget` arms a provider timeout only after
+  `execution_send_lease` allows the `agent_node_send_deadline` minimum.
+  The armed seconds are the smaller of the remaining whole seconds and a
+  positive cap. A later minimum of 30 with clock 12 and cap 180 arms 18
+  seconds. `workspace_tool_lease` returns `live`, and
+  `continue_retained_tools` returns the chart result. An elapsed, zero, or
+  negative minimum, and a non-positive or non-integer cap, return `armed`
+  false and `AGENT_EXECUTION_LEASE_DENIED` before that live flag. The
+  expired flag returns `LEASE_NOT_HELD` and does not call the tool. That
+  refusal is not state `NOT_APPLIED`. The task executor and the plan
+  executor call `execution_send_budget` after the lease admission and before
+  `exchange_fenced_turn`. The follow-up send does the same before its
+  exchange. `deadline - now` is no longer in those executors. Offline: 123
+  collected, the run exited 0. `rustfmt --edition 2024 --check` passed on
+  the policy admission file and the task executor. Rust was not compiled, so
+  the Rust function was not executed. The Python function was executed. Go
+  was not edited. The provider exchange was not executed. This is not 完成验收.
+- File text. `admit_upload_body` refuses a zero multipart length before
+  `parse_multipart` and does not write the cache. The Python oracle also
+  refuses a bool, a non-integer, and a negative length with `Upload body is
+  empty`. A length above 220000000 refuses before the parser.
+  `admit_file_text_part` returns the text from `decode_text_file` and
+  `normalize_extracted_text` for `notes.txt`. An empty part and
+  whitespace-only text refuse before `write_cache`. Image OCR does not call
+  the Python extractor. OCR off returns `ocr_required`. Corrupt image bytes
+  with OCR on refuse before `ocr_image`. A PNG, JPEG, GIF, WEBP, BMP, or
+  TIFF header continues and does not invent OCR text. PDF bytes, including
+  a payload that does not start with `%PDF`, stay on `extract_pdf_document`.
+  Offline: 8 collected in `tests/test_native_file_text_admission.py`, the
+  run exited 0. The 123-test admission file was not re-run. Ruff and
+  two-file mypy passed. `rustfmt --edition 2024 --check` passed on
+  `file_upload.rs` and `file_text_route.rs`. Rust was not compiled, so the
+  Rust functions were not executed. The Python functions were executed. Go
+  was not edited. No epoch was installed. This is not 完成验收.
+- Project files. `admit_project_metadata_write` allows parsing only when the
+  mode strips and lowercases to `python_disabled` and
+  `project_metadata_store` is in `RUST_DATA_DOMAINS`. That idle decision does
+  not attach and does not write. `admit_project_file_part` then returns the
+  text from `decode_text_file` and `normalize_extracted_text` for `notes.txt`,
+  with attach, metadata, and cache writes true. The test writes `project.json`
+  only when both write flags are true. An empty body, an empty part,
+  whitespace-only text, and corrupt image bytes with OCR on refuse before
+  metadata or cache writes. The empty-part code is `invalid_payload`. PDF,
+  HTML, and a recognized PNG header stay attach true with empty text, and the
+  gate does not call the extractors. `go_authoritative`, `shadow`, and every
+  other non-owner mode return `409 NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED`
+  and do not enter the patched writers. The route calls
+  `may_write_native_store` and `admit_project_metadata_write` before
+  `read_multipart_upload`, and `admit_project_file_part` before
+  `add_project_files`. A refused attach returns first. Continue still reaches
+  `add_project_files`. Offline: 5 collected in
+  `tests/test_native_project_file_admission.py`, the run exited 0. The 8-test
+  file-text file and the 123-test admission file were not re-run. Ruff and
+  two-file mypy passed. `rustfmt --edition 2024 --check` passed on
+  `projects.rs` and `project_files_route.rs` before the Python-only wire-code
+  fix, and those Rust files were not edited after that check. Rust was not
+  compiled, so the Rust functions were not executed. The Python functions
+  were executed. Go was not edited. No epoch was installed. This is not
+  完成验收.
+- Selectable PDF text. `admit_selectable_pdf` calls `extract_pdf_text` with
+  OCR disabled. A pypdf page whose content stream contains `Hello PDF`
+  returns that shipped text, with `cacheWrite` true. The test writes the
+  cache file only then. OCR is not entered. A non-PDF payload, a truncated
+  `%PDF` header, `None`, and a bool refuse with `Could not extract text from
+  this PDF`, `invalid_payload`, and status 422. `cacheWrite` stays false.
+  The part gate still leaves `.pdf` on `extract_uploaded_file`. That function
+  calls `extract_pdf_document` before `write_cache`. Empty text still reaches
+  `ocr_pdf_document`. `Uploaded PDF is corrupt.` is absent. `pdftoppm` is
+  not on PATH, so `GET /api/file-page-image` was not proven. Offline: 3
+  collected in `tests/test_native_pdf_text_admission.py`, the run exited 0.
+  The 5-test, 8-test, and 123-test files were not re-run. Ruff and two-file
+  mypy passed. Rust files were not edited. Rust was not compiled, so
+  `extract_pdf_document` was not executed. The Python function was executed.
+  Go was not edited. No epoch was installed. This is not 完成验收.
+- HTML file text. `admit_file_text_part` calls `extract_html_text` and
+  `normalize_extracted_text` for `.html` and `.htm`. A script secret plus a
+  Hello paragraph returns that shipped text, with `cacheWrite` true and kind
+  `html`. The test writes the cache file only then. The secret is not in the
+  text. A `.htm` page returns kind `htm`. An empty document, a whitespace
+  paragraph, and a script-only page refuse with `No readable text found in
+  this file` before a cache write. PDF and DOCX still continue, and the
+  patched HTML extractor is not entered. The Rust branch calls
+  `extract_html_text` before `normalize_extracted_text` and does not call
+  `write_cache`. `extract_uploaded_file` still calls `admit_file_text_part`
+  before `write_cache`, and `FileTextAction::Refuse` returns first.
+  `rustfmt --edition 2024 --check` passed on `file_upload.rs`. Offline: 10
+  collected in `tests/test_native_file_text_admission.py`, the run exited 0.
+  The project-files file was re-run: 5 collected, the run exited 0. Readable
+  HTML attaches that text. A script-only part does not attach. The previous
+  8-test run and the 3-test PDF run were not this run. Ruff and three-file
+  mypy passed. Rust was not compiled, so the Rust HTML extractor was not
+  executed. The Python functions were executed. Go was not edited. No epoch
+  was installed. This is not 完成验收.
+- DOCX file text. `admit_file_text_part` calls `extract_docx_text` and
+  `normalize_extracted_text` for `.docx`. A `word/document.xml` paragraph
+  `Hello DOCX` returns that shipped text, with `cacheWrite` true and kind
+  `docx`. The test writes the cache file only when `cacheWrite` is true.
+  The patched `extract_uploaded_file` is not entered. Bytes `PK` refuse with
+  the shipped `Invalid docx file`, `invalid_payload`, and status 422. A zip
+  whose `document.xml` is not XML refuses with the shipped `Invalid docx
+  XML`. A paragraph with no readable text returns an empty extraction and
+  refuses with `No readable text found in this file` before a cache write.
+  PDF still continues, and the patched `extract_docx_text` is not entered
+  for that name. The Rust branch calls `extract_docx_text` before
+  `normalize_extracted_text`, maps the extractor error through `refuse_file`,
+  and does not call `write_cache`. `cache_write` is true only after text is
+  present. The continue group is PPTX, XLSX, EPUB, and PDF.
+  `extract_uploaded_file` still calls `admit_file_text_part` before
+  `write_cache`, and `FileTextAction::Refuse` returns first. The later
+  Continue arm still contains `extract_docx_text` and is not reached for
+  `.docx`. `rustfmt --edition 2024 --check` passed on `file_upload.rs` after
+  that edit. Offline: 12 collected in
+  `tests/test_native_file_text_admission.py`, the run exited 0. The
+  project-files file was re-run: 5 collected, the run exited 0. That re-run
+  did not include a DOCX part. The previous 10-test HTML run and the 3-test
+  PDF run were not this run. Ruff and three-file mypy passed. Rust was not
+  compiled, so the Rust DOCX extractor was not executed. The Python
+  functions were executed. Go was not edited. No epoch was installed. This
+  is not 完成验收.
+- PPTX file text. `admit_file_text_part` calls `extract_pptx_text` and
+  `normalize_extracted_text` for `.pptx`. A slide whose text is `Hello PPTX`
+  returns that shipped text, with `cacheWrite` true and kind `pptx`. The
+  test writes the cache file only when `cacheWrite` is true. The patched
+  `extract_uploaded_file` is not entered. Bytes `PK` refuse with the shipped
+  `Invalid pptx file`, `invalid_payload`, and status 422. A zip whose slide
+  XML is not XML refuses with the shipped `Invalid pptx XML`. A slide whose
+  text is only whitespace returns an empty extraction and refuses with
+  `No readable text found in this file` before a cache write. PDF still
+  continues, and the patched `extract_pptx_text` is not entered for that
+  name. The Rust branch calls `extract_pptx_text` before
+  `normalize_extracted_text`, maps the extractor error through `refuse_file`,
+  and does not call `write_cache`. `cache_write` is true only after text is
+  present. The continue group is XLSX, EPUB, and PDF.
+  `extract_uploaded_file` still calls `admit_file_text_part` before
+  `write_cache`, and `FileTextAction::Refuse` returns first. The later
+  Continue arm still contains `extract_pptx_text` and is not reached for
+  `.pptx`. `rustfmt --edition 2024 --check` passed on `file_upload.rs` after
+  that edit. Offline: 14 collected in
+  `tests/test_native_file_text_admission.py`, the run exited 0. The
+  project-files file was re-run: 5 collected, the run exited 0. That re-run
+  did not include a PPTX part. The previous 12-test DOCX run, the 10-test
+  HTML run, and the 3-test PDF run were not this run. Ruff and three-file
+  mypy passed. Rust was not compiled, so the Rust PPTX extractor was not
+  executed. The Python functions were executed. Go was not edited. No epoch
+  was installed. This is not 完成验收.
+- XLSX file text. `admit_file_text_part` calls `extract_xlsx_text` and
+  `normalize_extracted_text` for `.xlsx`. An openpyxl workbook whose A1 cell
+  is `Hello XLSX` returns that shipped text, with `cacheWrite` true and kind
+  `xlsx`. The test writes the cache file only when `cacheWrite` is true.
+  The patched `extract_uploaded_file` is not entered. Bytes `PK` refuse with
+  the shipped `Invalid xlsx file`, `invalid_payload`, and status 422. A zip
+  whose `xl/workbook.xml` is not a workbook refuses with that same shipped
+  message. An empty workbook and a whitespace cell return an empty extraction
+  and refuse with `No readable text found in this file` before a cache write.
+  PDF still continues, and the patched `extract_xlsx_text` is not entered
+  for that name. The Rust branch calls `extract_xlsx_text` before
+  `normalize_extracted_text`, maps the extractor error through `refuse_file`,
+  and does not call `write_cache`. `cache_write` is true only after text is
+  present. The continue group is EPUB and PDF.
+  `extract_uploaded_file` still calls `admit_file_text_part` before
+  `write_cache`, and `FileTextAction::Refuse` returns first. The later
+  Continue arm still contains `extract_xlsx_text` and is not reached for
+  `.xlsx`. `rustfmt --edition 2024 --check` passed on `file_upload.rs` after
+  that edit. Offline: 16 collected in
+  `tests/test_native_file_text_admission.py`, the run exited 0. The
+  project-files file was re-run: 5 collected, the run exited 0. That re-run
+  did not include an XLSX part. The previous 14-test PPTX run, the 12-test
+  DOCX run, and the 10-test HTML run were not this run. Ruff and three-file
+  mypy passed. Rust was not compiled, so the Rust XLSX extractor was not
+  executed. The Python functions were executed. Go was not edited. No epoch
+  was installed. This is not 完成验收.
+- EPUB file text. `admit_file_text_part` calls `extract_epub_text` and
+  `normalize_extracted_text` for `.epub`. Chapters `a.xhtml` `Hello EPUB` and
+  `b.xhtml` `Later` return that shipped text, with `cacheWrite` true and kind
+  `epub`. The test writes the cache file only when `cacheWrite` is true.
+  `nav.xhtml` and the script secret are absent. The patched
+  `extract_uploaded_file` is not entered. Bytes `PK` refuse with the shipped
+  `Invalid epub file`, `invalid_payload`, and status 422. A nav-only package,
+  a whitespace chapter, and a script-only chapter return an empty extraction
+  and refuse with `No readable text found in this file` before a cache write.
+  PDF still continues, and the patched `extract_epub_text` is not entered
+  for that name. The Rust branch calls `extract_epub_text` before
+  `normalize_extracted_text`, maps the extractor error through `refuse_file`,
+  and does not call `write_cache`. `cache_write` is true only after text is
+  present. The continue group is PDF.
+  `extract_uploaded_file` still calls `admit_file_text_part` before
+  `write_cache`, and `FileTextAction::Refuse` returns first. The later
+  Continue arm still contains `extract_epub_text` and is not reached for
+  `.epub`. `rustfmt --edition 2024 --check` passed on `file_upload.rs` after
+  that edit. Offline: 18 collected in
+  `tests/test_native_file_text_admission.py`, the run exited 0. The
+  project-files file was re-run: 5 collected, the run exited 0. That re-run
+  did not include an EPUB part. The previous 16-test XLSX run, the 14-test
+  PPTX run, and the 12-test DOCX run were not this run. Ruff and three-file
+  mypy passed. Rust was not compiled, so the Rust EPUB extractor was not
+  executed. The Python functions were executed. Go was not edited. No epoch
+  was installed. This is not 完成验收.
+- Project-files EPUB. `admit_project_file_part` calls `admit_file_text_part`,
+  which calls `extract_epub_text` and `normalize_extracted_text` for `.epub`.
+  Chapters `a.xhtml` `Hello EPUB` and `b.xhtml` `Later` attach that shipped
+  text only when `admit_project_metadata_write` admits `python_disabled`.
+  `attach`, `metadataWrite`, and `cacheWrite` are true and the kind is
+  `epub`. The test writes `project.json` and the cache file only when both
+  write flags are true. `nav.xhtml` and the script secret are absent. The
+  patched `write_project`, `add_project_files`, and `extract_uploaded_file`
+  are not entered. Modes that are not `python_disabled`, including
+  `go_authoritative` and `shadow`, return 409
+  `NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED` and do not enter the patched
+  extractor. Bytes `PK` refuse with the shipped `Invalid epub file`,
+  `invalid_payload`, and status 422 before metadata or cache writes. A
+  nav-only package, a whitespace chapter, and a script-only chapter return
+  an empty extraction and refuse with `No readable text found in this file`
+  before those writes. PDF still continues with `attach` true and both write
+  flags false, and the patched `extract_epub_text` is not entered for that
+  name. The Rust route still calls `admit_project_file_part` before
+  `add_project_files`. The Text arm sets both write flags only when
+  `cache_write` is set and the text is non-empty. The EPUB branch in
+  `file_upload.rs` calls `extract_epub_text` before
+  `normalize_extracted_text` and does not call `write_cache` or
+  `write_project`. `rustfmt --edition 2024 --check` passed on `projects.rs`
+  after the comment edit. Offline: 7 collected in
+  `tests/test_native_project_file_admission.py`, the run exited 0. The
+  previous 5-test project-files run was not this run. The 18-test file-text
+  file was not re-run. Ruff and three-file mypy passed. Rust was not
+  compiled, so `admit_project_file_part` and `extract_epub_text` in Rust were
+  not executed. The Python functions were executed. Go was not edited. No
+  epoch was installed. This is not 完成验收.
+- Project-files DOCX. `admit_project_file_part` calls `admit_file_text_part`,
+  which calls `extract_docx_text` and `normalize_extracted_text` for `.docx`.
+  A `word/document.xml` paragraph `Hello DOCX` attaches that shipped text
+  only when `admit_project_metadata_write` admits `python_disabled`.
+  `attach`, `metadataWrite`, and `cacheWrite` are true and the kind is
+  `docx`. The test writes `project.json` and the cache file only when both
+  write flags are true. The patched `write_project`, `add_project_files`,
+  and `extract_uploaded_file` are not entered. Modes that are not
+  `python_disabled`, including `go_authoritative` and `shadow`, return 409
+  `NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED` and do not enter the patched
+  extractor. Bytes `PK` refuse with the shipped `Invalid docx file`. A zip
+  whose `document.xml` is not XML refuses with the shipped `Invalid docx
+  XML`. A whitespace paragraph returns an empty extraction and refuses with
+  `No readable text found in this file`. Those refusals happen before
+  metadata or cache writes. PDF still continues with `attach` true and both
+  write flags false, and the patched `extract_docx_text` is not entered for
+  that name. The Rust DOCX branch calls `extract_docx_text` before
+  `normalize_extracted_text` and does not call `write_cache` or
+  `write_project`. Rust files were not edited for this slice, so rustfmt
+  was not run. Offline: 9 collected in
+  `tests/test_native_project_file_admission.py`, the run exited 0. The
+  previous 7-test project-files run was not this run. The 18-test file-text
+  file was not re-run. Ruff and three-file mypy passed. Rust was not
+  compiled, so `admit_project_file_part` and `extract_docx_text` in Rust were
+  not executed. The Python functions were executed. Go was not edited. No
+  epoch was installed. This is not 完成验收.
+- Project-files PPTX. `admit_project_file_part` calls `admit_file_text_part`,
+  which calls `extract_pptx_text` and `normalize_extracted_text` for `.pptx`.
+  A slide whose `a:t` text is `Hello PPTX`, with both `xmlns:a` and `xmlns:p`,
+  attaches that shipped text only when `admit_project_metadata_write` admits
+  `python_disabled`. `attach`, `metadataWrite`, and `cacheWrite` are true and
+  the kind is `pptx`. The test writes `project.json` and the cache file only
+  when both write flags are true. The patched `write_project`,
+  `add_project_files`, and `extract_uploaded_file` are not entered. Modes
+  that are not `python_disabled`, including `go_authoritative` and `shadow`,
+  return 409 `NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED` and do not enter the
+  patched extractor. Bytes `PK` refuse with the shipped `Invalid pptx file`.
+  A zip whose slide XML is not XML refuses with the shipped `Invalid pptx
+  XML`. A whitespace `a:t` on a namespace-valid slide returns an empty
+  extraction and refuses with `No readable text found in this file`. Those
+  refusals happen before metadata or cache writes. PDF still continues with
+  `attach` true and both write flags false, and the patched
+  `extract_pptx_text` is not entered for that name. The Rust PPTX branch
+  calls `extract_pptx_text` before `normalize_extracted_text` and does not
+  call `write_cache` or `write_project`. Rust files were not edited for this
+  slice, so rustfmt was not run. Offline: 11 collected in
+  `tests/test_native_project_file_admission.py`, the run exited 0. The
+  previous 9-test project-files run was not this run. The 18-test file-text
+  file was not re-run. Ruff and three-file mypy passed. Rust was not
+  compiled, so `admit_project_file_part` and `extract_pptx_text` in Rust were
+  not executed. The Python functions were executed. Go was not edited. No
+  epoch was installed. This is not 完成验收.
+- Project-files XLSX. `admit_project_file_part` calls `admit_file_text_part`,
+  which calls `extract_xlsx_text` and `normalize_extracted_text` for `.xlsx`.
+  An openpyxl workbook whose sheet `Data` cell A1 is `Hello XLSX` attaches
+  that shipped text only when `admit_project_metadata_write` admits
+  `python_disabled`. `attach`, `metadataWrite`, and `cacheWrite` are true and
+  the kind is `xlsx`. The test writes `project.json` and the cache file only
+  when both write flags are true. The patched `write_project`,
+  `add_project_files`, and `extract_uploaded_file` are not entered. Modes
+  that are not `python_disabled`, including `go_authoritative` and `shadow`,
+  return 409 `NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED` and do not enter the
+  patched extractor. Bytes `PK` and a zip whose `xl/workbook.xml` is not a
+  workbook both refuse with the shipped `Invalid xlsx file`. An empty
+  workbook and a whitespace cell return an empty extraction and refuse with
+  `No readable text found in this file`. Those refusals happen before
+  metadata or cache writes. PDF still continues with `attach` true and both
+  write flags false, and the patched `extract_xlsx_text` is not entered for
+  that name. The Rust XLSX branch calls `extract_xlsx_text` before
+  `normalize_extracted_text` and does not call `write_cache` or
+  `write_project`. Rust files were not edited for this slice, so rustfmt
+  was not run. Offline: 13 collected in
+  `tests/test_native_project_file_admission.py`, the run exited 0. The
+  previous 11-test project-files run was not this run. The 18-test file-text
+  file was not re-run. Ruff and three-file mypy passed. Rust was not
+  compiled, so `admit_project_file_part` and `extract_xlsx_text` in Rust were
+  not executed. The Python functions were executed. Go was not edited. No
+  epoch was installed. This is not 完成验收.
+
+- Project-files HTM. `admit_project_file_part` calls `admit_file_text_part`, which calls `extract_html_text` and `normalize_extracted_text` for `.htm`. `<script>secret</script><p>Hello HTM</p>` attaches that shipped text only when `admit_project_metadata_write` admits `python_disabled`. `attach`, `metadataWrite`, and `cacheWrite` are true and the kind is `htm`. The test writes `project.json` and the cache file only when both write flags are true. The secret is absent. The patched `write_project`, `add_project_files`, and `extract_uploaded_file` are not entered. Modes that are not `python_disabled`, including `go_authoritative` and `shadow`, return 409 `NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED` and do not enter the patched extractor. A script-only page and a whitespace paragraph refuse with `No readable text found in this file` before metadata or cache writes. PDF still continues with `attach` true and both write flags false. The Rust HTML branch calls `extract_html_text` before `normalize_extracted_text` and does not call `write_cache` or `write_project`. Rust files were not edited, so rustfmt was not run. The first offline run collected 15 tests and exited 0. The later 19-test `-rA` run passed the two HTM tests again. Ruff and three-file mypy passed. The 18-test file-text file was not re-run. Rust was not compiled. The Python functions were executed. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files Markdown. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.md`. `Notes.MD` containing `# Hello MD` attaches that shipped text only when the native writer is admitted. The kind is `md` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only markdown refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false. Rust `TEXT_EXTENSIONS` contains `.md`. Rust files were not edited, so rustfmt was not run. The later 19-test run passed these two tests. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files CSV. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.csv`. `sheet.CSV` containing `Hello CSV` attaches that shipped text only when the native writer is admitted. The kind is `csv` and both write flags are true. The test writes `project.json` only then. Non-owner modes return 409 and do not enter the patched decoder. Whitespace-only CSV refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false. Rust `TEXT_EXTENSIONS` contains `.csv`. Rust files were not edited, so rustfmt was not run. Offline: 19 passed, listed by `-rA`, in `tests/test_native_project_file_admission.py`. The run exited 0. Ruff and three-file mypy passed. Rust was not compiled, so the Rust functions were not executed. The Python functions were executed. Go was not edited. Cargo, `go test`, and Docker were not started. No epoch was installed. This is not 完成验收.
+- Project-files JSON. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.json`. `notes.JSON` containing `{"note":"Hello JSON"}` attaches that shipped text only when the native writer is admitted. The kind is `json` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only JSON refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false. Rust `TEXT_EXTENSIONS` contains `.json`. Rust files were not edited, so rustfmt was not run. Offline: 21 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files YAML. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.yaml`. `config.YAML` containing `note: Hello YAML` attaches that shipped text only when the native writer is admitted. The kind is `yaml` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only YAML refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false. Rust `TEXT_EXTENSIONS` contains `.yaml`. Rust files were not edited, so rustfmt was not run. Offline: 23 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files YML. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.yml`. `config.YML` containing `note: Hello YML` attaches that shipped text only when the native writer is admitted. The kind is `yml` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.yml` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false. Rust `TEXT_EXTENSIONS` contains `.yml`. Rust files were not edited, so rustfmt was not run. Offline: 25 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files Markdown extension. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.markdown`. `notes.MARKDOWN` containing `# Hello MARKDOWN` attaches that shipped text only when the native writer is admitted. The kind is `markdown` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.markdown` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false. Rust `TEXT_EXTENSIONS` contains `.markdown`. Rust files were not edited, so rustfmt was not run. Offline: 27 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files TSV. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.tsv`. `sheet.TSV` containing `Hello TSV` attaches that shipped text only when the native writer is admitted. The kind is `tsv` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.tsv` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false. Rust `TEXT_EXTENSIONS` contains `.tsv`. Rust files were not edited, so rustfmt was not run. Offline: 29 passed, listed by `-rA`, and the run exited 0. The later 31-test run passed these two tests again. Ruff and three-file mypy passed. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files JSONL. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.jsonl`. `rows.JSONL` containing `{"note":"Hello JSONL"}` attaches that shipped text only when the native writer is admitted. The kind is `jsonl` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.jsonl` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false. Rust `TEXT_EXTENSIONS` contains `.jsonl`. Rust files were not edited, so rustfmt was not run. Offline: 31 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed. Rust was not compiled. Go was not edited. Cargo, `go test`, and Docker were not started. No epoch was installed. This is not 完成验收.
+- Project-files XML. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.xml`. It does not call `extract_html_text`. `notes.XML` containing `<note>Hello XML</note>` attaches that shipped text, tags included, only when the native writer is admitted. The kind is `xml` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.xml` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains `.xml`. `HTML_EXTENSIONS` does not. Rust files were not edited, so rustfmt was not run. Offline: 33 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files CSS. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.css`. It does not call `extract_html_text`. `theme.CSS` containing `.note { color: Hello CSS; }` attaches that shipped text only when the native writer is admitted. The kind is `css` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.css` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains `.css`. `HTML_EXTENSIONS` does not. Rust files were not edited, so rustfmt was not run. Offline: 35 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files JavaScript. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.js`. It does not call `extract_html_text`. `app.JS` containing `const note = "Hello JS";` attaches that shipped text only when the native writer is admitted. The kind is `js` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.js` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. The source check looks for the token `".js",` so `.json` does not satisfy it. `HTML_EXTENSIONS` does not contain `.js`. Rust files were not edited, so rustfmt was not run. Offline: 37 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed. The later 39-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files MJS. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.mjs`. It does not call `extract_html_text`. `app.MJS` containing `export const note = "Hello MJS";` attaches that shipped text only when the native writer is admitted. The kind is `mjs` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.mjs` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".mjs",`. `HTML_EXTENSIONS` does not. Rust files were not edited, so rustfmt was not run. Offline: 39 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 41-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files CJS. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.cjs`. It does not call `extract_html_text`. `app.CJS` containing `module.exports = "Hello CJS";` attaches that shipped text only when the native writer is admitted. The kind is `cjs` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.cjs` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".cjs",`. `HTML_EXTENSIONS` does not. Rust files were not edited, so rustfmt was not run. Offline: 41 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 43-test and 45-test runs passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files TypeScript. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.ts`. It does not call `extract_html_text`. `app.TS` containing `export const note: string = "Hello TS";` attaches that shipped text only when the native writer is admitted. The kind is `ts` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.ts` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. The source check looks for the token `".ts",` so `.tsx` does not satisfy it. `HTML_EXTENSIONS` does not contain `.ts`. Rust files were not edited, so rustfmt was not run. Offline: 43 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 45-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files TSX. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.tsx`. It does not call `extract_html_text`. `view.TSX` containing `export const view = "Hello TSX";` attaches that shipped text only when the native writer is admitted. The kind is `tsx` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.tsx` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".tsx",`. `HTML_EXTENSIONS` does not. Rust files were not edited, so rustfmt was not run. Offline: 45 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 47-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files JSX. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.jsx`. It does not call `extract_html_text`. `view.JSX` containing `export const view = "Hello JSX";` attaches that shipped text only when the native writer is admitted. The kind is `jsx` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.jsx` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".jsx",`. `HTML_EXTENSIONS` does not. Rust files were not edited, so rustfmt was not run. Offline: 47 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 49-test and 51-test runs passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files Python. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.py`. It does not call `extract_html_text`. `notes.PY` containing `def note():` and `return "Hello PY"` attaches that shipped text only when the native writer is admitted. The kind is `py` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.py` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".py",`. `HTML_EXTENSIONS` does not. Rust files were not edited, so rustfmt was not run. Offline: 49 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 51-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files Java. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.java`. It does not call `extract_html_text`. `Note.JAVA` containing `String text = "Hello JAVA";` attaches that shipped text only when the native writer is admitted. The kind is `java` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.java` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".java",`. `HTML_EXTENSIONS` does not. Rust files were not edited, so rustfmt was not run. Offline: 51 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 53-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files C. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.c`. It does not call `extract_html_text`. `main.C` containing `const char *note = "Hello C";` attaches that shipped text only when the native writer is admitted. The kind is `c` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.c` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. The source check looks for the token `".c",` so `.cpp`, `.cjs`, `.cs`, and `.csv` do not satisfy it. `HTML_EXTENSIONS` does not contain `.c`. Rust files were not edited, so rustfmt was not run. Offline: 53 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 55-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files C++. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.cpp`. It does not call `extract_html_text`. `main.CPP` containing `const char *note = "Hello CPP";` attaches that shipped text only when the native writer is admitted. The kind is `cpp` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.cpp` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".cpp",`. `HTML_EXTENSIONS` does not. Rust files were not edited, so rustfmt was not run. Offline: 55 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 57-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files header. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.h`. It does not call `extract_html_text`. `note.H` containing `#define NOTE "Hello H"` attaches that shipped text only when the native writer is admitted. The kind is `h` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.h` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. The source check looks for the token `".h",` so `.hpp` and `.html` do not satisfy it. The HTML-extension check also uses `".h",`, because `".h"` is a prefix of `".html"` and `".htm"`. Rust files were not edited, so rustfmt was not run. Offline: 57 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 59-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files C++ header. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.hpp`. It does not call `extract_html_text`. `note.HPP` containing `#define NOTE "Hello HPP"` attaches that shipped text only when the native writer is admitted. The kind is `hpp` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.hpp` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".hpp",`. `HTML_EXTENSIONS` does not. Rust files were not edited, so rustfmt was not run. Offline: 59 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 61-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files C#. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.cs`. It does not call `extract_html_text`. `Note.CS` containing `const string Text = "Hello CS";` attaches that shipped text only when the native writer is admitted. The kind is `cs` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.cs` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. The source check looks for the token `".cs",` so `.css` does not satisfy it. `HTML_EXTENSIONS` does not contain that token. Rust files were not edited, so rustfmt was not run. Offline: 61 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 63-test and 65-test runs passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files Go. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.go`. It does not call `extract_html_text`. `note.GO` containing `package note` and `const Text = "Hello GO"` attaches that shipped text only when the native writer is admitted. The kind is `go` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.go` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".go",`. `HTML_EXTENSIONS` does not contain that token. Rust files were not edited, so rustfmt was not run. Offline: 63 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 65-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files Rust source. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.rs`. It does not call `extract_html_text`. `note.RS` containing `fn note() -> &'static str { "Hello RS" }` attaches that shipped text only when the native writer is admitted. The kind is `rs` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.rs` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".rs",`. `HTML_EXTENSIONS` does not contain that token. Rust files were not edited, so rustfmt was not run. Offline: 65 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 67-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files PHP. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.php`. It does not call `extract_html_text`. `note.PHP` containing `<?php echo "Hello PHP";` keeps that opening tag and attaches the shipped text only when the native writer is admitted. The kind is `php` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.php` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".php",`. `HTML_EXTENSIONS` does not contain that token. Rust files were not edited, so rustfmt was not run. Offline: 67 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 69-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files Ruby. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.rb`. It does not call `extract_html_text`. `note.RB` containing `note = "Hello RB"` attaches that shipped text only when the native writer is admitted. The kind is `rb` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.rb` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".rb",`. `HTML_EXTENSIONS` does not contain that token. Rust files were not edited, so rustfmt was not run. Offline: 69 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 71-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files Swift. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.swift`. It does not call `extract_html_text`. `note.SWIFT` containing `let note = "Hello SWIFT"` attaches that shipped text only when the native writer is admitted. The kind is `swift` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.swift` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".swift",`. `HTML_EXTENSIONS` does not contain that token. Rust files were not edited, so rustfmt was not run. Offline: 71 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 73-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files Kotlin. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.kt`. It does not call `extract_html_text`. `note.KT` containing `val note = "Hello KT"` attaches that shipped text only when the native writer is admitted. The kind is `kt` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.kt` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".kt",`. `HTML_EXTENSIONS` does not contain that token. Rust files were not edited, so rustfmt was not run. Offline: 73 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 75-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files SQL. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.sql`. It does not call `extract_html_text`. `notes.SQL` containing `SELECT note AS "Hello SQL";` attaches that shipped text only when the native writer is admitted. The kind is `sql` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.sql` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".sql",`. `HTML_EXTENSIONS` does not contain that token. Rust files were not edited, so rustfmt was not run. Offline: 75 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 77-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files shell. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.sh`. It does not call `extract_html_text`. `run.SH` containing `echo "Hello SH"` attaches that shipped text only when the native writer is admitted. The kind is `sh` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.sh` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".sh",`. `HTML_EXTENSIONS` does not contain that token. Rust files were not edited, so rustfmt was not run. Offline: 77 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 79-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files PowerShell. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.ps1`. It does not call `extract_html_text`. `run.PS1` containing `Write-Output "Hello PS1"` attaches that shipped text only when the native writer is admitted. The kind is `ps1` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.ps1` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".ps1",`. `HTML_EXTENSIONS` does not contain that token. Rust files were not edited, so rustfmt was not run. Offline: 79 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 81-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files batch. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.bat`. It does not call `extract_html_text`. `run.BAT` containing `@echo Hello BAT` attaches that shipped text only when the native writer is admitted. The kind is `bat` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.bat` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".bat",`. `HTML_EXTENSIONS` does not contain that token. Rust files were not edited, so rustfmt was not run. Offline: 81 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 83-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files log. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.log`. It does not call `extract_html_text`. `app.LOG` containing `INFO Hello LOG` attaches that shipped text only when the native writer is admitted. The kind is `log` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.log` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".log",`. `HTML_EXTENSIONS` does not contain that token. Rust files were not edited, so rustfmt was not run. Offline: 83 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 85-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files INI. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.ini`. It does not call `extract_html_text`. `app.INI` containing `text = Hello INI` attaches that shipped text only when the native writer is admitted. The kind is `ini` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.ini` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".ini",`. `HTML_EXTENSIONS` does not contain that token. Rust files were not edited, so rustfmt was not run. Offline: 85 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 87-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files TOML. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.toml`. It does not call `extract_html_text`. `config.TOML` containing `note = "Hello TOML"` attaches that shipped text only when the native writer is admitted. The kind is `toml` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.toml` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".toml",`. `HTML_EXTENSIONS` does not contain that token. Rust files were not edited, so rustfmt was not run. Offline: 87 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 89-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files env. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.env`. It does not call `extract_html_text`. `app.ENV` containing `NOTE=Hello ENV` attaches that shipped text only when the native writer is admitted. The kind is `env` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.env` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".env",`. `HTML_EXTENSIONS` does not contain that token. Rust files were not edited, so rustfmt was not run. Offline: 89 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 91-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files RTF. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.rtf`. It does not call `extract_html_text`. `note.RTF` containing `{\rtf1 Hello RTF}` keeps that control word and attaches the shipped text only when the native writer is admitted. The kind is `rtf` and both write flags are true. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.rtf` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false, and the patched HTML extractor is not entered. Rust `TEXT_EXTENSIONS` contains the token `".rtf",`. `HTML_EXTENSIONS` does not contain that token. Rust files were not edited, so rustfmt was not run. Offline: 91 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 93-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files PNG OCR. `admit_project_file_part` calls `admit_file_text_part`. A recognized `scan.PNG` header with OCR off returns `ocr_required` and status 415 before metadata or cache writes. The patched image-magic checker, HTML extractor, and text decoder are not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched `admit_file_text_part`. The same header with OCR on continues with empty text and both write flags false. The gate does not invent OCR text. PDF still continues with both write flags false. Rust `IMAGE_EXTENSIONS` contains the token `".png",`. That token is not in `TEXT_EXTENSIONS` or `HTML_EXTENSIONS`. The image arm checks `!ocr_enabled` before `!image_magic_ok(` and then `continue_file()`, and that arm does not call `ocr_image(`. Rust files were not edited, so rustfmt was not run. Offline: 93 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 95-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files JPEG OCR. `admit_project_file_part` calls `admit_file_text_part`. A recognized `scan.JPG` header with OCR off returns `ocr_required` and status 415 before metadata or cache writes. The patched image-magic checker, HTML extractor, and text decoder are not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched `admit_file_text_part`. The same header with OCR on continues with empty text and both write flags false. The gate does not invent OCR text. PDF still continues with both write flags false. Rust `IMAGE_EXTENSIONS` contains the token `".jpg",`. That token is not in `TEXT_EXTENSIONS` or `HTML_EXTENSIONS`. Rust files were not edited, so rustfmt was not run. Offline: 95 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 97-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files JPEG long extension. `admit_project_file_part` calls `admit_file_text_part`. A recognized `scan.JPEG` header with OCR off returns `ocr_required` and status 415 before metadata or cache writes. The patched image-magic checker, HTML extractor, and text decoder are not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched `admit_file_text_part`. The same header with OCR on continues with empty text and both write flags false. The gate does not invent OCR text. PDF still continues with both write flags false. Rust `IMAGE_EXTENSIONS` contains the token `".jpeg",`. That token is not in `TEXT_EXTENSIONS` or `HTML_EXTENSIONS`. Rust files were not edited, so rustfmt was not run. Offline: 97 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 99-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files WebP OCR. `admit_project_file_part` calls `admit_file_text_part`. A recognized `scan.WEBP` header with OCR off returns `ocr_required` and status 415 before metadata or cache writes. The patched image-magic checker, HTML extractor, and text decoder are not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched `admit_file_text_part`. The same header with OCR on continues with empty text and both write flags false. The gate does not invent OCR text. PDF still continues with both write flags false. Rust `IMAGE_EXTENSIONS` contains the token `".webp",`. That token is not in `TEXT_EXTENSIONS` or `HTML_EXTENSIONS`. Rust files were not edited, so rustfmt was not run. Offline: 99 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 101-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files BMP OCR. `admit_project_file_part` calls `admit_file_text_part`. A recognized `scan.BMP` header with OCR off returns `ocr_required` and status 415 before metadata or cache writes. The patched image-magic checker, HTML extractor, and text decoder are not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched `admit_file_text_part`. The same header with OCR on continues with empty text and both write flags false. The gate does not invent OCR text. PDF still continues with both write flags false. Rust `IMAGE_EXTENSIONS` contains the token `".bmp",`. That token is not in `TEXT_EXTENSIONS` or `HTML_EXTENSIONS`. Rust files were not edited, so rustfmt was not run. Offline: 101 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 103-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files TIFF short extension. `admit_project_file_part` calls `admit_file_text_part`. A recognized `scan.TIF` header with OCR off returns `ocr_required` and status 415 before metadata or cache writes. The patched image-magic checker, HTML extractor, and text decoder are not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched `admit_file_text_part`. The same header with OCR on continues with empty text and both write flags false. The gate does not invent OCR text. PDF still continues with both write flags false. Rust `IMAGE_EXTENSIONS` contains the token `".tif",`, so `.tiff` does not satisfy that check. That token is not in `TEXT_EXTENSIONS` or `HTML_EXTENSIONS`. Rust files were not edited, so rustfmt was not run. Offline: 103 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 105-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files TIFF long extension. `admit_project_file_part` calls `admit_file_text_part`. A recognized `scan.TIFF` big-endian header with OCR off returns `ocr_required` and status 415 before metadata or cache writes. The patched image-magic checker, HTML extractor, and text decoder are not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched `admit_file_text_part`. The same header with OCR on continues with empty text and both write flags false. The gate does not invent OCR text. PDF still continues with both write flags false. Rust `IMAGE_EXTENSIONS` contains the token `".tiff",`. That token is not in `TEXT_EXTENSIONS` or `HTML_EXTENSIONS`. Rust files were not edited, so rustfmt was not run. Offline: 105 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 107-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files GIF. `admit_project_file_part` calls `admit_file_text_part`. A recognized `scan.GIF` header `GIF89a` with OCR off returns `ocr_required` and status 415 before metadata or cache writes. The patched image-magic checker, HTML extractor, and text decoder are not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched `admit_file_text_part`. The same header with OCR on continues with empty text and both write flags false. The gate does not invent OCR text. PDF still continues with both write flags false. Rust `IMAGE_EXTENSIONS` contains the token `".gif",`. That token is not in `TEXT_EXTENSIONS` or `HTML_EXTENSIONS`. Rust files were not edited, so rustfmt was not run. Offline: 107 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 109-test and 111-test runs passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files image content type. `admit_project_file_part` calls `admit_file_text_part`. `scan.BIN` is not an image extension. The content type ` Image/GIF ; charset=binary` is classified as an image only after the shipped normalizer splits on `;`, trims, and lowercases. OCR off returns `ocr_required` and status 415 before metadata or cache writes. The patched image-magic checker, HTML extractor, and text decoder are not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched `admit_file_text_part`. The same `GIF89a` header with OCR on continues with empty text and both write flags false. The gate does not invent OCR text. PDF still continues with both write flags false. Rust `is_image_file` does that normalization and then uses `starts_with("image/")`. `".bin",` is not in `IMAGE_EXTENSIONS`. Rust files were not edited, so rustfmt was not run. Offline: 109 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 111-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files GIF87a. `admit_project_file_part` calls `admit_file_text_part`. A recognized `scan.GIF` header `GIF87a` with OCR off returns `ocr_required` and status 415 before metadata or cache writes. The patched image-magic checker, HTML extractor, and text decoder are not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched `admit_file_text_part`. The same header with OCR on continues with empty text and both write flags false. The gate does not invent OCR text. PDF still continues with both write flags false. Rust `image_magic_ok` contains `b"GIF87a"` and `b"GIF89a"`. Rust files were not edited, so rustfmt was not run. Offline: 111 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 113-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files text content type. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `note.BIN` when the content type is `text/plain; charset=utf-8`. `.bin` is not in `TEXT_EXTENSIONS`. The raw `text/` prefix classifies it before the NUL scan. `extract_html_text` and the image-magic checker are not entered. The kind is `bin` and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only bytes refuse with `No readable text found in this file` before those writes. PDF still continues with both write flags false. Rust `is_text_file` checks `starts_with("text/")` before `take(2048)`. Rust files were not edited, so rustfmt was not run. Offline: 113 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 116-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files octet-stream sniffer. `admit_project_file_part` calls `admit_file_text_part`. `note.BIN` with content type `application/octet-stream` and no NUL in the payload attaches shipped decoded text with kind `bin` only when the native writer is admitted. Both write flags are true, and the test writes `project.json` only then. `extract_html_text` and the image-magic checker are not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace without a NUL refuses with `No readable text found in this file` before those writes. A NUL in `application/octet-stream` continues with empty text and both write flags false, and the patched decoder is not entered. The same NUL with content type `text/plain` still attaches, and `normalize_extracted_text` strips that NUL. PDF still continues with both write flags false. Rust files were not edited, so rustfmt was not run. Offline: 116 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 118-test run passed these three tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files 2048-byte NUL window. `admit_project_file_part` calls `admit_file_text_part`. For `note.BIN` with content type `application/octet-stream`, a NUL at index 2047 continues with empty text and both write flags false. The patched decoder, HTML extractor, and image-magic checker are not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched `admit_file_text_part`. A NUL at index 2048 still attaches shipped decoded text with kind `bin` only when the native writer is admitted. The 2048 `B` bytes and `OUTSIDE` remain after `normalize_extracted_text` strips the NUL. Both write flags are true, and the test writes `project.json` only then. Non-owners return 409 and do not enter the patched decoder. PDF still continues with both write flags false. The Python sniff keeps `sample = data[:2048]`, and Rust `is_text_file` keeps `take(2048)`. Neither source uses 2047 or 2049. The window size was not changed. Rust files were not edited, so rustfmt was not run. Offline: 118 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 120-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files dotless name. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `Notes` with content type `text/plain`. The name has no dot, so the kind is `text` from the empty-extension branch. `extract_html_text` and the image-magic checker are not entered. Both write flags are true only when the native writer is admitted, and the test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `blank` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false. Rust `is_text_file` uses `stripped.is_empty()` and `"text".to_string()`. Python uses `else "text"`. Rust files were not edited, so rustfmt was not run. Offline: 120 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 122-test and 124-test runs passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files leading-dot env. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.ENV` with content type `text/plain`. The only dot is at index 0, so the extension is empty and the kind is `text`, not `env`. The token `".env",` stays in `TEXT_EXTENSIONS` and does not classify this name. `extract_html_text` and the image-magic checker are not entered. Both write flags are true only when the native writer is admitted, and the test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.env` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false. Rust `extension_of` uses `rfind('.')` and keeps `index > 0` before taking the suffix; a dot at index 0 returns `String::new()`. Python uses `Path(name.lower()).suffix`. Rust files were not edited, so rustfmt was not run. Offline: 122 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 124-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files leading-dot env txt. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `.env.TXT` with content type `text/plain`. The last dot is after index 0, so the extension is `.txt` and the kind is `txt`, not `env` or `text`. `".txt",` is in `TEXT_EXTENSIONS`. `extract_html_text` and the image-magic checker are not entered. Both write flags are true only when the native writer is admitted, and the test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `.env.txt` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false. Rust files were not edited, so rustfmt was not run. Offline: 124 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 126-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files trailing dot. `admit_project_file_part` calls `admit_file_text_part`, which calls `decode_text_file` and `normalize_extracted_text` for `Notes.` with content type `text/plain`. Python `Path.suffix` for that name is empty, so the kind is `text`, not `"."`. `extract_html_text` and the image-magic checker are not entered. Both write flags are true only when the native writer is admitted, and the test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. Whitespace-only `blank.` refuses with `No readable text found in this file` before those writes. PDF still continues with both write flags false. Rust text admission uses `trim_start_matches('.')` before the empty-kind `"text"` branch, so a suffix of `"."` also becomes kind `text`. Rust files were not edited, so rustfmt was not run. Offline: 126 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 127-test run passed these two tests again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files untrimmed text content type. `admit_project_file_part` calls `admit_file_text_part`. For `note.BIN`, content type ` text/plain` does not match the raw `text/` prefix, so a NUL continues with empty text and both write flags false. The patched decoder is not entered. `extract_html_text` and the image-magic checker are not entered. The same payload with content type `text/plain` still calls `decode_text_file` and `normalize_extracted_text`. The kind is `bin` and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. PDF still continues with both write flags false. Rust `is_text_file` uses `starts_with("text/")` with no `trim()` before that prefix. Python `is_text_file` uses `startswith("text/")` with no strip before that prefix. Rust files were not edited, so rustfmt was not run. Offline: 127 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 128-test run passed this test again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files case-sensitive text content type. `admit_project_file_part` calls `admit_file_text_part`. For `note.BIN`, content type `TEXT/PLAIN` is not lowercased, so it does not match the raw `text/` prefix. A NUL continues with empty text and both write flags false. The patched decoder is not entered. `extract_html_text` and the image-magic checker are not entered. The same payload with content type `text/plain` still calls `decode_text_file` and `normalize_extracted_text`. The kind is `bin` and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. PDF still continues with both write flags false. Rust `is_text_file` and `admit_file_text_part` have no `to_ascii_lowercase()` before `starts_with("text/")`. Python `is_text_file` has no `.lower(` before `startswith("text/")`, and the `media = content_type` assignment is not stripped or lowercased before the text check. Image classification may still lowercase. Rust files were not edited, so rustfmt was not run. Offline: 128 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 129-test run passed this test again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTML content type on a bin name. `admit_project_file_part` calls `admit_file_text_part`. For `note.BIN`, content type `text/html` does not select the HTML extractor. The part calls `decode_text_file` and `normalize_extracted_text`, keeps the markup, and uses kind `bin` only when the native writer is admitted. The test writes `project.json` only then. `extract_html_text` and the image-magic checker are not entered. Whitespace-only bytes refuse with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. PDF still continues with both write flags false. The Rust HTML arm calls `extract_html_text` before `is_text_file` and does not consult `content_type`. The Python HTML arm does the same. Rust files were not edited, so rustfmt was not run. Offline: 129 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 130-test run passed this test again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files xhtml name. `admit_project_file_part` calls `admit_file_text_part`. `page.XHTML` is not an HTML extension. With content type `application/octet-stream` and no NUL, the part calls `decode_text_file` and `normalize_extracted_text`, keeps the markup, and uses kind `xhtml` only when the native writer is admitted. The test writes `project.json` only then. `extract_html_text` and the image-magic checker are not entered. Whitespace-only `blank.xhtml` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. PDF still continues with both write flags false. Rust `HTML_EXTENSIONS` contains `".html",` and `".htm"]` and does not contain `".xhtml"`. Python `HTML_EXTENSIONS` contains `".html"` and `".htm"}` and does not contain `.xhtml` on that line. Rust files were not edited, so rustfmt was not run. Offline: 130 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 131-test run passed this test again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files xhtml HTML content type. `admit_project_file_part` calls `admit_file_text_part`. `page.XHTML` with content type `text/html` still does not select the HTML extractor. The part calls `decode_text_file` and `normalize_extracted_text`, keeps the markup, and uses kind `xhtml` only when the native writer is admitted. The test writes `project.json` only then. `extract_html_text` and the image-magic checker are not entered. Whitespace-only `blank.xhtml` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. PDF still continues with both write flags false. Rust files were not edited, so rustfmt was not run. Offline: 131 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 132-test run passed this test again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files xhtml text prefix before NUL. `admit_project_file_part` calls `admit_file_text_part`. For `page.XHTML`, content type `text/html` matches the raw `text/` prefix before the NUL scan, so a NUL still calls `decode_text_file` and `normalize_extracted_text`. Normalization strips that NUL and the markup stays. The kind is `xhtml` and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. `extract_html_text` and the image-magic checker are not entered. The same NUL with content type `application/octet-stream` continues with empty text and both write flags false, and the patched decoder is not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. PDF still continues with both write flags false. Rust `is_text_file` checks `starts_with("text/")` before `take(2048)`. Python `is_text_file` checks `startswith("text/")` before `b"\0" not in sample`. Rust files were not edited, so rustfmt was not run. Offline: 132 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 133-test run passed this test again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files untrimmed HTML content type on xhtml. `admit_project_file_part` calls `admit_file_text_part`. For `page.XHTML`, content type ` text/html` does not match the raw `text/` prefix, so a NUL continues with empty text and both write flags false. The patched decoder is not entered. `extract_html_text` and the image-magic checker are not entered. The same payload with content type `text/html` still calls `decode_text_file` and `normalize_extracted_text`. Normalization strips that NUL and the markup stays. The kind is `xhtml` and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. PDF still continues with both write flags false. Rust `is_text_file` has no `trim()` before `starts_with("text/")`. Python `is_text_file` has no strip before `startswith("text/")`. Rust files were not edited, so rustfmt was not run. Offline: 133 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 134-test run passed this test again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files case-sensitive HTML content type on xhtml. `admit_project_file_part` calls `admit_file_text_part`. For `page.XHTML`, content type `TEXT/HTML` is not lowercased, so it does not match the raw `text/` prefix. A NUL continues with empty text and both write flags false. The patched decoder is not entered. `extract_html_text` and the image-magic checker are not entered. The same payload with content type `text/html` still calls `decode_text_file` and `normalize_extracted_text`. Normalization strips that NUL and the markup stays. The kind is `xhtml` and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. PDF still continues with both write flags false. Rust `is_text_file` and `admit_file_text_part` have no `to_ascii_lowercase()` before `starts_with("text/")`. Python `is_text_file` has no `.lower(` before `startswith("text/")`. Image classification may still lowercase. Rust files were not edited, so rustfmt was not run. Offline: 134 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 135-test run passed this test again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTML charset parameter on xhtml. `admit_project_file_part` calls `admit_file_text_part`. For `page.XHTML`, content type `text/html; charset=utf-8` still matches the raw `text/` prefix before the NUL scan. The text path does not split on `;`. A NUL still calls `decode_text_file` and `normalize_extracted_text`. Normalization strips that NUL and the markup stays. The kind is `xhtml` and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. `extract_html_text` and the image-magic checker are not entered. The same NUL with content type `application/xhtml+xml` continues with empty text and both write flags false, and the patched decoder is not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. PDF still continues with both write flags false. Rust `is_text_file` has no `split(';')` before `starts_with("text/")`. Python `is_text_file` has no semicolon split. Rust files were not edited, so rustfmt was not run. Offline: 135 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 136-test run passed this test again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files PDF before text content type. `admit_project_file_part` calls `admit_file_text_part`. `notes.PDF` is continued before the text content type, so content type `text/plain` with readable bytes continues with empty text and both write flags false. The patched decoder is not entered. `extract_html_text` and the image-magic checker are not entered. The same bytes named `note.BIN` with content type `text/plain` call `decode_text_file` and `normalize_extracted_text`. The kind is `bin` and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched decoder. A lowercase `notes.pdf` with `application/pdf` still continues. Rust checks `if extension == ".pdf"` and `continue_file()` before `is_text_file`, and that arm does not call `decode_text_file`. Python checks `_CONTINUED_EXTENSIONS` and `_continue()` before `is_text_file`. Rust files were not edited, so rustfmt was not run. Offline: 136 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 137-test run passed this test again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files GIF extension before text content type. `admit_project_file_part` calls `admit_file_text_part`. `scan.GIF` is an image extension, so content type `text/plain` does not select the text decoder. OCR off returns `ocr_required` and status 415 before the image-magic checker and before `decode_text_file`. The same `GIF89a` bytes named `note.BIN` with content type `text/plain` call `decode_text_file` and `normalize_extracted_text`. The kind is `bin` and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. With OCR on, the recognized header continues with empty text and both write flags false. OCR text is not invented, and the patched decoder is not entered. `extract_html_text` is not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust `admit_file_text_part` checks `is_image_file` before `is_text_file`, and the image arm checks `!ocr_enabled` before `image_magic_ok` with no `decode_text_file`. Python checks `ocr_enabled is not True` before `_image_magic_ok` and before `is_text_file`. Rust files were not edited, so rustfmt was not run. Offline: 137 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. The later 138-test run passed this test again. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files corrupt GIF does not fall through to text. `admit_project_file_part` calls `admit_file_text_part`. `scan.GIF` stays on the image arm when the content type is `text/plain`. With OCR on, bytes that are not a recognized image header return `Uploaded image is corrupt.` with status 400 before `decode_text_file`. The patched decoder is not entered. The same bytes named `note.BIN` with content type `text/plain` call `decode_text_file` and `normalize_extracted_text`. The kind is `bin` and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. OCR off on `scan.GIF` returns `ocr_required` and status 415 before the image-magic checker. `extract_html_text` is not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. The Rust and Python image arms contain `Uploaded image is corrupt.` and do not call `decode_text_file`. Rust files were not edited, so rustfmt was not run. Offline: 138 passed, listed by `-rA`, and the run exited 0. The later 139-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTML extension before text content type. `admit_project_file_part` calls `admit_file_text_part`. `page.HTML` with content type `text/plain` calls `extract_html_text` and `normalize_extracted_text`. The admission binding `decode_text_file` is patched and is not entered. `files.decode_text_file` is not patched, because `extract_html_text` calls that global. The extracted text contains `Hello HTMLPAGE`, drops the script, and drops the tags. The kind is `html` and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. The same markup named `note.BIN` with content type `text/plain` calls `decode_text_file` and `normalize_extracted_text`, keeps the markup and `secret`, and uses kind `bin`. The test writes `cache.txt` only then. The image-magic checker is not entered. Whitespace-only `blank.html` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. The Rust and Python HTML arms contain `extract_html_text` and do not contain `decode_text_file`. Rust files were not edited, so rustfmt was not run. Offline: 139 passed, listed by `-rA`, and the run exited 0. The later 140-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTML extension with octet-stream. `admit_project_file_part` calls `admit_file_text_part`. `page.HTML` with content type `application/octet-stream` calls `extract_html_text` and `normalize_extracted_text`. The admission binding `decode_text_file` is patched and is not entered. `files.decode_text_file` is not patched, because `extract_html_text` calls that global. The HTML extractor is restored only after the `note.BIN` call. The extracted text contains `Hello HTMLOCTET`, drops the script, and drops the tags. The kind is `html` and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. The same markup, with no NUL, named `note.BIN` and content type `application/octet-stream` calls `decode_text_file` and `normalize_extracted_text`, keeps the markup and `secret`, and uses kind `bin`. The test writes `cache.txt` only then. The image-magic checker is not entered, and the HTML extractor is not entered for that bin name. Whitespace-only `blank.html` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust files were not edited, so rustfmt was not run. Offline: 140 passed, listed by `-rA`, and the run exited 0. The later 141-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTML extension ignores a NUL. `admit_project_file_part` calls `admit_file_text_part`. `page.HTML` with content type `application/octet-stream` and a NUL inside the first 2048 bytes still calls `extract_html_text` and `normalize_extracted_text`. The admission binding `decode_text_file` is patched and is not entered. `files.decode_text_file` is not patched, because `extract_html_text` calls that global. The HTML extractor is restored only after the `note.BIN` call. The extracted text contains `Hello HTMLNUL`, drops the script, drops the tags, and drops the NUL. The kind is `html` and both write flags are true only when the native writer is admitted. The test writes `project.json` and `cache.txt` only then. The same bytes named `note.BIN` with content type `application/octet-stream` continue with empty text and both write flags false. The HTML extractor, the admission decoder, and the image-magic checker are not entered for that bin name. Whitespace-only `blank.html` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. The Rust HTML arm does not contain `take(2048)`. The Python HTML arm does not contain `b"\0"`. Rust files were not edited, so rustfmt was not run. Offline: 141 passed, listed by `-rA`, and the run exited 0. The later 142-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files image content type before HTML extraction. `admit_project_file_part` calls `admit_file_text_part`. `page.HTML` with content type ` Image/GIF ; charset=binary` is an image before the HTML arm. That type does not itself start with `image/`. OCR off returns `ocr_required` and status 415 before the image-magic checker and before `extract_html_text`. The admission decoder is patched for that call and is not entered. With OCR on, the same markup is not a recognized image header, so the part returns `Uploaded image is corrupt.` and status 400 before `extract_html_text`. The HTML extractor stays patched, so it is not entered. The same markup, with no NUL, named `note.BIN` and content type `application/octet-stream` calls `decode_text_file` and `normalize_extracted_text`, keeps the markup and `secret`, and uses kind `bin`. The test writes `project.json` and `cache.txt` only then. The HTML extractor and the image-magic checker are not entered for that bin name. `blank.html` with the image content type and OCR off returns status 415, not the empty-text 422. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust checks `is_image_file` before `HTML_EXTENSIONS.contains`. Python checks `is_image_file` before `extension in HTML_EXTENSIONS`. Rust files were not edited, so rustfmt was not run. Offline: 142 passed, listed by `-rA`, and the run exited 0. The later 143-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files recognized GIF header on an HTML name. `admit_project_file_part` calls `admit_file_text_part`. `page.HTML` with content type ` Image/GIF ; charset=binary` and payload `GIF89aMARKERgif` stays on the image arm. OCR off returns `ocr_required` and status 415 before the image-magic checker and before `extract_html_text`. With OCR on, the recognized header continues with empty text, empty kind, and both write flags false. No OCR text is invented. The HTML extractor and the admission decoder stay patched and are not entered. The same header, with no NUL, named `note.BIN` and content type `application/octet-stream` calls `decode_text_file` and `normalize_extracted_text`, keeps `MARKERgif`, and uses kind `bin`. The test writes `project.json` and `cache.txt` only then. The HTML extractor and the image-magic checker are not entered for that bin name. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust files were not edited, so rustfmt was not run. Offline: 143 passed, listed by `-rA`, and the run exited 0. The later 144-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTML name with text/plain and a GIF header. `admit_project_file_part` calls `admit_file_text_part`. `page.HTML` with content type `text/plain` and payload `GIF89aMARKERgif` calls `extract_html_text` and `normalize_extracted_text`. The image-magic checker is patched and is not entered. The admission binding `decode_text_file` is patched and is not entered. `files.decode_text_file` is not patched, because `extract_html_text` calls that global. The HTML extractor is restored only after the `note.BIN` call. The extracted text keeps `MARKERgif`. The kind is `html` and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. The same header named `note.BIN` with content type `text/plain` calls `decode_text_file` and `normalize_extracted_text`, keeps `MARKERgif`, and uses kind `bin`. The test writes `cache.txt` only then. The HTML extractor and the image-magic checker are not entered for that bin name. Whitespace-only `blank.html` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. The Rust HTML arm does not contain `image_magic_ok(`. The Python HTML arm does not contain `_image_magic_ok(`. Rust files were not edited, so rustfmt was not run. Offline: 144 passed, listed by `-rA`, and the run exited 0. The later 145-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTM name with text/plain and a GIF header. `admit_project_file_part` calls `admit_file_text_part`. `page.HTM` with content type `text/plain` and payload `GIF89aMARKERgif` calls `extract_html_text` and `normalize_extracted_text`. The image-magic checker is patched and is not entered. The admission binding `decode_text_file` is patched and is not entered. `files.decode_text_file` is not patched, because `extract_html_text` calls that global. The HTML extractor is restored only after the `note.BIN` call. The extracted text keeps `MARKERgif`. The kind is `htm`, not `html`, and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. The same header named `note.BIN` with content type `text/plain` calls `decode_text_file` and `normalize_extracted_text`, keeps `MARKERgif`, and uses kind `bin`. The test writes `cache.txt` only then. The HTML extractor and the image-magic checker are not entered for that bin name. Whitespace-only `blank.HTM` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust files were not edited, so rustfmt was not run. Offline: 145 passed, listed by `-rA`, and the run exited 0. The later 146-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files image content type before an HTM name. `admit_project_file_part` calls `admit_file_text_part`. `page.HTM` with content type ` Image/GIF ; charset=binary` is an image before the HTML arm. That type does not itself start with `image/`. OCR off returns `ocr_required` and status 415 before the image-magic checker and before `extract_html_text`. The admission decoder is patched for that call and is not entered. With OCR on, payload `GIF89aMARKERgif` continues with empty text, empty kind, and both write flags false. No OCR text is invented. The HTML extractor stays patched and is not entered. The same header named `note.BIN` with content type `text/plain` calls `decode_text_file` and `normalize_extracted_text`, keeps `MARKERgif`, and uses kind `bin`. The test writes `project.json` and `cache.txt` only then. The HTML extractor and the image-magic checker are not entered for that bin name. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust files were not edited, so rustfmt was not run. Offline: 146 passed, listed by `-rA`, and the run exited 0. The later 147-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files corrupt image on an HTM name. `admit_project_file_part` calls `admit_file_text_part`. `page.HTM` with content type ` Image/GIF ; charset=binary` stays on the image arm. With OCR on, bytes that are not a recognized image header return `Uploaded image is corrupt.` and status 400 before `extract_html_text`. The admission decoder is patched for that call and is not entered. The HTML extractor stays patched and is not entered. `blank.HTM` with that image type and OCR off returns `ocr_required` and status 415 before the image-magic checker. The same markup named `note.BIN` with content type `text/plain` calls `decode_text_file` and `normalize_extracted_text`, keeps the markup and `secret`, and uses kind `bin`. The test writes `project.json` and `cache.txt` only then. The HTML extractor and the image-magic checker are not entered for that bin name. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust files were not edited, so rustfmt was not run. Offline: 147 passed, listed by `-rA`, and the run exited 0. The later 148-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTM name with text/html and a GIF header. `admit_project_file_part` calls `admit_file_text_part`. `page.HTM` with content type `text/html` and payload `GIF89aMARKERgif` calls `extract_html_text` and `normalize_extracted_text`. The image-magic checker is patched and is not entered. The admission binding `decode_text_file` is patched and is not entered. `files.decode_text_file` is not patched, because `extract_html_text` calls that global. The HTML extractor is restored only after the `note.BIN` call. The extracted text keeps `MARKERgif`. The kind is `htm`, not `html`, and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. The same header named `note.BIN` with content type `text/html` calls `decode_text_file` and `normalize_extracted_text`, keeps `MARKERgif`, and uses kind `bin`. The test writes `cache.txt` only then. The HTML extractor and the image-magic checker are not entered for that bin name. Whitespace-only `blank.HTM` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust files were not edited, so rustfmt was not run. Offline: 148 passed, listed by `-rA`, and the run exited 0. The later 149-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTML name with text/html and a GIF header. `admit_project_file_part` calls `admit_file_text_part`. `page.HTML` with content type `text/html` and payload `GIF89aMARKERgif` calls `extract_html_text` and `normalize_extracted_text`. The image-magic checker is patched and is not entered. The admission binding `decode_text_file` is patched and is not entered. `files.decode_text_file` is not patched, because `extract_html_text` calls that global. The HTML extractor is restored only after the `note.BIN` call. The extracted text keeps `MARKERgif`. The kind is `html` and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. The same header named `note.BIN` with content type `text/html` calls `decode_text_file` and `normalize_extracted_text`, keeps `MARKERgif`, and uses kind `bin`. The test writes `cache.txt` only then. The HTML extractor and the image-magic checker are not entered for that bin name. Whitespace-only `blank.html` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust files were not edited, so rustfmt was not run. Offline: 149 passed, listed by `-rA`, and the run exited 0. The later 150-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTML name with `TEXT/HTML` and a NUL. `admit_project_file_part` calls `admit_file_text_part`. `page.HTML` with content type `TEXT/HTML` and a NUL inside the first 2048 bytes still calls `extract_html_text` and `normalize_extracted_text`. The image-magic checker is patched and is not entered. The admission binding `decode_text_file` is patched and is not entered. `files.decode_text_file` is not patched, because `extract_html_text` calls that global. The HTML extractor is restored only after the `note.BIN` call. The extracted text contains `Hello HTMLCASE`, drops the script, drops the tags, and drops the NUL. The kind is `html` and both write flags are true only when the native writer is admitted. The test writes `project.json` and `cache.txt` only then. The same bytes named `note.BIN` with content type `TEXT/HTML` continue with empty text and both write flags false. The raw prefix is not `text/`, and the NUL blocks the sniffer. The HTML extractor, the admission decoder, and the image-magic checker are not entered for that bin name. Whitespace-only `blank.html` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust `is_text_file` has no `to_ascii_lowercase()` before `starts_with("text/")`. The Rust HTML arm does not consult `content_type`. The Python HTML arm does not contain `content_type` or `b"\0"`. Rust files were not edited, so rustfmt was not run. Offline: 150 passed, listed by `-rA`, and the run exited 0. The later 151-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTML name with a leading space and a NUL. `admit_project_file_part` calls `admit_file_text_part`. `page.HTML` with content type ` text/html` and a NUL inside the first 2048 bytes still calls `extract_html_text` and `normalize_extracted_text`. The image-magic checker is patched and is not entered. The admission binding `decode_text_file` is patched and is not entered. `files.decode_text_file` is not patched, because `extract_html_text` calls that global. The HTML extractor is restored only after the `note.BIN` call. The extracted text contains `Hello HTMLSPACE`, drops the script, drops the tags, and drops the NUL. The kind is `html` and both write flags are true only when the native writer is admitted. The test writes `project.json` and `cache.txt` only then. The same bytes named `note.BIN` with content type ` text/html` continue with empty text and both write flags false. The raw prefix is not `text/`, and the NUL blocks the sniffer. The text path does not trim. The HTML extractor, the admission decoder, and the image-magic checker are not entered for that bin name. Whitespace-only `blank.html` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust `is_text_file` has no `trim()` before `starts_with("text/")`. Python `is_text_file` has no strip before `startswith("text/")`. Rust files were not edited, so rustfmt was not run. Offline: 151 passed, listed by `-rA`, and the run exited 0. The later 152-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTML name with a charset parameter and a NUL. `admit_project_file_part` calls `admit_file_text_part`. `page.HTML` with content type `text/html; charset=utf-8` and a NUL inside the first 2048 bytes still calls `extract_html_text` and `normalize_extracted_text`. The image-magic checker is patched and is not entered. The admission binding `decode_text_file` is patched and is not entered. `files.decode_text_file` is not patched, because `extract_html_text` calls that global. The HTML extractor is restored only after the `note.BIN` call. The extracted text contains `Hello HTMLPARAM`, drops the script, drops the tags, and drops the NUL. The kind is `html` and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. The same bytes named `note.BIN` with that content type call `decode_text_file` and `normalize_extracted_text` before the NUL scan. The raw prefix is `text/`. The text path does not split on `;`. The text keeps the markup and `secret`, drops the NUL, and uses kind `bin`. The test writes `cache.txt` only then. The HTML extractor is not entered for that bin name. The same NUL named `note.BIN` with content type `application/xhtml+xml` continues with empty text and both write flags false. The admission decoder is patched for that call and is not entered. Whitespace-only `blank.html` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust `is_text_file` has no `split(';')` before `starts_with("text/")`. Python `is_text_file` has no semicolon split. Rust files were not edited, so rustfmt was not run. Offline: 152 passed, listed by `-rA`, and the run exited 0. The later 153-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTM name with `TEXT/HTML` and a NUL. `admit_project_file_part` calls `admit_file_text_part`. `page.HTM` with content type `TEXT/HTML` and a NUL inside the first 2048 bytes still calls `extract_html_text` and `normalize_extracted_text`. The image-magic checker is patched and is not entered. The admission binding `decode_text_file` is patched and is not entered. `files.decode_text_file` is not patched, because `extract_html_text` calls that global. The HTML extractor is restored only after the `note.BIN` call. The extracted text contains `Hello HTMCASE`, drops the script, drops the tags, and drops the NUL. The kind is `htm`, not `html`, and both write flags are true only when the native writer is admitted. The test writes `project.json` and `cache.txt` only then. The same bytes named `note.BIN` with content type `TEXT/HTML` continue with empty text and both write flags false. The raw prefix is not `text/`, and the NUL blocks the sniffer. The HTML extractor, the admission decoder, and the image-magic checker are not entered for that bin name. Whitespace-only `blank.HTM` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust `is_text_file` has no `to_ascii_lowercase()` before `starts_with("text/")`. Rust files were not edited, so rustfmt was not run. Offline: 153 passed, listed by `-rA`, and the run exited 0. The later 154-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTM name with a leading space and a NUL. `admit_project_file_part` calls `admit_file_text_part`. `page.HTM` with content type ` text/html` and a NUL inside the first 2048 bytes still calls `extract_html_text` and `normalize_extracted_text`. The image-magic checker is patched and is not entered. The admission binding `decode_text_file` is patched and is not entered. `files.decode_text_file` is not patched, because `extract_html_text` calls that global. The HTML extractor is restored only after the `note.BIN` call. The extracted text contains `Hello HTMSPACE`, drops the script, drops the tags, and drops the NUL. The kind is `htm`, not `html`, and both write flags are true only when the native writer is admitted. The test writes `project.json` and `cache.txt` only then. The same bytes named `note.BIN` with content type ` text/html` continue with empty text and both write flags false. The raw prefix is not `text/`, and the NUL blocks the sniffer. The text path does not trim. The HTML extractor, the admission decoder, and the image-magic checker are not entered for that bin name. Whitespace-only `blank.HTM` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust `is_text_file` has no `trim()` before `starts_with("text/")`. Python `is_text_file` has no strip before `startswith("text/")`. Rust files were not edited, so rustfmt was not run. Offline: 154 passed, listed by `-rA`, and the run exited 0. The later 155-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTM name with a charset parameter and a NUL. `admit_project_file_part` calls `admit_file_text_part`. `page.HTM` with content type `text/html; charset=utf-8` and a NUL inside the first 2048 bytes still calls `extract_html_text` and `normalize_extracted_text`. The image-magic checker is patched and is not entered. The admission binding `decode_text_file` is patched and is not entered. `files.decode_text_file` is not patched, because `extract_html_text` calls that global. The HTML extractor is restored only after the `note.BIN` call. The extracted text contains `Hello HTMPARAM`, drops the script, drops the tags, and drops the NUL. The kind is `htm`, not `html`, and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. The same bytes named `note.BIN` with that content type call `decode_text_file` and `normalize_extracted_text` before the NUL scan. The raw prefix is `text/`. The text path does not split on `;`. The text keeps the markup and `secret`, drops the NUL, and uses kind `bin`. The test writes `cache.txt` only then. The HTML extractor is not entered for that bin name. The same NUL named `note.BIN` with content type `application/xhtml+xml` continues with empty text and both write flags false. The admission decoder is patched for that call and is not entered. Whitespace-only `blank.HTM` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust `is_text_file` has no `split(';')` before `starts_with("text/")`. Python `is_text_file` has no semicolon split. Rust files were not edited, so rustfmt was not run. Offline: 155 passed, listed by `-rA`, and the run exited 0. The later 156-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTML name with exact `text/html` and a NUL. `admit_project_file_part` calls `admit_file_text_part`. `page.HTML` with content type `text/html` and a NUL inside the first 2048 bytes still calls `extract_html_text` and `normalize_extracted_text`. The image-magic checker is patched and is not entered. The admission binding `decode_text_file` is patched and is not entered. `files.decode_text_file` is not patched, because `extract_html_text` calls that global. The HTML extractor is restored only after the `note.BIN` call. The extracted text contains `Hello HTMLEXACT`, drops the script, drops the tags, and drops the NUL. The kind is `html` and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. The same bytes named `note.BIN` with exact `text/html` call `decode_text_file` and `normalize_extracted_text` before the NUL scan. The raw prefix is `text/`. The text keeps the markup and `secret`, drops the NUL, and uses kind `bin`. The test writes `cache.txt` only then. The HTML extractor and the image-magic checker are not entered for that bin name. Whitespace-only `blank.html` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust files were not edited, so rustfmt was not run. Offline: 156 passed, listed by `-rA`, and the run exited 0. The later 157-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files HTM name with exact `text/html` and a NUL. `admit_project_file_part` calls `admit_file_text_part`. `page.HTM` with content type `text/html` and a NUL inside the first 2048 bytes still calls `extract_html_text` and `normalize_extracted_text`. The image-magic checker is patched and is not entered. The admission binding `decode_text_file` is patched and is not entered. `files.decode_text_file` is not patched, because `extract_html_text` calls that global. The HTML extractor is restored only after the `note.BIN` call. The extracted text contains `Hello HTMEXACT`, drops the script, drops the tags, and drops the NUL. The kind is `htm`, not `html`, and both write flags are true only when the native writer is admitted. The test writes `project.json` only then. The same bytes named `note.BIN` with exact `text/html` call `decode_text_file` and `normalize_extracted_text` before the NUL scan. The raw prefix is `text/`. The text keeps the markup and `secret`, drops the NUL, and uses kind `bin`. The test writes `cache.txt` only then. The HTML extractor and the image-magic checker are not entered for that bin name. Whitespace-only `blank.HTM` refuses with `No readable text found in this file` before those writes. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust files were not edited, so rustfmt was not run. Offline: 157 passed, listed by `-rA`, and the run exited 0. The later 158-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files GIF extension before exact `text/html`. `admit_project_file_part` calls `admit_file_text_part`. `scan.GIF` is an image extension, so content type `text/html` does not select the text decoder or the HTML extractor. The payload is `GIF89aMARKERgif` plus a NUL inside the first 2048 bytes. OCR off returns `ocr_required` and status 415 before the image-magic checker, before the admission `decode_text_file`, and before `extract_html_text`. With OCR on, the recognized header continues with empty text, empty kind, and both write flags false. No OCR text is invented. The admission decoder and the HTML extractor stay patched and are not entered. The same bytes named `note.BIN` with exact `text/html` call `decode_text_file` and `normalize_extracted_text` before the NUL scan. The raw prefix is `text/`. The text keeps `MARKERgif`, drops the NUL, and uses kind `bin`. The test writes `cache.txt` and `project.json` only then. `files.decode_text_file` is not patched. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust files were not edited, so rustfmt was not run. Offline: 158 passed, listed by `-rA`, and the run exited 0. The later 159-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files corrupt GIF with exact `text/html` does not fall through. `admit_project_file_part` calls `admit_file_text_part`. `scan.GIF` stays on the image arm when the content type is `text/html`. With OCR on, bytes that are not a recognized image header return `Uploaded image is corrupt.` and status 400 before the admission `decode_text_file` and before `extract_html_text`. The HTML extractor stays patched and is not entered. OCR off returns `ocr_required` and status 415 before the image-magic checker. The same markup named `note.BIN` with exact `text/html` calls `decode_text_file` and `normalize_extracted_text`, keeps the markup and `secret`, and uses kind `bin`. The test writes `cache.txt` and `project.json` only then. `files.decode_text_file` is not patched. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. PDF still continues with both write flags false. Rust files were not edited, so rustfmt was not run. Offline: 159 passed, listed by `-rA`, and the run exited 0. The later 160-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files PDF before exact `text/html` and a NUL. `admit_project_file_part` calls `admit_file_text_part`. `notes.PDF` with content type `text/html` and a NUL inside the first 2048 bytes continues with empty text and both write flags false. The admission binding `decode_text_file` is patched after the `note.BIN` call and is not entered. `extract_html_text` is patched and is not entered. The image-magic checker is patched and is not entered. `files.decode_text_file` is not patched. The same bytes named `note.BIN` with exact `text/html` call `decode_text_file` and `normalize_extracted_text` before the NUL scan. The raw prefix is `text/`. The text keeps `PDFHTML`, drops the NUL, and uses kind `bin`. The test writes `project.json` and `cache.txt` only then. A lowercase `notes.pdf` with the same content type and payload also continues. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. Rust checks `continue_file()` before `is_text_file` on the PDF arm. Rust files were not edited, so rustfmt was not run. Offline: 160 passed, listed by `-rA`, and the run exited 0. The later 161-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files PDF and BIN continue for `TEXT/HTML` and a NUL. `admit_project_file_part` calls `admit_file_text_part`. `notes.PDF` with content type `TEXT/HTML` and a NUL inside the first 2048 bytes continues with empty text and both write flags false. The admission binding `decode_text_file` is patched before that call and is not entered. `extract_html_text` is patched and is not entered. The image-magic checker is patched and is not entered. `files.decode_text_file` is not patched. A lowercase `notes.pdf` with the same content type and payload also continues. The same bytes named `note.BIN` with `TEXT/HTML` continue with empty text and both write flags false. The raw prefix is not `text/`, and the NUL blocks the sniffer. The admission decoder, the HTML extractor, and the image-magic checker are not entered for that bin name. Token `PDFCASE` is kept by `normalize_extracted_text` of the real decoder and is absent from the continued messages. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. No `project.json` or `cache.txt` is written. Sorted names are only `denied`. Metadata and cache stay empty. Rust files were not edited, so rustfmt was not run. Offline: 161 passed, listed by `-rA`, and the run exited 0. The later 162-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files PDF and BIN continue for a leading-space HTML type and a NUL. `admit_project_file_part` calls `admit_file_text_part`. `notes.PDF` with content type ` text/html` and a NUL inside the first 2048 bytes continues with empty text and both write flags false. The admission binding `decode_text_file` is patched before that call and is not entered. `extract_html_text` is patched and is not entered. The image-magic checker is patched and is not entered. `files.decode_text_file` is not patched. A lowercase `notes.pdf` with the same content type and payload also continues. The same bytes named `note.BIN` with ` text/html` continue with empty text and both write flags false. The raw prefix is not `text/`, and the NUL blocks the sniffer. The text path does not trim. The admission decoder, the HTML extractor, and the image-magic checker are not entered for that bin name. Token `PDFSPACE` is kept by `normalize_extracted_text` of the real decoder and is absent from the continued messages. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. No `project.json` or `cache.txt` is written. Sorted names are only `denied`. Metadata and cache stay empty. Rust `is_text_file` has no `trim()` before `starts_with("text/")`. Python `is_text_file` has no strip before `startswith("text/")`. Rust files were not edited, so rustfmt was not run. Offline: 162 passed, listed by `-rA`, and the run exited 0. The later 163-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files PDF continues before an HTML charset parameter and a NUL, while BIN attaches. `admit_project_file_part` calls `admit_file_text_part`. `notes.PDF` with content type `text/html; charset=utf-8` and a NUL inside the first 2048 bytes continues with empty text and both write flags false. The admission binding `decode_text_file` is patched after the attaching `note.BIN` call and is not entered for the PDF name. `extract_html_text` is patched and is not entered. The image-magic checker is patched and is not entered. `files.decode_text_file` is not patched. A lowercase `notes.pdf` with the same content type and payload also continues. The same bytes named `note.BIN` call `decode_text_file` and `normalize_extracted_text` before the NUL scan. The raw prefix is `text/`. The text path does not split on `;`. The text keeps `PDFPARAM`, drops the NUL, and uses kind `bin`. The test writes `project.json` and `cache.txt` only then. The same bytes named `note.BIN` with content type `application/xhtml+xml` continue with empty text and both write flags false. The admission decoder is patched for that call and is not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. Rust `is_text_file` has no `split(';')` before `starts_with("text/")`. Python `is_text_file` has no semicolon split. Rust files were not edited, so rustfmt was not run. Offline: 163 passed, listed by `-rA`, and the run exited 0. The later 164-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files PDF continues before a normalized image content type. `admit_project_file_part` calls `admit_file_text_part`. `notes.PDF` with content type ` Image/GIF ; charset=binary` continues with empty text and both write flags false when OCR is off and when OCR is on. The payload is `GIF89aMARKERgif` plus a NUL inside the first 2048 bytes. The PDF arm returns `continue_file()` before `is_image_file`. The image-magic checker is patched and is not entered. The admission binding `decode_text_file` is patched and is not entered. `extract_html_text` is patched and is not entered. `files.decode_text_file` is not patched. A lowercase `notes.pdf` also continues. The same bytes named `note.BIN` with OCR off return `ocr_required` and status 415 before the image-magic checker. No OCR text is invented. `MARKERgif` is absent from the continued and refused messages. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. No `project.json` or `cache.txt` is written. Sorted names are only `denied`. Metadata and cache stay empty. Rust `continue_file()` is before `if is_image_file(` on the PDF arm, and that prefix has no `image_magic_ok(`. Python `_continue()` is before `if is_image_file(`, and that prefix has no `_image_magic_ok(`. Rust files were not edited, so rustfmt was not run. Offline: 164 passed, listed by `-rA`, and the run exited 0. The later 165-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files PDF continues when an image content type carries corrupt bytes. `admit_project_file_part` calls `admit_file_text_part`. `notes.PDF` with content type ` Image/GIF ; charset=binary` and OCR on continues with empty text and both write flags false. The payload is `<script>secret</script><p>Hello PDFCORRUPT</p>`. It is not a GIF header and it has no NUL. The saved image-magic function reports that payload as not an image. The patched image-magic checker is not entered for the PDF name. The admission binding `decode_text_file` is patched and is not entered. `extract_html_text` is patched and is not entered. `files.decode_text_file` is not patched. A lowercase `notes.pdf` also continues. The message is not `Uploaded image is corrupt.`. Real image magic is restored only for the `note.BIN` call. That call with OCR on returns `Uploaded image is corrupt.` and status 400 before the admission decoder and before `extract_html_text`. `PDFCORRUPT` and `secret` are absent from that message. Image magic is patched again, and `note.BIN` with OCR off returns `ocr_required` and status 415 before magic. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. No `project.json` or `cache.txt` is written. Sorted names are only `denied`. Metadata and cache stay empty. Rust files were not edited, so rustfmt was not run. Offline: 165 passed, listed by `-rA`, and the run exited 0. The later 166-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files empty PDF refuses before continue. `admit_project_file_part` calls `admit_file_text_part`. An empty `notes.PDF` returns `Uploaded file is empty: notes.PDF`, status 400, and `invalid_payload` before the PDF continue arm. The original filename is kept. An empty `notes.pdf` returns `Uploaded file is empty: notes.pdf`. An empty `notes.PDF` with content type ` Image/GIF ; charset=binary` and OCR on returns the same empty-file message. It does not return `Uploaded image is corrupt.` and it does not return status 415. An empty `note.BIN` returns `Uploaded file is empty: note.BIN`. The image-magic checker, the admission binding `decode_text_file`, and `extract_html_text` are patched and are not entered. `files.decode_text_file` is not patched. Non-owner modes, including `go_authoritative` and `shadow`, return 409. Their message is the ownership refusal, and it does not contain `empty`. No `project.json` or `cache.txt` is written. Sorted names are only `denied`. Metadata and cache stay empty. Rust files were not edited, so rustfmt was not run. Offline: 166 passed, listed by `-rA`, and the run exited 0. The later empty-order log passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files empty check is pinned before the PDF arm. The same 166 tests ran again. `test_rust_route_gates_project_writes` now reads the shipped sources. Rust `data.is_empty()` and `Uploaded file is empty: {filename}` are in the prefix before `extension == ".pdf"`, and that prefix has no `is_image_file(`. Python `payload == b""` and `Uploaded file is empty: {name}` are in the prefix before `_CONTINUED_EXTENSIONS`, and that prefix has no `if is_image_file(`. Rust was not compiled. The Python empty refusal ran again in that log. No epoch is installed. Offline: 166 passed, listed by `-rA`, and the run exited 0. The later 167-test run passed this test again. Ruff and three-file mypy passed in that same log. This is not 完成验收.
+- Project-files whitespace PDF continues, while whitespace BIN text refuses. `admit_project_file_part` calls `admit_file_text_part`. The payload is the bytes space, newline, and tab. It is not empty and it has no NUL. `normalize_extracted_text` of the real decoder returns an empty string. `notes.PDF` with content type `text/plain` continues with empty text and both write flags false. The admission binding `decode_text_file` is patched for that call and is not entered. `extract_html_text` and the image-magic checker are patched and are not entered. `files.decode_text_file` is not patched. A lowercase `notes.pdf` also continues. The message is not `No readable text found in this file`. The admission decoder is restored only for `note.BIN`. That call with `text/plain` returns `No readable text found in this file`, status 422, and `invalid_payload`. Both write flags stay false. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. No `project.json` or `cache.txt` is written. Sorted names are only `denied`. Metadata and cache stay empty. Rust files were not edited, so rustfmt was not run. Offline: 167 passed, listed by `-rA`, and the run exited 0. The later 168-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files whitespace PDF continues when the content type is missing. `admit_project_file_part` calls `admit_file_text_part`. The payload is the bytes space, newline, and tab. It is not empty and it has no NUL. `normalize_extracted_text` of the real decoder returns an empty string. A non-string content type is stored as an empty media value: `media = content_type if isinstance(content_type, str) else ""`. `notes.PDF` with content type `None` continues with empty text and both write flags false. The admission binding `decode_text_file` is patched for that call and is not entered. `extract_html_text` and the image-magic checker are patched and are not entered. `files.decode_text_file` is not patched. A lowercase `notes.pdf` also continues. The message is not `No readable text found in this file`. The admission decoder is restored only for `note.BIN`. That call with content type `None` returns `No readable text found in this file`, status 422, and `invalid_payload`, because the empty media value does not start with `text/` and the NUL sniffer still treats the bytes as text. Both write flags stay false. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. No `project.json` or `cache.txt` is written. Sorted names are only `denied`. Metadata and cache stay empty. Rust `admit_file_text_part` takes `content_type: &str`, so `None` is a Python boundary. Rust was not compiled. Offline: 168 passed, listed by `-rA`, and the run exited 0. The later 169-test run passed this test again. Ruff and three-file mypy passed in that same log. Rust was not compiled. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files missing filename attaches text only for the native writer. `admit_project_file_part` calls `admit_file_text_part`. The filename is `None` and the content type is `None`. A non-string filename becomes an empty name, and `Path("").suffix` is empty, so the kind is `text`. A non-string content type becomes empty media. The payload is `Hello NONAME` and it has no NUL. The NUL sniffer admits those bytes. The admission binding `decode_text_file` is wrapped, calls the real decoder, and is entered once. `extract_html_text` and the image-magic checker are patched and are not entered. `files.decode_text_file` is not patched. Both write flags are true only for ` python_disabled `. The text keeps `NONAME`. The test writes `project.json` and `cache.txt` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the decoder again. After the part function is patched, those modes still return 409 and do not leak `NONAME`. Rust empty-extension text uses kind `text` when `stripped.is_empty()`. Rust `admit_file_text_part` takes `&str`, so `None` stays a Python boundary. Rust was not compiled. An earlier run failed because the source assert read the gateway route file. The recorded log is the rerun after that assert reads `deepseek-policy` `file_upload.rs`. Offline: 169 passed, listed by `-rA`, and the run exited 0. The later 170-test run passed this test again. Ruff and three-file mypy passed in that same log. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files empty filename attaches text only for the native writer. `admit_project_file_part` calls `admit_file_text_part`. The filename and the content type are empty strings. `Path("").suffix` is empty, so the kind is `text`. The payload is `Hello EMPTYNAME` and it has no NUL. The NUL sniffer admits those bytes. The admission binding `decode_text_file` is wrapped, calls the real decoder, and is entered once. `extract_html_text` and the image-magic checker are patched and are not entered. `files.decode_text_file` is not patched. Both write flags are true only for ` python_disabled `. The text keeps `EMPTYNAME`. The test writes `project.json` and `cache.txt` only then. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the decoder again. After the part function is patched, those modes still return 409 and do not leak `EMPTYNAME`. This filename is a string, so it is the form Rust `admit_file_text_part` can receive. Rust was not compiled. Offline: 170 passed, listed by `-rA`, and the run exited 0. The later 171-test run passed this test again. Ruff and three-file mypy passed in that same log. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files empty filename with a NUL continues unless the content type is `text/plain`. `admit_project_file_part` calls `admit_file_text_part`. The filename is an empty string. The payload is `Hello EMPTYNUL` plus a NUL inside the first 2048 bytes. With an empty content type, the part continues with empty text and both write flags false. The admission binding `decode_text_file` is patched to refuse and is not entered. `extract_html_text` and the image-magic checker are patched and are not entered. `files.decode_text_file` is not patched. The same bytes with content type `text/plain` call the real decoder once through a counting wrapper. Normalization drops the NUL and keeps `EMPTYNUL`. The kind is `text` and both write flags are true only for ` python_disabled `. The test writes `project.json` and `cache.txt` only then. The raw prefix is `text/` before the NUL scan. Non-owner modes, including `go_authoritative` and `shadow`, return 409 for both the empty content type and `text/plain`, and they do not enter the decoder again. After the part function is patched, those modes still return 409 and do not leak `EMPTYNUL`. Rust was not compiled. Offline: 171 passed, listed by `-rA`, and the run exited 0. The later 172-test run passed this test again. Ruff and three-file mypy passed in that same log. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files empty filename with `TEXT/PLAIN` and a NUL continues. `admit_project_file_part` calls `admit_file_text_part`. The filename is an empty string. The content type is `TEXT/PLAIN`. The payload is `Hello EMPTYCASE` plus a NUL inside the first 2048 bytes. The raw prefix is not `text/`. Lowercasing that type would make it start with `text/`, and the text path does not lowercase it. The NUL blocks the sniffer. The part continues with empty text and both write flags false. The admission binding `decode_text_file` is patched to refuse and is not entered. `extract_html_text` and the image-magic checker are patched and are not entered. `files.decode_text_file` is not patched. Token `EMPTYCASE` is kept by `normalize_extracted_text` of the real decoder and is absent from the continued message. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. No `project.json` or `cache.txt` is written. Sorted names are only `denied`. Metadata and cache stay empty. Rust `is_text_file` has no `to_ascii_lowercase()` before `starts_with("text/")`. Python `is_text_file` has no `.lower(` before `startswith("text/")`. Rust was not compiled. Offline: 172 passed, listed by `-rA`, and the run exited 0. The later 173-test run passed this test again. Ruff and three-file mypy passed in that same log. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files empty filename with a leading-space plain type and a NUL continues. `admit_project_file_part` calls `admit_file_text_part`. The filename is an empty string. The content type is ` text/plain`. The payload is `Hello EMPTYSPACE` plus a NUL inside the first 2048 bytes. The raw prefix is not `text/`. Trimming that type would make it `text/plain`, and the text path does not trim. The NUL blocks the sniffer. The part continues with empty text and both write flags false. The admission binding `decode_text_file` is patched to refuse and is not entered. `extract_html_text` and the image-magic checker are patched and are not entered. `files.decode_text_file` is not patched. Token `EMPTYSPACE` is kept by `normalize_extracted_text` of the real decoder and is absent from the continued message. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. No `project.json` or `cache.txt` is written. Sorted names are only `denied`. Metadata and cache stay empty. Rust `is_text_file` has no `trim()` before `starts_with("text/")`. Python `is_text_file` has no strip before `startswith("text/")`. Rust was not compiled. Offline: 173 passed, listed by `-rA`, and the run exited 0. The later 174-test run passed this test again. Ruff and three-file mypy passed in that same log. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files empty filename with `text/plain; charset=utf-8` and a NUL attaches. `admit_project_file_part` calls `admit_file_text_part`. The filename is an empty string. The content type is `text/plain; charset=utf-8`. The payload is `Hello EMPTYPARAM` plus a NUL inside the first 2048 bytes. The raw prefix is `text/` before the NUL scan. The text path does not split on `;`. `Path("").suffix` is empty, so the kind is `text`. The admission binding `decode_text_file` is wrapped, calls the real decoder, and is entered once. `extract_html_text` and the image-magic checker are patched and are not entered. `files.decode_text_file` is not patched. Normalization drops the NUL and keeps `EMPTYPARAM`. Both write flags are true only for ` python_disabled `. The test writes `project.json` and `cache.txt` only then. The same bytes with content type `application/octet-stream` continue with empty text and both write flags false. The admission decoder is patched to refuse before that call and is not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 for both content types and do not enter the decoder again. After the part function is patched, those modes still return 409 and do not leak `EMPTYPARAM`. Sorted names are `cache.txt`, `denied`, and `project.json`. Metadata and cache hold only the attached text. Rust was not compiled. Offline: 174 passed, listed by `-rA`, and the run exited 0. The later 175-test run passed this test again. Ruff and three-file mypy passed in that same log. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files empty filename with a leading-space plain charset and a NUL continues. `admit_project_file_part` calls `admit_file_text_part`. The filename is an empty string. The content type is ` text/plain; charset=utf-8`. The payload is `Hello EMPTYLEAD` plus a NUL inside the first 2048 bytes. The raw prefix is not `text/`. Trimming that type would make it start with `text/`, and the text path does not trim. Splitting on `;` leaves ` text/plain`, which still does not start with `text/`. The text path does not split on `;`. The NUL blocks the sniffer. The part continues with empty text and both write flags false. The admission binding `decode_text_file` is patched to refuse and is not entered. `extract_html_text` and the image-magic checker are patched and are not entered. `files.decode_text_file` is not patched. Token `EMPTYLEAD` is kept by `normalize_extracted_text` of the real decoder and is absent from the continued message. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. No `project.json` or `cache.txt` is written. Sorted names are only `denied`. Metadata and cache stay empty. Rust was not compiled. Offline: 175 passed, listed by `-rA`, and the run exited 0. The later 176-test run passed this test again. Ruff and three-file mypy passed in that same log. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files empty filename with `TEXT/PLAIN; charset=utf-8` and a NUL continues. `admit_project_file_part` calls `admit_file_text_part`. The filename is an empty string. The content type is `TEXT/PLAIN; charset=utf-8`. The payload is `Hello EMPTYCASEPARAM` plus a NUL inside the first 2048 bytes. The raw prefix is not `text/`. Lowercasing the piece before `;` would make it `text/plain`, and the text path does not lowercase and does not split on `;`. The NUL blocks the sniffer. The part continues with empty text and both write flags false. The admission binding `decode_text_file` is patched to refuse and is not entered. `extract_html_text` and the image-magic checker are patched and are not entered. `files.decode_text_file` is not patched. Token `EMPTYCASEPARAM` is kept by `normalize_extracted_text` of the real decoder and is absent from the continued message. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. No `project.json` or `cache.txt` is written. Sorted names are only `denied`. Metadata and cache stay empty. Rust was not compiled. Offline: 176 passed, listed by `-rA`, and the run exited 0. The later 177-test run passed this test again. Ruff and three-file mypy passed in that same log. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files empty filename with a tab before `text/plain` and a NUL continues. `admit_project_file_part` calls `admit_file_text_part`. The filename is an empty string. The content type is a tab followed by `text/plain`. The payload is `Hello EMPTYTAB` plus a NUL inside the first 2048 bytes. The raw prefix is not `text/`. Stripping leading whitespace would make it `text/plain`, and the text path does not trim. The NUL blocks the sniffer. The part continues with empty text and both write flags false. The admission binding `decode_text_file` is patched to refuse and is not entered. `extract_html_text` and the image-magic checker are patched and are not entered. `files.decode_text_file` is not patched. Token `EMPTYTAB` is kept by `normalize_extracted_text` of the real decoder and is absent from the continued message. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. No `project.json` or `cache.txt` is written. Sorted names are only `denied`. Metadata and cache stay empty. Rust was not compiled. Offline: 177 passed, listed by `-rA`, and the run exited 0. The later 178-test run passed this test again. Ruff and three-file mypy passed in that same log. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files empty filename with `text/plain` followed by a tab and a NUL attaches. `admit_project_file_part` calls `admit_file_text_part`. The filename is an empty string. The content type is `text/plain` followed by a tab. The payload is `Hello EMPTYTRAIL` plus a NUL inside the first 2048 bytes. The raw prefix is `text/` before the NUL scan. A trailing tab does not stop that prefix. `Path("").suffix` is empty, so the kind is `text`. The admission binding `decode_text_file` is wrapped, calls the real decoder, and is entered once. `extract_html_text` and the image-magic checker are patched and are not entered. `files.decode_text_file` is not patched. Normalization drops the NUL and keeps `EMPTYTRAIL`. Both write flags are true only for ` python_disabled `. The test writes `project.json` and `cache.txt` only then. The same bytes with content type `application/octet-stream` continue with empty text and both write flags false. The admission decoder is patched to refuse before that call and is not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 for both content types and do not enter the decoder again. After the part function is patched, those modes still return 409 and do not leak `EMPTYTRAIL`. Sorted names are `cache.txt`, `denied`, and `project.json`. Metadata and cache hold only the attached text. Rust was not compiled. Offline: 178 passed, listed by `-rA`, and the run exited 0. The later 179-test run passed this test again. Ruff and three-file mypy passed in that same log. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files empty filename with content type exactly `text/` and a NUL attaches. `admit_project_file_part` calls `admit_file_text_part`. The filename is an empty string. The content type is `text/`. The payload is `Hello EMPTYPREFIX` plus a NUL inside the first 2048 bytes. The raw prefix is `text/` before the NUL scan. No subtype is required. `Path("").suffix` is empty, so the kind is `text`. The admission binding `decode_text_file` is wrapped, calls the real decoder, and is entered once. `extract_html_text` and the image-magic checker are patched and are not entered. `files.decode_text_file` is not patched. Normalization drops the NUL and keeps `EMPTYPREFIX`. Both write flags are true only for ` python_disabled `. The test writes `project.json` and `cache.txt` only then. The same bytes with content type `application/octet-stream` continue with empty text and both write flags false. The admission decoder is patched to refuse before that call and is not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409 for both content types and do not enter the decoder again. After the part function is patched, those modes still return 409 and do not leak `EMPTYPREFIX`. Sorted names are `cache.txt`, `denied`, and `project.json`. Metadata and cache hold only the attached text. Rust was not compiled. Offline: 179 passed, listed by `-rA`, and the run exited 0. The later 180-test run passed this test again. Ruff and three-file mypy passed in that same log. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files empty filename with content type `text` and no slash continues. `admit_project_file_part` calls `admit_file_text_part`. The filename is an empty string. The content type is `text`. The payload is `Hello EMPTYNOSLASH` plus a NUL inside the first 2048 bytes. The raw prefix is not `text/`. Adding a slash would make it start with `text/`, and the slash is required. The NUL blocks the sniffer. The part continues with empty text and both write flags false. The admission binding `decode_text_file` is patched to refuse and is not entered. `extract_html_text` and the image-magic checker are patched and are not entered. `files.decode_text_file` is not patched. Token `EMPTYNOSLASH` is kept by `normalize_extracted_text` of the real decoder and is absent from the continued message. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. No `project.json` or `cache.txt` is written. Sorted names are only `denied`. Metadata and cache stay empty. Rust was not compiled. Offline: 180 passed, listed by `-rA`, and the run exited 0. The later 181-test run passed this test again. Ruff and three-file mypy passed in that same log. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files empty filename with content type `Text/` and a NUL continues. `admit_project_file_part` calls `admit_file_text_part`. The filename is an empty string. The content type is `Text/`. The payload is `Hello EMPTYTITLE` plus a NUL inside the first 2048 bytes. The raw prefix is not `text/`. Lowercasing that type would make it `text/`, and the text path does not lowercase. The NUL blocks the sniffer. The part continues with empty text and both write flags false. The admission binding `decode_text_file` is patched to refuse and is not entered. `extract_html_text` and the image-magic checker are patched and are not entered. `files.decode_text_file` is not patched. Token `EMPTYTITLE` is kept by `normalize_extracted_text` of the real decoder and is absent from the continued message. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. No `project.json` or `cache.txt` is written. Sorted names are only `denied`. Metadata and cache stay empty. Rust was not compiled. Offline: 181 passed, listed by `-rA`, and the run exited 0. The later 182-test run passed this test again. Ruff and three-file mypy passed in that same log. Go was not edited. No epoch was installed. This is not 完成验收.
+- Project-files empty filename with content type `TEXT/` and a NUL continues. `admit_project_file_part` calls `admit_file_text_part`. The filename is an empty string. The content type is `TEXT/`. The payload is `Hello EMPTYUPPERPREFIX` plus a NUL inside the first 2048 bytes. The raw prefix is not `text/`. Lowercasing that type would make it `text/`, and the text path does not lowercase. The slash is present. The NUL blocks the sniffer. The part continues with empty text and both write flags false. The admission binding `decode_text_file` is patched to refuse and is not entered. `extract_html_text` and the image-magic checker are patched and are not entered. `files.decode_text_file` is not patched. Token `EMPTYUPPERPREFIX` is kept by `normalize_extracted_text` of the real decoder and is absent from the continued message. Non-owner modes, including `go_authoritative` and `shadow`, return 409 and do not enter the patched part function. No `project.json` or `cache.txt` is written. Sorted names are only `denied`. Metadata and cache stay empty. Rust was not compiled. Offline: 182 passed, listed by `-rA`, and the run exited 0. Ruff and three-file mypy passed in that same log. Go was not edited. No epoch was installed. This is not 完成验收.
+- Selectable PDF admission refuses a textless PDF and project-files still continues. `admit_selectable_pdf` calls the shipped `extract_pdf_text` with OCR disabled. A blank one-page PDF returns action `refuse`, `cacheWrite` false, status 422, and code `ocr_required`. The message is `Scanned/image-only PDF requires OCR. Enable OCR and retry, or convert it to selectable text first.` `files.extract_pdf_ocr` is patched and is not entered. The same function returns shipped text for a one-page PDF whose content stream draws `Hello PDF`. The kind is `pdf` and `cacheWrite` is true. The test writes `cache.txt` only then. After that call, `extract_pdf_text` is patched to refuse. `admit_project_file_part` continues `notes.PDF` and `notes.pdf` for those selectable bytes. Both write flags stay false, and `Hello PDF` is absent from the continued message. The patched extractor is not entered. Non-owner modes, including `go_authoritative` and `shadow`, return 409. No `project.json` is written. Sorted names are `cache.txt` and `denied`. The project-files PDF arm is not moved onto selectable extraction. Rust was not compiled. Offline: 4 passed, listed by `-rA`, and the run exited 0. The later 5-test run passed this test again. Ruff and four-file mypy passed in that same log. Go was not edited. No epoch was installed. This is not 完成验收.
+- PDF page layout returns shipped geometry. `render_pdf_page_layout` reads a one-page selectable PDF through PyMuPDF. Page 1 returns index 1, page count 1, width 200, and height 200. Page 5 clamps to index 1 with the same width and height. The word list is a list, and `hasText` matches whether that list is non-empty. When words are present, the visible text contains `Hello`. Bytes that are not a PDF raise status 415 and `unsupported_file`, and the message starts with `PDF page text layout is unavailable`. `render_pdf_page_png` is patched and is not entered. The function writes no file. `pdftoppm` is not called. Rust was not compiled. Offline: 5 passed, listed by `-rA`, and the run exited 0. Ruff and four-file mypy passed in that same log. Go was not edited. No epoch was installed. This is not 完成验收.
+
+Not finished, and not 完成验收:
+
+- Vault reopen after a real worker restart, with the server key removed.
+- Compiled execution of the successor, the projection, schema v7, the tool
+  continuation, the workspace context, `resume_stored_tools`,
+  `retained_driver_tool_results`, `next_model_turn`,
+  `published_model_answer`, `settle_published_answer`,
+  `published_dependency_output`, `dependency_provider_body`,
+  `provider_body_from_outputs`, `execution_send_lease`,
+  `admitted_provider_send`, `provider_exchange_unknown`, and
+  `follow_up_exchange`, `workspace_tool_lease`,
+  `agent_node_send_deadline`, and `execution_send_budget`,
+  `admit_upload_body`, and `admit_file_text_part`,
+  `admit_project_metadata_write`, and `admit_project_file_part`, and
+  `extract_pdf_document`, `extract_html_text`, `extract_docx_text`,
+  `extract_pptx_text`, `extract_xlsx_text`, and `extract_epub_text`.
+  Cargo and `go test` were not run.
+  `pdftoppm` is not on PATH, so `render_pdf_page_png` was not executed.
+  The serde_json round trip inside `node_effect_value` was not executed. No
+  provider receipt shows the effect. The Python oracle redirects only the
+  reminders file. Other data-plane tools in that oracle still use their
+  module globals.
+- A crash after a tool write and before the result file is not retried,
+  because the SQL row is already confirmed. Resume then stays
+  `awaiting_tools`. The driver returns `errAgentDriverTools` when no stored
+  result is visible and does not treat that as `NOT_APPLIED`. When copies
+  are visible it returns the waiting effect and does not settle the node.
+  The worker reads the Rust result file, not `decision.Events`. A follow-up
+  with no further tool calls is stored under `retained-model-turns`. When
+  that file is a finished answer, publish attaches `publishedAnswer` and sets
+  `ANSWER_PUBLISHED`. Settlement signs a receipt over the unchanged tool
+  request and the answer artifact. `tasks` calls `RecordOutcome` and then
+  `SettleTask` only when that receipt and `TaskOutput` are present. A missing
+  receipt or a missing answer file stays `AWAITING_TOOLS` and is not state
+  `NOT_APPLIED`. The worker does not install an epoch. `SettleAgentTask` was
+  not executed, so a terminal run was not observed. Resume leaves the wait
+  only when the public stream contains `publishedAnswer`. A missing control
+  client writes no marker. A retrying node does not mint a successor from
+  `ANSWER_PUBLISHED`. `agent_task_prior_outputs` still passes no saved
+  answer, so a bare tool request fails that call. The executor reads the
+  saved follow-up and can pass that output into the dependent payload before
+  the provider call. A missing file returns `AGENT_DEPENDENCY_UNPUBLISHED`
+  and does not mark the node unknown. The Python twins now put that saved
+  text in the worker and synthesis messages. The Rust helper calls
+  `worker_payload` and `synthesis_payload`, but those Rust functions were
+  not executed. The provider exchange was not executed. A dead execution
+  lease returns `AGENT_EXECUTION_LEASE_DENIED` before that exchange, marks
+  the admitted node unknown, and does not store a provider effect or state
+  `NOT_APPLIED`. `execution_send_lease` was not executed in Rust. The Python
+  function was executed. `rustfmt --edition 2024 --check` passed on the two
+  formatted files. A live lease is the only result `admitted_provider_send`
+  forwards. A lost provider receipt returns `AGENT_PROVIDER_RESULT_UNKNOWN`
+  and does not store an effect or state `NOT_APPLIED`. Those Rust decisions
+  were not executed. The Python functions were executed. The second
+  follow-up exchange now calls `execution_send_lease` and
+  `admitted_provider_send` before the send. A lost receipt calls
+  `follow_up_exchange` and does not store a model turn or mark the confirmed
+  row unknown. `follow_up_exchange` was not executed in Rust. The Python
+  function was executed. The workspace retain flag now comes from
+  `admitted_provider_send(execution_send_lease(...)).allowed`. A dead or
+  non-positive clock passes `expired` and does not call the tool.
+  `workspace_tool_lease` was not executed in Rust. The Python function was
+  executed. `deadline > current` is gone. `agent_node_send_deadline` now
+  returns the minimum of the grant expiry, the claim lease, and the writer
+  lease. An elapsed or non-positive minimum is refused by
+  `execution_send_lease` before the provider exchange and before the live
+  workspace flag. The Rust function was not executed. The Python function
+  was executed. No epoch is installed. `execution_send_budget` now arms the
+  provider timeout only for the remaining whole seconds of that live
+  minimum. An elapsed or non-positive remainder does not arm the timeout
+  and does not call the tool. The Rust function was not executed. The
+  Python function was executed. `deadline - now` is no longer in the task
+  or plan executor. `POST /api/file-text` now calls `admit_upload_body`
+  before `parse_multipart` and `admit_file_text_part` before `write_cache`.
+  A legal text part returns the decoded text. An empty body, an empty part,
+  and whitespace-only text do not write the cache. Corrupt image bytes with
+  OCR on refuse before `ocr_image`. A recognized image header continues and
+  does not invent OCR text. PDF bytes stay on `extract_pdf_document`. Those
+  Rust functions were not executed. The Python functions were executed. No
+  epoch is installed. `POST /api/project-files` now calls
+  `admit_project_metadata_write` before `read_multipart_upload` and
+  `admit_project_file_part` before `add_project_files`. A legal text part
+  carries the decoded text and sets the write flags. An empty upload refuses
+  before metadata or cache writes. A Python-owned store returns 409 and
+  writes nothing. PDF and a recognized image header still reach
+  `add_project_files` without invented text. Readable HTML now returns the
+  shipped extractor text and sets the write flags. A script-only HTML part
+  refuses before `add_project_files`. Those Rust functions were not
+  executed. The Python functions were executed. No epoch is installed.
+  `admit_selectable_pdf` calls `extract_pdf_text` with OCR disabled. A legal
+  pypdf page returns that text and the test stores it only when `cacheWrite`
+  is true. A corrupt PDF returns `Could not extract text from this PDF` and
+  does not write. `extract_pdf_document` was not executed. `pdftoppm` is not
+  on PATH, so a page image was not rendered. No epoch is installed.
+  `POST /api/file-text` now calls `extract_docx_text` for `.docx` before
+  `write_cache`. A legal package returns that shipped text and the test
+  stores it only when `cacheWrite` is true. An invalid package returns
+  `Invalid docx file` or `Invalid docx XML`. A package with no readable
+  paragraph returns `No readable text found in this file` and does not
+  write. `extract_docx_text` in Rust was not executed. The Python function
+  was executed. No epoch is installed. `POST /api/file-text` now calls
+  `extract_pptx_text` for `.pptx` before `write_cache`. A legal package
+  returns that shipped text and the test stores it only when `cacheWrite`
+  is true. An invalid package returns `Invalid pptx file` or `Invalid pptx
+  XML`. A slide with no readable text returns `No readable text found in
+  this file` and does not write. `extract_pptx_text` in Rust was not
+  executed. The Python function was executed. No epoch is installed.
+  `POST /api/file-text` now calls `extract_xlsx_text` for `.xlsx` before
+  `write_cache`. A legal workbook returns that shipped text and the test
+  stores it only when `cacheWrite` is true. Bytes `PK` and a zip that is not
+  a workbook return `Invalid xlsx file`. An empty workbook returns
+  `No readable text found in this file` and does not write.
+  `extract_xlsx_text` in Rust was not executed. The Python function was
+  executed. No epoch is installed. `POST /api/file-text` now calls
+  `extract_epub_text` for `.epub` before `write_cache`. A legal package
+  returns that shipped text and the test stores it only when `cacheWrite`
+  is true. Bytes `PK` return `Invalid epub file`. A nav-only package, a
+  whitespace chapter, and a script-only chapter return
+  `No readable text found in this file` and do not write.
+  `extract_epub_text` in Rust was not executed. The Python function was
+  executed. No epoch is installed. `POST /api/project-files` now attaches
+  shipped EPUB text only when the native writer owns
+  `project_metadata_store`. A legal package sets both write flags and the
+  test stores `project.json` only then. Bytes `PK` return `Invalid epub
+  file` before metadata or cache writes. A nav-only package, a whitespace
+  chapter, and a script-only chapter return `No readable text found in this
+  file` and do not write. Modes that are not `python_disabled` still return
+  409 and do not enter the writers. PDF stays on `extract_pdf_document`
+  with both write flags false. `admit_project_file_part` in Rust was not
+  executed. The Python function was executed. No epoch is installed.
+  `POST /api/project-files` now attaches shipped DOCX text only when the
+  native writer owns `project_metadata_store`. A legal package sets both
+  write flags and the test stores `project.json` only then. Bytes `PK`
+  return `Invalid docx file`. A zip whose `document.xml` is not XML returns
+  `Invalid docx XML`. A whitespace paragraph returns `No readable text found
+  in this file`. Those refusals happen before metadata or cache writes.
+  Modes that are not `python_disabled` still return 409 and do not enter
+  the writers. PDF stays on `extract_pdf_document` with both write flags
+  false. `extract_docx_text` in Rust was not executed. The Python function
+  was executed. No epoch is installed. `POST /api/project-files` now attaches
+  shipped PPTX text only when the native writer owns
+  `project_metadata_store`. A legal slide sets both write flags and the test
+  stores `project.json` only then. Bytes `PK` return `Invalid pptx file`. A
+  zip whose slide XML is not XML returns `Invalid pptx XML`. A whitespace
+  slide returns `No readable text found in this file`. Those refusals happen
+  before metadata or cache writes. Modes that are not `python_disabled`
+  still return 409 and do not enter the writers. PDF stays on
+  `extract_pdf_document` with both write flags false. `extract_pptx_text` in
+  Rust was not executed. The Python function was executed. No epoch is
+  installed. `POST /api/project-files` now attaches shipped XLSX text only
+  when the native writer owns `project_metadata_store`. A legal workbook
+  sets both write flags and the test stores `project.json` only then. Bytes
+  `PK` and a zip that is not a workbook return `Invalid xlsx file`. An empty
+  workbook and a whitespace cell return `No readable text found in this
+  file`. Those refusals happen before metadata or cache writes. Modes that
+  are not `python_disabled` still return 409 and do not enter the writers.
+  PDF stays on `extract_pdf_document` with both write flags false.
+  `extract_xlsx_text` in Rust was not executed. The Python function was
+  executed. No epoch is installed.
+- A resume that arrives before the driver has queried the row still cannot
+  see that SQL row. The HTTP classifier does not query the journal, and it
+  does not invent an observation when the worker client is absent. A failed
+  event read is an HTTP error, not an admission.
+- Exact-head CI, Evidence Assembly, zero-Python workload, desktop, Android,
+  and every other matrix row still short of 完成验收.
+
+- Cached `file_page_layout` runs through the prebuilt native gateway
+  `GET /api/file-page-layout`. `cache_file_chunks` writes the index and the
+  `.source` bytes under the isolated workspace. A cached `text/plain` file
+  returns status 415, code `unsupported_file`, and `Page text layout is only
+  available for PDF files`. The same non-PDF bytes stored with kind `pdf`
+  return a message that starts with `PDF page text layout is unavailable`,
+  so the non-PDF refusal is the check before the renderer. A cached one-page
+  PDF requested at page 5 returns index 1, page count 1, width 612, height
+  792, text `Hello pdf\nWorld`, and the shipped Helvetica word boxes. The
+  cache names are unchanged, no PNG is written, and the source bytes are
+  unchanged. Python `file_page_layout`, `render_pdf_page_layout`, and
+  `render_pdf_page_png` are patched to raise and are not entered. No epoch
+  is installed. `pdftoppm` is not called. The new Rust unit test calls
+  `file_page_layout` the same way. Cargo was not started, so that unit test
+  was not executed. `rustfmt --edition 2024 --check` failed once on wrapping
+  and passed after formatting. The recorded log is that rerun. The gateway
+  is the 2026-10-07 prebuilt binary, 106881024 bytes, SHA-256
+  `BE20445DA7B186421DED7F12D458D0C8EA22860767A7FD067686566505286371`. It is
+  not a compile of this HEAD. Current `file_page_layout` source matches
+  `291092e9`. Offline: 6 passed, listed by `-rA`, and the run exited 0.
+  Ruff and four-file mypy passed in that log. This is not 完成验收.
+
+- Cached `GET /api/file-page-search` runs through the same prebuilt native
+  gateway. `cache_file_chunks` writes the index, the page texts, and the
+  `.source` bytes. An empty query and a whitespace query return status 400,
+  code `invalid_payload`, and `Search query is required`. Those bodies have
+  no `matches` field, so the scan's empty-needle success path is not the
+  result. Query `beta` returns two matches on pages 1 and 2, and each matched
+  text is `beta`. Query `strasse` matches the cached page that contains
+  `Straße`. The cache names and source bytes are unchanged. No PNG is
+  written. Python `file_page_search` is patched to raise and is not entered.
+  No epoch is installed. `pdftoppm` is not called. Cargo was not started.
+  The existing Rust `file_page_search` unit test was not executed. Offline:
+  1 passed, listed by `-rA`, and the run exited 0. Ruff and one-file mypy
+  passed in that log. This is not 完成验收.
+
+- Cached `POST /api/file-page-text` runs through the same prebuilt native
+  gateway. `cache_file_chunks` writes two page texts and the `.source` bytes.
+  Page 1 returns `page one`. Page 2 returns `page two`. Page 9 clamps to
+  index 2 and returns `page two`. A 32-hex id with no index returns status
+  410, code `file_index_expired`, and `Uploaded file index has expired or is
+  missing`. That call writes no index. The cache names and source bytes stay
+  unchanged. No PNG is written. Python `file_page_text` is patched to raise
+  and is not entered. No epoch is installed. `pdftoppm` is not called. Cargo
+  was not started. The existing Rust `file_page_text` unit test was not
+  executed. Offline: 1 passed, listed by `-rA`, and the run exited 0. Ruff
+  and one-file mypy passed in that log. This is not 完成验收.
+
+- Cached `POST /api/file-reader` runs through the same prebuilt native
+  gateway. `cache_file_chunks` writes at least two chunks and the `.source`
+  bytes. Start 1 with count 1 returns the writer's first chunk text, display
+  index one past the stored index, `hasNext` true, and no `vector`. Start 2
+  returns the second chunk, which contains `BETA-MARKER`, and `hasPrevious`
+  true. `chunkStart` `bad` returns status 400, code `invalid_payload`, and
+  `Invalid reader start`. A missing 32-hex id with that same bad start
+  returns status 410 and `Uploaded file index has expired or is missing`,
+  because the index load happens before the start check. The cache names
+  and source bytes stay unchanged. No PNG is written. Python
+  `file_reader_window` is patched to raise and is not entered. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started. Offline: 1
+  passed, listed by `-rA`, and the run exited 0. Ruff and one-file mypy
+  passed in that log. This is not 完成验收.
+
+- Cached `POST /api/file-chunk` runs through the same prebuilt native
+  gateway. `cache_file_chunks` writes at least two chunks and the `.source`
+  bytes. Chunk index 1 returns the writer's first raw chunk, including its
+  `vector`. Chunk index 2 returns the second raw chunk. That text contains
+  `BETA-MARKER`, and the chunk still has `vector`. An index one past the
+  writer's list returns status 404, code `not_found`, and `Chunk not found`.
+  A missing 32-hex id with numeric index 1 returns status 410, code
+  `file_index_expired`, and `Uploaded file index has expired or is missing`.
+  The same missing id with `chunkIndex` `bad` returns status 400, code
+  `invalid_payload`, and `Invalid chunk index`, because the index is parsed
+  before the cache load. The cache names and source bytes stay unchanged.
+  No PNG is written. Python `load_cached_file` is patched to raise and is
+  not entered. There is no separate Python `file_chunk` helper. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started. Offline: 1
+  passed, listed by `-rA`, and the run exited 0. Ruff and one-file mypy
+  passed in that log. This is not 完成验收.
+
+- Cached `GET /api/file-source` runs through the same prebuilt native
+  gateway. `cache_file_chunks` writes `source.txt` and the `.source` bytes.
+  The response body is those bytes. The content type is `text/plain;
+  charset=utf-8`. The disposition is inline, with `nosniff` and `no-store`.
+  `download=false` stays inline. `download=1` is an attachment. A missing
+  32-hex id returns status 410, code `file_index_expired`, and `Uploaded
+  file index has expired or is missing`. After the `.source` file is
+  removed, the same id returns status 410 and `Original uploaded file has
+  expired or is missing`. The index bytes stay unchanged. No PNG is written.
+  Python `cached_file_source` is patched to raise and is not entered. No
+  epoch is installed. `pdftoppm` is not called. Cargo was not started.
+  Offline: 1 passed, listed by `-rA`, and the run exited 0. Ruff and
+  one-file mypy passed in that log. This is not 完成验收.
+
+- `POST /api/file-text` runs through the same prebuilt native gateway. A
+  `notes.txt` upload of `hello\nworld` returns kind `txt`, that text, preview
+  `hello\nworld`, char count 11, chunk count 1, `chunked` false, and
+  `sourceAvailable` true. The gateway writes `{fileId}.json` and
+  `{fileId}.source`. `GET /api/file-source` returns those bytes. A
+  non-multipart body returns status 400, code `invalid_payload`, and
+  `Expected multipart/form-data`. An empty `empty.txt` returns status 400
+  and `Uploaded file is empty: empty.txt`. Both refusals leave the cache
+  empty. Python `extract_uploaded_file` and `cache_file_chunks` are patched
+  to raise and are not entered. No epoch is installed. `pdftoppm` is not
+  called. Cargo was not started. Offline: 1 passed, listed by `-rA`, and
+  the run exited 0. Ruff and one-file mypy passed in that log. This is not
+  完成验收.
+
+- `POST /api/file-text` extracts HTML on the same prebuilt native gateway.
+  A script-only `page.html` returns status 422, code `invalid_payload`, and
+  `No readable text found in this file`, and the cache stays empty.
+  `<p>Hello</p><script>secret()</script>` named `page.html` returns kind
+  `html` and text `Hello`. The script is absent from that text. The stored
+  source and `GET /api/file-source` both return the original HTML, including
+  `secret()`. The same bytes named `page.htm` return kind `htm`, not
+  `html`, and the same text. The two file ids differ. Python
+  `extract_uploaded_file` and `cache_file_chunks` are patched to raise and
+  are not entered. No epoch is installed. `pdftoppm` is not called. Cargo
+  was not started. Offline: 1 passed, listed by `-rA`, and the run exited
+  0. Ruff and one-file mypy passed in that log. This is not 完成验收.
+
+- `POST /api/file-text` keeps the HTML kind on the lowercased extension.
+  A whitespace-only `blank.html` returns status 422, code `invalid_payload`,
+  and `No readable text found in this file`, and the cache stays empty.
+  `page.HTM` with text/html returns kind `htm`, not `html`, and text
+  `Hello`. The stored source and `GET /api/file-source` return the original
+  HTML, including `secret()`. Python `extract_uploaded_file` and
+  `cache_file_chunks` are patched to raise and are not entered. No epoch
+  is installed. `pdftoppm` is not called. Cargo was not started. Offline:
+  1 passed, listed by `-rA`, and the run exited 0. Ruff and one-file mypy
+  passed in that log. This is not 完成验收.
+
+- `POST /api/project-files` runs through the same prebuilt native gateway.
+  Mode `python_authoritative` returns status 409, code
+  `NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED`, and the shipped message that
+  the project metadata store is still written by Python. `project.json`
+  bytes stay equal to the seed. No `files` directory is created, and
+  `.local-rag` is absent. Mode `python_disabled` stores `notes.txt` as kind
+  `txt` with preview `hello project`. The document id is 16 characters and
+  the file id is 32 lowercase hex. `project.json` records that file id and
+  preview, keeps `createdAt` 1, and advances `updatedAt`. The source file
+  bytes are `hello project`. `GET /api/workspace/projects/proj-demo`
+  returns that document, file count 1. `POST /api/file-reader` and
+  `GET /api/file-source` with the project id return the same bytes. Python
+  `admit_project_file_part` and `write_project` are patched to raise and
+  are not entered. No epoch is installed. `pdftoppm` is not called. Cargo
+  was not started. Offline: 1 passed, listed by `-rA`, and the run exited
+  0. Ruff and one-file mypy passed in that log. This is not 完成验收.
+
+- `POST /api/project-files` with `python_disabled` refuses a bad upload on
+  the same prebuilt native gateway. `blob.bin` with content type
+  `application/octet-stream` and bytes `a`, NUL, `b` returns status 415,
+  code `unsupported_file`, and `Unsupported file type. Use txt, md, csv,
+  json, code files, docx, xlsx, pptx, epub, pdf, image, or text-based
+  files.` `project.json` stays equal to the seed. No `files` directory is
+  created. Project id `missing-proj` returns status 404, code `not_found`,
+  and `Project not found`. That project directory is not created. The seeded
+  project bytes stay unchanged. `.local-rag` is absent. Python
+  `admit_project_file_part` and `write_project` are patched to raise and
+  are not entered. No epoch is installed. `pdftoppm` is not called. Cargo
+  was not started. Offline: 1 passed, listed by `-rA`, and the run exited
+  0. Ruff and one-file mypy passed in that log. This is not 完成验收.
+
+- `POST /api/project-files` enforces auth on the same prebuilt native
+  gateway. `AUTH_DISABLED` is unset. `AUTH_TOKEN` is set.
+  `DEEPSEEK_RUNTIME_MODE=python_disabled`. A `notes.txt` upload with no
+  token returns status 401. The body is `{"error": {"code": "UNAUTHORIZED",
+  "message": "Auth required"}}`. `project.json` stays equal to the seed and
+  no `files` directory is created. The same upload with `Authorization:
+  Bearer` and that token returns `ok`, kind `txt`, preview `hello project`,
+  and a 32-hex file id. The source bytes are `hello project`. `createdAt`
+  stays 1 and `updatedAt` advances. Python `admit_project_file_part` and
+  `write_project` are patched to raise and are not entered. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started. Offline: 1
+  passed, listed by `-rA`, and the run exited 0. Ruff and one-file mypy
+  passed in that log. This is not 完成验收.
+
+- `POST /api/project-files` refuses a multipart body with no file on the
+  same prebuilt native gateway. `AUTH_DISABLED` is unset, `AUTH_TOKEN` is
+  set, and the request sends that bearer token.
+  `DEEPSEEK_RUNTIME_MODE=python_disabled`. The body has a `note` field and
+  no file part. The response is status 400, code `invalid_payload`, and
+  `No file uploaded`. `project.json` stays equal to the seed. No `files`
+  directory is created. `.local-rag` is absent. Python
+  `admit_project_file_part` and `write_project` are patched to raise and
+  are not entered. No epoch is installed. `pdftoppm` is not called. Cargo
+  was not started. Offline: 1 passed, listed by `-rA`, and the run exited
+  0. Ruff and one-file mypy passed in that log. This is not 完成验收.
+
+- `POST /api/project-files` refuses an empty file on the same prebuilt
+  native gateway. `AUTH_DISABLED` is unset, the bearer token matches
+  `AUTH_TOKEN`, and `DEEPSEEK_RUNTIME_MODE=python_disabled`. An empty
+  `notes.txt` returns status 400, code `invalid_payload`, and `Uploaded
+  file is empty: notes.txt`. `project.json` stays equal to the seed. No
+  `files` directory is created. `.local-rag` is absent. Python
+  `admit_project_file_part` and `write_project` are patched to raise and
+  are not entered. No epoch is installed. `pdftoppm` is not called. Cargo
+  was not started. Offline: 1 passed, listed by `-rA`, and the run exited
+  0. Ruff and one-file mypy passed in that log. This is not 完成验收.
+
+- `GET /api/download` runs through the same prebuilt native gateway.
+  `store_generated_file` writes a markdown file and an SVG under the
+  isolated `.generated` directory. The markdown response body is those
+  bytes. The content type is `text/markdown; charset=utf-8`. The
+  disposition is `attachment; filename="notes.md"`, including when
+  `inline=1`. The SVG with `inline=false` is `attachment;
+  filename="mindmap.svg"` and content type `image/svg+xml`. `inline=1`
+  changes that SVG to inline and returns the same bytes. A missing 32-hex
+  id returns status 404, code `not_found`, and `File does not exist or has
+  expired`. No generated file is created for that id. The stored bytes stay
+  unchanged. Python `store_generated_file` is patched after the writes and
+  is not entered by the HTTP calls. No epoch is installed. `pdftoppm` is
+  not called. Cargo was not started. An earlier mypy check failed because
+  `Path.write_bytes` returns an int. The recorded log is the rerun after
+  the writers return None. Offline: 1 passed, listed by `-rA`, and the run
+  exited 0. Ruff and one-file mypy passed in that log. This is not 完成验收.
+
+- `GET /api/download` treats the remaining SVG inline synonyms on the same
+  prebuilt native gateway. `store_generated_file` writes the SVG.
+  `inline=yes` and `inline=on` return those bytes with content type
+  `image/svg+xml` and `inline; filename="mindmap.svg"`. `inline=0` returns
+  the same bytes as `attachment; filename="mindmap.svg"`. Both responses
+  send `Cache-Control: no-store`. The stored SVG bytes stay unchanged.
+  Python `store_generated_file` is patched after the write and is not
+  entered by the HTTP calls. No epoch is installed. `pdftoppm` is not
+  called. Cargo was not started. Offline: 1 passed, listed by `-rA`, and
+  the run exited 0. Ruff and one-file mypy passed in that log. This is not
+  完成验收.
+
+- `GET /api/config` runs on the same prebuilt native gateway. The child
+  env pops `DEEPSEEK_API_KEY`, `TAVILY_API_KEY`, `DEEPSEEK_DEFAULT_MODEL`,
+  `OCR_ENABLED`, and `OCR_MODE`. `AUTH_DISABLED=1` with no token returns
+  version `4.8.0`, `hasServerKey` false, `hasSearch` false, default model
+  `deepseek-v4-pro`, models `deepseek-v4-pro` and `deepseek-v4-flash`,
+  upload limits 200000000 / 220000000 / 20, MCP `2025-06-18` at `/mcp`, and
+  A2A `0.3.0` at `/a2a`. The response has no `ocr` key. With auth enabled,
+  a missing token and a wrong bearer token return status 401 and
+  `{"error": {"code": "UNAUTHORIZED", "message": "Auth required"}}`. The
+  configured bearer token returns the same document. Current
+  `api_config` in `deepseek-gateway` also emits `ocr`; this 2026-10-07
+  binary does not, so that field is not proven on the running process. The
+  first pytest compared the body to a document that included `ocr` and
+  failed. The recorded log is the rerun after the expected document matched
+  the binary. Python `create_status_router` is patched and is not entered.
+  No epoch is installed. `pdftoppm` is not called. Cargo was not started.
+  Offline: 1 passed, listed by `-rA`, and the run exited 0. Ruff and
+  one-file mypy passed in that log. This is not 完成验收.
+
+- `POST /policy/url` runs on the same prebuilt native gateway. No bearer
+  token is sent. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is set. `https://example.com`
+  with trace `trace-policy-allow` is allowed, code `allowed`, reason
+  `policy checks passed`, capability `NetworkFetch`, and risk `High`.
+  `http://127.0.0.1/` is denied, code `localhost_blocked`, reason
+  `private or local ip is not allowed: 127.0.0.1`, and the trace is
+  `trace-policy-loopback`. An empty object is denied, code
+  `invalid_policy_request`, reason `url is required`, capability
+  `ReadFile`, and the body has no `trace_id`. `file:///etc/passwd` is
+  denied, code `unsupported_scheme`, reason `scheme not allowed: file`.
+  Decision ids start with `pd_` and differ. Python `evaluate_url_safety`
+  is patched and is not entered. No epoch is installed. `pdftoppm` is not
+  called. Cargo was not started. Offline: 1 passed, listed by `-rA`, and
+  the run exited 0. Ruff and one-file mypy passed in that log. This is not
+  完成验收.
+
+- `POST /policy/path` runs on the same prebuilt native gateway. No bearer
+  token is sent. `project/file.txt` under root `/workspace` is allowed,
+  code `allowed`, reason `policy checks passed`, capability `ReadFile`,
+  and risk `High`. `../secret.txt` is denied, code `path_traversal`, reason
+  `parent directory traversal is not allowed`. `project/.git/config` is
+  denied, code `protected_path`, reason `path targets a protected location`.
+  An empty object is denied, code `invalid_policy_request`, reason
+  `root is required`, and the body has no `trace_id`. Decision ids start
+  with `pd_` and differ. Python `check_path` is patched and is not entered.
+  No epoch is installed. `pdftoppm` is not called. Cargo was not started.
+  Offline: 1 passed, listed by `-rA`, and the run exited 0. Ruff and
+  one-file mypy passed in that log. This is not 完成验收.
+
+- `POST /policy/capability` runs on the same prebuilt native gateway. No
+  bearer token is sent. `ReadFile` granted to itself with `max_risk` `Low`
+  is allowed, code `allowed`, reason `policy checks passed`, capability
+  `ReadFile`, risk `Low`, and trace `trace-policy-capability-allow`.
+  `ShellExec` granted only `ReadFile` with `max_risk` `Critical` is denied,
+  code `missing_capability`, reason `required capability was not granted`,
+  capability `ShellExec`, and risk `Critical`. `ShellExec` granted to
+  itself with `max_risk` `Low` is denied, code `risk_limit_exceeded`,
+  reason `capability risk exceeds the configured limit`, capability
+  `ShellExec`, and risk `Critical`. An empty object is denied, code
+  `invalid_policy_request`, reason `requested capability is invalid`,
+  capability `ReadFile`, risk `High`, and the body has no `trace_id`.
+  Decision ids start with `pd_` and differ. Python `check_capability` is
+  patched and is not entered. No epoch is installed. `pdftoppm` is not
+  called. Cargo was not started. Offline: 1 passed, listed by `-rA`, and
+  the run exited 0. Ruff and one-file mypy passed in that log. This is not
+  完成验收.
+
+- `POST /rag/query/normalize` runs on the same prebuilt native gateway. No
+  bearer token is sent. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is set.
+  Query `  Rust 语言  ` returns status 200, normalized `rust 语言`, and
+  tokens `rust`, `语言`. Query `""` returns status 400 and
+  `{"error": "query is empty"}`. Python `normalize_query` is patched and
+  is not entered. No epoch is installed. `pdftoppm` is not called. Cargo
+  was not started. Offline: 1 passed, listed by `-rA`, and the run exited
+  0. Ruff and one-file mypy passed in that log. This is not 完成验收.
+
+- `POST /rag/chunks/score` runs on the same prebuilt native gateway. No
+  bearer token is sent. Query `deepseek infra` with chunks `partial`
+  (`deepseek is a company`), `empty` (`""`), and `exact`
+  (`deepseek infra is a project`) returns status 200 and ids
+  `exact`, `partial`, `empty`. The scores are `(10 + 1 + 1) * 1.1`,
+  `1 * 1.1`, and `0`. An empty query with an empty chunk list returns
+  status 400 and `{"error": "query is empty"}`. Python `score_chunks` is
+  patched and is not entered. No epoch is installed. `pdftoppm` is not
+  called. Cargo was not started. Offline: 1 passed, listed by `-rA`, and
+  the run exited 0. Ruff and one-file mypy passed in that log. This is not
+  完成验收.
+
+- `POST /rag/vectors/rank` runs on the same prebuilt native gateway. No
+  bearer token is sent. Query `[1.0, 0.0]` against
+  `[[0.5, 0.0], [1.0, 0.0], [1.0, 0.0]]` returns status 200, index `1`, and
+  similarity `1.0`. The same query against
+  `[[1.0, 0.0], [1.0, 0.0], [0.0, 1.0]]` keeps the first tie at index `0`
+  and similarity `1.0`. Query `[1.0, 0.0]` against `[[0.0, 1.0], []]`
+  returns index `null` and similarity `0.0`. Python `rank_vectors` is
+  patched and is not entered. No epoch is installed. `pdftoppm` is not
+  called. Cargo was not started. Offline: 1 passed, listed by `-rA`, and
+  the run exited 0. Ruff and one-file mypy passed in that log. This is not
+  完成验收.
+
+- `POST /rag/vectors/rank-binary` runs on the same prebuilt native gateway.
+  No bearer token is sent. Request magic `DSVRNK01`, dimensions `2`, query
+  `[1.0, 0.0]`, and candidates `[[0.5, 0.0], [1.0, 0.0], [1.0, 0.0]]`
+  return status 200, content type
+  `application/vnd.deepseek.vector-rank.v1+octet-stream`, and 24 bytes:
+  magic `DSVRSP01`, index `1`, pad `0`, similarity `1.0`. The same query
+  against `[[0.0, 1.0]]` returns magic `DSVRSP01`, index `4294967295`,
+  pad `0`, and similarity `0.0`. Sixteen `X` bytes with the binary content
+  type return status 400, `ok` false, code `invalid_binary_magic`, and
+  `binary vector request magic is invalid`. The valid request with
+  `Content-Type: application/json` returns status 415, code
+  `invalid_content_type`, and `binary vector ranking requires the versioned
+  binary content type`. Python `rank_vectors` is patched and is not
+  entered. No epoch is installed. `pdftoppm` is not called. Cargo was not
+  started. Offline: 1 passed, listed by `-rA`, and the run exited 0. Ruff
+  and one-file mypy passed in that log. This is not 完成验收.
+
+- `POST /rag/citation/format` runs on the same prebuilt native gateway. No
+  bearer token is sent. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is set.
+  Source `docs/example.md` with start line `10` and end line `20` returns
+  status 200 and citation `docs/example.md:L10-L20`. Source
+  `  docs/example.md  ` with start line `5` and no end line returns
+  citation `docs/example.md:L5`. Start line `20` and end line `10` return
+  status 400 and `{"error": "invalid line range"}`. Python
+  `format_citation` is patched and is not entered. No epoch is installed.
+  `pdftoppm` is not called. Cargo was not started. Offline: 1 passed,
+  listed by `-rA`, and the run exited 0. Ruff and one-file mypy passed in
+  that log. This is not 完成验收.
+
+- `POST /rag/index/validate` runs on the same prebuilt native gateway. No
+  bearer token is sent. One chunk with id `a`, source `docs/example.md`,
+  and text `first` returns status 200 and `{"valid": true}`. Two chunks
+  with id `a` return status 200, `valid` false, and
+  `duplicate chunk id: a`. Id `blank` with empty text returns status 200,
+  `valid` false, and `invalid chunk blank: chunk text is empty`. Python
+  `validate_index` is patched and is not entered. No epoch is installed.
+  `pdftoppm` is not called. Cargo was not started. Offline: 1 passed,
+  listed by `-rA`, and the run exited 0. Ruff and one-file mypy passed in
+  that log. This is not 完成验收.
+
+- `POST /rag/documents/prepare` runs on the same prebuilt native gateway.
+  No bearer token is sent. Document `doc-1`, text `中文🚀abc`, chunk size
+  `3`, and overlap `1` return status 200 and `ok` true. The character
+  count is `6` and the chunk count is `3`. Metadata keeps `displayName`
+  `notes.txt` and `sourceType` `text/plain`. The document content hash is
+  24 lowercase hex characters. Diagnostics `normalized` is false. Chunk
+  texts are `中文🚀`, `🚀ab`, and `bc`, with starts `0`, `2`, `4` and ends
+  `3`, `5`, `6`. Each chunk id is `doc-1:{index}:{contentHash}`.
+  `chunkChars` `4` with `chunkOverlap` `4` returns status 200, `ok` false,
+  code `chunk_overlap_too_large`, and message
+  `chunkOverlap must be smaller than chunkChars`. Python
+  `prepare_document` is patched and is not entered. No epoch is installed.
+  `pdftoppm` is not called. Cargo was not started. Offline: 1 passed,
+  listed by `-rA`, and the run exited 0. Ruff and one-file mypy passed in
+  that log. This is not 完成验收.
+
+- `GET /api/tool-policy` runs on the same prebuilt native gateway.
+  `AUTH_DISABLED` is unset and `AUTH_TOKEN` is `tool-policy-token`. The
+  child environment drops `TOOL_POLICY_ENABLED`,
+  `TOOL_POLICY_ENFORCE_SCHEMA`, `TOOL_POLICY_REQUIRE_CONFIRM`,
+  `TOOL_POLICY_SANITIZE_RESULTS`, and `TOOL_POLICY_AUDIT_ENABLED`. A
+  missing token and a wrong bearer token return status 401 and the nested
+  `UNAUTHORIZED` / `Auth required` body. The configured bearer token
+  returns status 200, `ok` true, `toolPolicy.enabled` true, and
+  `toolPolicy.enforceSchema` false. `tools` has at least 28 entries, the
+  first name is `web_search`, and `browser_close_session` is present.
+  The isolated root's `.tool-audit/audit.jsonl` holds one object
+  `{"probe":"tool-policy-gateway"}`. `audit` is an array containing that
+  object. `limit=not-a-number` returns the same policy and the same audit
+  object. The audit file bytes are unchanged. Python
+  `create_status_router`, `tool_policy_status`, and `read_recent_audit`
+  are patched and are not entered. No epoch is installed. `pdftoppm` is
+  not called. Cargo was not started. Offline: 1 passed, listed by `-rA`,
+  and the run exited 0. Ruff and one-file mypy passed in that log. This
+  is not 完成验收.
+
+- `GET /api/budget` runs on the same prebuilt native gateway.
+  `AUTH_DISABLED` is unset and `AUTH_TOKEN` is `budget-auth-token`. The
+  child environment drops the `BUDGET_*` tracking, limit, policy, and
+  price variables. A missing token and a wrong bearer token return status
+  401 and the nested `UNAUTHORIZED` / `Auth required` body. The configured
+  bearer token returns status 200, `ok` true, `budget.enabled` true, scope
+  `global`, `lastError` empty, policy `none` with zero limits, and the two
+  shipped model prices. `today` is the empty spend view for that scope and
+  the UTC day. `overBudget.exceeded` is false and `reasons` is empty.
+  `scope=agent` returns scope `agent`. A whitespace scope stays `global`.
+  `.budget/budget.db` is not created. Python `create_status_router`,
+  `budget_status`, and `daily_spend` are patched and are not entered. No
+  epoch is installed. `pdftoppm` is not called. Cargo was not started.
+  Offline: 1 passed, listed by `-rA`, and the run exited 0. Ruff and
+  one-file mypy passed in that log. This is not 完成验收.
+
+- `GET /api/rag/status` runs on the same prebuilt native gateway.
+  `AUTH_DISABLED` is unset and `AUTH_TOKEN` is `rag-status-token`. The
+  child environment drops `LOCAL_RAG_ENABLED`, `LOCAL_RAG_BACKEND`,
+  `LOCAL_RAG_EMBEDDING_PROVIDER`, `LOCAL_RAG_ONNX_MODEL_PATH`,
+  `LOCAL_RAG_TOKENIZER_PATH`, and `LOCAL_RAG_INCREMENTAL`. A missing token
+  and a wrong bearer token return status 401 and the nested
+  `UNAUTHORIZED` / `Auth required` body. The configured bearer token
+  returns status 200, `ok` true, `localRag.enabled` true, backend
+  `sqlite_vec`, `sqliteVecAvailable` false, embedding provider `hash`,
+  dimensions `64`, `hybridSearch` `bm25+vector`, `bm25K1` `1.5`, `bm25B`
+  `0.75`, incremental true, empty `lastError`, and zero indexed items,
+  files, media, and memories. `vectorTableAvailable` is false.
+  `databasePath` is the isolated `.local-rag/rag.sqlite3`, and that file
+  is not created. A second process with `LOCAL_RAG_ENABLED=false` returns
+  `enabled` false and still does not create the database or the
+  `.local-rag` directory. Python `create_status_router` and local RAG
+  `status` are patched and are not entered. No epoch is installed.
+  `pdftoppm` is not called. Cargo was not started. Offline: 1 passed,
+  listed by `-rA`, and the run exited 0. Ruff and one-file mypy passed in
+  that log. This is not 完成验收.
+
+- `GET /api/gateway/status` runs on the same prebuilt native gateway.
+  `AUTH_DISABLED` is unset and `AUTH_TOKEN` is `gateway-status-token`.
+  The child environment drops `GATEWAY_CONTEXT_MANAGER_ENABLED`,
+  `GATEWAY_CONTEXT_WINDOW_MESSAGES`, `CONTEXT_ENGINE_ENABLED`, and
+  `CONTEXT_ENGINE_TOKEN_AWARE_TRIM`. A missing token and a wrong bearer
+  token return status 401 and the nested `UNAUTHORIZED` / `Auth required`
+  body. The configured bearer token returns status 200 and `ok` true.
+  The context manager is enabled, `stableJson` is true, `toolOrder` is
+  `function.name`, and `slidingWindowMessages` is `36`. The request queue
+  is not enabled, `ported` is false, the reason is
+  `native request queue is not ported`, and `counts` is absent. The
+  scheduler `ported` is false and the reason is
+  `python job scheduler is not ported`. A second process with
+  `GATEWAY_CONTEXT_MANAGER_ENABLED=false` and
+  `GATEWAY_CONTEXT_WINDOW_MESSAGES=12` returns enabled false,
+  `stableJson` false, and window `12`, with the same unported queue and
+  scheduler. Python `create_status_router` and `gateway_status` are
+  patched and are not entered. No epoch is installed. `pdftoppm` is not
+  called. Cargo was not started. Offline: 1 passed, listed by `-rA`, and
+  the run exited 0. Ruff and one-file mypy passed in that log. This is
+  not 完成验收. The request queue and scheduler remain unported.
+
+- `GET /api/taint` runs on the same prebuilt native gateway.
+  `AUTH_DISABLED` is unset and `AUTH_TOKEN` is `taint-status-token`. The
+  child environment drops `TAINT_ENABLED`, `TAINT_HARDEN_SEARCH_CONTEXT`,
+  `TAINT_HARDEN_FILE_CONTEXT`, `TAINT_ESCALATE_CONFIRM`, and
+  `TAINT_MAX_SEGMENTS`. A missing token and a wrong bearer token return
+  status 401 and the nested `UNAUTHORIZED` / `Auth required` body. The
+  configured bearer token returns status 200 and `ok` true. Taint is
+  enabled. Search hardening, file hardening, and escalate confirm are
+  true. Trust levels are `trusted` and `untrusted`. Sources are the ten
+  shipped names ending in `untrusted_tool_result`. Exfiltration patterns
+  are `3`. Tool-directive patterns are `3`. `sensitiveToolNames` is a
+  non-empty list of strings and includes `fetch_url`. A second process
+  with `TAINT_ENABLED=false` returns `enabled` false and the same other
+  fields. Python `create_status_router` and `taint_status` are patched
+  and are not entered. No epoch is installed. `pdftoppm` is not called.
+  Cargo was not started. Offline: 1 passed, listed by `-rA`, and the run
+  exited 0. Ruff and one-file mypy passed in that log. This is not
+  完成验收.
+
+- `POST /api/title` runs on the same prebuilt native gateway.
+  `AUTH_DISABLED` is unset and `AUTH_TOKEN` is `title-auth-token`. The
+  child environment drops `DEEPSEEK_API_KEY` and points
+  `DEEPSEEK_API_URL` at `http://127.0.0.1:1/v1/chat/completions`. A
+  missing token and a wrong bearer token return status 401 and the nested
+  `UNAUTHORIZED` / `Auth required` body. A bearer request with
+  `userMessage` `hello` and no API key returns status 400, error
+  `Missing DeepSeek API Key.`, and code `missing_api_key`. A bearer
+  request with `apiKey` `title-probe-key` and `userMessage` empty, three
+  spaces, or omitted returns status 200 and `{"title": ""}`. Those empty
+  titles do not reach the dead upstream. Python `create_chat_router` and
+  `generate_title_payload` are patched and are not entered. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started. Offline: 1
+  passed, listed by `-rA`, and the run exited 0. Ruff and one-file mypy
+  passed in that log. This is not 完成验收. A non-empty message with a key
+  still needs a real upstream title response.
+
+- `POST /api/conversations/search` runs on the same prebuilt native
+  gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `conversation-search-token`. A missing token and a wrong bearer token
+  return status 401 and the nested `UNAUTHORIZED` / `Auth required` body.
+  Query three spaces, even with `conversations` set to a string, returns
+  status 200 and `{"results": []}`. Query `""` returns the same empty
+  result. Query `beta` with `conversations` as an object returns status
+  400, error `conversations must be a list`, and code `invalid_payload`.
+  Query `  BETA  ` returns two results. `conv-1` has title `Beta marker`,
+  `updatedAt` `7`, `favorite` true, tag `notes`, and one title match whose
+  snippet is `Beta marker`. A non-object list entry is skipped. `conv-msg`
+  has title `Other`, `updatedAt` null, `favorite` false, no tags, and one
+  message match for `m1` whose snippet is `user see BETA-MARKER here`.
+  Python `create_chat_router`, `conversation_search`, and
+  `conversation_search_matches` are patched and are not entered. No epoch
+  is installed. `pdftoppm` is not called. Cargo was not started. Offline:
+  1 passed, listed by `-rA`, and the run exited 0. Ruff and one-file mypy
+  passed in that log. This is not 完成验收.
+
+- `GET /healthz`, `GET /readyz`, and `GET /v1/models` run on the same
+  prebuilt native gateway. The first process has auth enabled, no API
+  key, and `AUTH_TOKEN` `health-models-token`. `/healthz` with no token
+  returns status 200, `ok` true, service `deepseek-gateway-rs`, status
+  `ok`, version `4.8.0`, runtime `local`, provider `deepseek`, and
+  `auth_enabled` true. `/readyz` with no token returns status `ready`,
+  version `4.8.0`, tracing `disabled`, and model provider
+  `unconfigured`. `/v1/models` with no token returns status 401 and the
+  nested `UNAUTHORIZED` / `Auth required` body. The bearer token returns
+  object `list` and ids `deepseek-v4-pro`, `deepseek-v4-flash`, each
+  `object` `model`, `owned_by` `deepseek-infra`, and a positive `created`
+  timestamp no later than the test clock. A second process with
+  `AUTH_DISABLED=1` and `DEEPSEEK_API_KEY` `probe-not-a-real-key` returns
+  `auth_enabled` false, model provider `configured`, and the same catalog
+  with no token. Python `healthz`, `readyz`, and `create_chat_router` are
+  patched and are not entered. No epoch is installed. `pdftoppm` is not
+  called. Cargo was not started. Offline: 1 passed, listed by `-rA`, and
+  the run exited 0. Ruff and one-file mypy passed in that log. This is
+  not 完成验收.
+
+- `GET /.well-known/agent-card.json` runs on the same prebuilt native
+  gateway. `AUTH_DISABLED` is unset, `AUTH_TOKEN` is `agent-card-token`,
+  and no bearer token is sent. With `A2A_ENABLED` unset, the status is
+  200. The card protocol is `0.3.0`, the name is
+  `DeepSeek Infra Orchestrator`, the description is the shipped
+  orchestrator system text, the URL is
+  `http://127.0.0.1:8000/a2a/agents/orchestrator`, the transport is
+  `JSONRPC`, and the version is `4.8.0`. Capabilities are streaming true,
+  push notifications false, and state history false. Input and output
+  modes are `text/plain`. The skill id is `orchestrator.respond` and the
+  tags are `orchestrator`, `full_tool_surface`. The same process refuses
+  `GET /api/config` with no token: status 401 and the nested
+  `UNAUTHORIZED` / `Auth required` body. A second process with
+  `A2A_ENABLED=false` returns status 403 and
+  `{"error":{"code":"forbidden","message":"A2A mesh is disabled"}}`.
+  Python `create_a2a_router` and `agent_card` are patched and are not
+  entered. No epoch is installed. `pdftoppm` is not called. Cargo was
+  not started. Offline: 1 passed, listed by `-rA`, and the run exited 0.
+  Ruff and one-file mypy passed in that log. This is not 完成验收.
+
+- `GET /a2a/agents` runs on the same prebuilt native gateway.
+  `AUTH_DISABLED` is unset and `AUTH_TOKEN` is `a2a-agents-token`. With
+  `A2A_ENABLED` unset, a missing token and a wrong bearer token return
+  status 401 and the nested `UNAUTHORIZED` / `Auth required` body. The
+  configured bearer token returns status 200 and `ok` true. The five
+  agents, in order, are orchestrator `DeepSeek Infra Orchestrator`,
+  researcher `资料检索 Agent`, coder `代码分析 Agent`, reasoner
+  `逻辑推理 Agent`, and critic `反驳审查 Agent`. Each protocol is
+  `0.3.0`, version `4.8.0`, transport `JSONRPC`, and the URL is
+  `http://127.0.0.1:8000/a2a/agents/{id}`. A second process with
+  `A2A_ENABLED=false` still returns 401 when no token is sent. The same
+  bearer token then returns status 403 and
+  `{"error":{"code":"forbidden","message":"A2A mesh is disabled"}}`.
+  Python `create_a2a_router` and `agent_cards` are patched and are not
+  entered. No epoch is installed. `pdftoppm` is not called. Cargo was
+  not started. Offline: 1 passed, listed by `-rA`, and the run exited 0.
+  Ruff and one-file mypy passed in that log. This is not 完成验收.
+
+- `POST /a2a` runs on the same prebuilt native gateway.
+  `AUTH_DISABLED` is unset and `AUTH_TOKEN` is `a2a-rpc-token`. With
+  `A2A_ENABLED` unset, a missing token and bearer `not-the-a2a-token`
+  return status 401 and the nested `UNAUTHORIZED` / `Auth required`
+  body. The bearer `message/send` body
+  `{"jsonrpc":"2.0","id":"a2a-1","method":"message/send"}` returns HTTP
+  200, `jsonrpc` `2.0`, id `a2a-1`, error code `-32602`, message
+  `message.parts must contain non-empty text`, and no `result`. The
+  same token with `params.message.parts` set to `[]` and id `a2a-empty`
+  returns the same error and preserves that id. A second process with
+  `A2A_ENABLED=false` still returns 401 when no token is sent. The
+  bearer token then returns status 403 and
+  `{"error":{"code":"forbidden","message":"A2A mesh is disabled"}}`.
+  Python `create_a2a_router` and `handle_a2a_message` are patched and
+  are not entered. No non-empty text part is sent. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started. Offline:
+  1 passed, listed by `-rA`, and the run exited 0. Ruff and one-file
+  mypy passed in that log. This is not 完成验收. A successful A2A
+  `message/send` remains unproven.
+
+- `POST /mcp` runs on the same prebuilt native gateway.
+  `AUTH_DISABLED` is unset and `AUTH_TOKEN` is `mcp-gateway-token`.
+  `MCP_CAPABILITY`, `MCP_EXPOSE_RESOURCES`, `MCP_EXPOSE_PROMPTS`, and
+  `MCP_ENABLED` are unset. A missing token and bearer
+  `not-the-mcp-token` return status 401 and the nested `UNAUTHORIZED` /
+  `Auth required` body. Bearer `initialize` id `mcp-init` returns HTTP
+  200, protocol `2025-06-18`, server name `deepseek-infra`, version
+  `4.8.0`, instructions containing `Tool Hub`, and no `error`. Bearer
+  `ping` id `mcp-ping` returns an empty result object. Bearer
+  `tools/list` id `mcp-list` includes `python_eval`, `web_search`, and
+  `create_pptx`. Bearer `tools/call` of `python_eval` with expression
+  `2+2`, id `mcp-eval`, returns `isError` false and result `4`. Bearer
+  `tools/call` with empty params, id `mcp-missing`, returns HTTP 200,
+  JSON-RPC `-32602`, and `name is required`, with no `result`. Python
+  `create_mcp_router`, `handle_mcp_message`, and `python_eval` are
+  patched and are not entered. No epoch is installed. `pdftoppm` is
+  not called. Cargo was not started. Offline: 1 passed, listed by
+  `-rA`, and the run exited 0. Ruff and one-file mypy passed in that
+  log. This is not 完成验收. The `2+2` result matches the in-process
+  sandbox response shape. This run did not inventory gateway child
+  processes.
+
+- `POST /mcp` `python_eval` runs further cases on the same prebuilt
+  native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `mcp-eval-token`. A missing token returns status 401 and the nested
+  `UNAUTHORIZED` / `Auth required` body. Bearer `factorial(6)` returns
+  `isError` false, expression `factorial(6)`, and result `720`.
+  `1 + 2 * 3` returns `7`. `math.sqrt(4)` returns `2.0`. An empty
+  expression and a whitespace expression return `isError` true, code
+  `invalid_payload`, and `python_eval expression is empty`. A
+  1001-character expression returns `python_eval expression is too
+  long`. `__import__('os')` returns `Function is not allowed:
+  __import__`. Tool `not_a_tool` returns `isError` true, code
+  `forbidden`, risk `high`, and `Tool 'not_a_tool' was blocked by tool
+  policy (unknown_tool)`. The first pytest failed because that code is
+  `forbidden`, not `invalid_payload`. The recorded log is the rerun.
+  Python `create_mcp_router`, `handle_mcp_message`, and `python_eval`
+  are patched and are not entered. No epoch is installed. `pdftoppm`
+  is not called. Cargo was not started. Offline: 1 passed, listed by
+  `-rA`, and the run exited 0. Ruff and one-file mypy passed in that
+  log. This is not 完成验收.
+
+- `POST /mcp` resources and prompts run on the same prebuilt native
+  gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `mcp-resources-token`. A missing token returns status 401 and the
+  nested `UNAUTHORIZED` / `Auth required` body. Bearer `resources/list`
+  returns `runtime://capabilities` with name `runtime-capabilities`,
+  title `DeepSeek Infra tool policy & capability profiles`, and mime
+  `application/json`. No `.generated` directory exists, so that is the
+  only resource. Bearer `resources/read` of that URI returns capability
+  `full` and tool policy capability `full`. An empty URI returns HTTP
+  200, JSON-RPC `-32602`, and `uri is required`. Bearer `prompts/list`
+  returns `slides-outline` then `research-brief` with the shipped
+  titles. Method `nope/method` returns `-32601` and
+  `Method not found: nope/method`. Bearer
+  `notifications/initialized` returns HTTP 202 and an empty body.
+  Python `create_mcp_router` and `handle_mcp_message` are patched and
+  are not entered. No epoch is installed. `pdftoppm` is not called.
+  Cargo was not started. Offline: 1 passed, listed by `-rA`, and the
+  run exited 0. Ruff and one-file mypy passed in that log. This is not
+  完成验收.
+
+- `POST /mcp` `prompts/get` runs on the same prebuilt native gateway.
+  `AUTH_DISABLED` is unset and `AUTH_TOKEN` is `mcp-prompts-token`. A
+  missing token returns status 401 and the nested `UNAUTHORIZED` /
+  `Auth required` body. Bearer `slides-outline` with topic `季度回顾`
+  and audience `工程团队` returns the shipped description and a user
+  message containing both strings and the `create_pptx` instruction.
+  Bearer `research-brief` with topic `Rust 网关` returns the shipped
+  research description and the message that cites `[^Wn]`. An empty
+  name returns HTTP 200, JSON-RPC `-32602`, and `name is required`,
+  with no `data`. Prompt `missing-prompt` returns `-32602`,
+  `Prompt not found`, and data code `not_found`. Arguments `["topic"]`
+  return `-32602` and `arguments must be an object`. Python
+  `create_mcp_router` and `handle_mcp_message` are patched and are not
+  entered. No epoch is installed. `pdftoppm` is not called. Cargo was
+  not started. Offline: 1 passed, listed by `-rA`, and the run exited
+  0. Ruff and one-file mypy passed in that log. This is not 完成验收.
+
+- `POST /a2a` task reads run on the same prebuilt native gateway.
+  `AUTH_DISABLED` is unset and `AUTH_TOKEN` is `a2a-tasks-token`. The
+  A2A control URL and TLS variables are unset. With `A2A_ENABLED`
+  unset, a missing token and bearer `not-the-a2a-token` return status
+  401 and the nested `UNAUTHORIZED` / `Auth required` body. Bearer
+  `tasks/list` id `a2a-list` returns HTTP 200 and result
+  `{"tasks": []}`. Bearer `tasks/get` with id `  ` returns `-32602` and
+  `id is required`. Bearer `tasks/get` for `task_missing` returns
+  `-32001` and `Task not found`. Bearer `tasks/cancel` with no id
+  returns `-32602` and `id is required`. A second process with
+  `A2A_ENABLED=false` still returns 401 without a token. The bearer
+  token then returns status 403 and `A2A mesh is disabled`. Python
+  `create_a2a_router` and `handle_a2a_message` are patched and are not
+  entered. No text part is sent. No epoch is installed. `pdftoppm` is
+  not called. Cargo was not started. Offline: 1 passed, listed by
+  `-rA`, and the run exited 0. Ruff and one-file mypy passed in that
+  log. This is not 完成验收. A successful A2A `message/send` remains
+  unproven.
+
+- `POST /a2a` `agent/getAuthenticatedExtendedCard` runs on the same
+  prebuilt native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN`
+  is `a2a-card-rpc-token`. The A2A control URL and TLS variables are
+  unset. With `A2A_ENABLED` unset, a missing token and bearer
+  `not-the-a2a-token` return status 401 and the nested `UNAUTHORIZED`
+  / `Auth required` body. The bearer token on `POST /a2a` returns HTTP
+  200, id `a2a-card`, and the orchestrator card: protocol `0.3.0`,
+  name `DeepSeek Infra Orchestrator`, URL
+  `http://127.0.0.1:8000/a2a/agents/orchestrator`, transport `JSONRPC`,
+  version `4.8.0`, streaming true, and skill `orchestrator.respond`
+  with tags `orchestrator` and `full_tool_surface`. There is no
+  `error`. The same body on `POST /a2a/agents/no-such-agent` returns
+  HTTP 200, error code `-32001`, and
+  `Unknown agent: no-such-agent`, with no `result`. A second process
+  with `A2A_ENABLED=false` still returns 401 without a token. The
+  bearer token then returns status 403 and `A2A mesh is disabled`.
+  Python `create_a2a_router`, `handle_a2a_message`, and `agent_card`
+  are patched and are not entered. No text part is sent. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started. Offline:
+  1 passed, listed by `-rA`, and the run exited 0. Ruff and one-file
+  mypy passed in that log. This is not 完成验收. A successful A2A
+  `message/send` remains unproven.
+
+- `POST /mcp` `data_transform` runs on the same prebuilt native
+  gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `mcp-transform-token`. A missing token and bearer
+  `not-the-mcp-token` return status 401 and the nested `UNAUTHORIZED`
+  / `Auth required` body. Bearer `number_summary` of `1 2 3 4` returns
+  `isError` false, operation `number_summary`, label `numbers`, count
+  `4`, min `1`, max `4`, sum `10`, mean `2.5`, and median `2.5`.
+  Input `no digits here` returns count `0`, label `numbers`, and no
+  `min`. Operation `nope` returns `isError` true, code
+  `invalid_payload`, and `Unsupported data_transform operation`.
+  `extract_regex` with an empty pattern returns
+  `Regex pattern is required`. Python `create_mcp_router`,
+  `handle_mcp_message`, and `data_transform` are patched and are not
+  entered. No epoch is installed. `pdftoppm` is not called. Cargo was
+  not started. Offline: 1 passed, listed by `-rA`, and the run exited
+  0. Ruff and one-file mypy passed in that log. This is not 完成验收.
+
+- `POST /mcp` `data_transform` `json_path` runs on the same prebuilt
+  native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `mcp-json-path-token`. A missing token returns status 401 and the
+  nested `UNAUTHORIZED` / `Auth required` body. Bearer path
+  `$.a.b[1]` on `{"a": {"b": [10, 20]}}` returns `isError` false,
+  operation `json_path`, that path, and value `20`. Path `a.b[0]`
+  returns value `10`. Path `$.nope` on `{"a": 1}` returns `isError`
+  true, code `not_found`, and `JSON path not found`. Path `$.a[*]`
+  returns code `invalid_payload` and `Unsupported JSON path`. Python
+  `create_mcp_router`, `handle_mcp_message`, and `data_transform` are
+  patched and are not entered. No epoch is installed. `pdftoppm` is
+  not called. Cargo was not started. Offline: 1 passed, listed by
+  `-rA`, and the run exited 0. Ruff and one-file mypy passed in that
+  log. This is not 完成验收.
+
+- `POST /mcp` `data_transform` `extract_regex` runs on the same
+  prebuilt native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN`
+  is `mcp-regex-token`. A missing token returns status 401 and the
+  nested `UNAUTHORIZED` / `Auth required` body. Bearer pattern `\d`
+  on `a1b2` returns `isError` false, operation `extract_regex`, and
+  count `2`. The matches are `1` at start `1` end `2`, then `2` at
+  start `3` end `4`. Both group lists are empty. Pattern `(` returns
+  `isError` true, code `invalid_payload`, and `Invalid regex: (`.
+  Python `create_mcp_router`, `handle_mcp_message`, and
+  `data_transform` are patched and are not entered. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started. Offline:
+  1 passed, listed by `-rA`, and the run exited 0. Ruff and one-file
+  mypy passed in that log. This is not 完成验收.
+
+- `POST /mcp` `data_transform` `csv_summary` runs on the same prebuilt
+  native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `mcp-csv-token`. A missing token returns status 401 and the nested
+  `UNAUTHORIZED` / `Auth required` body. Bearer input `name,value`
+  then `x,1` then `y,2.5` returns `isError` false, operation
+  `csv_summary`, rows `2`, columns `name` and `value`, and one numeric
+  column `value` with count `2` and sum `3.5`. An empty input returns
+  `isError` false, operation `csv_summary`, rows `0`, and columns
+  `[]`. Python `create_mcp_router`, `handle_mcp_message`, and
+  `data_transform` are patched and are not entered. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started. Offline:
+  1 passed, listed by `-rA`, and the run exited 0. Ruff and one-file
+  mypy passed in that log. This is not 完成验收.
+
+- `POST /mcp` `generate_chart` runs on the same prebuilt native
+  gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `mcp-chart-token`. A missing token returns status 401 and the nested
+  `UNAUTHORIZED` / `Auth required` body. Bearer type `line`, title
+  `Revenue`, and points `Q1`/`1` then `Q2`/`2.5` returns `isError`
+  false, type `line`, title `Revenue`, those point values, and
+  markdown `| label | value |\n|---|---:|\n| Q1 | 1.0 |\n| Q2 | 2.5 |`.
+  An empty `data` list returns `isError` true, code `invalid_payload`,
+  and `Chart data must be a non-empty list`. Data `[{"value": 1}]`
+  returns `Chart data has no valid points`. Python
+  `create_mcp_router`, `handle_mcp_message`, and `generate_chart` are
+  patched and are not entered. No epoch is installed. `pdftoppm` is
+  not called. Cargo was not started. Offline: 1 passed, listed by
+  `-rA`, and the run exited 0. Ruff and one-file mypy passed in that
+  log. This is not 完成验收.
+
+- `POST /mcp` `generate_chart` defaults run on the same prebuilt
+  native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `mcp-chart-defaults-token`. A missing token returns status 401 and
+  the nested `UNAUTHORIZED` / `Auth required` body. Bearer data
+  `[{"label": "a", "value": 1}]` with no type and no title returns
+  `isError` false, type `bar`, title `Chart`, and that point. Type
+  `radar` with that point returns type `bar`. Label `a|b` returns
+  markdown containing `a\|b`. Python `create_mcp_router`,
+  `handle_mcp_message`, and `generate_chart` are patched and are not
+  entered. No epoch is installed. `pdftoppm` is not called. Cargo was
+  not started. Offline: 1 passed, listed by `-rA`, and the run exited
+  0. Ruff and one-file mypy passed in that log. This is not 完成验收.
+
+- `POST /mcp` `generate_chart` raw-item cap runs on the same prebuilt
+  native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `mcp-chart-cap-token`. A missing token returns status 401 and the
+  nested `UNAUTHORIZED` / `Auth required` body. Bearer data is six
+  unusable items, then `ok` with value `"3"`, then `p0` through `p19`.
+  The result is `isError` false and exactly seven points: `ok` value
+  `3.0`, `p0` value `0.0`, through `p5` value `5.0`. `p6` is absent.
+  Python `create_mcp_router`, `handle_mcp_message`, and
+  `generate_chart` are patched and are not entered. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started. Offline:
+  1 passed, listed by `-rA`, and the run exited 0. Ruff and one-file
+  mypy passed in that log. This is not 完成验收.
+
+- `POST /a2a` method `nope/method` runs on the same prebuilt native
+  gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `a2a-method-token`. The A2A control URL and TLS variables are unset.
+  With `A2A_ENABLED` unset, a missing token and bearer
+  `not-the-a2a-token` return status 401 and the nested `UNAUTHORIZED`
+  / `Auth required` body. The bearer token returns HTTP 200, id
+  `a2a-missing-method`, error code `-32601`, and
+  `Method not found: nope/method`, with no `result`. A second process
+  with `A2A_ENABLED=false` returns the same 401 body when no token is
+  sent. The bearer token on that process returns status 403 and
+  `A2A mesh is disabled`. Python `create_a2a_router` and
+  `handle_a2a_message` are patched and are not entered. No text part
+  is sent. No epoch is installed. `pdftoppm` is not called. Cargo was
+  not started. Offline: 1 passed, listed by `-rA`, and the run exited
+  0. Ruff and one-file mypy passed in that log. This is not 完成验收.
+  A successful A2A `message/send` remains unproven.
+
+- `POST /mcp` with `MCP_EXPOSE_RESOURCES=false` and
+  `MCP_EXPOSE_PROMPTS=false` runs on the same prebuilt native gateway.
+  `AUTH_DISABLED` is unset and `AUTH_TOKEN` is `mcp-expose-off-token`.
+  A missing token returns status 401 and the nested `UNAUTHORIZED` /
+  `Auth required` body. Bearer `initialize` returns capabilities with
+  `tools.listChanged` false and without `resources` or `prompts`.
+  Bearer `resources/list` returns `{"resources": []}`. Bearer
+  `resources/read` of `runtime://capabilities` returns `-32602`,
+  `MCP resources are disabled`, and data code `forbidden`. Bearer
+  `prompts/list` returns `{"prompts": []}`. Bearer `prompts/get` of
+  `slides-outline` returns `-32602`, `MCP prompts are disabled`, and
+  data code `forbidden`. Python `create_mcp_router` and
+  `handle_mcp_message` are patched and are not entered. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started. Offline:
+  1 passed, listed by `-rA`, and the run exited 0. Ruff and one-file
+  mypy passed in that log. This is not 完成验收.
+
+- `POST /mcp` `list_reminders` runs on the same prebuilt native
+  gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `mcp-reminders-token`. The seeded file is
+  `{DEEPSEEK_INFRA_ROOT}/.reminders/reminders.json` with `n1` notified
+  and `a1` not notified. A missing token returns status 401 and the
+  nested `UNAUTHORIZED` / `Auth required` body. Bearer status `active`
+  returns `isError` false, status `active`, count `1`, and id `a1`.
+  Status `  NOTIFIED  ` returns status `notified`, count `1`, and id
+  `n1`. Status `bogus` returns status `active` and count `1`. Status
+  `all` returns status `all` and count `2`. The seeded file bytes are
+  unchanged, so this read does not make the gateway the writer of
+  `.reminders`. Python `create_mcp_router`, `handle_mcp_message`, and
+  `list_reminders_tool` are patched and are not entered. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started. Offline:
+  1 passed, listed by `-rA`, and the run exited 0. Ruff and one-file
+  mypy passed in that log. This is not 完成验收.
+
+- `POST /mcp` `list_reminders` array cap runs on the same prebuilt
+  native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `mcp-reminder-cap-token`. The seeded file contains 60 active
+  reminders `a0` through `a59`. A missing token returns status 401 and
+  the nested `UNAUTHORIZED` / `Auth required` body. Bearer status
+  `active` returns `isError` false, status `active`, `reminders`
+  length `50`, and count `60`. The seeded file bytes are unchanged.
+  Python `create_mcp_router`, `handle_mcp_message`, and
+  `list_reminders_tool` are patched and are not entered. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started. Offline:
+  1 passed, listed by `-rA`, and the run exited 0. Ruff and one-file
+  mypy passed in that log. This is not 完成验收. The gateway is not
+  the writer of `.reminders`.
+
+- `POST /mcp` `recall_memory` runs on the same prebuilt native
+  gateway against an empty root. `AUTH_DISABLED` is unset and
+  `AUTH_TOKEN` is `mcp-recall-token`. A missing token returns status
+  401 and the nested `UNAUTHORIZED` / `Auth required` body. Bearer
+  query `React` returns `isError` false, query `React`, scopes
+  `["global"]`, and `memories` `[]`. Query `   ` returns query
+  `memory`, the same scopes, and `memories` `[]`.
+  `.memory/memories.json` is not created. Python `create_mcp_router`,
+  `handle_mcp_message`, and `recall_memory_tool` are patched and are
+  not entered. No epoch is installed. `pdftoppm` is not called. Cargo
+  was not started. Offline: 1 passed, listed by `-rA`, and the run
+  exited 0. Ruff and one-file mypy passed in that log. This is not
+  完成验收. The gateway is not the writer of `.memory`.
+
+- `POST /mcp` `recall_memory` reads a seeded memory on the same
+  prebuilt native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN`
+  is `mcp-recall-hit-token`. The seeded file has id `m1`, content
+  `我用 React`, category `preference`, scope `global`, and `updatedAt`
+  `2026-01-02T00:00:00+00:00`. A missing token returns status 401 and
+  the nested `UNAUTHORIZED` / `Auth required` body. Bearer query
+  `React` returns `isError` false, one memory, those five fields, and
+  no extra field. Replacing the file with id `unrelated` and content
+  `the sky is blue`, then querying `completely-different-term`,
+  returns `memories` `[]`. Both seeded files keep their bytes. Python
+  `create_mcp_router`, `handle_mcp_message`, and `recall_memory_tool`
+  are patched and are not entered. No epoch is installed. `pdftoppm`
+  is not called. Cargo was not started. Offline: 1 passed, listed by
+  `-rA`, and the run exited 0. Ruff and one-file mypy passed in that
+  log. This is not 完成验收. The gateway is not the writer of
+  `.memory`.
+
+- `POST /mcp` `recall_memory` ranking runs on the same prebuilt
+  native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `mcp-recall-rank-token`. The seeded file has three memories with
+  content `the sky is blue`: `plain` fact, `pref` preference, and
+  `pinned` fact with `pinned` true. A missing token returns status
+  401 and the nested `UNAUTHORIZED` / `Auth required` body. Bearer
+  query `sky` returns `isError` false and ids `pinned`, then `pref`,
+  then `plain`. The seeded file bytes are unchanged. Python
+  `create_mcp_router`, `handle_mcp_message`, and `recall_memory_tool`
+  are patched and are not entered. No epoch is installed. `pdftoppm`
+  is not called. Cargo was not started. Offline: 1 passed, listed by
+  `-rA`, and the run exited 0. Ruff and one-file mypy passed in that
+  log. This is not 完成验收. The gateway is not the writer of
+  `.memory`.
+
+- `POST /mcp` `recall_memory` scope filter runs on the same prebuilt
+  native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `mcp-recall-scope-token`. The seeded file has `g1` content `sky`
+  scope `global` and `p1` content `sky` scope `project:abc`. A missing
+  token returns status 401 and the nested `UNAUTHORIZED` / `Auth
+  required` body. Bearer query `sky` with no scope returns `isError`
+  false, scopes `["global"]`, and only id `g1`. The seeded file bytes
+  are unchanged. Python `create_mcp_router`, `handle_mcp_message`,
+  and `recall_memory_tool` are patched and are not entered. No epoch
+  is installed. `pdftoppm` is not called. Cargo was not started.
+  Offline: 1 passed, listed by `-rA`, and the run exited 0. Ruff and
+  one-file mypy passed in that log. This is not 完成验收. The gateway
+  is not the writer of `.memory`.
+
+- `POST /mcp` `forget_memory` rejects a whitespace query on the same
+  prebuilt native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN`
+  is `mcp-forget-blank-token`. The seeded file contains id `a`,
+  content `I use React`, scope `global`. A missing token returns
+  status 401 and the nested `UNAUTHORIZED` / `Auth required` body.
+  Bearer query `   ` returns `isError` true, code `invalid_payload`,
+  and `forget_memory query is required`, with no `result`. The seeded
+  file bytes are unchanged. No deleting query was sent. Python
+  `create_mcp_router`, `handle_mcp_message`, and `forget_memory_tool`
+  are patched and are not entered. No epoch is installed. `pdftoppm`
+  is not called. Cargo was not started. Offline: 1 passed, listed by
+  `-rA`, and the run exited 0. Ruff and one-file mypy passed in that
+  log. This is not 完成验收. A successful `forget_memory` delete
+  remains unproven. The gateway is not shown to be the writer of
+  `.memory`.
+
+- `POST /mcp` `recall_memory` with explicit scope `project:abc` runs
+  on the same prebuilt native gateway. `AUTH_DISABLED` is unset and
+  `AUTH_TOKEN` is `mcp-recall-project-token`. The seeded file has `g1`
+  content `sky` scope `global` and `p1` content `sky` scope
+  `project:abc`. A missing token returns status 401 and the nested
+  `UNAUTHORIZED` / `Auth required` body. Bearer query `sky` and scope
+  `project:abc` returns `isError` false, scopes `["project:abc"]`, and
+  only id `p1`. The seeded file bytes are unchanged. Python
+  `create_mcp_router`, `handle_mcp_message`, and `recall_memory_tool`
+  are patched and are not entered. No epoch is installed. `pdftoppm`
+  is not called. Cargo was not started. Offline: 1 passed, listed by
+  `-rA`, and the run exited 0. Ruff and one-file mypy passed in that
+  log. Evidence: `mcp-recall-project-gateway-pytest.txt`. This is not
+  完成验收. The gateway is not the writer of `.memory`.
+
+- `POST /mcp` `recall_memory` applies the 12-memory cap on the same
+  prebuilt native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN`
+  is `mcp-recall-limit-token`. The seeded file has 13 global memories
+  `m0` through `m12`, content `sky`, category `fact`, and `updatedAt`
+  from `2026-01-13T00:00:00+00:00` down to
+  `2026-01-01T00:00:00+00:00`. A missing token returns status 401 and
+  the nested `UNAUTHORIZED` / `Auth required` body. Bearer query `sky`
+  returns `isError` false, scopes `["global"]`, and ids `m0` through
+  `m11` in that order. Id `m12` is absent. The seeded file bytes are
+  unchanged. Python `create_mcp_router`, `handle_mcp_message`, and
+  `recall_memory_tool` are patched and are not entered. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started. Offline:
+  1 passed, listed by `-rA`, and the run exited 0. Ruff and one-file
+  mypy passed in that log. Evidence:
+  `mcp-recall-limit-gateway-pytest.txt`. This is not 完成验收. The
+  gateway is not the writer of `.memory`.
+
+- `POST /mcp` `list_project_files` runs on the same prebuilt native
+  gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `mcp-project-files-token`. A missing token returns status 401 and
+  the nested `UNAUTHORIZED` / `Auth required` body. With no
+  `.projects` directory, bearer arguments `{}` return `isError`
+  false, `projects` `[]`, and count `0`, and the directory stays
+  absent. Seeding `.projects/proj/project.json` with name `Notes` and
+  document `notes.txt` (file id 32 lowercase `a`) makes bearer
+  `projectId` `proj` and bearer `projectId` `  proj  ` each return
+  that project, that file, and count `1`. Bearer `projectId` `nope`
+  returns `not_found` / `Project not found`. Bearer `projectId` `x`
+  returns `invalid_payload` / `Invalid project id`. The seeded
+  `project.json` bytes are unchanged and `.projects` contains only
+  `proj`. Python `create_mcp_router`, `handle_mcp_message`, and
+  `list_project_files_tool` are patched and are not entered. No epoch
+  is installed. `pdftoppm` is not called. Cargo was not started.
+  Offline: 1 passed, listed by `-rA`, and the run exited 0. Ruff and
+  one-file mypy passed in that log. Evidence:
+  `mcp-list-project-files-gateway-pytest.txt`. This is not 完成验收.
+  The gateway is not the writer of `.projects`.
+
+- `POST /mcp` `read_file_chunk` runs on the same prebuilt native
+  gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `mcp-read-chunk-token`. The seeded file is
+  `.file-cache/<32 a>.json` with name `f` and one chunk `hello` at
+  lines 1 through 2. A missing token returns status 401 and the
+  nested `UNAUTHORIZED` / `Auth required` body. Bearer `chunkIndex`
+  `1`, `0`, and an omitted index each return `isError` false, name
+  `f`, kind `text`, that file id, an empty `projectId`, chunk count
+  `1`, index `1`, lines `1` through `2`, and text `hello`. Bearer
+  `chunkIndex` `2` returns `not_found` / `Chunk not found`. Bearer
+  file id `nope` returns `invalid_payload` / `Invalid file id`.
+  Bearer file id of 32 `b` characters returns `file_index_expired` /
+  `Uploaded file index has expired or is missing`. The seeded bytes
+  are unchanged and `.file-cache` contains only that json file.
+  Python `create_mcp_router`, `handle_mcp_message`, and
+  `read_file_chunk_tool` are patched and are not entered. No epoch
+  is installed. `pdftoppm` is not called. Cargo was not started.
+  Offline: 1 passed, listed by `-rA`, and the run exited 0. Ruff and
+  one-file mypy passed in that log. Evidence:
+  `mcp-read-file-chunk-gateway-pytest.txt`. This is not 完成验收.
+  The gateway is not the writer of `.file-cache`.
+
+- `POST /mcp` `read_file_chunk` reads a project-scoped cache on the
+  same prebuilt native gateway. `AUTH_DISABLED` is unset and
+  `AUTH_TOKEN` is `mcp-project-chunk-token`. The seeded file is
+  `.projects/proj/files/<32 a>.json` with name `g`, `projectId`
+  `proj`, kind `text`, and one chunk `scoped` at lines 3 through 4.
+  `.file-cache` is not created by the test. A missing token returns
+  status 401 and the nested `UNAUTHORIZED` / `Auth required` body.
+  Bearer `projectId` `proj` and bearer `projectId` `  proj  ` each
+  return `isError` false, name `g`, kind `text`, that file id,
+  `projectId` `proj`, chunk count `1`, index `1`, lines `3` through
+  `4`, and text `scoped`. A bearer call with no `projectId`, and
+  bearer `projectId` of only spaces, each return
+  `file_index_expired` / `Uploaded file index has expired or is
+  missing`. Bearer `projectId` `x` returns `invalid_payload` /
+  `Invalid project id`. The seeded bytes are unchanged,
+  `.file-cache` stays absent, and `.projects` contains only `proj`.
+  Python `create_mcp_router`, `handle_mcp_message`, and
+  `read_file_chunk_tool` are patched and are not entered. No epoch
+  is installed. `pdftoppm` is not called. Cargo was not started.
+  Offline: 1 passed, listed by `-rA`, and the run exited 0. Ruff and
+  one-file mypy passed in that log. Evidence:
+  `mcp-read-project-chunk-gateway-pytest.txt`. This is not 完成验收.
+  The gateway is not the writer of `.projects` or `.file-cache`.
+
+- `POST /mcp` `search_files` runs on an empty root on the same
+  prebuilt native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN`
+  is `mcp-search-files-token`. A missing token returns status 401
+  and the nested `UNAUTHORIZED` / `Auth required` body. Bearer query
+  `   ` returns `isError` true, code `invalid_payload`, and
+  `search_files query is empty`. Bearer query `  sky  ` returns
+  `isError` false, query `sky`, `matches` `[]`, and `searchedFiles`
+  `0`. `.file-cache`, `.projects`, and `.local-rag` stay absent.
+  Python `create_mcp_router`, `handle_mcp_message`, and
+  `search_files` are patched and are not entered. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started.
+  Offline: 1 passed, listed by `-rA`, and the run exited 0. Ruff and
+  one-file mypy passed in that log. Evidence:
+  `mcp-search-files-gateway-pytest.txt`. This is not 完成验收. The
+  gateway is not shown to be a writer. A seeded hit remains unproven.
+
+- `POST /mcp` `search_files` returns two seeded chunks on the same
+  prebuilt native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN`
+  is `mcp-search-hit-token`. The global file is
+  `.file-cache/<32 a>.json`, name `react-notes.txt`, text
+  `useMemo 可以缓存计算结果`, lines `1` through `1`. The project file
+  is `.projects/proj_1/files/<32 b>.json`, name `project-guide.txt`,
+  text `项目空间里的 useMemo 笔记`, lines `2` through `3`. A missing
+  token returns status 401 and the nested `UNAUTHORIZED` / `Auth
+  required` body. Bearer query `useMemo` returns `isError` false,
+  query `useMemo`, `searchedFiles` `2`, and those two file ids. The
+  global match has an empty `projectId`. The project match has
+  `projectId` `proj_1`. Both kinds are `text`, both chunk indexes
+  are `1`, both snippets equal the stored text, and both retrieval
+  sources are `json_hybrid`. Both seeded files keep their bytes.
+  `.local-rag` stays absent. Python `create_mcp_router`,
+  `handle_mcp_message`, and `search_files` are patched and are not
+  entered. No epoch is installed. `pdftoppm` is not called. Cargo
+  was not started. Offline: 1 passed, listed by `-rA`, and the run
+  exited 0. Ruff and one-file mypy passed in that log. Evidence:
+  `mcp-search-hit-gateway-pytest.txt`. This is not 完成验收. The
+  gateway is not shown to be a writer.
+
+- `POST /mcp` `search_files` skips corrupt caches on the same
+  prebuilt native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN`
+  is `mcp-search-corrupt-token`. `.file-cache/not-json.json` is
+  `not json`. `.file-cache/array.json` is `[]`.
+  `.projects/proj/files/<32 c>.json` is named `notes` and has a null
+  chunk plus chunk text `needle text` at lines `1` through `2`, with
+  stored id `file`. A missing token returns status 401 and the
+  nested `UNAUTHORIZED` / `Auth required` body. Bearer query
+  `needle` returns `isError` false, query `needle`, `searchedFiles`
+  `1`, and one match: file id `file`, `projectId` `proj`, name
+  `notes`, kind `text`, chunk index `1`, lines `1` through `2`,
+  snippet `needle text`, retrieval source `json_hybrid`. The three
+  seeded files keep their bytes. `.local-rag` stays absent. Python
+  `create_mcp_router`, `handle_mcp_message`, and `search_files` are
+  patched and are not entered. No epoch is installed. `pdftoppm` is
+  not called. Cargo was not started. Offline: 1 passed, listed by
+  `-rA`, and the run exited 0. Ruff and one-file mypy passed in that
+  log. Evidence: `mcp-search-corrupt-gateway-pytest.txt`. This is
+  not 完成验收. The gateway is not shown to be a writer.
+
+- `POST /mcp` `search_files` caps returned matches at 10 on the same
+  prebuilt native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN`
+  is `mcp-search-cap-token`. The root has 11 global caches named
+  `n00` through `n10`, each with chunk text `needle`. A missing
+  token returns status 401 and the nested `UNAUTHORIZED` / `Auth
+  required` body. Bearer query `needle` and `limit` `50` returns
+  `isError` false, query `needle`, `searchedFiles` `11`, and names
+  `n00` through `n09` in that order. Name `n10` is absent. Each
+  returned match has an empty `projectId`, kind `text`, chunk index
+  `1`, snippet `needle`, and retrieval source `json_hybrid`. The 11
+  seeded files keep their bytes. `.local-rag` stays absent. Python
+  `create_mcp_router`, `handle_mcp_message`, and `search_files` are
+  patched and are not entered. No epoch is installed. `pdftoppm` is
+  not called. Cargo was not started. Offline: 1 passed, listed by
+  `-rA`, and the run exited 0. Ruff and one-file mypy passed in that
+  log. Evidence: `mcp-search-cap-gateway-pytest.txt`. This is not
+  完成验收. The gateway is not shown to be a writer.
+
+- `POST /mcp` `search_files` uses the default limit of 5 on the same
+  prebuilt native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN`
+  is `mcp-search-default-token`. The root has the same 11 global
+  caches `n00` through `n10`, each with chunk text `needle`. A
+  missing token returns status 401 and the nested `UNAUTHORIZED` /
+  `Auth required` body. Bearer query `needle` with no `limit`
+  returns `isError` false, query `needle`, `searchedFiles` `11`, and
+  names `n00` through `n04` in that order. Name `n05` is absent.
+  Each returned match has an empty `projectId`, kind `text`, chunk
+  index `1`, snippet `needle`, and retrieval source `json_hybrid`.
+  The 11 seeded files keep their bytes. `.local-rag` stays absent.
+  Python `create_mcp_router`, `handle_mcp_message`, and
+  `search_files` are patched and are not entered. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started.
+  Offline: 1 passed, listed by `-rA`, and the run exited 0. Ruff and
+  one-file mypy passed in that log. Evidence:
+  `mcp-search-default-gateway-pytest.txt`. This is not 完成验收. The
+  gateway is not shown to be a writer.
+
+- `POST /mcp` `search_files` floors `limit` `0` at 1 on the same
+  prebuilt native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN`
+  is `mcp-search-floor-token`. The root has the same 11 global
+  caches `n00` through `n10`, each with chunk text `needle`. A
+  missing token returns status 401 and the nested `UNAUTHORIZED` /
+  `Auth required` body. Bearer query `needle` and `limit` `0`
+  returns `isError` false, query `needle`, `searchedFiles` `11`, and
+  only name `n00`. Name `n01` is absent. That match has an empty
+  `projectId`, kind `text`, chunk index `1`, snippet `needle`, and
+  retrieval source `json_hybrid`. The 11 seeded files keep their
+  bytes. `.local-rag` stays absent. Python `create_mcp_router`,
+  `handle_mcp_message`, and `search_files` are patched and are not
+  entered. No epoch is installed. `pdftoppm` is not called. Cargo
+  was not started. Offline: 1 passed, listed by `-rA`, and the run
+  exited 0. Ruff and one-file mypy passed in that log. Evidence:
+  `mcp-search-floor-gateway-pytest.txt`. This is not 完成验收. The
+  gateway is not shown to be a writer.
+
+- `POST /mcp` `search_files` accepts integer-string `limit` `"7"` on
+  the same prebuilt native gateway. `AUTH_DISABLED` is unset and
+  `AUTH_TOKEN` is `mcp-search-string-token`. The root has the same
+  11 global caches `n00` through `n10`, each with chunk text
+  `needle`. A missing token returns status 401 and the nested
+  `UNAUTHORIZED` / `Auth required` body. Bearer query `needle` and
+  string `limit` `"7"` returns `isError` false, query `needle`,
+  `searchedFiles` `11`, and names `n00` through `n06` in that order.
+  Name `n07` is absent. Each returned match has an empty
+  `projectId`, kind `text`, chunk index `1`, snippet `needle`, and
+  retrieval source `json_hybrid`. The 11 seeded files keep their
+  bytes. `.local-rag` stays absent. Python `create_mcp_router`,
+  `handle_mcp_message`, and `search_files` are patched and are not
+  entered. No epoch is installed. `pdftoppm` is not called. Cargo
+  was not started. Offline: 1 passed, listed by `-rA`, and the run
+  exited 0. Ruff and one-file mypy passed in that log. Evidence:
+  `mcp-search-string-gateway-pytest.txt`. This is not 完成验收. The
+  gateway is not shown to be a writer.
+
+- `POST /mcp` `search_files` treats non-integer string `limit`
+  `"7.9"` as the default of 5 on the same prebuilt native gateway.
+  `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `mcp-search-fraction-token`. The root has the same 11 global
+  caches `n00` through `n10`, each with chunk text `needle`. A
+  missing token returns status 401 and the nested `UNAUTHORIZED` /
+  `Auth required` body. Bearer query `needle` and string `limit`
+  `"7.9"` returns `isError` false, query `needle`, `searchedFiles`
+  `11`, and names `n00` through `n04` in that order. Name `n05` is
+  absent. Each returned match has an empty `projectId`, kind
+  `text`, chunk index `1`, snippet `needle`, and retrieval source
+  `json_hybrid`. The 11 seeded files keep their bytes. `.local-rag`
+  stays absent. Python `create_mcp_router`, `handle_mcp_message`,
+  and `search_files` are patched and are not entered. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started.
+  Offline: 1 passed, listed by `-rA`, and the run exited 0. Ruff
+  and one-file mypy passed in that log. Evidence:
+  `mcp-search-fraction-gateway-pytest.txt`. This is not 完成验收.
+  The gateway is not shown to be a writer.
+
+- `POST /mcp` `search_files` truncates numeric `limit` `3.9` toward
+  zero on the same prebuilt native gateway. `AUTH_DISABLED` is
+  unset and `AUTH_TOKEN` is `mcp-search-trunc-token`. The root has
+  the same 11 global caches `n00` through `n10`, each with chunk
+  text `needle`. A missing token returns status 401 and the nested
+  `UNAUTHORIZED` / `Auth required` body. Bearer query `needle` and
+  numeric `limit` `3.9` returns `isError` false, query `needle`,
+  `searchedFiles` `11`, and names `n00` through `n02` in that order.
+  Name `n03` is absent. Each returned match has an empty
+  `projectId`, kind `text`, chunk index `1`, snippet `needle`, and
+  retrieval source `json_hybrid`. The 11 seeded files keep their
+  bytes. `.local-rag` stays absent. Python `create_mcp_router`,
+  `handle_mcp_message`, and `search_files` are patched and are not
+  entered. No epoch is installed. `pdftoppm` is not called. Cargo
+  was not started. Offline: 1 passed, listed by `-rA`, and the run
+  exited 0. Ruff and one-file mypy passed in that log. Evidence:
+  `mcp-search-trunc-gateway-pytest.txt`. This is not 完成验收. The
+  gateway is not shown to be a writer.
+
+- `POST /mcp` `search_files` treats boolean limits as one match on
+  the same prebuilt native gateway. `AUTH_DISABLED` is unset and
+  `AUTH_TOKEN` is `mcp-search-bool-token`. The root has the same 11
+  global caches `n00` through `n10`, each with chunk text `needle`.
+  A missing token returns status 401 and the nested `UNAUTHORIZED` /
+  `Auth required` body. Bearer query `needle` with boolean `limit`
+  `true`, and the same query with boolean `limit` `false`, each
+  return `isError` false, query `needle`, `searchedFiles` `11`, and
+  only name `n00`. Name `n01` is absent. That match has an empty
+  `projectId`, kind `text`, chunk index `1`, snippet `needle`, and
+  retrieval source `json_hybrid`. The 11 seeded files keep their
+  bytes. `.local-rag` stays absent. Python `create_mcp_router`,
+  `handle_mcp_message`, and `search_files` are patched and are not
+  entered. No epoch is installed. `pdftoppm` is not called. Cargo
+  was not started. Offline: 1 passed, listed by `-rA`, and the run
+  exited 0. Ruff and one-file mypy passed in that log. Evidence:
+  `mcp-search-bool-gateway-pytest.txt`. This is not 完成验收. The
+  gateway is not shown to be a writer.
+
+- `POST /mcp` `search_files` trims integer-string `limit` `"  7  "`
+  on the same prebuilt native gateway. `AUTH_DISABLED` is unset and
+  `AUTH_TOKEN` is `mcp-search-padded-token`. The root has the same
+  11 global caches `n00` through `n10`, each with chunk text
+  `needle`. A missing token returns status 401 and the nested
+  `UNAUTHORIZED` / `Auth required` body. Bearer query `needle` and
+  string `limit` `"  7  "` returns `isError` false, query `needle`,
+  `searchedFiles` `11`, and names `n00` through `n06` in that order.
+  Name `n07` is absent. Each returned match has an empty
+  `projectId`, kind `text`, chunk index `1`, snippet `needle`, and
+  retrieval source `json_hybrid`. The 11 seeded files keep their
+  bytes. `.local-rag` stays absent. Python `create_mcp_router`,
+  `handle_mcp_message`, and `search_files` are patched and are not
+  entered. No epoch is installed. `pdftoppm` is not called. Cargo
+  was not started. Offline: 1 passed, listed by `-rA`, and the run
+  exited 0. Ruff and one-file mypy passed in that log. Evidence:
+  `mcp-search-padded-gateway-pytest.txt`. This is not 完成验收. The
+  gateway is not shown to be a writer.
+
+- `POST /mcp` `search_files` floors numeric `limit` `-9` at one
+  match on the same prebuilt native gateway. `AUTH_DISABLED` is
+  unset and `AUTH_TOKEN` is `mcp-search-negative-token`. The root
+  has the same 11 global caches `n00` through `n10`, each with
+  chunk text `needle`. A missing token returns status 401 and the
+  nested `UNAUTHORIZED` / `Auth required` body. Bearer query
+  `needle` and numeric `limit` `-9` returns `isError` false, query
+  `needle`, `searchedFiles` `11`, and only name `n00`. Name `n01`
+  is absent. That match has an empty `projectId`, kind `text`,
+  chunk index `1`, snippet `needle`, and retrieval source
+  `json_hybrid`. The 11 seeded files keep their bytes. `.local-rag`
+  stays absent. Python `create_mcp_router`, `handle_mcp_message`,
+  and `search_files` are patched and are not entered. No epoch is
+  installed. `pdftoppm` is not called. Cargo was not started.
+  Offline: 1 passed, listed by `-rA`, and the run exited 0. Ruff
+  and one-file mypy passed in that log. Evidence:
+  `mcp-search-negative-gateway-pytest.txt`. This is not 完成验收.
+  The gateway is not shown to be a writer.
+
+- `POST /api/memory` ownership is enforced on the same prebuilt
+  native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `memory-owner-token`. With `DEEPSEEK_RUNTIME_MODE` unset, a
+  missing token returns status 401 and the nested `UNAUTHORIZED` /
+  `Auth required` body. Bearer `action` `add` of content
+  `likes dark mode` and category `preference` returns status 409
+  and `NATIVE_MEMORY_WRITE_NOT_OWNED`. `.memory` and
+  `.workspace-generation` stay absent. With
+  `DEEPSEEK_RUNTIME_MODE=python_disabled`, the same bearer add
+  returns `ok` true, content `likes dark mode`, type and category
+  `preference`, scope and legacy scope `global`, and a 20-character
+  `memoryId`. `GET /api/memory` lists that one id.
+  `.memory/memories.json` contains the content, and
+  `.workspace-generation` is `4`. A later process with the mode
+  unset refuses bearer `action` `delete` for that content with the
+  same 409 code, and both the memory file and the generation file
+  keep their bytes. Python `create_memory_router`, `add_memory`,
+  `save_memories`, and `upsert_memory` are patched and are not
+  entered. No epoch is installed. `pdftoppm` is not called. Cargo
+  was not started. Offline: 1 passed, listed by `-rA`, and the run
+  exited 0. Ruff and one-file mypy passed in that log. Evidence:
+  `memory-owner-gateway-pytest.txt`. This is not 完成验收. The
+  non-owner process is not a writer. The owner process is the
+  writer of this isolated store.
+
+- `POST /api/reminders` ownership is enforced on the same prebuilt
+  native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `reminders-owner-token`. With `DEEPSEEK_RUNTIME_MODE` unset, a
+  missing token returns status 401 and the nested `UNAUTHORIZED` /
+  `Auth required` body. Bearer `action` `create`, title `喝水`,
+  content `多喝水`, and `dueAt` `2026-01-01T00:00:00Z` returns
+  status 409 and `NATIVE_REMINDERS_WRITE_NOT_OWNED`. `.reminders`
+  and `.workspace-generation` stay absent. With
+  `DEEPSEEK_RUNTIME_MODE=python_disabled`, the same bearer create
+  returns `ok` true, that title and content, `dueAt`
+  `2026-01-01T00:00:00+00:00`, `notified` false, and a 16-character
+  lowercase hex id. Bearer `action` `list` returns that one id.
+  `.reminders/reminders.json` contains the title and the id, and
+  `.workspace-generation` is `2`. A later process with the mode
+  unset refuses bearer `action` `delete` for that id with the same
+  409 code, and both files keep their bytes. Python
+  `reminder_action`, `create_reminder`, and `create_reminder_tool`
+  are patched and are not entered. No epoch is installed.
+  `pdftoppm` is not called. Cargo was not started. Offline: 1
+  passed, listed by `-rA`, and the run exited 0. Ruff and one-file
+  mypy passed in that log. Evidence:
+  `reminders-owner-gateway-pytest.txt`. This is not 完成验收. The
+  non-owner process is not a writer. The owner process is the
+  writer of this isolated store.
+
+- `POST /api/skills` ownership is enforced on the same prebuilt
+  native gateway. `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `skills-owner-token`. Skill directory overrides are unset. A
+  missing token returns status 401 and the flat body
+  `{"error":"Auth required","code":"unauthorized"}`. With
+  `DEEPSEEK_RUNTIME_MODE` unset, bearer `action` `create` of skill
+  id `custom`, name `学习`, version `1.0`, and system prompt
+  `Explain the topic` returns status 409 and
+  `NATIVE_SKILLS_WRITE_NOT_OWNED`. `.skills` stays absent. With
+  `DEEPSEEK_RUNTIME_MODE=python_disabled`, the same bearer create
+  returns `ok` true, that id, name, version, and prompt, and
+  `securityReview.reviewStatus` `local-custom`.
+  `.skills/custom/custom.json` contains the prompt and the id.
+  Bearer `action` `get` for id `custom` returns the same id, name,
+  version, and prompt. A later process with the mode unset refuses
+  bearer `action` `delete` for that id with the same 409 code. Every
+  file under `.skills`, and `.workspace-generation` when present,
+  keeps the bytes from the owner write. Python
+  `create_skills_router`, `create_custom_skill`, and `delete_skill`
+  are patched and are not entered. No epoch is installed.
+  `pdftoppm` is not called. Cargo was not started. Offline: 1
+  passed, listed by `-rA`, and the run exited 0. Ruff and one-file
+  mypy passed in that log. Evidence:
+  `skills-owner-gateway-pytest.txt`. This is not 完成验收. The
+  non-owner process is not a writer. The owner process is the
+  writer of this isolated store.
+
+- `POST /api/reminders/due` ownership is enforced on the same
+  prebuilt native gateway. `AUTH_DISABLED` is unset and
+  `AUTH_TOKEN` is `reminders-due-owner-token`. The isolated root
+  is seeded with `.reminders/reminders.json` bytes
+  `[{"id":"abc","title":"喝水","content":"","dueAt":"2000-01-01T00:00:00+00:00","createdAt":1,"notified":false}]`.
+  With `DEEPSEEK_RUNTIME_MODE` unset, a missing token returns
+  status 401 and the nested `UNAUTHORIZED` / `Auth required`
+  body. Bearer `{}` returns status 409 and
+  `NATIVE_REMINDERS_WRITE_NOT_OWNED`. The seeded bytes stay
+  identical and `.workspace-generation` stays absent. With
+  `DEEPSEEK_RUNTIME_MODE=python_disabled`, the same bearer poll
+  returns one reminder, id `abc`, title `喝水`, `dueAt`
+  `2000-01-01T00:00:00+00:00`, `notified` true, and an integer
+  `notifiedAt`. The file contains `"notified": true`, and the
+  stored object has that id, `notified` true, and the same
+  `notifiedAt`. A later process with the mode unset refuses the
+  same poll with the same 409 code. The reminders file keeps the
+  bytes from the owner poll, and `.workspace-generation` keeps
+  its post-poll bytes when that file exists. Python
+  `due_reminders`, `reminder_action`, `create_reminder`, and
+  `create_reminder_tool` are patched and are not entered. No
+  epoch is installed. `pdftoppm` is not called. Cargo was not
+  started. Offline: 1 passed, listed by `-rA`, and the run
+  exited 0. Ruff and one-file mypy passed in that log. Evidence:
+  `reminders-due-owner-gateway-pytest.txt`. This is not 完成验收.
+  The non-owner process is not a writer. The owner process is
+  the writer of this isolated store.
+
+- `POST /api/automation/templates/daily_project_summary` ownership
+  is enforced on the same prebuilt native gateway.
+  `AUTH_DISABLED` is unset and `AUTH_TOKEN` is
+  `automation-template-owner-token`. With
+  `DEEPSEEK_RUNTIME_MODE` unset, a missing token returns status
+  401 and the nested `UNAUTHORIZED` / `Auth required` body.
+  Bearer `{}` returns status 409 and
+  `NATIVE_AUTOMATION_WRITE_NOT_OWNED`. `.automation`,
+  `.workspace-generation`, and `.projects` stay absent. With
+  `DEEPSEEK_RUNTIME_MODE=python_disabled`, the same bearer body
+  returns `ok` true. `automationId` equals `id`, starts with
+  `auto_`, and has a 16-character lowercase hex suffix. The name
+  is `Daily Project Summary`, the trigger type is `schedule`,
+  the action type is `project_summary`, and `projectId` is
+  empty. `GET /api/automation/{id}` returns that same object.
+  `.automation/automations.json` contains the id. `.projects`
+  stays absent. A later process with the mode unset refuses
+  bearer `{}` with the same 409 code. The automation file keeps
+  the bytes from the owner write, and `.workspace-generation`
+  keeps its post-write bytes when that file exists. Python
+  `create_from_template`, `create_automation`, and
+  `create_automation_router` are patched and are not entered.
+  No epoch is installed. `pdftoppm` is not called. Cargo was
+  not started. Offline: 1 passed, listed by `-rA`, and the run
+  exited 0. Ruff and one-file mypy passed in that log.
+  Evidence: `automation-template-owner-gateway-pytest.txt`. This
+  is not 完成验收. The non-owner process is not a writer. The
+  owner process is the writer of this isolated store.
+
+- `DELETE /api/automation/auto_keep` ownership is enforced on
+  the same prebuilt native gateway. `AUTH_DISABLED` is unset
+  and `AUTH_TOKEN` is `automation-delete-owner-token`. The
+  isolated root is seeded with `.automation/automations.json`
+  containing id `auto_keep`, name `Keep`, action type
+  `save_item`, `createdAt` `stored-created`, `createdAtMs`
+  `1700000000000`, and `updatedAtMs` `1700000005000`. With
+  `DEEPSEEK_RUNTIME_MODE` unset, a missing token returns status
+  401 and the nested `UNAUTHORIZED` / `Auth required` body.
+  Bearer delete returns status 409 and
+  `NATIVE_AUTOMATION_WRITE_NOT_OWNED`. The seeded bytes stay
+  identical, and `.workspace-generation` and `.projects` stay
+  absent. With `DEEPSEEK_RUNTIME_MODE=python_disabled`, the
+  same bearer delete returns `ok` true and `deleted` 1. The
+  stored `automations` array is empty and no longer contains
+  `auto_keep`. Bearer GET returns status 404 and
+  `Automation not found`. `.projects` stays absent. A later
+  process with the mode unset refuses the same delete with the
+  same 409 code. The automation file keeps the bytes from the
+  owner delete, and `.workspace-generation` keeps its
+  post-delete bytes when that file exists. Python
+  `delete_automation` and `create_automation_router` are
+  patched and are not entered. No epoch is installed.
+  `pdftoppm` is not called. Cargo was not started. Offline: 1
+  passed, listed by `-rA`, and the run exited 0. Ruff and
+  one-file mypy passed in that log. Evidence:
+  `automation-delete-owner-gateway-pytest.txt`. This is not
+  完成验收. The non-owner process is not a writer. The owner
+  process is the writer of this isolated store.
+
+- `PATCH /api/automation/auto_keep` ownership is enforced on the
+  same prebuilt native gateway. `AUTH_DISABLED` is unset and
+  `AUTH_TOKEN` is `automation-patch-owner-token`. The isolated
+  root is seeded with the same `auto_keep` record used by the
+  delete proof: name `Keep`, action type `save_item`,
+  `createdAt` `stored-created`, `createdAtMs` `1700000000000`,
+  and `updatedAtMs` `1700000005000`. With
+  `DEEPSEEK_RUNTIME_MODE` unset, a missing token returns status
+  401 and the nested `UNAUTHORIZED` / `Auth required` body.
+  Bearer `{"name":"Renamed"}` returns status 409 and
+  `NATIVE_AUTOMATION_WRITE_NOT_OWNED`. The seeded bytes stay
+  identical, and `.workspace-generation` and `.projects` stay
+  absent. With `DEEPSEEK_RUNTIME_MODE=python_disabled`, the
+  same bearer patch returns `ok` true, id `auto_keep`, name
+  `Renamed`, `createdAt` `stored-created`, `createdAtMs`
+  `1700000000000`, action type `save_item`, and an empty
+  `projectId`. Bearer GET returns that same object. The stored
+  file contains `auto_keep` and `Renamed`, and it does not
+  contain `Keep`. `.projects` stays absent. A later process
+  with the mode unset refuses the same patch with the same 409
+  code. The automation file keeps the bytes from the owner
+  patch, and `.workspace-generation` keeps its post-patch bytes
+  when that file exists. Python `update_automation` and
+  `create_automation_router` are patched and are not entered.
+  No epoch is installed. `pdftoppm` is not called. Cargo was
+  not started. Offline: 1 passed, listed by `-rA`, and the run
+  exited 0. Ruff and one-file mypy passed in that log.
+  Evidence: `automation-patch-owner-gateway-pytest.txt`. This
+  is not 完成验收. The non-owner process is not a writer. The
+  owner process is the writer of this isolated store.
+
+- `POST /api/automation/auto_keep/run` ownership is enforced on
+  the same prebuilt native gateway. `AUTH_DISABLED` is unset
+  and `AUTH_TOKEN` is `automation-run-owner-token`. The child
+  env sets `AUTOMATION_ENABLED` `1`,
+  `AUTOMATION_MAX_RUNS_PER_DAY` `50`,
+  `AUTOMATION_MIN_INTERVAL_SECONDS` `300`,
+  `AUTOMATION_ALLOW_BROWSER` `0`,
+  `AUTOMATION_REQUIRE_CONFIRM_FOR_BROWSER_WRITE` `1`, and
+  `AUTOMATION_RUN_TIMEOUT_SECONDS` `1800`. The isolated root
+  is seeded with project `proj_ok` `project.json`
+  `{"id":"proj_ok","name":"Demo","createdAt":10,"updatedAt":10}`
+  and automation `auto_keep`, name `Keep notes`, enabled true,
+  `projectId` `proj_ok`, condition `always`, action
+  `save_item`, title `Kept note`, content
+  `hello from automation`. With `DEEPSEEK_RUNTIME_MODE` unset,
+  a missing token returns status 401 and the nested
+  `UNAUTHORIZED` / `Auth required` body. The same bearer body,
+  trigger `schedule`, cron `34 12 4 10 *`, and `now`
+  `2026-10-04T12:34:00+00:00`, returns status 409 and
+  `NATIVE_AUTOMATION_WRITE_NOT_OWNED`. The automation file and
+  `project.json` stay byte-identical. `.automation/history.json`,
+  `.projects/proj_ok/saved-items.json`,
+  `.memory/memories.json`, and `.workspace-generation` stay
+  absent. With `DEEPSEEK_RUNTIME_MODE=python_disabled`, that
+  bearer body returns `ok` true, run status `success`, empty
+  `skippedReason`, empty `error`, empty `traceId`, logs
+  `["saveItem"]`, and automation id `auto_keep`. `runId`
+  starts with `auto_run_` and has a 16-character lowercase hex
+  suffix. The saved-item file has one item, title `Kept note`,
+  content `hello from automation`, type `assistant_answer`,
+  purpose `reference`, tags `["automation"]`, project
+  `proj_ok`, and `savedId` `save_` plus 16 lowercase hex
+  characters. The run `outputs.savedItemIds` is that id.
+  History contains the run id. The automation file keeps the
+  seeded bytes. `project.json` still has id `proj_ok` and name
+  `Demo`, and `updatedAt` is an integer greater than 10. A
+  later process with the mode unset refuses the same body with
+  the same 409 code. The automation file, `project.json`,
+  history, and saved items keep the post-run bytes.
+  `.workspace-generation` and `.memory/memories.json` keep
+  their post-run bytes when those files exist. Python
+  `run_once`, `save_item_action`, and
+  `create_automation_router` are patched and are not entered.
+  No epoch is installed. `pdftoppm` is not called. Cargo was
+  not started. Offline: 1 passed, listed by `-rA`, and the run
+  exited 0. Ruff and one-file mypy passed in that log.
+  Evidence: `automation-run-owner-gateway-pytest.txt`. This is
+  not 完成验收. The non-owner process is not a writer. The
+  owner process is the writer of this isolated saved-item
+  store.
+
+- `POST /api/automation/auto_keep/run` schedule gate is enforced on the
+  same prebuilt native gateway owner process. With
+  `DEEPSEEK_RUNTIME_MODE=python_disabled` and the same seed and token
+  env, the 12:34 cron `34 12 4 10 *` post returns `success` and one
+  saved item titled `Kept note`. A second post on that same process,
+  cron `0 0 * * *` and `now` `2026-10-04T15:00:00+00:00`, returns
+  `ok` true, run status `skipped`, `skippedReason` `schedule_not_due`,
+  logs `["schedule_not_due"]`, empty `error`, automation id
+  `auto_keep`, and a `runId` different from the successful run. The
+  saved-item file and `project.json` keep the bytes from the
+  successful run, still one item. The automation file keeps the
+  seeded bytes. Python `run_once`, `save_item_action`, and
+  `create_automation_router` are patched and are not entered. No epoch
+  is installed. `pdftoppm` is not called. Cargo, Go, and Docker were
+  not started. Offline: 1 passed in
+  `tests/test_native_automation_run_not_due_gateway.py`, listed by
+  `-rA`, and the run exited 0. Ruff and one-file mypy passed. This is
+  not ????. The history file is not asserted for the skipped run.
+
+- `POST /api/automation/auto_off/run` disabled gate is enforced on the
+  same prebuilt native gateway owner process. The isolated root is
+  seeded with `auto_keep` and a second automation `auto_off`, name
+  `Off`, `enabled` false, project `proj_ok`, `save_item` action titled
+  `Should not save`. With `DEEPSEEK_RUNTIME_MODE=python_disabled` and
+  the same token and automation runtime env, a bearer post with
+  `{"trigger":{"type":"manual"}}` returns status 200, `ok` true, run
+  status `skipped`, `skippedReason` `automation_disabled`, logs
+  `["automation disabled"]`, empty `error`, and automation id
+  `auto_off`. No saved-item file appears. `project.json` and the
+  automation file keep the seeded bytes. Python `run_once`,
+  `save_item_action`, and `create_automation_router` are patched and
+  are not entered. No epoch is installed. `pdftoppm` is not called.
+  Cargo, Go, and Docker were not started. Offline: 1 passed in
+  `tests/test_native_automation_run_disabled_gateway.py`, listed by
+  `-rA`, and the run exited 0. Ruff and one-file mypy passed. This is
+  not ????. The history file is not asserted for the skipped run.
+
+- `POST /api/automation/auto_noproj/run` missing-project failure is
+  enforced on the same prebuilt native gateway owner process. The
+  isolated root is also seeded with `auto_noproj`, name `No project`,
+  `enabled` true, `projectId` empty string, `save_item` action titled
+  `Missing project`, content `x`. With
+  `DEEPSEEK_RUNTIME_MODE=python_disabled` and the same token and
+  automation runtime env, a bearer post with
+  `{"trigger":{"type":"manual"}}` returns status 200, `ok` true, run
+  status `failed`, `error` `save_item action requires projectId`, logs
+  `["attempt 1 failed: save_item action requires projectId"]`, and
+  automation id `auto_noproj`. No saved-item file appears.
+  `project.json` and the automation file keep the seeded bytes. Python
+  `run_once`, `save_item_action`, and `create_automation_router` are
+  patched and are not entered. No epoch is installed. `pdftoppm` is not
+  called. Cargo, Go, and Docker were not started. Offline: 1 passed in
+  `tests/test_native_automation_run_noproj_gateway.py`, listed by
+  `-rA`, and the run exited 0. Ruff and one-file mypy passed. This is
+  not ????. The history file is not asserted for the failed run.
+
+- A bodyless `POST /api/automation/auto_keep/run` is enforced as a manual
+  trigger on the same prebuilt native gateway owner process. With
+  `DEEPSEEK_RUNTIME_MODE=python_disabled` and the same seed, token and
+  automation runtime env, a bearer post with an empty body and no
+  `Content-Type` returns status 200, `ok` true, run status `success`,
+  `trigger` `{"type":"manual"}`, logs `["saveItem"]`, empty `traceId`,
+  automation id `auto_keep`, and a `runId` of `auto_run_` plus 16
+  lowercase hex characters. `startedAtMs` is an integer within 15000 ms
+  of the wall clock. The saved-item file has one item titled
+  `Kept note`. The automation file keeps the seeded bytes and `.traces`
+  stays absent. Python `run_once`, `save_item_action`, and
+  `create_automation_router` are patched and are not entered. No epoch
+  is installed. `pdftoppm` is not called. Cargo, Go, and Docker were not
+  started. Offline: 1 passed in
+  `tests/test_native_automation_run_bodyless_gateway.py`, listed by
+  `-rA`, and the run exited 0. Ruff and one-file mypy passed. This is
+  not ????. The Rust test's second saved item, the memory write, and
+  the oracle comparison are not asserted here.
+
+- Illegal `POST /api/automation/{id}/run` requests are refused on a
+  prebuilt native gateway with `DEEPSEEK_RUNTIME_MODE` unset, an empty
+  root, `AUTH_DISABLED` unset, `AUTH_TOKEN` `automation-run-owner-token`
+  and the same automation runtime env. Without a token, `auto_gone`
+  returns 401 `UNAUTHORIZED` / `Auth required`. With the bearer, id `no`
+  returns 400 `{"error":"Invalid automation id","code":"invalid_payload"}`,
+  `auto_gone` returns 404
+  `{"error":"Automation not found","code":"not_found"}`, and body
+  `{"now":"yesterday"}` returns 400
+  `{"error":"now must be an ISO timestamp or epoch milliseconds","code":"invalid_payload"}`.
+  `.automation`, `.projects`, and `.memory` stay absent after every
+  request. Python `run_once`, `save_item_action`, and
+  `create_automation_router` are patched and are not entered. No epoch
+  is installed. `pdftoppm` is not called. Cargo, Go, and Docker were not
+  started. Offline: 1 passed in
+  `tests/test_native_automation_run_illegal_gateway.py`, listed by
+  `-rA`, and the run exited 0. Ruff and one-file mypy passed. This is
+  not ????.
+
+  Divergence from the Rust in-process test: a raw request with
+  `Content-Length: -1` and body `not-json` does NOT reach the 404 on the
+  real binary. The HTTP layer answers `400 Bad Request` with
+  `content-length: 0` and an empty body before routing, and `.automation`
+  stays absent. The in-process `exchange` call at
+  `automation_run_routes.rs` line 1198 bypasses that framing check, so
+  its 404 assertion does not describe the served process. The offline
+  test asserts the observed 400/empty response. No gateway source was
+  changed. Whether that framing rejection should instead return the
+  JSON error envelope is a product decision and is not made here.
+
+Next executable task: prove the non-owner conflict on the same gateway
+with `DEEPSEEK_RUNTIME_MODE` unset. Seed `auto_keep` and the `proj_ok`
+project. A bearer bodyless post to `auto_keep/run` returns 409
+`NATIVE_AUTOMATION_WRITE_NOT_OWNED`; the automation file and
+`project.json` keep the seeded bytes, and `.automation/history.json`,
+`saved-items.json`, and `.memory` stay absent. That case is already
+covered by `tests/test_native_automation_run_owner_gateway.py` with a
+body, so the new value is the bodyless request only. Mirror
+`rust/crates/deepseek-gateway/tests/automation_run_routes.rs` lines
+1236-1250. After that, prove `GET /api/automation/{id}/runs` lists the
+runs from the owner process. Do not call `pdftoppm`. Do not install an
+epoch or edit readiness. Leave vault reopen unfinished. Leave
+`GET /api/file-page-image` unproven. Do not edit
+`release/native_runtime_5_0_evidence_v1.json`. Do not start local
+Cargo, Go, or Docker.
+<!-- END CURRENT_NATIVE_CLOUD_CHECKPOINT -->
+
+<!-- HISTORICAL 2026-10-14 credential-peer snapshot; its cloud runs failed as recorded above -->
+## Historical cloud checkpoint — 2026-10-14
+
+2026-10-14: reviewed snapshot `9c38f1dd9e68238f6cc5b06274e405004b567b1b`
 (tree `465f3c6741721fc1523ae1c495f249e0c040e269`, parent6e3b0b4d,8files)
 repairs credential-path test peers and narrows the Go worker client to only its
 six execution/projection methods. Credential preparation remains private Rust
@@ -11,6 +2534,9 @@ remains mandatory; the new controlled TLS unit peer is not encryption proof.
 
 Rust: https://github.com/leizd/DeepSeek-Infra/actions/runs/38501431635
 CI: https://github.com/leizd/DeepSeek-Infra/actions/runs/38501553143
+Those two runs completed with conclusion failure. See the current checkpoint.
+The notes below were written before those conclusions were collected.
+
 Exact source proof:902 native /3676 whole files. Rust expects1502 passes plus
 the existing Redis ignore; original80% coverage remains required. All37CI,
 all14Go-Docker and Go/Android/Python95% floors are unchanged. The complete Go
@@ -26,12 +2552,9 @@ preserved. Prior1a74b532 checks failed one outdated gateway fixture and Go fake
 interface compilation; these are not PASS. Superseded affected runs were cancelled
 and recorded. Prior b1d5c323 bounded Rust fully passed1494+1ignore /82.17874352578164%.
 
-Overall `NOT_READY`. Collect this head's real credential override and encrypted
-vault reopen across actual worker restart, fix genuine failures, then implement
-retained runtime updates, resume/rerun and admitted tool continuation. No main
-merge, release or real data operation. Review/checkpoint:
+Overall `NOT_READY`. Review/checkpoint:
 `artifacts/native-20261014-credential-peer-fixture/`.
-<!-- END CURRENT_NATIVE_CLOUD_CHECKPOINT -->
+<!-- /HISTORICAL 2026-10-14 -->
 
 
 <!-- native-planner-worker-20261011 -->

@@ -1,0 +1,9 @@
+{
+  "schema": "agent-runtime-admission-v1",
+  "schemaVersion": 1,
+  "operations": ["resume", "rerun", "runtime_update", "tool_continuation"],
+  "resumableStatuses": ["orphaned", "failed", "cancelled", "done"],
+  "activeStatuses": ["created", "planning", "running"],
+  "knownAgents": ["researcher", "coder", "reasoner", "critic"],
+  "synthesizerAliases": ["synth", "leader", "synthesizer"]
+}

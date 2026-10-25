@@ -31,6 +31,10 @@ func validAgentNodeEffect(effect *agentv1.AgentNodeEffectMetadata, fence *common
 	case "AWAITING_TOOLS":
 		return nodeOutcomeArtifact(effect.PublicEvent) && nodeOutcomeHex(effect.OutcomeSha256) &&
 			effect.OutcomeLength > 0 && effect.OutcomeLength <= 1024*1024 && effect.OutcomeReceipt == nil
+	case "ANSWER_PUBLISHED":
+		return nodeOutcomeArtifact(effect.PublicEvent) && nodeOutcomeHex(effect.OutcomeSha256) &&
+			effect.OutcomeLength > 0 && effect.OutcomeLength <= 1024*1024 && effect.OutcomeReceipt != nil &&
+			effect.OutcomeReceipt.Evidence != nil && effect.OutcomeReceipt.Evidence.TaskOutput != nil
 	default:
 		return false
 	}
@@ -65,6 +69,7 @@ func (client *Client) ExecuteAgentPlan(ctx context.Context, request *agentv1.Exe
 // Task selection is bounded to the admitted role. Task bodies and dependency
 // results are resolved by Rust from Go's authenticated reservation and its own journal.
 // AWAITING_TOOLS carries no completion proof and cannot settle a Go task.
+// ANSWER_PUBLISHED settles only when the signed receipt is already attached.
 func (client *Client) ExecuteAgentTask(ctx context.Context, request *agentv1.ExecuteAgentTaskRequest) (*agentv1.AgentNodeEffectMetadata, error) {
 	if request == nil || request.SchemaVersion != 1 || request.OperationId == "" || len(request.OperationId) > 256 ||
 		request.Actor != "rust-agent-worker" || request.Claim == nil || request.Claim.RunId == "" ||
@@ -82,8 +87,13 @@ func (client *Client) ExecuteAgentTask(ctx context.Context, request *agentv1.Exe
 	if err != nil {
 		return nil, fmt.Errorf("worker task transport: %w", err)
 	}
-	if result == nil || !strings.HasPrefix(result.OperationId, "agent-node-") || len(result.OperationId) != 75 ||
-		!nodeOutcomeHex(result.OperationId[11:]) || (result.State != "CONFIRMED" && result.State != "AWAITING_TOOLS") ||
+	if result == nil {
+		return nil, ErrInvalidWorkerResponse
+	}
+	published := result.State == "ANSWER_PUBLISHED"
+	admitted := result.State == "CONFIRMED" || result.State == "AWAITING_TOOLS" || published
+	if !strings.HasPrefix(result.OperationId, "agent-node-") || len(result.OperationId) != 75 ||
+		!nodeOutcomeHex(result.OperationId[11:]) || !admitted ||
 		!validAgentNodeEffect(result, request.Fence, result.OperationId, request.Claim.RunId, request.NodeId) {
 		return nil, ErrInvalidWorkerResponse
 	}

@@ -956,4 +956,138 @@ mod tests {
         assert!((words[0]["width"].as_f64().unwrap() - 4.4667).abs() < 0.0001);
         assert!((words[0]["height"].as_f64().unwrap() - 2.0818).abs() < 0.0001);
     }
+
+    fn write_cached(
+        directory: &std::path::Path,
+        file_id: &str,
+        name: &str,
+        media: &str,
+        kind: &str,
+        page_count: i64,
+        source: &[u8],
+    ) {
+        let payload = serde_json::json!({
+            "id": file_id,
+            "name": name,
+            "type": media,
+            "size": source.len(),
+            "kind": kind,
+            "projectId": "",
+            "sourceAvailable": true,
+            "pageCount": page_count,
+            "pageTexts": [],
+            "charCount": 0,
+            "chunkCount": 0,
+            "chunks": [],
+        });
+        std::fs::write(
+            directory.join(format!("{file_id}.json")),
+            payload.to_string(),
+        )
+        .unwrap();
+        std::fs::write(directory.join(format!("{file_id}.source")), source).unwrap();
+    }
+
+    fn cache_names(directory: &std::path::Path) -> Vec<String> {
+        let mut names = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    /// A cached non-PDF is refused before the renderer. A cached PDF returns the
+    /// same boxes as `render_pdf_page_layout` for those source bytes. Neither
+    /// result adds a file beside the index and the source.
+    #[test]
+    fn file_page_layout_refuses_a_cached_non_pdf_and_returns_shipped_pdf_layout() {
+        let root = std::env::temp_dir().join(format!("file-page-layout-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let directory = crate::file_cache::file_cache_dir(&root);
+        std::fs::create_dir_all(&directory).unwrap();
+        let text_id = "a".repeat(32);
+        let pdf_id = "b".repeat(32);
+        let bad_id = "c".repeat(32);
+        let text_bytes = b"not a pdf LAYOUTREFUSE";
+        let pdf_bytes = simple_pdf();
+        write_cached(
+            &directory,
+            &text_id,
+            "notes.txt",
+            "text/plain",
+            "text",
+            0,
+            text_bytes,
+        );
+        write_cached(
+            &directory,
+            &pdf_id,
+            "hello.pdf",
+            "application/pdf",
+            "pdf",
+            1,
+            &pdf_bytes,
+        );
+        write_cached(
+            &directory,
+            &bad_id,
+            "bad.pdf",
+            "application/pdf",
+            "pdf",
+            1,
+            text_bytes,
+        );
+        let before = cache_names(&directory);
+        let cache = crate::file_cache::FileCache::new();
+
+        let refused =
+            file_page_layout(&root, &text_id, None, Some(&serde_json::json!("5")), &cache)
+                .expect_err("a cached text file is not a page layout");
+        assert_eq!(refused.status, 415);
+        assert_eq!(refused.code, super::codes::UNSUPPORTED_FILE);
+        assert_eq!(
+            refused.message,
+            "Page text layout is only available for PDF files"
+        );
+        assert!(!refused.message.contains("LAYOUTREFUSE"));
+
+        let layout = file_page_layout(&root, &pdf_id, None, Some(&serde_json::json!("5")), &cache)
+            .expect("cached pdf layout");
+        assert_eq!(layout["ok"], true);
+        assert_eq!(layout["file"]["name"], "hello.pdf");
+        assert_eq!(layout["file"]["fileId"], pdf_id);
+        assert_eq!(layout["page"]["index"], 1);
+        assert_eq!(layout["page"]["pageCount"], 1);
+        assert_eq!(layout["page"]["width"], 612.0);
+        assert_eq!(layout["page"]["height"], 792.0);
+        assert_eq!(layout["page"]["text"], "Hello pdf\nWorld");
+        assert_eq!(layout["page"]["hasText"], true);
+        let words = layout["page"]["words"].as_array().expect("words");
+        assert_eq!(words.len(), 3);
+        assert_eq!(words[0]["text"], "Hello");
+        assert_eq!(words[1]["text"], "pdf");
+        assert_eq!(words[2]["text"], "World");
+        assert!((words[0]["left"].as_f64().unwrap() - 11.7647).abs() < 0.0001);
+        assert!((words[0]["top"].as_f64().unwrap() - 7.4621).abs() < 0.0001);
+        assert!((words[2]["left"].as_f64().unwrap() - 11.7647).abs() < 0.0001);
+
+        let rendered =
+            file_page_layout(&root, &bad_id, None, Some(&serde_json::json!("1")), &cache)
+                .expect_err("a pdf index still enters the renderer");
+        assert_eq!(rendered.status, 415);
+        assert_eq!(rendered.code, super::codes::UNSUPPORTED_FILE);
+        assert!(
+            rendered
+                .message
+                .starts_with("PDF page text layout is unavailable")
+        );
+        assert_ne!(rendered.message, refused.message);
+        assert_eq!(cache_names(&directory), before);
+        assert_eq!(
+            std::fs::read(directory.join(format!("{pdf_id}.source"))).unwrap(),
+            pdf_bytes
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

@@ -17,7 +17,7 @@ use deepseek_policy::app_error::{AppError, codes};
 use deepseek_policy::core_utils::web_truthy;
 use deepseek_policy::file_routes::clean_filename;
 use deepseek_policy::file_upload::{
-    self, MAX_SHARE_FIELD_CHARS, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILE_BYTES, UploadedPart,
+    self, MAX_SHARE_FIELD_CHARS, MAX_UPLOAD_FILE_BYTES, UploadedPart,
 };
 use percent_encoding::percent_decode_str;
 use serde_json::{Value, json};
@@ -98,17 +98,12 @@ pub(crate) fn read_multipart_upload(
     {
         return Err(invalid("Expected multipart/form-data"));
     }
-    if content_length == 0 {
-        return Err(invalid("Upload body is empty"));
-    }
-    if content_length > MAX_UPLOAD_BYTES {
+    let admission = file_upload::admit_upload_body(content_length);
+    if !admission.admit {
         return Err(AppError {
-            message: format!(
-                "Upload body is too large. Maximum request size is {} MB.",
-                format_upload_limit(MAX_UPLOAD_BYTES)
-            ),
-            code: codes::UPLOAD_TOO_LARGE,
-            status: 413,
+            message: admission.message,
+            code: admission.code,
+            status: admission.status,
         });
     }
     let (files, ocr_enabled, _api_key) = parse_multipart(content_type, body)?;

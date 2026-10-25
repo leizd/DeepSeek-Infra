@@ -413,7 +413,7 @@ func TestAgentDriverExistingUnknownAndReconciliationCannotAuthorizeDispatch(t *t
 	if err != nil || current != claim || len(grant) != 0 {
 		t.Fatal("reconciliation acquired grant", err)
 	}
-	_, err = driver.node(context.Background(), fixture, fixture.nodes, claim, nil, "leader")
+	_, err = driver.node(context.Background(), fixture, fixture.nodes, claim, nil, "leader", "")
 	if !errors.Is(err, errAgentDriverUnknown) || len(fixture.calls) != 0 {
 		t.Fatal("reconciliation redispatched", err)
 	}
@@ -647,7 +647,7 @@ func TestAgentDriverExpiredClaimOnlyAdmitsReconciliationWithNoFreshEffect(t *tes
 	if err != nil || current != recovered || grant != nil {
 		t.Fatal("reconciliation minted an execution permit", err)
 	}
-	_, err = driver.node(context.Background(), fixture, fixture.nodes, recovered, grant, "leader")
+	_, err = driver.node(context.Background(), fixture, fixture.nodes, recovered, grant, "leader", "")
 	if !errors.Is(err, errAgentDriverUnknown) || len(fixture.calls) != 0 {
 		t.Fatal("missing original custody redispatched an effect", err)
 	}

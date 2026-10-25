@@ -191,7 +191,13 @@ pub(crate) fn validate_scope(
     let intent = response.intent.as_ref().ok_or_else(denied)?;
     let seconds = authority_request::parse_utc_z_str(now).map_err(|_| denied())?;
     agent_execution_grant::validate_node_dispatch(response, claim, &intent.node_id, seconds)?;
-    if intent.operation_id != node_operation_id(intent)?
+    let derived = node_operation_id(intent)?;
+    // The successor id is the shared digest of the original fence. It is not
+    // the agent-node hash of the newer epoch, and accepting the prefix does
+    // not skip admit_command.
+    let successor = intent.operation_id.starts_with("agent-successor-")
+        && agent_execution_grant::canonical_agent_operation(&intent.operation_id);
+    if (intent.operation_id != derived && !successor)
         || intent.recorded_at > seconds.saturating_add(30)
     {
         return Err(denied());

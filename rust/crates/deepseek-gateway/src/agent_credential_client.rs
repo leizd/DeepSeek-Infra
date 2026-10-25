@@ -50,10 +50,14 @@ pub(crate) async fn prepare(
     config: &WorkerConfig,
     run_id: &str,
     epoch: u64,
+    runtime_revision: u64,
     reference: &ArtifactReference,
     api_key: Option<&str>,
     tavily_api_key: Option<&str>,
 ) -> Result<Value, ()> {
+    if runtime_revision == 0 {
+        return Err(());
+    }
     let origin = &config.origin;
     let address: SocketAddr = origin
         .strip_prefix("https://")
@@ -105,7 +109,7 @@ pub(crate) async fn prepare(
                 length: reference.length,
             },
         ),
-        runtime_revision: 1,
+        runtime_revision,
         api_key: api_key.unwrap_or_default().into(),
         tavily_api_key: tavily_api_key.unwrap_or_default().into(),
     });
@@ -131,7 +135,7 @@ pub(crate) async fn prepare(
     };
     if scope.run_id != run_id
         || scope.metadata_epoch != epoch
-        || scope.runtime_revision != 1
+        || scope.runtime_revision != runtime_revision
         || scope.request_sha256 != reference.sha256
         || scope.request_length != reference.length
         || scope.fleet_id.is_empty()

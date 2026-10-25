@@ -1,5 +1,12 @@
 //! Durable planner execution; Go alone decides the resulting run/phase state.
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
+
+use sha2::{Digest, Sha256};
 
 use deepseek_gateway::{
     assembly_env::NativeAssembly, chat_execution::UpstreamConfig,
@@ -40,8 +47,62 @@ impl std::fmt::Debug for AgentPlanExecutor {
     }
 }
 
+fn hold_published_answer(mut metadata: AgentNodeEffectMetadata) -> AgentNodeEffectMetadata {
+    metadata.state = "AWAITING_TOOLS".into();
+    metadata.outcome_receipt = None;
+    metadata
+}
+
 fn unavailable() -> Status {
     Status::unavailable("AGENT_PLAN_EXECUTOR_UNAVAILABLE")
+}
+
+fn unstored() -> Status {
+    Status::unavailable("AGENT_TOOL_RESULT_UNSTORED")
+}
+
+fn driver_result_scope(value: &str) -> String {
+    if value.is_empty() || value.len() > 64 {
+        return String::new();
+    }
+    if value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'-'))
+    {
+        return value.to_string();
+    }
+    String::new()
+}
+
+/// Tool results live beside the artifact store, not in the confirmed SQL row.
+/// A replay reads this file and does not run the tool again.
+fn retained_digest_name(operation_id: &str) -> Option<String> {
+    if operation_id.is_empty() || operation_id.len() > 256 {
+        return None;
+    }
+    let digest = Sha256::digest(operation_id.as_bytes());
+    let mut name = String::with_capacity(digest.len() * 2 + 5);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in digest {
+        name.push(HEX[(byte >> 4) as usize] as char);
+        name.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    name.push_str(".json");
+    Some(name)
+}
+
+fn retained_tool_result_path(root: &Path, operation_id: &str) -> Option<PathBuf> {
+    Some(
+        root.join("retained-tool-results")
+            .join(retained_digest_name(operation_id)?),
+    )
+}
+
+fn model_turn_path(root: &Path, operation_id: &str) -> Option<PathBuf> {
+    Some(
+        root.join("retained-model-turns")
+            .join(retained_digest_name(operation_id)?),
+    )
 }
 
 pub fn load_agent_plan_executor_from_env() -> Result<Option<AgentPlanExecutor>, Status> {
@@ -85,9 +146,16 @@ impl WorkerRpcService {
             node_id: outcome.node_id.clone(),
         };
         let mut metadata = executor.publish_known(outcome, run_id).await?;
-        if metadata.state == "AWAITING_TOOLS" {
-            // A received tool request is retained provider evidence, not a
-            // completed task. It cannot receive an outcome completion proof.
+        if metadata.state == "AWAITING_TOOLS" || metadata.state == "ANSWER_PUBLISHED" {
+            // A tool request stays on scheduling refs. A published answer may
+            // carry the receipt attached below. A missing answer stays waiting.
+            self.project_retained_driver_tools(executor, &metadata)
+                .await;
+            if metadata.state == "ANSWER_PUBLISHED" {
+                metadata = self
+                    .attach_published_answer_receipt(executor, &query, metadata)
+                    .await;
+            }
             return Ok(metadata);
         }
         // Lock order matches the existing signer RPC: worker, then custody.
@@ -113,6 +181,154 @@ impl WorkerRpcService {
         Ok(metadata)
     }
 
+    async fn project_retained_driver_tools(
+        &self,
+        executor: &AgentPlanExecutor,
+        metadata: &AgentNodeEffectMetadata,
+    ) {
+        let Some(reference) = metadata.public_event.clone() else {
+            return;
+        };
+        if reference.sha256.len() != 64 || reference.length == 0 || metadata.node_id.is_empty() {
+            return;
+        }
+        let root = executor.artifact_root.clone();
+        let sha = reference.sha256.clone();
+        let length = reference.length;
+        let loaded = tokio::task::spawn_blocking(move || {
+            ArtifactStore::open_readonly(&root)
+                .and_then(|store| {
+                    store.get(&ArtifactReference {
+                        sha256: sha,
+                        length,
+                    })
+                })
+                .ok()
+        })
+        .await;
+        let Ok(Some(event)) = loaded else {
+            return;
+        };
+        let decision = deepseek_policy::agent_runtime_admission::retained_driver_tool_results(
+            "AWAITING_TOOLS",
+            std::slice::from_ref(&event),
+            None,
+        );
+        if !decision.returned || decision.events.is_empty() {
+            return;
+        }
+        let mut refs = Vec::new();
+        for item in &decision.events {
+            if !item.is_object() {
+                return;
+            }
+            let scope =
+                driver_result_scope(item.get("toolCallId").and_then(Value::as_str).unwrap_or(""));
+            let root = executor.artifact_root.clone();
+            let stored = item.clone();
+            let put = tokio::task::spawn_blocking(move || {
+                ArtifactStore::open_native(&root, "python_disabled")
+                    .and_then(|mut store| store.put(&stored))
+                    .ok()
+            })
+            .await;
+            let Ok(Some(body)) = put else {
+                return;
+            };
+            refs.push((scope, body.sha256, body.length));
+        }
+        if refs.is_empty() {
+            return;
+        }
+        if let Some(control) = self.agent_execution_control.clone() {
+            let _ = control
+                .project_driver_tool_results(
+                    &metadata.run_id,
+                    &metadata.operation_id,
+                    &metadata.node_id,
+                    &reference.sha256,
+                    reference.length,
+                    &refs,
+                )
+                .await;
+        }
+    }
+
+    async fn attach_published_answer_receipt(
+        &self,
+        executor: &AgentPlanExecutor,
+        query: &QueryAgentNodeEffect,
+        metadata: AgentNodeEffectMetadata,
+    ) -> AgentNodeEffectMetadata {
+        let Some(saved) = executor.read_model_turn(&query.operation_id) else {
+            return hold_published_answer(metadata);
+        };
+        let Some(reference) = metadata.public_event.clone() else {
+            return hold_published_answer(metadata);
+        };
+        if reference.sha256.len() != 64 || reference.length == 0 {
+            return hold_published_answer(metadata);
+        }
+        let root = executor.artifact_root.clone();
+        let sha = reference.sha256.clone();
+        let length = reference.length;
+        let loaded = tokio::task::spawn_blocking(move || {
+            ArtifactStore::open_readonly(&root)
+                .and_then(|store| {
+                    store.get(&ArtifactReference {
+                        sha256: sha,
+                        length,
+                    })
+                })
+                .ok()
+        })
+        .await;
+        let Ok(Some(public_event)) = loaded else {
+            return hold_published_answer(metadata);
+        };
+        let proof = {
+            let worker = self.worker.lock().await;
+            let Ok(config) = worker.agent_node_authority() else {
+                return hold_published_answer(metadata);
+            };
+            let Some(store) = worker.authority_store.as_ref() else {
+                return hold_published_answer(metadata);
+            };
+            match store.published_answer_outcome_evidence(query, &public_event, &saved, &config) {
+                Ok(proof) => proof,
+                Err(_) => return hold_published_answer(metadata),
+            }
+        };
+        let (evidence, event) = proof;
+        let root = executor.artifact_root.clone();
+        let put = tokio::task::spawn_blocking(move || {
+            ArtifactStore::open_native(&root, "python_disabled")
+                .and_then(|mut store| store.put(&event))
+                .ok()
+        })
+        .await;
+        let Ok(Some(body)) = put else {
+            return hold_published_answer(metadata);
+        };
+        let Some(expected) = evidence.public_event.as_ref() else {
+            return hold_published_answer(metadata);
+        };
+        if expected.sha256 != body.sha256 || expected.length != body.length {
+            return hold_published_answer(metadata);
+        }
+        let Some(signer) = self.control_signer.as_ref() else {
+            return hold_published_answer(metadata);
+        };
+        let mut guard = signer.lock().await;
+        let receipt = match guard.sign_node_outcome(evidence) {
+            Ok(receipt) => receipt,
+            Err(_) => return hold_published_answer(metadata),
+        };
+        let mut metadata = metadata;
+        metadata.outcome_receipt = Some(receipt);
+        metadata
+    }
+
     pub fn with_agent_plan_executor(mut self, executor: AgentPlanExecutor) -> Self {
         self.agent_plan_executor = Some(Arc::new(executor));
         self
@@ -134,6 +350,82 @@ impl WorkerRpcService {
 }
 
 impl AgentPlanExecutor {
+    pub(crate) fn read_retained_tool_results(&self, operation_id: &str) -> Option<Value> {
+        let path = retained_tool_result_path(&self.artifact_root, operation_id)?;
+        let bytes = std::fs::read(path).ok()?;
+        let value: Value = serde_json::from_slice(&bytes).ok()?;
+        if value.as_array().is_none() {
+            return None;
+        }
+        Some(value)
+    }
+
+    /// Create the result file once. An existing file is left as it is.
+    pub(crate) fn store_retained_tool_results(
+        &self,
+        operation_id: &str,
+        results: &Value,
+    ) -> Result<(), Status> {
+        if !results.is_array() {
+            return Err(unstored());
+        }
+        let path =
+            retained_tool_result_path(&self.artifact_root, operation_id).ok_or_else(unstored)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|_| unstored())?;
+        }
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+            Err(_) => return Err(unstored()),
+        };
+        let bytes = serde_json::to_vec(results).map_err(|_| unstored())?;
+        file.write_all(&bytes).map_err(|_| unstored())?;
+        Ok(())
+    }
+
+    /// Write the follow-up answer once. An existing file is left as it is.
+    /// This does not settle the node.
+    pub(crate) fn store_model_turn(
+        &self,
+        operation_id: &str,
+        envelope: &Value,
+    ) -> Result<(), Status> {
+        if !envelope.is_object() {
+            return Err(unstored());
+        }
+        let path = model_turn_path(&self.artifact_root, operation_id).ok_or_else(unstored)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|_| unstored())?;
+        }
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+            Err(_) => return Err(unstored()),
+        };
+        let bytes = serde_json::to_vec(envelope).map_err(|_| unstored())?;
+        file.write_all(&bytes).map_err(|_| unstored())?;
+        Ok(())
+    }
+
+    pub(crate) fn read_model_turn(&self, operation_id: &str) -> Option<Value> {
+        let path = model_turn_path(&self.artifact_root, operation_id)?;
+        let bytes = std::fs::read(path).ok()?;
+        let value: Value = serde_json::from_slice(&bytes).ok()?;
+        if !value.is_object() {
+            return None;
+        }
+        Some(value)
+    }
+
     async fn prepare_preset(
         &self,
         request: &ExecuteAgentPlanRequest,
@@ -242,7 +534,7 @@ impl AgentPlanExecutor {
         run_id: &str,
     ) -> Result<AgentNodeEffectMetadata, Status> {
         let envelope: Value = serde_json::from_slice(&outcome.output).map_err(|_| unavailable())?;
-        let event = envelope
+        let mut event = envelope
             .get("publicEvent")
             .filter(|value| value.is_object())
             .ok_or_else(unavailable)?
@@ -266,6 +558,36 @@ impl AgentPlanExecutor {
         if envelope["runId"] != run_id || !(planner || task || pending_tools || synthesis) {
             return Err(Status::data_loss("AGENT_PLAN_OUTCOME_CORRUPT"));
         }
+        let mut answered = false;
+        if pending_tools {
+            let stored = self.read_retained_tool_results(&outcome.operation_id);
+            let results = stored.or_else(|| {
+                envelope
+                    .get("toolResults")
+                    .filter(|value| value.is_array())
+                    .cloned()
+            });
+            if let Some(results) = results {
+                if let Some(object) = event.as_object_mut() {
+                    object.insert("toolResults".to_string(), results);
+                }
+            }
+            if let Some(saved) = self.read_model_turn(&outcome.operation_id) {
+                let current = event.clone();
+                let decision = deepseek_policy::agent_runtime_admission::published_model_answer(
+                    std::slice::from_ref(&current),
+                    &saved,
+                );
+                if decision.published {
+                    if let Some(answer) = decision.event {
+                        if let Some(object) = event.as_object_mut() {
+                            object.insert("publishedAnswer".to_string(), answer);
+                            answered = true;
+                        }
+                    }
+                }
+            }
+        }
         let root = self.artifact_root.clone();
         let reference = tokio::task::spawn_blocking(move || {
             ArtifactStore::open_native(&root, "python_disabled")
@@ -279,7 +601,9 @@ impl AgentPlanExecutor {
             fence: Some(outcome.fence),
             run_id: run_id.into(),
             node_id: outcome.node_id,
-            state: if pending_tools {
+            state: if answered {
+                "ANSWER_PUBLISHED"
+            } else if pending_tools {
                 "AWAITING_TOOLS"
             } else {
                 "CONFIRMED"
@@ -445,7 +769,13 @@ impl AgentNodeWorker for WorkerRpcService {
         let sent = async {
             let deadline = service.node_send_lease(&permit).await?;
             let now = authority_request::parse_utc_z_str(&authority_request::utc_z_now().map_err(|_| unavailable())?).map_err(|_| unavailable())?;
-            if deadline <= now { return Err(Status::failed_precondition("AGENT_EXECUTION_LEASE_DENIED")); }
+            let lease = deepseek_policy::agent_runtime_admission::execution_send_lease(
+                deadline, now,
+            );
+            let admit = deepseek_policy::agent_runtime_admission::admitted_provider_send(lease);
+            if !admit.allowed {
+                return Err(Status::failed_precondition(admit.code));
+            }
             let envelope = if let Some(plan) = preset {
                 let label = plan["label"].as_str().ok_or_else(unavailable)?;
                 let event = json!({"type":"agent_plan","plan":plan,"text":label,"usage":{}});
@@ -453,9 +783,22 @@ impl AgentNodeWorker for WorkerRpcService {
                 json!({"runId":run_id,"publicEvent":event,"planningSource":"retained-preset-policy"})
             } else {
                 let mut config = executor.upstream.clone();
-                config.timeout = config.timeout.min(Duration::from_secs((deadline - now) as u64));
+                let budget = deepseek_policy::agent_runtime_admission::execution_send_budget(
+                    deadline,
+                    now,
+                    config.timeout.as_secs(),
+                );
+                if !budget.armed {
+                    return Err(Status::failed_precondition(budget.code));
+                }
+                config.timeout = Duration::from_secs(budget.seconds);
                 let (turn, receipt) = deepseek_gateway::chat_execution::exchange_fenced_turn(&config, body.as_ref().ok_or_else(unavailable)?, &permit.fence,
-                    permit.operation_id(), crate::MAX_AGENT_NODE_OUTCOME_BYTES / 2).await.map_err(|_| Status::unavailable("AGENT_PROVIDER_RESULT_UNKNOWN"))?;
+                    permit.operation_id(), crate::MAX_AGENT_NODE_OUTCOME_BYTES / 2).await.map_err(|_| {
+                    let failure = deepseek_policy::agent_runtime_admission::provider_exchange_unknown(
+                        false,
+                    );
+                    Status::unavailable(failure.code)
+                })?;
                 let content = turn.content();
                 if content.is_empty() || !turn.tool_calls().is_empty() { return Err(Status::failed_precondition("AGENT_PLAN_RESULT_UNKNOWN")); }
                 let event = json!({"type":"agent_plan","plan":multi_agent::parse_plan_response(&content),"text":content,"usage":turn.usage});

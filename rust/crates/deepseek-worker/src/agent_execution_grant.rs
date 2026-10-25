@@ -2,11 +2,13 @@
 use crate::{WorkerAuthorityConfig, authority_request};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use deepseek_protocol::generated::deepseek::agent::v1::{
-    AgentRunExecutionClaim, AgentRunExecutionPhase, BeginAgentNodeDispatchRequest,
-    BeginAgentNodeDispatchResponse, RenewAgentRunExecutionRequest,
+    AgentArtifactReference, AgentRunEventMetadata, AgentRunExecutionClaim, AgentRunExecutionPhase,
+    AppendAgentRunEventRequest, BeginAgentNodeDispatchRequest, BeginAgentNodeDispatchResponse,
+    GetAgentRunRequest, RenewAgentRunExecutionRequest,
     agent_node_control_client::AgentNodeControlClient,
     agent_run_control_client::AgentRunControlClient,
 };
+use deepseek_protocol::generated::deepseek::common::v1::ActionFence;
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -52,6 +54,13 @@ fn hex64(value: &str) -> bool {
         && value
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+pub(crate) fn canonical_agent_operation(operation_id: &str) -> bool {
+    operation_id
+        .strip_prefix("agent-node-")
+        .or_else(|| operation_id.strip_prefix("agent-successor-"))
+        .is_some_and(hex64)
 }
 fn identity_digest(domain: &str, value: &str) -> String {
     let mut digest = Sha256::new();
@@ -206,6 +215,107 @@ impl AgentExecutionControl {
         validate_node_dispatch(&response, claim, node_id, seconds)?;
         Ok(response)
     }
+
+    /// Project stored tool results as scheduling headers. Result bytes stay in
+    /// the artifact named by each reference. A refused append does not settle
+    /// the node. The caller ignores a transport failure.
+    pub(crate) async fn project_driver_tool_results(
+        &self,
+        run_id: &str,
+        operation_id: &str,
+        phase: &str,
+        public_sha256: &str,
+        public_length: u64,
+        results: &[(String, String, u64)],
+    ) -> Result<(), Status> {
+        if run_id.is_empty()
+            || operation_id.is_empty()
+            || phase.is_empty()
+            || !hex64(public_sha256)
+            || public_length == 0
+            || results.is_empty()
+        {
+            return Err(invalid());
+        }
+        let epoch = self.metadata_epoch().await?;
+        let channel = self.endpoint.connect().await.map_err(|_| unavailable())?;
+        let mut client = AgentRunControlClient::new(channel).max_decoding_message_size(64 * 1024);
+        let mut read = Request::new(GetAgentRunRequest {
+            run_id: run_id.to_string(),
+            fence: Some(ActionFence {
+                action_id: run_id.to_string(),
+                execution_epoch: epoch,
+            }),
+        });
+        read.metadata_mut()
+            .insert("authorization", self.authorization.clone());
+        let snapshot = client
+            .get_run(read)
+            .await
+            .map_err(|_| unavailable())?
+            .into_inner();
+        if !snapshot.authoritative {
+            return Ok(());
+        }
+        let mut expected = snapshot.run.ok_or_else(invalid)?.next_index;
+        if expected < 0 {
+            return Err(invalid());
+        }
+        let mut batch = Vec::with_capacity(results.len() + 1);
+        batch.push((
+            format!("retain-driver-marker:{operation_id}"),
+            "agent_tool_request".to_string(),
+            deepseek_policy::agent_runtime_admission::RETAINED_TOOL_RESULT_SCOPE.to_string(),
+            public_sha256.to_string(),
+            public_length,
+        ));
+        for (index, (scope, sha256, length)) in results.iter().enumerate() {
+            if !hex64(sha256) || *length == 0 {
+                return Err(invalid());
+            }
+            batch.push((
+                format!("retain-driver-result:{operation_id}:{index}"),
+                "agent_tool_result".to_string(),
+                scope.clone(),
+                sha256.clone(),
+                *length,
+            ));
+        }
+        for (operation, kind, scope, sha256, length) in batch {
+            let mut request = Request::new(AppendAgentRunEventRequest {
+                schema_version: 1,
+                operation_id: operation,
+                actor: "operator:agent-worker".to_string(),
+                run_id: run_id.to_string(),
+                expected_index: expected,
+                event: Some(AgentRunEventMetadata {
+                    r#type: kind,
+                    phase: phase.to_string(),
+                    scope,
+                    body: Some(AgentArtifactReference { sha256, length }),
+                    ..Default::default()
+                }),
+                fence: Some(ActionFence {
+                    action_id: run_id.to_string(),
+                    execution_epoch: epoch,
+                }),
+                ..Default::default()
+            });
+            request
+                .metadata_mut()
+                .insert("authorization", self.authorization.clone());
+            let appended = client
+                .append_event(request)
+                .await
+                .map_err(|_| unavailable())?;
+            let run = appended.into_inner().run.ok_or_else(invalid)?;
+            if run.next_index < expected {
+                return Err(invalid());
+            }
+            expected = run.next_index;
+        }
+        Ok(())
+    }
 }
 
 pub(crate) fn validate_node_dispatch(
@@ -228,7 +338,6 @@ pub(crate) fn validate_node_dispatch(
         ));
     }
     let intent = response.intent.as_ref().ok_or_else(invalid)?;
-    let operation = intent.operation_id.strip_prefix("agent-node-");
     let role_allowed = match AgentRunExecutionPhase::try_from(live.phase) {
         Ok(AgentRunExecutionPhase::Plan) => node_id == "leader" && intent.depends_on.is_empty(),
         Ok(AgentRunExecutionPhase::Tasks) => {
@@ -253,7 +362,7 @@ pub(crate) fn validate_node_dispatch(
         || intent.recorded_at > now.saturating_add(30)
         || intent.task.is_empty()
         || intent.task.len() > 16 * 1024
-        || !operation.is_some_and(hex64)
+        || !canonical_agent_operation(&intent.operation_id)
         || !role_allowed
         || intent.depends_on.len() > 4
         || intent.depends_on.iter().any(|id| {

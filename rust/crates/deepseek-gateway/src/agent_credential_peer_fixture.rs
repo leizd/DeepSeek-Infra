@@ -183,6 +183,7 @@ async fn credential_transport_refuses_foreign_hostname_and_bearer() {
                 &config,
                 "run-fixture",
                 1,
+                1,
                 &reference,
                 Some("request-only-credential"),
                 None

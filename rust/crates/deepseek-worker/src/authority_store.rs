@@ -177,6 +177,12 @@ impl AuthorityStore {
                 .pragma_update(None, "user_version", 6)
                 .map_err(|_| error())?;
         }
+        if schema_version < 7 {
+            agent_nodes::migrate_v7(&transaction)?;
+            transaction
+                .pragma_update(None, "user_version", 7)
+                .map_err(|_| error())?;
+        }
         validate_schema(&transaction, false)?;
         let (signer, fleet, environment, token): (String, String, String, i64) = transaction
             .query_row(
@@ -796,11 +802,13 @@ fn validate_schema(
     }
     if version == 5 {
         expected.extend(agent_nodes::SCHEMA_V5.iter().map(|sql| sql.to_string()));
-    } else if version >= 6 {
+    } else if version == 6 {
         expected.extend(agent_nodes::schema_v6());
+    } else if version >= 7 {
+        expected.extend(agent_nodes::schema_v7());
     }
     expected.sort();
-    if !matches!(version, 1..=6) || application != APPLICATION_ID || actual != expected {
+    if !matches!(version, 1..=7) || application != APPLICATION_ID || actual != expected {
         return Err(error());
     }
     Ok(version as u8)

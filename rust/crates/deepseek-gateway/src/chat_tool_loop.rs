@@ -212,6 +212,13 @@ impl ToolRoundExecutor {
         }
     }
 
+    /// The agent worker's root, with the same policy and search provider the
+    /// chat loop builds. The browser engine stays unset here; `from_env` is the
+    /// path that probes one.
+    pub fn for_workspace(root: PathBuf) -> Self {
+        Self::with_browser_engine(Some(WorkspaceBundle::new(root)), policy_from_env(), None)
+    }
+
     /// From the server environment, mirroring the oracle's defaults.
     ///
     /// The engine is built from `DEEPSEEK_BROWSER_ENGINE_ADDR` (or the sidecar's
@@ -229,6 +236,24 @@ impl ToolRoundExecutor {
         )
     }
 
+    /// The workspace, fetch, search callback, and browser engine `dispatch` uses.
+    ///
+    /// `execute_call_sync` and the agent continuation both enter through here, so
+    /// a retained data-plane tool sees the same root as a chat tool call.
+    pub fn with_chat_execution_context<T>(
+        &self,
+        on_memory_suggestion: Option<&(dyn Fn(&Value) + Send + Sync)>,
+        body: impl FnOnce(&ExecutorContext<'_>) -> T,
+    ) -> T {
+        bind_chat_execution_context(
+            self.workspace.as_deref(),
+            self.search_provider.clone(),
+            self.browser_engine(),
+            on_memory_suggestion,
+            body,
+        )
+    }
+
     fn browser_engine(&self) -> Option<&dyn deepseek_policy::browser_engine::BrowserEngine> {
         self.browser_engine.as_deref()
     }
@@ -236,40 +261,21 @@ impl ToolRoundExecutor {
     /// Run one tool the way MCP `tools/call` does: policy-gated `dispatch`,
     /// returning the envelope (success, denial, or unsupported).
     pub fn execute_call_sync(&self, name: &str, arguments: &Value) -> Value {
-        let view = self.workspace.as_deref().map(|bundle| bundle.view());
-        let callback = self.search_provider.clone().map(SearchProvider::callback);
-        let timeout_seconds = timeout_from_env();
-        let now_epoch = fetch_url::system_now();
-        let dns = fetch_url::system_dns;
-        let http = locked_http_get;
-        let fetch = self.workspace.as_deref().map(|bundle| FetchContext {
-            root: bundle.root(),
-            now_epoch,
-            timeout_seconds,
-            dns: &dns,
-            http: &http,
-        });
-        let context = ExecutorContext {
-            web_search: callback
-                .as_ref()
-                .map(|callback| callback as &deepseek_policy::tool_search::WebSearchCallback),
-            workspace: view.as_ref(),
-            fetch: fetch.as_ref(),
-            browser_engine: self.browser_engine(),
-        };
-        let mut policy_guard = self.policy.as_ref().map(|shared| {
-            shared
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-        });
-        match dispatch(name, arguments, policy_guard.as_deref_mut(), None, &context) {
-            tool_dispatch::DispatchOutcome::Executed(value)
-            | tool_dispatch::DispatchOutcome::Denied(value)
-            | tool_dispatch::DispatchOutcome::Unsupported(value) => value,
-            tool_dispatch::DispatchOutcome::Unported { tool, .. } => {
-                tool_batch::did_not_run_output(&json!({"function": {"name": tool}}))
+        self.with_chat_execution_context(None, |context| {
+            let mut policy_guard = self.policy.as_ref().map(|shared| {
+                shared
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            });
+            match dispatch(name, arguments, policy_guard.as_deref_mut(), None, context) {
+                tool_dispatch::DispatchOutcome::Executed(value)
+                | tool_dispatch::DispatchOutcome::Denied(value)
+                | tool_dispatch::DispatchOutcome::Unsupported(value) => value,
+                tool_dispatch::DispatchOutcome::Unported { tool, .. } => {
+                    tool_batch::did_not_run_output(&json!({"function": {"name": tool}}))
+                }
             }
-        }
+        })
     }
 
     /// Execute the finalized calls of one round and assemble the
@@ -312,9 +318,6 @@ impl ToolRoundExecutor {
             .collect();
         let fallback = selected.clone();
         let joined = tokio::task::spawn_blocking(move || {
-            let view = workspace
-                .as_deref()
-                .map(|bundle| bundle.view_with(on_memory_suggestion.as_deref()));
             // The web-search provider is per request, like the executor: its memo and
             // turn counter are the oracle's closure variables, so one callback must
             // live across every round of this request.
@@ -324,88 +327,44 @@ impl ToolRoundExecutor {
             // `search_tavily` raise the missing-key error, so an unconfigured
             // deployment gets a precise "not configured" failure rather than the
             // executor's generic "not enabled for this request".
-            let callback = search_provider.map(SearchProvider::callback);
-            let timeout_seconds = timeout_from_env();
-            let now_epoch = fetch_url::system_now();
-            let dns = fetch_url::system_dns;
-            let http = locked_http_get;
-            let fetch = workspace.as_deref().map(|bundle| FetchContext {
-                root: bundle.root(),
-                now_epoch,
-                timeout_seconds,
-                dns: &dns,
-                http: &http,
-            });
-            let context = ExecutorContext {
-                web_search: callback
-                    .as_ref()
-                    .map(|callback| callback as &deepseek_policy::tool_search::WebSearchCallback),
-                workspace: view.as_ref(),
-                fetch: fetch.as_ref(),
-                browser_engine: engine.as_deref(),
-            };
-            execute_tool_calls(&selected, &|| false, &|call| {
-                let name = tool_dispatch::tool_call_name(call);
-                // The memory store has exactly one authoritative writer, and which side that is comes
-                // from the same signal the Python gate reads (`crate::native_owns_memory_store`).
-                // While Python owns it, this loop must not delete from it, and `forget_memory`
-                // deletes (`delete_memories_by_query`).
-                //
-                // This is **not** redundant with the route's turn-level refusal: that one inspects
-                // the *user's* text, so a model that calls the tool on its own still reached the
-                // store with no command in the turn at all. Measured before it was refused:
-                // `forget_memory` answered `{"ok":true,"result":{"deleted":1,…}}` and the file
-                // changed. Once the mode says Python is de-authorised the tool runs for real, which
-                // is the point of the flip. `suggest_memory` needs no gate either way — it builds a
-                // suggestion and writes nothing.
-                if name == "forget_memory" && !crate::may_write_native_store("memory_store") {
-                    return tool_dispatch::DispatchOutcome::Denied(json!({
-                        "ok": false,
-                        "tool": name,
-                        "error": "The memory store is still written by the Python runtime, so this \
-                                  gateway refuses to delete from it.",
-                        "code": crate::MEMORY_WRITE_NOT_OWNED,
-                    }));
-                }
-                // The reminders store is in the same position, and worse: `reminders_store` is not a
-                // declared domain at all (`remind` appears nowhere in the ownership contract), Python
-                // writes it from three paths — one of them the *delivery* poll `due_reminders`, which
-                // marks `notified` and rewrites the whole file — and both sides reproduce the same
-                // temp path (`reminders.json` -> `reminders.tmp`), so two writers can interleave
-                // before either replaces it. `may_write_native_store` refuses it whatever the mode
-                // says, because a mode must not be able to enable a store nobody has declared; the
-                // cutover is where it gets declared, and this gate then flips with it.
-                if name == "create_reminder" && !crate::may_write_native_store("reminders_store") {
-                    return tool_dispatch::DispatchOutcome::Denied(json!({
-                        "ok": false,
-                        "tool": name,
-                        "error": "The reminders store is still written by the Python runtime, so this \
-                                  gateway refuses to create one rather than reporting a reminder that \
-                                  was never stored.",
-                        "code": crate::REMINDERS_WRITE_NOT_OWNED,
-                    }));
-                }
-                let arguments = call
-                    .get("function")
-                    .and_then(|function| function.get("arguments"))
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                let mut policy_guard = policy.as_ref().map(|shared| {
-                    shared
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                });
-                dispatch(
-                    &name,
-                    &arguments,
-                    policy_guard.as_deref_mut(),
-                    // `schema_for_tool` — the schema catalog — is not ported;
-                    // with `enforce_schema` off (the oracle default) the
-                    // absence changes no verdict.
-                    None,
-                    &context,
-                )
-            })
+            bind_chat_execution_context(
+                workspace.as_deref(),
+                search_provider,
+                engine.as_deref(),
+                on_memory_suggestion.as_deref(),
+                |context| {
+                    execute_tool_calls(&selected, &|| false, &|call| {
+                        let name = tool_dispatch::tool_call_name(call);
+                        // The memory store has exactly one authoritative writer. While Python owns
+                        // it, this loop must not delete from it. The same gate covers reminders:
+                        // both sides use `reminders.json` -> `reminders.tmp`, so two writers can
+                        // interleave. `suggest_memory` writes nothing and stays open.
+                        if let Some(denied) = crate::retained_store_denial(&name) {
+                            return tool_dispatch::DispatchOutcome::Denied(denied);
+                        }
+                        let arguments = call
+                            .get("function")
+                            .and_then(|function| function.get("arguments"))
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                        let mut policy_guard = policy.as_ref().map(|shared| {
+                            shared
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        });
+                        dispatch(
+                            &name,
+                            &arguments,
+                            policy_guard.as_deref_mut(),
+                            // `schema_for_tool` — the schema catalog — is not ported;
+                            // with `enforce_schema` off (the oracle default) the
+                            // absence changes no verdict.
+                            None,
+                            context,
+                        )
+                    })
+                },
+            )
         })
         .await;
         match joined {
@@ -422,6 +381,42 @@ impl ToolRoundExecutor {
                 .collect(),
         }
     }
+}
+
+/// One construction of the chat tool context. Callers pass the closure that
+/// runs `dispatch`; they do not assemble a second workspace or fetch stack.
+fn bind_chat_execution_context<T>(
+    workspace: Option<&WorkspaceBundle>,
+    search: Option<SearchProvider>,
+    browser_engine: Option<&dyn deepseek_policy::browser_engine::BrowserEngine>,
+    on_memory_suggestion: Option<&(dyn Fn(&Value) + Send + Sync)>,
+    body: impl FnOnce(&ExecutorContext<'_>) -> T,
+) -> T {
+    let view = workspace.map(|bundle| match on_memory_suggestion {
+        Some(callback) => bundle.view_with(Some(callback)),
+        None => bundle.view(),
+    });
+    let callback = search.map(SearchProvider::callback);
+    let timeout_seconds = timeout_from_env();
+    let now_epoch = fetch_url::system_now();
+    let dns = fetch_url::system_dns;
+    let http = locked_http_get;
+    let fetch = workspace.map(|bundle| FetchContext {
+        root: bundle.root(),
+        now_epoch,
+        timeout_seconds,
+        dns: &dns,
+        http: &http,
+    });
+    let context = ExecutorContext {
+        web_search: callback
+            .as_ref()
+            .map(|callback| callback as &deepseek_policy::tool_search::WebSearchCallback),
+        workspace: view.as_ref(),
+        fetch: fetch.as_ref(),
+        browser_engine,
+    };
+    body(&context)
 }
 
 /// The oracle's `build_tool_policy` for the main-chat shape this facade serves:

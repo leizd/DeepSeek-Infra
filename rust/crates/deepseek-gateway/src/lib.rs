@@ -747,6 +747,34 @@ pub(crate) fn python_is_de_authorised_in(mode: &str) -> bool {
 /// the two stores have different cutovers, and a caller that sees this one knows which store it was.
 pub(crate) const REMINDERS_WRITE_NOT_OWNED: &str = "NATIVE_REMINDERS_WRITE_NOT_OWNED";
 
+/// Refusal for a retained tool that would write a store this process does not own.
+///
+/// `None` means the call may proceed. The chat loop and the agent continuation
+/// both use this gate, so a worker cannot delete memory or create a reminder
+/// while Python still owns that store.
+pub fn retained_store_denial(tool: &str) -> Option<Value> {
+    if tool == "forget_memory" && !may_write_native_store("memory_store") {
+        return Some(json!({
+            "ok": false,
+            "tool": tool,
+            "error": "The memory store is still written by the Python runtime, so this \
+                      gateway refuses to delete from it.",
+            "code": MEMORY_WRITE_NOT_OWNED,
+        }));
+    }
+    if tool == "create_reminder" && !may_write_native_store("reminders_store") {
+        return Some(json!({
+            "ok": false,
+            "tool": tool,
+            "error": "The reminders store is still written by the Python runtime, so this \
+                      gateway refuses to create one rather than reporting a reminder that \
+                      was never stored.",
+            "code": REMINDERS_WRITE_NOT_OWNED,
+        }));
+    }
+    None
+}
+
 /// `NATIVE_PROJECT_METADATA_WRITE_NOT_OWNED` — `project.json` is still Python's.
 /// The same signal as the memory and reminders refusals: the store is declared,
 /// and only `DEEPSEEK_RUNTIME_MODE=python_disabled` lets this process write it.

@@ -302,7 +302,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             origin = "http://" + address
             edge_env = public.public_edge_environment(private_environment, address, ROOT / "static/ui", artifacts,
                                                       {"origin": control_origin, "internalBearer": seed["internalBearer"]},
-                {"ORIGIN": target, "CA_FILE": ca.as_posix(), "SERVER_NAME": "localhost", "BEARER": bearer})
+                public.credential_worker_transport(target, ca, "localhost", bearer))
             with (output / "daemon-public-edge.log").open("wb") as log:
                 edge = subprocess.Popen([args.edge.resolve().as_posix()], cwd=ROOT, env=edge_env, stdout=log, stderr=subprocess.STDOUT)
             public.wait_edge(origin, edge)

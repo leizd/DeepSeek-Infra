@@ -388,7 +388,7 @@ async fn v1_migration_preserves_legacy_journal_and_rolls_back_on_identity_failur
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        6
+        7
     );
     assert_eq!(
         connection

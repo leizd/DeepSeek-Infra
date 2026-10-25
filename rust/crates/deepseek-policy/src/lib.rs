@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::capability::{Capability, RiskLevel};
 
 pub mod agent_run_data;
+pub mod agent_runtime_admission;
 pub mod app_error;
 pub mod attachment_context;
 pub mod audit;

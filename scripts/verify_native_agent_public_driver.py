@@ -26,6 +26,22 @@ if str(ROOT / "scripts") not in sys.path:
 import verify_agent_signing_process as signing  # noqa: E402
 
 
+def credential_worker_transport(listen: str, ca_file: Path, server_name: str, bearer: str) -> dict[str, str]:
+    """Map the worker's loopback listen address to the edge's private HTTPS origin.
+
+    ``start_worker`` returns ``127.0.0.1:<port>`` for ``DEEPSEEK_WORKER_LISTEN``.
+    The gateway strips one ``https://`` prefix and parses the remainder as a
+    socket address, so the process probe must not pass the bare listen address.
+    """
+    host, separator, port = listen.rpartition(":")
+    if separator != ":" or host != "127.0.0.1" or not port.isdigit() or port != str(int(port)) or not 1 <= int(port) <= 65535:
+        raise ValueError("Explicit private Rust credential custody transport is invalid")
+    if server_name != "localhost" or not ca_file.is_absolute() or len(bearer) < 32:
+        raise ValueError("Explicit private Rust credential custody transport is invalid")
+    return {"ORIGIN": f"https://127.0.0.1:{port}", "CA_FILE": ca_file.as_posix(),
+            "SERVER_NAME": server_name, "BEARER": bearer}
+
+
 def public_edge_environment(source: dict[str, str], address: str, static: Path, artifacts: Path,
                             ready: dict[str, Any], credential_worker: dict[str, str] | None = None) -> dict[str, str]:
     """Explicit gateway custody/control configuration after ambient identities are removed."""
@@ -46,6 +62,12 @@ def public_edge_environment(source: dict[str, str], address: str, static: Path, 
             raise ValueError("Explicit private Rust credential custody transport is invalid")
         environment.update({"DEEPSEEK_AGENT_CREDENTIAL_WORKER_" + key: value for key, value in credential_worker.items()})
     return environment
+
+
+def require_request_credential(exchanges: list[dict[str, Any]]) -> None:
+    """Every controlled provider call must present the sealed request key, not the server fallback."""
+    if any(row.get("requestCredentialUsed") is not True for row in exchanges):
+        raise ValueError("Actual provider did not use the request credential")
 
 
 def validate_driver_result(result: dict[str, Any], exchanges: list[dict[str, Any]]) -> None:
@@ -70,6 +92,7 @@ def validate_driver_result(result: dict[str, Any], exchanges: list[dict[str, Any
             exchanges[2].get("predecessorSummaryInPrompt") is not True or exchanges[2].get("privateReasoningInPrompt") is not False or \
             exchanges[3].get("synthesisCoderInPrompt") is not True or exchanges[3].get("synthesisCriticInPrompt") is not True:
         raise ValueError("Actual native DAG dependency/final request assembly is unqualified")
+    require_request_credential(exchanges)
 
 
 def wait_edge(origin: str, process: subprocess.Popen[bytes]) -> None:
@@ -129,6 +152,7 @@ def validate_preset_result(result: dict[str, Any], exchanges: list[dict[str, Any
         raise ValueError("Preset provider calls lack distinct nodes, shared task phase or privacy fences")
     if any(not exchanges[index + int(planner)].get("predecessorSummaryInPrompt") for index, node in enumerate(case["plan"]) if node.get("depends_on")):
         raise ValueError("Preset dependency summaries are absent from actual provider prompts")
+    require_request_credential(exchanges)
 
 
 def cancellation_cases() -> list[dict[str, Any]]:
@@ -154,6 +178,7 @@ def validate_cancellation_result(result: dict[str, Any], exchanges: list[dict[st
         raise ValueError("Public cancellation evidence is incomplete or overclaims qualification")
     if exchanges and any(not exchanges[0].get(key) for key in ["actionId","operationId","executionEpoch"]):
         raise ValueError("Actual planner HTTP exchange omitted its durable fence")
+    require_request_credential(exchanges)
 
 
 def active_cancellation_case() -> dict[str, Any]:
@@ -189,6 +214,7 @@ def validate_active_cancellation_result(result: dict[str, Any], exchanges: list[
     if (not planning and exchanges[0].get("actionId")==exchanges[1].get("actionId")) or \
             any(not item.get(k) for item in exchanges for k in ["actionId","operationId","executionEpoch"]):
         raise ValueError("Active planner/task HTTP effects lack distinct durable admission")
+    require_request_credential(exchanges)
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -259,7 +285,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 exchanges.append({"actionId": self.headers.get("X-DeepSeek-Action-Id"),
                     "executionEpoch": self.headers.get("X-DeepSeek-Execution-Epoch"),
                     "operationId": self.headers.get("X-DeepSeek-Node-Operation-Id"), "model": body.get("model"),
-                    "stream": body.get("stream"), "selectedTaskInPrompt": "Agent 子任务：write" in prompt,
+                    "stream": body.get("stream"),
+                    "requestCredentialUsed": self.headers.get("Authorization") == "Bearer request-only-credential",
+                    "selectedTaskInPrompt": "Agent 子任务：write" in prompt,
                     "dependentTaskInPrompt": "Agent 子任务：review" in prompt,
                     "predecessorSummaryInPrompt": "Controlled public task summary" in prompt,
                     "privateReasoningInPrompt": "private-task-reasoning" in prompt,
@@ -331,7 +359,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 port.bind(("127.0.0.1", 0))
                 address = f"127.0.0.1:{port.getsockname()[1]}"
             edge_environment = public_edge_environment(worker_environment, address, static, artifacts, ready,
-                {"ORIGIN": target, "CA_FILE": ca.as_posix(), "SERVER_NAME": "localhost", "BEARER": bearer})
+                credential_worker_transport(target, ca, "localhost", bearer))
             with (output / "public-driver-edge.log").open("wb") as log:
                 edge = subprocess.Popen([args.edge.resolve().as_posix()], cwd=ROOT, env=edge_environment, stdout=log, stderr=subprocess.STDOUT)
             wait_edge("http://" + address, edge)

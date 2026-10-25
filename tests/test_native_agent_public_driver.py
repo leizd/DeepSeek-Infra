@@ -12,7 +12,8 @@ def complete_evidence():
         "productionRuntimeProcesses": ["Go", "Rust"], "publicCreationAndDAGDriverQualified": True,
         "publicPlanConfirmationQualified": True, "noTasksBeforePublicConfirmation": True,
         "productionProviderQualified": False, "fullMigrationQualified": False}
-    exchanges = [{"actionId": action, "operationId": f"node-{index}", "executionEpoch": "1", "stream": False}
+    exchanges = [{"actionId": action, "operationId": f"node-{index}", "executionEpoch": "1", "stream": False,
+        "requestCredentialUsed": True}
         for index, action in enumerate(["plan-action", "task-action", "task-action", "synthesis-action"])]
     exchanges[1]["selectedTaskInPrompt"] = True
     exchanges[2].update(dependentTaskInPrompt=True, predecessorSummaryInPrompt=True, privateReasoningInPrompt=False)
@@ -42,7 +43,7 @@ def test_public_driver_incomplete_or_overclaimed_evidence_is_refused(key, value)
 
 
 @pytest.mark.parametrize("change", ["missing-call", "duplicate-call", "missing-action", "duplicate-node", "different-task-phase",
-    "stale-epoch", "stream", "task", "dependency", "summary", "reasoning", "synthesis-coder", "synthesis-critic"])
+    "stale-epoch", "stream", "server-credential", "task", "dependency", "summary", "reasoning", "synthesis-coder", "synthesis-critic"])
 def test_public_driver_actual_dispatch_and_dependency_boundaries(change):
     result, exchanges = complete_evidence()
     if change == "missing-call":
@@ -59,6 +60,8 @@ def test_public_driver_actual_dispatch_and_dependency_boundaries(change):
         exchanges[2]["executionEpoch"] = "0"
     elif change == "stream":
         exchanges[1]["stream"] = True
+    elif change == "server-credential":
+        exchanges[3]["requestCredentialUsed"] = False
     else:
         index, field, value = {"task": (1, "selectedTaskInPrompt", False), "dependency": (2, "dependentTaskInPrompt", False),
             "summary": (2, "predecessorSummaryInPrompt", False), "reasoning": (2, "privateReasoningInPrompt", True),
@@ -103,7 +106,49 @@ def test_credential_transport_is_explicit_and_ambient_configuration_cannot_overr
     assert not any(key.startswith("DEEPSEEK_AGENT_CREDENTIAL_") for key in stripped)
 
 
-@pytest.mark.parametrize("mutation", ["remote", "relative-ca", "missing-field", "short-bearer"])
+def test_worker_listen_address_becomes_the_private_https_credential_origin(tmp_path):
+    """The cloud public driver passed start_worker's bare listen address as ORIGIN."""
+    from scripts.verify_native_agent_public_driver import credential_worker_transport, public_edge_environment
+
+    ready = {"origin": "http://127.0.0.1:18090", "internalBearer": "isolated-control-" + "x" * 32}
+    ca = tmp_path / "ca.pem"
+    bearer = "isolated-worker-" + "y" * 32
+    transport = credential_worker_transport("127.0.0.1:18091", ca, "localhost", bearer)
+    assert transport == {"ORIGIN": "https://127.0.0.1:18091", "CA_FILE": ca.as_posix(),
+                         "SERVER_NAME": "localhost", "BEARER": bearer}
+    result = public_edge_environment({}, "127.0.0.1:18100", tmp_path / "static/ui", tmp_path / "artifacts", ready, transport)
+    assert result["DEEPSEEK_AGENT_CREDENTIAL_WORKER_ORIGIN"] == "https://127.0.0.1:18091"
+    assert result["DEEPSEEK_AGENT_CREDENTIAL_WORKER_CA_FILE"] == ca.as_posix()
+    assert result["DEEPSEEK_AGENT_CREDENTIAL_WORKER_BEARER"] == bearer
+    bare = dict(transport, ORIGIN="127.0.0.1:18091")
+    with pytest.raises(ValueError, match="credential custody transport"):
+        public_edge_environment({}, "127.0.0.1:18100", tmp_path / "static/ui", tmp_path / "artifacts", ready, bare)
+
+
+@pytest.mark.parametrize("listen", ["127.0.0.1:0", "127.0.0.1:65536", "127.0.0.1:018091",
+    "0.0.0.0:18091", "https://127.0.0.1:18091", "[::1]:18091", "127.0.0.1", ""])
+def test_credential_transport_refuses_a_listen_address_that_is_not_loopback_https(tmp_path, listen):
+    from scripts.verify_native_agent_public_driver import credential_worker_transport
+
+    with pytest.raises(ValueError, match="credential custody transport"):
+        credential_worker_transport(listen, tmp_path / "ca.pem", "localhost", "isolated-worker-" + "y" * 32)
+
+
+@pytest.mark.parametrize("server_name,bearer,relative", [
+    ("worker.internal", "isolated-worker-" + "y" * 32, False),
+    ("localhost", "short-fixture", False),
+    ("localhost", "isolated-worker-" + "y" * 32, True),
+])
+def test_credential_transport_refuses_unpinned_name_bearer_or_ca(tmp_path, server_name, bearer, relative):
+    from pathlib import Path
+    from scripts.verify_native_agent_public_driver import credential_worker_transport
+
+    ca = Path("relative.pem") if relative else tmp_path / "ca.pem"
+    with pytest.raises(ValueError, match="credential custody transport"):
+        credential_worker_transport("127.0.0.1:18091", ca, server_name, bearer)
+
+
+@pytest.mark.parametrize("mutation", ["remote", "relative-ca", "missing-field", "short-bearer", "bare-origin"])
 def test_invalid_credential_transport_is_rejected_before_starting_a_process(tmp_path, mutation):
     from scripts.verify_native_agent_public_driver import public_edge_environment
 
@@ -116,6 +161,8 @@ def test_invalid_credential_transport_is_rejected_before_starting_a_process(tmp_
         transport["CA_FILE"] = "relative.pem"
     elif mutation == "missing-field":
         transport.pop("SERVER_NAME")
+    elif mutation == "bare-origin":
+        transport["ORIGIN"] = "127.0.0.1:18091"
     else:
         transport["BEARER"] = "short-fixture"
     with pytest.raises(ValueError, match="credential custody transport"):
@@ -158,7 +205,7 @@ def test_preset_evidence_rejects_semantic_and_provider_dispatch_changes(mutation
         "resourcesReleased":True,"finalAnswerVisible":True,"inputBodySeededByOfflineOracle":False,"requestBodyStoredByRust":True,
         "productionRuntimeProcesses":["Go","Rust"],"productionProviderQualified":False,"fullMigrationQualified":False}
     exchanges = [{"actionId":"tasks" if i < 2 else "final","operationId":str(i),"executionEpoch":"1","stream":False,
-        "privateReasoningInPrompt":False,"predecessorSummaryInPrompt":i == 1} for i in range(3)]
+        "requestCredentialUsed":True,"privateReasoningInPrompt":False,"predecessorSummaryInPrompt":i == 1} for i in range(3)]
     validate_preset_result(report, exchanges, case)
     if mutation == "dependencies":
         report["actualPlan"][1]["depends_on"] = []
@@ -185,7 +232,7 @@ def cancellation_evidence():
               "confirmationAfterCancellationDenied":True,"planConfirmationRequired":True,"requestBodyStoredByRust":True,
               "publicCancellationWhileAwaitingPlanQualified":True,"inputBodySeededByOfflineOracle":False,
               "productionProviderQualified":False,"fullMigrationQualified":False,"activeTaskCancellationQualified":False,"productionRuntimeProcesses":["Go","Rust"]}
-    return result,[{"actionId":"planner-action","operationId":"leader","executionEpoch":"1"}],case
+    return result,[{"actionId":"planner-action","operationId":"leader","executionEpoch":"1","requestCredentialUsed":True}],case
 
 
 def test_cancellation_evidence_retains_actual_scope_and_is_not_mutated():
@@ -236,7 +283,8 @@ def active_cancellation_evidence():
             "cancelledDuringActualProviderRequest":True,"actualLateTaskCustodyConfirmed":True,"noDependentOrSynthesisAdmission":True,
             "repeatCancellationIdempotent":True,"activeCancellationSafetyQualified":True,"requestBodyStoredByRust":True,
             "resourcesReleased":True,"cancelledPhaseRecoveryQualified":True,"controllerRestartRecoveryQualified":True,"originalExecutionEpoch":1,"recoveryExecutionEpoch":2,"inputBodySeededByOfflineOracle":False,"productionProviderQualified":False,"fullMigrationQualified":False}
-    exchanges=[{"actionId":"plan","operationId":"leader","executionEpoch":"1"},{"actionId":"task","operationId":"coder","executionEpoch":"1"}]
+    exchanges=[{"actionId":"plan","operationId":"leader","executionEpoch":"1","requestCredentialUsed":True},
+               {"actionId":"task","operationId":"coder","executionEpoch":"1","requestCredentialUsed":True}]
     return result,exchanges,case
 
 

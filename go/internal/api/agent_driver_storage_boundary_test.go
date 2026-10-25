@@ -32,7 +32,7 @@ func TestAgentDriverClosedStoreCannotAdmitOrQueryAnEffect(t *testing.T) {
 	if _, err := driver.admission(context.Background(), run, phase, &record); err == nil {
 		t.Fatal("closed store renewed admission")
 	}
-	if _, err := driver.node(context.Background(), fixture, fixture.nodes, claim, nil, "leader"); err == nil {
+	if _, err := driver.node(context.Background(), fixture, fixture.nodes, claim, nil, "leader", ""); err == nil {
 		t.Fatal("closed store bypassed dispatch custody")
 	}
 	if err := driver.drive(context.Background(), run); err == nil || len(fixture.calls) != 0 {

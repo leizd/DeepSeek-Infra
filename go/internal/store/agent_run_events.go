@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -164,6 +165,16 @@ func (store *Control) AppendAgentRunEvent(input AgentRunEventMutation) (AgentRun
 		}
 		if reserved {
 			return AgentRunEventResult{}, ErrAgentRunExecutionRequired
+		}
+	}
+	if found && mutation.Event.Type == "runtime_payload" {
+		length, lengthErr := strconv.ParseUint(mutation.Event.Status, 10, 64)
+		revision, revisionErr := strconv.ParseUint(mutation.Event.Scope, 10, 64)
+		admitted := run.AdmittedRevision()
+		// A wrapped next revision is not the successor. Refuse it before the add.
+		nextDenied := admitted == ^uint64(0) || revision != admitted+1
+		if lengthErr != nil || revisionErr != nil || !hex64Pattern.MatchString(mutation.Event.Phase) || length == 0 || length > 1<<20 || nextDenied {
+			return AgentRunEventResult{}, ErrAgentRunMetadataInvalid
 		}
 	}
 	if !found {

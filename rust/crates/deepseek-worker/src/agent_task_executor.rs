@@ -4,6 +4,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use deepseek_policy::agent_runtime_admission::{
+    admitted_provider_send, execution_send_budget, execution_send_lease, follow_up_exchange,
+    provider_body_from_outputs, provider_exchange_unknown,
+};
 use deepseek_policy::multi_agent;
 use deepseek_protocol::generated::deepseek::agent::v1::{
     AgentNodeEffectMetadata, ExecuteAgentTaskRequest,
@@ -65,6 +69,93 @@ fn task_model(role: &str) -> &'static str {
         }
         _ => "deepseek-v4-pro",
     }
+}
+
+fn retain_workspace_tool_results(
+    executor: &crate::agent_plan_executor::AgentPlanExecutor,
+    operation_id: &str,
+    envelope: &Value,
+    lease_live: bool,
+) -> Result<(), tonic::Status> {
+    let Some(public_event) = envelope.get("publicEvent").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    if public_event.get("type").and_then(Value::as_str) != Some("agent_tool_request") {
+        return Ok(());
+    }
+    let Some(phase) = public_event.get("phase").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    if phase.is_empty() {
+        return Ok(());
+    }
+    if executor.read_retained_tool_results(operation_id).is_some() {
+        return Ok(());
+    }
+    let phase_owned = phase.to_string();
+    let mut event = Value::Object(public_event.clone());
+    if let Some(object) = event.as_object_mut() {
+        let continuation = envelope
+            .get("toolContinuation")
+            .cloned()
+            .unwrap_or(Value::Null);
+        object.insert("toolContinuation".to_string(), continuation);
+    }
+    let plan = vec![phase_owned.clone()];
+    let admission = deepseek_policy::agent_runtime_admission::RuntimeAdmission {
+        operation: "tool_continuation",
+        status: "running",
+        identity_valid: true,
+        lease: if lease_live { "live" } else { "expired" },
+        epoch: "match",
+        effect: "awaiting_tools",
+        runtime_revision: 1,
+        requested_revision: 1,
+        agent_id: &phase_owned,
+        resynthesize: false,
+        plan: &plan,
+        nodes: &[],
+        has_final_answer: false,
+        same_effect: true,
+    };
+    let round = deepseek_gateway::chat_tool_loop::ToolRoundExecutor::for_workspace(
+        executor.workspace_root.clone(),
+    );
+    let decision = round.with_chat_execution_context(None, |context| {
+        deepseek_policy::agent_runtime_admission::continue_retained_tools(
+            &admission,
+            std::slice::from_ref(&event),
+            context,
+            &|name| deepseek_gateway::retained_store_denial(name),
+        )
+    });
+    if !decision.admitted || decision.dispatch != "same-effect" || decision.events.is_empty() {
+        return Ok(());
+    }
+    executor.store_retained_tool_results(operation_id, &Value::Array(decision.events))
+}
+
+fn saved_model_turn(
+    executor: &crate::agent_plan_executor::AgentPlanExecutor,
+    operation_id: &str,
+    body: &Value,
+    envelope: &Value,
+) -> Option<Value> {
+    let stored = executor.read_retained_tool_results(operation_id)?;
+    let mut event = envelope.get("publicEvent")?.clone();
+    let object = event.as_object_mut()?;
+    object.insert("toolResults".to_string(), stored);
+    if let Some(continuation) = envelope.get("toolContinuation") {
+        object.insert("toolContinuation".to_string(), continuation.clone());
+    }
+    let decision = deepseek_policy::agent_runtime_admission::next_model_turn(
+        body,
+        std::slice::from_ref(&event),
+    );
+    if !decision.started {
+        return None;
+    }
+    decision.body
 }
 
 fn task_envelope(
@@ -208,14 +299,20 @@ impl WorkerRpcService {
         let run_id = claim.run_id.clone();
         retain_admitted_agent_output(async move {
             let sent = async {
-                let outputs = service
-                    .worker
-                    .lock()
-                    .await
-                    .authority_store
-                    .as_ref()
-                    .ok_or_else(denied)?
-                    .agent_task_prior_outputs(&permit)?;
+                let outputs = {
+                    let worker = service.worker.lock().await;
+                    let store = worker.authority_store.as_ref().ok_or_else(denied)?;
+                    match store.agent_task_prior_outputs_for(&permit, |operation_id| {
+                        executor.read_model_turn(operation_id)
+                    }) {
+                        Ok(outputs) => outputs,
+                        Err(_) => {
+                            return Err(Status::failed_precondition(
+                                "AGENT_DEPENDENCY_UNPUBLISHED",
+                            ));
+                        }
+                    }
+                };
                 let intent = &permit.intent;
                 let role = intent.node_id.clone();
                 let task = intent.task.clone();
@@ -224,8 +321,8 @@ impl WorkerRpcService {
                     .prepare_payload(
                         intent.request.as_ref().ok_or_else(denied)?,
                         move |payload| {
-                            if synthesis {
-                                let query = payload["messages"]
+                            let query = if synthesis {
+                                payload["messages"]
                                     .as_array()
                                     .and_then(|messages| {
                                         messages
@@ -235,7 +332,17 @@ impl WorkerRpcService {
                                     })
                                     .and_then(|message| message["content"].as_str())
                                     .filter(|text| !text.trim().is_empty())
-                                    .ok_or_else(denied)?;
+                                    .ok_or_else(denied)?
+                            } else {
+                                ""
+                            };
+                            if !outputs.is_empty() {
+                                return provider_body_from_outputs(
+                                    &outputs, payload, &role, &task, model, query, synthesis,
+                                )
+                                .ok_or_else(denied);
+                            }
+                            if synthesis {
                                 Ok(multi_agent::synthesis_payload(
                                     payload, model, query, &outputs,
                                 ))
@@ -251,13 +358,17 @@ impl WorkerRpcService {
                     &authority_request::utc_z_now().map_err(|_| denied())?,
                 )
                 .map_err(|_| denied())?;
-                if deadline <= now {
-                    return Err(Status::failed_precondition("AGENT_EXECUTION_LEASE_DENIED"));
+                let lease = execution_send_lease(deadline, now);
+                let admit = admitted_provider_send(lease);
+                if !admit.allowed {
+                    return Err(Status::failed_precondition(admit.code));
                 }
                 let mut config = executor.upstream.clone();
-                config.timeout = config
-                    .timeout
-                    .min(Duration::from_secs((deadline - now) as u64));
+                let budget = execution_send_budget(deadline, now, config.timeout.as_secs());
+                if !budget.armed {
+                    return Err(Status::failed_precondition(budget.code));
+                }
+                config.timeout = Duration::from_secs(budget.seconds);
                 let started = Instant::now();
                 let (turn, receipt) = deepseek_gateway::chat_execution::exchange_fenced_turn(
                     &config,
@@ -267,7 +378,10 @@ impl WorkerRpcService {
                     crate::MAX_AGENT_NODE_OUTCOME_BYTES / 2,
                 )
                 .await
-                .map_err(|_| Status::unavailable("AGENT_PROVIDER_RESULT_UNKNOWN"))?;
+                .map_err(|_| {
+                    let failure = provider_exchange_unknown(false);
+                    Status::unavailable(failure.code)
+                })?;
                 let calls = turn.tool_calls();
                 match turn.message.get("tool_calls") {
                     None | Some(Value::Null) => {}
@@ -287,7 +401,104 @@ impl WorkerRpcService {
                         elapsed,
                     )?
                 };
-                service.confirm_agent_node_effect(&permit, &envelope).await
+                let outcome = service
+                    .confirm_agent_node_effect(&permit, &envelope)
+                    .await?;
+                if !synthesis {
+                    let current = authority_request::parse_utc_z_str(
+                        &authority_request::utc_z_now().map_err(|_| denied())?,
+                    )
+                    .map_err(|_| denied())?;
+                    let tools = std::sync::Arc::clone(&executor);
+                    let stored = envelope.clone();
+                    let operation_id = permit.operation_id().to_string();
+                    let lease_live =
+                        admitted_provider_send(execution_send_lease(deadline, current)).allowed;
+                    tokio::task::spawn_blocking(move || {
+                        retain_workspace_tool_results(&tools, &operation_id, &stored, lease_live)
+                    })
+                    .await
+                    .map_err(|_| denied())??;
+                    let tools = std::sync::Arc::clone(&executor);
+                    let saved_body = body.clone();
+                    let saved_envelope = envelope.clone();
+                    let saved_operation = permit.operation_id().to_string();
+                    let follow = tokio::task::spawn_blocking(move || {
+                        saved_model_turn(&tools, &saved_operation, &saved_body, &saved_envelope)
+                    })
+                    .await
+                    .map_err(|_| denied())?;
+                    let clock = authority_request::utc_z_now()
+                        .ok()
+                        .and_then(|text| authority_request::parse_utc_z_str(&text).ok());
+                    if let Some(seconds) = clock {
+                        let follow_lease = execution_send_lease(deadline, seconds);
+                        let follow_admit = admitted_provider_send(follow_lease);
+                        if follow_admit.allowed {
+                            let follow_budget =
+                                execution_send_budget(deadline, seconds, config.timeout.as_secs());
+                            if follow_budget.armed {
+                                config.timeout = Duration::from_secs(follow_budget.seconds);
+                                if let Some(next_body) = follow {
+                                    match deepseek_gateway::chat_execution::exchange_fenced_turn(
+                                        &config,
+                                        &next_body,
+                                        &permit.fence,
+                                        permit.operation_id(),
+                                        crate::MAX_AGENT_NODE_OUTCOME_BYTES / 2,
+                                    )
+                                    .await
+                                    {
+                                        Ok((follow_turn, follow_receipt)) => {
+                                            let stored = follow_up_exchange(true, true);
+                                            if stored.store
+                                                && !stored.mark_unknown
+                                                && !stored.provider_effect
+                                                && follow_turn.tool_calls().is_empty()
+                                            {
+                                                let elapsed = started
+                                                    .elapsed()
+                                                    .as_millis()
+                                                    .min(i64::MAX as u128)
+                                                    as u64;
+                                                if let Ok(answer) = task_envelope(
+                                                    (&run_id, &intent.node_id, &intent.task),
+                                                    follow_turn.message,
+                                                    follow_turn.usage,
+                                                    Vec::new(),
+                                                    &follow_receipt,
+                                                    elapsed,
+                                                ) {
+                                                    let tools = std::sync::Arc::clone(&executor);
+                                                    let operation_id =
+                                                        permit.operation_id().to_string();
+                                                    let _ =
+                                                        tokio::task::spawn_blocking(move || {
+                                                            tools.store_model_turn(
+                                                                &operation_id,
+                                                                &answer,
+                                                            )
+                                                        })
+                                                        .await;
+                                                }
+                                            }
+                                        }
+                                        Err(_) => {
+                                            let failure = follow_up_exchange(true, false);
+                                            let _kept = (
+                                                failure.store,
+                                                failure.mark_unknown,
+                                                failure.provider_effect,
+                                                failure.code,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(outcome)
             }
             .await;
             match sent {
@@ -297,7 +508,10 @@ impl WorkerRpcService {
                         .await
                 }
                 Err(error) => {
-                    let _ = service.mark_agent_node_effect_unknown(&permit).await;
+                    // The dependency answer was not read, so the provider call did not start.
+                    if error.message() != "AGENT_DEPENDENCY_UNPUBLISHED" {
+                        let _ = service.mark_agent_node_effect_unknown(&permit).await;
+                    }
                     Err(error)
                 }
             }

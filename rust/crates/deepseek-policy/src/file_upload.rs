@@ -268,6 +268,282 @@ fn cache_io() -> AppError {
     }
 }
 
+/// Body-size gate for `POST /api/file-text`. It never writes the file cache.
+///
+/// Zero refuses before the multipart parser. A length above
+/// [`MAX_UPLOAD_BYTES`] refuses before that parser as well. A positive length
+/// at or under the cap is admitted and still does not write.
+pub struct UploadBodyAdmission {
+    pub admit: bool,
+    pub cache_write: bool,
+    pub code: &'static str,
+    pub status: u16,
+    pub message: String,
+}
+
+pub fn admit_upload_body(content_length: usize) -> UploadBodyAdmission {
+    if content_length == 0 {
+        return UploadBodyAdmission {
+            admit: false,
+            cache_write: false,
+            code: codes::INVALID_PAYLOAD,
+            status: 400,
+            message: "Upload body is empty".to_string(),
+        };
+    }
+    if content_length > MAX_UPLOAD_BYTES {
+        return UploadBodyAdmission {
+            admit: false,
+            cache_write: false,
+            code: codes::UPLOAD_TOO_LARGE,
+            status: 413,
+            message: format!(
+                "Upload body is too large. Maximum request size is {} MB.",
+                format_upload_limit(MAX_UPLOAD_BYTES)
+            ),
+        };
+    }
+    UploadBodyAdmission {
+        admit: true,
+        cache_write: false,
+        code: "",
+        status: 200,
+        message: String::new(),
+    }
+}
+
+fn format_upload_limit(value: usize) -> u64 {
+    ((value as f64) / 1_000_000.0).round().max(1.0) as u64
+}
+
+/// What `admit_file_text_part` allows the extractor to do next.
+///
+/// `Refuse` is returned before the cache write and before OCR. `Text` already
+/// holds normalized text from `decode_text_file`, `extract_html_text`,
+/// `extract_docx_text`, `extract_pptx_text`, `extract_xlsx_text`, or
+/// `extract_epub_text`. `Continue` leaves PDF and a magic-valid image on the
+/// existing extractor. A PDF that does not start with `%PDF` stays on that
+/// extractor so its parse error is unchanged. HTML with no readable text, and
+/// an invalid DOCX, PPTX, XLSX, or EPUB, refuse before `write_cache`.
+pub enum FileTextAction {
+    Refuse(AppError),
+    Continue,
+    Text { text: String, kind: String },
+}
+
+pub struct FileTextAdmission {
+    pub action: FileTextAction,
+    pub cache_write: bool,
+}
+
+fn refuse_file(message: String, code: &'static str, status: u16) -> FileTextAdmission {
+    FileTextAdmission {
+        action: FileTextAction::Refuse(AppError {
+            message,
+            code,
+            status,
+        }),
+        cache_write: false,
+    }
+}
+
+fn continue_file() -> FileTextAdmission {
+    FileTextAdmission {
+        action: FileTextAction::Continue,
+        cache_write: false,
+    }
+}
+
+/// Image signatures the OCR engine may receive. A shorter or foreign prefix
+/// is corrupt and must not reach `ocr_image`.
+fn image_magic_ok(data: &[u8]) -> bool {
+    if data.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return true;
+    }
+    if data.starts_with(b"\xff\xd8\xff") {
+        return true;
+    }
+    if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        return true;
+    }
+    if data.len() >= 12 && data.starts_with(b"RIFF") && &data[8..12] == b"WEBP" {
+        return true;
+    }
+    if data.starts_with(b"BM") {
+        return true;
+    }
+    data.starts_with(b"II*\x00") || data.starts_with(b"MM\x00*")
+}
+
+/// Part gate for one uploaded file. Empty bytes refuse before `write_cache`.
+/// Text, HTML, DOCX, PPTX, XLSX, and EPUB are extracted here. Corrupt image
+/// bytes with OCR on refuse before `ocr_image`. This function does not call
+/// OCR and does not write the cache. Readable HTML, DOCX, PPTX, XLSX, and
+/// EPUB set `cache_write` only after the shipped extractor returns text.
+pub fn admit_file_text_part(
+    filename: &str,
+    content_type: &str,
+    data: &[u8],
+    ocr_enabled: bool,
+) -> FileTextAdmission {
+    if data.is_empty() {
+        return refuse_file(
+            format!("Uploaded file is empty: {filename}"),
+            codes::INVALID_PAYLOAD,
+            400,
+        );
+    }
+    let extension = extension_of(filename);
+    if extension == ".docx" {
+        let extracted = match crate::docx_text::extract_docx_text(data) {
+            Ok(text) => text,
+            Err(error) => return refuse_file(error.message, error.code, error.status),
+        };
+        let text = crate::file_routes::normalize_extracted_text(&extracted);
+        if text.is_empty() {
+            return refuse_file(
+                "No readable text found in this file".to_string(),
+                codes::INVALID_PAYLOAD,
+                422,
+            );
+        }
+        return FileTextAdmission {
+            action: FileTextAction::Text {
+                text,
+                kind: "docx".to_string(),
+            },
+            cache_write: true,
+        };
+    }
+    if extension == ".pptx" {
+        let extracted = match crate::docx_text::extract_pptx_text(data) {
+            Ok(text) => text,
+            Err(error) => return refuse_file(error.message, error.code, error.status),
+        };
+        let text = crate::file_routes::normalize_extracted_text(&extracted);
+        if text.is_empty() {
+            return refuse_file(
+                "No readable text found in this file".to_string(),
+                codes::INVALID_PAYLOAD,
+                422,
+            );
+        }
+        return FileTextAdmission {
+            action: FileTextAction::Text {
+                text,
+                kind: "pptx".to_string(),
+            },
+            cache_write: true,
+        };
+    }
+    if extension == ".xlsx" {
+        let extracted = match crate::docx_text::extract_xlsx_text(data) {
+            Ok(text) => text,
+            Err(error) => return refuse_file(error.message, error.code, error.status),
+        };
+        let text = crate::file_routes::normalize_extracted_text(&extracted);
+        if text.is_empty() {
+            return refuse_file(
+                "No readable text found in this file".to_string(),
+                codes::INVALID_PAYLOAD,
+                422,
+            );
+        }
+        return FileTextAdmission {
+            action: FileTextAction::Text {
+                text,
+                kind: "xlsx".to_string(),
+            },
+            cache_write: true,
+        };
+    }
+    if extension == ".epub" {
+        let extracted = match crate::docx_text::extract_epub_text(data) {
+            Ok(text) => text,
+            Err(error) => return refuse_file(error.message, error.code, error.status),
+        };
+        let text = crate::file_routes::normalize_extracted_text(&extracted);
+        if text.is_empty() {
+            return refuse_file(
+                "No readable text found in this file".to_string(),
+                codes::INVALID_PAYLOAD,
+                422,
+            );
+        }
+        return FileTextAdmission {
+            action: FileTextAction::Text {
+                text,
+                kind: "epub".to_string(),
+            },
+            cache_write: true,
+        };
+    }
+    if extension == ".pdf" {
+        return continue_file();
+    }
+    if is_image_file(&extension, content_type) {
+        if !ocr_enabled {
+            return refuse_file(
+                "Image OCR requires OCR to be enabled. Enable OCR and retry, or set OCR_ENABLED=1."
+                    .to_string(),
+                codes::OCR_REQUIRED,
+                415,
+            );
+        }
+        if !image_magic_ok(data) {
+            return refuse_file(
+                "Uploaded image is corrupt.".to_string(),
+                codes::INVALID_PAYLOAD,
+                400,
+            );
+        }
+        return continue_file();
+    }
+    if HTML_EXTENSIONS.contains(&extension.as_str()) {
+        let raw = crate::fetch_url::extract_html_text(data);
+        let text = crate::file_routes::normalize_extracted_text(&raw);
+        if text.is_empty() {
+            return refuse_file(
+                "No readable text found in this file".to_string(),
+                codes::INVALID_PAYLOAD,
+                422,
+            );
+        }
+        let stripped = extension.trim_start_matches('.');
+        let kind = if stripped.is_empty() {
+            "html".to_string()
+        } else {
+            stripped.to_string()
+        };
+        return FileTextAdmission {
+            action: FileTextAction::Text { text, kind },
+            cache_write: true,
+        };
+    }
+    if is_text_file(&extension, content_type, data) {
+        let raw = crate::fetch_url::decode_text_file(data);
+        let text = crate::file_routes::normalize_extracted_text(&raw);
+        if text.is_empty() {
+            return refuse_file(
+                "No readable text found in this file".to_string(),
+                codes::INVALID_PAYLOAD,
+                422,
+            );
+        }
+        let stripped = extension.trim_start_matches('.');
+        let kind = if stripped.is_empty() {
+            "text".to_string()
+        } else {
+            stripped.to_string()
+        };
+        return FileTextAdmission {
+            action: FileTextAction::Text { text, kind },
+            cache_write: true,
+        };
+    }
+    continue_file()
+}
+
 /// Mirrors `extract_uploaded_file` for the types this crate extracts.
 ///
 /// `ocr_enabled` is the value the route already resolved (the server default, then
@@ -286,86 +562,96 @@ pub fn extract_uploaded_file(
     project_id: Option<&str>,
 ) -> Result<Value, AppError> {
     crate::extraction_control::check()?;
-    let extension = extension_of(filename);
-    if data.is_empty() {
-        return Err(AppError {
-            message: format!("Uploaded file is empty: {filename}"),
-            code: codes::INVALID_PAYLOAD,
-            status: 400,
-        });
-    }
-    let (text, kind, page_count, page_texts) = if extension == ".docx" {
-        let text = normalize_extracted_text(&crate::docx_text::extract_docx_text(data)?);
-        (text, "docx".to_string(), 0, Vec::new())
-    } else if extension == ".pptx" {
-        let text = normalize_extracted_text(&crate::docx_text::extract_pptx_text(data)?);
-        (text, "pptx".to_string(), 0, Vec::new())
-    } else if extension == ".xlsx" {
-        let text = normalize_extracted_text(&crate::docx_text::extract_xlsx_text(data)?);
-        (text, "xlsx".to_string(), 0, Vec::new())
-    } else if extension == ".pdf" {
-        let extracted = crate::pdf_text::extract_pdf_document(data)?;
-        if extracted.text.is_empty() {
-            if !ocr_enabled {
-                return Err(AppError {
+    let admission = admit_file_text_part(filename, content_type, data, ocr_enabled);
+    let cache_write = admission.cache_write;
+    let (text, kind, page_count, page_texts) = match admission.action {
+        FileTextAction::Refuse(error) => return Err(error),
+        FileTextAction::Text { text, kind } if cache_write && !text.is_empty() => {
+            (text, kind, 0_i64, Vec::<Value>::new())
+        }
+        FileTextAction::Text { .. } => {
+            return Err(AppError {
+                message: "No readable text found in this file".to_string(),
+                code: codes::INVALID_PAYLOAD,
+                status: 422,
+            });
+        }
+        FileTextAction::Continue => {
+            let extension = extension_of(filename);
+            if extension == ".docx" {
+                let text = normalize_extracted_text(&crate::docx_text::extract_docx_text(data)?);
+                (text, "docx".to_string(), 0, Vec::new())
+            } else if extension == ".pptx" {
+                let text = normalize_extracted_text(&crate::docx_text::extract_pptx_text(data)?);
+                (text, "pptx".to_string(), 0, Vec::new())
+            } else if extension == ".xlsx" {
+                let text = normalize_extracted_text(&crate::docx_text::extract_xlsx_text(data)?);
+                (text, "xlsx".to_string(), 0, Vec::new())
+            } else if extension == ".pdf" {
+                let extracted = crate::pdf_text::extract_pdf_document(data)?;
+                if extracted.text.is_empty() {
+                    if !ocr_enabled {
+                        return Err(AppError {
                     message: "Scanned/image-only PDF requires OCR. Enable OCR and retry, or convert it to selectable text first.".to_string(),
                     code: codes::OCR_REQUIRED,
                     status: 422,
                 });
-            }
-            let (ocr_text, page_texts) = crate::ocr::ocr_pdf_document(data)?;
-            let text = normalize_extracted_text(&ocr_text);
-            (
-                text.clone(),
-                "pdf".to_string(),
-                extracted.page_count,
-                page_texts,
-            )
-        } else {
-            let text = normalize_extracted_text(&extracted.text);
-            (
-                text,
-                "pdf".to_string(),
-                extracted.page_count,
-                extracted.page_texts,
-            )
-        }
-    } else if extension == ".epub" {
-        let text = normalize_extracted_text(&crate::docx_text::extract_epub_text(data)?);
-        (text, "epub".to_string(), 0, Vec::new())
-    } else if is_image_file(&extension, content_type) {
-        if !ocr_enabled {
-            return Err(AppError {
+                    }
+                    let (ocr_text, page_texts) = crate::ocr::ocr_pdf_document(data)?;
+                    let text = normalize_extracted_text(&ocr_text);
+                    (
+                        text.clone(),
+                        "pdf".to_string(),
+                        extracted.page_count,
+                        page_texts,
+                    )
+                } else {
+                    let text = normalize_extracted_text(&extracted.text);
+                    (
+                        text,
+                        "pdf".to_string(),
+                        extracted.page_count,
+                        extracted.page_texts,
+                    )
+                }
+            } else if extension == ".epub" {
+                let text = normalize_extracted_text(&crate::docx_text::extract_epub_text(data)?);
+                (text, "epub".to_string(), 0, Vec::new())
+            } else if is_image_file(&extension, content_type) {
+                if !ocr_enabled {
+                    return Err(AppError {
                 message: "Image OCR requires OCR to be enabled. Enable OCR and retry, or set OCR_ENABLED=1.".to_string(),
                 code: codes::OCR_REQUIRED,
                 status: 415,
             });
-        }
-        let text = normalize_extracted_text(&crate::ocr::ocr_image(data)?);
-        let page_texts = vec![json!({"page": 1, "text": text})];
-        (text, "image".to_string(), 1, page_texts)
-    } else if is_text_file(&extension, content_type, data) {
-        let raw = if HTML_EXTENSIONS.contains(&extension.as_str()) {
-            crate::fetch_url::extract_html_text(data)
-        } else {
-            crate::fetch_url::decode_text_file(data)
-        };
-        let text = normalize_extracted_text(&raw);
-        let kind = {
-            let stripped = extension.trim_start_matches('.');
-            if stripped.is_empty() {
-                "text"
+                }
+                let text = normalize_extracted_text(&crate::ocr::ocr_image(data)?);
+                let page_texts = vec![json!({"page": 1, "text": text})];
+                (text, "image".to_string(), 1, page_texts)
+            } else if is_text_file(&extension, content_type, data) {
+                let raw = if HTML_EXTENSIONS.contains(&extension.as_str()) {
+                    crate::fetch_url::extract_html_text(data)
+                } else {
+                    crate::fetch_url::decode_text_file(data)
+                };
+                let text = normalize_extracted_text(&raw);
+                let kind = {
+                    let stripped = extension.trim_start_matches('.');
+                    if stripped.is_empty() {
+                        "text"
+                    } else {
+                        stripped
+                    }
+                };
+                (text, kind.to_string(), 0, Vec::new())
             } else {
-                stripped
-            }
-        };
-        (text, kind.to_string(), 0, Vec::new())
-    } else {
-        return Err(AppError {
+                return Err(AppError {
             message: "Unsupported file type. Use txt, md, csv, json, code files, docx, xlsx, pptx, epub, pdf, image, or text-based files.".to_string(),
             code: codes::UNSUPPORTED_FILE,
             status: 415,
         });
+            }
+        }
     };
     if text.is_empty() {
         return Err(AppError {

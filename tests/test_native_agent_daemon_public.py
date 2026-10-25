@@ -25,6 +25,7 @@ def daemon_fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         writerFenceAfterRestart=3, providerCallsBeforeRestart=1, providerCallsAfterRestartBeforeConfirmation=1,
         publicReplayPreserved=True, publicEventsEqualNDJSON=True, frontendIndexSha256="a" * 64, frontendAssetCount=2)
     calls = [dict(actionId=action, operationId=f"operation-{i}", executionEpoch="1", stream=False,
+                  requestCredentialUsed=True,
                   selectedTaskInPrompt=True, dependentTaskInPrompt=True, predecessorSummaryInPrompt=True,
                   privateReasoningInPrompt=False, synthesisCoderInPrompt=True, synthesisCriticInPrompt=True)
              for i, action in enumerate(["plan", "tasks", "tasks", "synthesis"])]

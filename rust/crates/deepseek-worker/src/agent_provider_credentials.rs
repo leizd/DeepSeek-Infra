@@ -52,7 +52,7 @@ fn bound_reference(
         || scope.environment != environment
         || scope.run_id != run_id
         || scope.metadata_epoch != metadata_epoch
-        || scope.runtime_revision != 1
+        || scope.runtime_revision == 0
     {
         return Err(denied());
     }
@@ -84,7 +84,7 @@ impl WorkerRpcService {
         let fence = input.fence.as_ref().ok_or_else(denied)?;
         let reference = input.request.as_ref().ok_or_else(denied)?;
         if input.schema_version != 1
-            || input.runtime_revision != 1
+            || input.runtime_revision == 0
             || fence.action_id != input.run_id
             || fence.execution_epoch == 0
         {
@@ -122,6 +122,17 @@ impl WorkerRpcService {
             }
             let signer = signer.blocking_lock();
             let (fleet_id, environment) = signer.agent_credential_binding()?;
+            let sealed_max = deepseek_federation::AgentCredentialVault::open(&root)
+                .and_then(|vault| {
+                    vault.max_runtime_revision(&fleet_id, &environment, &input.run_id, live_epoch)
+                })
+                .map_err(|_| denied())?;
+            if !deepseek_policy::agent_runtime_admission::vault_revision_allowed(
+                sealed_max,
+                input.runtime_revision,
+            ) {
+                return Err(denied());
+            }
             let scope = AgentCredentialScope {
                 fleet_id,
                 environment,
@@ -273,7 +284,7 @@ mod tests {
         for (field, value) in [
             ("runId", json!("other")),
             ("metadataEpoch", json!(3)),
-            ("runtimeRevision", json!(2)),
+            ("runtimeRevision", json!(0)),
             ("fleetId", json!("other")),
             ("environment", json!("prod")),
             ("requestSha256", json!("c".repeat(64))),
@@ -286,6 +297,12 @@ mod tests {
                 "{field}"
             );
         }
+        let mut next_revision = body.clone();
+        next_revision[PRIVATE_FIELD]["scope"]["runtimeRevision"] = json!(2);
+        let admitted = bound_reference(root.path(), next_revision, "run-a", 2, "fleet-a", "test")
+            .unwrap()
+            .unwrap();
+        assert_eq!(admitted.0.runtime_revision, 2);
         let mut changed = body;
         changed["payload"]["messages"][0]["content"] = json!("Different query");
         assert!(bound_reference(root.path(), changed, "run-a", 2, "fleet-a", "test").is_err());

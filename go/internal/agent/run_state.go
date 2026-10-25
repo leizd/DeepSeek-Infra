@@ -1,6 +1,10 @@
 package agent
 
-import agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
+import (
+	"strconv"
+
+	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
+)
 
 // ArtifactRef names immutable Rust-owned bytes. Possessing this reference is
 // neither proof of custody nor permission to execute an action.
@@ -79,6 +83,15 @@ type RunMetadata struct {
 	Cancelled      bool               `json:"cancelledObserved"`
 	FinalAfter     int64              `json:"finalAfter"`
 	LastEvent      RunEvent           `json:"lastEvent"`
+	// Zero means creation revision 1. Later runtime_payload events advance it by one.
+	RuntimeRevision uint64 `json:"runtimeRevision,omitempty"`
+}
+
+func (run RunMetadata) AdmittedRevision() uint64 {
+	if run.RuntimeRevision == 0 {
+		return 1
+	}
+	return run.RuntimeRevision
 }
 
 func runNodePhase(phase string) bool {
@@ -123,6 +136,13 @@ func (run *RunMetadata) ApplyRunEvent(event RunEvent) {
 	case "final_reset":
 		if event.Scope == "final_answer" {
 			run.FinalAfter = event.Index
+		}
+	case "runtime_payload":
+		length, lengthErr := strconv.ParseUint(event.Status, 10, 64)
+		revision, revisionErr := strconv.ParseUint(event.Scope, 10, 64)
+		if lengthErr == nil && revisionErr == nil && len(event.Phase) == 64 && length > 0 && length <= 1<<20 && revision >= 2 {
+			run.Request = ArtifactRef{SHA256: event.Phase, Length: length}
+			run.RuntimeRevision = revision
 		}
 	case "agent", "agent_output", "agent_reset":
 		if runNodePhase(event.Phase) {
