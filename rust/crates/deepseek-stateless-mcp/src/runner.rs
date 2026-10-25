@@ -3,7 +3,32 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::model::TaskOutcome;
+use crate::model::{StoreError, TaskOutcome, TaskRecord};
+
+/// Retry only an explicit refusal that guarantees settlement was not applied.
+/// The caller keeps its lease heartbeat alive until this operation returns.
+pub async fn complete_when_unfenced<F>(
+    mut complete: F,
+    cancel: &AtomicBool,
+    poll: Duration,
+    retry_limit: Duration,
+) -> Result<Option<TaskRecord>, StoreError>
+where
+    F: FnMut() -> Result<Option<TaskRecord>, StoreError>,
+{
+    let started = Instant::now();
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        match complete() {
+            Err(StoreError::RestoreFenced) if started.elapsed() < retry_limit => {
+                tokio::time::sleep(poll).await;
+            }
+            result => return result,
+        }
+    }
+}
 
 pub fn execute_configured_task(
     workspace: &Path,
@@ -119,6 +144,116 @@ pub fn execute_configured_task(
         } else {
             None
         },
+    }
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::complete_when_unfenced;
+    use crate::model::StoreError;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn completion_waits_only_for_explicit_restore_refusals() {
+        let cancelled = AtomicBool::new(false);
+        let mut calls = 0;
+        let result = complete_when_unfenced(
+            || {
+                calls += 1;
+                if calls <= 2 {
+                    Err(StoreError::RestoreFenced)
+                } else {
+                    Ok(None)
+                }
+            },
+            &cancelled,
+            Duration::from_millis(1),
+            Duration::from_secs(30),
+        )
+        .await;
+        assert!(matches!(result, Ok(None)));
+        assert_eq!(calls, 3);
+    }
+
+    #[tokio::test]
+    async fn unknown_or_other_completion_errors_are_never_retried() {
+        for error in [
+            StoreError::Message("completion response was lost".to_string()),
+            StoreError::BackupFenced,
+            StoreError::RestoreConflict,
+            StoreError::RestoreState("recovery required".to_string()),
+        ] {
+            let cancelled = AtomicBool::new(false);
+            let mut calls = 0;
+            let result = complete_when_unfenced(
+                || {
+                    calls += 1;
+                    Err(error.clone())
+                },
+                &cancelled,
+                Duration::from_millis(1),
+                Duration::from_secs(30),
+            )
+            .await;
+            assert_eq!(result, Err(error));
+            assert_eq!(calls, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_settlement_does_not_attempt_a_write() {
+        let cancelled = AtomicBool::new(true);
+        let mut calls = 0;
+        let result = complete_when_unfenced(
+            || {
+                calls += 1;
+                Ok(None)
+            },
+            &cancelled,
+            Duration::from_millis(1),
+            Duration::from_secs(30),
+        )
+        .await;
+        assert!(matches!(result, Ok(None)));
+        assert_eq!(calls, 0);
+    }
+
+    #[tokio::test]
+    async fn lease_loss_while_restore_fenced_stops_settlement() {
+        let cancelled = AtomicBool::new(false);
+        let mut calls = 0;
+        let result = complete_when_unfenced(
+            || {
+                calls += 1;
+                cancelled.store(true, Ordering::Relaxed);
+                Err(StoreError::RestoreFenced)
+            },
+            &cancelled,
+            Duration::from_millis(1),
+            Duration::from_secs(30),
+        )
+        .await;
+        assert!(matches!(result, Ok(None)));
+        assert_eq!(calls, 1);
+    }
+
+    #[tokio::test]
+    async fn restore_refusal_is_retained_when_the_retry_budget_expires() {
+        let cancelled = AtomicBool::new(false);
+        let mut calls = 0;
+        let result = complete_when_unfenced(
+            || {
+                calls += 1;
+                Err(StoreError::RestoreFenced)
+            },
+            &cancelled,
+            Duration::from_millis(1),
+            Duration::ZERO,
+        )
+        .await;
+        assert_eq!(result, Err(StoreError::RestoreFenced));
+        assert_eq!(calls, 1);
     }
 }
 

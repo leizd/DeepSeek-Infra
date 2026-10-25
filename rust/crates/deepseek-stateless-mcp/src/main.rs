@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use deepseek_stateless_mcp::http::{AppState, ServiceConfig, router};
 use deepseek_stateless_mcp::model::TaskOutcome;
-use deepseek_stateless_mcp::runner::execute_configured_task;
+use deepseek_stateless_mcp::runner::{complete_when_unfenced, execute_configured_task};
 use deepseek_stateless_mcp::store::TaskBackend;
 
 #[tokio::main]
@@ -109,12 +109,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     exit_code: None,
                     error: Some(error.to_string()),
                 });
-                heartbeat.abort();
                 if !cancel.load(Ordering::Relaxed) {
-                    let _ = tokio::task::block_in_place(|| {
-                        worker_store.complete(&task_id, &instance_id, outcome, now_millis())
-                    });
+                    let result = complete_when_unfenced(
+                        || {
+                            tokio::task::block_in_place(|| {
+                                worker_store.complete(
+                                    &task_id,
+                                    &instance_id,
+                                    outcome.clone(),
+                                    now_millis(),
+                                )
+                            })
+                        },
+                        &cancel,
+                        Duration::from_millis(poll_ms.max(1)),
+                        Duration::from_secs(5 * 60),
+                    )
+                    .await;
+                    if let Err(error) = result {
+                        eprintln!("task_completion_failed task_id={task_id}: {error}");
+                    }
                 }
+                heartbeat.abort();
                 continue;
             }
             tokio::time::sleep(Duration::from_millis(poll_ms)).await;
