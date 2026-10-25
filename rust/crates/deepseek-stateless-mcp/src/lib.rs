@@ -14,3 +14,6 @@ pub use memory::MemoryTaskStore;
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod task_process;
+
+#[cfg(windows)]
+mod windows_task_job;

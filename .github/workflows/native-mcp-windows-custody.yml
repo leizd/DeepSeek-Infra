@@ -41,11 +41,21 @@ jobs:
         run: |
           rustup toolchain install 1.85.0 --profile minimal
           if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows Rust installation failed' }
+          rustup component add --toolchain 1.85.0 clippy
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows Clippy installation failed' }
           New-Item -ItemType Directory -Force -Path artifacts/native-mcp-windows-custody | Out-Null
       - name: Build the actual native executor and offline Windows fixture
         run: |
           cargo +1.85.0 build --manifest-path rust/Cargo.toml --locked -p deepseek-stateless-mcp --example task_custody_probe 2>&1 | Tee-Object -FilePath artifacts/native-mcp-windows-custody/build.log
           if ($LASTEXITCODE -ne 0) { throw 'Windows native fixture build failed' }
+      - name: Lint the native MCP executor on its actual Windows target
+        run: |
+          cargo +1.85.0 clippy --manifest-path rust/Cargo.toml --locked -p deepseek-stateless-mcp --all-targets --all-features -- -D warnings 2>&1 | Tee-Object -FilePath artifacts/native-mcp-windows-custody/clippy.log
+          if ($LASTEXITCODE -ne 0) { throw 'Windows native Clippy failed' }
+      - name: Retain the native MCP library tests on Windows
+        run: |
+          cargo +1.85.0 test --manifest-path rust/Cargo.toml --locked -p deepseek-stateless-mcp --lib 2>&1 | Tee-Object -FilePath artifacts/native-mcp-windows-custody/library-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Windows native library tests failed' }
       - name: Bound actual Windows descendants after timeout and parent death
         run: |
           & ./scripts/verify_native_mcp_windows_custody.ps1 -Binary (Join-Path $env:CARGO_TARGET_DIR 'debug/examples/task_custody_probe.exe') -Output artifacts/native-mcp-windows-custody

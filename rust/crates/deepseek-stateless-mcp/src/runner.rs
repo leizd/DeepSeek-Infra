@@ -113,6 +113,27 @@ fn execute_direct(
     max_output_bytes: usize,
     cancel: &AtomicBool,
 ) -> TaskOutcome {
+    #[cfg(windows)]
+    if cancel.load(Ordering::Relaxed) {
+        return TaskOutcome {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+            error: None,
+        };
+    }
+    #[cfg(windows)]
+    let mut job = match crate::windows_task_job::TaskJob::new(&mut command) {
+        Ok(job) => job,
+        Err(error) => {
+            return TaskOutcome {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: None,
+                error: Some(error.to_string()),
+            };
+        }
+    };
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -124,6 +145,18 @@ fn execute_direct(
             };
         }
     };
+    #[cfg(windows)]
+    if let Err(error) = job.admit(&child, cancel) {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = job.finish();
+        return TaskOutcome {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+            error: Some(error.to_string()),
+        };
+    }
     let started = Instant::now();
     let limit = Duration::from_secs(timeout_seconds.max(1));
     let mut timed_out = false;
@@ -142,26 +175,46 @@ fn execute_direct(
             .and_then(|pipe| read_limited(pipe, max_output_bytes))
             .unwrap_or_default()
     });
-    let status = loop {
-        if cancel.load(Ordering::Relaxed) {
+    let status = {
+        #[cfg(windows)]
+        let mut stop =
+            |_child: &mut std::process::Child| job.finish().err().map(|error| error.to_string());
+        #[cfg(not(windows))]
+        let stop = |child: &mut std::process::Child| {
             let _ = child.kill();
-            break child.wait().ok();
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if started.elapsed() >= limit => {
-                timed_out = true;
-                let _ = child.kill();
+            None::<String>
+        };
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                if let Some(error) = stop(&mut child) {
+                    wait_error.get_or_insert(error);
+                }
                 break child.wait().ok();
             }
-            Ok(None) => std::thread::sleep(Duration::from_millis(30)),
-            Err(error) => {
-                let _ = child.kill();
-                wait_error = Some(error.to_string());
-                break child.wait().ok();
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) if started.elapsed() >= limit => {
+                    timed_out = true;
+                    if let Some(error) = stop(&mut child) {
+                        wait_error.get_or_insert(error);
+                    }
+                    break child.wait().ok();
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(30)),
+                Err(error) => {
+                    wait_error = Some(error.to_string());
+                    if let Some(error) = stop(&mut child) {
+                        wait_error.get_or_insert(error);
+                    }
+                    break child.wait().ok();
+                }
             }
         }
     };
+    #[cfg(windows)]
+    if let Err(error) = job.finish() {
+        wait_error.get_or_insert(error.to_string());
+    }
     let stdout = stdout_handle.join().unwrap_or_default();
     let stderr = stderr_handle.join().unwrap_or_default();
     if let Some(error) = wait_error {

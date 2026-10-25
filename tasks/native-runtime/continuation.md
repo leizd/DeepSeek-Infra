@@ -1,3 +1,47 @@
+## Native MCP Windows task custody — 2026-10-25
+
+Actual Windows sourcecb64c1c run40168858082/job121095415426 passed a real native
+short success control, then reproduced5 surviving descendants and5 late-effect
+files after ordinary timeout, detached/new-group timeout, normal root exit,
+actual driver termination and AtomicBool cancellation. Four normal/timeout/cancel
+outcomes were still blocked by descendant-owned pipes at the3-second sample.
+The crash root also exited; its descendant still survived and wrote the effect.
+This is Windows2025 process-plane RED, not a Redis lease or full GUI/device test.
+Sourcec7261eb's zero-job workflow failure is NOT_REACHED; its only context fix
+uses an allowed github.workspace target directory on the cloud host.
+
+Windows execution now creates a non-inheritable kill-on-close Job Object,
+creates the root suspended, assigns the actual Child handle and reopens/resumes
+its verified initial thread only after admission. Cancellation is checked before
+spawn/admission/resume. Timeout, cancellation and normal root exit terminate the
+whole job and wait until kernel ActiveProcesses reaches0 before joining pipes
+or settling. Parent death closes the sole job handle. Admission errors retain
+no unfenced fallback; original output caps, complete pipe draining, exit code
+handling and all11 runner regressions remain. Existing Go launcher kernel policy
+is reused; existing locked windows-sys0.61.2 is promoted without changing package
+versions/checksums. Linux/Android supervisor code and Go/Proto remain unchanged.
+New Windows native Clippy/library tests and the unchanged5-case fixture run in cloud.
+Actual GREEN/current Rust1605/original80% qualification is pending.
+
+Parentb73b complete1605 tests/82.117475% >=80%,26 named checks and52 controlled
+process/browser reports passed, with corrected derived v2 metadata at tree33be421.
+Original raw results were unchanged; stale v1 report tree/count literals remain
+archived as superseded. Linux5-case custody passed with zero late effects.
+Original37-job CI for that older source remains separate/currently in progress.
+
+Actual source3c4ea811 run40167843108 proved the offline original pytest executor
+passed a real selected test, while the stock native image failed with task program
+is not configured. The user explicitly chose to retain the original requirements
+and leave this feature unfinished. Both pytest compatibility and zero production
+Python stay required; no native-only language reduction or Python exception is
+authorized. Do not count fixture success as retained test-engine acceptance.
+
+Full hostile-code/resource/environment/filesystem-race confinement, Android and
+other platform/device/package qualification, provider/recovery/Fleet and release
+Evidence remain required. Every server/desktop/Android/background feature stays
+in scope; whole migration NOT_READY. Builds/caches stay cloud-only, reports return.
+Preserve root163 bytes. Daily unified PR09:00 Asia/Shanghai once/day; no PR now.
+
 ## Native MCP task descendant custody — 2026-10-25
 
 Actual source1728419 run40155708941 reproduced surviving descendants and real
