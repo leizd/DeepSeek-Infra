@@ -46,6 +46,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@69084b241933c14c2fa24234c4596f11a2655339 # 1.85.0
         with:
           toolchain: "1.85.0"
+          components: clippy
           targets: aarch64-linux-android,x86_64-linux-android
       - name: Install checksum-pinned Go in the cloud
         run: |

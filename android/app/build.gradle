@@ -4,6 +4,7 @@ plugins {
 
 def nativeBundleDir = layout.buildDirectory.dir("generated/native")
 def nativeProbeDir = layout.buildDirectory.dir("generated/native-test-probes")
+def nativeCustodyProbeDir = layout.buildDirectory.dir("generated/native-mcp-custody-probes")
 def configuredBuildPython = (findProperty("DEEPSEEK_BUILD_PYTHON") ?: System.getenv("DEEPSEEK_BUILD_PYTHON"))?.toString()?.trim()
 def configuredCargoTarget = (findProperty("DEEPSEEK_ANDROID_CARGO_TARGET") ?: System.getenv("DEEPSEEK_ANDROID_CARGO_TARGET"))?.toString()?.trim()
 def releaseStoreFilePath = findProperty("DEEPSEEK_RELEASE_STORE_FILE") ?: System.getenv("DEEPSEEK_RELEASE_STORE_FILE")
@@ -62,6 +63,24 @@ tasks.register("buildNativeLockProbes", Exec) {
     commandLine pythonCmd, "scripts/build_android_native.py", "--lock-probes-only", "--output", nativeProbeDir.get().asFile.absolutePath.replace('\\', '/')
 }
 
+
+tasks.register("buildNativeMCPCustodyProbes", Exec) {
+    // This output is an androidTest source set; it never enters the product APK.
+    dependsOn("buildNativeRuntime")
+    workingDir rootProject.projectDir.parentFile
+    inputs.files(fileTree("${rootProject.projectDir}/../rust") { exclude "target/**" })
+    inputs.file("${rootProject.projectDir}/../scripts/build_android_native.py")
+    outputs.dir nativeCustodyProbeDir
+    doFirst {
+        def pythonCmd = configuredBuildPython ?: "python3"
+        if (!configuredCargoTarget) throw new GradleException("Android custody probes require the shared cloud target")
+        commandLine pythonCmd, "scripts/build_android_native.py", "--custody-probes-only",
+            "--sdk", android.sdkDirectory.absolutePath.replace('\\', '/'),
+            "--output", nativeCustodyProbeDir.get().asFile.absolutePath.replace('\\', '/'),
+            "--cargo-target-dir", configuredCargoTarget.replace('\\', '/')
+    }
+}
+
 android {
     namespace "com.deepseek.mobile"
     compileSdk 34
@@ -109,12 +128,13 @@ android {
         }
         androidTest {
             jniLibs.srcDir nativeProbeDir
+            jniLibs.srcDir nativeCustodyProbeDir
         }
     }
     packaging {
         jniLibs {
             useLegacyPackaging true
-            keepDebugSymbols += ["**/libdeepseek_gateway.so", "**/libdeepseek_control.so", "**/libdeepseek_lock_probe.so"]
+            keepDebugSymbols += ["**/libdeepseek_gateway.so", "**/libdeepseek_control.so", "**/libdeepseek_lock_probe.so", "**/libdeepseek_mcp_custody_probe.so"]
         }
     }
     androidResources {
@@ -139,5 +159,5 @@ dependencies {
 
 preBuild.dependsOn buildNativeRuntime
 tasks.matching { it.name == "preDebugAndroidTestBuild" }.configureEach {
-    dependsOn("buildNativeLockProbes")
+    dependsOn("buildNativeLockProbes", "buildNativeMCPCustodyProbes")
 }

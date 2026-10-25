@@ -1,6 +1,8 @@
 """Offline negative report fixtures; these are never Android execution evidence."""
 import argparse
 import json
+import struct
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +17,15 @@ CASES = {"com.deepseek.mobile.OfflineTest#one", "com.deepseek.mobile.OfflineTest
 
 def build_report_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, dict[str, Any]]:
     apk, test_apk = tmp_path / "runtime.apk", tmp_path / "tests.apk"
-    apk.write_bytes(b"offline package-inspector fixture")
-    test_apk.write_bytes(b"offline instrumentation fixture")
+    # Deliberately non-executable header fixtures; never device execution evidence.
+    with zipfile.ZipFile(apk, "w") as archive:
+        archive.writestr("offline-fixture.txt", "package-inspector fixture")
+    with zipfile.ZipFile(test_apk, "w") as archive:
+        for abi, machine in (("x86_64", 62), ("arm64-v8a", 183)):
+            header = bytearray(64)
+            header[:7] = b"\x7fELF\x02\x01\x01"
+            struct.pack_into("<HH", header, 16, 3, machine)
+            archive.writestr(f"lib/{abi}/libdeepseek_mcp_custody_probe.so", header)
     identity = dict(commit="a" * 40, dirty=False, sourceSha256="b" * 64, sourceFiles=1)
     package = dict(sourceIdentity=identity, goCompatibility=android_cloud.expected_android_go_compatibility())
     monkeypatch.setattr(android_cloud, "source_identity", lambda root: identity)
@@ -33,6 +42,33 @@ def test_cloud_build_report_retains_the_exact_effective_go_variant(tmp_path: Pat
     assert result["runtimeApkSha256"] == android_cloud.digest(apk)
     assert result["instrumentationCases"] == sorted(CASES)
     assert not result["deviceExecutionVerified"] and not result["releaseQualified"] and not result["fullMigrationQualified"]
+    assert result["instrumentationCustodyProbeSha256"] == android_cloud.custody_probe_hashes(apk, test_apk)
+    assert result["custodyFixtureInProduct"] is False
+
+
+@pytest.mark.parametrize("fault", ["production-fixture", "missing-abi", "wrong-machine", "non-pie"])
+def test_test_apk_probe_binding_refuses_fixture_leaks_and_wrong_binaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str,
+) -> None:
+    apk, test_apk, _ = build_report_fixture(tmp_path, monkeypatch)
+    name = "lib/x86_64/libdeepseek_mcp_custody_probe.so"
+    if fault == "production-fixture":
+        with zipfile.ZipFile(apk, "a") as archive:
+            archive.writestr(name, b"offline leaked fixture")
+    else:
+        with zipfile.ZipFile(test_apk) as archive:
+            entries = {entry: archive.read(entry) for entry in archive.namelist()}
+        if fault == "missing-abi":
+            del entries[name]
+        else:
+            patched_header = bytearray(entries[name])
+            struct.pack_into("<H", patched_header, 18 if fault == "wrong-machine" else 16, 0)
+            entries[name] = bytes(patched_header)
+        with zipfile.ZipFile(test_apk, "w") as archive:
+            for entry, data in entries.items():
+                archive.writestr(entry, data)
+    with pytest.raises(ValueError, match="custody|Custody"):
+        android_cloud.build_report(tmp_path, apk, test_apk, "a" * 40)
 
 
 @pytest.mark.parametrize("fault", ["missing", "sdk-source", "overlay-source", "go-version", "architecture-scope", "probe-enabled",
@@ -218,7 +254,11 @@ def test_ignored_status_or_runner_crash_never_counts_as_pass() -> None:
 def test_inventory_includes_every_existing_instrumentation_method() -> None:
     root = Path(__file__).resolve().parents[1]
     cases = instrumentation_cases(root)
-    assert len(cases) == 9
+    assert len(cases) == 14
+    custody = {"ordinaryTimeoutReapsAllAppUidChildren", "detachedTimeoutReapsAllAppUidChildren",
+               "normalRootExitReapsDetachedAppUidDescendant", "actualDriverDeathClosesCustodyLifetime",
+               "actualCancellationReapsDetachedAppUidDescendant"}
+    assert {"com.deepseek.mobile.NativeMcpCustodyIntegrationTest#" + name for name in custody} <= cases
     assert "com.deepseek.mobile.NativeControlLockIntegrationTest#packagedControlExcludesLegacyLockFamiliesAndReleasesOnlyAfterShutdown" in cases
     assert "com.deepseek.mobile.NativeRuntimeIntegrationTest#packagedRuntimeCreatesRunsDownloadsAndRecoversPersistedState" in cases
     assert "com.deepseek.mobile.NativeFileOcrIntegrationTest#actualImageAndRasterPdfUploadReadRenderAndPersist" in cases
@@ -268,3 +308,55 @@ def test_source_branch_and_pr_merge_candidate_context_cannot_be_confused(
     else:
         with pytest.raises(ValueError):
             cloud_context("a" * 40)
+
+
+@pytest.mark.parametrize("fault", ["none", "binary", "api", "uid", "unreaped", "late-write", "no-control", "no-death", "cancel-result", "root-result"])
+def test_custody_observations_cannot_rebind_binaries_uid_or_actual_outcomes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str,
+) -> None:
+    # Offline report-validator fixtures; no native process or device claim.
+    def read(arguments: list[str], output: Path, timeout: int = 120) -> str:
+        assert arguments[:6] == ["exec-out", "run-as", android_cloud.APPLICATION, "head", "-c", "65537"]
+        assert timeout == 15
+        kind = arguments[-1].removeprefix("files/mcp-custody-").removesuffix(".json")
+        outcome: dict[str, Any] = dict(stdout="native Android root started; native Android root completed", stderr="", exitCode=0, error=None)
+        if kind.startswith("timeout"):
+            outcome.update(exitCode=None, error="test run exceeded 2 seconds")
+        elif kind == "cancel":
+            outcome.update(exitCode=None, cancelRequested=True)
+        case: dict[str, Any] = dict(kind=kind, api=24, appUid=12345, status="PASS", binarySha256="a" * 64,
+                    fixtureOnly=True, fullSandboxQualified=False, shortControlPassed=True, rootReaped=True,
+                    descendantReaped=True, driverExited=True, lateEffectPresent=False, sampleElapsedMs=3001,
+                    lateEffectElapsedMs=6501, driverExitCode=143 if kind == "driver-death" else 0,
+                    outcome=None if kind == "driver-death" else outcome)
+        for pid, role in enumerate(("driver", "root", "descendant"), 1):
+            case[role] = dict(pid=pid, uid=12345, startTicks=str(pid + 100), session=str(pid))
+        if kind == "cancel":
+            if fault == "binary":
+                case["binarySha256"] = "b" * 64
+            elif fault == "api":
+                case["api"] = 34
+            elif fault == "uid":
+                case["root"]["uid"] = 2000
+            elif fault == "unreaped":
+                case["descendantReaped"] = False
+            elif fault == "late-write":
+                case["lateEffectPresent"] = True
+            elif fault == "no-control":
+                case["shortControlPassed"] = False
+            elif fault == "cancel-result":
+                outcome["cancelRequested"] = False
+        if kind == "driver-death" and fault == "no-death":
+            case["driverExitCode"] = 0
+        if kind == "parent-exit" and fault == "root-result":
+            outcome["exitCode"] = 1
+        text = json.dumps(case)
+        output.write_text(text, encoding="utf-8")
+        return text
+    monkeypatch.setattr(android_cloud, "adb", read)
+    if fault == "none":
+        cases = android_cloud.collect_custody_reports(tmp_path, "a" * 64, 24)
+        assert len(cases) == 5 and {case["kind"] for case in cases} == set(android_cloud.MCP_CUSTODY_KINDS)
+    else:
+        with pytest.raises(ValueError):
+            android_cloud.collect_custody_reports(tmp_path, "a" * 64, 24)

@@ -328,6 +328,39 @@ def build_lock_probes(root: Path, output: Path) -> dict[str, Any]:
     return probes
 
 
+
+def build_custody_probes(root: Path, sdk: Path, output: Path, cargo_target: Path, toolchain: str) -> dict[str, Any]:
+    """Build the actual Rust runner probe for the instrumentation APK only."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        raise ValueError("Android MCP custody probes compile on the disposable cloud runner only")
+    env = cache_environment(root, toolchain=toolchain, target_dir=cargo_target, kind="android")
+    compiler_dir = sdk / "ndk" / NDK_VERSION / "toolchains/llvm/prebuilt/linux-x86_64/bin"
+    if f"Pkg.Revision = {NDK_VERSION}" not in (sdk / "ndk" / NDK_VERSION / "source.properties").read_text():
+        raise ValueError("Android custody probes require the pinned NDK")
+    version = run(["rustc", f"+{toolchain}", "--version"], root / "rust", env)
+    if version.split()[1] != RUST_VERSION:
+        raise ValueError("Android custody probes require the pinned Rust SDK")
+    probes = {}
+    for abi, (target, _) in TARGETS.items():
+        key = target.replace("-", "_")
+        compiler, ar = compiler_dir / (target + "24-clang"), compiler_dir / "llvm-ar"
+        if not compiler.is_file() or not ar.is_file():
+            raise ValueError("Android custody compiler is missing")
+        target_env = dict(env, **{f"CARGO_TARGET_{key.upper()}_LINKER": compiler.as_posix(),
+            f"CC_{key}": compiler.as_posix(), f"AR_{key}": ar.as_posix(),
+            f"CARGO_TARGET_{key.upper()}_RUSTFLAGS": "-C link-arg=-Wl,-z,max-page-size=16384"})
+        run(["cargo", f"+{toolchain}", "build", "--release", "--locked", "--target", target,
+             "-p", "deepseek-stateless-mcp", "--example", "android_task_custody_probe"], root / "rust", target_env)
+        run(["cargo", f"+{toolchain}", "clippy", "--release", "--locked", "--target", target,
+             "-p", "deepseek-stateless-mcp", "--example", "android_task_custody_probe", "--", "-D", "warnings"], root / "rust", target_env)
+        binary = output / abi / "libdeepseek_mcp_custody_probe.so"
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(cargo_target / target / "release/examples/android_task_custody_probe", binary)
+        binary.chmod(0o755)
+        probes[abi] = inspect_executable(binary, abi, "rust")
+    return {"instrumentationOnly": True, "probes": probes, "retainedTestEngineQualified": False}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=PROJECT_ROOT)
@@ -335,8 +368,17 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cargo-target-dir", type=Path)
     parser.add_argument("--lock-probes-only", action="store_true")
+    parser.add_argument("--custody-probes-only", action="store_true")
     parser.add_argument("--rust-toolchain", default=RUST_VERSION + ("-x86_64-pc-windows-gnu" if os.name == "nt" else ""))
     args = parser.parse_args()
+    if args.lock_probes_only and args.custody_probes_only:
+        parser.error("Select one instrumentation probe kind")
+    if args.custody_probes_only:
+        if args.sdk is None or args.cargo_target_dir is None:
+            parser.error("Custody probes require explicit SDK and shared cloud cargo target")
+        print(json.dumps(build_custody_probes(args.root.resolve(), args.sdk.resolve(), args.output.resolve(),
+                                             args.cargo_target_dir.resolve(), args.rust_toolchain)))
+        return 0
     if args.lock_probes_only:
         print(json.dumps({"instrumentationOnly": True, "probes": build_lock_probes(args.root.resolve(), args.output.resolve())}))
         return 0

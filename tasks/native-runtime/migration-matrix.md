@@ -1,3 +1,34 @@
+## Android MCP app-UID custody qualification — 2026-10-25
+
+The user explicitly retained both original arbitrary pytest compatibility and
+zero production Python. The stock test engine remains unfinished; no language
+reduction, fixture substitution or Python exception is authorized.
+
+Parent00d70ddb qualified actual Windows5-case custody with zero late effects,
+Windows Clippy and37 original library tests. Its Linux5-case custody also passed;
+its stock MCP workflow still fails at the retained test-engine success gate.
+Complete Rust1605 tests and82.119328% >=original80% coverage passed; all26 named checks and52 controlled reports also passed on that source.
+Olderb73b37-job CI remains in progress and separately source-bound.
+
+This snapshot adds an instrumentation-APK-only Android native runner fixture,
+not a production engine. Five actual app-UID cases cover ordinary/detached
+timeout, normal root exit, driver death and real AtomicBool cancellation.
+Each first proves a short native success control, binds actual PID/startTicks,
+UID and detached session, observes reaping at3 seconds and a real possible late
+write after6.5 seconds, and preserves original outcomes. No descendant PID is
+blindly killed. NDK27d builds both existing ABIs; actual execution remains five
+x86_64 emulators API24/26/28/30/34. The original9 instrumentation methods stay
+unchanged; five additional methods make14 per API. Product APK must exclude
+the fixture. Device JSON independently binds the test-APK executable hash.
+Actual Android results are PENDING; source code alone does not qualify it.
+
+All product server/desktop/Android/background features, existing-data upgrades,
+ARM64 device execution, provider/recovery/Fleet, hostile-code/resource/env/path
+race confinement and release Evidence remain required. Whole migration NOT_READY.
+Compilers, tests, caches and images stay cloud-only; download reports only.
+Root163 dirty/untracked source bytes remain unchanged. Unified daily PR09:00
+Asia/Shanghai once/day; no PR/merge/release/production data operation now.
+
 ## Native MCP Windows task custody — 2026-10-25
 
 Actual Windows sourcecb64c1c run40168858082/job121095415426 passed a real native
