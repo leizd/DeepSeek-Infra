@@ -1,9 +1,7 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::model::{StoreError, TaskOutcome, TaskRecord};
 

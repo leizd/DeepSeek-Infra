@@ -33,7 +33,9 @@ function compose(...arguments_: string[]): void {
     stdio: "pipe",
   });
   if (result.status !== 0) {
-    throw new Error(`docker compose ${arguments_.join(" ")} failed: ${result.stderr}`);
+    const stdout = result.stdout.slice(-32_768);
+    const stderr = result.stderr.slice(-32_768);
+    throw new Error(`docker compose ${arguments_.join(" ")} failed (exit ${String(result.status)}): ${result.error?.message || ""}\n${stdout}\n${stderr}`);
   }
 }
 
