@@ -2,7 +2,7 @@ name: Native stateless MCP recovery verification
 
 on:
   push:
-    branches: ["codex/rust-cloud/stateless-restore-*"]
+    branches: ["codex/rust-cloud/stateless-restore-*", "codex/native-mcp-search-liveness-*"]
     paths:
       - ".github/workflows/stateless-mcp-cloud.yml"
       - "rust/crates/deepseek-stateless-mcp/**"
@@ -78,6 +78,10 @@ jobs:
         run: |
           set -o pipefail
           npm run smoke:process-lifecycle --prefix stateless-mcp 2>&1 | tee artifacts/native-stateless-mcp/process-lifecycle.log
+      - name: Preserve actual native code-search HTTP liveness and bounded output memory
+        run: |
+          set -o pipefail
+          npm run smoke:search-liveness --prefix stateless-mcp 2>&1 | tee artifacts/native-stateless-mcp/search-liveness.log
       - name: Prepare offline Python oracle without adding it to production images
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:

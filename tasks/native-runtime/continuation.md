@@ -1,3 +1,37 @@
+## Native MCP real code-search concurrency/output reproduction — 2026-10-25
+
+Current Rust invokes Command::output synchronously from an async tools/call
+handler and caps only after collecting all stdout. The original Node service
+reads asynchronously and caps while draining. This snapshot changes no production
+runtime bytes: only an actual-service cloud reproduction, npm command, workflow
+step/branch filter and3 task lists. Actual RED remains PENDING.
+
+Actual original TS service is an offline oracle, using the original SDK/client,
+search engine and Redis code. Stock source-labeled native image must contain
+neither Node/Python nor a native task fixture. Both need a short successful public
+search first. A real FIFO holds actual rg open during a500ms HTTP health probe.
+The same64MiB corpus then keeps4096 output bytes; kernel VmHWM growth must be
+<=32MiB. Exact outputs, live status and memory peaks are saved before cleanup.
+One Tokio worker is an explicitly configured supported setting. There is no rg
+substitute or mocked native endpoint. A synthetic read-only host bind and cloud
+host network are declared; this is not full sandbox or platform qualification.
+
+The previously unpublished draft based on198224e6 is preserved locally. This
+candidate now descends from cumulative934c3e24, retaining all seven Android
+fixture fixes and avoiding a remote fork. Source934 Android and Rust runs remain
+live and separately source-bound. Parent198 complete1605 Rust tests/82.120255%
+>=80%,26 required checks and52 controlled reports passed. Its actual Android
+failures stay archived; no report retry relabels that failed workflow PASS.
+Olderb73b full37 CI and independently counted default Go95.021686% and Android
+Go95.008309% passed at original95% floors; no PR merge candidate is qualified.
+
+Original arbitrary pytest compatibility and zero production Python remain jointly
+required; the user left the test engine unfinished. Whole server/desktop/Android/
+background/provider/Fleet/recovery/upgrade/sandbox/resource/env/path-race/package/
+release migration remains NOT_READY. No local native build or cache; reports only
+return. Root163 bytes preserved. Unified PR09:00 Asia/Shanghai once/day; no PR now,
+no merge/release or real data operation.
+
 ## Android MCP fixture compatibility and observation barrier — 2026-10-25
 
 Actual source198224e6 run40174691281 built both ABIs, then API28/34 passed all14
