@@ -453,11 +453,19 @@ async fn media_segments_match_the_library_without_creating_a_missing_store() {
     assert!(raw.is_empty(), "HEAD body={bytes_body}");
 
     let (status, body, _) = fixture.request("GET", "/api/media", true).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(body["error"]["code"], "GO_CONTROL_PROXY_NOT_READY");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    assert!(
+        body["media"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|media| media["mediaId"] == "media_keep")
+    );
     let (status, body, _) = fixture.request("GET", "/api/media/media_keep", true).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(body["error"]["code"], "GO_CONTROL_PROXY_NOT_READY");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["media"]["mediaId"], "media_keep");
     let (status, body, _) = fixture
         .request("POST", "/api/media/media_keep/segments", true)
         .await;

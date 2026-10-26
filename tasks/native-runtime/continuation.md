@@ -1,3 +1,17 @@
+# Current native migration execution — media read contract synchronization, 2026-10-26
+
+Execution branch: `codex/rust-cloud/media-library-read-contract-sync-20261026`; base `5cb4df6886bfa44ffdcdb820518ef95c06d8402d`. Exact candidate commit/tree are recorded in `artifacts/native-20261026-media-library-read-contract-sync/manifest.json`; original root HEAD/index and163 dirty/untracked source bytes remain preserved.
+
+Run40251957338/job121345611343 compiled/linted the native media read repair and passed all three new production-router tests covering the unchanged22 original list/detail cases, HEAD/auth/filter/ordering/no-write and mutation-routing behavior. The sole failure was the older segment test's two assertions that list/detail must still return503 GO_CONTROL_PROXY_NOT_READY. These assertions represented the former unimplemented native paths, not the original Python contract, which returns200 for the retained records. This follow-up replaces only those obsolete absence expectations with positive200/ok/library-membership/item-identity checks. All existing segment, error, method-denial, authentication and byte-preservation assertions remain. The22-case frozen input matrix and oracle remain unchanged. No production source, dependency, protocol, workflow, ownership, threshold or fixture is changed.
+
+Complete1617 Rust tests/original Redis ignore, original80% coverage and the full workflow must pass on this new exact source before qualification. Actual default-native process/auth/restart and relevant browser acceptance remain pending; media create/upload/patch/process/index remain unfinished. Prior source2e2 Rust1614/82.13373792695111%/26 checks/52 reports, Windows46/5, Android70/25/zero late effects and14 MCP input cases, and older98 full37 source CI, are separate historical results and do not qualify this source or a PR merge candidate.
+
+Original arbitrary pytest and zero production Python remain mandatory together; start_test_run is unfinished per human decision. Complete all server/desktop/Android/background/provider/Fleet/recovery/upgrade/sandbox/resource/environment/path-race/package/release obligations and keep NOT_READY. Native builds/tests/containers/caches stay in GitHub Actions, reports only returned. Standing reviewed-upload authorization applies; PR only once daily09:00 Asia/Shanghai, no main merge/release/real data operation.
+
+## Historical source-bound records
+
+Earlier entries describe their recorded source/date; use the current snapshot and exact-source reports for present status.
+
 # Current native migration execution — media library read repair, 2026-10-26
 
 Execution branch: `codex/rust-cloud/media-library-read-fix-20261026`, base `80ac9e64d71fd72b771718b47480140c95a0e24f`; the exact candidate commit/tree are recorded in `artifacts/native-20261026-media-library-read-fix/manifest.json`. Preserved root HEAD remains `0caf8ec4a652a21d037b06e995fe21ffa7ecdbf2` with163 dirty/untracked source bytes unchanged.
