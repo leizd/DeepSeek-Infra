@@ -198,7 +198,7 @@ fn utc_now_z() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs() as i64)
         .unwrap_or(0);
-    deepseek_policy::core_utils::utc_now_iso(seconds).replace("+00:00", "Z")
+    crate::core_utils::utc_now_iso(seconds).replace("+00:00", "Z")
 }
 
 fn normalize_media_metadata(value: Option<&Value>) -> Value {

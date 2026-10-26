@@ -13174,3 +13174,23 @@ No PR outside the daily 09:00 Asia/Shanghai batch, no main merge, release or rea
 user/provider-data operation. Full server/desktop/Android/background migration
 stays NOT_READY. The original arbitrary pytest engine requirement remains held
 unfinished per the human decision; no Python exception or feature reduction.
+
+
+### 2026-10-26 first media implementation cloud corrections
+
+Source d8caa8913e193bd774b4b4654558ea943521bec6 was uploaded as an explicitly
+unqualified implementation candidate. The new actual cloud Go -race run
+40292348616 compiled all four packages, but the unsupported-method test read a
+flat code from the unchanged nested GO_API_NOT_IMPLEMENTED error envelope.
+Keep HTTP501, the original envelope and its complete message; correct only the
+new assertion. The cloud Rust coverage job in run40292348780 reached a real
+compiler error at the extracted policy media helper: its old gateway-qualified
+crate path is invalid inside the policy crate. Use crate::core_utils there.
+The source snapshot and failed reports remain immutable; neither failure counts
+as media acceptance or as an observed post-startup PATCH compatibility result.
+
+This three-file follow-up changes no Go production logic, Proto, workflows,
+thresholds, existing tests or readiness evidence. Native compilation/regressions
+remain cloud-only and pending for the new source. All authority/liveness/path
+race/platform/full-media gaps documented in the implementation acceptance stay
+open; retain NOT_READY and the unchanged original95/80percent floors.

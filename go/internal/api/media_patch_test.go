@@ -59,8 +59,19 @@ func TestMediaPublicPatchKeepsAuthenticationAuthorityAndBodyRefusals(t *testing.
 				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 			}
 			var result map[string]any
-			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || result["code"] != test.code {
-				t.Fatalf("refusal=%s %v", w.Body.String(), err)
+			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			code := result["code"]
+			if test.status == 501 {
+				envelope, ok := result["error"].(map[string]any)
+				if !ok || envelope["message"] != "this public /api path is not served by the Go control plane yet" {
+					t.Fatalf("legacy refusal=%s", w.Body.String())
+				}
+				code = envelope["code"]
+			}
+			if code != test.code {
+				t.Fatalf("refusal=%s", w.Body.String())
 			}
 		})
 	}
