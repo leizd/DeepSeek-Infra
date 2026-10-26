@@ -30,7 +30,7 @@ use deepseek_policy::media_schema::{
 };
 use deepseek_policy::python_json::value_str;
 use deepseek_policy::workspace_schema::{
-    new_id, normalize_source_ref, redact_sensitive_text, validate_project_id, validate_workspace_id,
+    new_id, redact_sensitive_text, validate_project_id, validate_workspace_id,
 };
 use serde_json::{Map, Value, json};
 
@@ -267,8 +267,6 @@ fn normalize_status(value: Option<&Value>) -> Result<(), AppError> {
     }
 }
 
-/// `PurePosixPath.suffix.lower()`, where a leading or trailing dot is empty.
-
 /// `Ok(None)` is the oracle's `except AppError: continue`. `Err` is an
 /// uncaught `ValueError`/`TypeError` from `int()`, which fails the request.
 fn normalize_segment(
@@ -435,14 +433,6 @@ fn media_sort_key(row: &Value) -> String {
         _ => String::new(),
     }
 }
-
-/// `schema.normalize_media_record`. The segment route only needed acceptance;
-/// home and library readers return the public record.
-
-/// `mimetypes.guess_type` for the suffixes the library actually stores.
-/// An unregistered suffix is the oracle's `application/octet-stream` default.
-
-/// `schema.normalize_metadata`. Lists are capped at 200, not the source-ref cap.
 
 fn method_not_allowed() -> Response {
     let mut response = (

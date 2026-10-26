@@ -13216,3 +13216,20 @@ pending; scoped coverage cannot substitute for either. Production Go/Proto/
 workflows/readiness bytes are unchanged in this increment. All earlier complete
 media recovery, path race, OS durability/platform and full-product gaps remain
 open. Native compilation/tests remain cloud-only; keep NOT_READY.
+
+
+### 2026-10-26 media lint preservation
+
+Exact source de096243 passed16 Go media top-level tests and26 observed cases
+with race detection in run40296053154, including five real TCP/TLS/gRPC tests
+with the explicitly synthetic peer. This is not Rust file-effect acceptance or
+the original full Go/Android-Go95percent gates. Rust lint job121482266946 in
+run40296053162 rejected an unused normalize_source_ref import and orphaned
+function documentation left behind by extraction. Remove the unused import and
+move the four original comments to their actual shared helper definitions.
+Keep -D warnings, original tests and all coverage floors unchanged. No executable
+normalization, Go/Proto/workflow or readiness behavior changes in this increment.
+Rust compilation/tests and actual default-launcher PATCH remain pending.
+Complete media recovery, path races, Windows durability, all retained metadata
+ordering/key-collision/large-number semantics and full-platform/product scope
+remain unfinished. Keep NOT_READY; all native builds/tests/caches stay cloud-only.

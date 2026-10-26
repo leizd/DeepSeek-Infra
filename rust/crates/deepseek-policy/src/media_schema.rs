@@ -84,6 +84,7 @@ fn is_drive_path(raw: &str) -> bool {
     )
 }
 
+/// `PurePosixPath.suffix.lower()`, where a leading or trailing dot is empty.
 pub fn posix_suffix(filename: &str) -> String {
     let name = filename.rsplit('/').next().unwrap_or(filename);
     match name.rfind('.') {
@@ -96,6 +97,8 @@ pub fn python_truthy_opt(value: Option<&Value>) -> bool {
     value.is_some_and(python_truthy)
 }
 
+/// `schema.normalize_media_record`. The segment route only needed acceptance;
+/// home and library readers return the public record.
 pub fn normalize_media_record(value: &Value) -> Result<Value, AppError> {
     let media_id = validate_workspace_id(&text_or_empty(value.get("mediaId")), "media id")?;
     let project_raw = text_or_empty(value.get("projectId"));
@@ -169,6 +172,8 @@ pub fn media_status(value: Option<&Value>) -> Result<String, AppError> {
     }
 }
 
+/// `mimetypes.guess_type` for the suffixes the library actually stores.
+/// An unregistered suffix is the oracle's `application/octet-stream` default.
 fn guess_mime_type(filename: &str) -> String {
     match posix_suffix(filename).as_str() {
         ".png" => "image/png",
@@ -205,6 +210,7 @@ fn utc_now_z() -> String {
     crate::core_utils::utc_now_iso(seconds).replace("+00:00", "Z")
 }
 
+/// `schema.normalize_metadata`. Lists are capped at 200, not the source-ref cap.
 fn normalize_media_metadata(value: Option<&Value>) -> Value {
     let Some(Value::Object(fields)) = value else {
         return json!({});
