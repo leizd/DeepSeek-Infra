@@ -1,3 +1,19 @@
+# Current native migration execution — media library read repair, 2026-10-26
+
+Execution branch: `codex/rust-cloud/media-library-read-fix-20261026`, base `80ac9e64d71fd72b771718b47480140c95a0e24f`; the exact candidate commit/tree are recorded in `artifacts/native-20261026-media-library-read-fix/manifest.json`. Preserved root HEAD remains `0caf8ec4a652a21d037b06e995fe21ffa7ecdbf2` with163 dirty/untracked source bytes unchanged.
+
+Cloud run40249416425/job121337819228 confirmed three actual production-router failures: original populated media list/detail requests return200 while native dispatch reaches `GO_CONTROL_PROXY_NOT_READY` with503; the existing segment-route test still passes. The independent original-library oracle passed22 read cases. This is an in-process HTTP compatibility counterexample, not default-launcher/browser acceptance.
+
+The repair connects native GET/HEAD collection and detail handlers to existing media normalization. It validates project/type/status filters before store reads, preserves the last query value and stable updatedAt list ordering, and reads the first valid duplicate for detail independently of list sorting. Readers do not create stores or add a writer. Other methods retain the existing Go proxy, including opaque URI/body handling, so unported media creation/upload/patch/process/index remain unfinished. No dependencies, schemas, ownership, frozen protocols or original coverage floors changed. The entire22-case original/native test matrix is byte-identical to RED. Exact-source workspace1617/original Redis ignore, original80% coverage and complete native process/browser/platform qualification remain pending.
+
+Source2e2ecce94688dde1fbd91140e745e88c33f3de36 separately has strict1614 Rust tests/82.13373792695111%/26 checks/52 controlled reports,46 Windows library tests/5 custody cases,70 Android x86_64 device tests/25 app-UID custody cases/zero late effects, and14 actual MCP input cases with zero divergences. Older98c97f973c9d580d3e55d7e4e7da25e7659ee6ea separately passed all37 original source-dispatch jobs. These results do not qualify the current source, a PR merge candidate or full migration.
+
+Original arbitrary pytest compatibility and zero production Python remain mandatory together; start_test_run stays unfinished per human decision. Complete all server/desktop/Android/background/provider/Fleet/recovery/upgrade/sandbox/resource/environment/path-race/package/release obligations. Keep NOT_READY. Native builds/tests/containers/caches stay in GitHub Actions; only reports return. Standing reviewed-upload authorization applies; PR only once daily09:00 Asia/Shanghai, no main merge, release or real data operation.
+
+## Historical source-bound records
+
+Earlier entries describe their recorded source/date. The current snapshot and exact-source reports determine present status.
+
 # Current native migration execution — 2026-10-26
 
 Execution branch: `codex/rust-cloud/media-library-read-red-20261026`; source base `2e2ecce94688dde1fbd91140e745e88c33f3de36`. The frozen candidate's exact published commit/tree are recorded in `artifacts/native-20261026-media-library-read-red/manifest.json`. Original root HEAD `0caf8ec4a652a21d037b06e995fe21ffa7ecdbf2` and163 dirty/untracked source bytes remain preserved.

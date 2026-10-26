@@ -1,20 +1,22 @@
-//! `GET /api/media/{media_id}/segments`.
+//! Read-only media collection, detail, and segment routes.
 //!
 //! `library.get_media` then `library.list_segments`. Both read `.media` and
 //! neither creates it. A missing `library.json` is an empty library, so a
 //! well-formed id is `404 Media not found`. Invalid records are skipped.
 //! A missing segments file is `{"ok": true, "segments": []}`.
 //!
-//! This path has no other Python method. `HEAD` follows Starlette and returns
+//! The segment path has no other Python method. `HEAD` returns
 //! the GET status with an empty body. Any other method is `405` with
 //! FastAPI's `{"detail": "Method Not Allowed"}` and does not touch the store.
-//! `GET /api/media` and `GET /api/media/{media_id}` stay on the Go proxy.
+//! Collection/item mutations retain their existing Go control proxy until
+//! their native write paths are implemented. These readers never create stores.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use axum::body::Bytes;
-use axum::extract::{OriginalUri, Path as AxumPath};
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::extract::{OriginalUri, Path as AxumPath, Query};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::{Json, Router};
@@ -43,7 +45,39 @@ const AUDIO_SUFFIXES: [&str; 6] = [".mp3", ".wav", ".m4a", ".aac", ".ogg", ".fla
 const VIDEO_SUFFIXES: [&str; 5] = [".mp4", ".mov", ".webm", ".mkv", ".avi"];
 
 pub fn router() -> Router {
-    Router::new().route("/api/media/:media_id/segments", any(dispatch))
+    Router::new()
+        .route("/api/media", any(collection_dispatch))
+        .route("/api/media/:media_id", any(item_dispatch))
+        .route("/api/media/:media_id/segments", any(dispatch))
+}
+
+async fn collection_dispatch(
+    method: Method,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+    body: Bytes,
+) -> Response {
+    if method == Method::GET || method == Method::HEAD {
+        return read_response(method, move || read_media_collection(&uri)).await;
+    }
+    crate::control_proxy::proxy_api_to_go(method, headers, OriginalUri(uri), body).await
+}
+
+async fn item_dispatch(
+    method: Method,
+    media_id: Result<AxumPath<String>, axum::extract::rejection::PathRejection>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+    body: Bytes,
+) -> Response {
+    if method == Method::GET || method == Method::HEAD {
+        let media_id = match media_id {
+            Ok(AxumPath(media_id)) => media_id,
+            Err(rejection) => return rejection.into_response(),
+        };
+        return read_response(method, move || read_media_item(&media_id)).await;
+    }
+    crate::control_proxy::proxy_api_to_go(method, headers, OriginalUri(uri), body).await
 }
 
 async fn dispatch(
@@ -60,7 +94,14 @@ async fn dispatch(
 }
 
 async fn segments_response(method: Method, media_id: String) -> Response {
-    let result = match tokio::task::spawn_blocking(move || read_segments(&media_id)).await {
+    read_response(method, move || read_segments(&media_id)).await
+}
+
+async fn read_response(
+    method: Method,
+    work: impl FnOnce() -> Result<Value, AppError> + Send + 'static,
+) -> Response {
+    let result = match tokio::task::spawn_blocking(work).await {
         Ok(result) => result,
         Err(_) => Err(server_error()),
     };
@@ -72,6 +113,45 @@ async fn segments_response(method: Method, media_id: String) -> Response {
             .into_response(),
         Err(error) => error_response(error),
     }
+}
+
+fn read_media_collection(uri: &Uri) -> Result<Value, AppError> {
+    let Query(filters) = Query::<BTreeMap<String, String>>::try_from_uri(uri)
+        .map_err(|_| AppError::invalid_payload("Invalid media filters"))?;
+    let raw_project = filters.get("projectId").map(String::as_str).unwrap_or("");
+    let project = if raw_project.is_empty() {
+        String::new()
+    } else {
+        validate_project_id(raw_project)?
+    };
+    let raw_type = filters.get("type").map(String::as_str).unwrap_or("");
+    let media_type = if raw_type.is_empty() {
+        String::new()
+    } else {
+        declared_media_type(Some(&Value::String(raw_type.to_string())), "", "")?
+    };
+    let raw_status = filters.get("status").map(String::as_str).unwrap_or("");
+    let status = if raw_status.is_empty() {
+        String::new()
+    } else {
+        media_status(Some(&Value::String(raw_status.to_string())))?
+    };
+    let mut items = list_public_media()?;
+    items.retain(|item| {
+        (project.is_empty() || item["projectId"].as_str() == Some(project.as_str()))
+            && (media_type.is_empty() || item["type"].as_str() == Some(media_type.as_str()))
+            && (status.is_empty() || item["status"].as_str() == Some(status.as_str()))
+    });
+    Ok(json!({"ok": true, "media": items}))
+}
+
+fn read_media_item(media_id: &str) -> Result<Value, AppError> {
+    let safe_id = validate_workspace_id(media_id, "media id")?;
+    let media = load_public_media_in_source_order()?
+        .into_iter()
+        .find(|item| item["mediaId"].as_str() == Some(safe_id.as_str()))
+        .ok_or_else(|| AppError::not_found("Media not found"))?;
+    Ok(json!({"ok": true, "media": media}))
 }
 
 fn read_segments(media_id: &str) -> Result<Value, AppError> {
@@ -390,6 +470,12 @@ fn python_truthy_opt(value: Option<&Value>) -> bool {
 /// and sort by `str(updatedAt)` descending. A missing library is `[]` and is
 /// not created. Invalid UTF-8 is the oracle's uncaught `UnicodeDecodeError`.
 pub(crate) fn list_public_media() -> Result<Vec<Value>, AppError> {
+    let mut items = load_public_media_in_source_order()?;
+    items.sort_by_key(|item| std::cmp::Reverse(media_sort_key(item)));
+    Ok(items)
+}
+
+fn load_public_media_in_source_order() -> Result<Vec<Value>, AppError> {
     let path = library_path();
     if !path.exists() {
         return Ok(Vec::new());
@@ -419,7 +505,6 @@ pub(crate) fn list_public_media() -> Result<Vec<Value>, AppError> {
         };
         items.push(normalize_media_record(&stored)?);
     }
-    items.sort_by_key(|item| std::cmp::Reverse(media_sort_key(item)));
     Ok(items)
 }
 
@@ -431,7 +516,7 @@ fn media_sort_key(row: &Value) -> String {
 }
 
 /// `schema.normalize_media_record`. The segment route only needed acceptance;
-/// home returns the public record.
+/// home and library readers return the public record.
 fn normalize_media_record(value: &Value) -> Result<Value, AppError> {
     let media_id = validate_workspace_id(&text_or_empty(value.get("mediaId")), "media id")?;
     let project_raw = text_or_empty(value.get("projectId"));
