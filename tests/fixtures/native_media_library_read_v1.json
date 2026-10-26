@@ -1,0 +1,234 @@
+{
+  "schemaVersion": 1,
+  "description": "Retained legacy media records and original-library read requests; fixture provisioning is explicit and offline.",
+  "sourceReadOracle": "80ac9e64d71fd72b771718b47480140c95a0e24f",
+  "media": [
+    {
+      "mediaId": "media_keep",
+      "projectId": "proj_ok",
+      "type": "pdf",
+      "title": "Notes",
+      "mimeType": "application/pdf",
+      "path": "objects/media_keep/source.pdf",
+      "status": "ready",
+      "createdAt": "2026-01-01T00:00:00+00:00",
+      "updatedAt": "2026-01-01T00:00:00+00:00"
+    },
+    {
+      "mediaId": "media_keep",
+      "type": "nope",
+      "title": "Second",
+      "createdAt": "2026-01-01T00:00:00+00:00",
+      "updatedAt": "2026-01-02T00:00:00+00:00"
+    },
+    {
+      "type": "image",
+      "title": "no id",
+      "createdAt": "2026-01-01T00:00:00+00:00",
+      "updatedAt": "2026-01-03T00:00:00+00:00"
+    },
+    {
+      "mediaId": "media_mime",
+      "mimeType": "image/jpeg; charset=binary",
+      "title": "shot",
+      "createdAt": "2026-01-01T00:00:00+00:00",
+      "updatedAt": "2026-01-04T00:00:00+00:00"
+    },
+    {
+      "mediaId": "media_suffix",
+      "title": "clip.mp4",
+      "path": "objects\\media_suffix\\source.mp4",
+      "createdAt": "2026-01-01T00:00:00+00:00",
+      "updatedAt": "2026-01-05T00:00:00+00:00"
+    },
+    {
+      "mediaId": "media_page",
+      "title": "page.html",
+      "createdAt": "2026-01-01T00:00:00+00:00",
+      "updatedAt": "2026-01-06T00:00:00+00:00"
+    },
+    {
+      "mediaId": "media_bad",
+      "type": "nope",
+      "title": "nope",
+      "createdAt": "2026-01-01T00:00:00+00:00",
+      "updatedAt": "2026-01-07T00:00:00+00:00"
+    },
+    {
+      "mediaId": "media_badproj",
+      "type": "image",
+      "projectId": "x",
+      "createdAt": "2026-01-01T00:00:00+00:00",
+      "updatedAt": "2026-01-08T00:00:00+00:00"
+    },
+    {
+      "mediaId": "media_badpath",
+      "type": "image",
+      "path": "/abs/a.png",
+      "createdAt": "2026-01-01T00:00:00+00:00",
+      "updatedAt": "2026-01-09T00:00:00+00:00"
+    },
+    {
+      "mediaId": "media_baddir",
+      "type": "image",
+      "path": "a/../b.png",
+      "createdAt": "2026-01-01T00:00:00+00:00",
+      "updatedAt": "2026-01-10T00:00:00+00:00"
+    },
+    {
+      "mediaId": "media_badstatus",
+      "type": "image",
+      "status": "nope",
+      "createdAt": "2026-01-01T00:00:00+00:00",
+      "updatedAt": "2026-01-11T00:00:00+00:00"
+    },
+    {
+      "mediaId": " media_trim ",
+      "type": "audio",
+      "title": "a.mp3",
+      "createdAt": "2026-01-01T00:00:00+00:00",
+      "updatedAt": "2026-01-12T00:00:00+00:00"
+    },
+    {
+      "mediaId": "media_second",
+      "type": "nope",
+      "createdAt": "2026-01-01T00:00:00+00:00",
+      "updatedAt": "2026-01-13T00:00:00+00:00"
+    },
+    {
+      "mediaId": "media_second",
+      "type": "Image",
+      "title": "Saved",
+      "createdAt": "2026-01-01T00:00:00+00:00",
+      "updatedAt": "2026-01-14T00:00:00+00:00"
+    },
+    {
+      "mediaId": "media_duplicate",
+      "type": "image",
+      "title": "First retained record",
+      "createdAt": "2025-01-01",
+      "updatedAt": "2025-01-01"
+    },
+    {
+      "mediaId": "media_duplicate",
+      "type": "image",
+      "title": "Newer duplicate",
+      "createdAt": "2025-01-01",
+      "updatedAt": "2026-12-01"
+    },
+    {
+      "mediaId": "media_tie_a",
+      "type": "audio",
+      "projectId": "proj_ok",
+      "title": "声音一",
+      "createdAt": "2026-02-01",
+      "updatedAt": "2026-02-01",
+      "metadata": {
+        "safe.key": {
+          "values": [
+            0,
+            null,
+            "文档"
+          ],
+          "number": 1.234567
+        },
+        "空 key": "removed"
+      }
+    },
+    {
+      "mediaId": "media_tie_b",
+      "type": "audio",
+      "projectId": "proj_other",
+      "title": "声音二",
+      "createdAt": "2026-02-01",
+      "updatedAt": "2026-02-01"
+    }
+  ],
+  "cases": [
+    {
+      "operation": "list",
+      "uri": "/api/media"
+    },
+    {
+      "operation": "list",
+      "uri": "/api/media?projectId=proj_ok",
+      "projectId": "proj_ok"
+    },
+    {
+      "operation": "list",
+      "uri": "/api/media?type=PDF",
+      "type": "PDF"
+    },
+    {
+      "operation": "list",
+      "uri": "/api/media?status=ready",
+      "status": "ready"
+    },
+    {
+      "operation": "list",
+      "uri": "/api/media?projectId=proj_ok&type=audio&status=pending",
+      "projectId": "proj_ok",
+      "type": "audio",
+      "status": "pending"
+    },
+    {
+      "operation": "list",
+      "uri": "/api/media?projectId=proj_other&projectId=proj_ok",
+      "projectId": "proj_ok"
+    },
+    {
+      "operation": "list",
+      "uri": "/api/media?projectId=&type=&status="
+    },
+    {
+      "operation": "list",
+      "uri": "/api/media?projectId=x",
+      "projectId": "x"
+    },
+    {
+      "operation": "list",
+      "uri": "/api/media?type=unsupported",
+      "type": "unsupported"
+    },
+    {
+      "operation": "list",
+      "uri": "/api/media?status=unsupported",
+      "status": "unsupported"
+    },
+    {
+      "operation": "get",
+      "uri": "/api/media/media_keep",
+      "mediaId": "media_keep"
+    },
+    {
+      "operation": "get",
+      "uri": "/api/media/media_mime",
+      "mediaId": "media_mime"
+    },
+    {
+      "operation": "get",
+      "uri": "/api/media/media_suffix",
+      "mediaId": "media_suffix"
+    },
+    {
+      "operation": "get",
+      "uri": "/api/media/%20media_trim%20",
+      "mediaId": " media_trim "
+    },
+    {
+      "operation": "get",
+      "uri": "/api/media/media_duplicate",
+      "mediaId": "media_duplicate"
+    },
+    {
+      "operation": "get",
+      "uri": "/api/media/media_unknown",
+      "mediaId": "media_unknown"
+    },
+    {
+      "operation": "get",
+      "uri": "/api/media/bad!",
+      "mediaId": "bad!"
+    }
+  ]
+}
