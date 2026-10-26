@@ -165,13 +165,19 @@ fn oracle(root: &Path, cases: &Value) -> Vec<Value> {
     let script = r#"
 import json, sys
 from deepseek_infra.core.errors import AppError
-from deepseek_infra.infra.media.library import get_media, list_segments
+from deepseek_infra.infra.media.library import get_media, list_media, list_segments
 plan = json.loads(sys.stdin.read())
 results = []
 for case in plan:
     try:
-        get_media(case["mediaId"])
-        results.append({"status": 200, "body": {"ok": True, "segments": list_segments(case["mediaId"])}})
+        if case.get("operation") == "list":
+            body = {"ok": True, "media": list_media(project_id=case.get("projectId", ""), media_type=case.get("type", ""), status=case.get("status", ""))}
+        elif case.get("operation") == "get":
+            body = {"ok": True, "media": get_media(case["mediaId"])}
+        else:
+            get_media(case["mediaId"])
+            body = {"ok": True, "segments": list_segments(case["mediaId"])}
+        results.append({"status": 200, "body": body})
     except AppError as exc:
         results.append({"status": exc.status, "body": {"error": str(exc), "code": exc.code.value}})
     except (UnicodeDecodeError, ValueError, TypeError, OverflowError):
@@ -550,4 +556,138 @@ async fn media_segments_match_the_library_without_creating_a_missing_store() {
         snapshot(&fixture.library_path()).as_deref(),
         Some(library_after.as_slice())
     );
+}
+
+fn retained_media_library() -> Value {
+    let mut records = rich_library().as_array().unwrap().clone();
+    for (index, record) in records.iter_mut().enumerate() {
+        if let Some(record) = record.as_object_mut() {
+            record.insert("createdAt".to_string(), json!("2026-01-01T00:00:00+00:00"));
+            record.insert(
+                "updatedAt".to_string(),
+                json!(format!("2026-01-{:02}T00:00:00+00:00", index + 1)),
+            );
+        }
+    }
+    records.extend([
+        json!({"mediaId":"media_duplicate", "type":"image", "title":"First retained record", "createdAt":"2025-01-01", "updatedAt":"2025-01-01"}),
+        json!({"mediaId":"media_duplicate", "type":"image", "title":"Newer duplicate", "createdAt":"2025-01-01", "updatedAt":"2026-12-01"}),
+        json!({"mediaId":"media_tie_a", "type":"audio", "projectId":"proj_ok", "title":"声音一", "createdAt":"2026-02-01", "updatedAt":"2026-02-01", "metadata":{"safe.key":{"values":[0,null,"文档"],"number":1.234567},"空 key":"removed"}}),
+        json!({"mediaId":"media_tie_b", "type":"audio", "projectId":"proj_other", "title":"声音二", "createdAt":"2026-02-01", "updatedAt":"2026-02-01"}),
+    ]);
+    Value::Array(records)
+}
+
+async fn expect_media_read(fixture: &Fixture, uri: &str, expected: &Value) {
+    let before = snapshot(&fixture.library_path());
+    let (status, body, _) = fixture.request("GET", uri, true).await;
+    assert_eq!(
+        status.as_u16() as u64,
+        expected["status"].as_u64().unwrap(),
+        "GET {uri}: {body}"
+    );
+    assert_eq!(body, expected["body"], "GET {uri}");
+    let (head_status, _, bytes) = fixture.request("HEAD", uri, true).await;
+    assert_eq!(head_status, status, "HEAD {uri}");
+    assert!(bytes.is_empty(), "HEAD {uri} returned a body");
+    assert_eq!(
+        snapshot(&fixture.library_path()),
+        before,
+        "read rewrote the legacy library"
+    );
+}
+
+#[tokio::test]
+async fn media_list_matches_original_filters_and_never_rewrites_store() {
+    let _lock = EnvLock::acquire();
+    let fixture = Fixture::new();
+    fixture.write_library(&retained_media_library());
+    let cases = json!([
+        {"operation":"list", "uri":"/api/media"},
+        {"operation":"list", "uri":"/api/media?projectId=proj_ok", "projectId":"proj_ok"},
+        {"operation":"list", "uri":"/api/media?type=PDF", "type":"PDF"},
+        {"operation":"list", "uri":"/api/media?status=ready", "status":"ready"},
+        {"operation":"list", "uri":"/api/media?projectId=proj_ok&type=audio&status=pending", "projectId":"proj_ok", "type":"audio", "status":"pending"},
+        {"operation":"list", "uri":"/api/media?projectId=proj_other&projectId=proj_ok", "projectId":"proj_ok"},
+        {"operation":"list", "uri":"/api/media?projectId=&type=&status="},
+        {"operation":"list", "uri":"/api/media?projectId=x", "projectId":"x"},
+        {"operation":"list", "uri":"/api/media?type=unsupported", "type":"unsupported"},
+        {"operation":"list", "uri":"/api/media?status=unsupported", "status":"unsupported"}
+    ]);
+    let expected = oracle(fixture.root.path(), &cases);
+    assert_eq!(expected.len(), cases.as_array().unwrap().len());
+    assert_eq!(
+        expected[0]["status"], 200,
+        "original populated list must succeed"
+    );
+    for (case, result) in cases.as_array().unwrap().iter().zip(&expected) {
+        expect_media_read(&fixture, case["uri"].as_str().unwrap(), result).await;
+    }
+    assert!(!fixture.media_dir().join("segments").exists());
+}
+
+#[tokio::test]
+async fn media_detail_matches_original_and_preserves_first_duplicate() {
+    let _lock = EnvLock::acquire();
+    let fixture = Fixture::new();
+    fixture.write_library(&retained_media_library());
+    let cases = json!([
+        {"operation":"get", "uri":"/api/media/media_keep", "mediaId":"media_keep"},
+        {"operation":"get", "uri":"/api/media/media_mime", "mediaId":"media_mime"},
+        {"operation":"get", "uri":"/api/media/media_suffix", "mediaId":"media_suffix"},
+        {"operation":"get", "uri":"/api/media/%20media_trim%20", "mediaId":" media_trim "},
+        {"operation":"get", "uri":"/api/media/media_duplicate", "mediaId":"media_duplicate"},
+        {"operation":"get", "uri":"/api/media/media_unknown", "mediaId":"media_unknown"},
+        {"operation":"get", "uri":"/api/media/bad!", "mediaId":"bad!"}
+    ]);
+    let expected = oracle(fixture.root.path(), &cases);
+    assert_eq!(
+        expected[0]["status"], 200,
+        "original stored item must succeed"
+    );
+    assert_eq!(
+        expected[4]["body"]["media"]["title"],
+        "First retained record"
+    );
+    for (case, result) in cases.as_array().unwrap().iter().zip(&expected) {
+        expect_media_read(&fixture, case["uri"].as_str().unwrap(), result).await;
+    }
+}
+
+#[tokio::test]
+async fn media_reads_keep_missing_stores_auth_and_existing_mutation_routing() {
+    let _lock = EnvLock::acquire();
+    let fixture = Fixture::new();
+    let (auth_status, auth_body, _) = fixture
+        .request("GET", "/api/media/media_keep/segments", false)
+        .await;
+    assert!([401, 403].contains(&auth_status.as_u16()));
+    for uri in ["/api/media", "/api/media/media_keep"] {
+        let (status, body, _) = fixture.request("GET", uri, false).await;
+        assert_eq!(status, auth_status);
+        assert_eq!(body, auth_body);
+    }
+    let cases = json!([
+        {"operation":"list", "uri":"/api/media"},
+        {"operation":"list", "uri":"/api/media?projectId=x", "projectId":"x"},
+        {"operation":"list", "uri":"/api/media?type=unsupported", "type":"unsupported"},
+        {"operation":"list", "uri":"/api/media?status=unsupported", "status":"unsupported"},
+        {"operation":"get", "uri":"/api/media/media_unknown", "mediaId":"media_unknown"}
+    ]);
+    let expected = oracle(fixture.root.path(), &cases);
+    for (case, result) in cases.as_array().unwrap().iter().zip(&expected) {
+        expect_media_read(&fixture, case["uri"].as_str().unwrap(), result).await;
+    }
+    let (proxy_status, proxy_body, _) =
+        fixture.request("POST", "/api/unported-control", true).await;
+    assert!(proxy_status.is_server_error());
+    for (method, uri) in [("POST", "/api/media"), ("PATCH", "/api/media/media_keep")] {
+        let (status, body, _) = fixture.request(method, uri, true).await;
+        assert_eq!(status, proxy_status, "unported mutation changed routing");
+        assert_eq!(
+            body, proxy_body,
+            "unported mutation changed the existing control refusal"
+        );
+    }
+    assert!(!fixture.media_dir().exists(), "reads created runtime state");
 }

@@ -1,3 +1,17 @@
+# Current native migration execution — 2026-10-26
+
+Execution branch: `codex/rust-cloud/media-library-read-red-20261026`; source base `2e2ecce94688dde1fbd91140e745e88c33f3de36`. The frozen candidate's exact published commit/tree are recorded in `artifacts/native-20261026-media-library-read-red/manifest.json`. Original root HEAD `0caf8ec4a652a21d037b06e995fe21ffa7ecdbf2` and163 dirty/untracked source bytes remain preserved.
+
+Source2e2 has strict1614 Rust tests/original Redis ignore,82.13373792695111% coverage >= original80%,26 named checks/52 controlled reports,46 Windows library tests/5 actual custody cases,70 Android x86_64 device tests/25 app-UID custody cases/zero late effects, and14 original/native public-MCP input cases with zero remaining acceptance divergences. Source98c97f973c9d580d3e55d7e4e7da25e7659ee6ea separately passed all37 original source-dispatch CI jobs in run40193199937. Those results do not qualify a newer source, PR merge candidate or complete migration; full CI has not run for2e2.
+
+Current executable gap: the media segment/home readers already normalize retained media records, but `/api/media` list and `/api/media/{id}` detail still fall through to the Go control proxy. Three new production-router tests use22 original-library cases, GET/HEAD, authentication, filter/error behavior, first duplicate selection, byte preservation and unchanged routing for unported POST/PATCH. The local offline original oracle passes all22 cases (13 success,7 invalid input,2 not found) without media-store writes. Native RED is PENDING; no production code is changed by this test candidate. Next: observe the exact cloud counterexample, reuse existing native normalization to connect both reads, then verify real process/browser behavior. Media creation/upload/patch/process/index, full authority/cutover and other product/platform obligations remain unfinished.
+
+The original arbitrary pytest requirement and zero production Python remain mandatory together; start_test_run is unfinished per the human decision. All original Rust80/Go95/Python95 floors and frozen protocols remain. Keep server/desktop/Android/background/provider/Fleet/recovery/upgrade/sandbox/resource/environment/path-race/package/release scope and NOT_READY. Native builds/tests/containers/caches stay in GitHub Actions; reports only return. Standing reviewed upload authorization applies; PR only daily09:00 Asia/Shanghai, once/day; no main merge, release or real data operation.
+
+## Historical source-bound records
+
+The entries below describe their recorded source and date; this current snapshot and source-bound reports take precedence for present status.
+
 <!-- native-20261025-unicode-input-fix -->
 2026-10-25 actual public MCP source29efc21c/run40194965675 proved all14 original input controls and six native divergences: valid300/500 Chinese and250/500 emoji queries plus200-emoji keys were rejected, while a2-emoji short key was accepted and independently read back from real Redis. Prior source98's actual search GREEN, Windows42 tests/5 custody cases,1610 Rust tests/82.1222948331081% coverage and70 Android tests/25 custody cases/zero late effects are separate evidence; full Rust process/browser workflow and37-job source CI still require exact-source completion.
 
