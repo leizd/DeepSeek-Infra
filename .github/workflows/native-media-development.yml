@@ -23,6 +23,7 @@ jobs:
     env:
       GOTOOLCHAIN: local
       CGO_ENABLED: "1"
+      MEDIA_GO_TEST_PATTERN: "^(TestMedia.*|TestActionAdmissionV4UpgradePreservesHistoryAndRollsBackOnFailure|TestActionReconciliationMigrationDoesNotLegalizeOldStateEdges|TestActionReconciliationV5UnknownTakeoverStillResolves|TestActionReconciliationV5UpgradePreservesHistory|TestActionVerificationUpgradeDoesNotLegalizePreV7Phases|TestActionVerificationV6UpgradeIsAtomicAndPreservesRecovery|TestControlAuthorityV7UpgradeIsAtomicAndPreservesHistory|TestControlMigratesFromV2ToOperationJournal|TestControlRPCRejectsDuplicateCredentialsAndOversizedMessages|TestCutoverJournalRejectsMutationAndControlMigratesFromV1|TestNativeOriginV18MigrationFaultRetainsOriginalSignedStore|TestOperationStatusV8UpgradePreservesTheJournal|TestReconcilingInvariantV5IllegalEdgeStaysIllegal|TestStorageDispatchV3UpgradePreservesHistoryAndFailedClaim|TestV10InventoryMigrationRetainsShadowHistoryWithoutForgingAttestation|TestV11StoreMigratesToTheHandbackSchemaWithoutInventingHistory|TestV12ImportMigratesWithoutInventingLiveSourceBinding|TestV12PromotedImportCannotUpgradeWithoutLiveSourceBinding|TestV14MigrationPreservesOlderRecordsWithoutInventingHealth|TestV15MigrationPreservesRecordsAndVerifiesTheJournal|TestV16CancellationMigrationPreservesActiveLeaseAndImmutableHistory|TestV16StoreOpenMigratesFailureLeaseAndPreservesOriginalCustody|TestV17FailureMigrationPreservesRowsThenSettlesVerifiedPhase|TestV9UnsignedPromotionHistoryCannotBeUpgradedAsSigned)$"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -46,7 +47,7 @@ jobs:
           test -z "$(git status --porcelain=v1 --untracked-files=all)"
           cd go
           set +e
-          go test -race -json -count=1 -timeout=8m -covermode=atomic -coverprofile=../artifacts/native-media-development/scoped-coverage.out ./internal/media ./internal/store ./internal/api ./internal/worker -run '^TestMedia' > ../artifacts/native-media-development/go-tests.jsonl 2>&1
+          go test -race -json -count=1 -timeout=8m -covermode=atomic -coverprofile=../artifacts/native-media-development/scoped-coverage.out ./internal/media ./internal/store ./internal/api ./internal/worker -run "$MEDIA_GO_TEST_PATTERN" > ../artifacts/native-media-development/go-tests.jsonl 2>&1
           test_status=$?
           set -e
           cd ..
@@ -57,8 +58,9 @@ jobs:
           expected = set()
           for package in ["media", "store", "api", "worker"]:
               for path in (Path("go/internal") / package).glob("*_test.go"):
-                  expected.update(re.findall(r"^func (TestMedia\w*)\(", path.read_text(), re.M))
-          assert len(expected) >= 11
+                  expected.update(n for n in re.findall(r"^func (Test\w*)\(", path.read_text(), re.M) if re.fullmatch(os.environ["MEDIA_GO_TEST_PATTERN"],n))
+          required_legacy = {'TestV15MigrationPreservesRecordsAndVerifiesTheJournal', 'TestV14MigrationPreservesOlderRecordsWithoutInventingHealth', 'TestControlMigratesFromV2ToOperationJournal', 'TestCutoverJournalRejectsMutationAndControlMigratesFromV1', 'TestActionAdmissionV4UpgradePreservesHistoryAndRollsBackOnFailure', 'TestActionReconciliationV5UpgradePreservesHistory', 'TestControlRPCRejectsDuplicateCredentialsAndOversizedMessages', 'TestNativeOriginV18MigrationFaultRetainsOriginalSignedStore', 'TestV10InventoryMigrationRetainsShadowHistoryWithoutForgingAttestation', 'TestActionReconciliationV5UnknownTakeoverStillResolves', 'TestOperationStatusV8UpgradePreservesTheJournal', 'TestActionVerificationUpgradeDoesNotLegalizePreV7Phases', 'TestV16CancellationMigrationPreservesActiveLeaseAndImmutableHistory', 'TestReconcilingInvariantV5IllegalEdgeStaysIllegal', 'TestV16StoreOpenMigratesFailureLeaseAndPreservesOriginalCustody', 'TestV11StoreMigratesToTheHandbackSchemaWithoutInventingHistory', 'TestActionVerificationV6UpgradeIsAtomicAndPreservesRecovery', 'TestStorageDispatchV3UpgradePreservesHistoryAndFailedClaim', 'TestV12PromotedImportCannotUpgradeWithoutLiveSourceBinding', 'TestControlAuthorityV7UpgradeIsAtomicAndPreservesHistory', 'TestV17FailureMigrationPreservesRowsThenSettlesVerifiedPhase', 'TestActionReconciliationMigrationDoesNotLegalizeOldStateEdges', 'TestV12ImportMigratesWithoutInventingLiveSourceBinding', 'TestV9UnsignedPromotionHistoryCannotBeUpgradedAsSigned'}
+          assert required_legacy <= expected and len([n for n in expected if n.startswith("TestMedia")]) == 17
           started, finished, packages = {}, {}, {}
           for line in Path("artifacts/native-media-development/go-tests.jsonl").read_text().splitlines():
               try: row = json.loads(line)

@@ -473,6 +473,14 @@
       "cutover": null,
       "durable_store": null,
       "production": false
+    },
+    {
+      "id": "media_library_store",
+      "plane": "data",
+      "current_owner": "python",
+      "target_owner": "rust",
+      "cutover": "4.9.4",
+      "durable_store": "rust_data"
     }
   ]
 }

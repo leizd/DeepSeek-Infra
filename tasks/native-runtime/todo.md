@@ -2311,3 +2311,32 @@ No PR outside the daily 09:00 Asia/Shanghai batch, no main merge, release or rea
 user/provider-data operation. Full server/desktop/Android/background migration
 stays NOT_READY. The original arbitrary pytest engine requirement remains held
 unfinished per the human decision; no Python exception or feature reduction.
+
+
+## 2026-10-26 original full-gate media contract corrections — pending cloud
+
+Source5aafd954 reached the real original37-job CI graph (run40298668219), and
+its separate Rust coverage job passed the original80percent floor. Full Go
+found the existing1MiB RPC guard had been accidentally raised globally, plus
+historical fixtures still carried empty v19 media tables while claiming older
+schemas. Restore per-method1MiB request/response bounds for every legacy RPC;
+only the three exact typed-media methods may use2MiB. The original oversized/
+duplicate-auth regression stays byte-identical. Add a real RPC case whose
+public-HTTP-valid sub1MB metadata has a typed representation above1MiB.
+
+The common historical-fixture builder may drop v19 media objects only after
+proving its table empty; never relax production foreign-schema validation or
+remove retained history. Keep all v18-specific interruption/provenance and exact
+schema assertions, then complete the additive chain before using current-only
+public lease/outcome readers. Original Go migration failures are explicitly
+selected in the bounded cloud -race development gate, alongside17 media tests.
+
+The full Python3.11 run passed6574 tests plus61 subtests and retained95.51percent
+coverage, but failed three real catalog assertions: the new media denial domain
+was not declared, and the committed protocol catalog still expected11 files/no
+media package. Declare media_library_store with current_owner=python and target
+rust (not a readiness promotion), and explicitly retain all old packages while
+adding media.v1/file12. No skip, threshold, old denial assertion or release
+readiness field is removed. Keep NOT_READY and full product/metadata/recovery/
+path/platform gaps open; actual native patch and exact-source complete gates
+remain independently pending. Native compilers/tests/caches stay cloud-only.

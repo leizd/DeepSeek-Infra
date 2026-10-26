@@ -194,6 +194,13 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             started = datetime.now(timezone.utc).timestamp()
             status, raw, content_type = exchange(origin, "/api/media/" + MEDIA_ID, "PATCH", token, PATCH)
             finished = datetime.now(timezone.utc).timestamp()
+            (args.out / "native-patch-response.txt").write_bytes(raw)
+            observation = {"sourceCommit": revision, "runId": os.environ.get("GITHUB_RUN_ID"),
+                "method": "PATCH", "path": "/api/media/" + MEDIA_ID, "startedUnix": started,
+                "finishedUnix": finished, "status": status, "contentType": content_type,
+                "responseSha256": hashlib.sha256(raw).hexdigest(), "requestRepeated": False}
+            (args.out / "native-patch-observation.json").write_text(
+                json.dumps(observation, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             report.update(semanticStageReached=True, nativePatchReplyObserved=True, nativePatchHTTPStatus=status,
                 responseSha256=hashlib.sha256(raw).hexdigest(), responseContentType=content_type,
                 mediaStoreUnchangedAfterReply=reads.media_snapshot(profile) == before)
@@ -209,6 +216,10 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             token = launch("retained-restart")
             require((profile / ".auth-token").read_bytes() == original_auth, "MEDIA_PATCH_FINAL_RESTART_REPLACED_AUTH")
             status, raw, _ = exchange(origin, "/api/media/" + MEDIA_ID, "GET", token)
+            (args.out / "retained-media-response.txt").write_bytes(raw)
+            observation.update(retainedGetStatus=status, retainedResponseSha256=hashlib.sha256(raw).hexdigest())
+            (args.out / "native-patch-observation.json").write_text(
+                json.dumps(observation, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             require(status == 200 and json.loads(raw) == actual, "NATIVE_MEDIA_PATCH_NOT_RETAINED_AFTER_RESTART")
             shutdown()
             report.update(status="PASS", controlledNativeMediaPatchWorkloadQualified=True,

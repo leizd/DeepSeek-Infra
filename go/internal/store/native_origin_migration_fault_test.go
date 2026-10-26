@@ -130,6 +130,23 @@ func TestNativeOriginV18MigrationFaultRetainsOriginalSignedStore(t *testing.T) {
 					if control.SchemaVersion() != SchemaV18 || !exists || string(origin) != "null" || !reflect.DeepEqual(before, after) {
 						t.Fatal("retry changed existing custody or manufactured native birth")
 					}
+					// The v18-specific rollback/provenance checks above stay exact.
+					// Public live APIs require the current schema, so finish the
+					// additive chain before reading the original retained lease.
+					tx, err = control.db.Begin()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err = control.migrateTx(tx); err != nil {
+						_ = tx.Rollback()
+						t.Fatal(err)
+					}
+					if err = tx.Commit(); err != nil {
+						t.Fatal(err)
+					}
+					if control.SchemaVersion() != CurrentSchema {
+						t.Fatal("current additive schema was not reached")
+					}
 					lease, active, err := control.GetActionLease(input.ActionID)
 					if err != nil || !active || lease.Epoch != input.Epoch || lease.ClaimToken != input.ClaimToken {
 						t.Fatal("upgrade retry replaced the original unresolved action lease", err)
