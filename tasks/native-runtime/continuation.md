@@ -13194,3 +13194,25 @@ thresholds, existing tests or readiness evidence. Native compilation/regressions
 remain cloud-only and pending for the new source. All authority/liveness/path
 race/platform/full-media gaps documented in the implementation acceptance stay
 open; retain NOT_READY and the unchanged original95/80percent floors.
+
+
+### 2026-10-26 media import and authenticated transport regressions
+
+The exact follow-up5e4ca1c7 passed the cloud Go media development suite in
+run40293872555. Its Rust lint job121475090471 in run40293872561 then identified
+three retained gateway references missing after extraction: serde_json::Map,
+declared_media_type and media_status. Keep their original behavior and expose/
+import the existing shared helpers rather than duplicate their normalization.
+The failure is compilation, not post-startup PATCH acceptance.
+
+Add five Go-only TCP+TLS+gRPC control/HTTP regressions with a deliberately explicit
+synthetic wire peer. They exercise successful signed settlement, lost reply to
+original-operation query without redispatch, absence preserving EFFECT_UNKNOWN
+and its reservation, forged result denial, and conclusive HTTP404 settlement.
+This test peer creates no Rust/data-plane evidence and never enters production;
+the actual default-launcher Rust write/restart probe remains independently
+mandatory. Original full95percent Go/Android-Go gates remain mandatory and
+pending; scoped coverage cannot substitute for either. Production Go/Proto/
+workflows/readiness bytes are unchanged in this increment. All earlier complete
+media recovery, path race, OS durability/platform and full-product gaps remain
+open. Native compilation/tests remain cloud-only; keep NOT_READY.

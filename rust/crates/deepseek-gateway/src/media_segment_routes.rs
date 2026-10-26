@@ -24,14 +24,15 @@ use deepseek_policy::app_error::{AppError, codes};
 use deepseek_policy::core_utils::{python_float_opt, python_int_opt, python_truthy, text_or_empty};
 use deepseek_policy::entropy::SystemEntropy;
 use deepseek_policy::media_schema::{
-    MAX_SEGMENT_TEXT_CHARS, MEDIA_STATUSES, MEDIA_TYPES, media_type_from_mime,
-    normalize_media_path, normalize_media_record, normalize_mime, python_truthy_opt,
+    MAX_SEGMENT_TEXT_CHARS, MEDIA_STATUSES, MEDIA_TYPES, declared_media_type, media_status,
+    media_type_from_mime, normalize_media_path, normalize_media_record, normalize_mime,
+    python_truthy_opt,
 };
 use deepseek_policy::python_json::value_str;
 use deepseek_policy::workspace_schema::{
     new_id, normalize_source_ref, redact_sensitive_text, validate_project_id, validate_workspace_id,
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 const SEGMENT_TYPES: [&str; 6] = [
     "ocr_text",

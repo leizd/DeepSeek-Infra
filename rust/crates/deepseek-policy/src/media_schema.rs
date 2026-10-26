@@ -138,7 +138,11 @@ pub fn normalize_media_record(value: &Value) -> Result<Value, AppError> {
     }))
 }
 
-fn declared_media_type(value: Option<&Value>, mime: &str, title: &str) -> Result<String, AppError> {
+pub fn declared_media_type(
+    value: Option<&Value>,
+    mime: &str,
+    title: &str,
+) -> Result<String, AppError> {
     let candidate = text_or_empty(value).trim().to_lowercase();
     if MEDIA_TYPES.contains(&candidate.as_str()) {
         return Ok(candidate);
@@ -151,7 +155,7 @@ fn declared_media_type(value: Option<&Value>, mime: &str, title: &str) -> Result
     }
 }
 
-fn media_status(value: Option<&Value>) -> Result<String, AppError> {
+pub fn media_status(value: Option<&Value>) -> Result<String, AppError> {
     let status = if python_truthy_opt(value) {
         text_or_empty(value)
     } else {
