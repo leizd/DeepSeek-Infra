@@ -48,6 +48,8 @@ jobs:
         run: |
           mkdir -p artifacts/rust-cloud
           python scripts/capture_evidence_context.py --version "$(cat VERSION)" --out "$DEEPSEEK_EVIDENCE_SOURCE_CONTEXT"
+      - name: Verify production runtime source inventory
+        run: python scripts/production_runtime_inventory.py --check
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
@@ -145,6 +147,22 @@ jobs:
           name: rust-cloud-media-library-read-process-${{ github.sha }}
           path: |
             artifacts/rust-cloud/media-library-read-process
+            artifacts/rust-cloud/source-context.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Verify authenticated media metadata patch through the default native launcher
+        if: matrix.mode == 'checks'
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          python scripts/verify_native_media_patch.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/rust-cloud/media-patch-process 2>&1 | tee artifacts/rust-cloud/media-patch-process.log
+      - name: Preserve authenticated media patch process evidence
+        if: always() && matrix.mode == 'checks'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-cloud-media-patch-process-${{ github.sha }}
+          path: |
+            artifacts/rust-cloud/media-patch-process
             artifacts/rust-cloud/source-context.json
           if-no-files-found: ignore
           retention-days: 7
