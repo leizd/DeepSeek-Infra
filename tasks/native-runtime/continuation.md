@@ -13262,3 +13262,39 @@ adding media.v1/file12. No skip, threshold, old denial assertion or release
 readiness field is removed. Keep NOT_READY and full product/metadata/recovery/
 path/platform gaps open; actual native patch and exact-source complete gates
 remain independently pending. Native compilers/tests/caches stay cloud-only.
+
+
+## 2026-10-26 media Go failure/recovery regressions — cloud qualification pending
+
+Source d9d4b3ad passed the original full Go test command, but its unmodified
+coverage gate failed at94.65788510793999percent (15522/16398 statements) against
+the original95percent floor. Exact run40315762537/job121547908204 and its raw
+profile are retained; this is an actual full-gate failure, not full qualification.
+Add20 top-level regressions covering malformed typed nesting/numbers/UTF-8 and
+wire bounds, invalid/signed outcome bindings, RPC authorization and replay,
+forwarding credential conflicts, absent/incomplete recovery replies, expired
+undispatched cancellation versus dispatched reservation, host/path/body fields,
+closed or fenced stores, exact-schema/data corruption, atomic SQL-abort rollback,
+short-lease expiry, invalid pinned public identity and retained history.
+
+All original tests/assertions, production Rust/Go/Proto and the original full CI
+and coverage scripts/floors remain unchanged. The bounded development selector
+retains the24 original top-level regressions and now includes all37 media tests
+(61 total); its scoped profile is not the original full Go/Android-Go95 gate.
+Synthetic RPC/response fixtures are explicit and cannot qualify a Rust file
+effect. Parent-source actual default-launcher PATCH/restart/raw-response proof,
+1626 Rust tests and82.0905337766249percent coverage remain separate. New-source
+native tests/compilation are pending cloud; do not transfer older exact-source
+acceptance. All complete media recovery/liveness, retained semantics, path races,
+Windows durability, platforms and full-product requirements remain mandatory.
+Keep NOT_READY and the retained arbitrary pytest/zero-production-Python item
+unfinished without an exception. Native builds/caches/images remain cloud-only.
+
+
+The same source d9d4b3ad also failed Rust push run40314796576 at its first browser
+step before browser execution: Ubuntu Azure-mirror package downloads consumed
+the entire10-minute step. Retain this as setup failure, not a semantic UI result.
+Keep the original pinned Chromium/dependency command and the original10-minute
+actual browser deadline; give dependency setup its own bounded stage with APT
+connection/data timeout30seconds and two retries, plus bounded pip networking.
+No native/browser assertion, report requirement or original floor is removed.
