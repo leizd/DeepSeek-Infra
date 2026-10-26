@@ -114,6 +114,7 @@ func Start(ctx context.Context, cfg config.Config) (*Server, error) {
 			AuthorizeCutover:            cfg.ControlAuthority,
 			PromotionSignerPublicKey:    cfg.PromotionSignerPublicKey,
 			AgentOutcomeSignerPublicKey: cfg.AgentOutcomeSignerPublicKey,
+			MediaOutcomeSignerPublicKey: cfg.MediaOutcomeSignerPublicKey,
 			FleetID:                     cfg.FleetID,
 			Environment:                 cfg.Environment,
 		})

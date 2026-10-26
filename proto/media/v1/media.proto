@@ -1,0 +1,154 @@
+syntax = "proto3";
+
+package deepseek.media.v1;
+
+import "common/v1/common.proto";
+
+option go_package = "github.com/leizd/DeepSeek-Infra/go/internal/protocol/mediav1;mediav1";
+
+// Media metadata is an explicitly typed value tree, never an opaque JSON RPC
+// payload. Members are unique and sorted by UTF-8 key bytes. Number spelling is
+// a validated JSON decimal, avoiding float/map canonicalization ambiguity.
+message MediaValue {
+  oneof kind {
+    bool null_value = 1; // Must be true when selected.
+    bool bool_value = 2;
+    string text_value = 3;
+    string number_value = 4;
+    MediaObject object_value = 5;
+    MediaArray array_value = 6;
+  }
+}
+
+message MediaMember {
+  string key = 1;
+  MediaValue value = 2;
+}
+
+message MediaObject {
+  repeated MediaMember members = 1;
+}
+
+message MediaArray {
+  repeated MediaValue values = 1;
+}
+
+// Message presence retains the HTTP patch's absent versus explicit null
+// semantics. Only the three supported public fields cross this boundary.
+message MediaPatch {
+  MediaValue title = 1;
+  MediaValue project_id = 2;
+  MediaValue metadata = 3;
+}
+
+message MediaPatchIntent {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  string media_id = 3;
+  MediaPatch patch = 4;
+}
+
+// Go owns every lease/fence field. Rust obtains this claim from its own pinned,
+// authenticated Go connection, not from the execution caller's supplied state.
+message MediaPatchClaim {
+  uint32 schema_version = 1;
+  MediaPatchIntent intent = 2;
+  deepseek.common.v1.ActionFence fence = 3;
+  bytes request_sha256 = 4;
+  string owner = 5;
+  string claim_token = 6;
+  int64 writer_fencing_token = 7;
+  int64 lease_until_unix = 8;
+  string state = 9;
+  string fleet_id = 10;
+  string environment = 11;
+}
+
+message GetMediaPatchClaimRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  deepseek.common.v1.ActionFence fence = 3;
+}
+
+message BeginMediaPatchDispatchRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  deepseek.common.v1.ActionFence fence = 3;
+  string claim_token = 4;
+  int64 writer_fencing_token = 5;
+  bytes preparation_sha256 = 6;
+}
+
+message MediaPatchDispatchPermit {
+  MediaPatchClaim claim = 1;
+  bytes preparation_sha256 = 2;
+  bool fresh = 3;
+}
+
+enum MediaPatchEffectState {
+  MEDIA_PATCH_EFFECT_STATE_UNSPECIFIED = 0;
+  MEDIA_PATCH_EFFECT_STATE_PREPARED = 1;
+  MEDIA_PATCH_EFFECT_STATE_APPLYING = 2;
+  MEDIA_PATCH_EFFECT_STATE_APPLIED = 3;
+  MEDIA_PATCH_EFFECT_STATE_REFUSED = 4;
+  MEDIA_PATCH_EFFECT_STATE_UNKNOWN = 5;
+}
+
+// A signed Rust outcome is evidence only. It cannot create a Go claim, advance
+// an epoch, authorize another write or settle an unrelated operation.
+message MediaPatchOutcome {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  deepseek.common.v1.ActionFence original_fence = 3;
+  bytes request_sha256 = 4;
+  MediaPatchEffectState state = 5;
+  MediaObject media = 6;
+  uint32 http_status = 7;
+  string error_code = 8;
+  string error_message = 9;
+  bytes before_sha256 = 10;
+  bytes after_sha256 = 11;
+  bytes signature = 12;
+  string fleet_id = 13;
+  string environment = 14;
+  int64 writer_fencing_token = 15;
+}
+
+message RecordMediaPatchOutcomeRequest {
+  uint32 schema_version = 1;
+  MediaPatchOutcome outcome = 2;
+  deepseek.common.v1.ActionFence fence = 3;
+}
+
+message RecordMediaPatchOutcomeResponse {
+  bool already_recorded = 1;
+}
+
+message ExecuteMediaPatchRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  deepseek.common.v1.ActionFence fence = 3;
+}
+
+message QueryMediaPatchRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  deepseek.common.v1.ActionFence original_fence = 3;
+}
+
+message QueryMediaPatchResponse {
+  // Absence is not proof of an unapplied effect or permission to retry.
+  bool found = 1;
+  MediaPatchOutcome outcome = 2;
+}
+
+service MediaMutationControl {
+  rpc GetClaim(GetMediaPatchClaimRequest) returns (MediaPatchClaim);
+  rpc BeginDispatch(BeginMediaPatchDispatchRequest) returns (MediaPatchDispatchPermit);
+  rpc RecordOutcome(RecordMediaPatchOutcomeRequest) returns (RecordMediaPatchOutcomeResponse);
+}
+
+service MediaMutationWorker {
+  rpc ExecutePatch(ExecuteMediaPatchRequest) returns (MediaPatchOutcome);
+  rpc QueryPatch(QueryMediaPatchRequest) returns (QueryMediaPatchResponse);
+}

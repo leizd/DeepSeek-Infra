@@ -63,6 +63,11 @@ pub mod generated {
                 tonic::include_proto!("deepseek.storage.v1");
             }
         }
+        pub mod media {
+            pub mod v1 {
+                tonic::include_proto!("deepseek.media.v1");
+            }
+        }
         pub mod platform {
             pub mod v1 {
                 tonic::include_proto!("deepseek.platform.v1");

@@ -58,6 +58,7 @@ type OpenOptions struct {
 	PromotionSignerPublicKey string
 	// AgentOutcomeSignerPublicKey pins Rust historical outcome custody. Empty refuses ingestion.
 	AgentOutcomeSignerPublicKey string
+	MediaOutcomeSignerPublicKey string
 	FleetID                     string
 	Environment                 string
 }
@@ -107,6 +108,7 @@ type Control struct {
 	authorizeCutover      bool
 	promotionSignerKey    string
 	agentOutcomeSignerKey string
+	mediaOutcomeSignerKey string
 	fleetID               string
 	environment           string
 }
@@ -247,6 +249,7 @@ func OpenControl(opts OpenOptions) (*Control, error) {
 		authorizeCutover:      opts.AuthorizeCutover,
 		promotionSignerKey:    opts.PromotionSignerPublicKey,
 		agentOutcomeSignerKey: opts.AgentOutcomeSignerPublicKey,
+		mediaOutcomeSignerKey: opts.MediaOutcomeSignerPublicKey,
 		fleetID:               opts.FleetID,
 		environment:           opts.Environment,
 	}
@@ -524,6 +527,18 @@ func expectedControlUserObjects(schema int) map[string]string {
 		objects["control_native_origin"] = "table"
 		objects["control_native_origin_no_delete"] = "trigger"
 		objects["control_native_origin_publication_once"] = "trigger"
+	}
+	if schema >= SchemaV19 {
+		for name := range mediaPatchSchemaObjects {
+			kind := "trigger"
+			if name == "control_media_operations" {
+				kind = "table"
+			}
+			if name == "control_media_one_publication" {
+				kind = "index"
+			}
+			objects[name] = kind
+		}
 	}
 	return objects
 }
@@ -820,6 +835,11 @@ func (store *Control) migrateTx(tx *sql.Tx) error {
 	}
 	if store.schema == SchemaV17 {
 		if err := store.migrateToV18Tx(tx); err != nil {
+			return err
+		}
+	}
+	if store.schema == SchemaV18 {
+		if err := store.migrateToV19Tx(tx); err != nil {
 			return err
 		}
 	}
@@ -1151,6 +1171,11 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 	}
 	if schema >= SchemaV18 {
 		if err := verifyNativeOriginSchemaTx(tx); err != nil {
+			return err
+		}
+	}
+	if schema >= SchemaV19 {
+		if err := verifyMediaPatchSchemaTx(tx); err != nil {
 			return err
 		}
 	}
@@ -2366,6 +2391,11 @@ func (store *Control) Rollback(version int) error {
 	leaseUntil, err := store.assertWriterTx(tx, now)
 	if err != nil {
 		return err
+	}
+	if store.schema >= SchemaV19 {
+		if err := retireEmptyMediaPatchTx(tx); err != nil {
+			return err
+		}
 	}
 	if store.schema >= SchemaV18 {
 		if err := retireEmptyNativeOriginTx(tx); err != nil {

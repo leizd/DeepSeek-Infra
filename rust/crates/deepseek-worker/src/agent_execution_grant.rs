@@ -72,8 +72,8 @@ fn typed_digest(value: &Value) -> Result<String, Status> {
 /// Deployment configuration, never selected by a signing RPC's caller.
 #[derive(Clone)]
 pub struct AgentExecutionControl {
-    endpoint: Endpoint,
-    authorization: MetadataValue<tonic::metadata::Ascii>,
+    pub(crate) endpoint: Endpoint,
+    pub(crate) authorization: MetadataValue<tonic::metadata::Ascii>,
 }
 impl std::fmt::Debug for AgentExecutionControl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

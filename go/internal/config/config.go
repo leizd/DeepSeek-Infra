@@ -60,6 +60,7 @@ type Config struct {
 	PromotionSignerPublicKey string
 	// Historical outcome proof uses the separately configured Rust custody public key.
 	AgentOutcomeSignerPublicKey string
+	MediaOutcomeSignerPublicKey string
 	// FleetID and Environment are the identity the signer must have bound into
 	// the request.
 	FleetID     string
@@ -84,6 +85,7 @@ func Load() (Config, error) {
 		MutationSignerPublicKey:     strings.TrimSpace(os.Getenv("DEEPSEEKD_MUTATION_SIGNER_KEY")),
 		PromotionSignerPublicKey:    strings.TrimSpace(os.Getenv("DEEPSEEKD_PROMOTION_SIGNER_KEY")),
 		AgentOutcomeSignerPublicKey: strings.TrimSpace(os.Getenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY")),
+		MediaOutcomeSignerPublicKey: strings.TrimSpace(os.Getenv("DEEPSEEK_WORKER_AUTHORITY_SIGNER_PUBLIC_KEY")),
 		FleetID:                     valueOr("DEEPSEEKD_FLEET_ID", "fleet-a"),
 		Environment:                 valueOr("DEEPSEEKD_ENVIRONMENT", "production"),
 	}

@@ -62,6 +62,14 @@
       "sha256": "9f3b9c013e328bf0804cbcda9e2b95c434b9dbcab6d172d783720f59ac692a0a"
     },
     {
+      "path": "go/internal/protocol/mediav1/media.pb.go",
+      "sha256": "5436eec609bac80e5339aa11487f2df605be419c4ce53c842a94c482649a323b"
+    },
+    {
+      "path": "go/internal/protocol/mediav1/media_grpc.pb.go",
+      "sha256": "0e5b3ff1a06fd0fc8ef015410aaffcde8bdd3e54f9377db0f968a73450c28036"
+    },
+    {
       "path": "go/internal/protocol/platform/v1/ocr.pb.go",
       "sha256": "924910e3e3aeba25398628b6b4475f88ddf7775a6556b53b8df4ab11f7ab24cc"
     },
@@ -75,7 +83,7 @@
     },
     {
       "path": "proto/generated/descriptor.pb",
-      "sha256": "5a86dd008ade6431e8c5718d87a137752e36d910f294b7dcad257b68c563580b"
+      "sha256": "8da14cac5b3518f6c32a0f4a9e0b57ee38770ba5be0edb5204c9d8c47bfe1ec5"
     }
   ],
   "schema_version": 1,
@@ -115,6 +123,10 @@
     {
       "path": "proto/federation/v1/federation.proto",
       "sha256": "24c52e6132a5b186cb27312deedabf348e31b6a652c1baa50c3ea68ef507f32d"
+    },
+    {
+      "path": "proto/media/v1/media.proto",
+      "sha256": "2105f38f462f1d8c48bce35015dceaaa46c07adb9da0d60bda971fac3e3cd866"
     },
     {
       "path": "proto/platform/v1/ocr.proto",

@@ -1,0 +1,87 @@
+name: Native media development checks
+
+on:
+  push:
+    branches: ["codex/rust-cloud/media-patch-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: native-media-development-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  media-go:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GOTOOLCHAIN: local
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - name: Install the original checksum-pinned Go
+        run: |
+          archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+          curl --fail --location --silent --show-error --output "$archive" https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+          echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/media-go"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/media-go"
+          echo "$RUNNER_TEMP/media-go/go/bin" >> "$GITHUB_PATH"
+      - name: Run media admission, proof, HTTP and transport regressions
+        timeout-minutes: 12
+        run: |
+          mkdir -p artifacts/native-media-development
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          cd go
+          set +e
+          go test -race -json -count=1 -timeout=8m -covermode=atomic -coverprofile=../artifacts/native-media-development/scoped-coverage.out ./internal/media ./internal/store ./internal/api ./internal/worker -run '^TestMedia' > ../artifacts/native-media-development/go-tests.jsonl 2>&1
+          test_status=$?
+          set -e
+          cd ..
+          export MEDIA_GO_STATUS="$test_status"
+          python - <<'PY'
+          import json, os, re, subprocess
+          from pathlib import Path
+          expected = set()
+          for package in ["media", "store", "api", "worker"]:
+              for path in (Path("go/internal") / package).glob("*_test.go"):
+                  expected.update(re.findall(r"^func (TestMedia\w*)\(", path.read_text(), re.M))
+          assert len(expected) >= 11
+          started, finished, packages = {}, {}, {}
+          for line in Path("artifacts/native-media-development/go-tests.jsonl").read_text().splitlines():
+              try: row = json.loads(line)
+              except json.JSONDecodeError: continue
+              name, action = row.get("Test"), row.get("Action")
+              if name in expected and action == "run": started[name] = started.get(name, 0) + 1
+              if name in expected and action in {"pass", "fail", "skip"}:
+                  assert name not in finished
+                  finished[name] = action
+              if not name and action in {"pass", "fail", "skip"}: packages[row["Package"]] = action
+          code = int(os.environ["MEDIA_GO_STATUS"])
+          expected_packages = {"github.com/leizd/DeepSeek-Infra/go/internal/" + p for p in ["media", "store", "api", "worker"]}
+          if code == 0 and (set(started) != expected or set(finished) != expected or set(started.values()) != {1} or set(finished.values()) != {"pass"} or set(packages) != expected_packages or set(packages.values()) != {"pass"}): code = 2
+          tree = subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip()
+          result = dict(status="PASS" if code == 0 else "FAIL", sourceCommit=os.environ["GITHUB_SHA"], sourceTree=tree, runId=os.environ["GITHUB_RUN_ID"], attempt=os.environ["GITHUB_RUN_ATTEMPT"], event=os.environ["GITHUB_EVENT_NAME"], ref=os.environ["GITHUB_REF"], expectedTests=sorted(expected), finishedTests=finished, packages=packages, exitCode=code, raceEnabled=True, scope="media Go development regressions only; not the original full Go/Android-Go suites or coverage gates", fullGoSuiteQualified=False, original95PercentCoverageQualified=False, actualNativeLauncherQualified=False, authorityRecoveryQualified=False, fullMigrationQualified=False, readiness="NOT_READY")
+          Path("artifacts/native-media-development/result.json").write_text(json.dumps(result, indent=2) + "\n")
+          raise SystemExit(code)
+          PY
+      - name: Preserve media development reports only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-media-development-${{ github.sha }}
+          path: artifacts/native-media-development/
+          if-no-files-found: warn
+          retention-days: 7

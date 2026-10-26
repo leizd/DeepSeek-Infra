@@ -11,6 +11,7 @@ import (
 	"github.com/leizd/DeepSeek-Infra/go/internal/config"
 	agentv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/agentv1"
 	controlv1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/controlv1"
+	mediav1 "github.com/leizd/DeepSeek-Infra/go/internal/protocol/mediav1"
 	"github.com/leizd/DeepSeek-Infra/go/internal/shadow"
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"github.com/leizd/DeepSeek-Infra/go/pkg/protocol"
@@ -54,7 +55,7 @@ func HealthFor(cfg config.Config) ControlPlaneHealth {
 // All RPCs require a loopback peer and the same configured internal bearer as
 // /internal/*. An absent bearer denies all.
 func NewControlRPC(control *store.Control, bearer string, health ControlPlaneHealth) *grpc.Server {
-	server := grpc.NewServer(grpc.MaxRecvMsgSize(1<<20), grpc.MaxSendMsgSize(1<<20),
+	server := grpc.NewServer(grpc.MaxRecvMsgSize(2<<20), grpc.MaxSendMsgSize(2<<20),
 		grpc.UnaryInterceptor(func(ctx context.Context, request any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 			remote, ok := peer.FromContext(ctx)
 			if !ok || remote.Addr == nil {
@@ -81,6 +82,7 @@ func NewControlRPC(control *store.Control, bearer string, health ControlPlaneHea
 	agentv1.RegisterAgentRunControlServer(server, agentRun)
 	agentv1.RegisterAgentRunRecoveryControlServer(server, &agentRunRecoveryService{run: agentRun})
 	agentv1.RegisterAgentNodeControlServer(server, &agentNodeService{run: agentRun})
+	mediav1.RegisterMediaMutationControlServer(server, &mediaMutationService{control: control, health: health})
 	return server
 }
 

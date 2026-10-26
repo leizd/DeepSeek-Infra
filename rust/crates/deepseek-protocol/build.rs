@@ -53,6 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .skip_debug(".deepseek.agent.v1.PrepareAgentCredentialsRequest")
         .message_attribute(".", "#[derive(Eq)]")
         .enum_attribute(".deepseek.platform.v1.DocumentChunk.part", "#[derive(Eq)]")
+        .enum_attribute(".deepseek.media.v1.MediaValue.kind", "#[derive(Eq)]")
         .compile_fds(descriptors)?;
     Ok(())
 }

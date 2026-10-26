@@ -1974,3 +1974,46 @@ Keep NOT_READY. Required next work: verify latest exact-head Rust1479/native884/
 2026-10-13 verifier follow-up: fourteen-file preset snapshot a1e53a8793b47e73cf9a8d7c546c64a6e9f23a45 failed cloud qualification: Go vet rejected two new test closures declared func() rather than the existing func() error callback type; the thirteen-preset process step lacked checks-mode binding and attempted to run without the pinned Go toolchain in coverage mode. Original signing process also could not build its Go producer because of the same test callback error. Preserve these actual failures; they do not qualify presets or Go95.
 
 Two-file follow-up c9d6fc71d41a71a73c13fcfe777a4b79a1a607cb, tree24b5a367778d45d8e8e7bb31271c57e5e6bdff44, corrects both callback return types and binds all thirteen new preset cases to checks mode, which installs Go and builds Rust binaries. Coverage mode keeps full workspace tests and LLVM80. All source/type/offline checks and exact synthetic-secret review passed; source and local index remain preserved. Latest exact-head cloud qualification pending; Rust1479/native884/all3655 and all original 37/14 gates and Rust80/Go95/Python95 remain required. Real-provider, public cancellation/updates/resume/rerun/tools, extended recovery, default CLI/platform packages and complete migration remain open. NOT_READY.
+
+
+## 2026-10-26 media PATCH implementation candidate — qualification pending
+
+The original authenticated launcher counterexample is retained at source
+`b61ac48b49cf13bbb9ef8e33cb2ff504ca2fd19f`: actual native PATCH was HTTP 501 after
+healthy control, authentication and media-read prerequisites; the independent
+original library accepted the same request. That refusal is not acceptance.
+
+The cumulative `codex/rust-cloud/media-patch-implementation-20261026` candidate
+adds typed media v1 gRPC, Go schema-19 operation admission and collection fencing,
+Rust-owned media normalization/publication/effect custody, independently verified
+purpose-bound Rust receipts and original-operation queries. Go never opens the
+media library; Rust never opens the Go control database. Python's retained media
+library writer is mechanically denied in `python_disabled` mode. Production
+execution has no Python, task-program or optional media delegate.
+
+This is an implementation candidate, not authority/recovery or media completion.
+Cloud compilation, regression and actual launcher results remain pending. In
+particular an interrupted APPLYING operation without its exact publication
+witness remains EFFECT_UNKNOWN, holds the collection and cannot be retried from
+an absent/old file. Complete recovery for that case, OS-level path/reparse races,
+Windows directory durability, real process-kill/fault/cancellation/takeover tests,
+all body/error/large-record parity and Android execution remain open. The bounded
+implementation currently limits a library read to 128 MiB and typed messages to
+2 MiB; these bounds require compatibility/resource acceptance rather than a
+blanket retained-functionality claim. Create/upload/delete/process/index remain
+unfinished. Keep all media/product readiness claims false until those pass.
+
+Separately, parent runtime source `b01de5e5ebd6a989c662b23ffff2b3a8feb2aefa`
+completed all original 37 CI jobs in workflow_dispatch run 40261365572. Reports
+independently retain default Go 95.02168583820479% and Android Go 95.00830922631872%
+against their unchanged original 95% floors. Its previously qualified Rust and
+platform reports stay bound to that source; they do not qualify this candidate,
+a PR merge candidate or 5.0 release. Python/Go/Android-Go 95% and Rust 80% floors
+are unchanged. No skip/threshold/ownership/readiness evidence was relaxed.
+
+Native compilation, Go tests and verification containers remain in GitHub Actions;
+only reports return locally. Keep primary checkout bytes/index/dirty files intact.
+No PR outside the daily 09:00 Asia/Shanghai batch, no main merge, release or real
+user/provider-data operation. Full server/desktop/Android/background migration
+stays NOT_READY. The original arbitrary pytest engine requirement remains held
+unfinished per the human decision; no Python exception or feature reduction.

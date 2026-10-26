@@ -13131,3 +13131,46 @@ remains to be completed. Custody corruption also remains a refusal, never
 permission to recreate private keys. Keep the complete server, desktop, Android,
 background, provider recovery, credential renewal and Evidence requirements;
 readiness remains `NOT_READY`.
+
+
+## 2026-10-26 media PATCH implementation candidate — qualification pending
+
+The original authenticated launcher counterexample is retained at source
+`b61ac48b49cf13bbb9ef8e33cb2ff504ca2fd19f`: actual native PATCH was HTTP 501 after
+healthy control, authentication and media-read prerequisites; the independent
+original library accepted the same request. That refusal is not acceptance.
+
+The cumulative `codex/rust-cloud/media-patch-implementation-20261026` candidate
+adds typed media v1 gRPC, Go schema-19 operation admission and collection fencing,
+Rust-owned media normalization/publication/effect custody, independently verified
+purpose-bound Rust receipts and original-operation queries. Go never opens the
+media library; Rust never opens the Go control database. Python's retained media
+library writer is mechanically denied in `python_disabled` mode. Production
+execution has no Python, task-program or optional media delegate.
+
+This is an implementation candidate, not authority/recovery or media completion.
+Cloud compilation, regression and actual launcher results remain pending. In
+particular an interrupted APPLYING operation without its exact publication
+witness remains EFFECT_UNKNOWN, holds the collection and cannot be retried from
+an absent/old file. Complete recovery for that case, OS-level path/reparse races,
+Windows directory durability, real process-kill/fault/cancellation/takeover tests,
+all body/error/large-record parity and Android execution remain open. The bounded
+implementation currently limits a library read to 128 MiB and typed messages to
+2 MiB; these bounds require compatibility/resource acceptance rather than a
+blanket retained-functionality claim. Create/upload/delete/process/index remain
+unfinished. Keep all media/product readiness claims false until those pass.
+
+Separately, parent runtime source `b01de5e5ebd6a989c662b23ffff2b3a8feb2aefa`
+completed all original 37 CI jobs in workflow_dispatch run 40261365572. Reports
+independently retain default Go 95.02168583820479% and Android Go 95.00830922631872%
+against their unchanged original 95% floors. Its previously qualified Rust and
+platform reports stay bound to that source; they do not qualify this candidate,
+a PR merge candidate or 5.0 release. Python/Go/Android-Go 95% and Rust 80% floors
+are unchanged. No skip/threshold/ownership/readiness evidence was relaxed.
+
+Native compilation, Go tests and verification containers remain in GitHub Actions;
+only reports return locally. Keep primary checkout bytes/index/dirty files intact.
+No PR outside the daily 09:00 Asia/Shanghai batch, no main merge, release or real
+user/provider-data operation. Full server/desktop/Android/background migration
+stays NOT_READY. The original arbitrary pytest engine requirement remains held
+unfinished per the human decision; no Python exception or feature reduction.

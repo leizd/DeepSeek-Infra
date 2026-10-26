@@ -89,6 +89,7 @@ RUST_DATA_DOMAINS = frozenset(
         "frontend_mirror_store",
         "observability_trace_store",
         "generated_files_store",
+        "media_library_store",
     }
 )
 
