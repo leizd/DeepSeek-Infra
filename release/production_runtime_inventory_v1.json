@@ -269,7 +269,8 @@
     "ingress_grant_lifecycle",
     "federated_transfer_journal",
     "dr_orchestration",
-    "health_readiness"
+    "health_readiness",
+    "media_library_store"
   ],
   "ownership_domains_current_owner_rust": [
     "public_http_listener",
