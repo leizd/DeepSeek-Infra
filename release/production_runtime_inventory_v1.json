@@ -633,16 +633,6 @@
       "file": "deepseek_infra/web/routes/media.py"
     },
     {
-      "method": "get",
-      "path": "/api/media",
-      "file": "deepseek_infra/web/routes/media.py"
-    },
-    {
-      "method": "get",
-      "path": "/api/media/{media_id}",
-      "file": "deepseek_infra/web/routes/media.py"
-    },
-    {
       "method": "patch",
       "path": "/api/media/{media_id}",
       "file": "deepseek_infra/web/routes/media.py"

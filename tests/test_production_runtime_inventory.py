@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -54,3 +55,16 @@ def test_production_runtime_inventory_matches_sources() -> None:
     assert all(item["marker_present"] for item in inventory["legacy_production_entries"])
     android = next(item for item in inventory["native_or_gap_entries"] if item["id"] == "android_activity")
     assert android["packaged_native_binary"] is False
+
+
+def test_native_media_read_registration_does_not_hide_unported_writes() -> None:
+    generator = runpy.run_path(str(ROOT / "scripts" / "production_runtime_inventory.py"))
+    inventory = generator["build_inventory"]()
+    remaining = {(row["method"], row["path"]) for row in inventory["http_routes_only_on_python"]}
+    assert {
+        ("post", "/api/media"),
+        ("patch", "/api/media/{media_id}"),
+        ("delete", "/api/media/{media_id}"),
+    } <= remaining
+    assert ("get", "/api/media") not in remaining
+    assert ("get", "/api/media/{media_id}") not in remaining

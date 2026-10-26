@@ -24,6 +24,15 @@ RUST_ROUTE_RE = re.compile(r'\.route\(\s*"([^"]+)"')
 GO_ROUTE_RE = re.compile(r'HandleFunc\("([^"]+)"')
 PARAM_RE = re.compile(r"\{([A-Za-z0-9_]+)\}")
 
+# These dispatchers register `any(...)`, but implement only native reads. A
+# registered path alone must not remove their unported writes from the inventory.
+# Other registrations remain a source inventory, not proof of method parity or
+# production authority; runtime qualification lives in the exact-source reports.
+NATIVE_METHOD_LIMITS: dict[str, frozenset[str]] = {
+    "/api/media": frozenset({"get", "head"}),
+    "/api/media/:media_id": frozenset({"get", "head"}),
+}
+
 # Live production entry points. ``marker`` is a source string that proves the
 # entry still executes Python or server-side TypeScript. Native packaging
 # inputs are listed separately and must not carry these markers.
@@ -272,7 +281,9 @@ def _native_route_paths() -> set[str]:
 def _routes_only_on_python(native_paths: set[str]) -> list[dict[str, str]]:
     missing: list[dict[str, str]] = []
     for route in _python_routes():
-        if _normalize(route["path"]) not in native_paths:
+        path = _normalize(route["path"])
+        methods = NATIVE_METHOD_LIMITS.get(path)
+        if path not in native_paths or (methods is not None and route["method"] not in methods):
             missing.append(route)
     return missing
 
