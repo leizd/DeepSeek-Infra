@@ -94,6 +94,12 @@ func TestMediaStoreShortLeaseExpiresWithoutReissuingAnOperation(t *testing.T) {
 	if err != nil || claim.LeaseUntilUnix != *now+10 {
 		t.Fatal("claim escaped shorter writer lease", err)
 	}
+	// Renew controller custody through the normal API while keeping the media
+	// operation's original short lease immutable, then expire only the operation.
+	c.leaseSeconds = 3600
+	if live, err := c.GetMediaPatchClaim(claim.Intent.OperationId, claim.Fence); err != nil || !proto.Equal(live, claim) {
+		t.Fatal("writer renewal changed the original media operation", err)
+	}
 	*now = claim.LeaseUntilUnix
 	if _, err := c.BeginMediaPatchDispatch(mediaBegin(claim)); !errors.Is(err, ErrActionLeaseExpired) {
 		t.Fatal("expired claim dispatched", err)
