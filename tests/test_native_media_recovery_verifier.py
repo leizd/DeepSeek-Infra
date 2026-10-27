@@ -181,3 +181,22 @@ def test_recovery_tracer_capability_is_scoped_and_always_removed() -> None:
     assert 'install --mode=0755 /usr/bin/strace "$tracer"' in steps[grant]["run"]
     assert 'setcap cap_sys_ptrace=ep "$tracer"' in steps[grant]["run"]
     assert 'setcap -r "$tracer"' in steps[revoke]["run"]
+
+
+def test_go_report_manifest_includes_every_selected_original_and_recovery_test() -> None:
+    import ast
+    import re
+    import yaml
+
+    job = yaml.safe_load((ROOT / ".github/workflows/native-media-development.yml").read_bytes())["jobs"]["media-go"]
+    command = next(step["run"] for step in job["steps"] if step.get("name") == "Run media admission, proof, HTTP and transport regressions")
+    report_code = command.split("python - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+    declared: set[str] = set()
+    for node in ast.walk(ast.parse(report_code)):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id.startswith("required_"):
+            declared.update(ast.literal_eval(node.value))
+    expected: set[str] = set()
+    for package in ["media", "store", "api", "worker"]:
+        for path in (ROOT / "go/internal" / package).glob("*_test.go"):
+            expected.update(name for name in re.findall(r"^func (Test\w*)\(", path.read_text(encoding="utf-8"), re.M) if re.fullmatch(job["env"]["MEDIA_GO_TEST_PATTERN"], name))
+    assert declared == expected
