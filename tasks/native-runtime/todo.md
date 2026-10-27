@@ -2499,3 +2499,6 @@ Keep the original pinned Chromium/dependency command and the original10-minute
 actual browser deadline; give dependency setup its own bounded stage with APT
 connection/data timeout30seconds and two retries, plus bounded pip networking.
 No native/browser assertion, report requirement or original floor is removed.
+
+
+- [ ] Qualify shared media original-operation background recovery against actual RED run40473482975: same operation/action/epoch and retained publication, no second PATCH, signed Go/Rust terminal agreement, race/full95% and exact-source platform gates. Implementation is pending cloud evidence; full migration stays NOT_READY.

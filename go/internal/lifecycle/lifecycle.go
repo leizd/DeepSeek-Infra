@@ -178,6 +178,7 @@ func serve(ctx context.Context, cfg config.Config, listener net.Listener, contro
 	})
 	rpc := api.NewControlRPC(control, cfg.InternalAPIBearer, api.HealthFor(cfg))
 	agentDone := api.StartAgentRunDriver(runCtx, control, api.HealthFor(cfg))
+	mediaDone := api.StartMediaPatchRecovery(runCtx, control, api.HealthFor(cfg))
 	protocols := new(http.Protocols)
 	protocols.SetHTTP1(true)
 	protocols.SetHTTP2(secureRPC)
@@ -196,7 +197,7 @@ func serve(ctx context.Context, cfg config.Config, listener net.Listener, contro
 		mux.ServeHTTP(writer, request)
 	})
 	server := &http.Server{Handler: handler, Protocols: protocols, BaseContext: func(net.Listener) context.Context { return runCtx }}
-	runtime := &Server{address: listener.Addr().String(), done: make(chan error, 1), stopRPC: rpc.Stop, agentDone: agentDone}
+	runtime := &Server{address: listener.Addr().String(), done: make(chan error, 1), stopRPC: rpc.Stop, agentDone: agentDone, mediaDone: mediaDone}
 	if secureRPC {
 		runtime.rpcAddress = listeners[1].Addr().String()
 	}

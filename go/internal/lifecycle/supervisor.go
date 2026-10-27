@@ -18,6 +18,7 @@ type Server struct {
 	done       chan error
 	stopRPC    func()
 	agentDone  <-chan struct{}
+	mediaDone  <-chan struct{}
 }
 
 func (runtime *Server) Addr() string            { return runtime.address }
@@ -101,6 +102,9 @@ monitor:
 	}
 	if runtime.agentDone != nil {
 		<-runtime.agentDone
+	}
+	if runtime.mediaDone != nil {
+		<-runtime.mediaDone
 	}
 	if control != nil {
 		terminal = errors.Join(terminal, control.Close())

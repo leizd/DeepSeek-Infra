@@ -2140,3 +2140,6 @@ No PR outside the daily 09:00 Asia/Shanghai batch, no main merge, release or rea
 user/provider-data operation. Full server/desktop/Android/background migration
 stays NOT_READY. The original arbitrary pytest engine requirement remains held
 unfinished per the human decision; no Python exception or feature reduction.
+
+
+Media PATCH crash/restart: actual retained-publication RED at df26c547/run40473482975 proves missing autonomous original reconciliation. Shared Go lifecycle recovery is implemented but cloud qualification remains pending. It uses the existing typed query and signed outcome, never redispatches, and keeps ambiguous dispatched operations blocked. This does not complete all media mutations/processing, retained MCP pytest execution or product/platform migration.

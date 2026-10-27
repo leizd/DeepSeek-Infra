@@ -274,3 +274,12 @@ post-rename synchronization and requires unrelated paths to remain unheld.
 The original file bytes/inode/mtime are now reobserved after restart before
 classifying any unsettled operation; lost/changed witnesses are a different
 failure and cannot reproduce missing autonomous reconciliation.
+
+
+## Autonomous recovery of the original published operation
+
+Run40473482975 at df26c547bf2806b652afcaa837c45109f3f3de23 reproduced a process-recovery defect: one authenticated PATCH actually replaced the library, then all owned native roles were SIGKILLed before the signed terminal result. Normal restart advanced the writer fence from2 to3 and retained exact library bytes/inode/mtime, but Go stayed DISPATCHED and Rust APPLYING with no outcome. The probe sent no further write. This is application RED, unlike the earlier setup/tracing failures.
+
+The shared authoritative Go lifecycle now starts a separate media recovery loop and drains it before closing the store. It queries the original operation/fence after writer succession or same-writer claim expiry; it skips a still-live same-writer request. The query-only interface cannot execute or admit a replacement. Existing transactional writer checks and signed-original-outcome verification remain mandatory; absence or unsigned/unknown evidence cannot retire a dispatched operation. Only an expired durable pre-dispatch claim can be cancelled using the existing guarded path. Every query is bounded by the parent cancellation and a five-second timeout.
+
+Cloud unit/race tests and the unchanged actual process probe must qualify this implementation before it is accepted. Proof must retain one operation, original claim/action/epoch/digests, equal Go/Rust signed outcome bytes, unchanged publication and independent Python-oracle public read after restart. Power loss/directory durability, every other media mutation/processing workload and the whole migration remain unqualified.

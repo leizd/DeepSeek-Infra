@@ -19,8 +19,7 @@ import (
 	"time"
 )
 
-type mediaPatchWorker interface {
-	ExecuteMediaPatch(context.Context, *mediav1.ExecuteMediaPatchRequest) (*mediav1.MediaPatchOutcome, error)
+type mediaPatchQueryWorker interface {
 	QueryMediaPatch(context.Context, *mediav1.QueryMediaPatchRequest) (*mediav1.QueryMediaPatchResponse, error)
 }
 
@@ -41,7 +40,7 @@ func mediaUnknown(w http.ResponseWriter, operation string) {
 	}
 	policyWriteError(w, 503, "EFFECT_UNKNOWN", "Media update requires reconciliation; do not repeat the write")
 }
-func recoverMediaPatch(ctx context.Context, control *store.Control, client mediaPatchWorker, claim *mediav1.MediaPatchClaim) (*mediav1.MediaPatchOutcome, bool) {
+func recoverMediaPatch(ctx context.Context, control *store.Control, client mediaPatchQueryWorker, claim *mediav1.MediaPatchClaim) (*mediav1.MediaPatchOutcome, bool) {
 	if claim == nil || claim.Intent == nil || claim.Fence == nil {
 		return nil, false
 	}

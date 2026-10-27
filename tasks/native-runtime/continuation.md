@@ -13421,3 +13421,8 @@ Keep the original pinned Chromium/dependency command and the original10-minute
 actual browser deadline; give dependency setup its own bounded stage with APT
 connection/data timeout30seconds and two retries, plus bounded pip networking.
 No native/browser assertion, report requirement or original floor is removed.
+
+
+### 2026-10-27 media original-operation recovery candidate
+
+Actual cloud RED run40473482975 (df26c547): publication retained after SIGKILL/restart and successor fence2→3, but original Go DISPATCHED/Rust APPLYING never reconciled without a second write. A separate query-only recovery loop is now implemented in the shared Go lifecycle, with live-request exclusion, signed historical settlement, ambiguity barriers and cancellation/drain. Source/unit/race/process qualification is still pending. Keep full migration NOT_READY; do not retry the original uncertain write. The arbitrary pytest MCP engine remains unfinished under the unchanged zero-production-Python requirement.
