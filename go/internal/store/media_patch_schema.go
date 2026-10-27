@@ -62,10 +62,14 @@ func (store *Control) migrateToV19Tx(tx *sql.Tx) error {
 		}
 	}
 	store.schema = SchemaV19
-	return verifyMediaPatchSchemaTx(tx)
+	return verifyMediaPatchSchemaTx(tx, SchemaV19)
 }
-func verifyMediaPatchSchemaTx(tx *sql.Tx) error {
-	for name, expected := range mediaPatchSchemaObjects {
+func verifyMediaPatchSchemaTx(tx *sql.Tx, schema int) error {
+	objects := mediaPatchSchemaObjects
+	if schema >= SchemaV20 {
+		objects = mediaCapacitySchemaObjects
+	}
+	for name, expected := range objects {
 		var actual string
 		if err := tx.QueryRow("SELECT sql FROM sqlite_schema WHERE name=?", name).Scan(&actual); err != nil || strings.TrimSpace(actual) != strings.TrimSpace(expected) {
 			return fmt.Errorf("%w: media schema %s", ErrForeignRuntimeStore, name)

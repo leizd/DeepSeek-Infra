@@ -1,5 +1,32 @@
 # Current native migration execution — actual native media PATCH reproduction, 2026-10-26
 
+## Current checkpoint: versioned media persistence capacity
+
+The actual parent Rust HTTP run40442478399 passed the four metadata-order
+workloads but refused the999,964-byte maximum-array request with503
+`EFFECT_UNKNOWN`. Its workspace generation stayed0; that observation does not
+prove an arbitrary uncertain effect absent and does not authorize retry.
+The latest parent Go workflow40444394609 passed all66 required top-level tests
+and113 observed cases. These are distinct source-bound qualifications.
+
+The exact schema-19 SQLite constraint independently rejects a legal999,967-byte
+JSON witness whose typed intent is2,499,893 bytes. Schema20 preserves the exact
+schema19 contract for historical validation and transactionally rebuilds only
+the media admission table with4 MiB intent/outcome bounds. Every original rowid,
+column, operation identity, signature byte and unresolved barrier is retained;
+all original immutability/state guards are recreated. An interrupted transaction
+must retain the complete old schema, rows, migration ledger and version marker.
+
+Five additional Go regression tests require genuine version19 upgrades across
+all six states, signed terminal replay, a large real typed admission/reopen,
+exact SQL bounds, rollback, schema-tamper denial and history-retirement denial.
+The original66 required Go tests remain required, for71 top-level tests total.
+Local SQLite SQL evaluation and formatting do not qualify native execution.
+Exact-source cloud Go/race, the six actual HTTP/restart/journal cases, original
+37-job CI and affected platforms remain pending. Original95/95/95/80 floors,
+MCP test-engine compatibility and whole-product scope remain; keep NOT_READY.
+
+
 ## Current checkpoint: ordered media inputs and transport overhead
 
 Parent `5471ed09edba16e6769bec3abd8b87110204cb36` passed

@@ -31,7 +31,7 @@ func (store *Control) mediaTx(fn func(*sql.Tx, int64) error) error {
 	if _, err = store.assertWriterTx(tx, now); err != nil {
 		return err
 	}
-	if err = verifyMediaPatchSchemaTx(tx); err != nil {
+	if err = verifyMediaPatchSchemaTx(tx, store.schema); err != nil {
 		return err
 	}
 	if err = fn(tx, now); err != nil {

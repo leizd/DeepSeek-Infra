@@ -212,3 +212,25 @@ generation. The maximum-array case must actually persist a claim larger than
 return from cloud builds. These checks remain pending for this candidate and
 cannot qualify all media APIs, numeric/record-size boundaries, hostile paths,
 complete interruption/takeover recovery or whole-product release readiness.
+
+### Schema-20 media persistence capacity
+
+Real native HTTP qualification exposed a separate schema-19 SQLite2 MiB intent
+constraint after the media RPC limits had been expanded. A legal JSON scalar
+array could therefore fail before admission despite fitting every RPC bound.
+Schema20 aligns only media intent/outcome persistence to4 MiB. Schema19 remains
+an immutable historical definition, and opening an old store validates it before
+migration. The fenced Go writer performs the rebuild, guard recreation, metadata
+and migration-ledger update in its existing SQLite transaction. It copies every
+original rowid and column without rewriting protobufs or signatures, preserves
+all six states and unresolved collection barriers, and fails closed on schema
+tampering. Transaction rollback restores the complete old store. Older binaries
+must reject the newer version; no destructive downgrade is authorized.
+
+Go regression gates exercise genuine version19 fixtures, signed historical
+terminal settlement after reopen, the legal scalar array beyond2 MiB, exact4 MiB
+SQL limits, immutability, rollback and retirement denial. The unchanged actual
+maximum-array HTTP probe must still succeed, advance generation and retain the
+original Rust APPLIED claim across whole-launcher restart. Offline SQL checks
+and partial Go success cannot replace that workload or original full-suite and
+platform qualification. Whole-product readiness remains NOT_READY.

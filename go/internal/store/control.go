@@ -843,6 +843,11 @@ func (store *Control) migrateTx(tx *sql.Tx) error {
 			return err
 		}
 	}
+	if store.schema == SchemaV19 {
+		if err := store.migrateToV20Tx(tx); err != nil {
+			return err
+		}
+	}
 	return verifySchemaTx(tx, store.schema)
 }
 
@@ -1175,7 +1180,7 @@ func verifySchemaTx(tx *sql.Tx, schema int) error {
 		}
 	}
 	if schema >= SchemaV19 {
-		if err := verifyMediaPatchSchemaTx(tx); err != nil {
+		if err := verifyMediaPatchSchemaTx(tx, schema); err != nil {
 			return err
 		}
 	}
