@@ -1,5 +1,5 @@
 //! Media library publication planning. No authority is granted by this module.
-use crate::media_values::{from_json, invalid, to_json};
+use crate::media_values::{from_json_legacy, invalid, to_json};
 use deepseek_policy::{
     app_error::{AppError, codes},
     media_schema::normalize_media_record,
@@ -115,7 +115,7 @@ pub(super) fn plan(
             ));
         }
     };
-    let value = from_json(&public)?;
+    let value = from_json_legacy(&public)?;
     result.media = match value.kind {
         Some(Kind::ObjectValue(object)) => Some(object),
         _ => return Err(invalid()),
@@ -129,7 +129,7 @@ pub(super) fn plan(
         return Err(Status::resource_exhausted("MEDIA_LIBRARY_LIMIT"));
     }
     result.after_sha256 = sha(&bytes);
-    if result.encoded_len() > 2 * 1024 * 1024 {
+    if result.encoded_len() > 4 * 1024 * 1024 {
         return Err(Status::resource_exhausted("MEDIA_MESSAGE_LIMIT"));
     }
     Ok((result, Some(bytes)))

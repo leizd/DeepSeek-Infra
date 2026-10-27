@@ -230,9 +230,13 @@ func (*MediaValue_ObjectValue) isMediaValue_Kind() {}
 func (*MediaValue_ArrayValue) isMediaValue_Kind() {}
 
 type MediaMember struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	Value         *MediaValue            `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Key   string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Value *MediaValue            `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	// One-based position in the original JSON object, independent of wire key
+	// ordering. All zero retains legacy sorted-key semantics; otherwise the
+	// object's ordinals must be a permutation of 1..member_count.
+	SourceOrdinal uint32 `protobuf:"varint,3,opt,name=source_ordinal,json=sourceOrdinal,proto3" json:"source_ordinal,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -279,6 +283,13 @@ func (x *MediaMember) GetValue() *MediaValue {
 		return x.Value
 	}
 	return nil
+}
+
+func (x *MediaMember) GetSourceOrdinal() uint32 {
+	if x != nil {
+		return x.SourceOrdinal
+	}
+	return 0
 }
 
 type MediaObject struct {
@@ -1281,10 +1292,11 @@ const file_media_v1_media_proto_rawDesc = "" +
 	"\fobject_value\x18\x05 \x01(\v2\x1e.deepseek.media.v1.MediaObjectH\x00R\vobjectValue\x12@\n" +
 	"\varray_value\x18\x06 \x01(\v2\x1d.deepseek.media.v1.MediaArrayH\x00R\n" +
 	"arrayValueB\x06\n" +
-	"\x04kind\"T\n" +
+	"\x04kind\"{\n" +
 	"\vMediaMember\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x123\n" +
-	"\x05value\x18\x02 \x01(\v2\x1d.deepseek.media.v1.MediaValueR\x05value\"G\n" +
+	"\x05value\x18\x02 \x01(\v2\x1d.deepseek.media.v1.MediaValueR\x05value\x12%\n" +
+	"\x0esource_ordinal\x18\x03 \x01(\rR\rsourceOrdinal\"G\n" +
 	"\vMediaObject\x128\n" +
 	"\amembers\x18\x01 \x03(\v2\x1e.deepseek.media.v1.MediaMemberR\amembers\"C\n" +
 	"\n" +

@@ -166,6 +166,24 @@ jobs:
             artifacts/rust-cloud/source-context.json
           if-no-files-found: ignore
           retention-days: 7
+      - name: Verify media metadata ordering and maximum legal JSON through native HTTP
+        if: matrix.mode == 'checks'
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          for scenario in top-level nested array truncated maximum-array; do
+            python scripts/verify_native_media_patch.py --metadata-order-case "$scenario" --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out "artifacts/rust-cloud/media-metadata-cases/$scenario" 2>&1 | tee "artifacts/rust-cloud/media-metadata-$scenario.log"
+          done
+      - name: Preserve authenticated media input semantics evidence
+        if: always() && matrix.mode == 'checks'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rust-cloud-media-metadata-cases-${{ github.sha }}
+          path: |
+            artifacts/rust-cloud/media-metadata-cases
+            artifacts/rust-cloud/source-context.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Verify real UTC Go authority and Rust custody signing over TLS and process restart
         if: matrix.mode == 'checks'
         run: |

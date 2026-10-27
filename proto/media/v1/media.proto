@@ -23,6 +23,10 @@ message MediaValue {
 message MediaMember {
   string key = 1;
   MediaValue value = 2;
+  // One-based position in the original JSON object, independent of wire key
+  // ordering. All zero retains legacy sorted-key semantics; otherwise the
+  // object's ordinals must be a permutation of 1..member_count.
+  uint32 source_ordinal = 3;
 }
 
 message MediaObject {

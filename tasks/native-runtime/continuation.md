@@ -1,5 +1,41 @@
 # Current native migration execution — actual native media PATCH reproduction, 2026-10-26
 
+## Current checkpoint: ordered media inputs and transport overhead
+
+Parent `5471ed09edba16e6769bec3abd8b87110204cb36` passed
+[the Rust workflow](https://github.com/leizd/DeepSeek-Infra/actions/runs/40428090974):
+1630 tests, original80% floor at82.1113513%, all32 named checks and54 controlled
+reports. Its actual normal-auth media PATCH advanced workspace generation0→2
+and retained2 after whole-launcher restart. The original full37-job source CI
+and affected platforms are separate qualifications; earlier1e6cb22e platform
+and full-CI success does not qualify this candidate.
+
+Test-only `65edd2d8344eaa549150d8d505005f4ba98cdd01` reproduced
+[exactly four ordered-metadata failures](https://github.com/leizd/DeepSeek-Infra/actions/runs/40430653341)
+while all12 original journal tests passed. Sorting input keys changed the value
+retained after sanitization/truncation, including nested/array metadata.
+
+This candidate adds an explicit typed source ordinal while keeping canonical
+wire key sorting, old zero-ordinal bytes, frozen v1 descriptors and normalized
+outcome compatibility. Go retains raw field order before the typed boundary;
+Rust alone normalizes/publishes data. A legal999,994-byte public JSON array
+expands to2,499,955 typed bytes, so only media RPCs grow to4 MiB; public JSON
+stays1,000,000 bytes and all other control methods stay1 MiB.
+
+Local25 observer/verifier cases and pinned12-source/21-output protocol
+regeneration pass. Go66 scoped regressions, Rust1636/original80%, original full
+Go/Android-Go95%, Python95%,33 Rust check steps/59 controlled reports, five
+actual public metadata/maximum-input workloads and current-source platforms are
+PENDING. Runtime compilers/caches/containers stay in GitHub Actions. Next:
+qualify that exact source, inspect the first actual failure, then continue full
+media interruption/takeover and remaining operations. Full server/desktop/
+Android/background/provider/Fleet, numeric/large-record/hostile-path/durability,
+data migration/rollback, original arbitrary pytest with zero production Python,
+cutover and release obligations remain open. Keep `NOT_READY`.
+
+The dated sections below are historical source-specific checkpoints.
+
+
 ## Current checkpoint: media workspace-generation repair
 
 The qualified parent is `1e6cb22e0537f68c5b519b50125153bc114836f1`, tree

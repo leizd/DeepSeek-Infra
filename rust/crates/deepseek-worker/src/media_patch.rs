@@ -44,7 +44,7 @@ fn validate_claim(
         || now < 0
         || c.lease_until_unix > now.saturating_add(60)
         || c.state != "CLAIMED"
-        || intent.encoded_len() > 2 * 1024 * 1024
+        || intent.encoded_len() > 4 * 1024 * 1024
         || (patch.title.is_none() && patch.project_id.is_none() && patch.metadata.is_none())
     {
         return Err(invalid());

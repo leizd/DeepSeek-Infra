@@ -15,8 +15,8 @@ impl AgentExecutionControl {
     ) -> Result<MediaPatchClaim, Status> {
         let channel = self.endpoint.connect().await.map_err(|_| unavailable())?;
         let mut client = MediaMutationControlClient::new(channel)
-            .max_decoding_message_size(2 * 1024 * 1024)
-            .max_encoding_message_size(2 * 1024 * 1024);
+            .max_decoding_message_size(4 * 1024 * 1024)
+            .max_encoding_message_size(4 * 1024 * 1024);
         let mut request = Request::new(GetMediaPatchClaimRequest {
             schema_version: 1,
             operation_id: operation.into(),
@@ -38,8 +38,8 @@ impl AgentExecutionControl {
     ) -> Result<MediaPatchDispatchPermit, Status> {
         let channel = self.endpoint.connect().await.map_err(|_| unavailable())?;
         let mut client = MediaMutationControlClient::new(channel)
-            .max_decoding_message_size(2 * 1024 * 1024)
-            .max_encoding_message_size(2 * 1024 * 1024);
+            .max_decoding_message_size(4 * 1024 * 1024)
+            .max_encoding_message_size(4 * 1024 * 1024);
         let mut request = Request::new(BeginMediaPatchDispatchRequest {
             schema_version: 1,
             operation_id: claim

@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -28,7 +29,8 @@ import verify_native_media_reads as reads
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/native_media_library_read_v1.json"
 MEDIA_ID = "media_keep"
-PATCH = {"title": "Native media update", "metadata": {"nativePatchProof": "controlled"}}
+BASE_PATCH = {"title": "Native media update", "metadata": {"nativePatchProof": "controlled"}}
+PATCH = BASE_PATCH
 LIMIT = 2 * 1024**2
 ORACLE = r'''
 import json, sys
@@ -46,6 +48,51 @@ class ProbeFailure(RuntimeError):
 def require(value: Any, code: str) -> None:
     if not value:
         raise ProbeFailure(code)
+
+
+def case_patch(case: str) -> dict[str, Any]:
+    if case == "maximum-array":
+        return {"title": BASE_PATCH["title"], "metadata": [0] * 499_960}
+    prefix = "k" * 80
+    metadata_cases = {
+        "top-level": {"a?": "first", "a!": "last"},
+        "nested": {"outer": {"a?": "first", "a!": "last"}},
+        "array": {"rows": [{"a?": "first", "a!": "last"}]},
+        "truncated": {prefix + "z": "first", prefix + "a": "last"},
+    }
+    if case == "baseline":
+        return json.loads(json.dumps(BASE_PATCH))
+    require(case in metadata_cases, "MEDIA_PATCH_ORDER_CASE_INVALID")
+    return {"title": BASE_PATCH["title"], "metadata": metadata_cases[case]}
+
+
+def wire_payload(payload: dict[str, Any]) -> bytes:
+    return json.dumps(payload, separators=(",", ":")).encode()
+
+
+def journal_observation(owned_root: Path) -> dict[str, Any]:
+    journals = list(owned_root.rglob("media-effects.sqlite3"))
+    require(len(journals) == 1, "MEDIA_PATCH_EFFECT_JOURNAL_INVALID")
+    path = journals[0]
+    require(path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(owned_root.resolve()),
+            "MEDIA_PATCH_EFFECT_JOURNAL_INVALID")
+    connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+    try:
+        require(connection.execute("PRAGMA application_id").fetchone()[0] == 0x44534D50,
+                "MEDIA_PATCH_EFFECT_JOURNAL_INVALID")
+        rows = connection.execute(
+            "SELECT operation_id,state,length(claim),substr(claim,1,?) FROM media_operations LIMIT 2",
+            (4 * 1024**2 + 1,),
+        ).fetchall()
+    finally:
+        connection.close()
+    require(len(rows) == 1, "MEDIA_PATCH_EFFECT_JOURNAL_INVALID")
+    operation, state, length, claim = rows[0]
+    require(isinstance(operation, str) and 0 < len(operation) <= 128 and state == "APPLIED"
+            and isinstance(length, int) and 0 < length <= 4 * 1024**2
+            and isinstance(claim, bytes) and len(claim) == length, "MEDIA_PATCH_EFFECT_JOURNAL_INVALID")
+    return {"operationId": operation, "state": state, "claimBytes": length,
+            "claimSha256": hashlib.sha256(claim).hexdigest()}
 
 
 def seed(profile: Path, media: list[dict[str, Any]]) -> None:
@@ -73,7 +120,7 @@ def exchange(origin: str, path: str, method: str, token: str | None,
     headers = {"Content-Type": "application/json"}
     if token is not None:
         headers["Authorization"] = "Bearer " + token
-    data = None if payload is None else json.dumps(payload).encode()
+    data = None if payload is None else wire_payload(payload)
     try:
         response = urlopen(Request(origin + path, method=method, headers=headers, data=data), timeout=10)
     except HTTPError as error:
@@ -115,6 +162,11 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
     require(fixture["schemaVersion"] == 1 and len(fixture["media"]) == 18, "MEDIA_PATCH_FIXTURE_CONTRACT_DIFFERS")
     report["fixtureSha256"] = hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
     report["patchSha256"] = hashlib.sha256(json.dumps(PATCH, sort_keys=True).encode()).hexdigest()
+    request_body = wire_payload(PATCH)
+    require(len(request_body) <= 1_000_000, "MEDIA_PATCH_FIXTURE_EXCEEDS_PUBLIC_LIMIT")
+    request_body_sha256 = hashlib.sha256(request_body).hexdigest()
+    report["requestBodySha256"] = request_body_sha256
+    report["requestBodyBytes"] = len(request_body)
     for port in (8090, 50052):
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", port))
@@ -216,6 +268,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 "method": "PATCH", "path": "/api/media/" + MEDIA_ID, "startedUnix": started,
                 "finishedUnix": finished, "status": status, "contentType": content_type,
                 "responseSha256": hashlib.sha256(raw).hexdigest(), "requestRepeated": False,
+                "requestBodySha256": request_body_sha256,
                 "generationBefore": generation_before, "generationAfter": generation_after}
             (args.out / "native-patch-observation.json").write_text(
                 json.dumps(observation, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -232,42 +285,56 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             instant = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
             require(instant.tzinfo is not None and started - 2 <= instant.timestamp() <= finished + 2,
                     "NATIVE_MEDIA_PATCH_TIMESTAMP_OUTSIDE_REQUEST")
+            effect_after = journal_observation(scratch)
+            observation["effectBeforeRestart"] = effect_after
+            if report.get("metadataOrderCase") == "maximum-array":
+                require(effect_after["claimBytes"] > 2 * 1024**2,
+                        "LARGE_MEDIA_INPUT_DID_NOT_CROSS_TYPED_NATIVE_BOUNDARY")
             shutdown()
             token = launch("retained-restart")
             require((profile / ".auth-token").read_bytes() == original_auth, "MEDIA_PATCH_FINAL_RESTART_REPLACED_AUTH")
             status, raw, _ = exchange(origin, "/api/media/" + MEDIA_ID, "GET", token)
             (args.out / "retained-media-response.txt").write_bytes(raw)
             generation_retained = generation_observation(profile)
+            effect_retained = journal_observation(scratch)
             observation.update(retainedGetStatus=status, retainedResponseSha256=hashlib.sha256(raw).hexdigest(),
-                generationRetained=generation_retained)
+                generationRetained=generation_retained, effectAfterRestart=effect_retained)
             (args.out / "native-patch-observation.json").write_text(
                 json.dumps(observation, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             require(status == 200 and json.loads(raw) == actual, "NATIVE_MEDIA_PATCH_NOT_RETAINED_AFTER_RESTART")
             require(generation_retained == generation_after, "MEDIA_READ_OR_RESTART_CHANGED_GENERATION")
+            require(effect_retained == effect_after, "MEDIA_EFFECT_IDENTITY_CHANGED_AFTER_RESTART")
             shutdown()
             report.update(status="PASS", controlledNativeMediaPatchWorkloadQualified=True,
                 originalResponseMatched=True, updatedAtWithinRequest=True, mediaRetainedAfterLauncherRestart=True,
                 workspaceGenerationFenced=True, workspaceGenerationRetainedAfterRestart=True,
+                mediaEffectJournalRetained=True,
                 nativePatchOutcome="PUBLIC_SUCCESS_RETAINED_AUTHORITY_PROOF_NOT_ASSESSED")
         finally:
             shutdown()
 
 
 def main() -> int:
+    global PATCH
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worker", type=Path, required=True)
     parser.add_argument("--edge", type=Path, required=True)
     parser.add_argument("--go-cache", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--metadata-order-case", choices=["baseline", "top-level", "nested", "array", "truncated", "maximum-array"],
+                        default="baseline")
     args = parser.parse_args()
+    PATCH = case_patch(args.metadata_order_case)
     args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = {"kind": "native-media-patch-process-v1", "status": "FAIL",
         "sourceCommit": os.environ.get("GITHUB_SHA"), "runId": os.environ.get("GITHUB_RUN_ID"),
         "event": os.environ.get("GITHUB_EVENT_NAME"), "semanticStageReached": False,
+        "metadataOrderCase": args.metadata_order_case,
         "nativePatchRequestStarted": False, "nativePatchReplyObserved": False,
         "controlledNativeMediaPatchWorkloadQualified": False, "offlineMediaFixtureSeeded": False,
         "workspaceGenerationFenced": False, "workspaceGenerationRetainedAfterRestart": False,
+        "mediaEffectJournalRetained": False,
         "mediaPatchAuthorityRecoveryQualified": False, "allMediaWritesQualified": False,
         "mediaMigrationQualified": False, "mediaGUIQualified": False,
         "fullMigrationQualified": False, "readiness": "NOT_READY"}

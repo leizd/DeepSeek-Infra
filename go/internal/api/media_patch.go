@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -111,7 +112,7 @@ func mediaPatch(w http.ResponseWriter, r *http.Request, control *store.Control, 
 	body := http.MaxBytesReader(w, r.Body, 1_000_000)
 	decoder := json.NewDecoder(body)
 	decoder.UseNumber()
-	var payload any
+	var payload json.RawMessage
 	if err := decoder.Decode(&payload); err != nil {
 		policyWriteError(w, 400, "invalid_payload", "Invalid JSON body")
 		return
@@ -120,9 +121,14 @@ func mediaPatch(w http.ResponseWriter, r *http.Request, control *store.Control, 
 		policyWriteError(w, 400, "invalid_payload", "Invalid JSON body")
 		return
 	}
-	fields, ok := payload.(map[string]any)
-	if !ok {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
 		policyWriteError(w, 400, "invalid_payload", "Request body must be a JSON object")
+		return
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		policyWriteError(w, 400, "invalid_payload", "Invalid JSON body")
 		return
 	}
 	patch := &mediav1.MediaPatch{}
@@ -133,7 +139,7 @@ func mediaPatch(w http.ResponseWriter, r *http.Request, control *store.Control, 
 			continue
 		}
 		present = true
-		typed, err := mediamodel.FromJSON(value)
+		typed, err := mediamodel.ParseJSON(value)
 		if err != nil {
 			policyWriteError(w, 400, "invalid_payload", "Invalid media patch")
 			return

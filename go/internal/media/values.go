@@ -13,7 +13,9 @@ import (
 	"sort"
 )
 
-const MaxMessageBytes = 2 * 1024 * 1024
+// Typed scalar arrays can exceed 2 MiB while their public JSON remains below
+// the unchanged 1,000,000-byte HTTP bound. This limit is media-RPC-specific.
+const MaxMessageBytes = 4 * 1024 * 1024
 
 var ErrInvalid = errors.New("MEDIA_MUTATION_INVALID")
 var signatureDomain = []byte("deepseek-infra:media-patch-outcome-v1\x00")
@@ -54,6 +56,82 @@ func RequestDigest(intent *mediav1.MediaPatchIntent) ([]byte, error) {
 	return digest[:], nil
 }
 func FromJSON(v any) (*mediav1.MediaValue, error) { return fromJSON(v, 0) }
+
+// ParseJSON retains input positions before canonical wire-key sorting. A
+// duplicate JSON key keeps its first position and last value, as Python does.
+// FromJSON remains the legacy sorted-map adapter for existing stored producers.
+func ParseJSON(raw []byte) (*mediav1.MediaValue, error) {
+	if len(raw) > 1_000_000 {
+		return nil, ErrInvalid
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	value, err := parseJSONAt(decoder, 0)
+	if err != nil || decoder.Decode(new(any)) != io.EOF {
+		return nil, ErrInvalid
+	}
+	return value, nil
+}
+
+func parseJSONAt(decoder *json.Decoder, depth int) (*mediav1.MediaValue, error) {
+	if depth > 128 {
+		return nil, ErrInvalid
+	}
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, ErrInvalid
+	}
+	delimiter, compound := token.(json.Delim)
+	if !compound {
+		return fromJSON(token, depth)
+	}
+	switch delimiter {
+	case '{':
+		object := &mediav1.MediaObject{}
+		positions := map[string]int{}
+		for decoder.More() {
+			token, err := decoder.Token()
+			if err != nil {
+				return nil, ErrInvalid
+			}
+			key, ok := token.(string)
+			if !ok {
+				return nil, ErrInvalid
+			}
+			child, err := parseJSONAt(decoder, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			if position, exists := positions[key]; exists {
+				object.Members[position].Value = child
+			} else {
+				positions[key] = len(object.Members)
+				object.Members = append(object.Members, &mediav1.MediaMember{Key: key, Value: child, SourceOrdinal: uint32(len(object.Members) + 1)})
+			}
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, ErrInvalid
+		}
+		sort.Slice(object.Members, func(i, j int) bool { return object.Members[i].Key < object.Members[j].Key })
+		return &mediav1.MediaValue{Kind: &mediav1.MediaValue_ObjectValue{ObjectValue: object}}, nil
+	case '[':
+		array := &mediav1.MediaArray{}
+		for decoder.More() {
+			child, err := parseJSONAt(decoder, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			array.Values = append(array.Values, child)
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, ErrInvalid
+		}
+		return &mediav1.MediaValue{Kind: &mediav1.MediaValue_ArrayValue{ArrayValue: array}}, nil
+	default:
+		return nil, ErrInvalid
+	}
+}
+
 func fromJSON(v any, depth int) (*mediav1.MediaValue, error) {
 	if depth > 128 {
 		return nil, ErrInvalid
@@ -141,9 +219,21 @@ func toJSON(v *mediav1.MediaValue, depth int) (any, error) {
 		}
 		o := map[string]any{}
 		previous := ""
+		seen := make([]bool, len(x.ObjectValue.Members))
+		hasZero, hasOrdinal := false, false
 		for i, m := range x.ObjectValue.Members {
 			if m == nil || len(m.ProtoReflect().GetUnknown()) != 0 || (i > 0 && m.Key <= previous) {
 				return nil, ErrInvalid
+			}
+			if m.SourceOrdinal == 0 {
+				hasZero = true
+			} else {
+				hasOrdinal = true
+				position := uint64(m.SourceOrdinal) - 1
+				if position >= uint64(len(seen)) || seen[position] {
+					return nil, ErrInvalid
+				}
+				seen[position] = true
 			}
 			child, err := toJSON(m.Value, depth+1)
 			if err != nil {
@@ -151,6 +241,9 @@ func toJSON(v *mediav1.MediaValue, depth int) (any, error) {
 			}
 			o[m.Key] = child
 			previous = m.Key
+		}
+		if hasZero && hasOrdinal {
+			return nil, ErrInvalid
 		}
 		return o, nil
 	case *mediav1.MediaValue_ArrayValue:

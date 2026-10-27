@@ -176,3 +176,39 @@ request, read and whole-launcher restart leave it unchanged. These observations
 do not qualify every backup, hostile path, closing-fsync failure, power-loss
 recovery, all media operations or the whole product. Existing readiness limits
 and original coverage floors remain required.
+
+## Ordered input values and bounded media transport
+
+The public PATCH keeps its original1,000,000-byte JSON bound. Go parses each
+supported field directly from its original JSON bytes into a typed value tree.
+Object members stay unique and sorted by UTF-8 key bytes on the wire, while
+`MediaMember.source_ordinal` records their one-based input positions. Nonzero
+positions must form a complete permutation; duplicate/gapped/mixed-zero sets
+are rejected before admission. All-zero objects retain legacy sorted-key
+semantics. JSON duplicate keys keep their first position and last value.
+
+Rust restores input positions before original media normalization. This matters
+when sanitization or80-character truncation makes different keys collide, also
+inside nested objects and arrays. The immutable request digest binds positions.
+Normalized public outcomes retain the old zero-position encoding, and old
+retained values/claims/outcomes stay readable without rewriting signed bytes.
+The old frozen descriptor baseline and all existing field numbers remain.
+[Protobuf evolution guidance](https://protobuf.dev/programming-guides/proto3/#updating)
+requires application compatibility checks in addition to wire compatibility;
+these legacy bytes and malformed-order refusals are explicit regressions.
+
+A legal999,994-byte JSON fixture expands to2,499,955 typed bytes. Media-only
+RPCs therefore use a4 MiB request/response bound; every other control method
+retains its original1 MiB limit and unchanged oversized-message regression.
+This changes neither the public HTTP cap nor any original coverage floor.
+
+The actual authenticated launcher probe adds top-level, nested, array,
+truncation and maximum-array workloads, each with an independent original
+mirror, complete raw public replies and whole-launcher restart. Request hashes
+bind compact bytes without sorting. Read-only observations bind the original
+Rust effect identity, claim length/hash, APPLIED phase and retained workspace
+generation. The maximum-array case must actually persist a claim larger than
+2 MiB, proving that the value crossed the typed native boundary. Only reports
+return from cloud builds. These checks remain pending for this candidate and
+cannot qualify all media APIs, numeric/record-size boundaries, hostile paths,
+complete interruption/takeover recovery or whole-product release readiness.

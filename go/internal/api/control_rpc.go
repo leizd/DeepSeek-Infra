@@ -56,7 +56,7 @@ func HealthFor(cfg config.Config) ControlPlaneHealth {
 // All RPCs require a loopback peer and the same configured internal bearer as
 // /internal/*. An absent bearer denies all.
 func NewControlRPC(control *store.Control, bearer string, health ControlPlaneHealth) *grpc.Server {
-	server := grpc.NewServer(grpc.MaxRecvMsgSize(2<<20), grpc.MaxSendMsgSize(2<<20),
+	server := grpc.NewServer(grpc.MaxRecvMsgSize(4<<20), grpc.MaxSendMsgSize(4<<20),
 		grpc.UnaryInterceptor(func(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 			limit := controlRPCMessageLimit(info.FullMethod)
 			if message, ok := request.(proto.Message); !ok || proto.Size(message) > limit {
@@ -152,7 +152,7 @@ func (service *controlReadService) GetBackupPolicyRecipients(context.Context, *c
 func controlRPCMessageLimit(method string) int {
 	switch method {
 	case mediav1.MediaMutationControl_GetClaim_FullMethodName, mediav1.MediaMutationControl_BeginDispatch_FullMethodName, mediav1.MediaMutationControl_RecordOutcome_FullMethodName:
-		return 2 << 20
+		return 4 << 20
 	default:
 		return 1 << 20
 	}

@@ -125,3 +125,87 @@ def test_directory_cannot_be_reported_as_a_generation(verifier: ModuleType, tmp_
     with pytest.raises(verifier.ProbeFailure, match="MEDIA_PATCH_GENERATION_COUNTER_INVALID"):
         verifier.generation_observation(tmp_path)
     assert path.is_dir()
+
+
+@pytest.mark.parametrize("case,metadata", [
+    ("top-level", {"a?": "first", "a!": "last"}),
+    ("nested", {"outer": {"a?": "first", "a!": "last"}}),
+    ("array", {"rows": [{"a?": "first", "a!": "last"}]}),
+    ("truncated", {"k" * 80 + "z": "first", "k" * 80 + "a": "last"}),
+])
+def test_metadata_order_workload_keeps_the_exact_input_order(
+    verifier: ModuleType, case: str, metadata: dict[str, object],
+) -> None:
+    patch = verifier.case_patch(case)
+    assert patch["title"] == "Native media update"
+    assert json.dumps(patch["metadata"]) == json.dumps(metadata)
+
+
+def test_metadata_order_cases_do_not_alias_the_default_workload(verifier: ModuleType) -> None:
+    original = json.dumps(verifier.PATCH)
+    first = verifier.case_patch("top-level")
+    first["metadata"]["a?"] = "changed"
+    assert verifier.case_patch("top-level")["metadata"]["a?"] == "first"
+    assert json.dumps(verifier.PATCH) == original
+
+
+def test_unknown_metadata_order_workload_fails_closed(verifier: ModuleType) -> None:
+    with pytest.raises(verifier.ProbeFailure, match="MEDIA_PATCH_ORDER_CASE_INVALID"):
+        verifier.case_patch("unrecognized")
+
+
+def test_maximum_array_workload_stays_inside_the_original_http_limit(verifier: ModuleType) -> None:
+    patch = verifier.case_patch("maximum-array")
+    raw = verifier.wire_payload(patch)
+    assert 900_000 < len(raw) <= 1_000_000
+    assert len(json.loads(raw)["metadata"]) == 499_960
+    assert set(json.loads(raw)["metadata"]) == {0}
+
+
+def test_wire_payload_keeps_input_order_without_formatting_expansion(verifier: ModuleType) -> None:
+    assert verifier.wire_payload({"metadata": {"a?": "first", "a!": "last"}}) == (
+        b'{"metadata":{"a?":"first","a!":"last"}}'
+    )
+
+
+def make_effect_journal(root: Path, state: str) -> Path:
+    import sqlite3
+
+    path = root / "rust-worker/media-effects.sqlite3"
+    path.parent.mkdir(parents=True)
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA application_id=1146309968")
+        connection.execute("CREATE TABLE media_operations(operation_id TEXT, state TEXT, claim BLOB)")
+        connection.execute("INSERT INTO media_operations VALUES (?,?,?)", ("fixture-operation", state, b"fixture-claim"))
+    return path
+
+
+def test_effect_journal_observer_is_read_only(verifier: ModuleType, tmp_path: Path) -> None:
+    import hashlib
+
+    path = make_effect_journal(tmp_path, "APPLIED")
+    original = path.read_bytes()
+    result = verifier.journal_observation(tmp_path)
+    assert result == {"operationId": "fixture-operation", "state": "APPLIED", "claimBytes": 13,
+                      "claimSha256": hashlib.sha256(b"fixture-claim").hexdigest()}
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("state", ["PREPARED", "APPLYING", "REFUSED"])
+def test_effect_journal_observer_cannot_qualify_an_unapplied_row(
+    verifier: ModuleType, tmp_path: Path, state: str,
+) -> None:
+    path = make_effect_journal(tmp_path, state)
+    original = path.read_bytes()
+    with pytest.raises(verifier.ProbeFailure, match="MEDIA_PATCH_EFFECT_JOURNAL_INVALID"):
+        verifier.journal_observation(tmp_path)
+    assert path.read_bytes() == original
+
+
+def test_effect_journal_observer_rejects_absent_or_ambiguous_storage(verifier: ModuleType, tmp_path: Path) -> None:
+    with pytest.raises(verifier.ProbeFailure, match="MEDIA_PATCH_EFFECT_JOURNAL_INVALID"):
+        verifier.journal_observation(tmp_path)
+    make_effect_journal(tmp_path / "one", "APPLIED")
+    make_effect_journal(tmp_path / "two", "APPLIED")
+    with pytest.raises(verifier.ProbeFailure, match="MEDIA_PATCH_EFFECT_JOURNAL_INVALID"):
+        verifier.journal_observation(tmp_path)

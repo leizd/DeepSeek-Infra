@@ -188,8 +188,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .add_service(AgentNodeWorkerServer::new(service.clone()))
         .add_service(
             MediaMutationWorkerServer::new(service.clone())
-                .max_decoding_message_size(2 * 1024 * 1024)
-                .max_encoding_message_size(2 * 1024 * 1024),
+                .max_decoding_message_size(4 * 1024 * 1024)
+                .max_encoding_message_size(4 * 1024 * 1024),
         )
         .add_service(WorkerServer::new(service))
         .serve_with_shutdown(address, async {

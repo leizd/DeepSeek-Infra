@@ -16,7 +16,7 @@ func (c *Client) ExecuteMediaPatch(ctx context.Context, r *mediav1.ExecuteMediaP
 	if err != nil {
 		return nil, err
 	}
-	return c.media.ExecutePatch(ctx, r, grpc.MaxCallRecvMsgSize(2*1024*1024), grpc.MaxCallSendMsgSize(2*1024*1024))
+	return c.media.ExecutePatch(ctx, r, grpc.MaxCallRecvMsgSize(4*1024*1024), grpc.MaxCallSendMsgSize(4*1024*1024))
 }
 func (c *Client) QueryMediaPatch(ctx context.Context, r *mediav1.QueryMediaPatchRequest) (*mediav1.QueryMediaPatchResponse, error) {
 	if c == nil || !c.tlsSecured || !c.bearerAttached || c.media == nil {
@@ -26,5 +26,5 @@ func (c *Client) QueryMediaPatch(ctx context.Context, r *mediav1.QueryMediaPatch
 	if err != nil {
 		return nil, err
 	}
-	return c.media.QueryPatch(ctx, r, grpc.MaxCallRecvMsgSize(2*1024*1024))
+	return c.media.QueryPatch(ctx, r, grpc.MaxCallRecvMsgSize(4*1024*1024))
 }

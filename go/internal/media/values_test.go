@@ -133,3 +133,119 @@ func TestMediaSignedOutcomeCannotRebindAnOperationOrRealm(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMediaOrderedJSONRetainsCanonicalKeysAndOriginalPositions(t *testing.T) {
+	for _, raw := range []string{`{"a?":"first","a!":"last"}`, `{"outer":[{"a?":"first","a!":"last"}]}`} {
+		value, err := ParseJSON([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		object := value.GetObjectValue()
+		if object.Members[0].Key == "outer" {
+			object = object.Members[0].Value.GetArrayValue().Values[0].GetObjectValue()
+		}
+		if len(object.Members) != 2 || object.Members[0].Key != "a!" || object.Members[0].SourceOrdinal != 2 || object.Members[1].Key != "a?" || object.Members[1].SourceOrdinal != 1 {
+			t.Fatalf("lost canonical keys or original positions: %v", object)
+		}
+		var expected any
+		if err := json.Unmarshal([]byte(raw), &expected); err != nil {
+			t.Fatal(err)
+		}
+		actual, err := ToJSON(value)
+		if err != nil || !reflect.DeepEqual(actual, expected) {
+			t.Fatalf("value changed: %#v %v", actual, err)
+		}
+	}
+}
+
+func TestMediaOrderedJSONPreservesDuplicateFirstPositionAndRejectsMalformedInput(t *testing.T) {
+	value, err := ParseJSON([]byte(`{"a?":"first","a!":"last","a?":"override"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	members := value.GetObjectValue().Members
+	if len(members) != 2 || members[0].SourceOrdinal != 2 || members[1].SourceOrdinal != 1 || members[1].Value.GetTextValue() != "override" {
+		t.Fatalf("JSON duplicate must keep its first position and last value: %v", members)
+	}
+	for _, raw := range [][]byte{nil, []byte(`{"a":1} {"b":2}`), []byte(`{"a":}`), []byte(`{true:1}`), []byte(`{"a" true}`), []byte(`{"a":1`), []byte(`[1,]`), []byte(`[1}`), []byte(`[1`), []byte(`NaN`), bytes.Repeat([]byte(" "), 1_000_001), append(bytes.Repeat([]byte("["), 130), bytes.Repeat([]byte("]"), 130)...)} {
+		if _, err := ParseJSON(raw); err == nil {
+			t.Fatalf("accepted malformed or oversized input of %d bytes", len(raw))
+		}
+	}
+}
+
+func TestMediaOrderedJSONBindsInputPositionsAndPreservesLegacyWire(t *testing.T) {
+	first, err := ParseJSON([]byte(`{"a?":"first","a!":"last"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := ParseJSON([]byte(`{"a!":"last","a?":"first"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := &mediav1.MediaPatchIntent{SchemaVersion: 1, OperationId: "ordered-media", MediaId: "media_one", Patch: &mediav1.MediaPatch{Metadata: first}}
+	before, err := RequestDigest(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := proto.Clone(intent).(*mediav1.MediaPatchIntent)
+	other.Patch.Metadata = second
+	after, err := RequestDigest(other)
+	if err != nil || bytes.Equal(before, after) {
+		t.Fatalf("the immutable digest did not bind input ordering: %v", err)
+	}
+	legacy, err := FromJSON(map[string]any{"a": "A", "b": "B"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := Encode(legacy)
+	golden := []byte{0x2a, 0x14, 0x0a, 0x08, 0x0a, 0x01, 0x61, 0x12, 0x03, 0x1a, 0x01, 0x41, 0x0a, 0x08, 0x0a, 0x01, 0x62, 0x12, 0x03, 0x1a, 0x01, 0x42}
+	if err != nil || !bytes.Equal(encoded, golden) {
+		t.Fatalf("changed immutable legacy zero-ordinal wire: %x %v", encoded, err)
+	}
+	decoded := &mediav1.MediaValue{}
+	if err := proto.Unmarshal(golden, decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ToJSON(decoded); err != nil {
+		t.Fatalf("old retained values must remain valid: %v", err)
+	}
+}
+
+func TestMediaOrderedJSONRejectsMalformedOrdinalSets(t *testing.T) {
+	base, err := ParseJSON([]byte(`{"b":false,"a":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ordinals := range [][2]uint32{{0, 1}, {1, 1}, {1, 3}, {1, ^uint32(0)}} {
+		value := proto.Clone(base).(*mediav1.MediaValue)
+		for i, member := range value.GetObjectValue().Members {
+			member.SourceOrdinal = ordinals[i]
+		}
+		if _, err := ToJSON(value); err == nil {
+			t.Fatalf("accepted ambiguous ordinals %v", ordinals)
+		}
+		intent := &mediav1.MediaPatchIntent{SchemaVersion: 1, OperationId: "bad-order", MediaId: "media_one", Patch: &mediav1.MediaPatch{Metadata: value}}
+		if _, err := RequestDigest(intent); err == nil {
+			t.Fatalf("admitted ambiguous ordinals %v", ordinals)
+		}
+	}
+}
+
+func TestMediaOrderedJSONFitsLargestPermittedPublicScalarArray(t *testing.T) {
+	raw := append([]byte("["), bytes.Repeat([]byte("0,"), 499_990)...)
+	raw[len(raw)-1] = ']'
+	body := append(append([]byte(`{"metadata":`), raw...), '}')
+	if len(body) > 1_000_000 || !json.Valid(body) {
+		t.Fatal("fixture must remain a legal public HTTP body")
+	}
+	value, err := ParseJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := &mediav1.MediaPatchIntent{SchemaVersion: 1, OperationId: "maximum-media-json", MediaId: "media_one", Patch: &mediav1.MediaPatch{Metadata: value}}
+	encoded, err := Encode(intent)
+	if err != nil || len(encoded) <= 2*1024*1024 || len(encoded) > MaxMessageBytes {
+		t.Fatalf("legal HTTP input lost to typed transport overhead: bytes=%d err=%v", len(encoded), err)
+	}
+}

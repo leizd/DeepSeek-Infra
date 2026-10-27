@@ -10,6 +10,33 @@ pub(super) fn invalid() -> Status {
 pub(super) fn from_json(value: &Value) -> Result<MediaValue, Status> {
     from_json_at(value, 0)
 }
+
+// Public records have already been normalized. Keep their existing v1 wire
+// encoding so older controllers can verify outcomes from a newer worker.
+pub(super) fn from_json_legacy(value: &Value) -> Result<MediaValue, Status> {
+    let mut result = from_json(value)?;
+    clear_source_ordinals(&mut result);
+    Ok(result)
+}
+
+fn clear_source_ordinals(value: &mut MediaValue) {
+    match value.kind.as_mut() {
+        Some(Kind::ObjectValue(object)) => {
+            for member in &mut object.members {
+                member.source_ordinal = 0;
+                if let Some(child) = member.value.as_mut() {
+                    clear_source_ordinals(child);
+                }
+            }
+        }
+        Some(Kind::ArrayValue(array)) => {
+            for child in &mut array.values {
+                clear_source_ordinals(child);
+            }
+        }
+        _ => {}
+    }
+}
 fn from_json_at(value: &Value, depth: usize) -> Result<MediaValue, Status> {
     if depth > 128 {
         return Err(invalid());
@@ -28,10 +55,12 @@ fn from_json_at(value: &Value, depth: usize) -> Result<MediaValue, Status> {
         Value::Object(o) => {
             let mut members = o
                 .iter()
-                .map(|(k, v)| {
+                .enumerate()
+                .map(|(position, (k, v))| {
                     Ok(MediaMember {
                         key: k.clone(),
                         value: Some(from_json_at(v, depth + 1)?),
+                        source_ordinal: u32::try_from(position + 1).map_err(|_| invalid())?,
                     })
                 })
                 .collect::<Result<Vec<_>, Status>>()?;
@@ -74,6 +103,17 @@ fn to_json_at(value: &MediaValue, depth: usize) -> Result<Value, Status> {
                     return Err(invalid());
                 }
                 previous = Some(&m.key);
+            }
+            let mut members = o.members.iter().collect::<Vec<_>>();
+            if members.iter().any(|m| m.source_ordinal != 0) {
+                members.sort_by_key(|m| m.source_ordinal);
+                for (position, member) in members.iter().enumerate() {
+                    if member.source_ordinal as usize != position + 1 {
+                        return Err(invalid());
+                    }
+                }
+            }
+            for m in members {
                 result.insert(
                     m.key.clone(),
                     to_json_at(m.value.as_ref().ok_or_else(invalid)?, depth + 1)?,
@@ -86,8 +126,9 @@ fn to_json_at(value: &MediaValue, depth: usize) -> Result<Value, Status> {
 
 #[cfg(test)]
 mod input_order_tests {
-    use super::{from_json, to_json};
+    use super::{Kind, MediaValue, from_json, from_json_legacy, to_json};
     use deepseek_policy::media_schema::normalize_media_record;
+    use prost::Message as _;
     use serde_json::{Value, json};
 
     fn compare_original_metadata(raw: &str, expected: Value) {
@@ -137,5 +178,40 @@ mod input_order_tests {
         let mut expected = serde_json::Map::new();
         expected.insert(prefix, Value::String("last".into()));
         compare_original_metadata(&input, Value::Object(expected));
+    }
+
+    #[test]
+    fn media_typed_values_reject_ambiguous_source_ordinals() {
+        let original = from_json(&json!({"a": "A", "b": "B"})).unwrap();
+        for ordinals in [[0, 1], [1, 1], [1, 3], [1, u32::MAX]] {
+            let mut value = original.clone();
+            let Some(Kind::ObjectValue(object)) = value.kind.as_mut() else {
+                panic!("object fixture");
+            };
+            for (member, ordinal) in object.members.iter_mut().zip(ordinals) {
+                member.source_ordinal = ordinal;
+            }
+            assert!(
+                to_json(&value).is_err(),
+                "accepted ambiguous source ordinals"
+            );
+        }
+    }
+
+    #[test]
+    fn media_typed_values_accept_exact_legacy_zero_ordinal_wire() {
+        let wire = [
+            0x2a, 0x14, 0x0a, 0x08, 0x0a, 0x01, 0x61, 0x12, 0x03, 0x1a, 0x01, 0x41, 0x0a, 0x08,
+            0x0a, 0x01, 0x62, 0x12, 0x03, 0x1a, 0x01, 0x42,
+        ];
+        let value = MediaValue::decode(wire.as_slice()).unwrap();
+        assert_eq!(value.encode_to_vec(), wire);
+        assert_eq!(to_json(&value).unwrap(), json!({"a": "A", "b": "B"}));
+        assert_eq!(
+            from_json_legacy(&json!({"a": "A", "b": "B"}))
+                .unwrap()
+                .encode_to_vec(),
+            wire
+        );
     }
 }
