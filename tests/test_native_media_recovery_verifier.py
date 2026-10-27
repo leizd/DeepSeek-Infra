@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+import argparse
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import sqlite3
+import sys
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+spec = importlib.util.spec_from_file_location("native_media_recovery_probe", ROOT / "scripts/verify_native_media_recovery.py")
+assert spec is not None and spec.loader is not None
+probe = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(probe)
+
+
+def journal(tmp_path: Path, application_id: int = 0x44534D50) -> Path:
+    path = tmp_path / "media-effects.sqlite3"
+    with sqlite3.connect(path) as db:
+        db.execute(f"PRAGMA application_id={application_id}")
+        db.execute("CREATE TABLE media_operations(operation_id,state,claim,preparation_sha256,before_bytes,after_bytes,planned,outcome)")
+        db.execute("INSERT INTO media_operations VALUES(?,?,?,?,?,?,?,?)",
+                   ("media-patch-" + "a" * 32, "APPLYING", b"typed claim", b"7" * 32, b"before", b"after", b"planned", None))
+    return path
+
+
+def test_recovery_observer_reads_the_original_preterminal_row_without_changing_it(tmp_path: Path) -> None:
+    path = journal(tmp_path)
+    before = hashlib.sha256(path.read_bytes()).hexdigest()
+    result = probe.journal_snapshot(tmp_path)
+    assert result["state"] == "APPLYING" and result["rowCount"] == 1
+    assert result["afterSha256"] == hashlib.sha256(b"after").hexdigest()
+    assert result["outcomeSha256"] is None
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == before
+
+
+def test_recovery_observer_rejects_foreign_journals_and_multiple_originals(tmp_path: Path) -> None:
+    path = journal(tmp_path, 123)
+    with pytest.raises(probe.patch.ProbeFailure, match="JOURNAL_ID_DIFFERS"):
+        probe.journal_snapshot(tmp_path)
+    with sqlite3.connect(path) as db:
+        db.execute("PRAGMA application_id=0x44534D50")
+        db.execute("INSERT INTO media_operations SELECT * FROM media_operations")
+    with pytest.raises(probe.patch.ProbeFailure, match="ORIGINAL_RUST_ROW_REQUIRED"):
+        probe.journal_snapshot(tmp_path)
+
+
+def test_recovery_observer_refuses_external_files_and_write_connections(tmp_path: Path) -> None:
+    directory = tmp_path / "owned"
+    directory.mkdir()
+    path = journal(directory)
+    outside = tmp_path / "external.sqlite3"
+    outside.write_bytes(path.read_bytes())
+    with pytest.raises(probe.patch.ProbeFailure, match="PATH_ESCAPED"):
+        probe.owned_file(outside, directory)
+    db = probe.readonly(path, directory)
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            db.execute("DELETE FROM media_operations")
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("key", probe.IMMUTABLE_GO)
+def test_recovery_cannot_rebind_any_original_control_identity_field(key: str) -> None:
+    original: dict[str, object] = {name: index for index, name in enumerate(probe.IMMUTABLE_GO)}
+    retained = dict(original, state="APPLIED")
+    assert probe.same_original(original, retained, probe.IMMUTABLE_GO)
+    retained[key] = -100
+    assert not probe.same_original(original, retained, probe.IMMUTABLE_GO)
+    del retained[key]
+    assert not probe.same_original(original, retained, probe.IMMUTABLE_GO)
+
+
+def test_recovery_identity_keeps_epoch_types_and_original_rust_witnesses() -> None:
+    assert not probe.same_original({"epoch": 1}, {"epoch": True}, ("epoch",))
+    original = {name: "original" for name in probe.IMMUTABLE_RUST}
+    for key in probe.IMMUTABLE_RUST:
+        changed = dict(original, state="APPLIED")
+        changed[key] = "replacement"
+        assert not probe.same_original(original, changed, probe.IMMUTABLE_RUST)
+
+
+def test_trace_arguments_hold_only_real_target_rename_exit(tmp_path: Path) -> None:
+    target = tmp_path / "library.json"
+    target.write_bytes(b"original")
+    args = probe.trace_command(Path("/usr/bin/strace"), target, tmp_path, tmp_path / "trace.log")
+    assert args[args.index("-P") + 1] == str(target.resolve())
+    injection = next(value for value in args if value.startswith("inject="))
+    assert injection == "inject=rename,renameat,renameat2:delay_exit=20s"
+    assert "retval=" not in injection and "error=" not in injection
+
+
+def test_recovery_requires_its_own_complete_generation_scope() -> None:
+    probe.require_recovery_generation({"value": 1}, {"present": True, "value": 3})
+    for wrong in (1, 2, 4, "3", True):
+        with pytest.raises(probe.patch.ProbeFailure, match="GENERATION_NOT_FENCED"):
+            probe.require_recovery_generation({"value": 1}, {"present": True, "value": wrong})
+    with pytest.raises(probe.patch.ProbeFailure, match="GENERATION_NOT_FENCED"):
+        probe.require_recovery_generation({"value": 1}, {"present": False, "value": 3})
+
+
+def test_probe_refuses_local_native_execution_before_any_build(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    with pytest.raises(probe.patch.ProbeFailure, match="CLOUD_LINUX_ONLY"):
+        probe.run(argparse.Namespace(), {})
+
+
+def test_signal_refuses_reused_pids_before_touching_a_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(probe.patch.reads, "process_identity", lambda _pid: "replacement-start-time")
+
+    def forbidden_signal(_pid: int, _signum: int) -> None:
+        raise AssertionError("an unowned/reused process was signalled")
+
+    monkeypatch.setattr(probe.os, "kill", forbidden_signal)
+    with pytest.raises(probe.patch.ProbeFailure, match="PID_IDENTITY_CHANGED"):
+        probe.signal_owned({"pid": 12345, "startTicks": "original-start-time"}, 9)
+
+
+def test_cleanup_failure_cannot_leave_a_passing_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(probe, "ROOT", tmp_path)
+    out = tmp_path / "artifacts" / "result"
+    monkeypatch.setattr(sys, "argv", ["probe", "--worker", "worker", "--edge", "edge", "--go-cache", "cache", "--out", str(out)])
+
+    def fail_after_success(_args: argparse.Namespace, report: dict[str, object]) -> None:
+        report["status"] = "PASS"
+        raise probe.patch.ProbeFailure("CLEANUP_FAILED")
+
+    monkeypatch.setattr(probe, "run", fail_after_success)
+    assert probe.main() == 1
+    result = json.loads((out / "result.json").read_text())
+    assert result["status"] == "FAIL" and result["failureCode"] == "CLEANUP_FAILED"
+    assert not result["fullMigrationQualified"]

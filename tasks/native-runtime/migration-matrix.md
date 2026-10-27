@@ -1,5 +1,33 @@
 # Current native migration execution — actual native media PATCH reproduction, 2026-10-26
 
+## Current checkpoint: real media process recovery regression
+
+Candidate `cf4f986e87c01aa7e5f466b7e9ee72b6af2d37fc` passed the exact Rust
+workflow:1636 tests,82.1249214% at the original80% floor,33 named checks and59
+controlled reports. Go scoped race checks passed71 top-level tests/126 cases.
+All six actual media PATCH cases passed; the999,964-byte scalar-array request
+persisted a2,500,166-byte Rust claim and retained generation0→2→2 after restart.
+Its full37-job source CI and affected platform qualification remain separate.
+
+This test-only follow-up adds a real Linux process-crash regression. Production
+Rust/Go/Proto/frontend/Android bytes remain identical to that candidate. External
+strace path filtering and syscall-exit delay first qualify themselves on a
+separate fixture; they must execute the actual rename and hold userspace return,
+without substituting success or errno. The actual native worker is then killed
+after replacement while its journal remains APPLYING and Go remains DISPATCHED.
+The other three owned native processes are stopped before SIGKILL so no response
+fallback can settle the operation before the controlled whole-launcher restart.
+
+After restart the original operation must autonomously converge to signed
+APPLIED evidence, under a newer Go writer, without another write request, a new
+operation, changed original fences/claim/digest or library republication. All
+observers use read-only SQLite and owned temporary paths. This gate is pending
+cloud reproduction; source inspection alone does not prove the runtime defect.
+It is neither a production fix nor power-loss, Windows, all-media recovery or
+whole-product qualification. Original coverage floors and retained MCP test-engine
+requirements remain; keep NOT_READY.
+
+
 ## Current checkpoint: versioned media persistence capacity
 
 The actual parent Rust HTTP run40442478399 passed the four metadata-order

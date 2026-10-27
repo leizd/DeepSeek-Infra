@@ -234,3 +234,31 @@ maximum-array HTTP probe must still succeed, advance generation and retain the
 original Rust APPLIED claim across whole-launcher restart. Offline SQL checks
 and partial Go success cannot replace that workload or original full-suite and
 platform qualification. Whole-product readiness remains NOT_READY.
+
+### Real process-crash and autonomous original-operation recovery
+
+The focused Linux regression holds return from the real media-library rename,
+then observes Rust APPLYING, Go DISPATCHED and the exact planned after-bytes.
+[strace's documented path filters and exit delays](https://lists.strace.io/pipermail/strace-devel/2020-March/009399.html)
+provide the external fault boundary. A separate tool fixture must first prove
+that unrelated paths are not held, the target rename really executes, and the
+caller has not returned to userspace. No success/errno substitution, application
+test hooks, journal edits or manual transport/key provisioning are permitted.
+
+The original four owned native processes are stopped/killed with PID/start-time
+checks. Go and the launcher are stopped before the worker dies, preventing an
+in-flight response fallback or supervisor restart from settling the operation
+before the controlled restart. Terminal/zombie processes cannot execute late
+effects; the launcher child is also reaped. The interrupted request is never
+repeated. After a normal authenticated restart, no write request is sent.
+
+Acceptance requires automatic original-operation settlement in both stores,
+authentic matching signed outcome bytes, original action/epoch/digest/claim and
+writer identity retained, a newer current Go writer, exactly one media operation,
+and unchanged library bytes/inode/modification time. Public reads must match the
+independent original-library oracle. Pending/unknown or rebound results fail.
+The initial test-only source intentionally leaves production unchanged; an
+expected red result requires every real crash/restart precondition to pass.
+Tracer/setup/build failures do not reproduce the recovery defect. Host power
+loss, durable directory recovery, before-publication uncertainty, Windows and
+other media operations remain separate incomplete requirements.
