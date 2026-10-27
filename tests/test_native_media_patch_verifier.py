@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import sqlite3
 import sys
 from types import ModuleType
 from urllib.error import HTTPError
@@ -14,6 +15,49 @@ from urllib.error import HTTPError
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_timeout_diagnostics_read_only_metadata_without_private_payloads(tmp_path: Path, verifier: ModuleType) -> None:
+    profile = tmp_path / "owned"
+    profile.mkdir()
+    database = profile / "control.sqlite3"
+    secret = b"PRIVATE-DIAGNOSTIC-SENTINEL"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE control_media_operations(operation_id,state,epoch,writer_fencing_token,lease_until,intent,outcome)")
+        connection.execute("INSERT INTO control_media_operations VALUES(?,?,?,?,?,?,?)", ("media-patch-owned", "DISPATCHED", 1, 2, 1000, secret, secret))
+    before = database.read_bytes()
+    observed = verifier.uncertain_request_snapshot(profile, [])
+    assert observed["go"]["status"] == "OBSERVED"
+    assert observed["go"]["rows"][0]["intentBytes"] == len(secret)
+    assert observed["go"]["rows"][0]["state"] == "DISPATCHED"
+    assert secret.decode() not in json.dumps(observed)
+    assert database.read_bytes() == before
+
+
+def test_timeout_diagnostics_refuse_writes_and_external_paths(tmp_path: Path, verifier: ModuleType) -> None:
+    database = tmp_path / "control.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE control_media_operations(operation_id)")
+        connection.execute("INSERT INTO control_media_operations VALUES('retained')")
+    before = database.read_bytes()
+    observed = verifier.diagnostic_table(tmp_path, "control.sqlite3", "DELETE FROM control_media_operations", ())
+    assert observed["status"] == "UNAVAILABLE" and observed["error"] == "OperationalError"
+    assert verifier.diagnostic_table(tmp_path, "../outside.sqlite3", "SELECT 1", ()) == {"status": "REFUSED"}
+    assert database.read_bytes() == before
+
+
+def test_timeout_diagnostics_bind_cpu_counters_to_the_owned_process_identity(tmp_path: Path, verifier: ModuleType) -> None:
+    process = tmp_path / "1234"
+    process.mkdir()
+    fields = ["0"] * 22
+    fields[0], fields[11], fields[12], fields[19], fields[21] = "S", "7", "5", "300", "400"
+    (process / "stat").write_text("1234 (test (thread)) " + " ".join(fields), encoding="utf-8")
+    identities = [{"pid": 1234, "executable": "deepseekd", "startTicks": "300"}]
+    observed = verifier.request_resources(identities, tmp_path)
+    assert observed[0]["cpuTicks"] == 12 and observed[0]["rssPages"] == 400
+    identities[0]["startTicks"] = "301"
+    changed = verifier.request_resources(identities, tmp_path)
+    assert changed[0]["status"] == "IDENTITY_CHANGED" and "cpuTicks" not in changed[0]
 
 
 @pytest.fixture

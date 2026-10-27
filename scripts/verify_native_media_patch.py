@@ -18,6 +18,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -68,6 +69,61 @@ def case_patch(case: str) -> dict[str, Any]:
 
 def wire_payload(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, separators=(",", ":")).encode()
+
+
+def diagnostic_table(owned_root: Path, filename: str, query: str, columns: tuple[str, ...]) -> dict[str, Any]:
+    if filename not in {"control.sqlite3", "media-effects.sqlite3"} or owned_root.is_symlink():
+        return {"status": "REFUSED"}
+    try:
+        paths = list(owned_root.rglob(filename))
+        if len(paths) != 1:
+            return {"status": "ABSENT" if not paths else "AMBIGUOUS", "matches": len(paths)}
+        path = paths[0]
+        require(path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(owned_root.resolve()),
+                "MEDIA_DIAGNOSTIC_PATH_ESCAPED")
+        connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.2)
+        try:
+            rows = connection.execute(query).fetchmany(2)
+        finally:
+            connection.close()
+        values = [{name: value if value is None or type(value) is int or isinstance(value, str) and len(value) <= 128
+                   else "INVALID_FIELD" for name, value in zip(columns, row, strict=True)} for row in rows]
+        return {"status": "OBSERVED", "rows": values}
+    except Exception as error:
+        return {"status": "UNAVAILABLE", "error": type(error).__name__}
+
+
+def request_resources(identities: list[dict[str, Any]], proc_root: Path = Path("/proc")) -> list[dict[str, Any]]:
+    observations = []
+    for identity in identities:
+        row = {"pid": identity["pid"], "executable": identity["executable"]}
+        try:
+            pid = identity["pid"]
+            require(type(pid) is int and pid > 1, "MEDIA_DIAGNOSTIC_PID_INVALID")
+            with (proc_root / str(pid) / "stat").open(encoding="utf-8") as stream:
+                raw = stream.read(16_385)
+            require(len(raw) <= 16_384 and raw.startswith(str(pid) + " ("), "MEDIA_DIAGNOSTIC_STAT_INVALID")
+            fields = raw[raw.rfind(")") + 2:].split()
+            require(len(fields) >= 22, "MEDIA_DIAGNOSTIC_STAT_INVALID")
+            if str(identity.get("startTicks")) != fields[19]:
+                row.update(status="IDENTITY_CHANGED")
+            else:
+                row.update(status="OBSERVED", startTicks=fields[19], cpuTicks=int(fields[11]) + int(fields[12]),
+                           rssPages=int(fields[21]))
+        except Exception as error:
+            row.update(status="UNAVAILABLE", error=type(error).__name__)
+        observations.append(row)
+    return observations
+
+
+def uncertain_request_snapshot(profile: Path, identities: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"processes": request_resources(identities),
+            "go": diagnostic_table(profile, "control.sqlite3",
+                "SELECT operation_id,state,epoch,writer_fencing_token,lease_until,length(intent),length(outcome) FROM control_media_operations LIMIT 2",
+                ("operationId", "state", "epoch", "writerFence", "leaseUntil", "intentBytes", "outcomeBytes")),
+            "rust": diagnostic_table(profile, "media-effects.sqlite3",
+                "SELECT operation_id,state,length(claim),length(outcome) FROM media_operations LIMIT 2",
+                ("operationId", "state", "claimBytes", "outcomeBytes"))}
 
 
 def journal_observation(owned_root: Path) -> dict[str, Any]:
@@ -259,8 +315,21 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             report.update(controlHealthyBeforePatch=True, originalMediaReadBeforePatch=True,
                 unauthenticatedPatchDenied=True, nativePatchRequestStarted=True,
                 nativePatchOutcome="EFFECT_UNKNOWN")
+            request_identities = [{**row, "startTicks": reads.process_identity(row["pid"])} for row in identities]
+            resources_before = uncertain_request_snapshot(profile, request_identities)
             started = datetime.now(timezone.utc).timestamp()
-            status, raw, content_type = exchange(origin, "/api/media/" + MEDIA_ID, "PATCH", token, PATCH)
+            request_clock = time.monotonic()
+            try:
+                status, raw, content_type = exchange(origin, "/api/media/" + MEDIA_ID, "PATCH", token, PATCH)
+            except Exception:
+                elapsed = time.monotonic() - request_clock
+                report["uncertainRequestDiagnostics"] = {"before": resources_before,
+                    "after": uncertain_request_snapshot(profile, request_identities),
+                    "elapsedSeconds": elapsed,
+                    "requestRepeated": False, "outcomeStillUnknown": True}
+                (args.out / "uncertain-request-diagnostics.json").write_text(
+                    json.dumps(report["uncertainRequestDiagnostics"], indent=2) + "\n", encoding="utf-8")
+                raise
             finished = datetime.now(timezone.utc).timestamp()
             generation_after = generation_observation(profile)
             (args.out / "native-patch-response.txt").write_bytes(raw)
@@ -269,7 +338,8 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 "finishedUnix": finished, "status": status, "contentType": content_type,
                 "responseSha256": hashlib.sha256(raw).hexdigest(), "requestRepeated": False,
                 "requestBodySha256": request_body_sha256,
-                "generationBefore": generation_before, "generationAfter": generation_after}
+                "generationBefore": generation_before, "generationAfter": generation_after,
+                "resourcesBefore": resources_before, "resourcesAfter": uncertain_request_snapshot(profile, request_identities)}
             (args.out / "native-patch-observation.json").write_text(
                 json.dumps(observation, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             report.update(semanticStageReached=True, nativePatchReplyObserved=True, nativePatchHTTPStatus=status,
