@@ -59,7 +59,7 @@ jobs:
     - name: Install official syscall tracing and offline oracle tooling
       run: 'sudo apt-get update -qq
 
-        sudo apt-get install --yes --no-install-recommends strace
+        sudo apt-get install --yes --no-install-recommends strace libcap2-bin
 
         python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-native-protocol.txt
 
@@ -128,14 +128,32 @@ jobs:
         2>&1 | tee artifacts/native-media-recovery/build.log
 
         '
+    - name: Permit only the temporary official tracer to attach
+      run: |
+        tracer="$RUNNER_TEMP/native-media-recovery-strace"
+        test ! -e "$tracer"
+        install --mode=0755 /usr/bin/strace "$tracer"
+        cmp --silent /usr/bin/strace "$tracer"
+        sudo setcap cap_sys_ptrace=ep "$tracer"
+        getcap "$tracer" | tee artifacts/native-media-recovery/tracer-capabilities.txt
+        sha256sum /usr/bin/strace "$tracer" > artifacts/native-media-recovery/tracer-checksums.txt
     - name: Crash after actual media replacement and require autonomous original reconciliation
       run: 'set -o pipefail
 
         python scripts/verify_native_media_recovery.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway"
-        --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/native-media-recovery/process 2>&1 | tee artifacts/native-media-recovery/process.log
+        --strace "$RUNNER_TEMP/native-media-recovery-strace" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out artifacts/native-media-recovery/process 2>&1 | tee artifacts/native-media-recovery/process.log
 
         '
       timeout-minutes: 15
+    - name: Remove the temporary tracer capability
+      if: always()
+      run: |
+        tracer="$RUNNER_TEMP/native-media-recovery-strace"
+        if [ -f "$tracer" ]; then
+          if [ -n "$(getcap "$tracer")" ]; then sudo setcap -r "$tracer"; fi
+          test -z "$(getcap "$tracer")"
+          echo temporary-tracer-capability-removed > artifacts/native-media-recovery/tracer-capability-cleanup.txt
+        fi
     - name: Preserve focused recovery reports only
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

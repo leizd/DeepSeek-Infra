@@ -164,3 +164,20 @@ def test_standalone_recovery_prepares_the_pinned_go_before_the_process_probe() -
     for index in (install, modules):
         assert "if" not in steps[index], "standalone Go preparation must not depend on a missing matrix"
         assert probe.patch.signing.GO_VERSION in steps[index]["run"]
+
+
+def test_recovery_tracer_capability_is_scoped_and_always_removed() -> None:
+    import yaml
+
+    steps = yaml.safe_load((ROOT / ".github/workflows/native-media-recovery.yml").read_bytes())["jobs"]["media-recovery"]["steps"]
+    names = [step.get("name", "") for step in steps]
+    grant = names.index("Permit only the temporary official tracer to attach")
+    crash = names.index("Crash after actual media replacement and require autonomous original reconciliation")
+    revoke = names.index("Remove the temporary tracer capability")
+    reports = names.index("Preserve focused recovery reports only")
+    assert grant < crash < revoke < reports
+    assert steps[revoke]["if"] == "always()"
+    assert '--strace "$RUNNER_TEMP/native-media-recovery-strace"' in steps[crash]["run"]
+    assert 'install --mode=0755 /usr/bin/strace "$tracer"' in steps[grant]["run"]
+    assert 'setcap cap_sys_ptrace=ep "$tracer"' in steps[grant]["run"]
+    assert 'setcap -r "$tracer"' in steps[revoke]["run"]
