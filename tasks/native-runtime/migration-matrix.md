@@ -1,5 +1,37 @@
 # Current native migration execution — actual native media PATCH reproduction, 2026-10-26
 
+## Current checkpoint: media workspace-generation repair
+
+The qualified parent is `1e6cb22e0537f68c5b519b50125153bc114836f1`, tree
+`bbe4f4e645e60fc883e685a9b13a9bca5eb1838e`. Its original
+[37-job source CI](https://github.com/leizd/DeepSeek-Infra/actions/runs/40324277592)
+passed with default Go95.0481766%, Android-Go95.0406310% and the original95%
+floors. Its Rust1626/original80% gate passed at82.0905338%; controlled browser,
+normal-auth media PATCH/restart, Windows and five-API Android70 device tests
+also passed on that source. These source/platform scopes do not qualify a PR
+merge candidate, full media recovery or the5.0 release.
+
+Test-only source `83b495ed487ef7b1058ca166407e2d7b17267cb1`
+[reproduced exactly four new Rust journal failures](https://github.com/leizd/DeepSeek-Infra/actions/runs/40425803329)
+while preserving all prior journal tests. This candidate integrates the existing
+workspace mutation scope before first publication and exact-original-publication
+settlement. Counter failure must leave the effect phase unsettled; terminal
+replay and unknown-effect refusal remain unchanged. The actual launcher probe
+now measures counter values/hashes before/after PATCH and after restart.
+
+Local offline verifier tests pass12 cases; native Rust1630/original80%, full
+Go/Android-Go95%, actual process/browser and affected platform qualification are
+PENDING for this candidate. Native compilation/caches/containers remain in
+GitHub Actions and only reports return. Next: qualify the precise source, then
+continue actual interruption/takeover/backup recovery and retained media
+operations. Keep full server/desktop/Android/background/provider/Fleet, hostile
+path/durability, data migration/rollback, arbitrary pytest with zero production
+Python and release scope open. Status remains `NOT_READY`.
+
+The dated sections below are historical checkpoints; their pending results do
+not supersede this source-specific qualification boundary.
+
+
 Execution branch: `codex/rust-cloud/media-patch-red-20261026`; base `b01de5e5ebd6a989c662b23ffff2b3a8feb2aefa`. Exact candidate commit/tree are recorded in `artifacts/native-20261026-media-patch-red/manifest.json`. Original root HEAD/index and163 dirty/untracked source files remain preserved.
 
 The next retained operation is authenticated PATCH /api/media/{id}. This test-only candidate adds the acceptance slice docs/specs/native-media-mutation-acceptance.md and an actual default-launcher public-TCP probe. It starts a fresh normal-auth native profile, observes real Go/Rust processes and control health, stops its owned processes, explicitly seeds the eighteen-record legacy media fixture, and uses an independent offline original-library mirror to establish a valid title/metadata update. Native GET and missing-auth PATCH must first pass their prerequisites. Only an observed authenticated PATCH refusal after those conditions is a semantic RED; compile/startup/fixture failures are not. Successful responses must match the entire original record except the measured dynamic updatedAt and survive whole-launcher restart. The probe cannot qualify all patch inputs, authority or lost-response recovery; those remain required for production implementation.

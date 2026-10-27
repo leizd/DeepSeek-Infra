@@ -149,3 +149,30 @@ No PR outside the daily 09:00 Asia/Shanghai batch, no main merge, release or rea
 user/provider-data operation. Full server/desktop/Android/background migration
 stays NOT_READY. The original arbitrary pytest engine requirement remains held
 unfinished per the human decision; no Python exception or feature reduction.
+
+## Workspace generation and interrupted publication
+
+
+Media publication must participate in the existing workspace mutation scope.
+After validating the retained claim and current library revision, acquire that
+scope before entering `APPLYING` or publishing bytes. Its opening and closing
+generation changes let a backup reject a snapshot that crossed this mutation.
+Failure to persist the opening generation must leave the public library and the
+`PREPARED` phase unchanged. Preparation and terminal receipt replay do not publish
+bytes and must not advance the generation.
+
+Reconciliation of an `APPLYING` operation with its exact retained publication
+witness must enter the same scope before settling its original receipt. This
+also invalidates a backup crossing recovery of an interrupted or older writer.
+A failed opening generation leaves the operation unsettled; repairing the
+counter permits querying the same original operation. Old or absent media bytes
+still do not prove non-application or permit redispatch.
+
+Four Rust journal regressions cover these transitions and failures in isolated
+fixtures. The normal-auth launcher probe independently retains before/after and
+post-restart counter values and hashes alongside the actual raw HTTP replies;
+one successful publication must advance the counter twice, while a denied
+request, read and whole-launcher restart leave it unchanged. These observations
+do not qualify every backup, hostile path, closing-fsync failure, power-loss
+recovery, all media operations or the whole product. Existing readiness limits
+and original coverage floors remain required.

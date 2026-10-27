@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -88,6 +89,18 @@ def without_update_time(body: dict[str, Any]) -> dict[str, Any]:
     require(isinstance(result.get("media"), dict), "NATIVE_MEDIA_PATCH_RECORD_INVALID")
     result["media"].pop("updatedAt", None)
     return result
+
+
+def generation_observation(profile: Path) -> dict[str, Any]:
+    path = profile / ".workspace-generation"
+    try:
+        entry = path.lstat()
+    except FileNotFoundError:
+        return {"present": False, "value": 0, "sha256": None}
+    require(stat.S_ISREG(entry.st_mode) and entry.st_size <= 32, "MEDIA_PATCH_GENERATION_COUNTER_INVALID")
+    raw = path.read_bytes()
+    require(len(raw) <= 32 and raw.strip().isdigit(), "MEDIA_PATCH_GENERATION_COUNTER_INVALID")
+    return {"present": True, "value": int(raw.strip()), "sha256": hashlib.sha256(raw).hexdigest()}
 
 
 def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
@@ -185,26 +198,33 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             status, raw, _ = exchange(origin, "/api/media/" + MEDIA_ID, "GET", token)
             require(status == 200 and json.loads(raw).get("media", {}).get("title") == "Notes",
                     "NATIVE_MEDIA_PATCH_PREREQUISITE_READ_FAILED")
+            generation_before = generation_observation(profile)
             require(exchange(origin, "/api/media/" + MEDIA_ID, "PATCH", None, PATCH)[0] == 401,
                     "UNAUTHENTICATED_NATIVE_MEDIA_PATCH_WAS_NOT_DENIED")
             require(reads.media_snapshot(profile) == before, "MEDIA_CHANGED_BEFORE_AUTHENTICATED_PATCH")
+            require(generation_observation(profile) == generation_before,
+                    "UNAUTHENTICATED_PATCH_CHANGED_WORKSPACE_GENERATION")
             report.update(controlHealthyBeforePatch=True, originalMediaReadBeforePatch=True,
                 unauthenticatedPatchDenied=True, nativePatchRequestStarted=True,
                 nativePatchOutcome="EFFECT_UNKNOWN")
             started = datetime.now(timezone.utc).timestamp()
             status, raw, content_type = exchange(origin, "/api/media/" + MEDIA_ID, "PATCH", token, PATCH)
             finished = datetime.now(timezone.utc).timestamp()
+            generation_after = generation_observation(profile)
             (args.out / "native-patch-response.txt").write_bytes(raw)
             observation = {"sourceCommit": revision, "runId": os.environ.get("GITHUB_RUN_ID"),
                 "method": "PATCH", "path": "/api/media/" + MEDIA_ID, "startedUnix": started,
                 "finishedUnix": finished, "status": status, "contentType": content_type,
-                "responseSha256": hashlib.sha256(raw).hexdigest(), "requestRepeated": False}
+                "responseSha256": hashlib.sha256(raw).hexdigest(), "requestRepeated": False,
+                "generationBefore": generation_before, "generationAfter": generation_after}
             (args.out / "native-patch-observation.json").write_text(
                 json.dumps(observation, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             report.update(semanticStageReached=True, nativePatchReplyObserved=True, nativePatchHTTPStatus=status,
                 responseSha256=hashlib.sha256(raw).hexdigest(), responseContentType=content_type,
                 mediaStoreUnchangedAfterReply=reads.media_snapshot(profile) == before)
             require(status == 200, "NATIVE_MEDIA_PATCH_REFUSED")
+            require(generation_after["present"] and generation_after["value"] == generation_before["value"] + 2,
+                    "NATIVE_MEDIA_PATCH_DID_NOT_FENCE_CROSSING_BACKUPS")
             actual = json.loads(raw)
             require(without_update_time(actual) == without_update_time(expected), "NATIVE_MEDIA_PATCH_DIFFERS_FROM_ORIGINAL")
             stamp = actual["media"].get("updatedAt")
@@ -217,13 +237,17 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             require((profile / ".auth-token").read_bytes() == original_auth, "MEDIA_PATCH_FINAL_RESTART_REPLACED_AUTH")
             status, raw, _ = exchange(origin, "/api/media/" + MEDIA_ID, "GET", token)
             (args.out / "retained-media-response.txt").write_bytes(raw)
-            observation.update(retainedGetStatus=status, retainedResponseSha256=hashlib.sha256(raw).hexdigest())
+            generation_retained = generation_observation(profile)
+            observation.update(retainedGetStatus=status, retainedResponseSha256=hashlib.sha256(raw).hexdigest(),
+                generationRetained=generation_retained)
             (args.out / "native-patch-observation.json").write_text(
                 json.dumps(observation, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             require(status == 200 and json.loads(raw) == actual, "NATIVE_MEDIA_PATCH_NOT_RETAINED_AFTER_RESTART")
+            require(generation_retained == generation_after, "MEDIA_READ_OR_RESTART_CHANGED_GENERATION")
             shutdown()
             report.update(status="PASS", controlledNativeMediaPatchWorkloadQualified=True,
                 originalResponseMatched=True, updatedAtWithinRequest=True, mediaRetainedAfterLauncherRestart=True,
+                workspaceGenerationFenced=True, workspaceGenerationRetainedAfterRestart=True,
                 nativePatchOutcome="PUBLIC_SUCCESS_RETAINED_AUTHORITY_PROOF_NOT_ASSESSED")
         finally:
             shutdown()
@@ -243,6 +267,7 @@ def main() -> int:
         "event": os.environ.get("GITHUB_EVENT_NAME"), "semanticStageReached": False,
         "nativePatchRequestStarted": False, "nativePatchReplyObserved": False,
         "controlledNativeMediaPatchWorkloadQualified": False, "offlineMediaFixtureSeeded": False,
+        "workspaceGenerationFenced": False, "workspaceGenerationRetainedAfterRestart": False,
         "mediaPatchAuthorityRecoveryQualified": False, "allMediaWritesQualified": False,
         "mediaMigrationQualified": False, "mediaGUIQualified": False,
         "fullMigrationQualified": False, "readiness": "NOT_READY"}

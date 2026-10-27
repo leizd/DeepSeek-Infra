@@ -89,3 +89,39 @@ def test_lost_reply_keeps_unknown_without_another_attempt(
     assert result["semanticStageReached"] is False
     assert result["controlledNativeMediaPatchWorkloadQualified"] is False
     assert not (tmp_path / "not-built-cache").exists()
+
+
+def test_missing_generation_is_observed_without_creating_it(verifier: ModuleType, tmp_path: Path) -> None:
+    assert verifier.generation_observation(tmp_path) == {"present": False, "value": 0, "sha256": None}
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_generation_observation_retains_the_exact_counter_hash(verifier: ModuleType, tmp_path: Path) -> None:
+    import hashlib
+
+    path = tmp_path / ".workspace-generation"
+    raw = b"42\n"
+    path.write_bytes(raw)
+    assert verifier.generation_observation(tmp_path) == {
+        "present": True, "value": 42, "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+    assert path.read_bytes() == raw
+
+
+@pytest.mark.parametrize("raw", [b"", b"-1", b"broken", b"0" * 33])
+def test_invalid_generation_cannot_be_reported_as_zero(
+    verifier: ModuleType, tmp_path: Path, raw: bytes,
+) -> None:
+    path = tmp_path / ".workspace-generation"
+    path.write_bytes(raw)
+    with pytest.raises(verifier.ProbeFailure, match="MEDIA_PATCH_GENERATION_COUNTER_INVALID"):
+        verifier.generation_observation(tmp_path)
+    assert path.read_bytes() == raw
+
+
+def test_directory_cannot_be_reported_as_a_generation(verifier: ModuleType, tmp_path: Path) -> None:
+    path = tmp_path / ".workspace-generation"
+    path.mkdir()
+    with pytest.raises(verifier.ProbeFailure, match="MEDIA_PATCH_GENERATION_COUNTER_INVALID"):
+        verifier.generation_observation(tmp_path)
+    assert path.is_dir()

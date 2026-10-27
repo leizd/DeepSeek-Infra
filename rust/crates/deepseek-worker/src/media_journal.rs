@@ -5,7 +5,7 @@ use crate::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use deepseek_federation::ControlSigningKey;
-use deepseek_policy::mutation_gate::{assert_mutation_allowed, exclusive_gate};
+use deepseek_policy::mutation_gate::{assert_mutation_allowed, exclusive_gate, mutation_scope};
 use deepseek_protocol::{
     ActionFence,
     generated::deepseek::media::v1::{MediaPatchClaim, MediaPatchEffectState, MediaPatchOutcome},
@@ -325,6 +325,7 @@ impl MediaJournal {
                 );
                 return self.settle(operation, "PREPARED", refused, key);
             }
+            let _publication = mutation_scope(None, &self.root).map_err(|_| invalid())?;
             let count=self.connection.execute("UPDATE media_operations SET state='APPLYING' WHERE operation_id=?1 AND state='PREPARED'",[operation]).map_err(|_|invalid())?;
             if count != 1 {
                 return Err(invalid());
@@ -370,6 +371,7 @@ impl MediaJournal {
                 read_library(&self.root).is_ok_and(|current| current == *after)
             })
         {
+            let _reconciliation = mutation_scope(None, &self.root).map_err(|_| invalid())?;
             return self
                 .settle(operation, "APPLYING", row.planned, key)
                 .map(Some);
