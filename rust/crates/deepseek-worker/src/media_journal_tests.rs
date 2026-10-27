@@ -277,3 +277,146 @@ fn media_library_symlink_cannot_receive_a_publication() {
     assert!(journal.prepare(&claim).is_err());
     assert_eq!(fs::read(target).unwrap(), b"retain me");
 }
+
+#[test]
+fn media_publication_fences_crossing_backups_without_bumping_on_receipt_replay() {
+    let (root, key, mut journal, claim) = fixture();
+    let generation = || deepseek_policy::mutation_gate::read_generation(root.path());
+    assert_eq!(generation(), 0);
+    let prepared = journal.prepare(&claim).unwrap();
+    assert_eq!(
+        generation(),
+        0,
+        "preparation cannot mutate the public store"
+    );
+    let outcome = journal.publish(&claim, &prepared.digest, &key).unwrap();
+    assert_eq!(outcome.state, MediaPatchEffectState::Applied as i32);
+    assert_eq!(
+        generation(),
+        2,
+        "publication must use the existing before/after generation protocol"
+    );
+    let published = read_library(root.path()).unwrap();
+    assert_eq!(
+        journal.publish(&claim, &prepared.digest, &key).unwrap(),
+        outcome
+    );
+    assert_eq!(
+        journal
+            .query("media-patch-one", claim.fence.as_ref().unwrap(), true, &key)
+            .unwrap(),
+        Some(outcome)
+    );
+    assert_eq!(read_library(root.path()).unwrap(), published);
+    assert_eq!(
+        generation(),
+        2,
+        "receipt replay is not another public mutation"
+    );
+}
+
+#[test]
+fn media_generation_counter_failure_refuses_publication_before_the_effect_phase() {
+    let (root, key, mut journal, claim) = fixture();
+    let before = read_library(root.path()).unwrap();
+    let prepared = journal.prepare(&claim).unwrap();
+    let counter = deepseek_policy::mutation_gate::generation_path(root.path());
+    fs::create_dir(&counter).unwrap();
+    assert!(
+        journal.publish(&claim, &prepared.digest, &key).is_err(),
+        "an unavailable backup generation must fail closed"
+    );
+    assert_eq!(read_library(root.path()).unwrap(), before);
+    assert_eq!(
+        journal.retained("media-patch-one").unwrap().unwrap().state,
+        "PREPARED"
+    );
+    fs::remove_dir(&counter).unwrap();
+    let result = journal.publish(&claim, &prepared.digest, &key).unwrap();
+    assert_eq!(result.state, MediaPatchEffectState::Applied as i32);
+    assert_eq!(
+        deepseek_policy::mutation_gate::read_generation(root.path()),
+        2
+    );
+}
+
+#[test]
+fn media_original_publication_reconciliation_invalidates_crossing_backups_once() {
+    let (root, key, mut journal, claim) = fixture();
+    journal.prepare(&claim).unwrap();
+    let row = journal.retained("media-patch-one").unwrap().unwrap();
+    journal
+        .connection
+        .execute(
+            "UPDATE media_operations SET state='APPLYING' WHERE operation_id='media-patch-one'",
+            [],
+        )
+        .unwrap();
+    // Explicit old-writer/lost-reply fixture: retain the exact publication and
+    // original operation but no closing generation/receipt. No RPC is faked.
+    media_library::publish(root.path(), row.after.as_ref().unwrap(), None).unwrap();
+    let published = read_library(root.path()).unwrap();
+    assert_eq!(
+        deepseek_policy::mutation_gate::read_generation(root.path()),
+        0
+    );
+    let result = journal
+        .query("media-patch-one", claim.fence.as_ref().unwrap(), true, &key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.state, MediaPatchEffectState::Applied as i32);
+    assert_eq!(
+        deepseek_policy::mutation_gate::read_generation(root.path()),
+        2
+    );
+    assert_eq!(read_library(root.path()).unwrap(), published);
+    assert_eq!(
+        journal
+            .query("media-patch-one", claim.fence.as_ref().unwrap(), true, &key)
+            .unwrap(),
+        Some(result)
+    );
+    assert_eq!(
+        deepseek_policy::mutation_gate::read_generation(root.path()),
+        2
+    );
+}
+
+#[test]
+fn media_generation_failure_cannot_settle_an_unconfirmed_original_publication() {
+    let (root, key, mut journal, claim) = fixture();
+    journal.prepare(&claim).unwrap();
+    let row = journal.retained("media-patch-one").unwrap().unwrap();
+    journal
+        .connection
+        .execute(
+            "UPDATE media_operations SET state='APPLYING' WHERE operation_id='media-patch-one'",
+            [],
+        )
+        .unwrap();
+    media_library::publish(root.path(), row.after.as_ref().unwrap(), None).unwrap();
+    let published = read_library(root.path()).unwrap();
+    let counter = deepseek_policy::mutation_gate::generation_path(root.path());
+    fs::create_dir(&counter).unwrap();
+    assert!(
+        journal
+            .query("media-patch-one", claim.fence.as_ref().unwrap(), true, &key)
+            .is_err()
+    );
+    assert_eq!(
+        journal.retained("media-patch-one").unwrap().unwrap().state,
+        "APPLYING"
+    );
+    assert_eq!(read_library(root.path()).unwrap(), published);
+    fs::remove_dir(&counter).unwrap();
+    let result = journal
+        .query("media-patch-one", claim.fence.as_ref().unwrap(), true, &key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.state, MediaPatchEffectState::Applied as i32);
+    assert_eq!(read_library(root.path()).unwrap(), published);
+    assert_eq!(
+        deepseek_policy::mutation_gate::read_generation(root.path()),
+        2
+    );
+}
