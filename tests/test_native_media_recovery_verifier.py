@@ -147,3 +147,20 @@ def test_recovery_checks_the_retained_publication_even_before_settlement() -> No
         changed[key] = "replacement"
         with pytest.raises(probe.patch.ProbeFailure, match="PUBLICATION_WITNESS_CHANGED"):
             probe.require_same_publication(before, changed)
+
+
+def test_standalone_recovery_prepares_the_pinned_go_before_the_process_probe() -> None:
+    import yaml
+
+    flow = yaml.safe_load((ROOT / ".github/workflows/native-media-recovery.yml").read_bytes())
+    job = flow["jobs"]["media-recovery"]
+    assert "strategy" not in job
+    steps = job["steps"]
+    names = [step.get("name", "") for step in steps]
+    install = names.index("Install the repository's checksum-pinned Go for the real signing producer")
+    modules = names.index("Verify Go modules before the isolated process probe")
+    probe_step = names.index("Crash after actual media replacement and require autonomous original reconciliation")
+    assert install < modules < probe_step
+    for index in (install, modules):
+        assert "if" not in steps[index], "standalone Go preparation must not depend on a missing matrix"
+        assert probe.patch.signing.GO_VERSION in steps[index]["run"]
