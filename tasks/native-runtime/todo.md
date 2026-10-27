@@ -2502,3 +2502,6 @@ No native/browser assertion, report requirement or original floor is removed.
 
 
 - [ ] Qualify shared media original-operation background recovery against actual RED run40473482975: same operation/action/epoch and retained publication, no second PATCH, signed Go/Rust terminal agreement, race/full95% and exact-source platform gates. Implementation is pending cloud evidence; full migration stays NOT_READY.
+
+
+- [ ] Qualify metadata-only media recovery polling against94bcb486/run40495720177: preserve original10-second maximum-array HTTP200, active-lease exclusion, original signed recovery, corruption denial and original95/80/fullCI/platform floors. Runtime candidate is not yet qualified.

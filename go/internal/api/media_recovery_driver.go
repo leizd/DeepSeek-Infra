@@ -55,15 +55,9 @@ func reconcilePendingMediaPatch(ctx context.Context, control *store.Control, now
 	if ctx.Err() != nil {
 		return
 	}
-	pending, err := control.PendingMediaPatch()
+	pending, err := control.RecoverableMediaPatch(now)
 	if err != nil || pending == nil {
 		return // Includes loss of the current transactional writer fence.
-	}
-	writer := control.Writer().FencingToken
-	// Do not interrupt a request still executing under this live writer/lease.
-	// A successor can query the older operation immediately without rebinding it.
-	if !(pending.WriterFencingToken < writer || pending.WriterFencingToken == writer && now >= pending.LeaseUntilUnix) {
-		return
 	}
 	client, err := dial()
 	if err != nil {

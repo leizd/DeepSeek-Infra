@@ -13426,3 +13426,8 @@ No native/browser assertion, report requirement or original floor is removed.
 ### 2026-10-27 media original-operation recovery candidate
 
 Actual cloud RED run40473482975 (df26c547): publication retained after SIGKILL/restart and successor fence2→3, but original Go DISPATCHED/Rust APPLYING never reconciled without a second write. A separate query-only recovery loop is now implemented in the shared Go lifecycle, with live-request exclusion, signed historical settlement, ambiguity barriers and cancellation/drain. Source/unit/race/process qualification is still pending. Keep full migration NOT_READY; do not retry the original uncertain write. The arbitrary pytest MCP engine remains unfinished under the unchanged zero-production-Python requirement.
+
+
+### 2026-10-27 active media intent polling regression
+
+Controlled diagnostics94bcb486/run40495720177: largest legal request timed out within the original10-second observer boundary; Rust retained APPLIED, Go DISPATCHED. Go dominated CPU while the recovery loop repeatedly parsed the live2.5MB intent. Metadata-first expiry/writer filtering is implemented but awaits the unchanged cloud maximum-array workload and all recovery/race/original-floor gates. Never retry that uncertain operation; every verification uses a fresh owned profile. Full migration, remaining media methods and retained pytest MCP execution stay unfinished/NOT_READY.

@@ -2143,3 +2143,6 @@ unfinished per the human decision; no Python exception or feature reduction.
 
 
 Media PATCH crash/restart: actual retained-publication RED at df26c547/run40473482975 proves missing autonomous original reconciliation. Shared Go lifecycle recovery is implemented but cloud qualification remains pending. It uses the existing typed query and signed outcome, never redispatches, and keeps ambiguous dispatched operations blocked. This does not complete all media mutations/processing, retained MCP pytest execution or product/platform migration.
+
+
+Media recovery performance: diagnostic94bcb486 exposed active-claim payload decoding contention at the largest legal input. Store-level metadata filtering now precedes decoding and preserves original pending reads, writer fencing and selected-claim digest validation. Cloud qualification remains pending; no media/all-product completion or power-loss claim.

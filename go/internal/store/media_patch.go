@@ -196,21 +196,45 @@ func (store *Control) RecordMediaPatchOutcome(outcome *mediav1.MediaPatchOutcome
 	return already, err
 }
 func (store *Control) PendingMediaPatch() (*mediav1.MediaPatchClaim, error) {
+	return store.pendingMediaPatch(nil)
+}
+
+// RecoverableMediaPatch selects by small fencing/lease fields before decoding
+// any immutable payload. A live request may contain megabytes of typed values;
+// background polling must not repeatedly hash it while holding the store lock.
+func (store *Control) RecoverableMediaPatch(now int64) (*mediav1.MediaPatchClaim, error) {
+	return store.pendingMediaPatch(&now)
+}
+
+func (store *Control) pendingMediaPatch(recoveryAt *int64) (*mediav1.MediaPatchClaim, error) {
 	var c *mediav1.MediaPatchClaim
 	err := store.mediaTx(func(tx *sql.Tx, _ int64) error {
-		var id string
-		err := tx.QueryRow("SELECT operation_id FROM control_media_operations WHERE state IN ('CLAIMED','DISPATCHED','EFFECT_UNKNOWN')").Scan(&id)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		c, _, _, err = readMediaClaim(tx, id)
+		var err error
+		c, err = pendingMediaPatchTx(tx, store.token, recoveryAt)
 		return err
 	})
 	return c, err
 }
+
+func pendingMediaPatchTx(tx *sql.Tx, writer int64, recoveryAt *int64) (*mediav1.MediaPatchClaim, error) {
+	query := "SELECT operation_id FROM control_media_operations WHERE state IN ('CLAIMED','DISPATCHED','EFFECT_UNKNOWN')"
+	var args []any
+	if recoveryAt != nil {
+		query += " AND (writer_fencing_token<? OR (writer_fencing_token=? AND lease_until<=?))"
+		args = []any{writer, writer, *recoveryAt}
+	}
+	var id string
+	err := tx.QueryRow(query, args...).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	claim, _, _, err := readMediaClaim(tx, id)
+	return claim, err
+}
+
 func (store *Control) CancelUndispatchedMediaPatch(operation string) error {
 	return store.mediaTx(func(tx *sql.Tx, now int64) error {
 		c, _, _, err := readMediaClaim(tx, operation)
