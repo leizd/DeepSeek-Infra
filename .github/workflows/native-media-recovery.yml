@@ -61,7 +61,7 @@ jobs:
 
         sudo apt-get install --yes --no-install-recommends strace
 
-        python -m pip install -r requirements.txt -r requirements-native-protocol.txt
+        python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-native-protocol.txt
 
         '
     - uses: dtolnay/rust-toolchain@69084b241933c14c2fa24234c4596f11a2655339
