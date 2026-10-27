@@ -237,7 +237,7 @@ platform qualification. Whole-product readiness remains NOT_READY.
 
 ### Real process-crash and autonomous original-operation recovery
 
-The focused Linux regression holds return from the real media-library rename,
+The focused Linux regression holds file-sync return after the real media-library rename,
 then observes Rust APPLYING, Go DISPATCHED and the exact planned after-bytes.
 [strace's documented path filters and exit delays](https://lists.strace.io/pipermail/strace-devel/2020-March/009399.html)
 provide the external fault boundary. A separate tool fixture must first prove
@@ -262,3 +262,15 @@ expected red result requires every real crash/restart precondition to pass.
 Tracer/setup/build failures do not reproduce the recovery defect. Host power
 loss, durable directory recovery, before-publication uncertainty, Windows and
 other media operations remain separate incomplete requirements.
+
+
+The initial tracing fixture failed closed on Ubuntu strace6.8: no rename was
+selected by the destination-only path filter. The official implementation
+[handles legacy rename through its generic first-path fallback](https://github.com/strace/strace/blob/v6.8/src/pathtrace.c),
+while descriptor matching follows an open file's current pathname. The revised
+boundary therefore holds the real post-rename fsync/fdatasync return on the
+library descriptor. The independent fixture mimics both temporary-file and
+post-rename synchronization and requires unrelated paths to remain unheld.
+The original file bytes/inode/mtime are now reobserved after restart before
+classifying any unsettled operation; lost/changed witnesses are a different
+failure and cannot reproduce missing autonomous reconciliation.

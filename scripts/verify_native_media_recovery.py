@@ -1,6 +1,6 @@
 """Cloud-only real media publication crash, restart and original-operation recovery.
 
-strace delays return from the real target-file rename. It never substitutes a
+strace delays the file-sync return after real target-file replacement. It never substitutes a
 return value or edits application databases. A separate fixture first proves
 that the rename executes, unrelated paths remain unheld, and userspace is held.
 """
@@ -121,6 +121,10 @@ def require_recovery_generation(before: dict[str, Any], after: dict[str, Any]) -
             and after["value"] == before["value"] + 2, "MEDIA_RECOVERY_GENERATION_NOT_FENCED")
 
 
+def require_same_publication(before: dict[str, Any], after: dict[str, Any]) -> None:
+    require(same_original(before, after, ("sha256", "inode", "mtimeNs")), "MEDIA_RECOVERY_PUBLICATION_WITNESS_CHANGED")
+
+
 def proc_state(pid: int) -> str | None:
     try:
         raw = Path(f"/proc/{pid}/stat").read_text()
@@ -131,8 +135,8 @@ def proc_state(pid: int) -> str | None:
 
 def trace_command(binary: Path, library: Path, root: Path, log: Path) -> list[str]:
     target = owned_file(library, root)
-    return [str(binary), "-f", "-P", str(target), "-e", "trace=rename,renameat,renameat2",
-            "-e", "inject=rename,renameat,renameat2:delay_exit=20s", "-o", str(log)]
+    return [str(binary), "-f", "-P", str(target), "-e", "trace=fsync,fdatasync",
+            "-e", "inject=fsync,fdatasync:delay_exit=20s", "-o", str(log)]
 
 
 def stop_trace(child: subprocess.Popen[bytes]) -> None:
@@ -151,10 +155,15 @@ def qualify_trace(binary: Path, scratch: Path, out: Path) -> dict[str, Any]:
     target.write_bytes(b"before")
     code = """from pathlib import Path
 import os,sys
-p=Path(sys.argv[1]); (p/'other-temp').write_bytes(b'other-after')
-os.replace(p/'other-temp',p/'other'); (p/'unrelated-finished').write_bytes(b'yes')
-(p/'target-temp').write_bytes(b'after'); os.replace(p/'target-temp',p/'target')
-(p/'returned-to-userspace').write_bytes(b'yes')
+p=Path(sys.argv[1])
+with (p/'other-temp').open('wb') as f:
+ f.write(b'other-after'); f.flush(); os.fsync(f.fileno())
+ os.replace(p/'other-temp',p/'other'); os.fsync(f.fileno())
+(p/'unrelated-finished').write_bytes(b'yes')
+with (p/'target-temp').open('wb') as f:
+ f.write(b'after'); f.flush(); os.fsync(f.fileno())
+ os.replace(p/'target-temp',p/'target'); os.fsync(f.fileno())
+ (p/'returned-to-userspace').write_bytes(b'yes')
 """
     command = trace_command(binary, target, root, out / "trace-qualification.log")
     with (out / "trace-qualification-stderr.log").open("wb") as log:
@@ -163,8 +172,8 @@ os.replace(p/'other-temp',p/'other'); (p/'unrelated-finished').write_bytes(b'yes
     try:
         wait_for(lambda: (root / "unrelated-finished").exists(), 5, "STRACE_FILTER_DELAYED_UNRELATED_PATH")
         wait_for(lambda: target.read_bytes() == b"after", 5, "STRACE_DID_NOT_EXECUTE_REAL_RENAME")
-        require(child.poll() is None and not (root / "returned-to-userspace").exists(), "STRACE_DID_NOT_HOLD_SYSCALL_EXIT")
-        return dict(realRenameExecuted=True, unrelatedPathUnheld=True, userspaceReturnHeld=True,
+        require(child.poll() is None and not (root / "returned-to-userspace").exists(), "STRACE_DID_NOT_HOLD_POST_RENAME_SYNC_EXIT")
+        return dict(realRenameExecuted=True, unrelatedPathUnheld=True, userspaceReturnHeld=True, heldSyscall="post-rename file sync",
                     substitutedReturnValue=False, injectedErrno=False)
     finally:
         stop_trace(child)
@@ -303,6 +312,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 require(not response.done(), "MEDIA_RESPONSE_RETURNED_BEFORE_CRASH")
                 report.update(publicationHeldAfterRealRename=True, beforeCrashRust=before_rust, beforeCrashGo=before_go,
                               generationAtCrash=patch.generation_observation(profile))
+                report["publicationAtCrash"] = dict(sha256=digest(raw_after), inode=stat_after.st_ino, mtimeNs=stat_after.st_mtime_ns)
                 (args.out / "after-crash-library.json").write_bytes(raw_after)
                 nonworkers = [row for row in identities if row != worker]
                 for row in sorted(nonworkers, key=lambda row: row["executable"] != "deepseek-launch"):
@@ -345,6 +355,11 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 time.sleep(0.1)
             report.update(afterRestartGo=after_go, afterRestartRust=after_rust,
                           generationAfterRestart=patch.generation_observation(profile))
+            final_bytes, final_stat = library.read_bytes(), library.stat()
+            report["publicationAfterRestart"] = dict(sha256=digest(final_bytes), inode=final_stat.st_ino, mtimeNs=final_stat.st_mtime_ns)
+            require_same_publication(report["publicationAtCrash"], report["publicationAfterRestart"])
+            report["postRestartPublicationWitnessRetained"] = True
+            (args.out / "after-restart-library.json").write_bytes(final_bytes)
             require(after_go["state"] == after_rust["state"] == "APPLIED", "ORIGINAL_MEDIA_NOT_AUTOMATICALLY_RECONCILED")
             require_recovery_generation(report["generationAtCrash"], report["generationAfterRestart"])
             require(library.read_bytes() == raw_after and library.stat().st_ino == stat_after.st_ino and library.stat().st_mtime_ns == stat_after.st_mtime_ns, "MEDIA_RECOVERY_REPUBLISHED_BYTES")

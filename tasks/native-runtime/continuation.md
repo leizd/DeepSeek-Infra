@@ -11,8 +11,8 @@ Its full37-job source CI and affected platform qualification remain separate.
 
 This test-only follow-up adds a real Linux process-crash regression. Production
 Rust/Go/Proto/frontend/Android bytes remain identical to that candidate. External
-strace path filtering and syscall-exit delay first qualify themselves on a
-separate fixture; they must execute the actual rename and hold userspace return,
+strace descriptor-path filtering and post-rename file-sync exit delay first qualify themselves on a
+separate fixture; they must execute the actual rename and hold its subsequent file-sync return,
 without substituting success or errno. The actual native worker is then killed
 after replacement while its journal remains APPLYING and Go remains DISPATCHED.
 The other three owned native processes are stopped before SIGKILL so no response

@@ -85,14 +85,15 @@ def test_recovery_identity_keeps_epoch_types_and_original_rust_witnesses() -> No
         assert not probe.same_original(original, changed, probe.IMMUTABLE_RUST)
 
 
-def test_trace_arguments_hold_only_real_target_rename_exit(tmp_path: Path) -> None:
+def test_trace_arguments_hold_real_post_rename_file_sync_exit(tmp_path: Path) -> None:
     target = tmp_path / "library.json"
     target.write_bytes(b"original")
     args = probe.trace_command(Path("/usr/bin/strace"), target, tmp_path, tmp_path / "trace.log")
     assert args[args.index("-P") + 1] == str(target.resolve())
     injection = next(value for value in args if value.startswith("inject="))
-    assert injection == "inject=rename,renameat,renameat2:delay_exit=20s"
+    assert injection == "inject=fsync,fdatasync:delay_exit=20s"
     assert "retval=" not in injection and "error=" not in injection
+    assert "trace=fsync,fdatasync" in args
 
 
 def test_recovery_requires_its_own_complete_generation_scope() -> None:
@@ -136,3 +137,13 @@ def test_cleanup_failure_cannot_leave_a_passing_report(tmp_path: Path, monkeypat
     result = json.loads((out / "result.json").read_text())
     assert result["status"] == "FAIL" and result["failureCode"] == "CLEANUP_FAILED"
     assert not result["fullMigrationQualified"]
+
+
+def test_recovery_checks_the_retained_publication_even_before_settlement() -> None:
+    before = {"sha256": "original", "inode": 17, "mtimeNs": 23}
+    probe.require_same_publication(before, dict(before))
+    for key in before:
+        changed = dict(before)
+        changed[key] = "replacement"
+        with pytest.raises(probe.patch.ProbeFailure, match="PUBLICATION_WITNESS_CHANGED"):
+            probe.require_same_publication(before, changed)
