@@ -83,3 +83,59 @@ fn to_json_at(value: &MediaValue, depth: usize) -> Result<Value, Status> {
         }
     }
 }
+
+#[cfg(test)]
+mod input_order_tests {
+    use super::{from_json, to_json};
+    use deepseek_policy::media_schema::normalize_media_record;
+    use serde_json::{Value, json};
+
+    fn compare_original_metadata(raw: &str, expected: Value) {
+        let input: Value = serde_json::from_str(raw).unwrap();
+        let record = |metadata| {
+            json!({"mediaId":"media_order", "type":"image", "title":"Ordered metadata",
+                "createdAt":"2026-10-27T00:00:00Z", "metadata":metadata})
+        };
+        let original = normalize_media_record(&record(input.clone())).unwrap();
+        assert_eq!(
+            original["metadata"], expected,
+            "the unencoded original normalization must match the independent Python oracle"
+        );
+        let transported = to_json(&from_json(&input).unwrap()).unwrap();
+        let result = normalize_media_record(&record(transported)).unwrap();
+        assert_eq!(
+            result["metadata"], expected,
+            "typed RPC transport must preserve the original input order before key normalization"
+        );
+    }
+
+    #[test]
+    fn media_typed_metadata_top_level_collisions_keep_input_order() {
+        compare_original_metadata(r#"{"a?":"first","a!":"last"}"#, json!({"a":"last"}));
+    }
+
+    #[test]
+    fn media_typed_metadata_nested_collisions_keep_input_order() {
+        compare_original_metadata(
+            r#"{"outer":{"a?":"first","a!":"last"}}"#,
+            json!({"outer":{"a":"last"}}),
+        );
+    }
+
+    #[test]
+    fn media_typed_metadata_array_collisions_keep_input_order() {
+        compare_original_metadata(
+            r#"{"rows":[{"a?":"first","a!":"last"}]}"#,
+            json!({"rows":[{"a":"last"}]}),
+        );
+    }
+
+    #[test]
+    fn media_typed_metadata_truncated_collisions_keep_input_order() {
+        let prefix = "k".repeat(80);
+        let input = format!(r#"{{"{prefix}z":"first","{prefix}a":"last"}}"#);
+        let mut expected = serde_json::Map::new();
+        expected.insert(prefix, Value::String("last".into()));
+        compare_original_metadata(&input, Value::Object(expected));
+    }
+}
