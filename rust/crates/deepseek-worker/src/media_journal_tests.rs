@@ -4,6 +4,273 @@ use deepseek_protocol::generated::deepseek::media::v1::{MediaPatch, MediaPatchIn
 use serde_json::{Value, json};
 use std::sync::OnceLock;
 
+fn delete_claim(mut claim: MediaPatchClaim, operation: &str, media: &str) -> MediaPatchClaim {
+    let intent = claim.intent.as_mut().unwrap();
+    intent.kind = 1;
+    intent.operation_id = operation.into();
+    intent.media_id = media.into();
+    intent.patch = None;
+    claim.fence.as_mut().unwrap().action_id = operation.into();
+    claim.request_sha256 = sha(&intent.encode_to_vec());
+    claim
+}
+
+fn seed_delete_data(root: &Path, vectors: bool) {
+    let media = root.join(".media");
+    fs::create_dir_all(media.join("segments")).unwrap();
+    for id in ["media_one", "media_other"] {
+        fs::create_dir_all(media.join("objects").join(id)).unwrap();
+        fs::write(
+            media.join("objects").join(id).join("source.pdf"),
+            id.as_bytes(),
+        )
+        .unwrap();
+        fs::write(
+            media.join("segments").join(format!("{id}.json")),
+            id.as_bytes(),
+        )
+        .unwrap();
+    }
+    fs::create_dir(root.join(".local-rag")).unwrap();
+    deepseek_policy::sqlite_vec_runtime::register().unwrap();
+    let connection = Connection::open(root.join(".local-rag/rag.sqlite3")).unwrap();
+    connection.execute_batch("CREATE TABLE rag_items(item_id TEXT PRIMARY KEY,vector_id INTEGER NOT NULL UNIQUE,collection TEXT NOT NULL,source_id TEXT NOT NULL,project_id TEXT NOT NULL); INSERT INTO rag_items VALUES('target-a',101,'media','media_one','project-a'),('target-b',102,'media','media_one','project-b'),('other-media',103,'media','media_other','project-a'),('same-id-files',104,'files','media_one','project-a');").unwrap();
+    if vectors {
+        connection.execute_batch("CREATE VIRTUAL TABLE rag_vec USING vec0(item_id TEXT,collection TEXT,source_id TEXT,project_id TEXT,scope TEXT,embedding float[2]); INSERT INTO rag_vec(rowid,item_id,collection,source_id,project_id,scope,embedding) VALUES(101,'target-a','media','media_one','project-a','','[1,0]'),(102,'target-b','media','media_one','project-b','','[0,1]'),(103,'other-media','media','media_other','project-a','','[-1,0]'),(104,'same-id-files','files','media_one','project-a','','[0,-1]');").unwrap();
+    }
+}
+
+fn assert_delete_data(root: &Path, vectors: bool) {
+    assert!(!root.join(".media/segments/media_one.json").exists());
+    assert!(!root.join(".media/objects/media_one").exists());
+    assert_eq!(
+        fs::read(root.join(".media/objects/media_other/source.pdf")).unwrap(),
+        b"media_other"
+    );
+    assert_eq!(
+        fs::read(root.join(".media/segments/media_other.json")).unwrap(),
+        b"media_other"
+    );
+    let connection = Connection::open(root.join(".local-rag/rag.sqlite3")).unwrap();
+    let mut statement = connection
+        .prepare("SELECT vector_id FROM rag_items ORDER BY vector_id")
+        .unwrap();
+    assert_eq!(
+        statement
+            .query_map([], |row| row.get::<_, i64>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap(),
+        vec![103, 104]
+    );
+    if vectors {
+        let mut statement = connection
+            .prepare("SELECT rowid FROM rag_vec ORDER BY rowid")
+            .unwrap();
+        assert_eq!(
+            statement
+                .query_map([], |row| row.get::<_, i64>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap(),
+            vec![103, 104]
+        );
+    }
+}
+
+#[test]
+fn media_delete_cleans_target_files_and_cross_project_sqlite_and_vector_rows() {
+    for vectors in [false, true] {
+        let (root, key, mut journal, claim) = fixture();
+        seed_delete_data(root.path(), vectors);
+        let claim = delete_claim(claim, "media-delete-one", "media_one");
+        let prepared = journal.prepare(&claim).unwrap();
+        assert!(
+            root.path()
+                .join(".media/objects/media_one/source.pdf")
+                .exists()
+        );
+        let result = journal.publish(&claim, &prepared.digest, &key).unwrap();
+        assert_eq!(result.state, MediaPatchEffectState::Applied as i32);
+        assert_eq!(result.deleted_count, 1);
+        assert!(result.media.is_none());
+        assert_delete_data(root.path(), vectors);
+        let document: Value = serde_json::from_slice(&read_library(root.path()).unwrap()).unwrap();
+        assert!(document["media"].as_array().unwrap().is_empty());
+        // A late query returns the original signed result and cannot delete
+        // later bytes that happen to use the same former media id.
+        fs::create_dir(root.path().join(".media/objects/media_one")).unwrap();
+        fs::write(root.path().join(".media/objects/media_one/later"), b"later").unwrap();
+        let replay = journal
+            .query(
+                "media-delete-one",
+                claim.fence.as_ref().unwrap(),
+                true,
+                &key,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(replay, result);
+        assert_eq!(
+            fs::read(root.path().join(".media/objects/media_one/later")).unwrap(),
+            b"later"
+        );
+    }
+}
+
+#[test]
+fn media_delete_missing_record_preserves_store_generation_and_orphan_bytes() {
+    let (root, key, mut journal, claim) = fixture();
+    let orphan = root.path().join(".media/objects/media_missing");
+    fs::create_dir_all(&orphan).unwrap();
+    fs::write(orphan.join("retained"), b"orphan retained").unwrap();
+    let before = read_library(root.path()).unwrap();
+    let claim = delete_claim(claim, "media-delete-missing", "media_missing");
+    let prepared = journal.prepare(&claim).unwrap();
+    let result = journal.publish(&claim, &prepared.digest, &key).unwrap();
+    assert_eq!(result.deleted_count, 0);
+    assert_eq!(result.state, MediaPatchEffectState::Applied as i32);
+    assert_eq!(read_library(root.path()).unwrap(), before);
+    assert_eq!(
+        deepseek_policy::mutation_gate::read_generation(root.path()),
+        0
+    );
+    assert_eq!(
+        fs::read(orphan.join("retained")).unwrap(),
+        b"orphan retained"
+    );
+    assert_eq!(
+        journal
+            .query(
+                "media-delete-missing",
+                claim.fence.as_ref().unwrap(),
+                true,
+                &key
+            )
+            .unwrap()
+            .unwrap(),
+        result
+    );
+}
+
+#[test]
+fn media_delete_restart_finishes_original_cleanup_after_known_library_publication() {
+    let (root, key, mut journal, claim) = fixture();
+    seed_delete_data(root.path(), true);
+    let claim = delete_claim(claim, "media-delete-recovery", "media_one");
+    journal.prepare(&claim).unwrap();
+    let row = journal.retained("media-delete-recovery").unwrap().unwrap();
+    journal.connection.execute("UPDATE media_operations SET state='APPLYING' WHERE operation_id='media-delete-recovery'", []).unwrap();
+    deepseek_policy::mutation_gate::bump_generation(root.path()).unwrap();
+    assert!(media_library::publish(root.path(), row.after.as_ref().unwrap(), None).unwrap());
+    let publication = read_library(root.path()).unwrap();
+    drop(journal);
+    let mut journal = MediaJournal::open(
+        root.path(),
+        &root.path().join("state"),
+        &key.public_key(),
+        "fleet-a",
+        "test",
+    )
+    .unwrap();
+    let result = journal
+        .query(
+            "media-delete-recovery",
+            claim.fence.as_ref().unwrap(),
+            true,
+            &key,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.deleted_count, 1);
+    assert_eq!(result.original_fence, claim.fence);
+    assert_eq!(result.request_sha256, claim.request_sha256);
+    assert_eq!(read_library(root.path()).unwrap(), publication);
+    assert_eq!(
+        deepseek_policy::mutation_gate::read_generation(root.path()),
+        3
+    );
+    assert_delete_data(root.path(), true);
+}
+
+#[test]
+fn media_delete_cleanup_failure_keeps_applying_without_a_signed_success() {
+    let (root, key, mut journal, claim) = fixture();
+    seed_delete_data(root.path(), false);
+    let claim = delete_claim(claim, "media-delete-cleanup-failure", "media_one");
+    let prepared = journal.prepare(&claim).unwrap();
+    let connection = Connection::open(root.path().join(".local-rag/rag.sqlite3")).unwrap();
+    connection.execute_batch("CREATE TRIGGER scope_guard BEFORE DELETE ON rag_items BEGIN SELECT RAISE(ABORT,'blocked'); END;").unwrap();
+    assert_eq!(
+        journal
+            .publish(&claim, &prepared.digest, &key)
+            .unwrap_err()
+            .message(),
+        "EFFECT_UNKNOWN"
+    );
+    let row = journal
+        .retained("media-delete-cleanup-failure")
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.state, "APPLYING");
+    assert!(row.outcome.is_none());
+    let publication = read_library(root.path()).unwrap();
+    assert!(
+        root.path()
+            .join(".media/objects/media_one/source.pdf")
+            .exists()
+    );
+    connection
+        .execute_batch("DROP TRIGGER scope_guard;")
+        .unwrap();
+    let result = journal
+        .query(
+            "media-delete-cleanup-failure",
+            claim.fence.as_ref().unwrap(),
+            true,
+            &key,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.deleted_count, 1);
+    assert_eq!(read_library(root.path()).unwrap(), publication);
+    assert_delete_data(root.path(), false);
+}
+
+#[test]
+fn media_patch_and_delete_share_one_unresolved_publication_barrier() {
+    let (root, key, mut journal, patch) = fixture();
+    journal.prepare(&patch).unwrap();
+    let deletion = delete_claim(patch.clone(), "media-delete-barrier", "media_one");
+    let before = read_library(root.path()).unwrap();
+    assert!(journal.prepare(&deletion).is_err());
+    assert_eq!(read_library(root.path()).unwrap(), before);
+    let stopped = journal
+        .query("media-patch-one", patch.fence.as_ref().unwrap(), true, &key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stopped.state, MediaPatchEffectState::Refused as i32);
+    let prepared = journal.prepare(&deletion).unwrap();
+    assert_eq!(
+        journal
+            .publish(&deletion, &prepared.digest, &key)
+            .unwrap()
+            .deleted_count,
+        1
+    );
+}
+
+#[test]
+fn media_original_query_refuses_a_different_go_claim_with_the_same_fence() {
+    let (_root, _key, mut journal, claim) = fixture();
+    journal.prepare(&claim).unwrap();
+    let mut other = claim.clone();
+    other.intent.as_mut().unwrap().media_id = "media_other".into();
+    other.request_sha256 = sha(&other.intent.as_ref().unwrap().encode_to_vec());
+    assert!(journal.verify_original_claim(&other).is_err());
+    journal.verify_original_claim(&claim).unwrap();
+}
+
 fn key() -> ControlSigningKey {
     static BUNDLE: OnceLock<Value> = OnceLock::new();
     let password = b"isolated-media-custody-fixture-password";
@@ -37,6 +304,7 @@ fn fixture() -> (
     )
     .unwrap();
     let intent = MediaPatchIntent {
+        kind: 0,
         schema_version: 1,
         operation_id: "media-patch-one".into(),
         media_id: "media_one".into(),

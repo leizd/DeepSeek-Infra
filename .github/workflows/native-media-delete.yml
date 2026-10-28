@@ -14,19 +14,26 @@ concurrency:
   cancel-in-progress: false
 jobs:
   delete-admission:
-    name: Original media DELETE admission
+    name: Native media DELETE Rust and Go gates
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
       CGO_ENABLED: '0'
       GOTOOLCHAIN: local
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/native-media-delete-admission/source-context.json
+      RUSTUP_TOOLCHAIN: 1.85.0
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
     - name: Keep Go compilation and cache on the cloud runner
       run: 'echo "GOCACHE=$RUNNER_TEMP/native-media-delete-go-cache" >> "$GITHUB_ENV"
+
+        echo "CARGO_HOME=$RUNNER_TEMP/native-media-delete-cargo" >> "$GITHUB_ENV"
+
+        echo "CARGO_TARGET_DIR=$RUNNER_TEMP/native-media-delete-target" >> "$GITHUB_ENV"
 
         '
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
@@ -63,11 +70,52 @@ jobs:
         go mod verify
 
         '
-    - name: Run actual retained DELETE admission cases
+    - uses: dtolnay/rust-toolchain@69084b241933c14c2fa24234c4596f11a2655339
+      with:
+        toolchain: 1.85.0
+        components: rustfmt
+    - name: Restore cloud dependency archives
+      id: registry
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: '${{ env.CARGO_HOME }}/registry/index
+
+          ${{ env.CARGO_HOME }}/registry/cache
+
+          ${{ env.CARGO_HOME }}/git/db
+
+          '
+        key: rust-cloud-v1-registry-${{ runner.os }}-1.85.0-${{ hashFiles('rust/Cargo.lock') }}
+        restore-keys: rust-cloud-v1-registry-${{ runner.os }}-1.85.0-
+    - name: Restore compiled dependencies and test binaries in the cloud
+      id: target
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: ${{ env.CARGO_TARGET_DIR }}
+        key: rust-cloud-v1-target-${{ runner.os }}-1.85.0-checks-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock', 'rust/.cargo/config.toml',
+          'scripts/rust_build.py', 'scripts/run_rust_coverage.py') }}-${{ github.sha }}
+        restore-keys: rust-cloud-v1-target-${{ runner.os }}-1.85.0-checks-
+    - name: Run original and DELETE journal tests with the embedded vector backend
+      run: 'set -o pipefail
+
+        python scripts/rust_build.py --toolchain 1.85.0 -- test --locked -p deepseek-worker --lib media_journal::tests 2>&1
+        | tee artifacts/native-media-delete-admission/rust-media-journal.log
+
+        grep -F "media_delete_cleans_target_files_and_cross_project_sqlite_and_vector_rows ... ok" artifacts/native-media-delete-admission/rust-media-journal.log
+
+        python scripts/rust_build.py --toolchain 1.85.0 -- test --locked -p deepseek-policy --lib sqlite_vec_runtime::tests
+        2>&1 | tee artifacts/native-media-delete-admission/rust-sqlite-vec.log
+
+        python scripts/rust_build.py --toolchain 1.85.0 -- test --locked -p deepseek-policy --lib memory_index::tests 2>&1
+        | tee artifacts/native-media-delete-admission/rust-memory-index.log
+
+        '
+    - name: Run actual DELETE admission and original media Go suites
       working-directory: go
       run: 'set -o pipefail
 
-        go test -count=1 -run "^TestMediaPublicDeleteAdmission$" -json ./internal/api 2>&1 | tee ../artifacts/native-media-delete-admission/go-tests.jsonl
+        go test -count=1 -run "^Test.*Media" -json ./internal/api ./internal/media ./internal/store ./internal/worker 2>&1
+        | tee ../artifacts/native-media-delete-admission/go-tests.jsonl
 
         '
     - name: Preserve admission reports only

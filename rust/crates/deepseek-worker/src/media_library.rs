@@ -6,7 +6,7 @@ use deepseek_policy::{
     workspace_schema::validate_workspace_id,
 };
 use deepseek_protocol::generated::deepseek::media::v1::{
-    MediaPatchClaim, MediaPatchEffectState, MediaPatchOutcome, media_value::Kind,
+    MediaMutationKind, MediaPatchClaim, MediaPatchEffectState, MediaPatchOutcome, media_value::Kind,
 };
 use prost::Message as _;
 use serde_json::{Value, json};
@@ -80,6 +80,7 @@ pub(super) fn refusal(
     result.error_code = code.into();
     result.error_message = message.into();
     result.signature.clear();
+    result.deleted_count = 0;
     result
 }
 pub(super) fn plan(
@@ -104,7 +105,40 @@ pub(super) fn plan(
         fleet_id: claim.fleet_id.clone(),
         environment: claim.environment.clone(),
         writer_fencing_token: claim.writer_fencing_token,
+        deleted_count: 0,
     };
+    if intent.kind == MediaMutationKind::Delete as i32 {
+        if intent.patch.is_some() {
+            return Err(invalid());
+        }
+        let safe = match validate_workspace_id(&intent.media_id, "media id") {
+            Ok(value) => value,
+            Err(error) => {
+                return Ok((
+                    refusal(result, error.status as u32, error.code, &error.message),
+                    None,
+                ));
+            }
+        };
+        let mut items = normalized_items(before);
+        let length = items.len();
+        items.retain(|item| item["mediaId"].as_str() != Some(safe.as_str()));
+        if items.len() == length {
+            // Missing records do not clean orphan files, normalize the store or
+            // advance its generation. Preserve the original delete=0 behavior.
+            result.after_sha256 = sha(before);
+            return Ok((result, None));
+        }
+        crate::media_delete::preflight(root, &safe)?;
+        if items.len() > 1000 {
+            items.drain(..items.len() - 1000);
+        }
+        result.deleted_count = 1;
+        return planned_bytes(claim, result, items);
+    }
+    if intent.kind != MediaMutationKind::Unspecified as i32 || intent.patch.is_none() {
+        return Err(invalid());
+    }
     let prepared = prepare_media(root, claim, before);
     let (public, items) = match prepared {
         Ok(v) => v,
@@ -120,6 +154,15 @@ pub(super) fn plan(
         Some(Kind::ObjectValue(object)) => Some(object),
         _ => return Err(invalid()),
     };
+    planned_bytes(claim, result, items)
+}
+
+fn planned_bytes(
+    claim: &MediaPatchClaim,
+    mut result: MediaPatchOutcome,
+    items: Vec<Value>,
+) -> Result<(MediaPatchOutcome, Option<Vec<u8>>), Status> {
+    let intent = claim.intent.as_ref().ok_or_else(invalid)?;
     // This internal commit witness is ignored by original public readers. It
     // proves publication of this exact original operation after a process death;
     // mere absence or equality with the old file can never prove non-application.
@@ -134,6 +177,18 @@ pub(super) fn plan(
     }
     Ok((result, Some(bytes)))
 }
+
+fn normalized_items(before: &[u8]) -> Vec<Value> {
+    let document: Value = serde_json::from_slice(before).unwrap_or(Value::Null);
+    document
+        .get("media")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|value| value.is_object())
+        .filter_map(|value| normalize_media_record(value).ok())
+        .collect()
+}
 fn prepare_media(
     root: &Path,
     claim: &MediaPatchClaim,
@@ -142,15 +197,7 @@ fn prepare_media(
     let bad = || AppError::invalid_payload("Invalid media update");
     let intent = claim.intent.as_ref().ok_or_else(bad)?;
     let safe = validate_workspace_id(&intent.media_id, "media id")?;
-    let document: Value = serde_json::from_slice(before).unwrap_or(Value::Null);
-    let mut items: Vec<Value> = document
-        .get("media")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|v| v.is_object())
-        .filter_map(|v| normalize_media_record(v).ok())
-        .collect();
+    let mut items = normalized_items(before);
     let index = items
         .iter()
         .position(|v| v["mediaId"].as_str() == Some(&safe))

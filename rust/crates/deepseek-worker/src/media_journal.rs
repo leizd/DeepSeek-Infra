@@ -185,7 +185,10 @@ impl MediaJournal {
         };
         let planned = MediaPatchOutcome::decode(planned.as_slice()).map_err(|_| invalid())?;
         let binding = MediaPatchClaim::decode(claim.as_slice()).map_err(|_| invalid())?;
+        let intent = binding.intent.as_ref().ok_or_else(invalid)?;
         if planned.original_fence != binding.fence
+            || intent.operation_id != operation
+            || binding.request_sha256 != sha(&intent.encode_to_vec())
             || planned.request_sha256 != binding.request_sha256
             || planned.fleet_id != binding.fleet_id
             || planned.environment != binding.environment
@@ -280,6 +283,40 @@ impl MediaJournal {
             terminal: None,
         })
     }
+
+    pub(super) fn verify_original_claim(&self, claim: &MediaPatchClaim) -> Result<(), Status> {
+        let intent = claim.intent.as_ref().ok_or_else(invalid)?;
+        if let Some(row) = self.retained(&intent.operation_id)? {
+            if row.claim != normalized_claim(claim) {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_original_cleanup(&self, row: &Retained) -> Result<(), Status> {
+        use deepseek_protocol::generated::deepseek::media::v1::MediaMutationKind;
+        let claim = MediaPatchClaim::decode(row.claim.as_slice()).map_err(|_| invalid())?;
+        let intent = claim.intent.as_ref().ok_or_else(invalid)?;
+        match MediaMutationKind::try_from(intent.kind).map_err(|_| invalid())? {
+            MediaMutationKind::Unspecified
+                if intent.patch.is_some() && row.planned.deleted_count == 0 =>
+            {
+                Ok(())
+            }
+            MediaMutationKind::Delete
+                if intent.patch.is_none()
+                    && row.planned.media.is_none()
+                    && row.planned.deleted_count <= 1 =>
+            {
+                if row.planned.deleted_count == 1 {
+                    crate::media_delete::finish(&self.root, &intent.media_id)?;
+                }
+                Ok(())
+            }
+            _ => Err(invalid()),
+        }
+    }
     fn settle(
         &mut self,
         operation: &str,
@@ -341,8 +378,24 @@ impl MediaJournal {
                 );
                 return self.settle(operation, "APPLYING", refused, key);
             }
+            self.finish_original_cleanup(&row)?;
             self.settle(operation, "APPLYING", row.planned, key)
         } else {
+            if row.planned.state == MediaPatchEffectState::Applied as i32
+                && read_library(&self.root)? != row.before
+            {
+                return self.settle(
+                    operation,
+                    "PREPARED",
+                    media_library::refusal(
+                        row.planned,
+                        409,
+                        "revision_conflict",
+                        "Media library changed before publication",
+                    ),
+                    key,
+                );
+            }
             self.settle(operation, "PREPARED", row.planned, key)
         }
     }
@@ -374,6 +427,10 @@ impl MediaJournal {
             media_library::confirm_publication(&self.root, row.after.as_ref().ok_or_else(invalid)?)
                 .map_err(|_| Status::unavailable("EFFECT_UNKNOWN"))?;
             let _reconciliation = mutation_scope(None, &self.root).map_err(|_| invalid())?;
+            // Resume only the original fenced local cleanup. The durable
+            // after-image identifies that operation; no second publication,
+            // admission, action id or execution epoch is manufactured.
+            self.finish_original_cleanup(&row)?;
             return self
                 .settle(operation, "APPLYING", row.planned, key)
                 .map(Some);
@@ -393,6 +450,7 @@ impl MediaJournal {
         let mut unknown = row.planned;
         unknown.state = MediaPatchEffectState::Unknown as i32;
         unknown.media = None;
+        unknown.deleted_count = 0;
         unknown.http_status = 503;
         unknown.error_code = "EFFECT_UNKNOWN".into();
         unknown.error_message = "Media publication requires reconciliation".into();

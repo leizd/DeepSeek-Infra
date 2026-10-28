@@ -62,6 +62,7 @@ pub mod request_shaping;
 pub mod search;
 pub mod search_files;
 pub mod skills;
+pub mod sqlite_vec_runtime;
 pub mod title;
 pub mod tool_batch;
 pub mod tool_catalog;

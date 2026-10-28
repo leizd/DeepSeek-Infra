@@ -7,8 +7,9 @@ use crate::{
 use deepseek_protocol::{
     ActionFence,
     generated::deepseek::media::v1::{
-        ExecuteMediaPatchRequest, MediaPatchClaim, MediaPatchOutcome, QueryMediaPatchRequest,
-        QueryMediaPatchResponse, media_mutation_worker_server::MediaMutationWorker,
+        ExecuteMediaDeleteRequest, ExecuteMediaPatchRequest, MediaMutationKind, MediaPatchClaim,
+        MediaPatchOutcome, QueryMediaPatchRequest, QueryMediaPatchResponse,
+        media_mutation_worker_server::MediaMutationWorker,
     },
 };
 use prost::Message as _;
@@ -25,7 +26,15 @@ fn validate_claim(
     now: i64,
 ) -> Result<(), Status> {
     let intent = c.intent.as_ref().ok_or_else(invalid)?;
-    let patch = intent.patch.as_ref().ok_or_else(invalid)?;
+    let is_delete = intent.kind == MediaMutationKind::Delete as i32;
+    if intent.kind != MediaMutationKind::Unspecified as i32 && !is_delete {
+        return Err(invalid());
+    }
+    let prefix = if is_delete {
+        "media-delete-"
+    } else {
+        "media-patch-"
+    };
     if c.schema_version != 1
         || intent.schema_version != 1
         || intent.operation_id != operation
@@ -33,7 +42,7 @@ fn validate_claim(
         || fence.action_id != operation
         || fence.execution_epoch != 1
         || operation.len() > 128
-        || !operation.starts_with("media-patch-")
+        || !operation.starts_with(prefix)
         || c.request_sha256 != crate::media_library::sha(&intent.encode_to_vec())
         || c.owner.is_empty()
         || c.claim_token.len() != 64
@@ -45,8 +54,18 @@ fn validate_claim(
         || c.lease_until_unix > now.saturating_add(60)
         || c.state != "CLAIMED"
         || intent.encoded_len() > 4 * 1024 * 1024
-        || (patch.title.is_none() && patch.project_id.is_none() && patch.metadata.is_none())
     {
+        return Err(invalid());
+    }
+    if is_delete {
+        return if intent.patch.is_none() {
+            Ok(())
+        } else {
+            Err(invalid())
+        };
+    }
+    let patch = intent.patch.as_ref().ok_or_else(invalid)?;
+    if patch.title.is_none() && patch.project_id.is_none() && patch.metadata.is_none() {
         return Err(invalid());
     }
     for v in [&patch.title, &patch.project_id, &patch.metadata]
@@ -87,11 +106,11 @@ impl WorkerRpcService {
         Ok(())
     }
 }
-#[tonic::async_trait]
-impl MediaMutationWorker for WorkerRpcService {
-    async fn execute_patch(
+impl WorkerRpcService {
+    async fn execute_media_mutation(
         &self,
         request: Request<ExecuteMediaPatchRequest>,
+        expected_kind: MediaMutationKind,
     ) -> Result<Response<MediaPatchOutcome>, Status> {
         self.media_caller(&request)?;
         let input = request.into_inner();
@@ -104,6 +123,13 @@ impl MediaMutationWorker for WorkerRpcService {
         }
         let control = self.agent_execution_control.as_ref().ok_or_else(invalid)?;
         let claim = control.media_claim(&input.operation_id, fence).await?;
+        if claim
+            .intent
+            .as_ref()
+            .is_none_or(|intent| intent.kind != expected_kind as i32)
+        {
+            return Err(invalid());
+        }
         let config = self.worker.lock().await.agent_node_authority()?;
         let now = crate::service::unix_now_seconds().map_err(|_| invalid())?;
         validate_claim(&claim, &input.operation_id, fence, &config, now)?;
@@ -123,6 +149,7 @@ impl MediaMutationWorker for WorkerRpcService {
                 let live = control
                     .media_claim(&original.operation_id, original_fence)
                     .await?;
+                journal.verify_original_claim(&live)?;
                 if !matches!(live.state.as_str(), "CANCELLED" | "REFUSED" | "APPLIED") {
                     return Err(Status::unavailable("EFFECT_UNKNOWN"));
                 }
@@ -160,6 +187,34 @@ impl MediaMutationWorker for WorkerRpcService {
         journal
             .publish(&original, &prepared.digest, &signer.key)
             .map(Response::new)
+    }
+}
+
+#[tonic::async_trait]
+impl MediaMutationWorker for WorkerRpcService {
+    async fn execute_patch(
+        &self,
+        request: Request<ExecuteMediaPatchRequest>,
+    ) -> Result<Response<MediaPatchOutcome>, Status> {
+        self.execute_media_mutation(request, MediaMutationKind::Unspecified)
+            .await
+    }
+    async fn execute_delete(
+        &self,
+        request: Request<ExecuteMediaDeleteRequest>,
+    ) -> Result<Response<MediaPatchOutcome>, Status> {
+        let (metadata, extensions, input) = request.into_parts();
+        let forwarded = Request::from_parts(
+            metadata,
+            extensions,
+            ExecuteMediaPatchRequest {
+                schema_version: input.schema_version,
+                operation_id: input.operation_id,
+                fence: input.fence,
+            },
+        );
+        self.execute_media_mutation(forwarded, MediaMutationKind::Delete)
+            .await
     }
     async fn query_patch(
         &self,
@@ -199,6 +254,7 @@ impl MediaMutationWorker for WorkerRpcService {
             .ok_or_else(invalid)?
             .lock()
             .await;
+        journal.verify_original_claim(&live)?;
         let signer = self
             .control_signer
             .as_ref()
@@ -220,6 +276,7 @@ mod tests {
     #[test]
     fn media_execution_admission_binds_epoch_writer_realm_request_and_lease() {
         let intent = MediaPatchIntent {
+            kind: 0,
             schema_version: 1,
             operation_id: "media-patch-isolated".into(),
             media_id: "media_one".into(),

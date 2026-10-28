@@ -18,6 +18,16 @@ func (c *Client) ExecuteMediaPatch(ctx context.Context, r *mediav1.ExecuteMediaP
 	}
 	return c.media.ExecutePatch(ctx, r, grpc.MaxCallRecvMsgSize(4*1024*1024), grpc.MaxCallSendMsgSize(4*1024*1024))
 }
+func (c *Client) ExecuteMediaDelete(ctx context.Context, r *mediav1.ExecuteMediaDeleteRequest) (*mediav1.MediaPatchOutcome, error) {
+	if c == nil || !c.tlsSecured || !c.bearerAttached || c.media == nil {
+		return nil, ErrWorkerTLSRequired
+	}
+	ctx, err := c.outgoingContext(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	return c.media.ExecuteDelete(ctx, r, grpc.MaxCallRecvMsgSize(4*1024*1024), grpc.MaxCallSendMsgSize(4*1024*1024))
+}
 func (c *Client) QueryMediaPatch(ctx context.Context, r *mediav1.QueryMediaPatchRequest) (*mediav1.QueryMediaPatchResponse, error) {
 	if c == nil || !c.tlsSecured || !c.bearerAttached || c.media == nil {
 		return nil, ErrWorkerTLSRequired

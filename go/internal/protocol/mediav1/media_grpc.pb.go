@@ -197,8 +197,9 @@ var MediaMutationControl_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	MediaMutationWorker_ExecutePatch_FullMethodName = "/deepseek.media.v1.MediaMutationWorker/ExecutePatch"
-	MediaMutationWorker_QueryPatch_FullMethodName   = "/deepseek.media.v1.MediaMutationWorker/QueryPatch"
+	MediaMutationWorker_ExecutePatch_FullMethodName  = "/deepseek.media.v1.MediaMutationWorker/ExecutePatch"
+	MediaMutationWorker_ExecuteDelete_FullMethodName = "/deepseek.media.v1.MediaMutationWorker/ExecuteDelete"
+	MediaMutationWorker_QueryPatch_FullMethodName    = "/deepseek.media.v1.MediaMutationWorker/QueryPatch"
 )
 
 // MediaMutationWorkerClient is the client API for MediaMutationWorker service.
@@ -206,6 +207,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type MediaMutationWorkerClient interface {
 	ExecutePatch(ctx context.Context, in *ExecuteMediaPatchRequest, opts ...grpc.CallOption) (*MediaPatchOutcome, error)
+	ExecuteDelete(ctx context.Context, in *ExecuteMediaDeleteRequest, opts ...grpc.CallOption) (*MediaPatchOutcome, error)
 	QueryPatch(ctx context.Context, in *QueryMediaPatchRequest, opts ...grpc.CallOption) (*QueryMediaPatchResponse, error)
 }
 
@@ -227,6 +229,16 @@ func (c *mediaMutationWorkerClient) ExecutePatch(ctx context.Context, in *Execut
 	return out, nil
 }
 
+func (c *mediaMutationWorkerClient) ExecuteDelete(ctx context.Context, in *ExecuteMediaDeleteRequest, opts ...grpc.CallOption) (*MediaPatchOutcome, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MediaPatchOutcome)
+	err := c.cc.Invoke(ctx, MediaMutationWorker_ExecuteDelete_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *mediaMutationWorkerClient) QueryPatch(ctx context.Context, in *QueryMediaPatchRequest, opts ...grpc.CallOption) (*QueryMediaPatchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(QueryMediaPatchResponse)
@@ -242,6 +254,7 @@ func (c *mediaMutationWorkerClient) QueryPatch(ctx context.Context, in *QueryMed
 // for forward compatibility.
 type MediaMutationWorkerServer interface {
 	ExecutePatch(context.Context, *ExecuteMediaPatchRequest) (*MediaPatchOutcome, error)
+	ExecuteDelete(context.Context, *ExecuteMediaDeleteRequest) (*MediaPatchOutcome, error)
 	QueryPatch(context.Context, *QueryMediaPatchRequest) (*QueryMediaPatchResponse, error)
 	mustEmbedUnimplementedMediaMutationWorkerServer()
 }
@@ -255,6 +268,9 @@ type UnimplementedMediaMutationWorkerServer struct{}
 
 func (UnimplementedMediaMutationWorkerServer) ExecutePatch(context.Context, *ExecuteMediaPatchRequest) (*MediaPatchOutcome, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExecutePatch not implemented")
+}
+func (UnimplementedMediaMutationWorkerServer) ExecuteDelete(context.Context, *ExecuteMediaDeleteRequest) (*MediaPatchOutcome, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExecuteDelete not implemented")
 }
 func (UnimplementedMediaMutationWorkerServer) QueryPatch(context.Context, *QueryMediaPatchRequest) (*QueryMediaPatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method QueryPatch not implemented")
@@ -298,6 +314,24 @@ func _MediaMutationWorker_ExecutePatch_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MediaMutationWorker_ExecuteDelete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExecuteMediaDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MediaMutationWorkerServer).ExecuteDelete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MediaMutationWorker_ExecuteDelete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MediaMutationWorkerServer).ExecuteDelete(ctx, req.(*ExecuteMediaDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _MediaMutationWorker_QueryPatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(QueryMediaPatchRequest)
 	if err := dec(in); err != nil {
@@ -326,6 +360,10 @@ var MediaMutationWorker_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ExecutePatch",
 			Handler:    _MediaMutationWorker_ExecutePatch_Handler,
+		},
+		{
+			MethodName: "ExecuteDelete",
+			Handler:    _MediaMutationWorker_ExecuteDelete_Handler,
 		},
 		{
 			MethodName: "QueryPatch",

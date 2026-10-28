@@ -28,6 +28,7 @@ sha2 = { workspace = true }
 sha1 = { workspace = true }
 md-5 = { workspace = true }
 rusqlite = { workspace = true }
+sqlite-vec = { workspace = true }
 idna = "1.1.0"
 encoding_rs = "=0.8.35"
 # DOCX is a ZIP of WordprocessingML. `zip` reads stored and deflate entries;

@@ -71,6 +71,14 @@ func writeMediaOutcome(w http.ResponseWriter, request *http.Request, outcome *me
 		policyWriteError(w, int(outcome.HttpStatus), outcome.ErrorCode, outcome.ErrorMessage)
 		return
 	}
+	if request.Method == http.MethodDelete {
+		if outcome.Media != nil || outcome.DeletedCount > 1 {
+			mediaUnknown(w, outcome.OperationId)
+			return
+		}
+		writeJSON(w, request, http.MethodDelete, map[string]any{"ok": true, "deleted": outcome.DeletedCount})
+		return
+	}
 	value, err := mediamodel.ToJSON(&mediav1.MediaValue{Kind: &mediav1.MediaValue_ObjectValue{ObjectValue: outcome.Media}})
 	if err != nil {
 		mediaUnknown(w, outcome.OperationId)
@@ -79,7 +87,7 @@ func writeMediaOutcome(w http.ResponseWriter, request *http.Request, outcome *me
 	writeJSON(w, request, http.MethodPatch, map[string]any{"ok": true, "media": value})
 }
 func mediaPatch(w http.ResponseWriter, r *http.Request, control *store.Control, view PublicView) {
-	if r.Method != http.MethodPatch {
+	if r.Method != http.MethodPatch && r.Method != http.MethodDelete {
 		notImplemented(w, r)
 		return
 	}
@@ -100,61 +108,16 @@ func mediaPatch(w http.ResponseWriter, r *http.Request, control *store.Control, 
 		notImplemented(w, r)
 		return
 	}
-	if r.ContentLength <= 0 {
-		policyWriteError(w, 400, "invalid_payload", "Request body is empty")
-		return
-	}
-	if r.ContentLength > 1_000_000 {
-		policyWriteError(w, 413, "upload_too_large", "Request body is too large")
-		return
-	}
-	body := http.MaxBytesReader(w, r.Body, 1_000_000)
-	decoder := json.NewDecoder(body)
-	decoder.UseNumber()
-	var payload json.RawMessage
-	if err := decoder.Decode(&payload); err != nil {
-		policyWriteError(w, 400, "invalid_payload", "Invalid JSON body")
-		return
-	}
-	if decoder.Decode(new(any)) != io.EOF {
-		policyWriteError(w, 400, "invalid_payload", "Invalid JSON body")
-		return
-	}
-	trimmed := bytes.TrimSpace(payload)
-	if len(trimmed) == 0 || trimmed[0] != '{' {
-		policyWriteError(w, 400, "invalid_payload", "Request body must be a JSON object")
-		return
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(payload, &fields); err != nil {
-		policyWriteError(w, 400, "invalid_payload", "Invalid JSON body")
-		return
-	}
-	patch := &mediav1.MediaPatch{}
-	present := false
-	for _, field := range []string{"title", "projectId", "metadata"} {
-		value, exists := fields[field]
-		if !exists {
-			continue
-		}
-		present = true
-		typed, err := mediamodel.ParseJSON(value)
-		if err != nil {
-			policyWriteError(w, 400, "invalid_payload", "Invalid media patch")
+	var patch *mediav1.MediaPatch
+	kind := mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED
+	if r.Method == http.MethodPatch {
+		var valid bool
+		patch, valid = parseMediaPublicPatch(w, r)
+		if !valid {
 			return
 		}
-		switch field {
-		case "title":
-			patch.Title = typed
-		case "projectId":
-			patch.ProjectId = typed
-		case "metadata":
-			patch.Metadata = typed
-		}
-	}
-	if !present {
-		policyWriteError(w, 400, "invalid_payload", "Media patch did not include any supported fields")
-		return
+	} else {
+		kind = mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE
 	}
 	client, err := dialMediaWorker()
 	if err != nil {
@@ -180,14 +143,23 @@ func mediaPatch(w http.ResponseWriter, r *http.Request, control *store.Control, 
 		policyWriteError(w, 503, "MEDIA_ID_UNAVAILABLE", "Media operation identity unavailable")
 		return
 	}
-	operation := "media-patch-" + hex.EncodeToString(nonce[:])
-	intent := &mediav1.MediaPatchIntent{SchemaVersion: 1, OperationId: operation, MediaId: id, Patch: patch}
+	prefix := "media-patch-"
+	if kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE {
+		prefix = "media-delete-"
+	}
+	operation := prefix + hex.EncodeToString(nonce[:])
+	intent := &mediav1.MediaPatchIntent{SchemaVersion: 1, OperationId: operation, MediaId: id, Patch: patch, Kind: kind}
 	claim, err := control.AdmitMediaPatch(intent)
 	if err != nil {
 		mediaUnknown(w, operation)
 		return
 	}
-	outcome, err := client.ExecuteMediaPatch(ctx, &mediav1.ExecuteMediaPatchRequest{SchemaVersion: 1, OperationId: operation, Fence: claim.Fence})
+	var outcome *mediav1.MediaPatchOutcome
+	if kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE {
+		outcome, err = client.ExecuteMediaDelete(ctx, &mediav1.ExecuteMediaDeleteRequest{SchemaVersion: 1, OperationId: operation, Fence: claim.Fence})
+	} else {
+		outcome, err = client.ExecuteMediaPatch(ctx, &mediav1.ExecuteMediaPatchRequest{SchemaVersion: 1, OperationId: operation, Fence: claim.Fence})
+	}
 	if err == nil && outcome != nil {
 		if _, recordErr := control.RecordMediaPatchOutcome(outcome); recordErr == nil {
 			writeMediaOutcome(w, r, outcome)
@@ -203,4 +175,64 @@ func mediaPatch(w http.ResponseWriter, r *http.Request, control *store.Control, 
 		return
 	}
 	mediaUnknown(w, operation)
+}
+
+func parseMediaPublicPatch(w http.ResponseWriter, r *http.Request) (*mediav1.MediaPatch, bool) {
+	if r.ContentLength <= 0 {
+		policyWriteError(w, 400, "invalid_payload", "Request body is empty")
+		return nil, false
+	}
+	if r.ContentLength > 1_000_000 {
+		policyWriteError(w, 413, "upload_too_large", "Request body is too large")
+		return nil, false
+	}
+	body := http.MaxBytesReader(w, r.Body, 1_000_000)
+	decoder := json.NewDecoder(body)
+	decoder.UseNumber()
+	var payload json.RawMessage
+	if err := decoder.Decode(&payload); err != nil {
+		policyWriteError(w, 400, "invalid_payload", "Invalid JSON body")
+		return nil, false
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		policyWriteError(w, 400, "invalid_payload", "Invalid JSON body")
+		return nil, false
+	}
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		policyWriteError(w, 400, "invalid_payload", "Request body must be a JSON object")
+		return nil, false
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		policyWriteError(w, 400, "invalid_payload", "Invalid JSON body")
+		return nil, false
+	}
+	patch := &mediav1.MediaPatch{}
+	present := false
+	for _, field := range []string{"title", "projectId", "metadata"} {
+		value, exists := fields[field]
+		if !exists {
+			continue
+		}
+		present = true
+		typed, err := mediamodel.ParseJSON(value)
+		if err != nil {
+			policyWriteError(w, 400, "invalid_payload", "Invalid media patch")
+			return nil, false
+		}
+		switch field {
+		case "title":
+			patch.Title = typed
+		case "projectId":
+			patch.ProjectId = typed
+		case "metadata":
+			patch.Metadata = typed
+		}
+	}
+	if !present {
+		policyWriteError(w, 400, "invalid_payload", "Media patch did not include any supported fields")
+		return nil, false
+	}
+	return patch, true
 }

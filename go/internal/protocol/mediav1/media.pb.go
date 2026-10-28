@@ -22,6 +22,56 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// The v1 envelope retains its original name so stored PATCH receipts and their
+// canonical request bytes remain valid. An unspecified kind is valid only for
+// the existing PATCH envelope with its required patch message; it cannot imply
+// DELETE. New deletion requests select an explicit non-default kind.
+type MediaMutationKind int32
+
+const (
+	MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED MediaMutationKind = 0
+	MediaMutationKind_MEDIA_MUTATION_KIND_DELETE      MediaMutationKind = 1
+)
+
+// Enum value maps for MediaMutationKind.
+var (
+	MediaMutationKind_name = map[int32]string{
+		0: "MEDIA_MUTATION_KIND_UNSPECIFIED",
+		1: "MEDIA_MUTATION_KIND_DELETE",
+	}
+	MediaMutationKind_value = map[string]int32{
+		"MEDIA_MUTATION_KIND_UNSPECIFIED": 0,
+		"MEDIA_MUTATION_KIND_DELETE":      1,
+	}
+)
+
+func (x MediaMutationKind) Enum() *MediaMutationKind {
+	p := new(MediaMutationKind)
+	*p = x
+	return p
+}
+
+func (x MediaMutationKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (MediaMutationKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_media_v1_media_proto_enumTypes[0].Descriptor()
+}
+
+func (MediaMutationKind) Type() protoreflect.EnumType {
+	return &file_media_v1_media_proto_enumTypes[0]
+}
+
+func (x MediaMutationKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use MediaMutationKind.Descriptor instead.
+func (MediaMutationKind) EnumDescriptor() ([]byte, []int) {
+	return file_media_v1_media_proto_rawDescGZIP(), []int{0}
+}
+
 type MediaPatchEffectState int32
 
 const (
@@ -64,11 +114,11 @@ func (x MediaPatchEffectState) String() string {
 }
 
 func (MediaPatchEffectState) Descriptor() protoreflect.EnumDescriptor {
-	return file_media_v1_media_proto_enumTypes[0].Descriptor()
+	return file_media_v1_media_proto_enumTypes[1].Descriptor()
 }
 
 func (MediaPatchEffectState) Type() protoreflect.EnumType {
-	return &file_media_v1_media_proto_enumTypes[0]
+	return &file_media_v1_media_proto_enumTypes[1]
 }
 
 func (x MediaPatchEffectState) Number() protoreflect.EnumNumber {
@@ -77,7 +127,7 @@ func (x MediaPatchEffectState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use MediaPatchEffectState.Descriptor instead.
 func (MediaPatchEffectState) EnumDescriptor() ([]byte, []int) {
-	return file_media_v1_media_proto_rawDescGZIP(), []int{0}
+	return file_media_v1_media_proto_rawDescGZIP(), []int{1}
 }
 
 // Media metadata is an explicitly typed value tree, never an opaque JSON RPC
@@ -448,6 +498,7 @@ type MediaPatchIntent struct {
 	OperationId   string                 `protobuf:"bytes,2,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	MediaId       string                 `protobuf:"bytes,3,opt,name=media_id,json=mediaId,proto3" json:"media_id,omitempty"`
 	Patch         *MediaPatch            `protobuf:"bytes,4,opt,name=patch,proto3" json:"patch,omitempty"`
+	Kind          MediaMutationKind      `protobuf:"varint,5,opt,name=kind,proto3,enum=deepseek.media.v1.MediaMutationKind" json:"kind,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -508,6 +559,13 @@ func (x *MediaPatchIntent) GetPatch() *MediaPatch {
 		return x.Patch
 	}
 	return nil
+}
+
+func (x *MediaPatchIntent) GetKind() MediaMutationKind {
+	if x != nil {
+		return x.Kind
+	}
+	return MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED
 }
 
 // Go owns every lease/fence field. Rust obtains this claim from its own pinned,
@@ -859,8 +917,11 @@ type MediaPatchOutcome struct {
 	FleetId            string                 `protobuf:"bytes,13,opt,name=fleet_id,json=fleetId,proto3" json:"fleet_id,omitempty"`
 	Environment        string                 `protobuf:"bytes,14,opt,name=environment,proto3" json:"environment,omitempty"`
 	WriterFencingToken int64                  `protobuf:"varint,15,opt,name=writer_fencing_token,json=writerFencingToken,proto3" json:"writer_fencing_token,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// DELETE applies to a single original record: zero or one. PATCH and every
+	// refused/unknown result must keep this field zero.
+	DeletedCount  uint32 `protobuf:"varint,16,opt,name=deleted_count,json=deletedCount,proto3" json:"deleted_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MediaPatchOutcome) Reset() {
@@ -994,6 +1055,13 @@ func (x *MediaPatchOutcome) GetEnvironment() string {
 func (x *MediaPatchOutcome) GetWriterFencingToken() int64 {
 	if x != nil {
 		return x.WriterFencingToken
+	}
+	return 0
+}
+
+func (x *MediaPatchOutcome) GetDeletedCount() uint32 {
+	if x != nil {
+		return x.DeletedCount
 	}
 	return 0
 }
@@ -1162,6 +1230,66 @@ func (x *ExecuteMediaPatchRequest) GetFence() *commonv1.ActionFence {
 	return nil
 }
 
+type ExecuteMediaDeleteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	OperationId   string                 `protobuf:"bytes,2,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	Fence         *commonv1.ActionFence  `protobuf:"bytes,3,opt,name=fence,proto3" json:"fence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecuteMediaDeleteRequest) Reset() {
+	*x = ExecuteMediaDeleteRequest{}
+	mi := &file_media_v1_media_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecuteMediaDeleteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecuteMediaDeleteRequest) ProtoMessage() {}
+
+func (x *ExecuteMediaDeleteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_media_v1_media_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecuteMediaDeleteRequest.ProtoReflect.Descriptor instead.
+func (*ExecuteMediaDeleteRequest) Descriptor() ([]byte, []int) {
+	return file_media_v1_media_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ExecuteMediaDeleteRequest) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *ExecuteMediaDeleteRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *ExecuteMediaDeleteRequest) GetFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
 type QueryMediaPatchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SchemaVersion uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
@@ -1173,7 +1301,7 @@ type QueryMediaPatchRequest struct {
 
 func (x *QueryMediaPatchRequest) Reset() {
 	*x = QueryMediaPatchRequest{}
-	mi := &file_media_v1_media_proto_msgTypes[14]
+	mi := &file_media_v1_media_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1185,7 +1313,7 @@ func (x *QueryMediaPatchRequest) String() string {
 func (*QueryMediaPatchRequest) ProtoMessage() {}
 
 func (x *QueryMediaPatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_media_v1_media_proto_msgTypes[14]
+	mi := &file_media_v1_media_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1198,7 +1326,7 @@ func (x *QueryMediaPatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryMediaPatchRequest.ProtoReflect.Descriptor instead.
 func (*QueryMediaPatchRequest) Descriptor() ([]byte, []int) {
-	return file_media_v1_media_proto_rawDescGZIP(), []int{14}
+	return file_media_v1_media_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *QueryMediaPatchRequest) GetSchemaVersion() uint32 {
@@ -1233,7 +1361,7 @@ type QueryMediaPatchResponse struct {
 
 func (x *QueryMediaPatchResponse) Reset() {
 	*x = QueryMediaPatchResponse{}
-	mi := &file_media_v1_media_proto_msgTypes[15]
+	mi := &file_media_v1_media_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1245,7 +1373,7 @@ func (x *QueryMediaPatchResponse) String() string {
 func (*QueryMediaPatchResponse) ProtoMessage() {}
 
 func (x *QueryMediaPatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_media_v1_media_proto_msgTypes[15]
+	mi := &file_media_v1_media_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1258,7 +1386,7 @@ func (x *QueryMediaPatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryMediaPatchResponse.ProtoReflect.Descriptor instead.
 func (*QueryMediaPatchResponse) Descriptor() ([]byte, []int) {
-	return file_media_v1_media_proto_rawDescGZIP(), []int{15}
+	return file_media_v1_media_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *QueryMediaPatchResponse) GetFound() bool {
@@ -1307,12 +1435,13 @@ const file_media_v1_media_proto_rawDesc = "" +
 	"\x05title\x18\x01 \x01(\v2\x1d.deepseek.media.v1.MediaValueR\x05title\x12<\n" +
 	"\n" +
 	"project_id\x18\x02 \x01(\v2\x1d.deepseek.media.v1.MediaValueR\tprojectId\x129\n" +
-	"\bmetadata\x18\x03 \x01(\v2\x1d.deepseek.media.v1.MediaValueR\bmetadata\"\xac\x01\n" +
+	"\bmetadata\x18\x03 \x01(\v2\x1d.deepseek.media.v1.MediaValueR\bmetadata\"\xe6\x01\n" +
 	"\x10MediaPatchIntent\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12!\n" +
 	"\foperation_id\x18\x02 \x01(\tR\voperationId\x12\x19\n" +
 	"\bmedia_id\x18\x03 \x01(\tR\amediaId\x123\n" +
-	"\x05patch\x18\x04 \x01(\v2\x1d.deepseek.media.v1.MediaPatchR\x05patch\"\xb9\x03\n" +
+	"\x05patch\x18\x04 \x01(\v2\x1d.deepseek.media.v1.MediaPatchR\x05patch\x128\n" +
+	"\x04kind\x18\x05 \x01(\x0e2$.deepseek.media.v1.MediaMutationKindR\x04kind\"\xb9\x03\n" +
 	"\x0fMediaPatchClaim\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12;\n" +
 	"\x06intent\x18\x02 \x01(\v2#.deepseek.media.v1.MediaPatchIntentR\x06intent\x125\n" +
@@ -1342,7 +1471,7 @@ const file_media_v1_media_proto_rawDesc = "" +
 	"\x18MediaPatchDispatchPermit\x128\n" +
 	"\x05claim\x18\x01 \x01(\v2\".deepseek.media.v1.MediaPatchClaimR\x05claim\x12-\n" +
 	"\x12preparation_sha256\x18\x02 \x01(\fR\x11preparationSha256\x12\x14\n" +
-	"\x05fresh\x18\x03 \x01(\bR\x05fresh\"\xfc\x04\n" +
+	"\x05fresh\x18\x03 \x01(\bR\x05fresh\"\xa1\x05\n" +
 	"\x11MediaPatchOutcome\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12!\n" +
 	"\foperation_id\x18\x02 \x01(\tR\voperationId\x12F\n" +
@@ -1361,7 +1490,8 @@ const file_media_v1_media_proto_rawDesc = "" +
 	"\tsignature\x18\f \x01(\fR\tsignature\x12\x19\n" +
 	"\bfleet_id\x18\r \x01(\tR\afleetId\x12 \n" +
 	"\venvironment\x18\x0e \x01(\tR\venvironment\x120\n" +
-	"\x14writer_fencing_token\x18\x0f \x01(\x03R\x12writerFencingToken\"\xbe\x01\n" +
+	"\x14writer_fencing_token\x18\x0f \x01(\x03R\x12writerFencingToken\x12#\n" +
+	"\rdeleted_count\x18\x10 \x01(\rR\fdeletedCount\"\xbe\x01\n" +
 	"\x1eRecordMediaPatchOutcomeRequest\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12>\n" +
 	"\aoutcome\x18\x02 \x01(\v2$.deepseek.media.v1.MediaPatchOutcomeR\aoutcome\x125\n" +
@@ -1371,6 +1501,10 @@ const file_media_v1_media_proto_rawDesc = "" +
 	"\x18ExecuteMediaPatchRequest\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12!\n" +
 	"\foperation_id\x18\x02 \x01(\tR\voperationId\x125\n" +
+	"\x05fence\x18\x03 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\"\x9c\x01\n" +
+	"\x19ExecuteMediaDeleteRequest\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12!\n" +
+	"\foperation_id\x18\x02 \x01(\tR\voperationId\x125\n" +
 	"\x05fence\x18\x03 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\"\xaa\x01\n" +
 	"\x16QueryMediaPatchRequest\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12!\n" +
@@ -1378,7 +1512,10 @@ const file_media_v1_media_proto_rawDesc = "" +
 	"\x0eoriginal_fence\x18\x03 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\roriginalFence\"o\n" +
 	"\x17QueryMediaPatchResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12>\n" +
-	"\aoutcome\x18\x02 \x01(\v2$.deepseek.media.v1.MediaPatchOutcomeR\aoutcome*\x81\x02\n" +
+	"\aoutcome\x18\x02 \x01(\v2$.deepseek.media.v1.MediaPatchOutcomeR\aoutcome*X\n" +
+	"\x11MediaMutationKind\x12#\n" +
+	"\x1fMEDIA_MUTATION_KIND_UNSPECIFIED\x10\x00\x12\x1e\n" +
+	"\x1aMEDIA_MUTATION_KIND_DELETE\x10\x01*\x81\x02\n" +
 	"\x15MediaPatchEffectState\x12(\n" +
 	"$MEDIA_PATCH_EFFECT_STATE_UNSPECIFIED\x10\x00\x12%\n" +
 	"!MEDIA_PATCH_EFFECT_STATE_PREPARED\x10\x01\x12%\n" +
@@ -1389,9 +1526,10 @@ const file_media_v1_media_proto_rawDesc = "" +
 	"\x14MediaMutationControl\x12\\\n" +
 	"\bGetClaim\x12,.deepseek.media.v1.GetMediaPatchClaimRequest\x1a\".deepseek.media.v1.MediaPatchClaim\x12o\n" +
 	"\rBeginDispatch\x121.deepseek.media.v1.BeginMediaPatchDispatchRequest\x1a+.deepseek.media.v1.MediaPatchDispatchPermit\x12v\n" +
-	"\rRecordOutcome\x121.deepseek.media.v1.RecordMediaPatchOutcomeRequest\x1a2.deepseek.media.v1.RecordMediaPatchOutcomeResponse2\xdd\x01\n" +
+	"\rRecordOutcome\x121.deepseek.media.v1.RecordMediaPatchOutcomeRequest\x1a2.deepseek.media.v1.RecordMediaPatchOutcomeResponse2\xc2\x02\n" +
 	"\x13MediaMutationWorker\x12a\n" +
 	"\fExecutePatch\x12+.deepseek.media.v1.ExecuteMediaPatchRequest\x1a$.deepseek.media.v1.MediaPatchOutcome\x12c\n" +
+	"\rExecuteDelete\x12,.deepseek.media.v1.ExecuteMediaDeleteRequest\x1a$.deepseek.media.v1.MediaPatchOutcome\x12c\n" +
 	"\n" +
 	"QueryPatch\x12).deepseek.media.v1.QueryMediaPatchRequest\x1a*.deepseek.media.v1.QueryMediaPatchResponseBFZDgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/mediav1;mediav1b\x06proto3"
 
@@ -1407,66 +1545,72 @@ func file_media_v1_media_proto_rawDescGZIP() []byte {
 	return file_media_v1_media_proto_rawDescData
 }
 
-var file_media_v1_media_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_media_v1_media_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_media_v1_media_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_media_v1_media_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_media_v1_media_proto_goTypes = []any{
-	(MediaPatchEffectState)(0),              // 0: deepseek.media.v1.MediaPatchEffectState
-	(*MediaValue)(nil),                      // 1: deepseek.media.v1.MediaValue
-	(*MediaMember)(nil),                     // 2: deepseek.media.v1.MediaMember
-	(*MediaObject)(nil),                     // 3: deepseek.media.v1.MediaObject
-	(*MediaArray)(nil),                      // 4: deepseek.media.v1.MediaArray
-	(*MediaPatch)(nil),                      // 5: deepseek.media.v1.MediaPatch
-	(*MediaPatchIntent)(nil),                // 6: deepseek.media.v1.MediaPatchIntent
-	(*MediaPatchClaim)(nil),                 // 7: deepseek.media.v1.MediaPatchClaim
-	(*GetMediaPatchClaimRequest)(nil),       // 8: deepseek.media.v1.GetMediaPatchClaimRequest
-	(*BeginMediaPatchDispatchRequest)(nil),  // 9: deepseek.media.v1.BeginMediaPatchDispatchRequest
-	(*MediaPatchDispatchPermit)(nil),        // 10: deepseek.media.v1.MediaPatchDispatchPermit
-	(*MediaPatchOutcome)(nil),               // 11: deepseek.media.v1.MediaPatchOutcome
-	(*RecordMediaPatchOutcomeRequest)(nil),  // 12: deepseek.media.v1.RecordMediaPatchOutcomeRequest
-	(*RecordMediaPatchOutcomeResponse)(nil), // 13: deepseek.media.v1.RecordMediaPatchOutcomeResponse
-	(*ExecuteMediaPatchRequest)(nil),        // 14: deepseek.media.v1.ExecuteMediaPatchRequest
-	(*QueryMediaPatchRequest)(nil),          // 15: deepseek.media.v1.QueryMediaPatchRequest
-	(*QueryMediaPatchResponse)(nil),         // 16: deepseek.media.v1.QueryMediaPatchResponse
-	(*commonv1.ActionFence)(nil),            // 17: deepseek.common.v1.ActionFence
+	(MediaMutationKind)(0),                  // 0: deepseek.media.v1.MediaMutationKind
+	(MediaPatchEffectState)(0),              // 1: deepseek.media.v1.MediaPatchEffectState
+	(*MediaValue)(nil),                      // 2: deepseek.media.v1.MediaValue
+	(*MediaMember)(nil),                     // 3: deepseek.media.v1.MediaMember
+	(*MediaObject)(nil),                     // 4: deepseek.media.v1.MediaObject
+	(*MediaArray)(nil),                      // 5: deepseek.media.v1.MediaArray
+	(*MediaPatch)(nil),                      // 6: deepseek.media.v1.MediaPatch
+	(*MediaPatchIntent)(nil),                // 7: deepseek.media.v1.MediaPatchIntent
+	(*MediaPatchClaim)(nil),                 // 8: deepseek.media.v1.MediaPatchClaim
+	(*GetMediaPatchClaimRequest)(nil),       // 9: deepseek.media.v1.GetMediaPatchClaimRequest
+	(*BeginMediaPatchDispatchRequest)(nil),  // 10: deepseek.media.v1.BeginMediaPatchDispatchRequest
+	(*MediaPatchDispatchPermit)(nil),        // 11: deepseek.media.v1.MediaPatchDispatchPermit
+	(*MediaPatchOutcome)(nil),               // 12: deepseek.media.v1.MediaPatchOutcome
+	(*RecordMediaPatchOutcomeRequest)(nil),  // 13: deepseek.media.v1.RecordMediaPatchOutcomeRequest
+	(*RecordMediaPatchOutcomeResponse)(nil), // 14: deepseek.media.v1.RecordMediaPatchOutcomeResponse
+	(*ExecuteMediaPatchRequest)(nil),        // 15: deepseek.media.v1.ExecuteMediaPatchRequest
+	(*ExecuteMediaDeleteRequest)(nil),       // 16: deepseek.media.v1.ExecuteMediaDeleteRequest
+	(*QueryMediaPatchRequest)(nil),          // 17: deepseek.media.v1.QueryMediaPatchRequest
+	(*QueryMediaPatchResponse)(nil),         // 18: deepseek.media.v1.QueryMediaPatchResponse
+	(*commonv1.ActionFence)(nil),            // 19: deepseek.common.v1.ActionFence
 }
 var file_media_v1_media_proto_depIdxs = []int32{
-	3,  // 0: deepseek.media.v1.MediaValue.object_value:type_name -> deepseek.media.v1.MediaObject
-	4,  // 1: deepseek.media.v1.MediaValue.array_value:type_name -> deepseek.media.v1.MediaArray
-	1,  // 2: deepseek.media.v1.MediaMember.value:type_name -> deepseek.media.v1.MediaValue
-	2,  // 3: deepseek.media.v1.MediaObject.members:type_name -> deepseek.media.v1.MediaMember
-	1,  // 4: deepseek.media.v1.MediaArray.values:type_name -> deepseek.media.v1.MediaValue
-	1,  // 5: deepseek.media.v1.MediaPatch.title:type_name -> deepseek.media.v1.MediaValue
-	1,  // 6: deepseek.media.v1.MediaPatch.project_id:type_name -> deepseek.media.v1.MediaValue
-	1,  // 7: deepseek.media.v1.MediaPatch.metadata:type_name -> deepseek.media.v1.MediaValue
-	5,  // 8: deepseek.media.v1.MediaPatchIntent.patch:type_name -> deepseek.media.v1.MediaPatch
-	6,  // 9: deepseek.media.v1.MediaPatchClaim.intent:type_name -> deepseek.media.v1.MediaPatchIntent
-	17, // 10: deepseek.media.v1.MediaPatchClaim.fence:type_name -> deepseek.common.v1.ActionFence
-	17, // 11: deepseek.media.v1.GetMediaPatchClaimRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	17, // 12: deepseek.media.v1.BeginMediaPatchDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	7,  // 13: deepseek.media.v1.MediaPatchDispatchPermit.claim:type_name -> deepseek.media.v1.MediaPatchClaim
-	17, // 14: deepseek.media.v1.MediaPatchOutcome.original_fence:type_name -> deepseek.common.v1.ActionFence
-	0,  // 15: deepseek.media.v1.MediaPatchOutcome.state:type_name -> deepseek.media.v1.MediaPatchEffectState
-	3,  // 16: deepseek.media.v1.MediaPatchOutcome.media:type_name -> deepseek.media.v1.MediaObject
-	11, // 17: deepseek.media.v1.RecordMediaPatchOutcomeRequest.outcome:type_name -> deepseek.media.v1.MediaPatchOutcome
-	17, // 18: deepseek.media.v1.RecordMediaPatchOutcomeRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	17, // 19: deepseek.media.v1.ExecuteMediaPatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	17, // 20: deepseek.media.v1.QueryMediaPatchRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
-	11, // 21: deepseek.media.v1.QueryMediaPatchResponse.outcome:type_name -> deepseek.media.v1.MediaPatchOutcome
-	8,  // 22: deepseek.media.v1.MediaMutationControl.GetClaim:input_type -> deepseek.media.v1.GetMediaPatchClaimRequest
-	9,  // 23: deepseek.media.v1.MediaMutationControl.BeginDispatch:input_type -> deepseek.media.v1.BeginMediaPatchDispatchRequest
-	12, // 24: deepseek.media.v1.MediaMutationControl.RecordOutcome:input_type -> deepseek.media.v1.RecordMediaPatchOutcomeRequest
-	14, // 25: deepseek.media.v1.MediaMutationWorker.ExecutePatch:input_type -> deepseek.media.v1.ExecuteMediaPatchRequest
-	15, // 26: deepseek.media.v1.MediaMutationWorker.QueryPatch:input_type -> deepseek.media.v1.QueryMediaPatchRequest
-	7,  // 27: deepseek.media.v1.MediaMutationControl.GetClaim:output_type -> deepseek.media.v1.MediaPatchClaim
-	10, // 28: deepseek.media.v1.MediaMutationControl.BeginDispatch:output_type -> deepseek.media.v1.MediaPatchDispatchPermit
-	13, // 29: deepseek.media.v1.MediaMutationControl.RecordOutcome:output_type -> deepseek.media.v1.RecordMediaPatchOutcomeResponse
-	11, // 30: deepseek.media.v1.MediaMutationWorker.ExecutePatch:output_type -> deepseek.media.v1.MediaPatchOutcome
-	16, // 31: deepseek.media.v1.MediaMutationWorker.QueryPatch:output_type -> deepseek.media.v1.QueryMediaPatchResponse
-	27, // [27:32] is the sub-list for method output_type
-	22, // [22:27] is the sub-list for method input_type
-	22, // [22:22] is the sub-list for extension type_name
-	22, // [22:22] is the sub-list for extension extendee
-	0,  // [0:22] is the sub-list for field type_name
+	4,  // 0: deepseek.media.v1.MediaValue.object_value:type_name -> deepseek.media.v1.MediaObject
+	5,  // 1: deepseek.media.v1.MediaValue.array_value:type_name -> deepseek.media.v1.MediaArray
+	2,  // 2: deepseek.media.v1.MediaMember.value:type_name -> deepseek.media.v1.MediaValue
+	3,  // 3: deepseek.media.v1.MediaObject.members:type_name -> deepseek.media.v1.MediaMember
+	2,  // 4: deepseek.media.v1.MediaArray.values:type_name -> deepseek.media.v1.MediaValue
+	2,  // 5: deepseek.media.v1.MediaPatch.title:type_name -> deepseek.media.v1.MediaValue
+	2,  // 6: deepseek.media.v1.MediaPatch.project_id:type_name -> deepseek.media.v1.MediaValue
+	2,  // 7: deepseek.media.v1.MediaPatch.metadata:type_name -> deepseek.media.v1.MediaValue
+	6,  // 8: deepseek.media.v1.MediaPatchIntent.patch:type_name -> deepseek.media.v1.MediaPatch
+	0,  // 9: deepseek.media.v1.MediaPatchIntent.kind:type_name -> deepseek.media.v1.MediaMutationKind
+	7,  // 10: deepseek.media.v1.MediaPatchClaim.intent:type_name -> deepseek.media.v1.MediaPatchIntent
+	19, // 11: deepseek.media.v1.MediaPatchClaim.fence:type_name -> deepseek.common.v1.ActionFence
+	19, // 12: deepseek.media.v1.GetMediaPatchClaimRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	19, // 13: deepseek.media.v1.BeginMediaPatchDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	8,  // 14: deepseek.media.v1.MediaPatchDispatchPermit.claim:type_name -> deepseek.media.v1.MediaPatchClaim
+	19, // 15: deepseek.media.v1.MediaPatchOutcome.original_fence:type_name -> deepseek.common.v1.ActionFence
+	1,  // 16: deepseek.media.v1.MediaPatchOutcome.state:type_name -> deepseek.media.v1.MediaPatchEffectState
+	4,  // 17: deepseek.media.v1.MediaPatchOutcome.media:type_name -> deepseek.media.v1.MediaObject
+	12, // 18: deepseek.media.v1.RecordMediaPatchOutcomeRequest.outcome:type_name -> deepseek.media.v1.MediaPatchOutcome
+	19, // 19: deepseek.media.v1.RecordMediaPatchOutcomeRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	19, // 20: deepseek.media.v1.ExecuteMediaPatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	19, // 21: deepseek.media.v1.ExecuteMediaDeleteRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	19, // 22: deepseek.media.v1.QueryMediaPatchRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
+	12, // 23: deepseek.media.v1.QueryMediaPatchResponse.outcome:type_name -> deepseek.media.v1.MediaPatchOutcome
+	9,  // 24: deepseek.media.v1.MediaMutationControl.GetClaim:input_type -> deepseek.media.v1.GetMediaPatchClaimRequest
+	10, // 25: deepseek.media.v1.MediaMutationControl.BeginDispatch:input_type -> deepseek.media.v1.BeginMediaPatchDispatchRequest
+	13, // 26: deepseek.media.v1.MediaMutationControl.RecordOutcome:input_type -> deepseek.media.v1.RecordMediaPatchOutcomeRequest
+	15, // 27: deepseek.media.v1.MediaMutationWorker.ExecutePatch:input_type -> deepseek.media.v1.ExecuteMediaPatchRequest
+	16, // 28: deepseek.media.v1.MediaMutationWorker.ExecuteDelete:input_type -> deepseek.media.v1.ExecuteMediaDeleteRequest
+	17, // 29: deepseek.media.v1.MediaMutationWorker.QueryPatch:input_type -> deepseek.media.v1.QueryMediaPatchRequest
+	8,  // 30: deepseek.media.v1.MediaMutationControl.GetClaim:output_type -> deepseek.media.v1.MediaPatchClaim
+	11, // 31: deepseek.media.v1.MediaMutationControl.BeginDispatch:output_type -> deepseek.media.v1.MediaPatchDispatchPermit
+	14, // 32: deepseek.media.v1.MediaMutationControl.RecordOutcome:output_type -> deepseek.media.v1.RecordMediaPatchOutcomeResponse
+	12, // 33: deepseek.media.v1.MediaMutationWorker.ExecutePatch:output_type -> deepseek.media.v1.MediaPatchOutcome
+	12, // 34: deepseek.media.v1.MediaMutationWorker.ExecuteDelete:output_type -> deepseek.media.v1.MediaPatchOutcome
+	18, // 35: deepseek.media.v1.MediaMutationWorker.QueryPatch:output_type -> deepseek.media.v1.QueryMediaPatchResponse
+	30, // [30:36] is the sub-list for method output_type
+	24, // [24:30] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_media_v1_media_proto_init() }
@@ -1487,8 +1631,8 @@ func file_media_v1_media_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_media_v1_media_proto_rawDesc), len(file_media_v1_media_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   16,
+			NumEnums:      2,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

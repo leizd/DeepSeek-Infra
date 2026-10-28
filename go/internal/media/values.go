@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"io"
 	"sort"
+	"strings"
 )
 
 // Typed scalar arrays can exceed 2 MiB while their public JSON remains below
@@ -31,22 +32,31 @@ func Encode(message proto.Message) ([]byte, error) {
 	return b, nil
 }
 func RequestDigest(intent *mediav1.MediaPatchIntent) ([]byte, error) {
-	if intent == nil || intent.SchemaVersion != 1 || intent.OperationId == "" || len(intent.OperationId) > 128 || intent.MediaId == "" || len(intent.MediaId) > 512 || intent.Patch == nil {
+	if intent == nil || intent.SchemaVersion != 1 || intent.OperationId == "" || len(intent.OperationId) > 128 || intent.MediaId == "" || len(intent.MediaId) > 512 {
 		return nil, ErrInvalid
 	}
-	if len(intent.ProtoReflect().GetUnknown()) != 0 || len(intent.Patch.ProtoReflect().GetUnknown()) != 0 {
+	if len(intent.ProtoReflect().GetUnknown()) != 0 {
 		return nil, ErrInvalid
 	}
-	p := intent.Patch
-	if p.Title == nil && p.ProjectId == nil && p.Metadata == nil {
-		return nil, ErrInvalid
-	}
-	for _, v := range []*mediav1.MediaValue{p.Title, p.ProjectId, p.Metadata} {
-		if v != nil {
-			if _, err := ToJSON(v); err != nil {
-				return nil, err
+	switch intent.Kind {
+	case mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED:
+		p := intent.Patch
+		if p == nil || len(p.ProtoReflect().GetUnknown()) != 0 || (p.Title == nil && p.ProjectId == nil && p.Metadata == nil) {
+			return nil, ErrInvalid
+		}
+		for _, v := range []*mediav1.MediaValue{p.Title, p.ProjectId, p.Metadata} {
+			if v != nil {
+				if _, err := ToJSON(v); err != nil {
+					return nil, err
+				}
 			}
 		}
+	case mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE:
+		if intent.Patch != nil || !strings.HasPrefix(intent.OperationId, "media-delete-") {
+			return nil, ErrInvalid
+		}
+	default:
+		return nil, ErrInvalid
 	}
 	b, err := Encode(intent)
 	if err != nil {
@@ -270,14 +280,26 @@ func VerifyOutcome(outcome *mediav1.MediaPatchOutcome, claim *mediav1.MediaPatch
 	if outcome.State != mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED && outcome.State != mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_REFUSED {
 		return ErrInvalid
 	}
+	if claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED && claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE {
+		return ErrInvalid
+	}
 	if outcome.State == mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED {
-		if outcome.HttpStatus != 200 || outcome.Media == nil || len(outcome.BeforeSha256) != 32 || len(outcome.AfterSha256) != 32 || outcome.ErrorCode != "" || outcome.ErrorMessage != "" {
+		if outcome.HttpStatus != 200 || len(outcome.BeforeSha256) != 32 || len(outcome.AfterSha256) != 32 || outcome.ErrorCode != "" || outcome.ErrorMessage != "" {
 			return ErrInvalid
 		}
-		if _, err := ToJSON(&mediav1.MediaValue{Kind: &mediav1.MediaValue_ObjectValue{ObjectValue: outcome.Media}}); err != nil {
-			return err
+		if claim.Intent.Kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE {
+			if outcome.Media != nil || outcome.DeletedCount > 1 {
+				return ErrInvalid
+			}
+		} else {
+			if outcome.Media == nil || outcome.DeletedCount != 0 {
+				return ErrInvalid
+			}
+			if _, err := ToJSON(&mediav1.MediaValue{Kind: &mediav1.MediaValue_ObjectValue{ObjectValue: outcome.Media}}); err != nil {
+				return err
+			}
 		}
-	} else if outcome.HttpStatus < 400 || outcome.HttpStatus >= 500 || outcome.Media != nil || len(outcome.AfterSha256) != 0 || outcome.ErrorCode == "" {
+	} else if outcome.HttpStatus < 400 || outcome.HttpStatus >= 500 || outcome.Media != nil || outcome.DeletedCount != 0 || len(outcome.AfterSha256) != 0 || outcome.ErrorCode == "" {
 		return ErrInvalid
 	}
 	unsigned := proto.Clone(outcome).(*mediav1.MediaPatchOutcome)

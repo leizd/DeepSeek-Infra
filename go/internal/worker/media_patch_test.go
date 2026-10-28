@@ -14,5 +14,8 @@ func TestMediaCallsRequireTheProductionSecuredWorkerChannel(t *testing.T) {
 		if _, err := client.QueryMediaPatch(context.Background(), &mediav1.QueryMediaPatchRequest{}); err != ErrWorkerTLSRequired {
 			t.Fatalf("query accepted unpinned channel: %v", err)
 		}
+		if _, err := client.ExecuteMediaDelete(context.Background(), &mediav1.ExecuteMediaDeleteRequest{}); err != ErrWorkerTLSRequired {
+			t.Fatalf("delete accepted unpinned channel: %v", err)
+		}
 	}
 }

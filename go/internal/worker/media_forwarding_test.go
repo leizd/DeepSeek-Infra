@@ -15,10 +15,19 @@ import (
 // a TLS server or Rust worker and cannot qualify transport/custody/file effects.
 type mediaForwardingFixture struct {
 	execute                      *mediav1.ExecuteMediaPatchRequest
+	delete                       *mediav1.ExecuteMediaDeleteRequest
 	query                        *mediav1.QueryMediaPatchRequest
 	executeOptions, queryOptions int
+	deleteOptions                int
 	calls                        int
 	failure                      error
+}
+
+func (f *mediaForwardingFixture) ExecuteDelete(_ context.Context, r *mediav1.ExecuteMediaDeleteRequest, opts ...grpc.CallOption) (*mediav1.MediaPatchOutcome, error) {
+	f.calls++
+	f.delete = proto.Clone(r).(*mediav1.ExecuteMediaDeleteRequest)
+	f.deleteOptions = len(opts)
+	return &mediav1.MediaPatchOutcome{OperationId: r.OperationId}, f.failure
 }
 
 func (f *mediaForwardingFixture) ExecutePatch(_ context.Context, r *mediav1.ExecuteMediaPatchRequest, opts ...grpc.CallOption) (*mediav1.MediaPatchOutcome, error) {
@@ -39,6 +48,7 @@ func TestMediaForwardingPreservesTheOriginalOperationAndTransportErrors(t *testi
 	fence := &commonv1.ActionFence{ActionId: "original-operation", ExecutionEpoch: 7}
 	execute := &mediav1.ExecuteMediaPatchRequest{SchemaVersion: 1, OperationId: fence.ActionId, Fence: fence}
 	query := &mediav1.QueryMediaPatchRequest{SchemaVersion: 1, OperationId: fence.ActionId, OriginalFence: fence}
+	deletion := &mediav1.ExecuteMediaDeleteRequest{SchemaVersion: 1, OperationId: fence.ActionId, Fence: fence}
 	result, err := c.ExecuteMediaPatch(context.Background(), execute)
 	if err != nil || result.OperationId != fence.ActionId || !proto.Equal(f.execute, execute) || f.executeOptions != 2 {
 		t.Fatalf("execution binding lost: %#v %v", result, err)
@@ -47,6 +57,10 @@ func TestMediaForwardingPreservesTheOriginalOperationAndTransportErrors(t *testi
 	if err != nil || !response.Found || !proto.Equal(f.query, query) || f.queryOptions != 1 {
 		t.Fatal("original query/options changed", err)
 	}
+	deleted, err := c.ExecuteMediaDelete(context.Background(), deletion)
+	if err != nil || deleted.OperationId != fence.ActionId || !proto.Equal(f.delete, deletion) || f.deleteOptions != 2 {
+		t.Fatal("delete operation or transport bound changed", err)
+	}
 	f.failure = errors.New("isolated transport failure")
 	if _, err := c.ExecuteMediaPatch(context.Background(), execute); !errors.Is(err, f.failure) {
 		t.Fatal("execution failure hidden", err)
@@ -54,7 +68,10 @@ func TestMediaForwardingPreservesTheOriginalOperationAndTransportErrors(t *testi
 	if _, err := c.QueryMediaPatch(context.Background(), query); !errors.Is(err, f.failure) {
 		t.Fatal("query failure hidden", err)
 	}
-	if f.calls != 4 {
+	if _, err := c.ExecuteMediaDelete(context.Background(), deletion); !errors.Is(err, f.failure) {
+		t.Fatal("deletion failure hidden", err)
+	}
+	if f.calls != 6 {
 		t.Fatal("transport was retried", f.calls)
 	}
 }
@@ -67,6 +84,9 @@ func TestMediaForwardingRejectsConflictingCredentialsBeforeCallingThePeer(t *tes
 		}
 		if _, err := c.QueryMediaPatch(ctx, &mediav1.QueryMediaPatchRequest{}); err == nil {
 			t.Fatal("invalid recovery context accepted")
+		}
+		if _, err := c.ExecuteMediaDelete(ctx, &mediav1.ExecuteMediaDeleteRequest{}); err == nil {
+			t.Fatal("invalid deletion context accepted")
 		}
 	}
 	if f.calls != 0 {
