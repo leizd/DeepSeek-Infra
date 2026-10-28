@@ -139,6 +139,56 @@ def trace_command(binary: Path, library: Path, root: Path, log: Path) -> list[st
             "-e", "inject=fsync,fdatasync:delay_exit=20s", "-o", str(log)]
 
 
+def sync_fault_command(binary: Path, library: Path, root: Path, log: Path, kind: str) -> list[str]:
+    require(kind in {"file", "directory"}, "MEDIA_SYNC_FAULT_KIND_INVALID")
+    target = owned_file(library, root)
+    if kind == "directory":
+        target = target.parent
+    return [str(binary), "-f", "-P", str(target), "-e", "trace=fsync,fdatasync",
+            "-e", "inject=fsync,fdatasync:error=EIO", "-o", str(log)]
+
+
+def require_sync_failure_retains_original(before_go: dict[str, Any], before_rust: dict[str, Any],
+                                         after_go: dict[str, Any], after_rust: dict[str, Any]) -> None:
+    require(same_original(before_go, after_go, IMMUTABLE_GO)
+            and same_original(before_rust, after_rust, IMMUTABLE_RUST), "MEDIA_RECOVERY_REBOUND_ORIGINAL_OPERATION")
+    require(after_go["state"] == "DISPATCHED" and after_rust["state"] == "APPLYING"
+            and after_go["outcomeSha256"] is None and after_rust["outcomeSha256"] is None,
+            "MEDIA_RECOVERY_SETTLED_WITHOUT_SYNC_BARRIER")
+
+
+def qualify_sync_fault_trace(binary: Path, scratch: Path, out: Path, kind: str) -> dict[str, Any]:
+    root = scratch / "sync-fault-qualification"
+    (root / "target").mkdir(parents=True)
+    library = root / "target/library.json"
+    library.write_bytes(b"retained")
+    code = """from pathlib import Path
+import errno,os,sys
+p=Path(sys.argv[1]);kind=sys.argv[2]
+with (p/'unrelated').open('wb') as f:
+ f.write(b'other');f.flush();os.fsync(f.fileno())
+print('unrelated-sync-passed',flush=True)
+fd=os.open(p/'target/library.json',os.O_RDWR) if kind=='file' else os.open(p/'target',os.O_RDONLY|os.O_DIRECTORY)
+try:
+ try:os.fsync(fd)
+ except OSError as e:
+  if e.errno!=errno.EIO:raise
+  print('target-sync-eio',flush=True)
+ else:raise RuntimeError('target sync did not fail')
+finally:os.close(fd)
+"""
+    log = out / "sync-fault-qualification-syscalls.log"
+    command = sync_fault_command(binary, library, root, log, kind)
+    result = subprocess.run(command + [sys.executable, "-c", code, str(root), kind],
+                            capture_output=True, timeout=10)
+    (out / "sync-fault-qualification-output.log").write_bytes(result.stdout + result.stderr)
+    require(result.returncode == 0 and result.stdout.splitlines() == [b"unrelated-sync-passed", b"target-sync-eio"],
+            "MEDIA_SYNC_FAULT_FILTER_NOT_QUALIFIED")
+    require("EIO" in log.read_text() and "INJECTED" in log.read_text(), "MEDIA_SYNC_EIO_NOT_OBSERVED")
+    return dict(targetKind=kind, unrelatedSyncPassed=True, targetedEIOObserved=True,
+                syscallErrorInjected=True, physicalPowerLossSimulated=False)
+
+
 def stop_trace(child: subprocess.Popen[bytes]) -> None:
     if sys.platform != "linux":
         raise patch.ProbeFailure("MEDIA_TRACE_REQUIRES_LINUX")
@@ -235,14 +285,26 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
         child: subprocess.Popen[bytes] | None = None
         identities: list[dict[str, Any]] = []
         tracer: subprocess.Popen[bytes] | None = None
+        sync_traced = False
 
-        def launch(label: str) -> str:
-            nonlocal child, identities
+        def launch(label: str, sync_fault: str = "none") -> str:
+            nonlocal child, identities, sync_traced
+            command = [str(binaries / "deepseek-launch"), "--server", "--no-prompt", "--port", str(port)]
+            sync_traced = sync_fault != "none"
+            if sync_traced:
+                command = sync_fault_command(args.strace, profile / ".media/library.json", profile,
+                                             args.out / "recovery-sync-syscalls.log", sync_fault) + command
             with (args.out / (label + ".log")).open("wb") as log:
-                child = subprocess.Popen([str(binaries / "deepseek-launch"), "--server", "--no-prompt", "--port", str(port)],
-                                         cwd=scratch, env=launch_env, stdout=log, stderr=subprocess.STDOUT)
+                child = subprocess.Popen(command, cwd=scratch, env=launch_env, stdout=log,
+                                         stderr=subprocess.STDOUT, start_new_session=sync_traced)
             patch.bootstrap.wait_public(origin, child)
             identities = [{**row, "startTicks": patch.reads.process_identity(row["pid"])} for row in patch.bootstrap.process_roles(child.pid)]
+            if sync_traced:
+                wrappers = [row for row in identities if row["pid"] == child.pid]
+                require(len(wrappers) == 1 and wrappers[0]["executable"] == args.strace.name,
+                        "MEDIA_SYNC_TRACER_IDENTITY_DIFFERS")
+                report["syncFaultTracerProcess"] = wrappers[0]
+                identities = [row for row in identities if row["pid"] != child.pid]
             require({row["executable"] for row in identities} == {"deepseek-launch", "deepseekd", "deepseek-worker", "deepseek-gateway"}, "MEDIA_RECOVERY_NATIVE_ROLES_DIFFER")
             require(all(row["startTicks"] is not None for row in identities), "MEDIA_RECOVERY_NATIVE_PROCESS_DISAPPEARED")
             report[label + "Processes"] = identities
@@ -253,10 +315,24 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             return auth
 
         def shutdown() -> None:
-            nonlocal child, identities
+            nonlocal child, identities, sync_traced
             if child is not None:
-                patch.reads.stop(child, identities)
+                if sync_traced:
+                    launchers = [row for row in identities if row["executable"] == "deepseek-launch"]
+                    if child.poll() is None and len(launchers) == 1:
+                        signal_owned(launchers[0], signal.SIGTERM)
+                        try:
+                            child.wait(timeout=20)
+                        finally:
+                            if child.poll() is None:
+                                stop_trace(child)
+                    elif child.poll() is None:
+                        stop_trace(child)
+                    wait_for(lambda: all(exited(row) for row in identities), 5, "MEDIA_SYNC_NATIVE_CHILD_SURVIVED")
+                else:
+                    patch.reads.stop(child, identities)
                 child, identities = None, []
+                sync_traced = False
 
         try:
             launch("empty-launch")
@@ -337,6 +413,29 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 raise patch.ProbeFailure("MEDIA_ORIGINAL_RECOVERY_ROW_MISSING")
             require(crashed_go["state"] == "DISPATCHED" and crashed_rust["state"] == "APPLYING", "MEDIA_TERMINAL_RESULT_PRECEDED_RESTART")
             report["interruptedOutcome"] = "EFFECT_UNKNOWN"
+            if args.recovery_sync_fault != "none":
+                report["syncFaultQualification"] = qualify_sync_fault_trace(args.strace, scratch, args.out, args.recovery_sync_fault)
+                report["semanticStageReached"] = True
+                launch("sync-fault-launch", args.recovery_sync_fault)
+                deadline = time.monotonic() + 4
+                observations = 0
+                while time.monotonic() < deadline:
+                    fault_go, fault_rust = control_snapshot(scratch), journal_snapshot(scratch)
+                    if fault_go is None or fault_rust is None:
+                        raise patch.ProbeFailure("MEDIA_ORIGINAL_RECOVERY_ROW_MISSING")
+                    report.update(duringSyncFaultGo=fault_go, duringSyncFaultRust=fault_rust)
+                    require_sync_failure_retains_original(before_go, before_rust, fault_go, fault_rust)
+                    observed = dict(sha256=digest(library.read_bytes()), inode=library.stat().st_ino,
+                                    mtimeNs=library.stat().st_mtime_ns)
+                    require_same_publication(report["publicationAtCrash"], observed)
+                    observations += 1
+                    time.sleep(0.1)
+                trace = (args.out / "recovery-sync-syscalls.log").read_text()
+                injected = sum("EIO" in line and "INJECTED" in line for line in trace.splitlines())
+                require(injected >= 2, "MEDIA_RECOVERY_DID_NOT_RETRY_SYNC_BARRIER")
+                report.update(syncFailureKeptOriginalUnresolved=True, syncFailureObservations=observations,
+                              injectedRecoverySyncErrors=injected, publicationUnchangedDuringSyncFailure=True)
+                shutdown()
             token = launch("recovery-launch")
             writer_after = patch.reads.writer(profile)
             require(writer_after[0] > writer_before[0], "MEDIA_RESTART_WRITER_FENCE_NOT_ADVANCED")
@@ -385,6 +484,7 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--strace", type=Path, default=Path(shutil.which("strace") or "/not-installed/strace"))
     parser.add_argument("--reconcile-timeout", type=float, default=20)
+    parser.add_argument("--recovery-sync-fault", choices=("none", "file", "directory"), default="none")
     args = parser.parse_args()
     require(1 <= args.reconcile_timeout <= 30, "MEDIA_RECOVERY_TIMEOUT_INVALID")
     args.out = args.out.resolve()
@@ -393,6 +493,7 @@ def main() -> int:
     report: dict[str, Any] = dict(kind="native-media-recovery-process-v1", status="FAIL",
         sourceCommit=os.environ.get("GITHUB_SHA"), runId=os.environ.get("GITHUB_RUN_ID"),
         event=os.environ.get("GITHUB_EVENT_NAME"), semanticStageReached=False,
+        recoverySyncFault=args.recovery_sync_fault,
         controlledOriginalOperationRecoveryQualified=False, mediaAuthorityRecoveryQualified=False,
         powerLossRecoveryQualified=False, windowsRecoveryQualified=False, fullMigrationQualified=False,
         readiness="NOT_READY", startedAt=datetime.now(timezone.utc).isoformat())

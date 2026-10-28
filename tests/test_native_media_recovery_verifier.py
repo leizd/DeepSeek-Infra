@@ -96,6 +96,33 @@ def test_trace_arguments_hold_real_post_rename_file_sync_exit(tmp_path: Path) ->
     assert "trace=fsync,fdatasync" in args
 
 
+@pytest.mark.parametrize("kind", ["file", "directory"])
+def test_sync_fault_targets_only_the_retained_publication(tmp_path: Path, kind: str) -> None:
+    target = tmp_path / "library.json"
+    target.write_bytes(b"original")
+    args = probe.sync_fault_command(Path("/usr/bin/strace"), target, tmp_path, tmp_path / "trace.log", kind)
+    expected = target.resolve() if kind == "file" else tmp_path.resolve()
+    assert args[args.index("-P") + 1] == str(expected)
+    assert "inject=fsync,fdatasync:error=EIO" in args
+    assert "delay_exit" not in " ".join(args)
+    with pytest.raises(probe.patch.ProbeFailure, match="FAULT_KIND_INVALID"):
+        probe.sync_fault_command(Path("strace"), target, tmp_path, tmp_path / "trace.log", "volume")
+
+
+def test_sync_failure_cannot_accept_a_terminal_or_rebound_operation() -> None:
+    go: dict[str, object] = {name: index for index, name in enumerate(probe.IMMUTABLE_GO)}
+    rust: dict[str, object] = {name: index for index, name in enumerate(probe.IMMUTABLE_RUST)}
+    go.update(state="DISPATCHED", outcomeSha256=None)
+    rust.update(state="APPLYING", outcomeSha256=None)
+    probe.require_sync_failure_retains_original(go, rust, dict(go), dict(rust))
+    with pytest.raises(probe.patch.ProbeFailure, match="WITHOUT_SYNC_BARRIER"):
+        probe.require_sync_failure_retains_original(go, rust, dict(go), dict(rust, state="APPLIED"))
+    with pytest.raises(probe.patch.ProbeFailure, match="WITHOUT_SYNC_BARRIER"):
+        probe.require_sync_failure_retains_original(go, rust, dict(go, outcomeSha256="signed"), dict(rust))
+    with pytest.raises(probe.patch.ProbeFailure, match="REBOUND_ORIGINAL"):
+        probe.require_sync_failure_retains_original(go, rust, dict(go, epoch=99), dict(rust))
+
+
 def test_recovery_requires_its_own_complete_generation_scope() -> None:
     probe.require_recovery_generation({"value": 1}, {"present": True, "value": 3})
     for wrong in (1, 2, 4, "3", True):
