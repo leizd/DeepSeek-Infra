@@ -376,14 +376,23 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                     launchers = [row for row in identities if row["executable"] == "deepseek-launch"]
                     if child.poll() is None and len(launchers) == 1:
                         signal_owned(launchers[0], signal.SIGTERM)
+                    deadline = time.monotonic() + 5
+                    while not all(exited(row) for row in identities) and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    # Keep the tracer alive while draining tracees. Killing the
+                    # tracer first can detach native children in separate groups.
+                    forced = [row for row in identities if not exited(row)]
+                    for row in forced:
+                        signal_owned(row, signal.SIGKILL)
+                    wait_for(lambda: all(exited(row) for row in identities), 5, "MEDIA_SYNC_NATIVE_CHILD_SURVIVED")
+                    if child.poll() is None:
                         try:
-                            child.wait(timeout=20)
+                            child.wait(timeout=5)
                         finally:
                             if child.poll() is None:
                                 stop_trace(child)
-                    elif child.poll() is None:
-                        stop_trace(child)
-                    wait_for(lambda: all(exited(row) for row in identities), 5, "MEDIA_SYNC_NATIVE_CHILD_SURVIVED")
+                    report.setdefault("syncFaultCleanups", []).append(dict(
+                        nativeRoles=len(identities), forcedPIDs=[row["pid"] for row in forced], allNativeProcessesExited=True))
                 else:
                     patch.reads.stop(child, identities)
                 child, identities = None, []
@@ -522,6 +531,9 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             require(after_go["outcomeSha256"] is not None and after_go["outcomeSha256"] == after_rust["outcomeSha256"], "MEDIA_ORIGINAL_SIGNED_OUTCOME_DIFFERS")
             report.update(controlledOriginalOperationRecoveryQualified=True, libraryRepublicationObserved=False,
                           originalSignedOutcomeRetained=True, status="PASS")
+        except (patch.ProbeFailure, patch.bootstrap.ProbeFailure, patch.reads.ProbeFailure) as error:
+            report["failureBeforeCleanup"] = str(error)
+            raise
         finally:
             if tracer is not None:
                 stop_trace(tracer)

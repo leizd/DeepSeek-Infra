@@ -1,3 +1,34 @@
+# Current checkpoint: retained media publication synchronization, 2026-10-28
+
+The complete original source CI/Rust and controlled platform proofs at `0acac3b5`
+are now collected:37/37 CI jobs, Rust1636 tests/82.124921%, Go95.036276% and
+Android-Go95.023107%, plus the scoped Windows/Android/browser/process reports.
+They are source workflow_dispatch evidence, not PR merge-candidate or product
+release readiness.
+
+Actual push run40610956860 at `35281ce9` independently captured original Go/Rust
+APPLIED rows with identical outcome digests and unchanged operation identity,
+while the targeted retained-file trace contained zero fsync/fdatasync calls.
+The file EIO filter was independently calibrated. The run also had a traced
+cleanup failure; the directory case never reached its mutation. These limits
+are preserved in the scoped RED receipt, not counted as successful recovery.
+
+This candidate reopens and validates the exact retained regular-file after-image,
+synchronizes its contents/metadata and, on Unix, its containing directory, checks
+the retained path again, then enters the generation scope and signs settlement.
+Any synchronization error leaves the original operation unresolved and cannot
+create, truncate or republish the library. Windows obtains the write-capable
+handle required for FlushFileBuffers; dedicated native Windows journal tests
+cover successful synchronization and read-only-file refusal/recovery.
+
+The cloud observer now drains identity-checked native tracees before terminating
+the tracer, recording any forced cleanup, and preserves the first failure code.
+Normal/file-error/directory-error process cases, the new native tests, full source
+CI/Rust and affected platforms remain CLOUD_PENDING at this candidate.
+No thresholds or original tests are removed. Full product stays NOT_READY;
+physical power loss, Windows directory durability, other media operations,
+retained pytest MCP and all remaining product/release requirements remain open.
+
 # Current native migration execution — actual native media PATCH reproduction, 2026-10-26
 
 ## Current checkpoint: real media process recovery regression

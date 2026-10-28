@@ -128,6 +128,11 @@ jobs:
         2>&1 | tee artifacts/native-media-recovery/build.log
 
         '
+    - name: Verify native media journal retention and synchronization
+      run: |
+        set -o pipefail
+        python scripts/rust_build.py --toolchain 1.85.0 -- test --locked -p deepseek-worker --bin deepseek-worker media_journal::tests 2>&1 | tee artifacts/native-media-recovery/media-journal-tests.log
+        grep -F 'media_retained_publication_sync_never_creates_or_replaces_bytes ... ok' artifacts/native-media-recovery/media-journal-tests.log
     - name: Permit only the temporary official tracer to attach
       run: |
         tracer="$RUNNER_TEMP/native-media-recovery-strace"

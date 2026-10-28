@@ -201,6 +201,48 @@ fn prepare_media(
     }
     Ok((normalize_media_record(&normalized)?, items))
 }
+fn sync_published(file: &fs::File, directory: &Path) -> Result<(), Status> {
+    file.sync_all().map_err(|_| invalid())?;
+    #[cfg(unix)]
+    fs::File::open(directory)
+        .and_then(|f| f.sync_all())
+        .map_err(|_| invalid())?;
+    #[cfg(not(unix))]
+    let _ = directory;
+    Ok(())
+}
+
+// The journal caller holds the exclusive mutation gate and has already matched
+// the original after-image. Synchronize that retained file, never republish it.
+pub(super) fn confirm_publication(root: &Path, expected: &[u8]) -> Result<(), Status> {
+    let path = library_path(root);
+    let directory = path.parent().ok_or_else(invalid)?;
+    reject_links(&path)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    // Windows FlushFileBuffers requires a handle with GENERIC_WRITE, even
+    // though this recovery path never writes or truncates any file bytes.
+    #[cfg(windows)]
+    options.write(true);
+    let file = options.open(&path).map_err(|_| invalid())?;
+    if !file.metadata().map_err(|_| invalid())?.is_file() {
+        return Err(invalid());
+    }
+    let mut retained = Vec::new();
+    (&file)
+        .take(MAX_LIBRARY_BYTES + 1)
+        .read_to_end(&mut retained)
+        .map_err(|_| invalid())?;
+    if retained.len() as u64 > MAX_LIBRARY_BYTES || retained.as_slice() != expected {
+        return Err(Status::unavailable("EFFECT_UNKNOWN"));
+    }
+    sync_published(&file, directory)?;
+    if read_library(root)? != expected {
+        return Err(Status::unavailable("EFFECT_UNKNOWN"));
+    }
+    Ok(())
+}
+
 pub(super) fn publish(root: &Path, bytes: &[u8], deadline: Option<i64>) -> Result<bool, Status> {
     let path = library_path(root);
     let directory = path.parent().ok_or_else(invalid)?;
@@ -221,11 +263,7 @@ pub(super) fn publish(root: &Path, bytes: &[u8], deadline: Option<i64>) -> Resul
         }
     }
     let file = temporary.persist(&path).map_err(|_| invalid())?;
-    file.sync_all().map_err(|_| invalid())?;
-    #[cfg(unix)]
-    fs::File::open(directory)
-        .and_then(|f| f.sync_all())
-        .map_err(|_| invalid())?;
+    sync_published(&file, directory)?;
     if read_library(root)? != bytes {
         return Err(Status::unavailable("EFFECT_UNKNOWN"));
     }

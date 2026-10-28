@@ -371,6 +371,8 @@ impl MediaJournal {
                 read_library(&self.root).is_ok_and(|current| current == *after)
             })
         {
+            media_library::confirm_publication(&self.root, row.after.as_ref().ok_or_else(invalid)?)
+                .map_err(|_| Status::unavailable("EFFECT_UNKNOWN"))?;
             let _reconciliation = mutation_scope(None, &self.root).map_err(|_| invalid())?;
             return self
                 .settle(operation, "APPLYING", row.planned, key)

@@ -87,6 +87,14 @@ jobs:
         run: |
           python scripts/rust_build.py --toolchain 1.85.0 --target-dir $env:CARGO_TARGET_DIR -- build --locked -p deepseek-worker -p deepseek-gateway --bins 2>&1 | Tee-Object -FilePath artifacts/windows-native-cloud/rust-build.log
           if ($LASTEXITCODE -ne 0) { throw 'Windows Rust build failed' }
+      - name: Verify retained media synchronization and recovery on Windows
+        run: |
+          python scripts/rust_build.py --toolchain 1.85.0 --target-dir $env:CARGO_TARGET_DIR -- test --locked -p deepseek-worker --bin deepseek-worker media_journal::tests 2>&1 | Tee-Object -FilePath artifacts/windows-native-cloud/media-journal-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Windows media journal recovery tests failed' }
+          $tests = Get-Content -LiteralPath artifacts/windows-native-cloud/media-journal-tests.log -Raw
+          foreach ($name in @('media_retained_publication_sync_never_creates_or_replaces_bytes', 'media_windows_readonly_recovery_keeps_original_unknown_until_sync_is_possible')) {
+            if ($tests -notmatch ('test .*' + $name + ' \.\.\. ok')) { throw ('Windows recovery case missing: ' + $name) }
+          }
       - name: Build actual Windows Go control, launcher and WebView2 host
         run: |
           $bin = Join-Path $env:RUNNER_TEMP 'deepseek-windows-bin'

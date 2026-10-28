@@ -10,6 +10,41 @@ This is an implementation acceptance slice of
 the already requested Go control/Rust data boundary and the existing HTTP
 contract. It neither authorizes production cutover nor narrows the full migration.
 
+## Retained publication synchronization before recovery settlement
+
+A retained APPLYING operation whose exact after-image is present still requires a
+durability barrier before APPLIED can be signed. Under the original exclusive
+mutation gate, reopen the existing regular file without create/truncate, compare
+the opened descriptor's bounded bytes to the original planned after-image, call
+file sync_all, synchronize the containing directory on Unix, and revalidate the
+retained path. Only then enter the generation scope and settle the original row.
+Any open/read/sync/revalidation error keeps EFFECT_UNKNOWN and the original
+APPLYING/DISPATCHED admission barrier. The recovery path cannot publish bytes or
+admit a replacement operation. Existing terminal replay remains independent of
+later media publications.
+
+The normal publisher and recovery share the same file/Unix-directory sync
+implementation. Rust [sync_all](https://doc.rust-lang.org/std/fs/struct.File.html#method.sync_all)
+and [tempfile3.27 persist](https://docs.rs/tempfile/3.27.0/tempfile/struct.NamedTempFile.html#method.persist)
+require explicit error handling; [Linux fsync](https://man7.org/linux/man-pages/man2/fsync.2.html)
+requires a separate directory synchronization for the directory entry. Windows
+[FlushFileBuffers](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers)
+requires GENERIC_WRITE, so reopening for recovery permits writing the handle while
+performing no byte write or truncation. Windows directory/power-loss durability
+is not established by these tests and remains a separate acceptance item.
+
+Actual file-sync RED at35281ce9/run40610956860 binds independent Go/Rust terminal
+rows and no target synchronization calls. Its tracer cleanup failed and the
+directory case did not execute; these are retained limitations. The successor
+must pass the unchanged normal case and both independently calibrated targeted
+EIO cases: failures preserve original unresolved rows, normal untraced restart
+settles the same original signed outcome, generation advances by the original
+recovery delta, and bytes/inode/mtime remain unchanged. Traced teardown must drain
+only identity-checked native children while the tracer remains alive, record any
+forced termination, and preserve the first failure if cleanup also fails.
+The current implementation and added Windows tests are CLOUD_PENDING. No scoped
+process proof is physical-power-loss, all-media, all-platform or product readiness.
+
 ## Existing contract and objective
 
 `deepseek_infra/web/routes/media.py` accepts authenticated

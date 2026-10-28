@@ -165,6 +165,81 @@ fn media_prepared_abort_fences_a_late_old_permit() {
     assert_eq!(journal.publish(&claim, &p.digest, &key).unwrap(), refused);
     assert_eq!(read_library(root.path()).unwrap(), before);
 }
+
+#[test]
+fn media_retained_publication_sync_never_creates_or_replaces_bytes() {
+    let (root, _key, mut journal, claim) = fixture();
+    journal.prepare(&claim).unwrap();
+    let after = journal
+        .retained("media-patch-one")
+        .unwrap()
+        .unwrap()
+        .after
+        .unwrap();
+    media_library::publish(root.path(), &after, None).unwrap();
+    let path = media_library::library_path(root.path());
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    media_library::confirm_publication(root.path(), &after).unwrap();
+    assert_eq!(read_library(root.path()).unwrap(), after);
+    assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+    assert!(media_library::confirm_publication(root.path(), b"different publication").is_err());
+    assert_eq!(read_library(root.path()).unwrap(), after);
+    let retained = path.with_file_name("retained-library.json");
+    fs::rename(&path, &retained).unwrap();
+    assert!(media_library::confirm_publication(root.path(), &after).is_err());
+    assert!(!path.exists());
+    assert_eq!(fs::read(&retained).unwrap(), after);
+    fs::rename(&retained, &path).unwrap();
+    media_library::confirm_publication(root.path(), &after).unwrap();
+    assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+}
+
+#[cfg(windows)]
+#[test]
+fn media_windows_readonly_recovery_keeps_original_unknown_until_sync_is_possible() {
+    let (root, key, mut journal, claim) = fixture();
+    journal.prepare(&claim).unwrap();
+    let after = journal
+        .retained("media-patch-one")
+        .unwrap()
+        .unwrap()
+        .after
+        .unwrap();
+    journal
+        .connection
+        .execute(
+            "UPDATE media_operations SET state='APPLYING' WHERE operation_id='media-patch-one'",
+            [],
+        )
+        .unwrap();
+    media_library::publish(root.path(), &after, None).unwrap();
+    let path = media_library::library_path(root.path());
+    let original_permissions = fs::metadata(&path).unwrap().permissions();
+    let mut readonly = original_permissions.clone();
+    readonly.set_readonly(true);
+    fs::set_permissions(&path, readonly).unwrap();
+    let attempt = journal.query("media-patch-one", claim.fence.as_ref().unwrap(), true, &key);
+    fs::set_permissions(&path, original_permissions).unwrap();
+    assert_eq!(attempt.unwrap_err().message(), "EFFECT_UNKNOWN");
+    let unresolved = journal.retained("media-patch-one").unwrap().unwrap();
+    assert_eq!(unresolved.state, "APPLYING");
+    assert!(journal.terminal(&unresolved).unwrap().is_none());
+    assert_eq!(read_library(root.path()).unwrap(), after);
+    assert_eq!(
+        deepseek_policy::mutation_gate::read_generation(root.path()),
+        0
+    );
+    let result = journal
+        .query("media-patch-one", claim.fence.as_ref().unwrap(), true, &key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.state, MediaPatchEffectState::Applied as i32);
+    assert_eq!(read_library(root.path()).unwrap(), after);
+    assert_eq!(
+        deepseek_policy::mutation_gate::read_generation(root.path()),
+        2
+    );
+}
 #[test]
 fn media_uncertain_publication_does_not_infer_absence_or_release_the_library() {
     let (root, key, mut journal, claim) = fixture();
