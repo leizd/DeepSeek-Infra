@@ -46,6 +46,54 @@ def test_field_probes_are_successful_retained_original_workloads(
         assert result["source"] != before["source"]
 
 
+@pytest.mark.usefixtures("tmp_settings")
+@pytest.mark.parametrize("case,expected_status", [
+    ("all-fields", 200), ("source-only", 400), ("path-only", 400), ("status-only", 400), ("type-only", 400),
+    ("mime-only", 400), ("null-reset", 200), ("type-inference", 200), ("source-ordered", 400),
+])
+def test_original_public_route_retains_its_three_field_boundary(
+    case: str, expected_status: int, verifier: ModuleType,
+) -> None:
+    from fastapi.testclient import TestClient
+    from deepseek_infra.infra.media import library
+    from deepseek_infra.web.server import create_app, settings
+
+    records = json.loads(verifier.FIXTURE.read_text(encoding="utf-8"))["media"]
+    library.MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    library.store_path().write_text(json.dumps({"media": records}), encoding="utf-8")
+    before = library.get_media("media_keep")
+    client = TestClient(create_app(), base_url="http://127.0.0.1")
+    try:
+        response = client.patch("/api/media/media_keep", json=verifier.FIELD_PATCHES[case],
+                                headers={"Authorization": "Bearer " + settings.auth.token})
+    finally:
+        client.close()
+    assert response.status_code == expected_status
+    after = library.get_media("media_keep")
+    if expected_status == 400:
+        assert response.json()["code"] == "invalid_payload" and after == before
+    else:
+        assert response.json()["media"] == after
+        for field in ("path", "source", "status", "type", "mimeType"):
+            assert after[field] == before[field]
+
+
+def test_explicit_empty_journal_observation_never_accepts_an_incomplete_effect(
+    verifier: ModuleType, tmp_path: Path,
+) -> None:
+    journal = tmp_path / "media-effects.sqlite3"
+    with sqlite3.connect(journal) as connection:
+        connection.execute("PRAGMA application_id=1146309968")
+        connection.execute("CREATE TABLE media_operations(operation_id,state,claim)")
+    with pytest.raises(verifier.ProbeFailure, match="MEDIA_PATCH_EFFECT_JOURNAL_INVALID"):
+        verifier.journal_observation(tmp_path)
+    assert verifier.journal_observation(tmp_path, allow_empty=True) == {"state": "EMPTY", "operationCount": 0}
+    with sqlite3.connect(journal) as connection:
+        connection.execute("INSERT INTO media_operations VALUES('retained','APPLYING',X'00')")
+    with pytest.raises(verifier.ProbeFailure, match="MEDIA_PATCH_EFFECT_JOURNAL_INVALID"):
+        verifier.journal_observation(tmp_path, allow_empty=True)
+
+
 def test_timeout_diagnostics_read_only_metadata_without_private_payloads(tmp_path: Path, verifier: ModuleType) -> None:
     profile = tmp_path / "owned"
     profile.mkdir()

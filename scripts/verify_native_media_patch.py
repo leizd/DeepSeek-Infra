@@ -31,6 +31,8 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/native_media_library_read_v1.json"
 MEDIA_ID = "media_keep"
 BASE_PATCH = {"title": "Native media update", "metadata": {"nativePatchProof": "controlled"}}
+# These requests deliberately include fields accepted only by the internal
+# library. Their public contract must come from the actual original HTTP route.
 FIELD_PATCHES: dict[str, dict[str, Any]] = {
     "all-fields": {
         "title": "Native full field parity", "projectId": "proj_fields", "metadata": {"nativePatchProof": "all-fields"},
@@ -54,6 +56,18 @@ from deepseek_infra.infra.media import library
 patch = json.load(sys.stdin)
 media = library.update_media("media_keep", patch)
 print(json.dumps({"ok": True, "media": media}))
+'''
+HTTP_ORACLE = r'''
+import json, sys
+from fastapi.testclient import TestClient
+from deepseek_infra.web.server import create_app, settings
+client = TestClient(create_app(), base_url="http://127.0.0.1")
+try:
+    response = client.patch("/api/media/media_keep", content=sys.stdin.buffer.read(),
+        headers={"Authorization": "Bearer " + settings.auth.token, "Content-Type": "application/json"})
+    print(json.dumps({"status": response.status_code, "body": response.json()}))
+finally:
+    client.close()
 '''
 
 
@@ -141,7 +155,7 @@ def uncertain_request_snapshot(profile: Path, identities: list[dict[str, Any]]) 
                 ("operationId", "state", "claimBytes", "outcomeBytes"))}
 
 
-def journal_observation(owned_root: Path) -> dict[str, Any]:
+def journal_observation(owned_root: Path, *, allow_empty: bool = False) -> dict[str, Any]:
     journals = list(owned_root.rglob("media-effects.sqlite3"))
     require(len(journals) == 1, "MEDIA_PATCH_EFFECT_JOURNAL_INVALID")
     path = journals[0]
@@ -157,6 +171,8 @@ def journal_observation(owned_root: Path) -> dict[str, Any]:
         ).fetchall()
     finally:
         connection.close()
+    if allow_empty and not rows:
+        return {"state": "EMPTY", "operationCount": 0}
     require(len(rows) == 1, "MEDIA_PATCH_EFFECT_JOURNAL_INVALID")
     operation, state, length, claim = rows[0]
     require(isinstance(operation, str) and 0 < len(operation) <= 128 and state == "APPLIED"
@@ -184,6 +200,25 @@ def original_patch(profile: Path) -> dict[str, Any]:
     require(body.get("ok") is True and body.get("media", {}).get("mediaId") == MEDIA_ID,
             "ORIGINAL_MEDIA_PATCH_WORKLOAD_DID_NOT_SUCCEED")
     return body
+
+
+def original_http_patch(profile: Path, diagnostic: Path | None = None) -> tuple[int, dict[str, Any]]:
+    """Exercise the original public route, including its three-field allowlist."""
+    environment = {key: value for key, value in os.environ.items() if key in {
+        "PATH", "HOME", "LANG", "LC_ALL", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "TMPDIR",
+        "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP"}}
+    environment.update(DEEPSEEK_INFRA_ROOT=str(profile), PYTHONDONTWRITEBYTECODE="1", PYTHONUTF8="1")
+    result = subprocess.run([sys.executable, "-B", "-c", HTTP_ORACLE], cwd=ROOT, env=environment,
+        input=wire_payload(PATCH), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=False)
+    require(len(result.stderr) <= LIMIT, "ORIGINAL_MEDIA_HTTP_DIAGNOSTIC_EXCEEDED_BOUND")
+    if diagnostic is not None:
+        diagnostic.write_bytes(result.stderr)
+    require(result.returncode == 0, "ORIGINAL_MEDIA_HTTP_ORACLE_FAILED")
+    require(len(result.stdout) <= LIMIT, "ORIGINAL_MEDIA_HTTP_OUTPUT_EXCEEDED_BOUND")
+    observed = json.loads(result.stdout)
+    require(observed.get("status") in {200, 400} and isinstance(observed.get("body"), dict),
+            "ORIGINAL_MEDIA_HTTP_OBSERVATION_INVALID")
+    return observed["status"], observed["body"]
 
 
 def exchange(origin: str, path: str, method: str, token: str | None,
@@ -307,12 +342,15 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             seed(mirror, fixture["media"])
             report["offlineMediaFixtureSeeded"] = True
             before = reads.media_snapshot(profile)
-            expected = original_patch(mirror)
+            expected_status, expected = original_http_patch(mirror, args.out / "original-http-oracle.log")
+            require(bool(args.field_case) or expected_status == 200, "ORIGINAL_MEDIA_PATCH_WORKLOAD_DID_NOT_SUCCEED")
             require(reads.media_snapshot(profile) == before, "ORACLE_CHANGED_NATIVE_MEDIA_PROFILE")
             (args.out / "original-patch-oracle.json").write_text(
-                json.dumps({"expectedPublicHTTPStatus": 200, "originalLibrarySucceeded": True,
+                json.dumps({"expectedPublicHTTPStatus": expected_status, "originalLibrarySucceeded": expected_status == 200,
+                    "actualOriginalPublicRouteCompared": True,
                     "body": expected}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            report.update(originalLibrarySucceeded=True, expectedPublicHTTPStatus=200)
+            report.update(originalLibrarySucceeded=expected_status == 200, expectedPublicHTTPStatus=expected_status,
+                          actualOriginalPublicRouteCompared=True)
             token = launch("patch-launch")
             require((profile / ".auth-token").read_bytes() == original_auth, "MEDIA_PATCH_RESTART_REPLACED_AUTH")
             current_writer = reads.writer(profile)
@@ -321,6 +359,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             status, raw, _ = exchange(origin, "/api/media/" + MEDIA_ID, "GET", token)
             require(status == 200 and json.loads(raw).get("media", {}).get("title") == "Notes",
                     "NATIVE_MEDIA_PATCH_PREREQUISITE_READ_FAILED")
+            original_record = json.loads(raw)
             generation_before = generation_observation(profile)
             require(exchange(origin, "/api/media/" + MEDIA_ID, "PATCH", None, PATCH)[0] == 401,
                     "UNAUTHENTICATED_NATIVE_MEDIA_PATCH_WAS_NOT_DENIED")
@@ -360,6 +399,29 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             report.update(semanticStageReached=True, nativePatchReplyObserved=True, nativePatchHTTPStatus=status,
                 responseSha256=hashlib.sha256(raw).hexdigest(), responseContentType=content_type,
                 mediaStoreUnchangedAfterReply=reads.media_snapshot(profile) == before)
+            if expected_status == 400:
+                require(status == 400 and json.loads(raw) == expected, "NATIVE_MEDIA_PATCH_REFUSAL_DIFFERS_FROM_ORIGINAL_ROUTE")
+                require(reads.media_snapshot(profile) == before and generation_after == generation_before,
+                        "REFUSED_MEDIA_PATCH_CHANGED_STORE_OR_GENERATION")
+                empty_journal = journal_observation(scratch, allow_empty=True)
+                require(empty_journal == {"state": "EMPTY", "operationCount": 0}, "REFUSED_MEDIA_PATCH_CREATED_EFFECT")
+                shutdown()
+                token = launch("retained-restart")
+                require((profile / ".auth-token").read_bytes() == original_auth, "MEDIA_PATCH_FINAL_RESTART_REPLACED_AUTH")
+                retained_status, retained_raw, _ = exchange(origin, "/api/media/" + MEDIA_ID, "GET", token)
+                require(retained_status == 200 and json.loads(retained_raw) == original_record,
+                        "REFUSED_MEDIA_PATCH_CHANGED_RETAINED_RECORD")
+                require(reads.media_snapshot(profile) == before and generation_observation(profile) == generation_before,
+                        "REFUSED_MEDIA_PATCH_RESTART_CHANGED_STORE_OR_GENERATION")
+                require(journal_observation(scratch, allow_empty=True) == empty_journal,
+                        "REFUSED_MEDIA_PATCH_RESTART_CREATED_EFFECT")
+                (args.out / "retained-media-response.txt").write_bytes(retained_raw)
+                report.update(status="PASS", originalResponseMatched=True, originalPublicFieldAllowlistRetained=True,
+                              nativePatchOutcome="REFUSED_WITHOUT_EFFECT", originalRefusalMatched=True,
+                              refusedPatchStoreAndGenerationPreserved=True, refusedPatchEffectJournalEmpty=True,
+                              mediaRetainedAfterLauncherRestart=True, internalLibraryFieldsMigrated=False)
+                shutdown()
+                return
             require(status == 200, "NATIVE_MEDIA_PATCH_REFUSED")
             require(generation_after["present"] and generation_after["value"] == generation_before["value"] + 2,
                     "NATIVE_MEDIA_PATCH_DID_NOT_FENCE_CROSSING_BACKUPS")

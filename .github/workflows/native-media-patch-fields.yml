@@ -1,8 +1,8 @@
-name: Native media full PATCH parity
+name: Native media public PATCH boundary
 
 on:
   push:
-    branches: ["codex/native-media-full-patch-*"]
+    branches: ["codex/native-media-full-patch-*", "codex/native-media-public-patch-*"]
   workflow_dispatch:
 
 permissions:
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   media-patch-fields:
-    name: All original media PATCH fields
+    name: Original public media PATCH allowlist
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -127,7 +127,7 @@ jobs:
         set -o pipefail
         python scripts/rust_build.py --toolchain 1.85.0 -- test --locked -p deepseek-worker --lib media_journal::tests 2>&1 | tee artifacts/native-media-patch-fields/media-journal-tests.log
         grep -F 'media_retained_publication_sync_never_creates_or_replaces_bytes ... ok' artifacts/native-media-patch-fields/media-journal-tests.log
-    - name: Match all original PATCH fields through authenticated native HTTP and restart
+    - name: Match the original public field allowlist through native HTTP and restart
       timeout-minutes: 20
       run: |
         set -o pipefail
