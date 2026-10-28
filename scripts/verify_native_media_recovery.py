@@ -289,6 +289,14 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
     require(not subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT), "MEDIA_RECOVERY_SOURCE_IS_DIRTY")
     require(args.strace.is_file(), "STRACE_REQUIRED")
     report["straceVersion"] = subprocess.check_output([str(args.strace), "--version"], text=True).splitlines()[0]
+    if args.recovery_sync_fault != "none":
+        require(args.sync_strace.is_file(), "MEDIA_SYNC_STRACE_REQUIRED")
+        require(args.sync_strace.resolve() != args.strace.resolve(), "MEDIA_SYNC_TRACER_MUST_BE_UNPRIVILEGED")
+        require(args.sync_strace.read_bytes() == args.strace.read_bytes(), "MEDIA_SYNC_TRACER_BINARY_DIFFERS")
+        capabilities = subprocess.check_output(["getcap", str(args.sync_strace)], text=True).strip()
+        require(not capabilities, "MEDIA_SYNC_TRACER_HAS_FILE_CAPABILITIES")
+        report.update(syncTracerUnprivileged=True, syncTracerMatchesOfficialAttachCopy=True,
+                      syncTracerSha256=digest(args.sync_strace.read_bytes()))
     fixture = json.loads(patch.FIXTURE.read_text())
     require(fixture["schemaVersion"] == 1 and len(fixture["media"]) == 18, "MEDIA_FIXTURE_DIFFERS")
     request_body = patch.wire_payload(patch.PATCH)
@@ -335,7 +343,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             command = [str(binaries / "deepseek-launch"), "--server", "--no-prompt", "--port", str(port)]
             sync_traced = sync_fault != "none"
             if sync_traced:
-                command = sync_fault_command(args.strace, profile / ".media/library.json", profile,
+                command = sync_fault_command(args.sync_strace, profile / ".media/library.json", profile,
                                              args.out / "recovery-sync-syscalls.log", sync_fault) + command
             with (args.out / (label + ".log")).open("wb") as log:
                 child = subprocess.Popen(command, cwd=scratch, env=launch_env, stdout=log,
@@ -344,7 +352,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             identities = [{**row, "startTicks": patch.reads.process_identity(row["pid"])} for row in patch.bootstrap.process_roles(child.pid)]
             if sync_traced:
                 wrappers = [row for row in identities if row["pid"] == child.pid]
-                require(len(wrappers) == 1 and wrappers[0]["executable"] == args.strace.name,
+                require(len(wrappers) == 1 and wrappers[0]["executable"] == args.sync_strace.name,
                         "MEDIA_SYNC_TRACER_IDENTITY_DIFFERS")
                 report["syncFaultTracerProcess"] = wrappers[0]
                 identities = [row for row in identities if row["pid"] != child.pid]
@@ -361,6 +369,10 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             nonlocal child, identities, sync_traced
             if child is not None:
                 if sync_traced:
+                    if child.poll() is None and not any(row["executable"] == "deepseek-launch" for row in identities):
+                        observed = patch.bootstrap.process_roles(child.pid, required=set())
+                        identities = [{**row, "startTicks": patch.reads.process_identity(row["pid"])}
+                                      for row in observed if row["pid"] != child.pid]
                     launchers = [row for row in identities if row["executable"] == "deepseek-launch"]
                     if child.poll() is None and len(launchers) == 1:
                         signal_owned(launchers[0], signal.SIGTERM)
@@ -457,7 +469,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             require(crashed_go["state"] == "DISPATCHED" and crashed_rust["state"] == "APPLYING", "MEDIA_TERMINAL_RESULT_PRECEDED_RESTART")
             report["interruptedOutcome"] = "EFFECT_UNKNOWN"
             if args.recovery_sync_fault != "none":
-                report["syncFaultQualification"] = qualify_sync_fault_trace(args.strace, scratch, args.out, args.recovery_sync_fault)
+                report["syncFaultQualification"] = qualify_sync_fault_trace(args.sync_strace, scratch, args.out, args.recovery_sync_fault)
                 report["semanticStageReached"] = True
                 launch("sync-fault-launch", args.recovery_sync_fault)
                 deadline = time.monotonic() + 4
@@ -526,6 +538,7 @@ def main() -> int:
     parser.add_argument("--go-cache", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--strace", type=Path, default=Path(shutil.which("strace") or "/not-installed/strace"))
+    parser.add_argument("--sync-strace", type=Path, default=Path(shutil.which("strace") or "/not-installed/strace"))
     parser.add_argument("--reconcile-timeout", type=float, default=20)
     parser.add_argument("--recovery-sync-fault", choices=("none", "file", "directory"), default="none")
     args = parser.parse_args()
@@ -542,7 +555,7 @@ def main() -> int:
         readiness="NOT_READY", startedAt=datetime.now(timezone.utc).isoformat())
     try:
         run(args, report)
-    except patch.ProbeFailure as error:
+    except (patch.ProbeFailure, patch.bootstrap.ProbeFailure, patch.reads.ProbeFailure) as error:
         report.update(status="FAIL", failureCode=str(error))
     except Exception as error:
         report.update(status="FAIL", failureCode="MEDIA_RECOVERY_VERIFIER_ERROR", exceptionType=type(error).__name__)
