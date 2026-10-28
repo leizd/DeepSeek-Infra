@@ -45,11 +45,19 @@ message MediaPatch {
   MediaValue metadata = 3;
 }
 
+// The v1 envelope retains its original name so stored PATCH receipts and their
+// canonical request bytes remain valid. A non-default kind is always explicit.
+enum MediaMutationKind {
+  MEDIA_MUTATION_KIND_PATCH = 0;
+  MEDIA_MUTATION_KIND_DELETE = 1;
+}
+
 message MediaPatchIntent {
   uint32 schema_version = 1;
   string operation_id = 2;
   string media_id = 3;
   MediaPatch patch = 4;
+  MediaMutationKind kind = 5;
 }
 
 // Go owns every lease/fence field. Rust obtains this claim from its own pinned,
@@ -116,6 +124,9 @@ message MediaPatchOutcome {
   string fleet_id = 13;
   string environment = 14;
   int64 writer_fencing_token = 15;
+  // DELETE applies to a single original record: zero or one. PATCH and every
+  // refused/unknown result must keep this field zero.
+  uint32 deleted_count = 16;
 }
 
 message RecordMediaPatchOutcomeRequest {
@@ -129,6 +140,12 @@ message RecordMediaPatchOutcomeResponse {
 }
 
 message ExecuteMediaPatchRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  deepseek.common.v1.ActionFence fence = 3;
+}
+
+message ExecuteMediaDeleteRequest {
   uint32 schema_version = 1;
   string operation_id = 2;
   deepseek.common.v1.ActionFence fence = 3;
@@ -154,5 +171,6 @@ service MediaMutationControl {
 
 service MediaMutationWorker {
   rpc ExecutePatch(ExecuteMediaPatchRequest) returns (MediaPatchOutcome);
+  rpc ExecuteDelete(ExecuteMediaDeleteRequest) returns (MediaPatchOutcome);
   rpc QueryPatch(QueryMediaPatchRequest) returns (QueryMediaPatchResponse);
 }

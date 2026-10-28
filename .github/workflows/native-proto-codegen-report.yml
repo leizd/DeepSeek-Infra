@@ -1,0 +1,100 @@
+name: Native protocol source-generation report
+'on':
+  push:
+    branches:
+    - codex/native-proto-codegen-*
+  workflow_dispatch: null
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: native-proto-codegen-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  source-report:
+    name: Pinned media protocol source generation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+      CGO_ENABLED: '0'
+      GOSUMDB: sum.golang.org
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - name: Keep source-generator tools and caches on the cloud runner
+      run: 'echo "GOBIN=$RUNNER_TEMP/native-proto-tools/bin" >> "$GITHUB_ENV"
+
+        echo "GOCACHE=$RUNNER_TEMP/native-proto-go-cache" >> "$GITHUB_ENV"
+
+        echo "GOMODCACHE=$RUNNER_TEMP/native-proto-modules" >> "$GITHUB_ENV"
+
+        '
+    - name: Bind the report to the unchanged uploaded source revision
+      run: 'mkdir -p artifacts/native-proto-codegen
+
+        python scripts/capture_evidence_context.py --version "$(cat VERSION)" --out artifacts/native-proto-codegen/source-context.json
+
+        '
+    - name: Install checksum-pinned Protobuf descriptor validator
+      run: 'python -m pip install --disable-pip-version-check --no-deps --only-binary=:all: --require-hashes -r requirements-native-protocol.txt'
+    - name: Install checksum-pinned Go 1.27.1
+      shell: bash
+      run: "set -euo pipefail\narchive=\"$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz\"\ninstall_dir=\"$RUNNER_TEMP/go-1.27.1\"\
+        \ncurl --fail --location --silent --show-error \\\n  --output \"$archive\" \\\n  https://go.dev/dl/go1.27.1.linux-amd64.tar.gz\n\
+        echo \"63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive\" | sha256sum --check --strict\n\
+        mkdir -p \"$install_dir\"\ntar -xzf \"$archive\" -C \"$install_dir\"\necho \"$install_dir/go/bin\" >> \"$GITHUB_PATH\"\
+        \n"
+    - name: Install checksum-pinned protoc 36.1
+      shell: bash
+      run: "set -euo pipefail\narchive=\"$RUNNER_TEMP/protoc-36.1-linux-x86_64.zip\"\ninstall_dir=\"$RUNNER_TEMP/protoc-36.1\"\
+        \ncurl --fail --location --silent --show-error \\\n  --output \"$archive\" \\\n  https://github.com/protocolbuffers/protobuf/releases/download/v36.1/protoc-36.1-linux-x86_64.zip\n\
+        echo \"c4bc672d9d49214dc8cafdceadf4df92182d6ca8e3ec65a56b2d7de5602669b4  $archive\" | sha256sum --check --strict\n\
+        unzip -q \"$archive\" -d \"$install_dir\"\necho \"$install_dir/bin\" >> \"$GITHUB_PATH\"\n"
+    - name: Install pinned Go protobuf generators
+      shell: bash
+      run: 'set -euo pipefail
+
+        mkdir -p "$GOBIN"
+
+        go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+
+        go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+
+        echo "$GOBIN" >> "$GITHUB_PATH"
+
+        '
+    - name: Install checksum-pinned Android Java Lite generator
+      shell: bash
+      run: "set -euo pipefail\nplugin=\"$RUNNER_TEMP/protoc-gen-grpc-java-1.84.0-linux-x86_64.exe\"\ncurl --fail --location\
+        \ --silent --show-error --retry 4 --retry-max-time 180 --max-time 60 --connect-timeout 10 --output \"$plugin\" \\\n\
+        \  https://repo.maven.apache.org/maven2/io/grpc/protoc-gen-grpc-java/1.84.0/protoc-gen-grpc-java-1.84.0-linux-x86_64.exe\n\
+        echo \"907c2d4efc2bae9b21cada75c31b36f3821e15b7be96311e214a6be65bcd20aa  $plugin\" | sha256sum --check --strict\n\
+        chmod +x \"$plugin\"\necho \"PROTOC_GEN_GRPC_JAVA=$plugin\" >> \"$GITHUB_ENV\"\n"
+    - name: Generate reviewed media bindings and export a bounded source diff report
+      run: "set -euo pipefail\npython scripts/native_codegen.py --write\npython scripts/native_android_codegen.py --check\n\
+        python - <<'PY'\nfrom pathlib import Path\nimport hashlib, json, os, subprocess\nroot=Path.cwd(); out=root/'artifacts/native-proto-codegen'\n\
+        assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==os.environ['GITHUB_SHA']\nallowed={'go/internal/protocol/mediav1/media.pb.go','go/internal/protocol/mediav1/media_grpc.pb.go','proto/generated/descriptor.pb','proto/generated/codegen-manifest.v1.json'}\n\
+        changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())\nassert changed==allowed,\
+        \ 'Generated changes escaped the reviewed four-file output boundary'\nassert not subprocess.check_output(['git','ls-files','--others','--exclude-standard'])\n\
+        subprocess.run(['git','diff','--check'],check=True)\npatch=subprocess.check_output(['git','diff','--binary','--',*sorted(allowed)])\n\
+        assert 0<len(patch)<8*1024**2\n(out/'generated-protocol.patch').write_bytes(patch)\nrows=[]\nfor name in sorted(allowed):\n\
+        \    path=root/name;assert path.is_file() and not path.is_symlink()\n    before=subprocess.check_output(['git','show','HEAD:'+name])\n\
+        \    rows.append({'path':name,'beforeSha256':hashlib.sha256(before).hexdigest(),'afterSha256':hashlib.sha256(path.read_bytes()).hexdigest(),'bytes':path.stat().st_size})\n\
+        result={'status':'PASS','scope':'Pinned source-generation report only','sourceCommit':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'event':os.environ['GITHUB_EVENT_NAME'],'patchSha256':hashlib.sha256(patch).hexdigest(),'files':rows,'runtimeBuildQualified':False,'nativeDeleteQualified':False,'fullMigrationQualified':False,'readiness':'NOT_READY','compilerCachesOrBinariesIncluded':False}\n\
+        (out/'generation-result.json').write_text(json.dumps(result,indent=2)+'\\n')\nprint(json.dumps({'status':'PASS','generatedFiles':len(rows),'patchBytes':len(patch),'runtimeBuildQualified':False}))\n\
+        PY\n"
+    - name: Preserve source-generation reports only
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: native-proto-codegen-${{ github.sha }}
+        path: artifacts/native-proto-codegen/
+        if-no-files-found: error
+        retention-days: 7
