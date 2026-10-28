@@ -46,9 +46,11 @@ message MediaPatch {
 }
 
 // The v1 envelope retains its original name so stored PATCH receipts and their
-// canonical request bytes remain valid. A non-default kind is always explicit.
+// canonical request bytes remain valid. An unspecified kind is valid only for
+// the existing PATCH envelope with its required patch message; it cannot imply
+// DELETE. New deletion requests select an explicit non-default kind.
 enum MediaMutationKind {
-  MEDIA_MUTATION_KIND_PATCH = 0;
+  MEDIA_MUTATION_KIND_UNSPECIFIED = 0;
   MEDIA_MUTATION_KIND_DELETE = 1;
 }
 
