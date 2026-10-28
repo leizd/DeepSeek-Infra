@@ -1,0 +1,144 @@
+name: Native media full PATCH parity
+
+on:
+  push:
+    branches: ["codex/native-media-full-patch-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: native-media-patch-fields-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  media-patch-fields:
+    name: All original media PATCH fields
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      RUSTUP_TOOLCHAIN: 1.85.0
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/native-media-patch-fields/source-context.json
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.12'
+    - name: Keep all compiler outputs on the cloud runner
+      run: 'echo "CARGO_HOME=$RUNNER_TEMP/rust-cloud-cargo" >> "$GITHUB_ENV"
+
+        echo "CARGO_TARGET_DIR=$RUNNER_TEMP/rust-cloud-target-checks" >> "$GITHUB_ENV"
+
+        '
+    - name: Bind this focused probe to its exact source revision
+      run: 'mkdir -p artifacts/native-media-patch-fields
+
+        python scripts/capture_evidence_context.py --version "$(cat VERSION)" --out "$DEEPSEEK_EVIDENCE_SOURCE_CONTEXT"
+
+        '
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      with:
+        node-version: '24'
+        cache: npm
+        cache-dependency-path: frontend/package-lock.json
+    - name: Build the unchanged native frontend
+      run: 'npm ci --prefix frontend
+
+        npm run build --prefix frontend
+
+        '
+    - name: Install isolated offline oracle tooling
+      run: python -m pip install -r requirements.txt -r requirements-dev.txt -r requirements-native-protocol.txt
+    - uses: dtolnay/rust-toolchain@69084b241933c14c2fa24234c4596f11a2655339
+      with:
+        toolchain: 1.85.0
+        components: rustfmt
+    - name: Restore cloud dependency archives
+      id: registry
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: '${{ env.CARGO_HOME }}/registry/index
+
+          ${{ env.CARGO_HOME }}/registry/cache
+
+          ${{ env.CARGO_HOME }}/git/db
+
+          '
+        key: rust-cloud-v1-registry-${{ runner.os }}-1.85.0-${{ hashFiles('rust/Cargo.lock') }}
+    - name: Restore compiled dependencies and test binaries in the cloud
+      id: target
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: ${{ env.CARGO_TARGET_DIR }}
+        key: rust-cloud-v1-target-${{ runner.os }}-1.85.0-checks-${{ hashFiles('rust/**/Cargo.toml', 'rust/Cargo.lock', 'rust/.cargo/config.toml',
+          'scripts/rust_build.py', 'scripts/run_rust_coverage.py') }}-${{ github.sha }}
+        restore-keys: 'rust-cloud-v1-target-${{ runner.os }}-1.85.0-checks-${{ hashFiles(''rust/**/Cargo.toml'', ''rust/Cargo.lock'',
+          ''rust/.cargo/config.toml'', ''scripts/rust_build.py'', ''scripts/run_rust_coverage.py'') }}-
+
+          '
+    - name: Install the repository's checksum-pinned Go for the real signing producer
+      run: 'archive="$RUNNER_TEMP/go1.27.1.linux-amd64.tar.gz"
+
+        install_dir="$RUNNER_TEMP/agent-signing-go-1.27.1"
+
+        curl --fail --location --silent --show-error --output "$archive" https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+
+        echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  $archive" | sha256sum --check --strict
+
+        mkdir -p "$install_dir"
+
+        tar -xzf "$archive" -C "$install_dir"
+
+        echo "$install_dir/go/bin" >> "$GITHUB_PATH"
+
+        '
+    - name: Verify Go modules before the isolated process probe
+      working-directory: go
+      run: 'test "$(go env GOVERSION)" = "go1.27.1"
+
+        go mod download
+
+        go mod verify
+
+        '
+    - name: Run offline observer and identity regressions
+      run: 'python -m pytest -q --no-cov -p no:cacheprovider tests/test_native_media_recovery_verifier.py tests/test_native_media_patch_verifier.py
+
+        '
+    - name: Build actual production worker and edge without test hooks
+      id: build
+      run: 'set -o pipefail
+
+        python scripts/rust_build.py --toolchain 1.85.0 -- build --locked -p deepseek-worker -p deepseek-gateway --bins
+        2>&1 | tee artifacts/native-media-patch-fields/build.log
+
+        '
+    - name: Verify native media journal retention and synchronization
+      run: |
+        set -o pipefail
+        python scripts/rust_build.py --toolchain 1.85.0 -- test --locked -p deepseek-worker --lib media_journal::tests 2>&1 | tee artifacts/native-media-patch-fields/media-journal-tests.log
+        grep -F 'media_retained_publication_sync_never_creates_or_replaces_bytes ... ok' artifacts/native-media-patch-fields/media-journal-tests.log
+    - name: Match all original PATCH fields through authenticated native HTTP and restart
+      timeout-minutes: 20
+      run: |
+        set -o pipefail
+        for scenario in all-fields source-only path-only status-only type-only mime-only null-reset type-inference source-ordered; do
+          python scripts/verify_native_media_patch.py --field-case "$scenario" --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --out "artifacts/native-media-patch-fields/process/$scenario" 2>&1 | tee "artifacts/native-media-patch-fields/process-$scenario.log"
+        done
+    - name: Preserve field parity reports only
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: native-media-patch-fields-${{ github.sha }}
+        path: artifacts/native-media-patch-fields/
+        if-no-files-found: error
+        retention-days: 7

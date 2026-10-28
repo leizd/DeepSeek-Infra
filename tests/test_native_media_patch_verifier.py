@@ -17,6 +17,35 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.usefixtures("tmp_settings")
+@pytest.mark.parametrize("case", [
+    "all-fields", "source-only", "path-only", "status-only", "type-only", "mime-only", "null-reset", "type-inference", "source-ordered",
+])
+def test_field_probes_are_successful_retained_original_workloads(
+    case: str, verifier: ModuleType,
+) -> None:
+    from deepseek_infra.infra.media import library
+
+    records = json.loads(verifier.FIXTURE.read_text(encoding="utf-8"))["media"]
+    library.MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    library.store_path().write_text(json.dumps({"media": records}), encoding="utf-8")
+    before = library.get_media("media_keep")
+    result = library.update_media("media_keep", verifier.FIELD_PATCHES[case])
+    assert result["mediaId"] == before["mediaId"] and result["createdAt"] == before["createdAt"]
+    assert result == library.get_media("media_keep")
+    expected = {
+        "all-fields": ("type", "image"), "path-only": ("path", "objects/media_keep/alternate.pdf"),
+        "status-only": ("status", "processing"), "type-only": ("type", "video"),
+        "mime-only": ("mimeType", "audio/ogg"), "null-reset": ("status", "pending"),
+        "type-inference": ("type", "audio"),
+    }
+    if case in expected:
+        field, value = expected[case]
+        assert result[field] == value
+    else:
+        assert result["source"] != before["source"]
+
+
 def test_timeout_diagnostics_read_only_metadata_without_private_payloads(tmp_path: Path, verifier: ModuleType) -> None:
     profile = tmp_path / "owned"
     profile.mkdir()

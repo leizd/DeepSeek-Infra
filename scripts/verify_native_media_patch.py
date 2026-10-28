@@ -31,6 +31,21 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/fixtures/native_media_library_read_v1.json"
 MEDIA_ID = "media_keep"
 BASE_PATCH = {"title": "Native media update", "metadata": {"nativePatchProof": "controlled"}}
+FIELD_PATCHES: dict[str, dict[str, Any]] = {
+    "all-fields": {
+        "title": "Native full field parity", "projectId": "proj_fields", "metadata": {"nativePatchProof": "all-fields"},
+        "path": "objects/media_keep/alternate.png", "source": {"kind": "url", "refId": "https://example.invalid/source"},
+        "status": "pending", "type": "image", "mimeType": "IMAGE/PNG; charset=binary",
+    },
+    "source-only": {"source": {"kind": "upload", "refId": "new-source.pdf", "label": "Changed origin"}},
+    "path-only": {"path": "objects\\media_keep\\alternate.pdf"},
+    "status-only": {"status": " PROCESSING "},
+    "type-only": {"type": "video"},
+    "mime-only": {"mimeType": "Audio/OGG; codecs=opus"},
+    "null-reset": {"path": None, "source": None, "status": None, "mimeType": None, "title": None, "projectId": None},
+    "type-inference": {"type": None, "mimeType": "audio/ogg", "title": "sound.ogg"},
+    "source-ordered": {"source": {"kind": "manual", "refId": {"z": 0, "a": 1}, "title": "Ordered source"}},
+}
 PATCH = BASE_PATCH
 LIMIT = 2 * 1024**2
 ORACLE = r'''
@@ -393,14 +408,17 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--metadata-order-case", choices=["baseline", "top-level", "nested", "array", "truncated", "maximum-array"],
                         default="baseline")
+    parser.add_argument("--field-case", choices=tuple(FIELD_PATCHES))
     args = parser.parse_args()
-    PATCH = case_patch(args.metadata_order_case)
+    require(not args.field_case or args.metadata_order_case == "baseline", "MEDIA_PATCH_CASE_SELECTION_CONFLICT")
+    PATCH = FIELD_PATCHES[args.field_case] if args.field_case else case_patch(args.metadata_order_case)
     args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = {"kind": "native-media-patch-process-v1", "status": "FAIL",
         "sourceCommit": os.environ.get("GITHUB_SHA"), "runId": os.environ.get("GITHUB_RUN_ID"),
         "event": os.environ.get("GITHUB_EVENT_NAME"), "semanticStageReached": False,
         "metadataOrderCase": args.metadata_order_case,
+        "fieldCase": args.field_case,
         "nativePatchRequestStarted": False, "nativePatchReplyObserved": False,
         "controlledNativeMediaPatchWorkloadQualified": False, "offlineMediaFixtureSeeded": False,
         "workspaceGenerationFenced": False, "workspaceGenerationRetainedAfterRestart": False,
