@@ -7,6 +7,7 @@ that the rename executes, unrelated paths remain unheld, and userspace is held.
 from __future__ import annotations
 
 import argparse
+import errno
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import datetime, timezone
@@ -50,6 +51,44 @@ def wait_for(condition: Callable[[], Any], timeout: float, code: str) -> Any:
             return value
         time.sleep(0.05)
     raise patch.ProbeFailure(code)
+
+
+def require_port_available(port: int) -> None:
+    with socket.socket() as listener:
+        # A stopped previous case can leave TIME_WAIT sockets. Reuse their local
+        # address while still refusing a live TCP listener; never set REUSEPORT.
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", port))
+
+
+def qualify_port_preflight() -> dict[str, Any]:
+    with socket.socket() as server:
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        server.settimeout(2)
+        port = server.getsockname()[1]
+        try:
+            require_port_available(port)
+        except OSError as error:
+            require(error.errno == errno.EADDRINUSE, "MEDIA_PREFLIGHT_LISTENER_ERRNO_DIFFERS")
+        else:
+            raise patch.ProbeFailure("MEDIA_PREFLIGHT_ACCEPTED_ACTIVE_LISTENER")
+        with socket.create_connection(("127.0.0.1", port), timeout=2) as client:
+            connection, _ = server.accept()
+            with connection:
+                connection.shutdown(socket.SHUT_RDWR)
+            require(client.recv(1) == b"", "MEDIA_PREFLIGHT_CONNECTION_NOT_CLOSED")
+    def retained_time_wait() -> bool:
+        for line in Path("/proc/net/tcp").read_text().splitlines()[1:]:
+            fields = line.split()
+            if fields[1].endswith(f":{port:04X}") and fields[3] == "06":
+                return True
+        return False
+    wait_for(retained_time_wait, 2, "MEDIA_PREFLIGHT_TIME_WAIT_NOT_OBSERVED")
+    require_port_available(port)
+    return dict(activeListenerDenied=True, kernelTimeWaitObserved=True, timeWaitAddressReusable=True,
+                reusePortEnabled=False)
 
 
 def owned_file(path: Path, root: Path) -> Path:
@@ -254,9 +293,13 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
     require(fixture["schemaVersion"] == 1 and len(fixture["media"]) == 18, "MEDIA_FIXTURE_DIFFERS")
     request_body = patch.wire_payload(patch.PATCH)
     report.update(requestBodyBytes=len(request_body), requestBodySha256=digest(request_body))
+    report["portPreflightQualification"] = qualify_port_preflight()
     for port in (8090, 50052):
-        with socket.socket() as listener:
-            listener.bind(("127.0.0.1", port))
+        try:
+            require_port_available(port)
+        except OSError as error:
+            report.update(portPreflightFailedPort=port, portPreflightErrno=error.errno)
+            raise patch.ProbeFailure("MEDIA_RECOVERY_PRIVATE_PORT_UNAVAILABLE") from error
     with tempfile.TemporaryDirectory(prefix="native-media-recovery-") as temporary:
         scratch = Path(temporary)
         report["traceQualification"] = qualify_trace(args.strace, scratch, args.out)
@@ -503,6 +546,8 @@ def main() -> int:
         report.update(status="FAIL", failureCode=str(error))
     except Exception as error:
         report.update(status="FAIL", failureCode="MEDIA_RECOVERY_VERIFIER_ERROR", exceptionType=type(error).__name__)
+        if isinstance(error, OSError):
+            report["exceptionErrno"] = error.errno
     report["finishedAt"] = datetime.now(timezone.utc).isoformat()
     (args.out / "result.json").write_bytes((json.dumps(report, ensure_ascii=False, indent=2) + "\n").encode())
     print(json.dumps(report, ensure_ascii=False), flush=True)
