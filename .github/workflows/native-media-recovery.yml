@@ -172,6 +172,18 @@ jobs:
         set -o pipefail
         python scripts/verify_native_media_delete.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --backend sqlite --out artifacts/native-media-recovery/delete-sqlite 2>&1 | tee artifacts/native-media-recovery/delete-sqlite.log
         python scripts/verify_native_media_delete.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --backend sqlite_vec --out artifacts/native-media-recovery/delete-vector 2>&1 | tee artifacts/native-media-recovery/delete-vector.log
+    - name: Resume the original DELETE after a real SIGKILL with ordinary SQLite
+      if: always() && steps.build.outcome == 'success'
+      timeout-minutes: 15
+      run: |
+        set -o pipefail
+        python scripts/verify_native_media_recovery.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --strace "$RUNNER_TEMP/native-media-recovery-strace" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --mutation delete --backend sqlite --out artifacts/native-media-recovery/delete-crash-sqlite 2>&1 | tee artifacts/native-media-recovery/delete-crash-sqlite.log
+    - name: Resume the original DELETE after a real SIGKILL with the vector backend
+      if: always() && steps.build.outcome == 'success'
+      timeout-minutes: 15
+      run: |
+        set -o pipefail
+        python scripts/verify_native_media_recovery.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --strace "$RUNNER_TEMP/native-media-recovery-strace" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --mutation delete --backend sqlite_vec --out artifacts/native-media-recovery/delete-crash-vector 2>&1 | tee artifacts/native-media-recovery/delete-crash-vector.log
     - name: Remove the temporary tracer capability
       if: always()
       run: |

@@ -145,6 +145,31 @@ def require_deleted(before: dict[str, Any], after: dict[str, Any], expected: dic
                 "MEDIA_DELETE_SOURCE_OR_SEGMENT_BYTES_DIFFER")
 
 
+def require_cleanup_not_started(before: dict[str, Any], current: dict[str, Any]) -> None:
+    """The actual crash must precede cleanup, not merely lose a finished reply."""
+    for name in ("rows", "rowContents", "vectors"):
+        require(current[name] == before[name], "MEDIA_DELETE_CRASH_CLEANUP_ALREADY_STARTED")
+    for name in (TARGET, OTHER):
+        for relative in (f".media/objects/{name}/source.pdf", f".media/segments/{name}.json"):
+            require(before["files"][relative] is not None and current["files"][relative] == before["files"][relative],
+                "MEDIA_DELETE_CRASH_CLEANUP_ALREADY_STARTED")
+
+
+def seed_pair(profile: Path, mirror: Path, backend: str, out: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    seeded = offline(mirror, backend, SEED, out / "seed.log")
+    require(seeded["vector"] is (backend == "sqlite_vec"), "MEDIA_DELETE_SEED_BACKEND_DIFFERS")
+    for name in (".media", ".local-rag"):
+        require(not (profile / name).exists(), "MEDIA_DELETE_SEED_WOULD_REPLACE_STATE")
+        shutil.copytree(mirror / name, profile / name)
+    before = snapshot(profile, backend)
+    oracle = offline(mirror, backend, ORACLE, out / "original-route.log")
+    require(oracle == dict(refused=401, firstStatus=200, first=dict(ok=True, deleted=1),
+        repeatStatus=200, repeat=dict(ok=True, deleted=0)), "MEDIA_DELETE_ORIGINAL_ROUTE_DID_NOT_SUCCEED")
+    expected = snapshot(mirror, backend)
+    require_deleted(before, expected, expected)
+    return before, expected, oracle
+
+
 def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
     require(os.environ.get("GITHUB_ACTIONS") == "true" and sys.platform == "linux", "MEDIA_DELETE_VERIFICATION_IS_CLOUD_ONLY")
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -200,17 +225,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             launch("empty-launch")
             require(not (profile / ".media").exists(), "MEDIA_DELETE_FRESH_PROFILE_HAS_MEDIA")
             stop()
-            seeded = offline(mirror, args.backend, SEED, args.out / "seed.log")
-            require(seeded["vector"] is (args.backend == "sqlite_vec"), "MEDIA_DELETE_SEED_BACKEND_DIFFERS")
-            for name in (".media", ".local-rag"):
-                require(not (profile / name).exists(), "MEDIA_DELETE_SEED_WOULD_REPLACE_STATE")
-                shutil.copytree(mirror / name, profile / name)
-            before = snapshot(profile, args.backend)
-            oracle = offline(mirror, args.backend, ORACLE, args.out / "original-route.log")
-            require(oracle == dict(refused=401, firstStatus=200, first=dict(ok=True, deleted=1),
-                repeatStatus=200, repeat=dict(ok=True, deleted=0)), "MEDIA_DELETE_ORIGINAL_ROUTE_DID_NOT_SUCCEED")
-            expected = snapshot(mirror, args.backend)
-            require_deleted(before, expected, expected)
+            before, expected, oracle = seed_pair(profile, mirror, args.backend, args.out)
             token = launch("delete-launch")
             generation_before = patch.generation_observation(profile)
             original_library = (profile / ".media/library.json").read_bytes()

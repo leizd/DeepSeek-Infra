@@ -109,7 +109,8 @@ def readonly(path: Path, root: Path) -> sqlite3.Connection:
     return sqlite3.connect(owned_file(path, root).as_uri() + "?mode=ro", uri=True, timeout=0.25)
 
 
-def journal_snapshot(root: Path, allow_empty: bool = False) -> dict[str, Any] | None:
+def journal_snapshot(root: Path, allow_empty: bool = False, *, mutation: str = "patch") -> dict[str, Any] | None:
+    require(mutation in {"patch", "delete"}, "MEDIA_RECOVERY_MUTATION_SELECTOR_INVALID")
     paths = list(root.rglob("media-effects.sqlite3"))
     require(len(paths) == 1, "MEDIA_RUST_JOURNAL_REQUIRED")
     with closing(readonly(paths[0], root)) as db:
@@ -119,7 +120,7 @@ def journal_snapshot(root: Path, allow_empty: bool = False) -> dict[str, Any] | 
         return None
     require(len(rows) == 1, "MEDIA_ORIGINAL_RUST_ROW_REQUIRED")
     operation, state, claim, preparation, before, after, planned, outcome = rows[0]
-    require(isinstance(operation, str) and re.fullmatch("media-patch-[0-9a-f]{32}", operation), "MEDIA_OPERATION_ID_INVALID")
+    require(isinstance(operation, str) and re.fullmatch("media-" + mutation + "-[0-9a-f]{32}", operation), "MEDIA_OPERATION_ID_INVALID")
     require(state in {"PREPARED", "APPLYING", "APPLIED", "REFUSED"}, "MEDIA_RUST_STATE_INVALID")
     require(isinstance(claim, bytes) and 0 < len(claim) <= 4 * 1024**2, "MEDIA_CLAIM_BOUND_INVALID")
     require(isinstance(preparation, bytes) and len(preparation) == 32, "MEDIA_PREPARATION_INVALID")
@@ -299,7 +300,8 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                       syncTracerSha256=digest(args.sync_strace.read_bytes()))
     fixture = json.loads(patch.FIXTURE.read_text())
     require(fixture["schemaVersion"] == 1 and len(fixture["media"]) == 18, "MEDIA_FIXTURE_DIFFERS")
-    request_body = patch.wire_payload(patch.PATCH)
+    is_delete = args.mutation == "delete"
+    request_body = b"" if is_delete else patch.wire_payload(patch.PATCH)
     report.update(requestBodyBytes=len(request_body), requestBodySha256=digest(request_body))
     report["portPreflightQualification"] = qualify_port_preflight()
     for port in (8090, 50052):
@@ -333,6 +335,8 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             "PATH", "HOME", "LANG", "LC_ALL", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "TMPDIR"}}
         launch_env.update(DEEPSEEK_NATIVE_BIN=str(binaries), DEEPSEEK_INFRA_ROOT=str(profile),
                           DEEPSEEK_INFRA_STATIC_DIR=str(ROOT / "static"))
+        if is_delete:
+            launch_env.update(LOCAL_RAG_ENABLED="true", LOCAL_RAG_BACKEND=args.backend, LOCAL_RAG_EMBEDDING_DIMENSIONS="64")
         child: subprocess.Popen[bytes] | None = None
         identities: list[dict[str, Any]] = []
         tracer: subprocess.Popen[bytes] | None = None
@@ -402,9 +406,13 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             launch("empty-launch")
             require(patch.reads.media_snapshot(profile) is None, "MEDIA_RECOVERY_FRESH_PROFILE_HAS_MEDIA")
             shutdown()
-            patch.seed(profile, fixture["media"])
-            patch.seed(mirror, fixture["media"])
-            expected = patch.original_patch(mirror)
+            if is_delete:
+                import verify_native_media_delete as deletion
+                cleanup_before, cleanup_expected, expected = deletion.seed_pair(profile, mirror, args.backend, args.out)
+            else:
+                patch.seed(profile, fixture["media"])
+                patch.seed(mirror, fixture["media"])
+                expected = patch.original_patch(mirror)
             report["offlineMediaFixtureSeeded"] = True
             (args.out / "original-patch-oracle.json").write_bytes((json.dumps(expected, ensure_ascii=False, indent=2) + "\n").encode())
             token = launch("mutation-launch")
@@ -427,7 +435,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             report["tracedWorkerThreads"] = wait_for(all_threads_attached, 5, "MEDIA_STRACE_ATTACH_FAILED")
 
             def held_publication() -> Any:
-                journal = journal_snapshot(scratch, True)
+                journal = journal_snapshot(scratch, True, mutation=args.mutation)
                 if journal is None or journal["state"] == "PREPARED":
                     return None
                 require(journal["state"] == "APPLYING", "MEDIA_PUBLICATION_BOUNDARY_NOT_HELD")
@@ -447,9 +455,14 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
 
             with ThreadPoolExecutor(max_workers=1) as pool:
                 report["writeRequestsSent"] = 1
-                response = pool.submit(patch.exchange, origin, "/api/media/" + patch.MEDIA_ID, "PATCH", token, patch.PATCH)
+                response = pool.submit(patch.exchange, origin, "/api/media/" + patch.MEDIA_ID,
+                    "DELETE" if is_delete else "PATCH", token, None if is_delete else patch.PATCH)
                 before_rust, before_go, raw_after, stat_after = wait_for(held_publication, 8, "MEDIA_REAL_PUBLICATION_NOT_OBSERVED")
                 require(not response.done(), "MEDIA_RESPONSE_RETURNED_BEFORE_CRASH")
+                if is_delete:
+                    cleanup_held = deletion.snapshot(profile, args.backend)
+                    deletion.require_cleanup_not_started(cleanup_before, cleanup_held)
+                    report["cleanupAtCrash"] = cleanup_held
                 report.update(publicationHeldAfterRealRename=True, beforeCrashRust=before_rust, beforeCrashGo=before_go,
                               generationAtCrash=patch.generation_observation(profile))
                 report["publicationAtCrash"] = dict(sha256=digest(raw_after), inode=stat_after.st_ino, mtimeNs=stat_after.st_mtime_ns)
@@ -472,7 +485,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                     report["interruptedResponseSha256"] = digest(raw)
                 except Exception as error:
                     report["interruptedRequestException"] = type(error).__name__
-            crashed_go, crashed_rust = control_snapshot(scratch), journal_snapshot(scratch)
+            crashed_go, crashed_rust = control_snapshot(scratch), journal_snapshot(scratch, mutation=args.mutation)
             if crashed_go is None or crashed_rust is None:
                 raise patch.ProbeFailure("MEDIA_ORIGINAL_RECOVERY_ROW_MISSING")
             require(crashed_go["state"] == "DISPATCHED" and crashed_rust["state"] == "APPLYING", "MEDIA_TERMINAL_RESULT_PRECEDED_RESTART")
@@ -484,7 +497,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 deadline = time.monotonic() + 4
                 observations = 0
                 while time.monotonic() < deadline:
-                    fault_go, fault_rust = control_snapshot(scratch), journal_snapshot(scratch)
+                    fault_go, fault_rust = control_snapshot(scratch), journal_snapshot(scratch, mutation=args.mutation)
                     if fault_go is None or fault_rust is None:
                         raise patch.ProbeFailure("MEDIA_ORIGINAL_RECOVERY_ROW_MISSING")
                     report.update(duringSyncFaultGo=fault_go, duringSyncFaultRust=fault_rust)
@@ -508,7 +521,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             deadline = time.monotonic() + args.reconcile_timeout
             after_go, after_rust = crashed_go, crashed_rust
             while time.monotonic() < deadline:
-                observed_go, observed_rust = control_snapshot(scratch), journal_snapshot(scratch)
+                observed_go, observed_rust = control_snapshot(scratch), journal_snapshot(scratch, mutation=args.mutation)
                 if observed_go is None or observed_rust is None:
                     raise patch.ProbeFailure("MEDIA_ORIGINAL_RECOVERY_ROW_MISSING")
                 after_go, after_rust = observed_go, observed_rust
@@ -527,7 +540,14 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             require_recovery_generation(report["generationAtCrash"], report["generationAfterRestart"])
             require(library.read_bytes() == raw_after and library.stat().st_ino == stat_after.st_ino and library.stat().st_mtime_ns == stat_after.st_mtime_ns, "MEDIA_RECOVERY_REPUBLISHED_BYTES")
             status, raw, _ = patch.exchange(origin, "/api/media/" + patch.MEDIA_ID, "GET", token)
-            require(status == 200 and patch.without_update_time(json.loads(raw)) == patch.without_update_time(expected), "MEDIA_RECOVERED_PUBLIC_RESULT_DIFFERS")
+            if is_delete:
+                require(status == 404, "MEDIA_DELETE_RECOVERED_PUBLIC_RECORD_STILL_EXISTS")
+                cleanup_after = deletion.snapshot(profile, args.backend)
+                deletion.require_deleted(cleanup_before, cleanup_after, cleanup_expected)
+                report.update(actualDeleteSIGKILLQualified=True, cleanupAfterRestart=cleanup_after,
+                    actualOriginalASGIRouteCompared=True)
+            else:
+                require(status == 200 and patch.without_update_time(json.loads(raw)) == patch.without_update_time(expected), "MEDIA_RECOVERED_PUBLIC_RESULT_DIFFERS")
             require(after_go["outcomeSha256"] is not None and after_go["outcomeSha256"] == after_rust["outcomeSha256"], "MEDIA_ORIGINAL_SIGNED_OUTCOME_DIFFERS")
             report.update(controlledOriginalOperationRecoveryQualified=True, libraryRepublicationObserved=False,
                           originalSignedOutcomeRetained=True, status="PASS")
@@ -553,6 +573,8 @@ def main() -> int:
     parser.add_argument("--sync-strace", type=Path, default=Path(shutil.which("strace") or "/not-installed/strace"))
     parser.add_argument("--reconcile-timeout", type=float, default=20)
     parser.add_argument("--recovery-sync-fault", choices=("none", "file", "directory"), default="none")
+    parser.add_argument("--mutation", choices=("patch", "delete"), default="patch")
+    parser.add_argument("--backend", choices=("sqlite", "sqlite_vec"), default="sqlite")
     args = parser.parse_args()
     require(1 <= args.reconcile_timeout <= 30, "MEDIA_RECOVERY_TIMEOUT_INVALID")
     args.out = args.out.resolve()
@@ -562,6 +584,8 @@ def main() -> int:
         sourceCommit=os.environ.get("GITHUB_SHA"), runId=os.environ.get("GITHUB_RUN_ID"),
         event=os.environ.get("GITHUB_EVENT_NAME"), semanticStageReached=False,
         recoverySyncFault=args.recovery_sync_fault,
+        mutation=args.mutation, indexBackend=args.backend if args.mutation == "delete" else None,
+        actualDeleteSIGKILLQualified=False, backupRestoreInteractionQualified=False,
         controlledOriginalOperationRecoveryQualified=False, mediaAuthorityRecoveryQualified=False,
         powerLossRecoveryQualified=False, windowsRecoveryQualified=False, fullMigrationQualified=False,
         readiness="NOT_READY", startedAt=datetime.now(timezone.utc).isoformat())

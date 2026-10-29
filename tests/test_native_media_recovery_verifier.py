@@ -38,6 +38,20 @@ def test_recovery_observer_reads_the_original_preterminal_row_without_changing_i
     assert hashlib.sha256(path.read_bytes()).hexdigest() == before
 
 
+def test_delete_recovery_journal_requires_its_explicit_original_mutation(tmp_path: Path) -> None:
+    path = journal(tmp_path)
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE media_operations SET operation_id=?", ("media-delete-" + "a" * 32,))
+    before = path.read_bytes()
+    row = probe.journal_snapshot(tmp_path, mutation="delete")
+    assert row is not None and row["operationId"] == "media-delete-" + "a" * 32
+    with pytest.raises(probe.patch.ProbeFailure, match="MEDIA_OPERATION_ID_INVALID"):
+        probe.journal_snapshot(tmp_path)
+    with pytest.raises(probe.patch.ProbeFailure, match="MUTATION_SELECTOR_INVALID"):
+        probe.journal_snapshot(tmp_path, mutation="foreign")
+    assert path.read_bytes() == before
+
+
 def test_recovery_observer_rejects_foreign_journals_and_multiple_originals(tmp_path: Path) -> None:
     path = journal(tmp_path, 123)
     with pytest.raises(probe.patch.ProbeFailure, match="JOURNAL_ID_DIFFERS"):

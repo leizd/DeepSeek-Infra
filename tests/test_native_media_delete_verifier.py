@@ -79,6 +79,34 @@ def test_delete_snapshot_refuses_linked_roots_and_libraries(tmp_path: Path) -> N
     assert target.read_text() == '{"media":[]}'
 
 
+def test_delete_crash_observation_requires_all_cleanup_to_be_unfinished() -> None:
+    before, after = observations()
+    probe.require_cleanup_not_started(before, before)
+    with pytest.raises(probe.patch.ProbeFailure, match="CLEANUP_ALREADY_STARTED"):
+        probe.require_cleanup_not_started(before, after)
+    for relative in before["files"]:
+        partial = copy.deepcopy(before)
+        partial["files"][relative] = None
+        with pytest.raises(probe.patch.ProbeFailure, match="CLEANUP_ALREADY_STARTED"):
+            probe.require_cleanup_not_started(before, partial)
+    for part in ("rows", "rowContents", "vectors"):
+        partial = copy.deepcopy(before)
+        partial[part] = []
+        with pytest.raises(probe.patch.ProbeFailure, match="CLEANUP_ALREADY_STARTED"):
+            probe.require_cleanup_not_started(before, partial)
+
+
+def test_delete_fixture_pair_uses_identical_seeded_data_before_the_oracle(tmp_path: Path) -> None:
+    profile, mirror, out = tmp_path / "profile", tmp_path / "oracle", tmp_path / "logs"
+    profile.mkdir()
+    out.mkdir()
+    before, expected, oracle = probe.seed_pair(profile, mirror, "sqlite", out)
+    assert oracle["first"] == dict(ok=True, deleted=1)
+    assert probe.snapshot(profile, "sqlite") == before
+    probe.require_cleanup_not_started(before, probe.snapshot(profile, "sqlite"))
+    probe.require_deleted(before, expected, expected)
+
+
 def test_delete_native_probe_refuses_local_execution_before_build(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     def forbidden(*args, **kwargs):
