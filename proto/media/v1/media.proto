@@ -151,6 +151,7 @@ message MediaCreatedResult {
   bytes record_sha256 = 1;
   uint64 record_bytes = 2;
   bytes preparation_sha256 = 3;
+  deepseek.common.v1.ActionFence original_fence = 4;
 }
 
 // Durable Rust-local preparation. Source bytes are actual media file contents,
