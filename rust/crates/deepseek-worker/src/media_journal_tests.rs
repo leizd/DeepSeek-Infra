@@ -81,6 +81,59 @@ fn seed_delete_data(root: &Path, vectors: bool) {
     }
 }
 
+#[test]
+fn media_delete_noop_settlement_preserves_legal_edges_and_rolls_back_atomically() {
+    let (root, key, mut journal, claim) = fixture();
+    let claim = delete_claim(claim, "media-delete-atomic-noop", "media_missing");
+    let before = read_library(root.path()).unwrap();
+    let prepared = journal.prepare(&claim).unwrap();
+    journal.connection.execute_batch("CREATE TRIGGER fail_noop BEFORE UPDATE ON media_operations WHEN NEW.state='APPLIED' BEGIN SELECT RAISE(ABORT,'controlled terminal failure'); END;").unwrap();
+    assert!(journal.publish(&claim, &prepared.digest, &key).is_err());
+    let row = journal
+        .retained("media-delete-atomic-noop")
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.state, "PREPARED");
+    assert!(row.outcome.is_none());
+    assert_eq!(read_library(root.path()).unwrap(), before);
+    assert_eq!(
+        deepseek_policy::mutation_gate::read_generation(root.path()),
+        0
+    );
+    journal
+        .connection
+        .execute_batch("DROP TRIGGER fail_noop;")
+        .unwrap();
+    let result = journal.publish(&claim, &prepared.digest, &key).unwrap();
+    assert_eq!(result.deleted_count, 0);
+    assert_eq!(result.signature.len(), 64);
+    assert_eq!(result.state, MediaPatchEffectState::Applied as i32);
+    assert!(journal.active().unwrap().is_none());
+    assert_eq!(read_library(root.path()).unwrap(), before);
+    assert_eq!(
+        deepseek_policy::mutation_gate::read_generation(root.path()),
+        0
+    );
+    drop(journal);
+    let retained = MediaJournal::open(
+        root.path(),
+        &root.path().join("state"),
+        &key.public_key(),
+        "fleet-a",
+        "test",
+    )
+    .unwrap()
+    .query(
+        "media-delete-atomic-noop",
+        claim.fence.as_ref().unwrap(),
+        true,
+        &key,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(retained, result);
+}
+
 fn assert_delete_data(root: &Path, vectors: bool) {
     assert!(!root.join(".media/segments/media_one.json").exists());
     assert!(!root.join(".media/objects/media_one").exists());

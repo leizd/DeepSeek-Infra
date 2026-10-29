@@ -12,7 +12,7 @@ use deepseek_protocol::{
 };
 use ed25519_dalek::{Signature, VerifyingKey};
 use prost::Message as _;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use std::{
     fs,
     io::Read,
@@ -324,13 +324,45 @@ impl MediaJournal {
         mut result: MediaPatchOutcome,
         key: &ControlSigningKey,
     ) -> Result<MediaPatchOutcome, Status> {
+        let noop = state == "PREPARED" && result.state == MediaPatchEffectState::Applied as i32;
+        if noop {
+            use deepseek_protocol::generated::deepseek::media::v1::MediaMutationKind;
+            let row = self.retained(operation)?.ok_or_else(invalid)?;
+            let claim = MediaPatchClaim::decode(row.claim.as_slice()).map_err(|_| invalid())?;
+            let intent = claim.intent.as_ref().ok_or_else(invalid)?;
+            if row.after.is_some()
+                || intent.kind != MediaMutationKind::Delete as i32
+                || intent.patch.is_some()
+                || result.media.is_some()
+                || result.deleted_count != 0
+                || result.after_sha256 != result.before_sha256
+            {
+                return Err(invalid());
+            }
+        }
         result.signature = key
             .sign_media_patch_outcome(&result)
             .map_err(|_| invalid())?;
-        let count=self.connection.execute("UPDATE media_operations SET state=?1,outcome=?2 WHERE operation_id=?3 AND state=?4",params![if result.state==MediaPatchEffectState::Applied as i32{"APPLIED"}else{"REFUSED"},result.encode_to_vec(),operation,state]).map_err(|_|invalid())?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| invalid())?;
+        let expected = if noop {
+            // Keep the original legal state edges. Both journal-only steps
+            // commit atomically, with no external mutation or generation scope.
+            let count = transaction.execute("UPDATE media_operations SET state='APPLYING' WHERE operation_id=?1 AND state='PREPARED'", [operation]).map_err(|_| invalid())?;
+            if count != 1 {
+                return Err(invalid());
+            }
+            "APPLYING"
+        } else {
+            state
+        };
+        let count=transaction.execute("UPDATE media_operations SET state=?1,outcome=?2 WHERE operation_id=?3 AND state=?4",params![if result.state==MediaPatchEffectState::Applied as i32{"APPLIED"}else{"REFUSED"},result.encode_to_vec(),operation,expected]).map_err(|_|invalid())?;
         if count != 1 {
             return Err(invalid());
         }
+        transaction.commit().map_err(|_| invalid())?;
         Ok(result)
     }
     pub(super) fn publish(

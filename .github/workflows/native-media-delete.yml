@@ -106,6 +106,8 @@ jobs:
 
         grep -F "media_signer_binds_patch_and_delete_result_shapes_to_the_original_operation ... ok" artifacts/native-media-delete-admission/rust-media-journal.log
 
+        grep -F "media_delete_noop_settlement_preserves_legal_edges_and_rolls_back_atomically ... ok" artifacts/native-media-delete-admission/rust-media-journal.log
+
         python scripts/rust_build.py --toolchain 1.85.0 -- test --locked -p deepseek-policy --lib sqlite_vec_runtime::tests
         2>&1 | tee artifacts/native-media-delete-admission/rust-sqlite-vec.log
 
