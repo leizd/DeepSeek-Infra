@@ -1,5 +1,10 @@
 # Native media DELETE lifecycle
 
+<!-- docs-language-switcher:start -->
+[中文](../README.md) / [English](../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 The native HTTP controller accepts `DELETE /api/media/{media_id}` only with the
 original host/authentication checks, authoritative Go mode and
 `DEEPSEEK_RUNTIME_MODE=python_disabled`. It uses the pinned authenticated Rust

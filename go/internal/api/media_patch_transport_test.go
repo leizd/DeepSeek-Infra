@@ -38,7 +38,17 @@ type mediaWirePeer struct {
 	key               ed25519.PrivateKey
 	mode              string
 	executed, queried int
+	deleteCalls       int
 	retained          *mediav1.MediaPatchOutcome
+}
+
+func (p *mediaWirePeer) ExecuteDelete(ctx context.Context, r *mediav1.ExecuteMediaDeleteRequest) (*mediav1.MediaPatchOutcome, error) {
+	p.mu.Lock()
+	p.deleteCalls++
+	p.mu.Unlock()
+	// This simulated peer shares its claim/dispatch/signature fixture, while
+	// retaining a separate counter for the actual generated DELETE RPC.
+	return p.ExecutePatch(ctx, &mediav1.ExecuteMediaPatchRequest{SchemaVersion: r.SchemaVersion, OperationId: r.OperationId, Fence: r.Fence})
 }
 
 func (p *mediaWirePeer) ExecutePatch(_ context.Context, r *mediav1.ExecuteMediaPatchRequest) (*mediav1.MediaPatchOutcome, error) {
@@ -61,9 +71,24 @@ func (p *mediaWirePeer) ExecutePatch(_ context.Context, r *mediav1.ExecuteMediaP
 		return nil, err
 	}
 	outcome := &mediav1.MediaPatchOutcome{SchemaVersion: 1, OperationId: r.OperationId, OriginalFence: proto.Clone(r.Fence).(*commonv1.ActionFence), RequestSha256: claim.RequestSha256, State: mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED, Media: value.GetObjectValue(), HttpStatus: 200, BeforeSha256: bytes.Repeat([]byte{1}, 32), AfterSha256: bytes.Repeat([]byte{2}, 32), FleetId: claim.FleetId, Environment: claim.Environment, WriterFencingToken: claim.WriterFencingToken}
+	if claim.Intent.Kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE {
+		outcome.Media = nil
+		outcome.DeletedCount = 1
+		if p.mode == "absent" {
+			outcome.DeletedCount = 0
+			outcome.AfterSha256 = append([]byte(nil), outcome.BeforeSha256...)
+		}
+		if p.mode == "mixed-delete-result" {
+			outcome.Media = value.GetObjectValue()
+		}
+		if p.mode == "invalid-delete-count" {
+			outcome.DeletedCount = 2
+		}
+	}
 	if p.mode == "refused" {
 		outcome.State = mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_REFUSED
 		outcome.Media = nil
+		outcome.DeletedCount = 0
 		outcome.AfterSha256 = nil
 		outcome.HttpStatus = 404
 		outcome.ErrorCode = "not_found"
@@ -251,5 +276,91 @@ func TestMediaPublicTLSRefusalRetainsTheOriginalHTTPErrorAndReleasesAdmission(t 
 	}
 	if pending, err := control.PendingMediaPatch(); err != nil || pending != nil {
 		t.Fatal("proved refusal retained admission", err)
+	}
+}
+
+func TestMediaPublicDeleteTLSKeepsCountsSignedIdentityAndUnknownReservation(t *testing.T) {
+	for _, test := range []struct {
+		mode, state, code string
+		status, queries   int
+		deleted           float64
+	}{
+		{mode: "success", state: "APPLIED", status: 200, deleted: 1},
+		{mode: "absent", state: "APPLIED", status: 200, deleted: 0},
+		{mode: "lost", state: "APPLIED", status: 200, deleted: 1, queries: 1},
+		{mode: "refused", state: "REFUSED", status: 404, code: "not_found"},
+		{mode: "unknown", state: "DISPATCHED", status: 503, code: "EFFECT_UNKNOWN", queries: 2},
+		{mode: "forged", state: "DISPATCHED", status: 503, code: "EFFECT_UNKNOWN", queries: 2},
+		{mode: "mixed-delete-result", state: "DISPATCHED", status: 503, code: "EFFECT_UNKNOWN", queries: 2},
+		{mode: "invalid-delete-count", state: "DISPATCHED", status: 503, code: "EFFECT_UNKNOWN", queries: 2},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			control, peer, server := mediaWireFixture(t, test.mode)
+			deleteRequest := func() (int, map[string]any, string) {
+				t.Helper()
+				request, err := http.NewRequest(http.MethodDelete, server.URL+"/api/media/media_one", nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request.Header.Set("Authorization", "Bearer "+strings.Repeat("m", 32))
+				response, err := server.Client().Do(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer response.Body.Close()
+				var body map[string]any
+				if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				return response.StatusCode, body, response.Header.Get("X-DeepSeek-Operation-Id")
+			}
+			code, body, operation := deleteRequest()
+			if code != test.status || !strings.HasPrefix(operation, "media-delete-") {
+				t.Fatalf("DELETE response %d %#v operation=%q", code, body, operation)
+			}
+			if _, exists := body["media"]; exists {
+				t.Fatal("DELETE exposed a PATCH result", body)
+			}
+			if test.status == 200 {
+				if body["ok"] != true || body["deleted"] != test.deleted {
+					t.Fatal("DELETE changed its retained public count", body)
+				}
+			} else if body["code"] != test.code || body["ok"] == true {
+				t.Fatal("unproved DELETE became success", body)
+			}
+			claim, err := control.GetMediaPatchClaim(operation, &commonv1.ActionFence{ActionId: operation, ExecutionEpoch: 1})
+			if err != nil || claim == nil || claim.State != test.state || claim.Intent.OperationId != operation ||
+				claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE || claim.Intent.Patch != nil {
+				t.Fatal("DELETE lost its original typed claim", claim, err)
+			}
+			pending, err := control.PendingMediaPatch()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.state == "DISPATCHED" {
+				if !proto.Equal(pending, claim) {
+					t.Fatal("uncertain DELETE released or replaced the original claim")
+				}
+				second, refused, original := deleteRequest()
+				if second != 503 || refused["code"] != "EFFECT_UNKNOWN" || original != operation {
+					t.Fatal("another DELETE escaped the original unresolved operation", second, refused, original)
+				}
+			} else if pending != nil {
+				t.Fatal("proved terminal DELETE retained admission", pending)
+			}
+			peer.mu.Lock()
+			defer peer.mu.Unlock()
+			if peer.deleteCalls != 1 || peer.executed != 1 || peer.queried != test.queries {
+				t.Fatal("DELETE used another RPC or redispatched", peer.deleteCalls, peer.executed, peer.queried)
+			}
+			if test.state == "APPLIED" && (peer.retained == nil || peer.retained.OperationId != operation ||
+				!proto.Equal(peer.retained.OriginalFence, claim.Fence) || !bytes.Equal(peer.retained.RequestSha256, claim.RequestSha256) ||
+				peer.retained.Media != nil || peer.retained.DeletedCount != uint32(test.deleted)) {
+				t.Fatal("DELETE settled a different retained outcome")
+			}
+			if test.mode == "absent" && !bytes.Equal(peer.retained.BeforeSha256, peer.retained.AfterSha256) {
+				t.Fatal("zero-count DELETE changed its publication witness")
+			}
+		})
 	}
 }
