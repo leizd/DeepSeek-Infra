@@ -128,8 +128,8 @@ jobs:
           data = json.dumps(envelope, separators=(",", ":"), ensure_ascii=False).encode()
           assert len(data) < 128 * 1024
           encoded = base64.b64encode(gzip.compress(data, mtime=0)).decode()
-          pieces = [encoded[start:start+30000] for start in range(0, len(encoded), 30000)]
-          assert 1 <= len(pieces) <= 4
+          pieces = [encoded[start:start+3000] for start in range(0, len(encoded), 3000)]
+          assert 1 <= len(pieces) <= 64
           for index, piece in enumerate(pieces, 1):
               print("::notice file=.github/workflows/native-report-relay.yml,line=1,title=native-report-relay-v1-part-" + str(index) + "-of-" + str(len(pieces)) + "::" + piece, flush=True)
           print(json.dumps(dict(status="REPORT_TRANSPORT_ONLY", originSource=SOURCE, originRun=RUN,
