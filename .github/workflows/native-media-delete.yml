@@ -3,6 +3,7 @@ name: Native media DELETE admission
   push:
     branches:
     - codex/native-media-delete-*
+    - codex/native-media-recovery-delete-*
   workflow_dispatch: null
 permissions:
   contents: read
@@ -102,6 +103,8 @@ jobs:
         | tee artifacts/native-media-delete-admission/rust-media-journal.log
 
         grep -F "media_delete_cleans_target_files_and_cross_project_sqlite_and_vector_rows ... ok" artifacts/native-media-delete-admission/rust-media-journal.log
+
+        grep -F "media_signer_binds_patch_and_delete_result_shapes_to_the_original_operation ... ok" artifacts/native-media-delete-admission/rust-media-journal.log
 
         python scripts/rust_build.py --toolchain 1.85.0 -- test --locked -p deepseek-policy --lib sqlite_vec_runtime::tests
         2>&1 | tee artifacts/native-media-delete-admission/rust-sqlite-vec.log

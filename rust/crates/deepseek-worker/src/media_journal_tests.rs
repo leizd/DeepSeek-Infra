@@ -15,6 +15,47 @@ fn delete_claim(mut claim: MediaPatchClaim, operation: &str, media: &str) -> Med
     claim
 }
 
+#[test]
+fn media_signer_binds_patch_and_delete_result_shapes_to_the_original_operation() {
+    let (root, key, _journal, claim) = fixture();
+    let before = read_library(root.path()).unwrap();
+    let (patch, _) = media_library::plan(root.path(), &claim, &before).unwrap();
+    assert!(key.sign_media_patch_outcome(&patch).is_ok());
+    let deletion = delete_claim(claim, "media-delete-signing", "media_one");
+    let (deleted, _) = media_library::plan(root.path(), &deletion, &before).unwrap();
+    assert_eq!(deleted.deleted_count, 1);
+    assert!(key.sign_media_patch_outcome(&deleted).is_ok());
+    let mut missing = deleted.clone();
+    missing.deleted_count = 0;
+    missing.after_sha256 = missing.before_sha256.clone();
+    assert!(key.sign_media_patch_outcome(&missing).is_ok());
+
+    let mut too_many = deleted.clone();
+    too_many.deleted_count = 2;
+    let mut mixed_delete = deleted.clone();
+    mixed_delete.media = patch.media.clone();
+    let mut mixed_patch = patch.clone();
+    mixed_patch.deleted_count = 1;
+    let mut empty_patch = patch;
+    empty_patch.media = None;
+    let mut refused = media_library::refusal(deleted.clone(), 409, "conflict", "Conflict");
+    refused.deleted_count = 1;
+    let mut foreign_operation = deleted;
+    foreign_operation.operation_id = "foreign-operation".into();
+    foreign_operation.original_fence.as_mut().unwrap().action_id = "foreign-operation".into();
+    for invalid in [
+        too_many,
+        mixed_delete,
+        mixed_patch,
+        empty_patch,
+        refused,
+        foreign_operation,
+    ] {
+        assert!(key.sign_media_patch_outcome(&invalid).is_err());
+    }
+    assert_eq!(read_library(root.path()).unwrap(), before);
+}
+
 fn seed_delete_data(root: &Path, vectors: bool) {
     let media = root.join(".media");
     fs::create_dir_all(media.join("segments")).unwrap();
