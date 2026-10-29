@@ -52,6 +52,7 @@ message MediaPatch {
 enum MediaMutationKind {
   MEDIA_MUTATION_KIND_UNSPECIFIED = 0;
   MEDIA_MUTATION_KIND_DELETE = 1;
+  MEDIA_MUTATION_KIND_CREATE = 2;
 }
 
 message MediaPatchIntent {
@@ -60,6 +61,9 @@ message MediaPatchIntent {
   string media_id = 3;
   MediaPatch patch = 4;
   MediaMutationKind kind = 5;
+  // Only CREATE. The controller retains the content binding; payload bytes
+  // remain in Rust custody and do not enlarge historical control rows.
+  MediaCreateManifest create = 6;
 }
 
 // Go owns every lease/fence field. Rust obtains this claim from its own pinned,
@@ -129,6 +133,56 @@ message MediaPatchOutcome {
   // DELETE applies to a single original record: zero or one. PATCH and every
   // refused/unknown result must keep this field zero.
   uint32 deleted_count = 16;
+  // Only a successfully applied CREATE. The original public record is retained
+  // separately in Rust custody; its exact typed bytes are signed here.
+  MediaCreatedResult created = 17;
+}
+
+message MediaCreateManifest {
+  bytes payload_sha256 = 1;
+  uint64 payload_bytes = 2;
+}
+
+message MediaCreatePayload {
+  MediaObject registration = 1;
+}
+
+message MediaCreatedResult {
+  bytes record_sha256 = 1;
+  uint64 record_bytes = 2;
+  bytes preparation_sha256 = 3;
+}
+
+// Durable Rust-local preparation. Source bytes are actual media file contents,
+// never an opaque JSON business request. This record is not a Go authority.
+message MediaCreatePreparation {
+  MediaObject record = 1;
+  string source_suffix = 2;
+  bytes source_bytes = 3;
+}
+
+message MediaCreateStageRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  deepseek.common.v1.ActionFence fence = 3;
+  oneof part {
+    MediaCreateManifest manifest = 4;
+    bytes chunk = 5;
+  }
+}
+
+message MediaCreateStageResponse {
+  MediaCreateManifest manifest = 1;
+}
+
+message ReadMediaCreateResultRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  deepseek.common.v1.ActionFence original_fence = 3;
+}
+
+message ReadMediaCreateResultResponse {
+  MediaObject media = 1;
 }
 
 message RecordMediaPatchOutcomeRequest {
@@ -174,5 +228,13 @@ service MediaMutationControl {
 service MediaMutationWorker {
   rpc ExecutePatch(ExecuteMediaPatchRequest) returns (MediaPatchOutcome);
   rpc ExecuteDelete(ExecuteMediaDeleteRequest) returns (MediaPatchOutcome);
+  rpc ExecuteCreate(ExecuteMediaPatchRequest) returns (MediaPatchOutcome);
   rpc QueryPatch(QueryMediaPatchRequest) returns (QueryMediaPatchResponse);
+}
+
+// Separate media-content transport. Existing PATCH/DELETE/control RPC limits,
+// canonical encodings, signing domain and SQLite row bounds stay unchanged.
+service MediaCreationPayloads {
+  rpc Stage(stream MediaCreateStageRequest) returns (MediaCreateStageResponse);
+  rpc ReadResult(ReadMediaCreateResultRequest) returns (ReadMediaCreateResultResponse);
 }

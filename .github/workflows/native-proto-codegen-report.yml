@@ -90,6 +90,27 @@ jobs:
         result={'status':'PASS','scope':'Pinned source-generation report only','sourceCommit':os.environ['GITHUB_SHA'],'runId':os.environ['GITHUB_RUN_ID'],'event':os.environ['GITHUB_EVENT_NAME'],'patchSha256':hashlib.sha256(patch).hexdigest(),'files':rows,'runtimeBuildQualified':False,'nativeDeleteQualified':False,'fullMigrationQualified':False,'readiness':'NOT_READY','compilerCachesOrBinariesIncluded':False}\n\
         (out/'generation-result.json').write_text(json.dumps(result,indent=2)+'\\n')\nprint(json.dumps({'status':'PASS','generatedFiles':len(rows),'patchBytes':len(patch),'runtimeBuildQualified':False}))\n\
         PY\n"
+    - name: Return only bounded generated-source report fields
+      run: |
+        python - <<'PY'
+        from pathlib import Path
+        import base64,gzip,json,os,subprocess
+        folder=Path('artifacts/native-proto-codegen')
+        result=json.loads((folder/'generation-result.json').read_bytes())
+        patch=(folder/'generated-protocol.patch').read_bytes()
+        assert result['sourceCommit']==os.environ['GITHUB_SHA'] and result['runtimeBuildQualified'] is False
+        envelope=dict(kind='native-generated-protocol-transport-v1',sourceCommit=os.environ['GITHUB_SHA'],
+            sourceTree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip(),
+            runId=os.environ['GITHUB_RUN_ID'],report=result,patchBase64=base64.b64encode(patch).decode(),
+            compilerCachesOrBinariesRelayed=False,runtimeQualified=False)
+        raw=json.dumps(envelope,separators=(',',':'),allow_nan=False).encode()
+        assert len(raw)<12*1024**2
+        encoded=base64.b64encode(gzip.compress(raw,mtime=0)).decode()
+        pieces=[encoded[i:i+3000] for i in range(0,len(encoded),3000)]
+        assert 1<=len(pieces)<=64
+        for i,piece in enumerate(pieces,1):
+            print(f'::notice file=.github/workflows/native-proto-codegen-report.yml,line=1,title=native-generated-protocol-v1-part-{i}-of-{len(pieces)}::{piece}')
+        PY
     - name: Preserve source-generation reports only
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
