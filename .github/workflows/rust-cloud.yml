@@ -63,7 +63,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install --yes --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng
-          python -m pip install -r requirements.txt -r requirements-ocr.txt
+          python -m pip install -r requirements.txt -r requirements-ocr.txt -r requirements-dev.txt
+          python -c "from fastapi.testclient import TestClient"
           python -m pip install -r requirements-native-protocol.txt
       - uses: dtolnay/rust-toolchain@69084b241933c14c2fa24234c4596f11a2655339 # 1.85.0
         with:
