@@ -202,6 +202,8 @@ jobs:
         \ authorityRecoveryQualified=False, fullMigrationQualified=False, readiness=\"NOT_READY\")\nPath(\"artifacts/native-media-create/result.json\"\
         ).write_text(json.dumps(result, indent=2) + \"\\n\")\nraise SystemExit(code)\nPY\n"
       if: always() && steps.modules.outcome == 'success'
+      env:
+        CGO_ENABLED: '1'
     - name: Compare actual native JSON creation with original ASGI and retained source
       run: 'set -o pipefail
 
