@@ -31,6 +31,7 @@ type MediaMutationKind int32
 const (
 	MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED MediaMutationKind = 0
 	MediaMutationKind_MEDIA_MUTATION_KIND_DELETE      MediaMutationKind = 1
+	MediaMutationKind_MEDIA_MUTATION_KIND_CREATE      MediaMutationKind = 2
 )
 
 // Enum value maps for MediaMutationKind.
@@ -38,10 +39,12 @@ var (
 	MediaMutationKind_name = map[int32]string{
 		0: "MEDIA_MUTATION_KIND_UNSPECIFIED",
 		1: "MEDIA_MUTATION_KIND_DELETE",
+		2: "MEDIA_MUTATION_KIND_CREATE",
 	}
 	MediaMutationKind_value = map[string]int32{
 		"MEDIA_MUTATION_KIND_UNSPECIFIED": 0,
 		"MEDIA_MUTATION_KIND_DELETE":      1,
+		"MEDIA_MUTATION_KIND_CREATE":      2,
 	}
 )
 
@@ -499,6 +502,9 @@ type MediaPatchIntent struct {
 	MediaId       string                 `protobuf:"bytes,3,opt,name=media_id,json=mediaId,proto3" json:"media_id,omitempty"`
 	Patch         *MediaPatch            `protobuf:"bytes,4,opt,name=patch,proto3" json:"patch,omitempty"`
 	Kind          MediaMutationKind      `protobuf:"varint,5,opt,name=kind,proto3,enum=deepseek.media.v1.MediaMutationKind" json:"kind,omitempty"`
+	// Only CREATE. The controller retains the content binding; payload bytes
+	// remain in Rust custody and do not enlarge historical control rows.
+	Create        *MediaCreateManifest `protobuf:"bytes,6,opt,name=create,proto3" json:"create,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -566,6 +572,13 @@ func (x *MediaPatchIntent) GetKind() MediaMutationKind {
 		return x.Kind
 	}
 	return MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED
+}
+
+func (x *MediaPatchIntent) GetCreate() *MediaCreateManifest {
+	if x != nil {
+		return x.Create
+	}
+	return nil
 }
 
 // Go owns every lease/fence field. Rust obtains this claim from its own pinned,
@@ -919,7 +932,10 @@ type MediaPatchOutcome struct {
 	WriterFencingToken int64                  `protobuf:"varint,15,opt,name=writer_fencing_token,json=writerFencingToken,proto3" json:"writer_fencing_token,omitempty"`
 	// DELETE applies to a single original record: zero or one. PATCH and every
 	// refused/unknown result must keep this field zero.
-	DeletedCount  uint32 `protobuf:"varint,16,opt,name=deleted_count,json=deletedCount,proto3" json:"deleted_count,omitempty"`
+	DeletedCount uint32 `protobuf:"varint,16,opt,name=deleted_count,json=deletedCount,proto3" json:"deleted_count,omitempty"`
+	// Only a successfully applied CREATE. The original public record is retained
+	// separately in Rust custody; its exact typed bytes are signed here.
+	Created       *MediaCreatedResult `protobuf:"bytes,17,opt,name=created,proto3" json:"created,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1066,6 +1082,493 @@ func (x *MediaPatchOutcome) GetDeletedCount() uint32 {
 	return 0
 }
 
+func (x *MediaPatchOutcome) GetCreated() *MediaCreatedResult {
+	if x != nil {
+		return x.Created
+	}
+	return nil
+}
+
+type MediaCreateManifest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PayloadSha256 []byte                 `protobuf:"bytes,1,opt,name=payload_sha256,json=payloadSha256,proto3" json:"payload_sha256,omitempty"`
+	PayloadBytes  uint64                 `protobuf:"varint,2,opt,name=payload_bytes,json=payloadBytes,proto3" json:"payload_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MediaCreateManifest) Reset() {
+	*x = MediaCreateManifest{}
+	mi := &file_media_v1_media_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MediaCreateManifest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MediaCreateManifest) ProtoMessage() {}
+
+func (x *MediaCreateManifest) ProtoReflect() protoreflect.Message {
+	mi := &file_media_v1_media_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MediaCreateManifest.ProtoReflect.Descriptor instead.
+func (*MediaCreateManifest) Descriptor() ([]byte, []int) {
+	return file_media_v1_media_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *MediaCreateManifest) GetPayloadSha256() []byte {
+	if x != nil {
+		return x.PayloadSha256
+	}
+	return nil
+}
+
+func (x *MediaCreateManifest) GetPayloadBytes() uint64 {
+	if x != nil {
+		return x.PayloadBytes
+	}
+	return 0
+}
+
+type MediaCreatePayload struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Registration  *MediaObject           `protobuf:"bytes,1,opt,name=registration,proto3" json:"registration,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MediaCreatePayload) Reset() {
+	*x = MediaCreatePayload{}
+	mi := &file_media_v1_media_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MediaCreatePayload) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MediaCreatePayload) ProtoMessage() {}
+
+func (x *MediaCreatePayload) ProtoReflect() protoreflect.Message {
+	mi := &file_media_v1_media_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MediaCreatePayload.ProtoReflect.Descriptor instead.
+func (*MediaCreatePayload) Descriptor() ([]byte, []int) {
+	return file_media_v1_media_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *MediaCreatePayload) GetRegistration() *MediaObject {
+	if x != nil {
+		return x.Registration
+	}
+	return nil
+}
+
+type MediaCreatedResult struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	RecordSha256      []byte                 `protobuf:"bytes,1,opt,name=record_sha256,json=recordSha256,proto3" json:"record_sha256,omitempty"`
+	RecordBytes       uint64                 `protobuf:"varint,2,opt,name=record_bytes,json=recordBytes,proto3" json:"record_bytes,omitempty"`
+	PreparationSha256 []byte                 `protobuf:"bytes,3,opt,name=preparation_sha256,json=preparationSha256,proto3" json:"preparation_sha256,omitempty"`
+	OriginalFence     *commonv1.ActionFence  `protobuf:"bytes,4,opt,name=original_fence,json=originalFence,proto3" json:"original_fence,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *MediaCreatedResult) Reset() {
+	*x = MediaCreatedResult{}
+	mi := &file_media_v1_media_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MediaCreatedResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MediaCreatedResult) ProtoMessage() {}
+
+func (x *MediaCreatedResult) ProtoReflect() protoreflect.Message {
+	mi := &file_media_v1_media_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MediaCreatedResult.ProtoReflect.Descriptor instead.
+func (*MediaCreatedResult) Descriptor() ([]byte, []int) {
+	return file_media_v1_media_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *MediaCreatedResult) GetRecordSha256() []byte {
+	if x != nil {
+		return x.RecordSha256
+	}
+	return nil
+}
+
+func (x *MediaCreatedResult) GetRecordBytes() uint64 {
+	if x != nil {
+		return x.RecordBytes
+	}
+	return 0
+}
+
+func (x *MediaCreatedResult) GetPreparationSha256() []byte {
+	if x != nil {
+		return x.PreparationSha256
+	}
+	return nil
+}
+
+func (x *MediaCreatedResult) GetOriginalFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.OriginalFence
+	}
+	return nil
+}
+
+// Durable Rust-local preparation. Source bytes are actual media file contents,
+// never an opaque JSON business request. This record is not a Go authority.
+type MediaCreatePreparation struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Record        *MediaObject           `protobuf:"bytes,1,opt,name=record,proto3" json:"record,omitempty"`
+	SourceSuffix  string                 `protobuf:"bytes,2,opt,name=source_suffix,json=sourceSuffix,proto3" json:"source_suffix,omitempty"`
+	SourceBytes   []byte                 `protobuf:"bytes,3,opt,name=source_bytes,json=sourceBytes,proto3" json:"source_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MediaCreatePreparation) Reset() {
+	*x = MediaCreatePreparation{}
+	mi := &file_media_v1_media_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MediaCreatePreparation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MediaCreatePreparation) ProtoMessage() {}
+
+func (x *MediaCreatePreparation) ProtoReflect() protoreflect.Message {
+	mi := &file_media_v1_media_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MediaCreatePreparation.ProtoReflect.Descriptor instead.
+func (*MediaCreatePreparation) Descriptor() ([]byte, []int) {
+	return file_media_v1_media_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *MediaCreatePreparation) GetRecord() *MediaObject {
+	if x != nil {
+		return x.Record
+	}
+	return nil
+}
+
+func (x *MediaCreatePreparation) GetSourceSuffix() string {
+	if x != nil {
+		return x.SourceSuffix
+	}
+	return ""
+}
+
+func (x *MediaCreatePreparation) GetSourceBytes() []byte {
+	if x != nil {
+		return x.SourceBytes
+	}
+	return nil
+}
+
+type MediaCreateStageRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	OperationId   string                 `protobuf:"bytes,2,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	Fence         *commonv1.ActionFence  `protobuf:"bytes,3,opt,name=fence,proto3" json:"fence,omitempty"`
+	// Types that are valid to be assigned to Part:
+	//
+	//	*MediaCreateStageRequest_Manifest
+	//	*MediaCreateStageRequest_Chunk
+	Part          isMediaCreateStageRequest_Part `protobuf_oneof:"part"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MediaCreateStageRequest) Reset() {
+	*x = MediaCreateStageRequest{}
+	mi := &file_media_v1_media_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MediaCreateStageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MediaCreateStageRequest) ProtoMessage() {}
+
+func (x *MediaCreateStageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_media_v1_media_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MediaCreateStageRequest.ProtoReflect.Descriptor instead.
+func (*MediaCreateStageRequest) Descriptor() ([]byte, []int) {
+	return file_media_v1_media_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *MediaCreateStageRequest) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *MediaCreateStageRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *MediaCreateStageRequest) GetFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *MediaCreateStageRequest) GetPart() isMediaCreateStageRequest_Part {
+	if x != nil {
+		return x.Part
+	}
+	return nil
+}
+
+func (x *MediaCreateStageRequest) GetManifest() *MediaCreateManifest {
+	if x != nil {
+		if x, ok := x.Part.(*MediaCreateStageRequest_Manifest); ok {
+			return x.Manifest
+		}
+	}
+	return nil
+}
+
+func (x *MediaCreateStageRequest) GetChunk() []byte {
+	if x != nil {
+		if x, ok := x.Part.(*MediaCreateStageRequest_Chunk); ok {
+			return x.Chunk
+		}
+	}
+	return nil
+}
+
+type isMediaCreateStageRequest_Part interface {
+	isMediaCreateStageRequest_Part()
+}
+
+type MediaCreateStageRequest_Manifest struct {
+	Manifest *MediaCreateManifest `protobuf:"bytes,4,opt,name=manifest,proto3,oneof"`
+}
+
+type MediaCreateStageRequest_Chunk struct {
+	Chunk []byte `protobuf:"bytes,5,opt,name=chunk,proto3,oneof"`
+}
+
+func (*MediaCreateStageRequest_Manifest) isMediaCreateStageRequest_Part() {}
+
+func (*MediaCreateStageRequest_Chunk) isMediaCreateStageRequest_Part() {}
+
+type MediaCreateStageResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Manifest      *MediaCreateManifest   `protobuf:"bytes,1,opt,name=manifest,proto3" json:"manifest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MediaCreateStageResponse) Reset() {
+	*x = MediaCreateStageResponse{}
+	mi := &file_media_v1_media_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MediaCreateStageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MediaCreateStageResponse) ProtoMessage() {}
+
+func (x *MediaCreateStageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_media_v1_media_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MediaCreateStageResponse.ProtoReflect.Descriptor instead.
+func (*MediaCreateStageResponse) Descriptor() ([]byte, []int) {
+	return file_media_v1_media_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *MediaCreateStageResponse) GetManifest() *MediaCreateManifest {
+	if x != nil {
+		return x.Manifest
+	}
+	return nil
+}
+
+type ReadMediaCreateResultRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	OperationId   string                 `protobuf:"bytes,2,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	OriginalFence *commonv1.ActionFence  `protobuf:"bytes,3,opt,name=original_fence,json=originalFence,proto3" json:"original_fence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadMediaCreateResultRequest) Reset() {
+	*x = ReadMediaCreateResultRequest{}
+	mi := &file_media_v1_media_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadMediaCreateResultRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadMediaCreateResultRequest) ProtoMessage() {}
+
+func (x *ReadMediaCreateResultRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_media_v1_media_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadMediaCreateResultRequest.ProtoReflect.Descriptor instead.
+func (*ReadMediaCreateResultRequest) Descriptor() ([]byte, []int) {
+	return file_media_v1_media_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ReadMediaCreateResultRequest) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *ReadMediaCreateResultRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *ReadMediaCreateResultRequest) GetOriginalFence() *commonv1.ActionFence {
+	if x != nil {
+		return x.OriginalFence
+	}
+	return nil
+}
+
+type ReadMediaCreateResultResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Media         *MediaObject           `protobuf:"bytes,1,opt,name=media,proto3" json:"media,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadMediaCreateResultResponse) Reset() {
+	*x = ReadMediaCreateResultResponse{}
+	mi := &file_media_v1_media_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadMediaCreateResultResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadMediaCreateResultResponse) ProtoMessage() {}
+
+func (x *ReadMediaCreateResultResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_media_v1_media_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadMediaCreateResultResponse.ProtoReflect.Descriptor instead.
+func (*ReadMediaCreateResultResponse) Descriptor() ([]byte, []int) {
+	return file_media_v1_media_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *ReadMediaCreateResultResponse) GetMedia() *MediaObject {
+	if x != nil {
+		return x.Media
+	}
+	return nil
+}
+
 type RecordMediaPatchOutcomeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SchemaVersion uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
@@ -1077,7 +1580,7 @@ type RecordMediaPatchOutcomeRequest struct {
 
 func (x *RecordMediaPatchOutcomeRequest) Reset() {
 	*x = RecordMediaPatchOutcomeRequest{}
-	mi := &file_media_v1_media_proto_msgTypes[11]
+	mi := &file_media_v1_media_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1089,7 +1592,7 @@ func (x *RecordMediaPatchOutcomeRequest) String() string {
 func (*RecordMediaPatchOutcomeRequest) ProtoMessage() {}
 
 func (x *RecordMediaPatchOutcomeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_media_v1_media_proto_msgTypes[11]
+	mi := &file_media_v1_media_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1102,7 +1605,7 @@ func (x *RecordMediaPatchOutcomeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordMediaPatchOutcomeRequest.ProtoReflect.Descriptor instead.
 func (*RecordMediaPatchOutcomeRequest) Descriptor() ([]byte, []int) {
-	return file_media_v1_media_proto_rawDescGZIP(), []int{11}
+	return file_media_v1_media_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *RecordMediaPatchOutcomeRequest) GetSchemaVersion() uint32 {
@@ -1135,7 +1638,7 @@ type RecordMediaPatchOutcomeResponse struct {
 
 func (x *RecordMediaPatchOutcomeResponse) Reset() {
 	*x = RecordMediaPatchOutcomeResponse{}
-	mi := &file_media_v1_media_proto_msgTypes[12]
+	mi := &file_media_v1_media_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1147,7 +1650,7 @@ func (x *RecordMediaPatchOutcomeResponse) String() string {
 func (*RecordMediaPatchOutcomeResponse) ProtoMessage() {}
 
 func (x *RecordMediaPatchOutcomeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_media_v1_media_proto_msgTypes[12]
+	mi := &file_media_v1_media_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1160,7 +1663,7 @@ func (x *RecordMediaPatchOutcomeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RecordMediaPatchOutcomeResponse.ProtoReflect.Descriptor instead.
 func (*RecordMediaPatchOutcomeResponse) Descriptor() ([]byte, []int) {
-	return file_media_v1_media_proto_rawDescGZIP(), []int{12}
+	return file_media_v1_media_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *RecordMediaPatchOutcomeResponse) GetAlreadyRecorded() bool {
@@ -1181,7 +1684,7 @@ type ExecuteMediaPatchRequest struct {
 
 func (x *ExecuteMediaPatchRequest) Reset() {
 	*x = ExecuteMediaPatchRequest{}
-	mi := &file_media_v1_media_proto_msgTypes[13]
+	mi := &file_media_v1_media_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1193,7 +1696,7 @@ func (x *ExecuteMediaPatchRequest) String() string {
 func (*ExecuteMediaPatchRequest) ProtoMessage() {}
 
 func (x *ExecuteMediaPatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_media_v1_media_proto_msgTypes[13]
+	mi := &file_media_v1_media_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1206,7 +1709,7 @@ func (x *ExecuteMediaPatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecuteMediaPatchRequest.ProtoReflect.Descriptor instead.
 func (*ExecuteMediaPatchRequest) Descriptor() ([]byte, []int) {
-	return file_media_v1_media_proto_rawDescGZIP(), []int{13}
+	return file_media_v1_media_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ExecuteMediaPatchRequest) GetSchemaVersion() uint32 {
@@ -1241,7 +1744,7 @@ type ExecuteMediaDeleteRequest struct {
 
 func (x *ExecuteMediaDeleteRequest) Reset() {
 	*x = ExecuteMediaDeleteRequest{}
-	mi := &file_media_v1_media_proto_msgTypes[14]
+	mi := &file_media_v1_media_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1253,7 +1756,7 @@ func (x *ExecuteMediaDeleteRequest) String() string {
 func (*ExecuteMediaDeleteRequest) ProtoMessage() {}
 
 func (x *ExecuteMediaDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_media_v1_media_proto_msgTypes[14]
+	mi := &file_media_v1_media_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1266,7 +1769,7 @@ func (x *ExecuteMediaDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecuteMediaDeleteRequest.ProtoReflect.Descriptor instead.
 func (*ExecuteMediaDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_media_v1_media_proto_rawDescGZIP(), []int{14}
+	return file_media_v1_media_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ExecuteMediaDeleteRequest) GetSchemaVersion() uint32 {
@@ -1301,7 +1804,7 @@ type QueryMediaPatchRequest struct {
 
 func (x *QueryMediaPatchRequest) Reset() {
 	*x = QueryMediaPatchRequest{}
-	mi := &file_media_v1_media_proto_msgTypes[15]
+	mi := &file_media_v1_media_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1313,7 +1816,7 @@ func (x *QueryMediaPatchRequest) String() string {
 func (*QueryMediaPatchRequest) ProtoMessage() {}
 
 func (x *QueryMediaPatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_media_v1_media_proto_msgTypes[15]
+	mi := &file_media_v1_media_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1326,7 +1829,7 @@ func (x *QueryMediaPatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryMediaPatchRequest.ProtoReflect.Descriptor instead.
 func (*QueryMediaPatchRequest) Descriptor() ([]byte, []int) {
-	return file_media_v1_media_proto_rawDescGZIP(), []int{15}
+	return file_media_v1_media_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *QueryMediaPatchRequest) GetSchemaVersion() uint32 {
@@ -1361,7 +1864,7 @@ type QueryMediaPatchResponse struct {
 
 func (x *QueryMediaPatchResponse) Reset() {
 	*x = QueryMediaPatchResponse{}
-	mi := &file_media_v1_media_proto_msgTypes[16]
+	mi := &file_media_v1_media_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1373,7 +1876,7 @@ func (x *QueryMediaPatchResponse) String() string {
 func (*QueryMediaPatchResponse) ProtoMessage() {}
 
 func (x *QueryMediaPatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_media_v1_media_proto_msgTypes[16]
+	mi := &file_media_v1_media_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1386,7 +1889,7 @@ func (x *QueryMediaPatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryMediaPatchResponse.ProtoReflect.Descriptor instead.
 func (*QueryMediaPatchResponse) Descriptor() ([]byte, []int) {
-	return file_media_v1_media_proto_rawDescGZIP(), []int{16}
+	return file_media_v1_media_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *QueryMediaPatchResponse) GetFound() bool {
@@ -1435,13 +1938,14 @@ const file_media_v1_media_proto_rawDesc = "" +
 	"\x05title\x18\x01 \x01(\v2\x1d.deepseek.media.v1.MediaValueR\x05title\x12<\n" +
 	"\n" +
 	"project_id\x18\x02 \x01(\v2\x1d.deepseek.media.v1.MediaValueR\tprojectId\x129\n" +
-	"\bmetadata\x18\x03 \x01(\v2\x1d.deepseek.media.v1.MediaValueR\bmetadata\"\xe6\x01\n" +
+	"\bmetadata\x18\x03 \x01(\v2\x1d.deepseek.media.v1.MediaValueR\bmetadata\"\xa6\x02\n" +
 	"\x10MediaPatchIntent\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12!\n" +
 	"\foperation_id\x18\x02 \x01(\tR\voperationId\x12\x19\n" +
 	"\bmedia_id\x18\x03 \x01(\tR\amediaId\x123\n" +
 	"\x05patch\x18\x04 \x01(\v2\x1d.deepseek.media.v1.MediaPatchR\x05patch\x128\n" +
-	"\x04kind\x18\x05 \x01(\x0e2$.deepseek.media.v1.MediaMutationKindR\x04kind\"\xb9\x03\n" +
+	"\x04kind\x18\x05 \x01(\x0e2$.deepseek.media.v1.MediaMutationKindR\x04kind\x12>\n" +
+	"\x06create\x18\x06 \x01(\v2&.deepseek.media.v1.MediaCreateManifestR\x06create\"\xb9\x03\n" +
 	"\x0fMediaPatchClaim\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12;\n" +
 	"\x06intent\x18\x02 \x01(\v2#.deepseek.media.v1.MediaPatchIntentR\x06intent\x125\n" +
@@ -1471,7 +1975,7 @@ const file_media_v1_media_proto_rawDesc = "" +
 	"\x18MediaPatchDispatchPermit\x128\n" +
 	"\x05claim\x18\x01 \x01(\v2\".deepseek.media.v1.MediaPatchClaimR\x05claim\x12-\n" +
 	"\x12preparation_sha256\x18\x02 \x01(\fR\x11preparationSha256\x12\x14\n" +
-	"\x05fresh\x18\x03 \x01(\bR\x05fresh\"\xa1\x05\n" +
+	"\x05fresh\x18\x03 \x01(\bR\x05fresh\"\xe2\x05\n" +
 	"\x11MediaPatchOutcome\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12!\n" +
 	"\foperation_id\x18\x02 \x01(\tR\voperationId\x12F\n" +
@@ -1491,7 +1995,37 @@ const file_media_v1_media_proto_rawDesc = "" +
 	"\bfleet_id\x18\r \x01(\tR\afleetId\x12 \n" +
 	"\venvironment\x18\x0e \x01(\tR\venvironment\x120\n" +
 	"\x14writer_fencing_token\x18\x0f \x01(\x03R\x12writerFencingToken\x12#\n" +
-	"\rdeleted_count\x18\x10 \x01(\rR\fdeletedCount\"\xbe\x01\n" +
+	"\rdeleted_count\x18\x10 \x01(\rR\fdeletedCount\x12?\n" +
+	"\acreated\x18\x11 \x01(\v2%.deepseek.media.v1.MediaCreatedResultR\acreated\"a\n" +
+	"\x13MediaCreateManifest\x12%\n" +
+	"\x0epayload_sha256\x18\x01 \x01(\fR\rpayloadSha256\x12#\n" +
+	"\rpayload_bytes\x18\x02 \x01(\x04R\fpayloadBytes\"X\n" +
+	"\x12MediaCreatePayload\x12B\n" +
+	"\fregistration\x18\x01 \x01(\v2\x1e.deepseek.media.v1.MediaObjectR\fregistration\"\xd3\x01\n" +
+	"\x12MediaCreatedResult\x12#\n" +
+	"\rrecord_sha256\x18\x01 \x01(\fR\frecordSha256\x12!\n" +
+	"\frecord_bytes\x18\x02 \x01(\x04R\vrecordBytes\x12-\n" +
+	"\x12preparation_sha256\x18\x03 \x01(\fR\x11preparationSha256\x12F\n" +
+	"\x0eoriginal_fence\x18\x04 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\roriginalFence\"\x98\x01\n" +
+	"\x16MediaCreatePreparation\x126\n" +
+	"\x06record\x18\x01 \x01(\v2\x1e.deepseek.media.v1.MediaObjectR\x06record\x12#\n" +
+	"\rsource_suffix\x18\x02 \x01(\tR\fsourceSuffix\x12!\n" +
+	"\fsource_bytes\x18\x03 \x01(\fR\vsourceBytes\"\x80\x02\n" +
+	"\x17MediaCreateStageRequest\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12!\n" +
+	"\foperation_id\x18\x02 \x01(\tR\voperationId\x125\n" +
+	"\x05fence\x18\x03 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\x05fence\x12D\n" +
+	"\bmanifest\x18\x04 \x01(\v2&.deepseek.media.v1.MediaCreateManifestH\x00R\bmanifest\x12\x16\n" +
+	"\x05chunk\x18\x05 \x01(\fH\x00R\x05chunkB\x06\n" +
+	"\x04part\"^\n" +
+	"\x18MediaCreateStageResponse\x12B\n" +
+	"\bmanifest\x18\x01 \x01(\v2&.deepseek.media.v1.MediaCreateManifestR\bmanifest\"\xb0\x01\n" +
+	"\x1cReadMediaCreateResultRequest\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12!\n" +
+	"\foperation_id\x18\x02 \x01(\tR\voperationId\x12F\n" +
+	"\x0eoriginal_fence\x18\x03 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\roriginalFence\"U\n" +
+	"\x1dReadMediaCreateResultResponse\x124\n" +
+	"\x05media\x18\x01 \x01(\v2\x1e.deepseek.media.v1.MediaObjectR\x05media\"\xbe\x01\n" +
 	"\x1eRecordMediaPatchOutcomeRequest\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12>\n" +
 	"\aoutcome\x18\x02 \x01(\v2$.deepseek.media.v1.MediaPatchOutcomeR\aoutcome\x125\n" +
@@ -1512,10 +2046,11 @@ const file_media_v1_media_proto_rawDesc = "" +
 	"\x0eoriginal_fence\x18\x03 \x01(\v2\x1f.deepseek.common.v1.ActionFenceR\roriginalFence\"o\n" +
 	"\x17QueryMediaPatchResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12>\n" +
-	"\aoutcome\x18\x02 \x01(\v2$.deepseek.media.v1.MediaPatchOutcomeR\aoutcome*X\n" +
+	"\aoutcome\x18\x02 \x01(\v2$.deepseek.media.v1.MediaPatchOutcomeR\aoutcome*x\n" +
 	"\x11MediaMutationKind\x12#\n" +
 	"\x1fMEDIA_MUTATION_KIND_UNSPECIFIED\x10\x00\x12\x1e\n" +
-	"\x1aMEDIA_MUTATION_KIND_DELETE\x10\x01*\x81\x02\n" +
+	"\x1aMEDIA_MUTATION_KIND_DELETE\x10\x01\x12\x1e\n" +
+	"\x1aMEDIA_MUTATION_KIND_CREATE\x10\x02*\x81\x02\n" +
 	"\x15MediaPatchEffectState\x12(\n" +
 	"$MEDIA_PATCH_EFFECT_STATE_UNSPECIFIED\x10\x00\x12%\n" +
 	"!MEDIA_PATCH_EFFECT_STATE_PREPARED\x10\x01\x12%\n" +
@@ -1526,12 +2061,17 @@ const file_media_v1_media_proto_rawDesc = "" +
 	"\x14MediaMutationControl\x12\\\n" +
 	"\bGetClaim\x12,.deepseek.media.v1.GetMediaPatchClaimRequest\x1a\".deepseek.media.v1.MediaPatchClaim\x12o\n" +
 	"\rBeginDispatch\x121.deepseek.media.v1.BeginMediaPatchDispatchRequest\x1a+.deepseek.media.v1.MediaPatchDispatchPermit\x12v\n" +
-	"\rRecordOutcome\x121.deepseek.media.v1.RecordMediaPatchOutcomeRequest\x1a2.deepseek.media.v1.RecordMediaPatchOutcomeResponse2\xc2\x02\n" +
+	"\rRecordOutcome\x121.deepseek.media.v1.RecordMediaPatchOutcomeRequest\x1a2.deepseek.media.v1.RecordMediaPatchOutcomeResponse2\xa6\x03\n" +
 	"\x13MediaMutationWorker\x12a\n" +
 	"\fExecutePatch\x12+.deepseek.media.v1.ExecuteMediaPatchRequest\x1a$.deepseek.media.v1.MediaPatchOutcome\x12c\n" +
-	"\rExecuteDelete\x12,.deepseek.media.v1.ExecuteMediaDeleteRequest\x1a$.deepseek.media.v1.MediaPatchOutcome\x12c\n" +
+	"\rExecuteDelete\x12,.deepseek.media.v1.ExecuteMediaDeleteRequest\x1a$.deepseek.media.v1.MediaPatchOutcome\x12b\n" +
+	"\rExecuteCreate\x12+.deepseek.media.v1.ExecuteMediaPatchRequest\x1a$.deepseek.media.v1.MediaPatchOutcome\x12c\n" +
 	"\n" +
-	"QueryPatch\x12).deepseek.media.v1.QueryMediaPatchRequest\x1a*.deepseek.media.v1.QueryMediaPatchResponseBFZDgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/mediav1;mediav1b\x06proto3"
+	"QueryPatch\x12).deepseek.media.v1.QueryMediaPatchRequest\x1a*.deepseek.media.v1.QueryMediaPatchResponse2\xec\x01\n" +
+	"\x15MediaCreationPayloads\x12b\n" +
+	"\x05Stage\x12*.deepseek.media.v1.MediaCreateStageRequest\x1a+.deepseek.media.v1.MediaCreateStageResponse(\x01\x12o\n" +
+	"\n" +
+	"ReadResult\x12/.deepseek.media.v1.ReadMediaCreateResultRequest\x1a0.deepseek.media.v1.ReadMediaCreateResultResponseBFZDgithub.com/leizd/DeepSeek-Infra/go/internal/protocol/mediav1;mediav1b\x06proto3"
 
 var (
 	file_media_v1_media_proto_rawDescOnce sync.Once
@@ -1546,7 +2086,7 @@ func file_media_v1_media_proto_rawDescGZIP() []byte {
 }
 
 var file_media_v1_media_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_media_v1_media_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_media_v1_media_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_media_v1_media_proto_goTypes = []any{
 	(MediaMutationKind)(0),                  // 0: deepseek.media.v1.MediaMutationKind
 	(MediaPatchEffectState)(0),              // 1: deepseek.media.v1.MediaPatchEffectState
@@ -1561,13 +2101,21 @@ var file_media_v1_media_proto_goTypes = []any{
 	(*BeginMediaPatchDispatchRequest)(nil),  // 10: deepseek.media.v1.BeginMediaPatchDispatchRequest
 	(*MediaPatchDispatchPermit)(nil),        // 11: deepseek.media.v1.MediaPatchDispatchPermit
 	(*MediaPatchOutcome)(nil),               // 12: deepseek.media.v1.MediaPatchOutcome
-	(*RecordMediaPatchOutcomeRequest)(nil),  // 13: deepseek.media.v1.RecordMediaPatchOutcomeRequest
-	(*RecordMediaPatchOutcomeResponse)(nil), // 14: deepseek.media.v1.RecordMediaPatchOutcomeResponse
-	(*ExecuteMediaPatchRequest)(nil),        // 15: deepseek.media.v1.ExecuteMediaPatchRequest
-	(*ExecuteMediaDeleteRequest)(nil),       // 16: deepseek.media.v1.ExecuteMediaDeleteRequest
-	(*QueryMediaPatchRequest)(nil),          // 17: deepseek.media.v1.QueryMediaPatchRequest
-	(*QueryMediaPatchResponse)(nil),         // 18: deepseek.media.v1.QueryMediaPatchResponse
-	(*commonv1.ActionFence)(nil),            // 19: deepseek.common.v1.ActionFence
+	(*MediaCreateManifest)(nil),             // 13: deepseek.media.v1.MediaCreateManifest
+	(*MediaCreatePayload)(nil),              // 14: deepseek.media.v1.MediaCreatePayload
+	(*MediaCreatedResult)(nil),              // 15: deepseek.media.v1.MediaCreatedResult
+	(*MediaCreatePreparation)(nil),          // 16: deepseek.media.v1.MediaCreatePreparation
+	(*MediaCreateStageRequest)(nil),         // 17: deepseek.media.v1.MediaCreateStageRequest
+	(*MediaCreateStageResponse)(nil),        // 18: deepseek.media.v1.MediaCreateStageResponse
+	(*ReadMediaCreateResultRequest)(nil),    // 19: deepseek.media.v1.ReadMediaCreateResultRequest
+	(*ReadMediaCreateResultResponse)(nil),   // 20: deepseek.media.v1.ReadMediaCreateResultResponse
+	(*RecordMediaPatchOutcomeRequest)(nil),  // 21: deepseek.media.v1.RecordMediaPatchOutcomeRequest
+	(*RecordMediaPatchOutcomeResponse)(nil), // 22: deepseek.media.v1.RecordMediaPatchOutcomeResponse
+	(*ExecuteMediaPatchRequest)(nil),        // 23: deepseek.media.v1.ExecuteMediaPatchRequest
+	(*ExecuteMediaDeleteRequest)(nil),       // 24: deepseek.media.v1.ExecuteMediaDeleteRequest
+	(*QueryMediaPatchRequest)(nil),          // 25: deepseek.media.v1.QueryMediaPatchRequest
+	(*QueryMediaPatchResponse)(nil),         // 26: deepseek.media.v1.QueryMediaPatchResponse
+	(*commonv1.ActionFence)(nil),            // 27: deepseek.common.v1.ActionFence
 }
 var file_media_v1_media_proto_depIdxs = []int32{
 	4,  // 0: deepseek.media.v1.MediaValue.object_value:type_name -> deepseek.media.v1.MediaObject
@@ -1580,37 +2128,53 @@ var file_media_v1_media_proto_depIdxs = []int32{
 	2,  // 7: deepseek.media.v1.MediaPatch.metadata:type_name -> deepseek.media.v1.MediaValue
 	6,  // 8: deepseek.media.v1.MediaPatchIntent.patch:type_name -> deepseek.media.v1.MediaPatch
 	0,  // 9: deepseek.media.v1.MediaPatchIntent.kind:type_name -> deepseek.media.v1.MediaMutationKind
-	7,  // 10: deepseek.media.v1.MediaPatchClaim.intent:type_name -> deepseek.media.v1.MediaPatchIntent
-	19, // 11: deepseek.media.v1.MediaPatchClaim.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 12: deepseek.media.v1.GetMediaPatchClaimRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 13: deepseek.media.v1.BeginMediaPatchDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	8,  // 14: deepseek.media.v1.MediaPatchDispatchPermit.claim:type_name -> deepseek.media.v1.MediaPatchClaim
-	19, // 15: deepseek.media.v1.MediaPatchOutcome.original_fence:type_name -> deepseek.common.v1.ActionFence
-	1,  // 16: deepseek.media.v1.MediaPatchOutcome.state:type_name -> deepseek.media.v1.MediaPatchEffectState
-	4,  // 17: deepseek.media.v1.MediaPatchOutcome.media:type_name -> deepseek.media.v1.MediaObject
-	12, // 18: deepseek.media.v1.RecordMediaPatchOutcomeRequest.outcome:type_name -> deepseek.media.v1.MediaPatchOutcome
-	19, // 19: deepseek.media.v1.RecordMediaPatchOutcomeRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 20: deepseek.media.v1.ExecuteMediaPatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 21: deepseek.media.v1.ExecuteMediaDeleteRequest.fence:type_name -> deepseek.common.v1.ActionFence
-	19, // 22: deepseek.media.v1.QueryMediaPatchRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
-	12, // 23: deepseek.media.v1.QueryMediaPatchResponse.outcome:type_name -> deepseek.media.v1.MediaPatchOutcome
-	9,  // 24: deepseek.media.v1.MediaMutationControl.GetClaim:input_type -> deepseek.media.v1.GetMediaPatchClaimRequest
-	10, // 25: deepseek.media.v1.MediaMutationControl.BeginDispatch:input_type -> deepseek.media.v1.BeginMediaPatchDispatchRequest
-	13, // 26: deepseek.media.v1.MediaMutationControl.RecordOutcome:input_type -> deepseek.media.v1.RecordMediaPatchOutcomeRequest
-	15, // 27: deepseek.media.v1.MediaMutationWorker.ExecutePatch:input_type -> deepseek.media.v1.ExecuteMediaPatchRequest
-	16, // 28: deepseek.media.v1.MediaMutationWorker.ExecuteDelete:input_type -> deepseek.media.v1.ExecuteMediaDeleteRequest
-	17, // 29: deepseek.media.v1.MediaMutationWorker.QueryPatch:input_type -> deepseek.media.v1.QueryMediaPatchRequest
-	8,  // 30: deepseek.media.v1.MediaMutationControl.GetClaim:output_type -> deepseek.media.v1.MediaPatchClaim
-	11, // 31: deepseek.media.v1.MediaMutationControl.BeginDispatch:output_type -> deepseek.media.v1.MediaPatchDispatchPermit
-	14, // 32: deepseek.media.v1.MediaMutationControl.RecordOutcome:output_type -> deepseek.media.v1.RecordMediaPatchOutcomeResponse
-	12, // 33: deepseek.media.v1.MediaMutationWorker.ExecutePatch:output_type -> deepseek.media.v1.MediaPatchOutcome
-	12, // 34: deepseek.media.v1.MediaMutationWorker.ExecuteDelete:output_type -> deepseek.media.v1.MediaPatchOutcome
-	18, // 35: deepseek.media.v1.MediaMutationWorker.QueryPatch:output_type -> deepseek.media.v1.QueryMediaPatchResponse
-	30, // [30:36] is the sub-list for method output_type
-	24, // [24:30] is the sub-list for method input_type
-	24, // [24:24] is the sub-list for extension type_name
-	24, // [24:24] is the sub-list for extension extendee
-	0,  // [0:24] is the sub-list for field type_name
+	13, // 10: deepseek.media.v1.MediaPatchIntent.create:type_name -> deepseek.media.v1.MediaCreateManifest
+	7,  // 11: deepseek.media.v1.MediaPatchClaim.intent:type_name -> deepseek.media.v1.MediaPatchIntent
+	27, // 12: deepseek.media.v1.MediaPatchClaim.fence:type_name -> deepseek.common.v1.ActionFence
+	27, // 13: deepseek.media.v1.GetMediaPatchClaimRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	27, // 14: deepseek.media.v1.BeginMediaPatchDispatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	8,  // 15: deepseek.media.v1.MediaPatchDispatchPermit.claim:type_name -> deepseek.media.v1.MediaPatchClaim
+	27, // 16: deepseek.media.v1.MediaPatchOutcome.original_fence:type_name -> deepseek.common.v1.ActionFence
+	1,  // 17: deepseek.media.v1.MediaPatchOutcome.state:type_name -> deepseek.media.v1.MediaPatchEffectState
+	4,  // 18: deepseek.media.v1.MediaPatchOutcome.media:type_name -> deepseek.media.v1.MediaObject
+	15, // 19: deepseek.media.v1.MediaPatchOutcome.created:type_name -> deepseek.media.v1.MediaCreatedResult
+	4,  // 20: deepseek.media.v1.MediaCreatePayload.registration:type_name -> deepseek.media.v1.MediaObject
+	27, // 21: deepseek.media.v1.MediaCreatedResult.original_fence:type_name -> deepseek.common.v1.ActionFence
+	4,  // 22: deepseek.media.v1.MediaCreatePreparation.record:type_name -> deepseek.media.v1.MediaObject
+	27, // 23: deepseek.media.v1.MediaCreateStageRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	13, // 24: deepseek.media.v1.MediaCreateStageRequest.manifest:type_name -> deepseek.media.v1.MediaCreateManifest
+	13, // 25: deepseek.media.v1.MediaCreateStageResponse.manifest:type_name -> deepseek.media.v1.MediaCreateManifest
+	27, // 26: deepseek.media.v1.ReadMediaCreateResultRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
+	4,  // 27: deepseek.media.v1.ReadMediaCreateResultResponse.media:type_name -> deepseek.media.v1.MediaObject
+	12, // 28: deepseek.media.v1.RecordMediaPatchOutcomeRequest.outcome:type_name -> deepseek.media.v1.MediaPatchOutcome
+	27, // 29: deepseek.media.v1.RecordMediaPatchOutcomeRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	27, // 30: deepseek.media.v1.ExecuteMediaPatchRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	27, // 31: deepseek.media.v1.ExecuteMediaDeleteRequest.fence:type_name -> deepseek.common.v1.ActionFence
+	27, // 32: deepseek.media.v1.QueryMediaPatchRequest.original_fence:type_name -> deepseek.common.v1.ActionFence
+	12, // 33: deepseek.media.v1.QueryMediaPatchResponse.outcome:type_name -> deepseek.media.v1.MediaPatchOutcome
+	9,  // 34: deepseek.media.v1.MediaMutationControl.GetClaim:input_type -> deepseek.media.v1.GetMediaPatchClaimRequest
+	10, // 35: deepseek.media.v1.MediaMutationControl.BeginDispatch:input_type -> deepseek.media.v1.BeginMediaPatchDispatchRequest
+	21, // 36: deepseek.media.v1.MediaMutationControl.RecordOutcome:input_type -> deepseek.media.v1.RecordMediaPatchOutcomeRequest
+	23, // 37: deepseek.media.v1.MediaMutationWorker.ExecutePatch:input_type -> deepseek.media.v1.ExecuteMediaPatchRequest
+	24, // 38: deepseek.media.v1.MediaMutationWorker.ExecuteDelete:input_type -> deepseek.media.v1.ExecuteMediaDeleteRequest
+	23, // 39: deepseek.media.v1.MediaMutationWorker.ExecuteCreate:input_type -> deepseek.media.v1.ExecuteMediaPatchRequest
+	25, // 40: deepseek.media.v1.MediaMutationWorker.QueryPatch:input_type -> deepseek.media.v1.QueryMediaPatchRequest
+	17, // 41: deepseek.media.v1.MediaCreationPayloads.Stage:input_type -> deepseek.media.v1.MediaCreateStageRequest
+	19, // 42: deepseek.media.v1.MediaCreationPayloads.ReadResult:input_type -> deepseek.media.v1.ReadMediaCreateResultRequest
+	8,  // 43: deepseek.media.v1.MediaMutationControl.GetClaim:output_type -> deepseek.media.v1.MediaPatchClaim
+	11, // 44: deepseek.media.v1.MediaMutationControl.BeginDispatch:output_type -> deepseek.media.v1.MediaPatchDispatchPermit
+	22, // 45: deepseek.media.v1.MediaMutationControl.RecordOutcome:output_type -> deepseek.media.v1.RecordMediaPatchOutcomeResponse
+	12, // 46: deepseek.media.v1.MediaMutationWorker.ExecutePatch:output_type -> deepseek.media.v1.MediaPatchOutcome
+	12, // 47: deepseek.media.v1.MediaMutationWorker.ExecuteDelete:output_type -> deepseek.media.v1.MediaPatchOutcome
+	12, // 48: deepseek.media.v1.MediaMutationWorker.ExecuteCreate:output_type -> deepseek.media.v1.MediaPatchOutcome
+	26, // 49: deepseek.media.v1.MediaMutationWorker.QueryPatch:output_type -> deepseek.media.v1.QueryMediaPatchResponse
+	18, // 50: deepseek.media.v1.MediaCreationPayloads.Stage:output_type -> deepseek.media.v1.MediaCreateStageResponse
+	20, // 51: deepseek.media.v1.MediaCreationPayloads.ReadResult:output_type -> deepseek.media.v1.ReadMediaCreateResultResponse
+	43, // [43:52] is the sub-list for method output_type
+	34, // [34:43] is the sub-list for method input_type
+	34, // [34:34] is the sub-list for extension type_name
+	34, // [34:34] is the sub-list for extension extendee
+	0,  // [0:34] is the sub-list for field type_name
 }
 
 func init() { file_media_v1_media_proto_init() }
@@ -1626,15 +2190,19 @@ func file_media_v1_media_proto_init() {
 		(*MediaValue_ObjectValue)(nil),
 		(*MediaValue_ArrayValue)(nil),
 	}
+	file_media_v1_media_proto_msgTypes[15].OneofWrappers = []any{
+		(*MediaCreateStageRequest_Manifest)(nil),
+		(*MediaCreateStageRequest_Chunk)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_media_v1_media_proto_rawDesc), len(file_media_v1_media_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   17,
+			NumMessages:   25,
 			NumExtensions: 0,
-			NumServices:   2,
+			NumServices:   3,
 		},
 		GoTypes:           file_media_v1_media_proto_goTypes,
 		DependencyIndexes: file_media_v1_media_proto_depIdxs,

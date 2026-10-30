@@ -81,6 +81,7 @@ pub(super) fn refusal(
     result.error_message = message.into();
     result.signature.clear();
     result.deleted_count = 0;
+    result.created = None;
     result
 }
 pub(super) fn plan(
@@ -106,6 +107,7 @@ pub(super) fn plan(
         environment: claim.environment.clone(),
         writer_fencing_token: claim.writer_fencing_token,
         deleted_count: 0,
+        created: None,
     };
     if intent.kind == MediaMutationKind::Delete as i32 {
         if intent.patch.is_some() {
@@ -157,7 +159,7 @@ pub(super) fn plan(
     planned_bytes(claim, result, items)
 }
 
-fn planned_bytes(
+pub(super) fn planned_bytes(
     claim: &MediaPatchClaim,
     mut result: MediaPatchOutcome,
     items: Vec<Value>,
@@ -178,7 +180,7 @@ fn planned_bytes(
     Ok((result, Some(bytes)))
 }
 
-fn normalized_items(before: &[u8]) -> Vec<Value> {
+pub(super) fn normalized_items(before: &[u8]) -> Vec<Value> {
     let document: Value = serde_json::from_slice(before).unwrap_or(Value::Null);
     document
         .get("media")

@@ -153,6 +153,7 @@ func DialTLS(cfg TLSDialConfig) (*Client, error) {
 		origin:         actionv1.NewNativeOriginCustodyClient(connection),
 		nodes:          agentv1.NewAgentNodeWorkerClient(connection),
 		media:          mediav1.NewMediaMutationWorkerClient(connection),
+		mediaCreation:  mediav1.NewMediaCreationPayloadsClient(connection),
 		connection:     connection,
 		tlsSecured:     true,
 		bearerAttached: true,

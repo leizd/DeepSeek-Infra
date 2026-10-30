@@ -41,7 +41,7 @@ func RequestDigest(intent *mediav1.MediaPatchIntent) ([]byte, error) {
 	switch intent.Kind {
 	case mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED:
 		p := intent.Patch
-		if p == nil || len(p.ProtoReflect().GetUnknown()) != 0 || (p.Title == nil && p.ProjectId == nil && p.Metadata == nil) {
+		if intent.Create != nil || p == nil || len(p.ProtoReflect().GetUnknown()) != 0 || (p.Title == nil && p.ProjectId == nil && p.Metadata == nil) {
 			return nil, ErrInvalid
 		}
 		for _, v := range []*mediav1.MediaValue{p.Title, p.ProjectId, p.Metadata} {
@@ -52,7 +52,13 @@ func RequestDigest(intent *mediav1.MediaPatchIntent) ([]byte, error) {
 			}
 		}
 	case mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE:
-		if intent.Patch != nil || !strings.HasPrefix(intent.OperationId, "media-delete-") {
+		if intent.Create != nil || intent.Patch != nil || !strings.HasPrefix(intent.OperationId, "media-delete-") {
+			return nil, ErrInvalid
+		}
+	case mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_CREATE:
+		if intent.Patch != nil || !strings.HasPrefix(intent.OperationId, "media-create-") || intent.Create == nil ||
+			len(intent.Create.ProtoReflect().GetUnknown()) != 0 || len(intent.Create.PayloadSha256) != 32 ||
+			intent.Create.PayloadBytes == 0 || intent.Create.PayloadBytes > MaxCreatePayloadBytes {
 			return nil, ErrInvalid
 		}
 	default:
@@ -71,7 +77,13 @@ func FromJSON(v any) (*mediav1.MediaValue, error) { return fromJSON(v, 0) }
 // duplicate JSON key keeps its first position and last value, as Python does.
 // FromJSON remains the legacy sorted-map adapter for existing stored producers.
 func ParseJSON(raw []byte) (*mediav1.MediaValue, error) {
-	if len(raw) > 1_000_000 {
+	return ParseJSONBounded(raw, 1_000_000)
+}
+
+// Creation retains its original 16,000,000-byte JSON bound. The PATCH parser
+// keeps its historical bound and all existing callers retain that behavior.
+func ParseJSONBounded(raw []byte, limit int) (*mediav1.MediaValue, error) {
+	if limit < 0 || limit > 16_000_000 || len(raw) > limit {
 		return nil, ErrInvalid
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -280,26 +292,32 @@ func VerifyOutcome(outcome *mediav1.MediaPatchOutcome, claim *mediav1.MediaPatch
 	if outcome.State != mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED && outcome.State != mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_REFUSED {
 		return ErrInvalid
 	}
-	if claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED && claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE {
+	if claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED && claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE && claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_CREATE {
 		return ErrInvalid
 	}
 	if outcome.State == mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED {
 		if outcome.HttpStatus != 200 || len(outcome.BeforeSha256) != 32 || len(outcome.AfterSha256) != 32 || outcome.ErrorCode != "" || outcome.ErrorMessage != "" {
 			return ErrInvalid
 		}
-		if claim.Intent.Kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE {
-			if outcome.Media != nil || outcome.DeletedCount > 1 {
+		if claim.Intent.Kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_CREATE {
+			if outcome.Media != nil || outcome.DeletedCount != 0 || outcome.Created == nil ||
+				len(outcome.Created.ProtoReflect().GetUnknown()) != 0 || len(outcome.Created.RecordSha256) != 32 ||
+				!proto.Equal(outcome.Created.OriginalFence, claim.Fence) || len(outcome.Created.PreparationSha256) != 32 || outcome.Created.RecordBytes == 0 || outcome.Created.RecordBytes > MaxCreatePayloadBytes {
+				return ErrInvalid
+			}
+		} else if claim.Intent.Kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE {
+			if outcome.Created != nil || outcome.Media != nil || outcome.DeletedCount > 1 {
 				return ErrInvalid
 			}
 		} else {
-			if outcome.Media == nil || outcome.DeletedCount != 0 {
+			if outcome.Created != nil || outcome.Media == nil || outcome.DeletedCount != 0 {
 				return ErrInvalid
 			}
 			if _, err := ToJSON(&mediav1.MediaValue{Kind: &mediav1.MediaValue_ObjectValue{ObjectValue: outcome.Media}}); err != nil {
 				return err
 			}
 		}
-	} else if outcome.HttpStatus < 400 || outcome.HttpStatus >= 500 || outcome.Media != nil || outcome.DeletedCount != 0 || len(outcome.AfterSha256) != 0 || outcome.ErrorCode == "" {
+	} else if outcome.HttpStatus < 400 || outcome.HttpStatus >= 500 || outcome.Created != nil || outcome.Media != nil || outcome.DeletedCount != 0 || len(outcome.AfterSha256) != 0 || outcome.ErrorCode == "" {
 		return ErrInvalid
 	}
 	unsigned := proto.Clone(outcome).(*mediav1.MediaPatchOutcome)

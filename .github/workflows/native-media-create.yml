@@ -24,6 +24,7 @@ jobs:
       DEEPSEEK_EVIDENCE_SOURCE_CONTEXT: ${{ github.workspace }}/artifacts/native-media-create/source-context.json
       CGO_ENABLED: '0'
       GOTOOLCHAIN: local
+      MEDIA_GO_TEST_PATTERN: ^(TestMedia.*|TestActionAdmissionV4UpgradePreservesHistoryAndRollsBackOnFailure|TestActionReconciliationMigrationDoesNotLegalizeOldStateEdges|TestActionReconciliationV5UnknownTakeoverStillResolves|TestActionReconciliationV5UpgradePreservesHistory|TestActionVerificationUpgradeDoesNotLegalizePreV7Phases|TestActionVerificationV6UpgradeIsAtomicAndPreservesRecovery|TestControlAuthorityV7UpgradeIsAtomicAndPreservesHistory|TestControlMigratesFromV2ToOperationJournal|TestControlRPCRejectsDuplicateCredentialsAndOversizedMessages|TestCutoverJournalRejectsMutationAndControlMigratesFromV1|TestNativeOriginV18MigrationFaultRetainsOriginalSignedStore|TestOperationStatusV8UpgradePreservesTheJournal|TestReconcilingInvariantV5IllegalEdgeStaysIllegal|TestStorageDispatchV3UpgradePreservesHistoryAndFailedClaim|TestV10InventoryMigrationRetainsShadowHistoryWithoutForgingAttestation|TestV11StoreMigratesToTheHandbackSchemaWithoutInventingHistory|TestV12ImportMigratesWithoutInventingLiveSourceBinding|TestV12PromotedImportCannotUpgradeWithoutLiveSourceBinding|TestV14MigrationPreservesOlderRecordsWithoutInventingHealth|TestV15MigrationPreservesRecordsAndVerifiesTheJournal|TestV16CancellationMigrationPreservesActiveLeaseAndImmutableHistory|TestV16StoreOpenMigratesFailureLeaseAndPreservesOriginalCustody|TestV17FailureMigrationPreservesRowsThenSettlesVerifiedPhase|TestV9UnsignedPromotionHistoryCannotBeUpgradedAsSigned)$
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -132,15 +133,74 @@ jobs:
         python scripts/rust_build.py --toolchain 1.85.0 -- build --locked -p deepseek-worker -p deepseek-gateway --bins 2>&1 | tee artifacts/native-media-create/build.log
 
         '
-    - name: Require compiled Go create admission parity
-      id: admission
+    - name: Require Rust media journal, typed registration and recovery tests
+      id: media-unit
       run: 'set -o pipefail
 
-        cd go
-
-        go test -count=1 -json -run "^TestMediaPublicCreateAdmission$" ./internal/api 2>&1 | tee ../artifacts/native-media-create/go-tests.jsonl
+        python scripts/rust_build.py --toolchain 1.85.0 -- test --locked -p deepseek-worker --lib media_ 2>&1 | tee artifacts/native-media-create/rust-media-tests.log
 
         '
+    - name: Require all retained media and migration Go tests with the race detector
+      id: admission
+      run: "mkdir -p artifacts/native-media-create\ntest \"$(git rev-parse HEAD)\" = \"$GITHUB_SHA\"\ntest -z \"$(git status --porcelain=v1 --untracked-files=all)\"\
+        \ncd go\nset +e\ngo test -race -json -count=1 -timeout=8m -covermode=atomic -coverprofile=../artifacts/native-media-create/scoped-coverage.out\
+        \ ./internal/media ./internal/store ./internal/api ./internal/worker -run \"$MEDIA_GO_TEST_PATTERN\" > ../artifacts/native-media-create/go-tests.jsonl\
+        \ 2>&1\ntest_status=$?\nset -e\ncd ..\nexport MEDIA_GO_STATUS=\"$test_status\"\npython - <<'PY'\nimport json, os, re, subprocess\nfrom\
+        \ pathlib import Path\nexpected = set()\nfor package in [\"media\", \"store\", \"api\", \"worker\"]:\n    for path in (Path(\"go/internal\"\
+        ) / package).glob(\"*_test.go\"):\n        expected.update(n for n in re.findall(r\"^func (Test\\w*)\\(\", path.read_text(), re.M) if\
+        \ re.fullmatch(os.environ[\"MEDIA_GO_TEST_PATTERN\"],n))\nrequired_legacy = {'TestV15MigrationPreservesRecordsAndVerifiesTheJournal',\
+        \ 'TestV14MigrationPreservesOlderRecordsWithoutInventingHealth', 'TestControlMigratesFromV2ToOperationJournal', 'TestCutoverJournalRejectsMutationAndControlMigratesFromV1',\
+        \ 'TestActionAdmissionV4UpgradePreservesHistoryAndRollsBackOnFailure', 'TestActionReconciliationV5UpgradePreservesHistory', 'TestControlRPCRejectsDuplicateCredentialsAndOversizedMessages',\
+        \ 'TestNativeOriginV18MigrationFaultRetainsOriginalSignedStore', 'TestV10InventoryMigrationRetainsShadowHistoryWithoutForgingAttestation',\
+        \ 'TestActionReconciliationV5UnknownTakeoverStillResolves', 'TestOperationStatusV8UpgradePreservesTheJournal', 'TestActionVerificationUpgradeDoesNotLegalizePreV7Phases',\
+        \ 'TestV16CancellationMigrationPreservesActiveLeaseAndImmutableHistory', 'TestReconcilingInvariantV5IllegalEdgeStaysIllegal', 'TestV16StoreOpenMigratesFailureLeaseAndPreservesOriginalCustody',\
+        \ 'TestV11StoreMigratesToTheHandbackSchemaWithoutInventingHistory', 'TestActionVerificationV6UpgradeIsAtomicAndPreservesRecovery', 'TestStorageDispatchV3UpgradePreservesHistoryAndFailedClaim',\
+        \ 'TestV12PromotedImportCannotUpgradeWithoutLiveSourceBinding', 'TestControlAuthorityV7UpgradeIsAtomicAndPreservesHistory', 'TestV17FailureMigrationPreservesRowsThenSettlesVerifiedPhase',\
+        \ 'TestActionReconciliationMigrationDoesNotLegalizeOldStateEdges', 'TestV12ImportMigratesWithoutInventingLiveSourceBinding', 'TestV9UnsignedPromotionHistoryCannotBeUpgradedAsSigned'}\n\
+        required_media = {'TestMediaAdmissionSerializesTheLibraryAndRetainsOriginalIdentity', 'TestMediaCallsRequireTheProductionSecuredWorkerChannel',\
+        \ 'TestMediaControlRPCDispatchAndSignedSettlementRetainReplayIdentity', 'TestMediaControlRPCLargeTypedClaimRetainsTheOriginalLegacyMessageLimit',\
+        \ 'TestMediaControlRPCRefusesBothMutationMethodsWithoutAuthority', 'TestMediaDigestBindsPresenceAndEveryIntentField', 'TestMediaDigestRejectsUnknownFieldsInvalidUTF8AndOversizedMessages',\
+        \ 'TestMediaDispatchRejectsStaleClaimsAndNeverReissuesAFreshPermit', 'TestMediaForwardingPreservesTheOriginalOperationAndTransportErrors',\
+        \ 'TestMediaForwardingRejectsConflictingCredentialsBeforeCallingThePeer', 'TestMediaLegacyReadRPCStillDefaultsToShadowAndRejectsMalformedSnapshots',\
+        \ 'TestMediaNestedMalformedValuesCannotBypassTheTypedBoundary', 'TestMediaOutcomeRejectsMalformedAppliedObjectsAndRefusalEncoding', 'TestMediaPreparedRefusalCanSettleWithoutInventingADispatch',\
+        \ 'TestMediaPublicClosedControlAndMalformedReplyRetainUncertainty', 'TestMediaPublicForgedTLSResultCannotSettleTheClaim', 'TestMediaPublicIngressKeepsHostPathDepthAndFieldPresenceChecks',\
+        \ 'TestMediaPublicLostTLSReplyQueriesTheOriginalWithoutRedispatch', 'TestMediaPublicPatchKeepsAuthenticationAuthorityAndBodyRefusals',\
+        \ 'TestMediaPublicTLSRefusalRetainsTheOriginalHTTPErrorAndReleasesAdmission', 'TestMediaPublicTLSRoundTripSettlesOnlyTheBoundSignedOutcome',\
+        \ 'TestMediaPublicUnresolvedTLSReplyBlocksAnotherOperationDespiteAbsence', 'TestMediaRPCDoesNotAcceptAnUnauthoritativeOrUnboundRequest',\
+        \ 'TestMediaRecoveryCancelsOnlyDurableUndispatchedAbsence', 'TestMediaRecoveryKeepsQueryFailuresAndIncompleteRepliesUnknown', 'TestMediaSignedHistoricalOutcomeSettlesAfterExpiryAndCannotBeChanged',\
+        \ 'TestMediaSignedOutcomeCannotRebindAnOperationOrRealm', 'TestMediaStoreCorruptIntentParsingCannotEscapeItsOriginalTransaction', 'TestMediaStoreMalformedSignerCannotSettleOrRetireHistory',\
+        \ 'TestMediaStoreMissingRecordsNeverInventAClaimOrSettlement', 'TestMediaStorePublicAdmissionRejectsPersistedDigestCorruption', 'TestMediaStoreShortLeaseExpiresWithoutReissuingAnOperation',\
+        \ 'TestMediaStoreSignedOutcomeMustFitTheBoundIncludingItsSignature', 'TestMediaStoreUnavailableAndLostWriterFailBeforeAdmission', 'TestMediaStoreWriteAbortRollsBackTheClaimAndRetainsOnlyOnePermit',\
+        \ 'TestMediaValuesRejectAmbiguousOrMalformedWireValues', 'TestMediaValuesRetainNullNumbersNestedArraysAndUnicode'}\nrequired_ordered =\
+        \ {'TestMediaOrderedJSONBindsInputPositionsAndPreservesLegacyWire', 'TestMediaOrderedJSONFitsLargestPermittedPublicScalarArray', 'TestMediaOrderedJSONPreservesDuplicateFirstPositionAndRejectsMalformedInput',\
+        \ 'TestMediaOrderedJSONRejectsMalformedOrdinalSets', 'TestMediaOrderedJSONRetainsCanonicalKeysAndOriginalPositions'}\nrequired_capacity\
+        \ = {'TestMediaCapacityLargestLegalIntentSurvivesAdmissionAndReopen', 'TestMediaCapacityMigrationRefusesTamperedHistoryAndRetirement',\
+        \ 'TestMediaCapacityMigrationRollbackRetainsExactV19Store', 'TestMediaCapacityV19UpgradeRetainsRowsAndUncertainBarrier', 'TestMediaCapacityV20SQLRetainsExactBoundsAndImmutability'}\n\
+        required_recovery = {'TestMediaRecoveryDriverAbsenceAndInvalidEvidenceRetainTheBarrier', 'TestMediaRecoveryDriverCancellationDrainsTheQueryAndClosesItsClient',\
+        \ 'TestMediaRecoveryDriverEmptyAndClosedStoresDoNotDialAndTicksCancel', 'TestMediaRecoveryDriverSignedRefusalSettlesWithoutDispatch',\
+        \ 'TestMediaRecoveryDriverSkipsLiveClaimsAndRetiresOnlyExpiredUndispatchedAbsence', 'TestMediaRecoveryDriverStartsOnlyInTheNativeAuthoritativeLifecycle',\
+        \ 'TestMediaRecoveryDriverSuccessorSettlesOriginalWithoutRedispatch', 'TestMediaRecoveryMetadataSelectsExpiryWithoutChangingTheClaim',\
+        \ 'TestMediaRecoveryMetadataSelectsHistoricalWriterBeforeOriginalExpiry', 'TestMediaRecoveryMetadataSkipsPayloadDecodingUntilRecoveryIsEligible'}\n\
+        required_delete = {'TestMediaDeleteIntentCannotCarryPatchOrUnknownKind', 'TestMediaDeleteSignedCountsCannotRebindPatchOrRefusal', 'TestMediaPublicDeleteAdmission',\
+        \ 'TestMediaPublicDeleteTLSKeepsCountsSignedIdentityAndUnknownReservation', 'TestMediaLegacyPatchCanonicalBytesRetainDefaultKind'}\nrequired_create\
+        \ = {'TestMediaCreateManifestBindsContentWithoutExpandingControlRows', 'TestMediaCreateSignedResultRequiresOriginalDigestFenceAndShape',\
+        \ 'TestMediaCreationContentRequiresPinnedTLSAndServiceIdentity', 'TestMediaPublicCreateAdmission'}\nassert (required_legacy | required_media\
+        \ | required_ordered | required_capacity | required_recovery | required_delete | required_create) == expected\nstarted, finished, packages\
+        \ = {}, {}, {}\nfor line in Path(\"artifacts/native-media-create/go-tests.jsonl\").read_text().splitlines():\n    try: row = json.loads(line)\n\
+        \    except json.JSONDecodeError: continue\n    name, action = row.get(\"Test\"), row.get(\"Action\")\n    if name in expected and action\
+        \ == \"run\": started[name] = started.get(name, 0) + 1\n    if name in expected and action in {\"pass\", \"fail\", \"skip\"}:\n      \
+        \  assert name not in finished\n        finished[name] = action\n    if not name and action in {\"pass\", \"fail\", \"skip\"}: packages[row[\"\
+        Package\"]] = action\ncode = int(os.environ[\"MEDIA_GO_STATUS\"])\nexpected_packages = {\"github.com/leizd/DeepSeek-Infra/go/internal/\"\
+        \ + p for p in [\"media\", \"store\", \"api\", \"worker\"]}\nif code == 0 and (set(started) != expected or set(finished) != expected or\
+        \ set(started.values()) != {1} or set(finished.values()) != {\"pass\"} or set(packages) != expected_packages or set(packages.values())\
+        \ != {\"pass\"}): code = 2\ntree = subprocess.check_output([\"git\", \"rev-parse\", \"HEAD^{tree}\"], text=True).strip()\nresult = dict(status=\"\
+        PASS\" if code == 0 else \"FAIL\", sourceCommit=os.environ[\"GITHUB_SHA\"], sourceTree=tree, runId=os.environ[\"GITHUB_RUN_ID\"], attempt=os.environ[\"\
+        GITHUB_RUN_ATTEMPT\"], event=os.environ[\"GITHUB_EVENT_NAME\"], ref=os.environ[\"GITHUB_REF\"], expectedTests=sorted(expected), finishedTests=finished,\
+        \ packages=packages, exitCode=code, raceEnabled=True, scope=\"media Go development regressions only; not the original full Go/Android-Go\
+        \ suites or coverage gates\", fullGoSuiteQualified=False, original95PercentCoverageQualified=False, actualNativeLauncherQualified=False,\
+        \ authorityRecoveryQualified=False, fullMigrationQualified=False, readiness=\"NOT_READY\")\nPath(\"artifacts/native-media-create/result.json\"\
+        ).write_text(json.dumps(result, indent=2) + \"\\n\")\nraise SystemExit(code)\nPY\n"
+      if: always() && steps.build.outcome == 'success'
     - name: Compare actual native JSON creation with original ASGI and retained source
       run: 'set -o pipefail
 

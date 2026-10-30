@@ -91,6 +91,7 @@ func RegisterPublicView(mux *http.ServeMux, control *store.Control, view PublicV
 	mux.HandleFunc("/api/workspace/backup-targets", func(writer http.ResponseWriter, request *http.Request) {
 		backupTargetsList(writer, request, control)
 	})
+	mux.HandleFunc("/api/media", func(w http.ResponseWriter, r *http.Request) { mediaCreate(w, r, control, view) })
 	mux.HandleFunc("/api/media/", func(w http.ResponseWriter, r *http.Request) { mediaPatch(w, r, control, view) })
 	mux.HandleFunc("/api/", notImplemented)
 }

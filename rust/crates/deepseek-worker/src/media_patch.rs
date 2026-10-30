@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
-fn validate_claim(
+pub(super) fn validate_claim(
     c: &MediaPatchClaim,
     operation: &str,
     fence: &ActionFence,
@@ -27,10 +27,13 @@ fn validate_claim(
 ) -> Result<(), Status> {
     let intent = c.intent.as_ref().ok_or_else(invalid)?;
     let is_delete = intent.kind == MediaMutationKind::Delete as i32;
-    if intent.kind != MediaMutationKind::Unspecified as i32 && !is_delete {
+    let is_create = intent.kind == MediaMutationKind::Create as i32;
+    if intent.kind != MediaMutationKind::Unspecified as i32 && !is_delete && !is_create {
         return Err(invalid());
     }
-    let prefix = if is_delete {
+    let prefix = if is_create {
+        "media-create-"
+    } else if is_delete {
         "media-delete-"
     } else {
         "media-patch-"
@@ -55,6 +58,21 @@ fn validate_claim(
         || c.state != "CLAIMED"
         || intent.encoded_len() > 4 * 1024 * 1024
     {
+        return Err(invalid());
+    }
+    if is_create {
+        return if intent.patch.is_none()
+            && intent.create.as_ref().is_some_and(|create| {
+                create.payload_sha256.len() == 32
+                    && create.payload_bytes > 0
+                    && create.payload_bytes <= crate::media_create::MAX_PAYLOAD_BYTES as u64
+            }) {
+            Ok(())
+        } else {
+            Err(invalid())
+        };
+    }
+    if intent.create.is_some() {
         return Err(invalid());
     }
     if is_delete {
@@ -95,7 +113,7 @@ impl WorkerRpcService {
         )?)));
         Ok(self)
     }
-    fn media_caller<T>(&self, request: &Request<T>) -> Result<(), Status> {
+    pub(super) fn media_caller<T>(&self, request: &Request<T>) -> Result<(), Status> {
         let identity = self
             .authenticator
             .authenticate(request.metadata())
@@ -192,6 +210,13 @@ impl WorkerRpcService {
 
 #[tonic::async_trait]
 impl MediaMutationWorker for WorkerRpcService {
+    async fn execute_create(
+        &self,
+        request: Request<ExecuteMediaPatchRequest>,
+    ) -> Result<Response<MediaPatchOutcome>, Status> {
+        self.execute_media_mutation(request, MediaMutationKind::Create)
+            .await
+    }
     async fn execute_patch(
         &self,
         request: Request<ExecuteMediaPatchRequest>,
@@ -284,6 +309,7 @@ mod tests {
                 title: Some(crate::media_values::from_json(&serde_json::json!("title")).unwrap()),
                 ..Default::default()
             }),
+            create: None,
         };
         let fence = ActionFence {
             action_id: intent.operation_id.clone(),

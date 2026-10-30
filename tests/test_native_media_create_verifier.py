@@ -15,6 +15,12 @@ creation = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(creation)
 
 
+@pytest.mark.parametrize("left,right", [(False, 0), (True, 1), (1, 1.0), ({"zero":False}, {"zero":0}), ([True], [1])])
+def test_parity_comparison_retains_exact_json_scalar_types(left, right) -> None:
+    assert creation.same_json(left, right) is False
+    assert creation.same_json(left, left) is True
+
+
 def test_actual_original_asgi_create_writes_the_original_source_and_metadata(tmp_path: Path) -> None:
     value = creation.original_observation(tmp_path / "original-profile", tmp_path / "oracle.log")
     record = value["body"]["media"]
@@ -25,6 +31,16 @@ def test_actual_original_asgi_create_writes_the_original_source_and_metadata(tmp
     assert value["requestId"] == creation.REQUEST_ID
     normalized = creation.canonical_media(record)
     assert normalized["path"] == "objects/{mediaId}/source.html" and "mediaId" not in normalized
+
+
+@pytest.mark.parametrize("kind,mime", [("image", "image/png"), ("pdf", "application/pdf"), ("audio", "audio/mpeg"),
+    ("video", "video/mp4"), ("webpage", "text/html"), ("screenshot", "image/png")])
+def test_actual_original_asgi_retains_all_six_registration_kinds_without_source(tmp_path: Path, kind: str, mime: str) -> None:
+    value = creation.original_observation(tmp_path / "original-profile", tmp_path / "oracle.log",
+        dict(type=kind, mimeType=mime, metadata=dict(zero=0, disabled=False)), "")
+    record = value["body"]["media"]
+    assert record["type"] == kind and record["path"] == "" and value["sourceSha256"] is None
+    assert type(record["metadata"]["zero"]) is int and type(record["metadata"]["disabled"]) is bool
 
 
 @pytest.mark.parametrize("media_id,path", [

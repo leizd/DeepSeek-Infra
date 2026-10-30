@@ -29,6 +29,7 @@ mod authority_request;
 mod authority_store;
 mod control_signer;
 mod media_control;
+mod media_create;
 mod media_delete;
 mod media_journal;
 mod media_library;

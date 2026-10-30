@@ -37,6 +37,7 @@ pub(crate) struct MediaJournal {
     connection: Connection,
     root: PathBuf,
     public_key: String,
+    creation_staging: PathBuf,
 }
 pub(super) struct Prepared {
     pub digest: Vec<u8>,
@@ -162,7 +163,26 @@ impl MediaJournal {
             connection,
             root,
             public_key: key.into(),
+            creation_staging: state.join("rust-worker/media-create"),
         })
+    }
+    pub(super) fn creation_staging(&self) -> &Path {
+        &self.creation_staging
+    }
+    pub(super) fn created_record(
+        &self,
+        claim: &MediaPatchClaim,
+    ) -> Result<deepseek_protocol::generated::deepseek::media::v1::MediaObject, Status> {
+        self.verify_original_claim(claim)?;
+        let operation = &claim.intent.as_ref().ok_or_else(invalid)?.operation_id;
+        let row = self.retained(operation)?.ok_or_else(invalid)?;
+        let outcome = self.terminal(&row)?.ok_or_else(invalid)?;
+        if row.state != "APPLIED" || outcome.created.is_none() {
+            return Err(invalid());
+        }
+        crate::media_create::retained_preparation(&self.creation_staging, claim, &outcome)?
+            .record
+            .ok_or_else(invalid)
     }
     pub(super) fn active(&self) -> Result<Option<MediaPatchClaim>, Status> {
         let bytes = self
@@ -263,7 +283,13 @@ impl MediaJournal {
             });
         }
         let before = read_library(&self.root)?;
-        let (planned, after) = media_library::plan(&self.root, claim, &before)?;
+        let (planned, after) = if intent.kind
+            == deepseek_protocol::generated::deepseek::media::v1::MediaMutationKind::Create as i32
+        {
+            crate::media_create::plan(&self.root, &self.creation_staging, claim, &before)?
+        } else {
+            media_library::plan(&self.root, claim, &before)?
+        };
         let digest = sha(&planned.encode_to_vec());
         self.connection
             .execute(
@@ -300,12 +326,17 @@ impl MediaJournal {
         let intent = claim.intent.as_ref().ok_or_else(invalid)?;
         match MediaMutationKind::try_from(intent.kind).map_err(|_| invalid())? {
             MediaMutationKind::Unspecified
-                if intent.patch.is_some() && row.planned.deleted_count == 0 =>
+                if intent.create.is_none()
+                    && row.planned.created.is_none()
+                    && intent.patch.is_some()
+                    && row.planned.deleted_count == 0 =>
             {
                 Ok(())
             }
             MediaMutationKind::Delete
-                if intent.patch.is_none()
+                if intent.create.is_none()
+                    && row.planned.created.is_none()
+                    && intent.patch.is_none()
                     && row.planned.media.is_none()
                     && row.planned.deleted_count <= 1 =>
             {
@@ -313,6 +344,20 @@ impl MediaJournal {
                     crate::media_delete::finish(&self.root, &intent.media_id)?;
                 }
                 Ok(())
+            }
+            MediaMutationKind::Create
+                if intent.patch.is_none()
+                    && intent.create.is_some()
+                    && row.planned.media.is_none()
+                    && row.planned.deleted_count == 0
+                    && row.planned.created.is_some() =>
+            {
+                crate::media_create::finish(
+                    &self.root,
+                    &self.creation_staging,
+                    &claim,
+                    &row.planned,
+                )
             }
             _ => Err(invalid()),
         }
@@ -483,6 +528,7 @@ impl MediaJournal {
         unknown.state = MediaPatchEffectState::Unknown as i32;
         unknown.media = None;
         unknown.deleted_count = 0;
+        unknown.created = None;
         unknown.http_status = 503;
         unknown.error_code = "EFFECT_UNKNOWN".into();
         unknown.error_message = "Media publication requires reconciliation".into();

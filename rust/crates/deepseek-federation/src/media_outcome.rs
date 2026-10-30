@@ -18,13 +18,24 @@ impl ControlSigningKey {
         // signature; allowing an absent PATCH record would erase that boundary.
         let deletion = outcome.operation_id.starts_with("media-delete-");
         let patch = outcome.operation_id.starts_with("media-patch-");
-        let applied_shape = if deletion {
-            outcome.media.is_none() && outcome.deleted_count <= 1
+        let creation = outcome.operation_id.starts_with("media-create-");
+        let applied_shape = if creation {
+            outcome.media.is_none()
+                && outcome.deleted_count == 0
+                && outcome.created.as_ref().is_some_and(|created| {
+                    created.original_fence == outcome.original_fence
+                        && created.record_sha256.len() == 32
+                        && created.preparation_sha256.len() == 32
+                        && created.record_bytes > 0
+                        && created.record_bytes <= 128 * 1024 * 1024
+                })
+        } else if deletion {
+            outcome.created.is_none() && outcome.media.is_none() && outcome.deleted_count <= 1
         } else {
-            outcome.media.is_some() && outcome.deleted_count == 0
+            outcome.created.is_none() && outcome.media.is_some() && outcome.deleted_count == 0
         };
         if outcome.schema_version != 1
-            || !(patch || deletion)
+            || !(patch || deletion || creation)
             || outcome.operation_id != fence.action_id
             || outcome.operation_id.len() > 128
             || outcome.request_sha256.len() != 32
@@ -43,6 +54,7 @@ impl ControlSigningKey {
             || (refused
                 && (!(400..500).contains(&outcome.http_status)
                     || outcome.media.is_some()
+                    || outcome.created.is_some()
                     || outcome.deleted_count != 0
                     || !outcome.after_sha256.is_empty()
                     || outcome.error_code.is_empty()))

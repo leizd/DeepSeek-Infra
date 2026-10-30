@@ -24,7 +24,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 import verify_native_media_patch as patch
 
 ROOT = Path(__file__).resolve().parents[1]
-LIMIT = 2 * 1024**2
+LIMIT = 32 * 1024**2
 REQUEST_ID = "native-media-create-baseline"
 PAYLOAD: dict[str, Any] = dict(type="webpage", mimeType="text/html", title="Retained creation", projectId="project-oracle",
     url="https://example.invalid/not-fetched", html="<h1>Retained snapshot</h1>", text="Original webpage text",
@@ -39,7 +39,7 @@ client=TestClient(create_app(),base_url="http://127.0.0.1")
 try:
     response=client.post("/api/media",content=sys.stdin.buffer.read(),headers={"Authorization":"Bearer "+settings.auth.token,"Content-Type":"application/json","X-DeepSeek-Request-ID":"native-media-create-baseline"})
     body=response.json()
-    source=library.media_dir()/body["media"]["path"] if response.status_code==200 else None
+    source=library.media_dir()/body["media"]["path"] if response.status_code==200 and body["media"]["path"] else None
     print(json.dumps(dict(status=response.status_code,body=body,requestId=response.headers.get("X-DeepSeek-Request-ID"),sourceSha256=hashlib.sha256(source.read_bytes()).hexdigest() if source else None)))
 finally:
     client.close()
@@ -55,13 +55,24 @@ def require(value: Any, code: str) -> None:
         raise ProbeFailure(code)
 
 
-def canonical_media(record: dict[str, Any]) -> dict[str, Any]:
+def same_json(left: Any, right: Any) -> bool:
+    """JSON scalar types are part of parity; False must never equal zero."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(same_json(left[key], right[key]) for key in left)
+    if isinstance(left, list):
+        return len(left) == len(right) and all(same_json(a, b) for a, b in zip(left, right))
+    return bool(left == right)
+
+
+def canonical_media(record: dict[str, Any], source_suffix: str = ".html") -> dict[str, Any]:
     result = json.loads(json.dumps(record))
     media_id = result.pop("mediaId", None)
     require(isinstance(media_id, str) and re.fullmatch(r"media_[0-9a-f]{16}", media_id), "MEDIA_CREATE_ID_INVALID")
     path = result.get("path")
-    require(path == f"objects/{media_id}/source.html", "MEDIA_CREATE_SOURCE_PATH_INVALID")
-    result["path"] = "objects/{mediaId}/source.html"
+    require(path == (f"objects/{media_id}/source{source_suffix}" if source_suffix else ""), "MEDIA_CREATE_SOURCE_PATH_INVALID")
+    result["path"] = "objects/{mediaId}/source" + source_suffix if source_suffix else ""
     for field in ("createdAt", "updatedAt"):
         value = result.pop(field, None)
         require(isinstance(value, str) and bool(value), "MEDIA_CREATE_TIME_MISSING")
@@ -78,21 +89,22 @@ def require_creation_time(record: dict[str, Any], before: datetime, after: datet
         "MEDIA_CREATE_TIME_NOT_CAUSAL")
 
 
-def original_observation(profile: Path, diagnostic: Path) -> dict[str, Any]:
+def original_observation(profile: Path, diagnostic: Path, payload: dict[str, Any] | None = None, source_suffix: str = ".html") -> dict[str, Any]:
     env = {key: value for key, value in os.environ.items() if key in {
         "PATH", "HOME", "LANG", "LC_ALL", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "TMPDIR",
         "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP"}}
     env.update(DEEPSEEK_INFRA_ROOT=str(profile), LOCAL_RAG_ENABLED="false", PYTHONDONTWRITEBYTECODE="1", PYTHONUTF8="1")
     result = subprocess.run([sys.executable, "-B", "-c", ORACLE], cwd=ROOT, env=env,
-        input=json.dumps(PAYLOAD, ensure_ascii=False).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=False)
+        input=json.dumps(PAYLOAD if payload is None else payload, ensure_ascii=False).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=False)
     require(len(result.stderr) <= LIMIT, "MEDIA_CREATE_ORACLE_DIAGNOSTIC_BOUND")
     diagnostic.write_bytes(result.stderr)
     require(result.returncode == 0 and len(result.stdout) <= LIMIT, "MEDIA_CREATE_ORIGINAL_ORACLE_FAILED")
     value = json.loads(result.stdout)
     require(value["status"] == 200 and value["body"]["ok"] is True and value["requestId"] == REQUEST_ID,
         "MEDIA_CREATE_ORIGINAL_ROUTE_DID_NOT_SUCCEED")
-    canonical_media(value["body"]["media"])
-    require(value["sourceSha256"] == hashlib.sha256(PAYLOAD["html"].encode()).hexdigest(), "MEDIA_CREATE_ORIGINAL_SOURCE_DIFFERS")
+    canonical_media(value["body"]["media"], source_suffix)
+    if payload is None:
+        require(value["sourceSha256"] == hashlib.sha256(PAYLOAD["html"].encode()).hexdigest(), "MEDIA_CREATE_ORIGINAL_SOURCE_DIFFERS")
     return value
 
 
@@ -110,7 +122,7 @@ def exchange(origin: str, path: str, method: str, token: str | None, payload: di
         headers["Authorization"] = "Bearer " + token
     data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode()
     try:
-        response = build_opener(NoRedirect()).open(Request(origin + path, method=method, headers=headers, data=data), timeout=10)
+        response = build_opener(NoRedirect()).open(Request(origin + path, method=method, headers=headers, data=data), timeout=30)
     except HTTPError as error:
         response = error
     with response:
@@ -192,21 +204,60 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             require(unauthenticated == 401 and body.get("ok") is True, "MEDIA_CREATE_AUTH_OR_SUCCESS_DIFFERS")
             require(response_headers.get("x-deepseek-request-id") == REQUEST_ID, "MEDIA_CREATE_CORRELATION_ID_DIFFERS")
             record = body["media"]
-            require(canonical_media(record) == canonical_media(oracle["body"]["media"]), "MEDIA_CREATE_RECORD_DIFFERS")
+            require(same_json(canonical_media(record), canonical_media(oracle["body"]["media"])), "MEDIA_CREATE_RECORD_DIFFERS")
             require_creation_time(record, before, after)
             source = profile / ".media" / record["path"]
             require(source.resolve(strict=True).is_relative_to((profile / ".media").resolve()), "MEDIA_CREATE_SOURCE_ESCAPED_PROFILE")
             require(hashlib.sha256(source.read_bytes()).hexdigest() == oracle["sourceSha256"], "MEDIA_CREATE_SOURCE_BYTES_DIFFER")
             read_status, retained, _ = exchange(origin, "/api/media/" + record["mediaId"], "GET", token)
-            require(read_status == 200 and retained == body, "MEDIA_CREATE_PUBLIC_READ_DIFFERS")
+            require(read_status == 200 and same_json(retained, body), "MEDIA_CREATE_PUBLIC_READ_DIFFERS")
+            observations = [(record["mediaId"], body, oracle["sourceSha256"])]
+            cases: list[tuple[str, dict[str, Any], str]] = [
+                (kind, dict(type=kind, mimeType=mime, title="Native " + kind, metadata=dict(zero=0, disabled=False)), "")
+                for kind, mime in [("image", "image/png"), ("pdf", "application/pdf"), ("audio", "audio/mpeg"),
+                    ("video", "video/mp4"), ("webpage", "text/html"), ("screenshot", "image/png")]
+            ]
+            cases.extend([
+                ("audio-text", dict(type="audio", mimeType="audio/mpeg", text="  imported transcript\n"), ".txt"),
+                ("video-transcript", dict(type="video", mimeType="video/mp4", transcript="retained transcript"), ".txt"),
+                ("image-text", dict(type="image", mimeType="image/png", text="retained image text"), ".txt"),
+                ("large-record", dict(type="pdf", mimeType="application/pdf", metadata={f"field{i:03}": "z" * 9000 for i in range(500)}), ""),
+            ])
+            report["jsonRegistrationCases"] = []
+            for label, payload, suffix in cases:
+                reference = original_observation(mirror / label, args.out / ("oracle-" + label + ".log"), payload, suffix)
+                started = datetime.now(timezone.utc)
+                actual_status, actual_body, actual_headers = exchange(origin, "/api/media", "POST", token, payload)
+                completed = datetime.now(timezone.utc)
+                require(actual_status == reference["status"] == 200 and actual_body.get("ok") is True, "MEDIA_CREATE_CASE_FAILED:" + label)
+                require(actual_headers.get("x-deepseek-request-id") == REQUEST_ID, "MEDIA_CREATE_CASE_CORRELATION_DIFFERS:" + label)
+                expected_record = canonical_media(reference["body"]["media"], suffix)
+                actual_record = canonical_media(actual_body["media"], suffix)
+                require(same_json(actual_record, expected_record), "MEDIA_CREATE_CASE_RECORD_DIFFERS:" + label)
+                require_creation_time(actual_body["media"], started, completed)
+                actual_file = profile / ".media" / actual_body["media"]["path"] if suffix else None
+                actual_sha = hashlib.sha256(actual_file.read_bytes()).hexdigest() if actual_file else None
+                require(actual_sha == reference["sourceSha256"], "MEDIA_CREATE_CASE_SOURCE_DIFFERS:" + label)
+                encoded = json.dumps(actual_record, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()
+                report["jsonRegistrationCases"].append(dict(case=label, status=actual_status, mediaId=actual_body["media"]["mediaId"],
+                    canonicalRecordSha256=hashlib.sha256(encoded).hexdigest(), publicRecordBytes=len(encoded), sourceSha256=actual_sha))
+                observations.append((actual_body["media"]["mediaId"], actual_body, actual_sha))
+            require(report["jsonRegistrationCases"][-1]["publicRecordBytes"] > 4 * 1024**2, "MEDIA_CREATE_LARGE_RECORD_NOT_EXERCISED")
             library = profile / ".media/library.json"
             published = library.read_bytes()
             stop()
             token = launch("retained-launch")
             read_status, retained, _ = exchange(origin, "/api/media/" + record["mediaId"], "GET", token)
-            require(read_status == 200 and retained == body and library.read_bytes() == published, "MEDIA_CREATE_RESTART_DIFFERS")
+            require(read_status == 200 and same_json(retained, body) and library.read_bytes() == published, "MEDIA_CREATE_RESTART_DIFFERS")
             require(hashlib.sha256(source.read_bytes()).hexdigest() == oracle["sourceSha256"], "MEDIA_CREATE_RESTART_SOURCE_DIFFERS")
-            report.update(status="PASS", actualNativeJSONWebpageCreateQualified=True, publicReadAndRestartRetained=True)
+            for media_id, original_body, original_sha in observations:
+                read_status, retained_body, _ = exchange(origin, "/api/media/" + media_id, "GET", token)
+                require(read_status == 200 and same_json(retained_body, original_body), "MEDIA_CREATE_CASE_RESTART_DIFFERS")
+                if original_sha is not None:
+                    retained_file = profile / ".media" / original_body["media"]["path"]
+                    require(hashlib.sha256(retained_file.read_bytes()).hexdigest() == original_sha, "MEDIA_CREATE_CASE_RESTART_SOURCE_DIFFERS")
+            report.update(status="PASS", actualNativeJSONWebpageCreateQualified=True, publicReadAndRestartRetained=True,
+                allSixJSONMediaKindsQualified=True, largeJSONRecordBeyondControlRowQualified=True, actualJSONRegistrationCases=len(observations))
         finally:
             stop()
 

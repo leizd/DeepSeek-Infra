@@ -409,6 +409,7 @@ fn fixture() -> (
                 crate::media_values::from_json(&json!({"added":[null,false,2]})).unwrap(),
             ),
         }),
+        create: None,
     };
     let claim = MediaPatchClaim {
         schema_version: 1,
@@ -856,4 +857,169 @@ fn media_generation_failure_cannot_settle_an_unconfirmed_original_publication() 
         deepseek_policy::mutation_gate::read_generation(root.path()),
         2
     );
+}
+
+fn create_claim(
+    journal: &MediaJournal,
+    mut claim: MediaPatchClaim,
+    payload: Value,
+) -> MediaPatchClaim {
+    use deepseek_protocol::generated::deepseek::media::v1::{
+        MediaCreateManifest, MediaCreatePayload,
+    };
+    let object = crate::media_values::from_json(&payload).unwrap();
+    let Some(deepseek_protocol::generated::deepseek::media::v1::media_value::Kind::ObjectValue(
+        object,
+    )) = object.kind
+    else {
+        panic!()
+    };
+    let bytes = MediaCreatePayload {
+        registration: Some(object),
+    }
+    .encode_to_vec();
+    let intent = claim.intent.as_mut().unwrap();
+    intent.kind = 2;
+    intent.patch = None;
+    intent.media_id = "media_0123456789abcdef".into();
+    intent.operation_id = "media-create-0123456789abcdef0123456789abcdef".into();
+    intent.create = Some(MediaCreateManifest {
+        payload_sha256: sha(&bytes),
+        payload_bytes: bytes.len() as u64,
+    });
+    claim.fence.as_mut().unwrap().action_id = intent.operation_id.clone();
+    claim.request_sha256 = sha(&intent.encode_to_vec());
+    let path = crate::media_create::operation_dir(journal.creation_staging(), &intent.operation_id)
+        .unwrap()
+        .join("payload.pb");
+    crate::media_create::persist_bound(&path, &bytes).unwrap();
+    claim
+}
+
+#[test]
+fn media_create_original_result_and_source_survive_close_and_replay_without_republishing() {
+    let (root, key, mut journal, claim) = fixture();
+    let claim = create_claim(
+        &journal,
+        claim,
+        json!({"type":"webpage","html":"<h1>retained</h1>"}),
+    );
+    let operation = claim.intent.as_ref().unwrap().operation_id.clone();
+    let before = read_library(root.path()).unwrap();
+    let prepared = journal.prepare(&claim).unwrap();
+    assert_eq!(read_library(root.path()).unwrap(), before);
+    assert!(
+        !root
+            .path()
+            .join(".media/objects/media_0123456789abcdef")
+            .exists()
+    );
+    let outcome = journal.publish(&claim, &prepared.digest, &key).unwrap();
+    assert!(outcome.created.is_some());
+    assert!(outcome.media.is_none());
+    assert_eq!(outcome.signature.len(), 64);
+    let published = read_library(root.path()).unwrap();
+    let source = root
+        .path()
+        .join(".media/objects/media_0123456789abcdef/source.html");
+    assert_eq!(fs::read(&source).unwrap(), b"<h1>retained</h1>");
+    let record = journal.created_record(&claim).unwrap();
+    drop(journal);
+    let mut journal = MediaJournal::open(
+        root.path(),
+        &root.path().join("state"),
+        &key.public_key(),
+        "fleet-a",
+        "test",
+    )
+    .unwrap();
+    assert_eq!(
+        journal
+            .query(&operation, claim.fence.as_ref().unwrap(), true, &key)
+            .unwrap(),
+        Some(outcome.clone())
+    );
+    assert_eq!(journal.created_record(&claim).unwrap(), record);
+    assert_eq!(read_library(root.path()).unwrap(), published);
+    // Terminal replay is evidence only: never overwrite a later id reuse.
+    fs::write(&source, b"later retained identity").unwrap();
+    assert_eq!(
+        journal
+            .query(&operation, claim.fence.as_ref().unwrap(), true, &key)
+            .unwrap(),
+        Some(outcome)
+    );
+    assert_eq!(fs::read(source).unwrap(), b"later retained identity");
+}
+
+#[test]
+fn media_create_lost_receipt_finishes_only_original_bound_source_after_library_publication() {
+    let (root, key, mut journal, claim) = fixture();
+    let claim = create_claim(
+        &journal,
+        claim,
+        json!({"type":"webpage","html":"original source"}),
+    );
+    let operation = claim.intent.as_ref().unwrap().operation_id.clone();
+    journal.prepare(&claim).unwrap();
+    let row = journal.retained(&operation).unwrap().unwrap();
+    journal
+        .connection
+        .execute(
+            "UPDATE media_operations SET state='APPLYING' WHERE operation_id=?1",
+            [&operation],
+        )
+        .unwrap();
+    media_library::publish(root.path(), row.after.as_ref().unwrap(), None).unwrap();
+    let after = read_library(root.path()).unwrap();
+    let source = root
+        .path()
+        .join(".media/objects/media_0123456789abcdef/source.html");
+    fs::create_dir_all(&source).unwrap();
+    assert!(
+        journal
+            .query(&operation, claim.fence.as_ref().unwrap(), true, &key)
+            .is_err()
+    );
+    assert_eq!(
+        journal.retained(&operation).unwrap().unwrap().state,
+        "APPLYING"
+    );
+    assert_eq!(read_library(root.path()).unwrap(), after);
+    fs::remove_dir(&source).unwrap();
+    let result = journal
+        .query(&operation, claim.fence.as_ref().unwrap(), true, &key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.original_fence, claim.fence);
+    assert_eq!(result.request_sha256, claim.request_sha256);
+    assert_eq!(fs::read(&source).unwrap(), b"original source");
+    assert_eq!(read_library(root.path()).unwrap(), after);
+    assert_eq!(
+        journal
+            .query(&operation, claim.fence.as_ref().unwrap(), true, &key)
+            .unwrap(),
+        Some(result)
+    );
+}
+
+#[test]
+fn media_create_large_original_json_record_keeps_control_receipt_compact() {
+    let (root, key, mut journal, claim) = fixture();
+    let metadata: serde_json::Map<String, Value> = (0..500)
+        .map(|i| (format!("field{i:03}"), json!("z".repeat(9000))))
+        .collect();
+    let payload = json!({"type":"pdf","metadata":metadata});
+    assert!(serde_json::to_vec(&payload).unwrap().len() < 16_000_000);
+    let claim = create_claim(&journal, claim, payload);
+    assert!(claim.encoded_len() < 1024);
+    let prepared = journal.prepare(&claim).unwrap();
+    let outcome = journal.publish(&claim, &prepared.digest, &key).unwrap();
+    assert!(outcome.encoded_len() < 1024);
+    assert!(outcome.created.as_ref().unwrap().record_bytes > 4 * 1024 * 1024);
+    assert_eq!(
+        journal.created_record(&claim).unwrap().encoded_len() as u64,
+        outcome.created.unwrap().record_bytes
+    );
+    assert!(read_library(root.path()).unwrap().len() > 4 * 1024 * 1024);
 }

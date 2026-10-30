@@ -32,6 +32,7 @@ type Client struct {
 	origin         actionv1.NativeOriginCustodyClient
 	nodes          agentNodeClient
 	media          mediav1.MediaMutationWorkerClient
+	mediaCreation  mediav1.MediaCreationPayloadsClient
 }
 
 func New(rpc actionv1.WorkerClient) *Client {

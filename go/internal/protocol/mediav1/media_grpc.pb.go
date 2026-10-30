@@ -199,6 +199,7 @@ var MediaMutationControl_ServiceDesc = grpc.ServiceDesc{
 const (
 	MediaMutationWorker_ExecutePatch_FullMethodName  = "/deepseek.media.v1.MediaMutationWorker/ExecutePatch"
 	MediaMutationWorker_ExecuteDelete_FullMethodName = "/deepseek.media.v1.MediaMutationWorker/ExecuteDelete"
+	MediaMutationWorker_ExecuteCreate_FullMethodName = "/deepseek.media.v1.MediaMutationWorker/ExecuteCreate"
 	MediaMutationWorker_QueryPatch_FullMethodName    = "/deepseek.media.v1.MediaMutationWorker/QueryPatch"
 )
 
@@ -208,6 +209,7 @@ const (
 type MediaMutationWorkerClient interface {
 	ExecutePatch(ctx context.Context, in *ExecuteMediaPatchRequest, opts ...grpc.CallOption) (*MediaPatchOutcome, error)
 	ExecuteDelete(ctx context.Context, in *ExecuteMediaDeleteRequest, opts ...grpc.CallOption) (*MediaPatchOutcome, error)
+	ExecuteCreate(ctx context.Context, in *ExecuteMediaPatchRequest, opts ...grpc.CallOption) (*MediaPatchOutcome, error)
 	QueryPatch(ctx context.Context, in *QueryMediaPatchRequest, opts ...grpc.CallOption) (*QueryMediaPatchResponse, error)
 }
 
@@ -239,6 +241,16 @@ func (c *mediaMutationWorkerClient) ExecuteDelete(ctx context.Context, in *Execu
 	return out, nil
 }
 
+func (c *mediaMutationWorkerClient) ExecuteCreate(ctx context.Context, in *ExecuteMediaPatchRequest, opts ...grpc.CallOption) (*MediaPatchOutcome, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MediaPatchOutcome)
+	err := c.cc.Invoke(ctx, MediaMutationWorker_ExecuteCreate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *mediaMutationWorkerClient) QueryPatch(ctx context.Context, in *QueryMediaPatchRequest, opts ...grpc.CallOption) (*QueryMediaPatchResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(QueryMediaPatchResponse)
@@ -255,6 +267,7 @@ func (c *mediaMutationWorkerClient) QueryPatch(ctx context.Context, in *QueryMed
 type MediaMutationWorkerServer interface {
 	ExecutePatch(context.Context, *ExecuteMediaPatchRequest) (*MediaPatchOutcome, error)
 	ExecuteDelete(context.Context, *ExecuteMediaDeleteRequest) (*MediaPatchOutcome, error)
+	ExecuteCreate(context.Context, *ExecuteMediaPatchRequest) (*MediaPatchOutcome, error)
 	QueryPatch(context.Context, *QueryMediaPatchRequest) (*QueryMediaPatchResponse, error)
 	mustEmbedUnimplementedMediaMutationWorkerServer()
 }
@@ -271,6 +284,9 @@ func (UnimplementedMediaMutationWorkerServer) ExecutePatch(context.Context, *Exe
 }
 func (UnimplementedMediaMutationWorkerServer) ExecuteDelete(context.Context, *ExecuteMediaDeleteRequest) (*MediaPatchOutcome, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExecuteDelete not implemented")
+}
+func (UnimplementedMediaMutationWorkerServer) ExecuteCreate(context.Context, *ExecuteMediaPatchRequest) (*MediaPatchOutcome, error) {
+	return nil, status.Error(codes.Unimplemented, "method ExecuteCreate not implemented")
 }
 func (UnimplementedMediaMutationWorkerServer) QueryPatch(context.Context, *QueryMediaPatchRequest) (*QueryMediaPatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method QueryPatch not implemented")
@@ -332,6 +348,24 @@ func _MediaMutationWorker_ExecuteDelete_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MediaMutationWorker_ExecuteCreate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExecuteMediaPatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MediaMutationWorkerServer).ExecuteCreate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MediaMutationWorker_ExecuteCreate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MediaMutationWorkerServer).ExecuteCreate(ctx, req.(*ExecuteMediaPatchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _MediaMutationWorker_QueryPatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(QueryMediaPatchRequest)
 	if err := dec(in); err != nil {
@@ -366,10 +400,154 @@ var MediaMutationWorker_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _MediaMutationWorker_ExecuteDelete_Handler,
 		},
 		{
+			MethodName: "ExecuteCreate",
+			Handler:    _MediaMutationWorker_ExecuteCreate_Handler,
+		},
+		{
 			MethodName: "QueryPatch",
 			Handler:    _MediaMutationWorker_QueryPatch_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
+	Metadata: "media/v1/media.proto",
+}
+
+const (
+	MediaCreationPayloads_Stage_FullMethodName      = "/deepseek.media.v1.MediaCreationPayloads/Stage"
+	MediaCreationPayloads_ReadResult_FullMethodName = "/deepseek.media.v1.MediaCreationPayloads/ReadResult"
+)
+
+// MediaCreationPayloadsClient is the client API for MediaCreationPayloads service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Separate media-content transport. Existing PATCH/DELETE/control RPC limits,
+// canonical encodings, signing domain and SQLite row bounds stay unchanged.
+type MediaCreationPayloadsClient interface {
+	Stage(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[MediaCreateStageRequest, MediaCreateStageResponse], error)
+	ReadResult(ctx context.Context, in *ReadMediaCreateResultRequest, opts ...grpc.CallOption) (*ReadMediaCreateResultResponse, error)
+}
+
+type mediaCreationPayloadsClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewMediaCreationPayloadsClient(cc grpc.ClientConnInterface) MediaCreationPayloadsClient {
+	return &mediaCreationPayloadsClient{cc}
+}
+
+func (c *mediaCreationPayloadsClient) Stage(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[MediaCreateStageRequest, MediaCreateStageResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &MediaCreationPayloads_ServiceDesc.Streams[0], MediaCreationPayloads_Stage_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[MediaCreateStageRequest, MediaCreateStageResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type MediaCreationPayloads_StageClient = grpc.ClientStreamingClient[MediaCreateStageRequest, MediaCreateStageResponse]
+
+func (c *mediaCreationPayloadsClient) ReadResult(ctx context.Context, in *ReadMediaCreateResultRequest, opts ...grpc.CallOption) (*ReadMediaCreateResultResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadMediaCreateResultResponse)
+	err := c.cc.Invoke(ctx, MediaCreationPayloads_ReadResult_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// MediaCreationPayloadsServer is the server API for MediaCreationPayloads service.
+// All implementations must embed UnimplementedMediaCreationPayloadsServer
+// for forward compatibility.
+//
+// Separate media-content transport. Existing PATCH/DELETE/control RPC limits,
+// canonical encodings, signing domain and SQLite row bounds stay unchanged.
+type MediaCreationPayloadsServer interface {
+	Stage(grpc.ClientStreamingServer[MediaCreateStageRequest, MediaCreateStageResponse]) error
+	ReadResult(context.Context, *ReadMediaCreateResultRequest) (*ReadMediaCreateResultResponse, error)
+	mustEmbedUnimplementedMediaCreationPayloadsServer()
+}
+
+// UnimplementedMediaCreationPayloadsServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedMediaCreationPayloadsServer struct{}
+
+func (UnimplementedMediaCreationPayloadsServer) Stage(grpc.ClientStreamingServer[MediaCreateStageRequest, MediaCreateStageResponse]) error {
+	return status.Error(codes.Unimplemented, "method Stage not implemented")
+}
+func (UnimplementedMediaCreationPayloadsServer) ReadResult(context.Context, *ReadMediaCreateResultRequest) (*ReadMediaCreateResultResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadResult not implemented")
+}
+func (UnimplementedMediaCreationPayloadsServer) mustEmbedUnimplementedMediaCreationPayloadsServer() {}
+func (UnimplementedMediaCreationPayloadsServer) testEmbeddedByValue()                               {}
+
+// UnsafeMediaCreationPayloadsServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to MediaCreationPayloadsServer will
+// result in compilation errors.
+type UnsafeMediaCreationPayloadsServer interface {
+	mustEmbedUnimplementedMediaCreationPayloadsServer()
+}
+
+func RegisterMediaCreationPayloadsServer(s grpc.ServiceRegistrar, srv MediaCreationPayloadsServer) {
+	// If the following call panics, it indicates UnimplementedMediaCreationPayloadsServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&MediaCreationPayloads_ServiceDesc, srv)
+}
+
+func _MediaCreationPayloads_Stage_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(MediaCreationPayloadsServer).Stage(&grpc.GenericServerStream[MediaCreateStageRequest, MediaCreateStageResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type MediaCreationPayloads_StageServer = grpc.ClientStreamingServer[MediaCreateStageRequest, MediaCreateStageResponse]
+
+func _MediaCreationPayloads_ReadResult_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadMediaCreateResultRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MediaCreationPayloadsServer).ReadResult(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MediaCreationPayloads_ReadResult_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MediaCreationPayloadsServer).ReadResult(ctx, req.(*ReadMediaCreateResultRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// MediaCreationPayloads_ServiceDesc is the grpc.ServiceDesc for MediaCreationPayloads service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var MediaCreationPayloads_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "deepseek.media.v1.MediaCreationPayloads",
+	HandlerType: (*MediaCreationPayloadsServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ReadResult",
+			Handler:    _MediaCreationPayloads_ReadResult_Handler,
+		},
+	},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Stage",
+			Handler:       _MediaCreationPayloads_Stage_Handler,
+			ClientStreams: true,
+		},
+	},
 	Metadata: "media/v1/media.proto",
 }

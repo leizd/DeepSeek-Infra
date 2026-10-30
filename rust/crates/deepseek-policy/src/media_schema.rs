@@ -174,7 +174,7 @@ pub fn media_status(value: Option<&Value>) -> Result<String, AppError> {
 
 /// `mimetypes.guess_type` for the suffixes the library actually stores.
 /// An unregistered suffix is the oracle's `application/octet-stream` default.
-fn guess_mime_type(filename: &str) -> String {
+pub fn guess_mime_type(filename: &str) -> String {
     match posix_suffix(filename).as_str() {
         ".png" => "image/png",
         ".jpg" | ".jpeg" => "image/jpeg",
@@ -211,7 +211,7 @@ fn utc_now_z() -> String {
 }
 
 /// `schema.normalize_metadata`. Lists are capped at 200, not the source-ref cap.
-fn normalize_media_metadata(value: Option<&Value>) -> Value {
+pub fn normalize_media_metadata(value: Option<&Value>) -> Value {
     let Some(Value::Object(fields)) = value else {
         return json!({});
     };

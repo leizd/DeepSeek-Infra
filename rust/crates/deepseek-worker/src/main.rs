@@ -6,6 +6,7 @@ use deepseek_protocol::generated::deepseek::action::v1::control_signer_server::C
 use deepseek_protocol::generated::deepseek::action::v1::native_origin_custody_server::NativeOriginCustodyServer;
 use deepseek_protocol::generated::deepseek::action::v1::worker_server::WorkerServer;
 use deepseek_protocol::generated::deepseek::agent::v1::agent_node_worker_server::AgentNodeWorkerServer;
+use deepseek_protocol::generated::deepseek::media::v1::media_creation_payloads_server::MediaCreationPayloadsServer;
 use deepseek_protocol::generated::deepseek::media::v1::media_mutation_worker_server::MediaMutationWorkerServer;
 use deepseek_worker::{Worker, WorkerRpcService, authority_config_from_env, load_worker_transport};
 use tonic::transport::Server;
@@ -190,6 +191,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             MediaMutationWorkerServer::new(service.clone())
                 .max_decoding_message_size(4 * 1024 * 1024)
                 .max_encoding_message_size(4 * 1024 * 1024),
+        )
+        .add_service(
+            MediaCreationPayloadsServer::new(service.clone())
+                .max_decoding_message_size(256 * 1024 + 1024)
+                .max_encoding_message_size(128 * 1024 * 1024 + 1024),
         )
         .add_service(WorkerServer::new(service))
         .serve_with_shutdown(address, async {
