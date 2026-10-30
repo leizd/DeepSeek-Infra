@@ -156,6 +156,12 @@ jobs:
       run: |
         set -o pipefail
         python scripts/verify_native_media_recovery.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --strace "$RUNNER_TEMP/native-media-recovery-strace" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --recovery-sync-fault file --out artifacts/native-media-recovery/file-sync-failure 2>&1 | tee artifacts/native-media-recovery/file-sync-failure.log
+    - name: Finish only the original CREATE after a real publication SIGKILL and retain its source
+      if: always() && steps.build.outcome == 'success'
+      timeout-minutes: 15
+      run: |
+        set -o pipefail
+        python scripts/verify_native_media_recovery.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --strace "$RUNNER_TEMP/native-media-recovery-strace" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --mutation create --out artifacts/native-media-recovery/create-crash 2>&1 | tee artifacts/native-media-recovery/create-crash.log
     - name: Refuse recovery settlement while the publication directory cannot synchronize
       if: always() && steps.build.outcome == 'success'
       timeout-minutes: 15

@@ -52,6 +52,49 @@ def test_delete_recovery_journal_requires_its_explicit_original_mutation(tmp_pat
     assert path.read_bytes() == before
 
 
+def test_create_recovery_journal_reads_only_the_original_create(tmp_path: Path) -> None:
+    path = journal(tmp_path)
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE media_operations SET operation_id=?", ("media-create-" + "a" * 32,))
+    before = path.read_bytes()
+    row = probe.journal_snapshot(tmp_path, mutation="create")
+    assert row is not None and row["operationId"] == "media-create-" + "a" * 32
+    for other in ("patch", "delete"):
+        with pytest.raises(probe.patch.ProbeFailure, match="MEDIA_OPERATION_ID_INVALID"):
+            probe.journal_snapshot(tmp_path, mutation=other)
+    assert path.read_bytes() == before
+
+
+def creation_record(media_id: str = "media_0123456789abcdef") -> dict[str, object]:
+    return dict(mediaId=media_id, path=f"objects/{media_id}/source.html", createdAt="2026-10-30T01:00:00Z",
+                updatedAt="2026-10-30T01:00:00Z", type="webpage", title="Original", metadata={"zero": 0})
+
+
+def test_create_recovery_identifies_one_new_record_and_keeps_every_prior_record() -> None:
+    baseline = [{"mediaId": "retained-old", "metadata": {"enabled": False}}]
+    actual = creation_record()
+    expected = creation_record("media_abcdef0123456789")
+    raw = json.dumps({"media": [*baseline, actual]}).encode()
+    assert probe.retained_created_record(raw, baseline, expected) == actual
+
+
+@pytest.mark.parametrize("damage", ["no-new-record", "two-new-records", "changed-retained-record", "changed-scalar-type"])
+def test_create_recovery_rejects_a_missing_ambiguous_or_changed_publication(damage: str) -> None:
+    baseline = [{"mediaId": "retained-old", "metadata": {"enabled": False}}]
+    actual, expected = creation_record(), creation_record("media_abcdef0123456789")
+    rows: list[dict[str, object]] = [json.loads(json.dumps(baseline[0])), actual]
+    if damage == "no-new-record":
+        rows.pop()
+    elif damage == "two-new-records":
+        rows.append(creation_record("media_1111111111111111"))
+    elif damage == "changed-retained-record":
+        rows[0]["metadata"] = {"enabled": 0}
+    else:
+        actual["metadata"] = {"zero": False}
+    with pytest.raises(probe.patch.ProbeFailure, match="MEDIA_CREATE_RECOVERY_"):
+        probe.retained_created_record(json.dumps({"media": rows}).encode(), baseline, expected)
+
+
 def test_recovery_observer_rejects_foreign_journals_and_multiple_originals(tmp_path: Path) -> None:
     path = journal(tmp_path, 123)
     with pytest.raises(probe.patch.ProbeFailure, match="JOURNAL_ID_DIFFERS"):
