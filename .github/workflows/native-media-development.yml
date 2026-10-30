@@ -65,7 +65,7 @@ jobs:
           required_capacity = {'TestMediaCapacityLargestLegalIntentSurvivesAdmissionAndReopen', 'TestMediaCapacityMigrationRefusesTamperedHistoryAndRetirement', 'TestMediaCapacityMigrationRollbackRetainsExactV19Store', 'TestMediaCapacityV19UpgradeRetainsRowsAndUncertainBarrier', 'TestMediaCapacityV20SQLRetainsExactBoundsAndImmutability'}
           required_recovery = {'TestMediaRecoveryDriverAbsenceAndInvalidEvidenceRetainTheBarrier', 'TestMediaRecoveryDriverCancellationDrainsTheQueryAndClosesItsClient', 'TestMediaRecoveryDriverEmptyAndClosedStoresDoNotDialAndTicksCancel', 'TestMediaRecoveryDriverSignedRefusalSettlesWithoutDispatch', 'TestMediaRecoveryDriverSkipsLiveClaimsAndRetiresOnlyExpiredUndispatchedAbsence', 'TestMediaRecoveryDriverStartsOnlyInTheNativeAuthoritativeLifecycle', 'TestMediaRecoveryDriverSuccessorSettlesOriginalWithoutRedispatch', 'TestMediaRecoveryMetadataSelectsExpiryWithoutChangingTheClaim', 'TestMediaRecoveryMetadataSelectsHistoricalWriterBeforeOriginalExpiry', 'TestMediaRecoveryMetadataSkipsPayloadDecodingUntilRecoveryIsEligible'}
           required_delete = {'TestMediaDeleteIntentCannotCarryPatchOrUnknownKind', 'TestMediaDeleteSignedCountsCannotRebindPatchOrRefusal', 'TestMediaPublicDeleteAdmission', 'TestMediaPublicDeleteTLSKeepsCountsSignedIdentityAndUnknownReservation', 'TestMediaLegacyPatchCanonicalBytesRetainDefaultKind'}
-          required_create = {'TestMediaCreateManifestBindsContentWithoutExpandingControlRows', 'TestMediaCreateSignedResultRequiresOriginalDigestFenceAndShape', 'TestMediaCreationContentRequiresPinnedTLSAndServiceIdentity', 'TestMediaPublicCreateAdmission'}
+          required_create = {'TestMediaCreateManifestBindsContentWithoutExpandingControlRows', 'TestMediaCreateSignedResultRequiresOriginalDigestFenceAndShape', 'TestMediaCreationContentRequiresPinnedTLSAndServiceIdentity', 'TestMediaPublicCreateAdmission', 'TestMediaCreateForwarding'}
           assert (required_legacy | required_media | required_ordered | required_capacity | required_recovery | required_delete | required_create) == expected
           started, finished, packages = {}, {}, {}
           for line in Path("artifacts/native-media-development/go-tests.jsonl").read_text().splitlines():
@@ -83,6 +83,9 @@ jobs:
           tree = subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip()
           result = dict(status="PASS" if code == 0 else "FAIL", sourceCommit=os.environ["GITHUB_SHA"], sourceTree=tree, runId=os.environ["GITHUB_RUN_ID"], attempt=os.environ["GITHUB_RUN_ATTEMPT"], event=os.environ["GITHUB_EVENT_NAME"], ref=os.environ["GITHUB_REF"], expectedTests=sorted(expected), finishedTests=finished, packages=packages, exitCode=code, raceEnabled=True, scope="media Go development regressions only; not the original full Go/Android-Go suites or coverage gates", fullGoSuiteQualified=False, original95PercentCoverageQualified=False, actualNativeLauncherQualified=False, authorityRecoveryQualified=False, fullMigrationQualified=False, readiness="NOT_READY")
           Path("artifacts/native-media-development/result.json").write_text(json.dumps(result, indent=2) + "\n")
+          print(json.dumps(dict(kind="native-media-go-gate-v1",status=result["status"],sourceCommit=os.environ["GITHUB_SHA"],runId=os.environ["GITHUB_RUN_ID"],
+              goProcessExitCode=int(os.environ["MEDIA_GO_STATUS"]),verifierExitCode=code,expectedTests=len(expected),startedTests=len(started),finishedTests=len(finished),
+              missingTests=sorted(expected-set(started)),nonPass={n:v for n,v in finished.items() if v!="pass"},packages=packages)),flush=True)
           raise SystemExit(code)
           PY
       - name: Preserve media development reports only

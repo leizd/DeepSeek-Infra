@@ -14,6 +14,8 @@ import (
 // This fixture tests forwarding and credential-conflict refusal only. It is not
 // a TLS server or Rust worker and cannot qualify transport/custody/file effects.
 type mediaForwardingFixture struct {
+	create                       *mediav1.ExecuteMediaPatchRequest
+	createOptions                int
 	execute                      *mediav1.ExecuteMediaPatchRequest
 	delete                       *mediav1.ExecuteMediaDeleteRequest
 	query                        *mediav1.QueryMediaPatchRequest
@@ -21,6 +23,13 @@ type mediaForwardingFixture struct {
 	deleteOptions                int
 	calls                        int
 	failure                      error
+}
+
+func (f *mediaForwardingFixture) ExecuteCreate(_ context.Context, r *mediav1.ExecuteMediaPatchRequest, opts ...grpc.CallOption) (*mediav1.MediaPatchOutcome, error) {
+	f.calls++
+	f.create = proto.Clone(r).(*mediav1.ExecuteMediaPatchRequest)
+	f.createOptions = len(opts)
+	return &mediav1.MediaPatchOutcome{OperationId: r.OperationId}, f.failure
 }
 
 func (f *mediaForwardingFixture) ExecuteDelete(_ context.Context, r *mediav1.ExecuteMediaDeleteRequest, opts ...grpc.CallOption) (*mediav1.MediaPatchOutcome, error) {
@@ -91,5 +100,28 @@ func TestMediaForwardingRejectsConflictingCredentialsBeforeCallingThePeer(t *tes
 	}
 	if f.calls != 0 {
 		t.Fatal("unauthorized request reached peer")
+	}
+}
+
+func TestMediaCreateForwarding(t *testing.T) {
+	fixture := &mediaForwardingFixture{}
+	client := &Client{tlsSecured: true, bearerAttached: true, media: fixture}
+	fence := &commonv1.ActionFence{ActionId: "original-create", ExecutionEpoch: 7}
+	request := &mediav1.ExecuteMediaPatchRequest{SchemaVersion: 1, OperationId: fence.ActionId, Fence: fence}
+	result, err := client.ExecuteMediaCreate(context.Background(), request)
+	if err != nil || result == nil || result.OperationId != fence.ActionId || !proto.Equal(fixture.create, request) || fixture.createOptions != 1 || fixture.execute != nil || fixture.delete != nil {
+		t.Fatal("CREATE forwarding lost its original identity or invoked another mutation", err)
+	}
+	fixture.failure = errors.New("isolated creation transport failure")
+	if _, err = client.ExecuteMediaCreate(context.Background(), request); !errors.Is(err, fixture.failure) {
+		t.Fatal("creation failure hidden", err)
+	}
+	for _, ctx := range []context.Context{nil, metadata.NewOutgoingContext(context.Background(), metadata.Pairs("authorization", "Bearer untrusted"))} {
+		if _, err = client.ExecuteMediaCreate(ctx, request); err == nil {
+			t.Fatal("untrusted creation context accepted")
+		}
+	}
+	if fixture.calls != 2 {
+		t.Fatal("creation retried or unauthorized request reached peer", fixture.calls)
 	}
 }
