@@ -13462,3 +13462,46 @@ Actual cloud RED run40473482975 (df26c547): publication retained after SIGKILL/r
 ### 2026-10-27 active media intent polling regression
 
 Controlled diagnostics94bcb486/run40495720177: largest legal request timed out within the original10-second observer boundary; Rust retained APPLIED, Go DISPATCHED. Go dominated CPU while the recovery loop repeatedly parsed the live2.5MB intent. Metadata-first expiry/writer filtering is implemented but awaits the unchanged cloud maximum-array workload and all recovery/race/original-floor gates. Never retry that uncertain operation; every verification uses a fresh owned profile. Full migration, remaining media methods and retained pytest MCP execution stay unfinished/NOT_READY.
+
+
+## Current development: native multipart ingestion, still NOT_READY
+
+Source 046f4d231bd966cf55d23c51889493c191bc31e6 has an actual cloud RED
+(run41047503993): the independent original ASGI app accepted one975-byte
+five-file request and stored all five, while the actual native launcher returned
+503 MEDIA_UPLOAD_NOT_READY. Its94 Go/race families passed. Eleven JSON cases
+were observed first, but that failed multipart run did not reach the final
+whole-launcher restart and must not be reported as complete JSON/restart proof.
+
+This child implements process=false uploads through the existing typed
+MediaCreatePayload upload variant, bounded256KiB chunks and original signed
+CREATE admission. Go parses the original220000000-byte body,20 files,24 parts,
+4096-byte fields and eight individual4096-byte header lines, preserving repeated
+fields, last query values, basename cleanup and ordered partial effects. It
+never writes source files or payloads into the control database. Rust alone
+prepares and publishes source bytes, validates the original50MiB/file limit,
+retains suffixes and public records, and verifies original staged content during
+recovery. Each file receives its own original operation/fence; uncertain writes
+are never retried as new operations. Edge framing preserves a missing incoming
+Content-Length so Go authenticates before refusing it; legal multipart forwarding
+has a bounded660-second transport budget.
+
+Three additional Go families and five Rust tests complement all original
+regressions; the existing proxy test adds actual loopback framing and an
+11-second upload. The unchanged actual multipart observer requires five kinds,
+raw byte hashes, partial failure,50MiB and220000000-byte20-file capacity plus
+whole-launcher restart. Local native compilation is prohibited; exact-source
+cloud execution remains pending. Strict field codec equivalence across every
+legacy Python encoding, all malformed multipart inputs, processing/OCR/index,
+upload-specific controlled crashes, browser interaction, Windows/Android and
+whole-product zero-Python CI/Evidence remain unqualified. Do not turn these
+pending requirements into an approved scope reduction or permanent fallback.
+
+Ancestral source cd651621b70609bfd689d8290d753a3958784c4f separately passed its
+original37-job workflow_dispatch CI41014345462: Go15899/16732=95.0215156586%,
+Android Go16219/17070=95.0146455770%, Rust91483/111394=82.1256082015%, and
+Python branch83522/87385=95.5793328374%;50 Evidence files were hash-verified.
+These are original95/95/80/95 floors for that source, not this child or a PR
+merge candidate. The earlier immutable-message fix9834e0bc separately passed
+94 Go/race families and all27 retained-message subcases in41045355443.
+No PR outside the daily09:00 schedule, no main merge, release or real data.

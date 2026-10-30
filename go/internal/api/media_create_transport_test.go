@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -32,6 +33,7 @@ type mediaCreateWirePeer struct {
 	staged                        []byte
 	record                        *mediav1.MediaObject
 	stageCalls, readCalls, chunks int
+	uploadOperations              []string
 }
 
 func (p *mediaCreateWirePeer) Stage(stream grpc.ClientStreamingServer[mediav1.MediaCreateStageRequest, mediav1.MediaCreateStageResponse]) error {
@@ -85,7 +87,11 @@ func (p *mediaCreateWirePeer) ExecuteCreate(_ context.Context, r *mediav1.Execut
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, "original claim required")
 	}
-	if p.stageCalls != 1 || len(p.staged) == 0 || claim.Intent.Create == nil {
+	stagesValid := p.stageCalls == 1
+	if strings.HasPrefix(p.mode, "upload") {
+		stagesValid = p.stageCalls == p.executed
+	}
+	if !stagesValid || len(p.staged) == 0 || claim.Intent.Create == nil {
 		return nil, status.Error(codes.FailedPrecondition, "original content was not staged")
 	}
 	preparation := bytes.Repeat([]byte{7}, 32)
@@ -100,13 +106,25 @@ func (p *mediaCreateWirePeer) ExecuteCreate(_ context.Context, r *mediav1.Execut
 	if err = proto.Unmarshal(p.staged, &payload); err != nil {
 		return nil, err
 	}
-	registration, err := mediamodel.ToJSON(&mediav1.MediaValue{Kind: &mediav1.MediaValue_ObjectValue{ObjectValue: payload.Registration}})
-	if err != nil {
-		return nil, err
-	}
-	fields, ok := registration.(map[string]any)
-	if !ok {
-		return nil, status.Error(codes.InvalidArgument, "typed registration required")
+	var fields map[string]any
+	if strings.HasPrefix(p.mode, "upload") {
+		if payload.Upload == nil || payload.Registration != nil {
+			return nil, status.Error(codes.InvalidArgument, "one typed upload required")
+		}
+		p.uploadOperations = append(p.uploadOperations, r.OperationId)
+		hash := sha256.Sum256(payload.Upload.Data)
+		fields = map[string]any{"title": payload.Upload.Title, "filename": payload.Upload.Filename,
+			"mimeType": payload.Upload.ContentType, "projectId": payload.Upload.ProjectId, "dataSha256": hex.EncodeToString(hash[:])}
+	} else {
+		registration, parseErr := mediamodel.ToJSON(&mediav1.MediaValue{Kind: &mediav1.MediaValue_ObjectValue{ObjectValue: payload.Registration}})
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		var ok bool
+		fields, ok = registration.(map[string]any)
+		if !ok {
+			return nil, status.Error(codes.InvalidArgument, "typed registration required")
+		}
 	}
 	fields["mediaId"] = claim.Intent.MediaId
 	value, err := mediamodel.FromJSON(fields)
@@ -126,7 +144,7 @@ func (p *mediaCreateWirePeer) ExecuteCreate(_ context.Context, r *mediav1.Execut
 		State: mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED, HttpStatus: 200, BeforeSha256: bytes.Repeat([]byte{1}, 32), AfterSha256: bytes.Repeat([]byte{2}, 32),
 		FleetId: claim.FleetId, Environment: claim.Environment, WriterFencingToken: claim.WriterFencingToken,
 		Created: &mediav1.MediaCreatedResult{RecordSha256: hash[:], RecordBytes: uint64(len(encoded)), PreparationSha256: preparation, OriginalFence: proto.Clone(r.Fence).(*commonv1.ActionFence)}}
-	if p.mode == "refused" {
+	if p.mode == "refused" || p.mode == "upload-refused" {
 		outcome.State = mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_REFUSED
 		outcome.Created = nil
 		outcome.AfterSha256 = nil
@@ -153,7 +171,7 @@ func (p *mediaCreateWirePeer) ReadResult(_ context.Context, r *mediav1.ReadMedia
 	if p.retained == nil || r.SchemaVersion != 1 || r.OperationId != p.retained.OperationId || !proto.Equal(r.OriginalFence, p.retained.OriginalFence) {
 		return nil, status.Error(codes.FailedPrecondition, "read rebound original operation")
 	}
-	if p.mode == "result-unavailable" {
+	if p.mode == "result-unavailable" || p.mode == "upload-result-unavailable" {
 		return nil, status.Error(codes.Unavailable, "isolated result read failure")
 	}
 	if p.mode == "result-missing" {

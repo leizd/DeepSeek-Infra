@@ -197,7 +197,7 @@ jobs:
         required_delete = {'TestMediaDeleteIntentCannotCarryPatchOrUnknownKind', 'TestMediaDeleteSignedCountsCannotRebindPatchOrRefusal', 'TestMediaPublicDeleteAdmission',\
         \ 'TestMediaPublicDeleteTLSKeepsCountsSignedIdentityAndUnknownReservation', 'TestMediaLegacyPatchCanonicalBytesRetainDefaultKind'}\nrequired_create\
         \ = {'TestMediaCreateManifestBindsContentWithoutExpandingControlRows', 'TestMediaCreateSignedResultRequiresOriginalDigestFenceAndShape',\
-        \ 'TestMediaCreationContentRequiresPinnedTLSAndServiceIdentity', 'TestMediaPublicCreateAdmission', 'TestMediaCreateForwarding', 'TestMediaCreateClientBoundedMessages', 'TestMediaPublicCreateTLS', 'TestMediaPublicCreateInputBounds'}\nassert\
+        \ 'TestMediaCreationContentRequiresPinnedTLSAndServiceIdentity', 'TestMediaPublicCreateAdmission', 'TestMediaCreateForwarding', 'TestMediaCreateClientBoundedMessages', 'TestMediaPublicCreateTLS', 'TestMediaPublicCreateInputBounds', 'TestMediaMultipartParser', 'TestMediaMultipartFormCodecs', 'TestMediaMultipartPublicTLS'}\nassert\
         \ (required_legacy | required_media | required_ordered | required_capacity | required_recovery | required_delete | required_create) ==\
         \ expected\nstarted, finished, packages = {}, {}, {}\nfor line in Path(\"artifacts/native-media-create/go-tests.jsonl\").read_text().splitlines():\n\
         \    try: row = json.loads(line)\n    except json.JSONDecodeError: continue\n    name, action = row.get(\"Test\"), row.get(\"Action\"\

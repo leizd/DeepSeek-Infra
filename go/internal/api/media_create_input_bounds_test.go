@@ -25,9 +25,8 @@ func (r *mediaBoundedBody) Read(buffer []byte) (int, error) {
 	return n, nil
 }
 
-// These are Go handler admission tests, not original multipart parity or Rust
-// file-effect acceptance. Multipart upload remains unfinished; its current
-// refusal must never fall back to a Python writer or create an operation.
+// These input admission checks complement actual multipart and Rust file-effect
+// workloads. Malformed multipart must not create an operation or reach a worker.
 func TestMediaPublicCreateInputBounds(t *testing.T) {
 	for _, name := range []string{"method", "multipart-pre-admission", "declared-body-limit", "streamed-body-limit", "closed-control-store"} {
 		t.Run(name, func(t *testing.T) {
@@ -42,7 +41,7 @@ func TestMediaPublicCreateInputBounds(t *testing.T) {
 				status, code = 501, "GO_API_NOT_IMPLEMENTED"
 			case "multipart-pre-admission":
 				request.Header.Set("Content-Type", "multipart/form-data; boundary=unqualified-fixture")
-				status, code = 503, "MEDIA_UPLOAD_NOT_READY"
+				status, code = 400, "invalid_payload"
 			case "declared-body-limit":
 				request.ContentLength = 16_000_001
 			case "streamed-body-limit":

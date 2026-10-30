@@ -120,6 +120,22 @@ pub(crate) async fn proxy_api_to_go(
         Ok(target) => target,
         Err(response) => return response,
     };
+    let media_upload = method == Method::POST
+        && uri.path() == "/api/media"
+        && headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("multipart/form-data"));
+    // Preserve an absent original length through forwarding. Otherwise a Bytes
+    // body invents Content-Length and makes a request rejected by the original
+    // authenticated upload handler appear valid. Go still authenticates first.
+    let body = if media_upload && !headers.contains_key(header::CONTENT_LENGTH) {
+        reqwest::Body::wrap_stream(futures_util::stream::once(async move {
+            Ok::<_, std::io::Error>(body)
+        }))
+    } else {
+        reqwest::Body::from(body)
+    };
     // Explicit operator-configured private origins may use HTTP. Never consult
     // ambient proxies or follow a redirect into a different API/management path.
     let client = match reqwest::Client::builder()
@@ -133,7 +149,7 @@ pub(crate) async fn proxy_api_to_go(
         .no_zstd()
         .no_deflate()
         .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(if media_upload { 660 } else { 10 }))
         .build()
     {
         Ok(client) => client,

@@ -5,16 +5,16 @@ use deepseek_policy::{
     core_utils::{python_truthy, text_or_empty, utc_now_iso},
     media_schema::{
         declared_media_type, guess_mime_type, normalize_media_metadata, normalize_media_path,
-        normalize_media_record, normalize_mime,
+        normalize_media_record, normalize_mime, posix_suffix,
     },
     workspace_schema::{normalize_source_ref, validate_workspace_id},
 };
 use deepseek_protocol::generated::deepseek::media::v1::{
     MediaCreatePayload, MediaCreatePreparation, MediaCreateStageRequest, MediaCreateStageResponse,
     MediaCreatedResult, MediaMutationKind, MediaObject, MediaPatchClaim, MediaPatchEffectState,
-    MediaPatchOutcome, ReadMediaCreateResultRequest, ReadMediaCreateResultResponse,
-    media_create_stage_request::Part, media_creation_payloads_server::MediaCreationPayloads,
-    media_value::Kind,
+    MediaPatchOutcome, MediaUploadPayload, ReadMediaCreateResultRequest,
+    ReadMediaCreateResultResponse, media_create_stage_request::Part,
+    media_creation_payloads_server::MediaCreationPayloads, media_value::Kind,
 };
 use prost::Message as _;
 use serde_json::{Value, json};
@@ -276,12 +276,75 @@ fn registration(
     })
 }
 
-pub(super) fn plan(
-    root: &Path,
-    staging: &Path,
-    claim: &MediaPatchClaim,
-    before: &[u8],
-) -> Result<(MediaPatchOutcome, Option<Vec<u8>>), Status> {
+fn upload_suffix(filename: &str) -> String {
+    let suffix = posix_suffix(filename);
+    if suffix.is_empty() {
+        ".bin".into()
+    } else {
+        // Python lower() also lowercases non-ASCII filename extensions.
+        suffix.to_lowercase()
+    }
+}
+
+fn upload(
+    payload: &MediaUploadPayload,
+    media_id: &str,
+    now: i64,
+) -> Result<MediaCreatePreparation, AppError> {
+    if payload.data.is_empty() {
+        return Err(AppError::invalid_payload("Media source is empty"));
+    }
+    if payload.data.len() > 50 * 1024 * 1024 {
+        return Err(AppError {
+            message: "Media upload exceeds the 50 MB limit".into(),
+            code: deepseek_policy::app_error::codes::UPLOAD_TOO_LARGE,
+            status: 413,
+        });
+    }
+    let filename = &payload.filename;
+    if filename.is_empty() || filename.chars().count() > 180 || filename.contains(['/', '\\', '\0'])
+    {
+        return Err(AppError::invalid_payload("Invalid media upload filename"));
+    }
+    let media_id = validate_workspace_id(media_id, "media id")?;
+    let mut mime = normalize_mime(Some(&json!(payload.content_type)));
+    if mime.is_empty() {
+        mime = guess_mime_type(filename);
+    }
+    if !["application/pdf", "text/html", "application/xhtml+xml"].contains(&mime.as_str())
+        && !["image/", "audio/", "video/"]
+            .iter()
+            .any(|prefix| mime.starts_with(prefix))
+    {
+        return Err(AppError::invalid_payload("Unsupported media MIME type"));
+    }
+    let media_type = declared_media_type(None, &mime, filename)?;
+    let source_suffix = upload_suffix(filename);
+    let title = if payload.title.is_empty() {
+        filename
+    } else {
+        &payload.title
+    };
+    let time = utc_now_iso(now);
+    let record = normalize_media_record(
+        &json!({"mediaId":media_id,"projectId":payload.project_id,
+        "type":media_type,"title":title,"mimeType":mime,"path":format!("objects/{media_id}/source{source_suffix}"),
+        "source":{"kind":"upload","refId":filename},"status":"pending","createdAt":time,"updatedAt":time,"metadata":{}}),
+    )?;
+    let record = normalize_media_record(&record)?;
+    let record = media_values::from_json_legacy(&record)
+        .map_err(|_| AppError::invalid_payload("Invalid media upload record"))?;
+    let Some(Kind::ObjectValue(record)) = record.kind else {
+        return Err(AppError::invalid_payload("Invalid media upload record"));
+    };
+    Ok(MediaCreatePreparation {
+        record: Some(record),
+        source_suffix,
+        source_bytes: payload.data.clone(),
+    })
+}
+
+fn retained_payload(staging: &Path, claim: &MediaPatchClaim) -> Result<MediaCreatePayload, Status> {
     let intent = claim.intent.as_ref().ok_or_else(invalid)?;
     let manifest = intent.create.as_ref().ok_or_else(invalid)?;
     let directory = operation_dir(staging, &intent.operation_id)?;
@@ -295,15 +358,17 @@ pub(super) fn plan(
     if payload.encode_to_vec() != bytes {
         return Err(invalid());
     }
-    let object = payload.registration.as_ref().ok_or_else(invalid)?;
-    let payload = media_values::to_json(
-        &deepseek_protocol::generated::deepseek::media::v1::MediaValue {
-            kind: Some(Kind::ObjectValue(object.clone())),
-        },
-    )?;
-    if payload.get("process").is_some_and(python_truthy) {
-        return Err(Status::unimplemented("MEDIA_PROCESSING_NOT_READY"));
-    }
+    Ok(payload)
+}
+
+pub(super) fn plan(
+    root: &Path,
+    staging: &Path,
+    claim: &MediaPatchClaim,
+    before: &[u8],
+) -> Result<(MediaPatchOutcome, Option<Vec<u8>>), Status> {
+    let intent = claim.intent.as_ref().ok_or_else(invalid)?;
+    let payload = retained_payload(staging, claim)?;
     let mut result = MediaPatchOutcome {
         schema_version: 1,
         operation_id: intent.operation_id.clone(),
@@ -318,7 +383,22 @@ pub(super) fn plan(
         ..Default::default()
     };
     let now = crate::service::unix_now_seconds().map_err(|_| invalid())?;
-    let prepared = match registration(&payload, &intent.media_id, now) {
+    let prepared = match (&payload.registration, &payload.upload) {
+        (Some(object), None) => {
+            let value = media_values::to_json(
+                &deepseek_protocol::generated::deepseek::media::v1::MediaValue {
+                    kind: Some(Kind::ObjectValue(object.clone())),
+                },
+            )?;
+            if value.get("process").is_some_and(python_truthy) {
+                return Err(Status::unimplemented("MEDIA_PROCESSING_NOT_READY"));
+            }
+            registration(&value, &intent.media_id, now)
+        }
+        (None, Some(value)) => upload(value, &intent.media_id, now),
+        _ => return Err(invalid()),
+    };
+    let prepared = match prepared {
         Ok(value) => value,
         Err(error) => {
             return Ok((
@@ -346,6 +426,7 @@ pub(super) fn plan(
     let record = prepared.record.as_ref().ok_or_else(invalid)?;
     let record_bytes = record.encode_to_vec();
     let prepared_bytes = prepared.encode_to_vec();
+    let directory = operation_dir(staging, &intent.operation_id)?;
     persist_bound(&directory.join("prepared.pb"), &prepared_bytes)?;
     result.created = Some(MediaCreatedResult {
         record_sha256: media_library::sha(&record_bytes),
@@ -397,10 +478,18 @@ pub(super) fn retained_preparation(
     if json["mediaId"].as_str() != Some(&intent.media_id) {
         return Err(invalid());
     }
-    if !["", ".html", ".txt"].contains(&prepared.source_suffix.as_str())
-        || prepared.source_bytes.len() > 50 * 1024 * 1024
-    {
+    if prepared.source_bytes.len() > 50 * 1024 * 1024 {
         return Err(invalid());
+    }
+    let payload = retained_payload(staging, claim)?;
+    match (payload.registration, payload.upload) {
+        (Some(_), None) if ["", ".html", ".txt"].contains(&prepared.source_suffix.as_str()) => {}
+        (None, Some(value))
+            if !value.data.is_empty()
+                && !value.filename.contains(['/', '\\', '\0'])
+                && prepared.source_suffix == upload_suffix(&value.filename)
+                && prepared.source_bytes == value.data => {}
+        _ => return Err(invalid()),
     }
     if prepared.source_suffix.is_empty() != prepared.source_bytes.is_empty() {
         return Err(invalid());
