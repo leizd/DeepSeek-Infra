@@ -40,7 +40,10 @@ func (c *Client) StageMediaCreate(ctx context.Context, claim *mediav1.MediaPatch
 		if end > len(payload) {
 			end = len(payload)
 		}
-		message.Part = &mediav1.MediaCreateStageRequest_Chunk{Chunk: payload[offset:end]}
+		// SendMsg may retain the message for lazy tracing/stats observers.
+		// Keep every sent message immutable until the stream has completed.
+		message := &mediav1.MediaCreateStageRequest{SchemaVersion: 1, OperationId: claim.Intent.OperationId, Fence: claim.Fence,
+			Part: &mediav1.MediaCreateStageRequest_Chunk{Chunk: payload[offset:end]}}
 		if err = stream.Send(message); err != nil {
 			return err
 		}
