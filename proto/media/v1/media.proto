@@ -145,6 +145,21 @@ message MediaCreateManifest {
 
 message MediaCreatePayload {
   MediaObject registration = 1;
+  // Exactly one of registration/upload must be present. The absent upload field
+  // leaves every existing JSON registration payload and content digest intact.
+  MediaUploadPayload upload = 2;
+}
+
+// One original multipart file. Go retains only the signed content binding in its
+// control rows; these bytes cross the existing fenced Stage stream and remain
+// in Rust custody. HTTP multipart parsing/order and processing coordination stay
+// outside this message. No caller-selected filesystem path or OCR key is stored.
+message MediaUploadPayload {
+  string filename = 1;
+  string content_type = 2;
+  string project_id = 3;
+  string title = 4;
+  bytes data = 5;
 }
 
 message MediaCreatedResult {

@@ -81,7 +81,7 @@ jobs:
       run: "set -euo pipefail\npython scripts/native_codegen.py --write\npython scripts/native_android_codegen.py --check\n\
         python - <<'PY'\nfrom pathlib import Path\nimport hashlib, json, os, subprocess\nroot=Path.cwd(); out=root/'artifacts/native-proto-codegen'\n\
         assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==os.environ['GITHUB_SHA']\nallowed={'go/internal/protocol/mediav1/media.pb.go','go/internal/protocol/mediav1/media_grpc.pb.go','proto/generated/descriptor.pb','proto/generated/codegen-manifest.v1.json'}\n\
-        changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())\nassert changed==allowed,\
+        changed=set(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())\nexpected_changed=allowed-{'go/internal/protocol/mediav1/media_grpc.pb.go'}\nassert changed==expected_changed,\
         \ 'Generated changes escaped the reviewed four-file output boundary'\nassert not subprocess.check_output(['git','ls-files','--others','--exclude-standard'])\n\
         subprocess.run(['git','diff','--check'],check=True)\npatch=subprocess.check_output(['git','diff','--binary','--',*sorted(allowed)])\n\
         assert 0<len(patch)<8*1024**2\n(out/'generated-protocol.patch').write_bytes(patch)\nrows=[]\nfor name in sorted(allowed):\n\
