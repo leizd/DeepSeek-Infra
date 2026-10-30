@@ -77,17 +77,46 @@ fn bounded_read(path: &Path) -> Result<Vec<u8>, Status> {
 
 // No replacement of an existing content identity. A retry can observe exactly
 // the retained bytes; conflicting/partial content never authorizes a new write.
+fn confirm_retained(path: &Path, bytes: &[u8]) -> Result<(), Status> {
+    media_library::reject_links(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    // FlushFileBuffers requires GENERIC_WRITE on Windows even when this
+    // original-operation confirmation never writes or truncates the file.
+    #[cfg(windows)]
+    options.write(true);
+    let file = options.open(path).map_err(|_| invalid())?;
+    if !file.metadata().map_err(|_| invalid())?.is_file() {
+        return Err(invalid());
+    }
+    let mut retained = Vec::new();
+    (&file)
+        .take(MAX_PAYLOAD_BYTES as u64 + 1)
+        .read_to_end(&mut retained)
+        .map_err(|_| invalid())?;
+    if retained.len() > MAX_PAYLOAD_BYTES || retained.as_slice() != bytes {
+        return Err(invalid());
+    }
+    file.sync_all().map_err(|_| invalid())?;
+    let parent = path.parent().ok_or_else(invalid)?;
+    sync_directory(parent)?;
+    if let Some(grandparent) = parent.parent() {
+        sync_directory(grandparent)?;
+    }
+    media_library::reject_links(path)?;
+    if bounded_read(path)? != bytes {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 pub(super) fn persist_bound(path: &Path, bytes: &[u8]) -> Result<(), Status> {
     if bytes.len() > MAX_PAYLOAD_BYTES {
         return Err(invalid());
     }
     media_library::reject_links(path)?;
     if path.exists() {
-        return if bounded_read(path)? == bytes {
-            Ok(())
-        } else {
-            Err(invalid())
-        };
+        return confirm_retained(path, bytes);
     }
     let parent = path.parent().ok_or_else(invalid)?;
     fs::create_dir_all(parent).map_err(|_| invalid())?;
@@ -99,9 +128,7 @@ pub(super) fn persist_bound(path: &Path, bytes: &[u8]) -> Result<(), Status> {
     match temporary.persist_noclobber(path) {
         Ok(file) => file.sync_all().map_err(|_| invalid())?,
         Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
-            if bounded_read(path)? != bytes {
-                return Err(invalid());
-            }
+            return confirm_retained(path, bytes);
         }
         Err(_) => return Err(invalid()),
     }
