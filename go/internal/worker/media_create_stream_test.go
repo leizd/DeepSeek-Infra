@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -142,7 +143,8 @@ func TestMediaCreateClientBoundedMessages(t *testing.T) {
 			}
 		})
 	}
-	value, err := mediamodel.FromJSON(map[string]any{"mediaId": "media_one", "flag": false, "zero": 0})
+	// Match ParseJSONBounded's numeric representation; false and zero remain distinct.
+	value, err := mediamodel.FromJSON(map[string]any{"mediaId": "media_one", "flag": false, "zero": json.Number("0")})
 	if err != nil {
 		t.Fatal(err)
 	}
