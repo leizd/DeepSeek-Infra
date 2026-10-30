@@ -123,3 +123,39 @@ fn media_create_content_custody_refuses_path_aliases_and_conflicting_replay() {
     assert!(persist_bound(&path, b"different").is_err());
     assert_eq!(fs::read(path).unwrap(), b"first");
 }
+
+// The ordinary test covers a successful retained read. The dedicated cloud
+// workload runs this exact compiled test with a qualified syscall fault. These
+// variables exist only in this test module, never in a production executable.
+#[test]
+fn media_create_retained_sync_fault_probe() {
+    let Some(root) = std::env::var_os("DEEPSEEK_MEDIA_SYNC_TEST_ROOT") else {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("owned/source.html");
+        persist_bound(&path, b"retained-media-sync").unwrap();
+        persist_bound(&path, b"retained-media-sync").unwrap();
+        assert_eq!(fs::read(path).unwrap(), b"retained-media-sync");
+        return;
+    };
+    assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+    let root = fs::canonicalize(root).unwrap();
+    assert!(root.starts_with(fs::canonicalize(std::env::temp_dir()).unwrap()));
+    assert!(
+        root.file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("native-media-create-sync-")
+    );
+    assert_eq!(
+        fs::read(root.join("owned-fixture-marker")).unwrap(),
+        b"native-media-source-sync-test-v1"
+    );
+    let path = root.join(".media/objects/media_sync/source.html");
+    assert_eq!(fs::read(&path).unwrap(), b"retained-media-sync");
+    assert!(
+        persist_bound(&path, b"retained-media-sync").is_err(),
+        "retained bytes cannot replace the required file/directory synchronization barrier"
+    );
+    assert_eq!(fs::read(path).unwrap(), b"retained-media-sync");
+}
