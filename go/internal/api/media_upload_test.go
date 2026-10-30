@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -78,7 +79,6 @@ func TestMediaMultipartParser(t *testing.T) {
 				parts[0].extra = "X-Header: " + strings.Repeat("h", 4096-len("X-Header: ")) + "\r\n"
 			case "folded-header":
 				parts[0].extra = "X-Header: value\r\n continued\r\n"
-				status = 400
 			case "field-invalid-utf8":
 				parts = append(parts, mediaUploadTestPart{name: "title", data: []byte{255}})
 				status = 500
@@ -107,7 +107,7 @@ func TestMediaMultipartParser(t *testing.T) {
 			case "malformed":
 				r = httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/media", strings.NewReader("broken"))
 				r.Header.Set("Content-Type", "multipart/form-data; boundary=media-test-boundary")
-				status = 400
+				status = 415
 			}
 			fields, files, failure := readMediaMultipart(httptest.NewRecorder(), r)
 			if status != 0 {
@@ -122,6 +122,47 @@ func TestMediaMultipartParser(t *testing.T) {
 			}
 			if name == "content-type-missing" && files[0].contentType != "application/octet-stream" {
 				t.Fatal("missing MIME invented a file extension guess")
+			}
+		})
+	}
+	// These expected statuses and last-header values come from the original
+	// multipart1.3.1 parser used by read_multipart_form, with its actual settings.
+	request := mediaMultipartRequest([]mediaUploadTestPart{file})
+	encoded, err := io.ReadAll(request.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := string(encoded)
+	const opening = "--media-test-boundary\r\n"
+	for _, fixture := range []struct {
+		name, wire            string
+		status                int
+		filename, contentType string
+	}{
+		{"preamble", "preamble\r\n" + valid, 0, "image.PNG", "image/png"},
+		{"no-final-newline", strings.TrimSuffix(valid, "\r\n"), 0, "image.PNG", "image/png"},
+		{"transport-padding", strings.ReplaceAll(valid, opening, "--media-test-boundary \t\r\n"), 415, "", ""},
+		{"empty-headers", opening + "\r\nbytes\r\n--media-test-boundary--\r\n", 415, "", ""},
+		{"truncated-small-header", opening + "X-Header: value", 415, "", ""},
+		{"truncated-long-header", opening + "X-Header: " + strings.Repeat("h", 4097), 413, "", ""},
+		{"truncated-many-headers", opening + strings.Repeat("X-Header: value\r\n", 9), 413, "", ""},
+		{"bad-header-name", strings.ReplaceAll(valid, "Content-Type: image/png", "BrokenHeader"), 415, "", ""},
+		{"attachment-disposition", strings.ReplaceAll(valid, "form-data; name=", "attachment; name="), 415, "", ""},
+		{"duplicate-disposition", strings.ReplaceAll(valid, "Content-Type: image/png", "Content-Type: image/png\r\nContent-Disposition: form-data; name=\"files\"; filename=\"second.png\""), 0, "second.png", "image/png"},
+		{"duplicate-content-type", strings.ReplaceAll(valid, "Content-Type: image/png", "Content-Type: image/png\r\nContent-Type: text/html"), 0, "image.PNG", "text/html"},
+	} {
+		t.Run("original/"+fixture.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/api/media", strings.NewReader(fixture.wire))
+			r.Header.Set("Content-Type", "multipart/form-data; boundary=media-test-boundary")
+			_, files, failure := readMediaMultipart(httptest.NewRecorder(), r)
+			if fixture.status != 0 {
+				if failure == nil || failure.status != fixture.status {
+					t.Fatalf("original status=%d native=%v", fixture.status, failure)
+				}
+				return
+			}
+			if failure != nil || len(files) != 1 || files[0].filename != fixture.filename || files[0].contentType != fixture.contentType || !bytes.Equal(files[0].data, file.data) {
+				t.Fatal("original accepted bytes or last-header semantics changed", failure, files)
 			}
 		})
 	}
@@ -143,10 +184,16 @@ func TestMediaMultipartFormCodecs(t *testing.T) {
 		{"utf-8", []byte("中文"), "中文", false}, {"utf-8", []byte{255}, "", true},
 		{"utf-8-sig", []byte{239, 187, 191, 65}, "A", false}, {"ascii", []byte("text"), "text", false},
 		{"ascii", []byte{128}, "", true}, {"iso-8859-1", []byte{99, 97, 102, 233, 129}, "café\u0081", false},
-		{"utf-16", []byte{255, 254, 65, 0}, "A", false}, {"utf-16", []byte{65, 0}, "", true},
+		{"utf-16", []byte{255, 254, 65, 0}, "A", false}, {"utf-16", []byte{65, 0}, "A", false},
+		{"utf-16", []byte{253, 255}, "\ufffd", false},
+		{"utf-16le", []byte{253, 255}, "\ufffd", false},
 		{"utf-16le", []byte{65, 0}, "A", false}, {"utf-16be", []byte{0, 65}, "A", false},
 		{"utf-16le", []byte{65}, "", true}, {"windows-1252", []byte{128}, "€", false},
 		{"gbk", []byte{214, 208, 206, 196}, "中文", false}, {"not-a-codec", []byte("x"), "", true},
+		{"utf-7", []byte("caf+AOk +Ti1lhw-"), "café 中文", false},
+		{"utf-32", []byte{255, 254, 0, 0, 99, 0, 0, 0, 97, 0, 0, 0, 102, 0, 0, 0, 233, 0, 0, 0, 32, 0, 0, 0, 45, 78, 0, 0, 135, 101, 0, 0}, "café 中文", false},
+		{"utf-32le", []byte{99, 0, 0, 0, 97, 0, 0, 0, 102, 0, 0, 0, 233, 0, 0, 0, 32, 0, 0, 0, 45, 78, 0, 0, 135, 101, 0, 0}, "café 中文", false},
+		{"utf-32be", []byte{0, 0, 0, 99, 0, 0, 0, 97, 0, 0, 0, 102, 0, 0, 0, 233, 0, 0, 0, 32, 0, 0, 78, 45, 0, 0, 101, 135}, "café 中文", false},
 	} {
 		t.Run(fmt.Sprintf("%s-%x", v.name, v.raw), func(t *testing.T) {
 			value, err := mediaUploadField(v.raw, v.name)

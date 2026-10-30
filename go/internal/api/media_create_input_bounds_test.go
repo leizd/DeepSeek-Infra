@@ -41,7 +41,7 @@ func TestMediaPublicCreateInputBounds(t *testing.T) {
 				status, code = 501, "GO_API_NOT_IMPLEMENTED"
 			case "multipart-pre-admission":
 				request.Header.Set("Content-Type", "multipart/form-data; boundary=unqualified-fixture")
-				status, code = 400, "invalid_payload"
+				status, code = 415, "invalid_payload"
 			case "declared-body-limit":
 				request.ContentLength = 16_000_001
 			case "streamed-body-limit":
