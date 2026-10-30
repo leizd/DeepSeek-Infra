@@ -31,7 +31,9 @@ func (s *mediaCreateStreamFixture) Send(r *mediav1.MediaCreateStageRequest) erro
 	if s.failAt == len(s.sent)+1 {
 		return s.failure
 	}
-	s.sent = append(s.sent, proto.Clone(r).(*mediav1.MediaCreateStageRequest))
+	// gRPC tracing/stats may retain the sent message itself. A clone would hide
+	// mutation after Send, which is forbidden by the ClientStream contract.
+	s.sent = append(s.sent, r)
 	return nil
 }
 func (s *mediaCreateStreamFixture) CloseAndRecv() (*mediav1.MediaCreateStageResponse, error) {
