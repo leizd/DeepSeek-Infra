@@ -56,3 +56,15 @@ def test_multipart_native_probe_remains_cloud_only(tmp_path, monkeypatch):
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     with pytest.raises(upload.create.ProbeFailure, match="CLOUD_ONLY"):
         upload.verify_cases("http://127.0.0.1:1", "", tmp_path, tmp_path, tmp_path, {})
+
+
+@pytest.mark.parametrize("uploaded,total", [(0, 11), (31, 42)])
+def test_retained_observation_report_separates_json_cases_from_uploaded_records(uploaded, total):
+    report = dict(jsonRegistrationCases=[{} for _ in range(10)], actualMultipartStoredRecords=uploaded)
+    assert upload.create.observation_counts(report, total) == dict(actualJSONRegistrationCases=11, actualRetainedMediaObservations=total)
+
+
+def test_retained_observation_report_refuses_missing_or_pooled_counts():
+    report = dict(jsonRegistrationCases=[{} for _ in range(10)], actualMultipartStoredRecords=31)
+    with pytest.raises(upload.create.ProbeFailure, match="OBSERVATION_COUNTS_DIFFER"):
+        upload.create.observation_counts(report, 41)

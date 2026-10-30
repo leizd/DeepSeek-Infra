@@ -137,6 +137,13 @@ def exchange(origin: str, path: str, method: str, token: str | None, payload: di
         return response.status, body, {key.lower(): value for key, value in response.headers.items()}
 
 
+def observation_counts(report: dict[str, Any], observed: int) -> dict[str, int]:
+    json_cases = 1 + len(report["jsonRegistrationCases"])
+    uploaded = int(report.get("actualMultipartStoredRecords", 0))
+    require(observed == json_cases + uploaded, "MEDIA_CREATE_OBSERVATION_COUNTS_DIFFER")
+    return dict(actualJSONRegistrationCases=json_cases, actualRetainedMediaObservations=observed)
+
+
 def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
     require(os.environ.get("GITHUB_ACTIONS") == "true" and sys.platform == "linux", "MEDIA_CREATE_VERIFICATION_IS_CLOUD_ONLY")
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
@@ -260,7 +267,8 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                     retained_file = profile / ".media" / original_body["media"]["path"]
                     require(hashlib.sha256(retained_file.read_bytes()).hexdigest() == original_sha, "MEDIA_CREATE_CASE_RESTART_SOURCE_DIFFERS")
             report.update(status="PASS", actualNativeJSONWebpageCreateQualified=True, publicReadAndRestartRetained=True,
-                allSixJSONMediaKindsQualified=True, largeJSONRecordBeyondControlRowQualified=True, actualJSONRegistrationCases=len(observations))
+                allSixJSONMediaKindsQualified=True, largeJSONRecordBeyondControlRowQualified=True,
+                **observation_counts(report, len(observations)))
         finally:
             stop()
 
