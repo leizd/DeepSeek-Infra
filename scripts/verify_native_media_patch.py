@@ -273,9 +273,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
     request_body_sha256 = hashlib.sha256(request_body).hexdigest()
     report["requestBodySha256"] = request_body_sha256
     report["requestBodyBytes"] = len(request_body)
-    for port in (8090, 50052):
-        with socket.socket() as listener:
-            listener.bind(("127.0.0.1", port))
+    bootstrap.require_loopback_ports_available()
     with tempfile.TemporaryDirectory(prefix="native-media-patch-") as temporary:
         scratch = Path(temporary)
         binaries, profile, mirror = scratch / "bin", scratch / "profile", scratch / "oracle"

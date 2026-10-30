@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import argparse
+import errno
 from email.message import Message
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import socket
 import sqlite3
 import sys
+import time
 from types import ModuleType
 from urllib.error import HTTPError
 
@@ -156,6 +160,54 @@ def test_native_guard_precedes_every_subprocess(verifier: ModuleType, monkeypatc
     monkeypatch.setattr(verifier.subprocess, "check_output", forbidden)
     with pytest.raises(verifier.ProbeFailure, match="NATIVE_MEDIA_PATCH_VERIFICATION_IS_CLOUD_ONLY"):
         verifier.run(argparse.Namespace(), {})
+
+
+def test_loopback_preflight_refuses_a_live_listener_and_preserves_it(verifier: ModuleType) -> None:
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        listener.settimeout(2)
+        host, port = listener.getsockname()
+        with pytest.raises(verifier.bootstrap.ProbeFailure, match=f"NATIVE_LOOPBACK_PORT_UNAVAILABLE:{port}:"):
+            verifier.bootstrap.require_loopback_ports_available((port,))
+        # The probe may not terminate, replace, or borrow the other listener.
+        with socket.create_connection((host, port), timeout=2) as client:
+            client.sendall(b"retained-listener")
+            accepted, _ = listener.accept()
+            with accepted:
+                assert accepted.recv(64) == b"retained-listener"
+
+
+def test_loopback_preflight_releases_its_temporary_listener(verifier: ModuleType) -> None:
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        host, port = listener.getsockname()
+    verifier.bootstrap.require_loopback_ports_available((port,))
+    with socket.create_server((host, port)) as replacement:
+        assert replacement.getsockname() == (host, port)
+
+
+@pytest.mark.skipif(os.name != "posix" or not Path("/proc/net/tcp").is_file(), reason="requires the Linux TCP TIME_WAIT kernel state")
+def test_loopback_preflight_accepts_stopped_listener_time_wait(verifier: ModuleType) -> None:
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        listener.settimeout(2)
+        host, port = listener.getsockname()
+        with socket.create_connection((host, port), timeout=2) as client:
+            accepted, _ = listener.accept()
+            with accepted:
+                accepted.shutdown(socket.SHUT_WR)
+                assert client.recv(1) == b""
+            # Server closes first; the peer's FIN leaves its port in TIME_WAIT.
+        deadline = time.monotonic() + 2
+        while not any(row.split()[1] == f"0100007F:{port:04X}" and row.split()[3] == "06"
+                      for row in Path("/proc/net/tcp").read_text().splitlines()[1:]):
+            assert time.monotonic() < deadline, "controlled TCP connection did not enter TIME_WAIT"
+            time.sleep(0.01)
+    # This is the exact old bind-only preflight; its failure is independently observed.
+    with socket.socket() as old_probe:
+        with pytest.raises(OSError) as original:
+            old_probe.bind((host, port))
+    assert original.value.errno == errno.EADDRINUSE
+    verifier.bootstrap.require_loopback_ports_available((port,))
+    with socket.create_server((host, port)) as replacement:
+        assert replacement.getsockname() == (host, port)
 
 
 def test_plain_http_refusal_is_observed_without_json_decoding(verifier: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:

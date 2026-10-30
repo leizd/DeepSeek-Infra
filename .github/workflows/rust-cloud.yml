@@ -66,6 +66,10 @@ jobs:
           python -m pip install -r requirements.txt -r requirements-ocr.txt -r requirements-dev.txt
           python -c "from fastapi.testclient import TestClient"
           python -m pip install -r requirements-native-protocol.txt
+      - name: Verify private-port preflight against live listeners and retained TIME_WAIT
+        if: matrix.mode == 'checks'
+        run: |
+          python -m pytest tests/test_native_media_patch_verifier.py -k loopback_preflight --no-cov -p no:cacheprovider --junitxml=artifacts/rust-cloud/loopback-preflight.xml
       - uses: dtolnay/rust-toolchain@69084b241933c14c2fa24234c4596f11a2655339 # 1.85.0
         with:
           toolchain: "1.85.0"

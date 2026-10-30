@@ -122,6 +122,18 @@ def stop(process: subprocess.Popen[bytes] | None) -> None:
             raise ProbeFailure("DEFAULT_NATIVE_LAUNCHER_DID_NOT_STOP")
 
 
+def require_loopback_ports_available(ports: tuple[int, ...] = (8090, 50052)) -> None:
+    """Check the private ports before a probe builds or launches native processes."""
+    for port in ports:
+        try:
+            # create_server reuses POSIX TIME_WAIT addresses and checks listen(),
+            # while still refusing a live listener. Never enable shared REUSEPORT.
+            with socket.create_server(("127.0.0.1", port), reuse_port=False):
+                pass
+        except OSError as error:
+            raise ProbeFailure(f"NATIVE_LOOPBACK_PORT_UNAVAILABLE:{port}:{error.errno}") from error
+
+
 def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
     if os.environ.get("GITHUB_ACTIONS") != "true" or os.name != "posix":
         raise ProbeFailure("NATIVE_DEFAULT_BOOTSTRAP_VERIFICATION_IS_CLOUD_ONLY")
@@ -131,9 +143,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
     report["sourceCommit"] = revision
     # These are the production launcher's fixed private ports. Never share a probe
     # with another runtime and never change a real user's listener configuration.
-    for port in (8090, 50052):
-        with socket.socket() as check:
-            check.bind(("127.0.0.1", port))
+    require_loopback_ports_available()
     with tempfile.TemporaryDirectory(prefix="native-default-bootstrap-") as temporary:
         scratch = Path(temporary)
         binaries, profile = scratch / "bin", scratch / "profile"

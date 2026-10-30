@@ -155,9 +155,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
     report["fixtureSha256"] = hashlib.sha256(FIXTURE.read_bytes()).hexdigest()
     cases = fixture["cases"]
     empty_cases = [cases[0], *cases[7:10], cases[15]]
-    for port in (8090, 50052):
-        with socket.socket() as check:
-            check.bind(("127.0.0.1", port))
+    bootstrap.require_loopback_ports_available()
     with tempfile.TemporaryDirectory(prefix="native-media-read-") as temporary:
         scratch = Path(temporary)
         binaries, profile = scratch / "bin", scratch / "profile"
