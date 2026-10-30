@@ -117,7 +117,7 @@ func (p *mediaWirePeer) QueryPatch(_ context.Context, r *mediav1.QueryMediaPatch
 	}
 	return &mediav1.QueryMediaPatchResponse{Found: true, Outcome: proto.Clone(p.retained).(*mediav1.MediaPatchOutcome)}, nil
 }
-func mediaWireFixture(t *testing.T, mode string) (*store.Control, *mediaWirePeer, *httptest.Server) {
+func mediaWireFixture(t *testing.T, mode string, register ...func(*grpc.Server, *mediaWirePeer)) (*store.Control, *mediaWirePeer, *httptest.Server) {
 	t.Helper()
 	public, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -144,8 +144,22 @@ func mediaWireFixture(t *testing.T, mode string) (*store.Control, *mediaWirePeer
 			return nil, status.Error(codes.Unauthenticated, "test peer requires bearer")
 		}
 		return next(ctx, r)
+	}), grpc.StreamInterceptor(func(srv any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, next grpc.StreamHandler) error {
+		md, _ := metadata.FromIncomingContext(stream.Context())
+		values := md.Get("authorization")
+		if len(values) != 1 || values[0] != "Bearer "+bearer {
+			return status.Error(codes.Unauthenticated, "test peer requires stream bearer")
+		}
+		return next(srv, stream)
 	}))
-	mediav1.RegisterMediaMutationWorkerServer(rpc, peer)
+	if len(register) == 0 {
+		mediav1.RegisterMediaMutationWorkerServer(rpc, peer)
+	} else {
+		if len(register) != 1 {
+			t.Fatal("exactly one test service registrar is required")
+		}
+		register[0](rpc, peer)
+	}
 	t.Cleanup(rpc.Stop)
 	tlsServer := httptest.NewUnstartedServer(rpc)
 	tlsServer.EnableHTTP2 = true
