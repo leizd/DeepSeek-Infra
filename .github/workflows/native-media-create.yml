@@ -116,6 +116,7 @@ jobs:
         go mod verify
 
         '
+      id: modules
     - name: Verify observer and original public create route offline
       run: 'python -m pip install mypy ruff pytest
 
@@ -200,7 +201,7 @@ jobs:
         \ suites or coverage gates\", fullGoSuiteQualified=False, original95PercentCoverageQualified=False, actualNativeLauncherQualified=False,\
         \ authorityRecoveryQualified=False, fullMigrationQualified=False, readiness=\"NOT_READY\")\nPath(\"artifacts/native-media-create/result.json\"\
         ).write_text(json.dumps(result, indent=2) + \"\\n\")\nraise SystemExit(code)\nPY\n"
-      if: always() && steps.build.outcome == 'success'
+      if: always() && steps.modules.outcome == 'success'
     - name: Compare actual native JSON creation with original ASGI and retained source
       run: 'set -o pipefail
 
