@@ -243,6 +243,9 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                     canonicalRecordSha256=hashlib.sha256(encoded).hexdigest(), publicRecordBytes=len(encoded), sourceSha256=actual_sha))
                 observations.append((actual_body["media"]["mediaId"], actual_body, actual_sha))
             require(report["jsonRegistrationCases"][-1]["publicRecordBytes"] > 4 * 1024**2, "MEDIA_CREATE_LARGE_RECORD_NOT_EXERCISED")
+            if getattr(args, "verify_uploads", False):
+                import verify_native_media_upload as upload
+                observations.extend(upload.verify_cases(origin, token, profile, mirror / "uploads", args.out, report))
             library = profile / ".media/library.json"
             published = library.read_bytes()
             stop()
@@ -268,15 +271,17 @@ def main() -> int:
     parser.add_argument("--edge", type=Path, required=True)
     parser.add_argument("--go-cache", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--verify-uploads", action="store_true", help="also verify original multipart ingestion boundaries")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = dict(kind="native-media-create-process-v1", status="FAIL", sourceCommit=os.environ.get("GITHUB_SHA"),
         runId=os.environ.get("GITHUB_RUN_ID"), event=os.environ.get("GITHUB_EVENT_NAME"), semanticStageReached=False,
         actualNativeJSONWebpageCreateQualified=False, allMediaCreateFormsQualified=False, uploadParityQualified=False,
         processPipelineQualified=False, authorityRecoveryQualified=False, fullMigrationQualified=False, readiness="NOT_READY")
+    import verify_native_media_upload as upload
     try:
         run(args, report)
-    except (ProbeFailure, patch.ProbeFailure, patch.bootstrap.ProbeFailure, patch.reads.ProbeFailure) as error:
+    except (ProbeFailure, upload.create.ProbeFailure, patch.ProbeFailure, patch.bootstrap.ProbeFailure, patch.reads.ProbeFailure) as error:
         report.update(failureCode=str(error))
     except Exception as error:
         report.update(failureCode="MEDIA_CREATE_VERIFIER_ERROR", exceptionType=type(error).__name__)

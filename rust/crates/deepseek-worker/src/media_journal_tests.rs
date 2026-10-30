@@ -876,6 +876,7 @@ fn create_claim(
     };
     let bytes = MediaCreatePayload {
         registration: Some(object),
+        upload: None,
     }
     .encode_to_vec();
     let intent = claim.intent.as_mut().unwrap();
