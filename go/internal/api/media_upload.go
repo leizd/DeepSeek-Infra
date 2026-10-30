@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"io"
-	"mime"
-	"mime/multipart"
 	"net/http"
 	"strings"
 	"unicode"
@@ -15,7 +13,6 @@ import (
 	"github.com/leizd/DeepSeek-Infra/go/internal/store"
 	"github.com/leizd/DeepSeek-Infra/go/internal/worker"
 	"golang.org/x/text/encoding/ianaindex"
-	textunicode "golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
 	"google.golang.org/protobuf/proto"
 )
@@ -83,14 +80,14 @@ func mediaUploadField(raw []byte, charset string) (string, error) {
 		}
 		return string(runes), nil
 	}
-	encoding, err := ianaindex.IANA.Encoding(name)
-	if name == "utf-16" {
-		encoding, err = textunicode.UTF16(textunicode.BigEndian, textunicode.ExpectBOM), nil
-	} else if name == "utf-16le" || name == "utf-16-le" || name == "utf16le" {
-		encoding, err = textunicode.UTF16(textunicode.LittleEndian, textunicode.IgnoreBOM), nil
-	} else if name == "utf-16be" || name == "utf-16-be" || name == "utf16be" {
-		encoding, err = textunicode.UTF16(textunicode.BigEndian, textunicode.IgnoreBOM), nil
+	compact := strings.ReplaceAll(name, "-", "")
+	switch compact {
+	case "utf7":
+		return mediaUploadUTF7(raw)
+	case "utf16", "utf16le", "utf16be", "utf32", "utf32le", "utf32be":
+		return mediaUploadUnicode(raw, compact)
 	}
+	encoding, err := ianaindex.IANA.Encoding(name)
 	if err != nil || encoding == nil {
 		return "", errors.New("unsupported form charset")
 	}
@@ -109,94 +106,18 @@ func mediaUploadField(raw []byte, charset string) (string, error) {
 	return string(decoded), nil
 }
 
-// The original parser limits each raw header line, not the sum of normalized
-// headers. Check raw bytes before net/multipart can unfold or trim them. Source
-// bytes still use the standard multipart reader; this only retains its original
-// strict header, part-count and CRLF boundaries.
-func mediaMultipartHeaders(raw []byte, boundary string) *mediaUploadError {
-	delimiter := []byte("--" + boundary)
-	find := func(offset int) (int, bool) {
-		for offset < len(raw) {
-			index := bytes.Index(raw[offset:], delimiter)
-			if index < 0 {
-				break
-			}
-			index += offset
-			end := index + len(delimiter)
-			if index == 0 || index >= 2 && bytes.Equal(raw[index-2:index], []byte("\r\n")) {
-				closing := bytes.HasPrefix(raw[end:], []byte("--"))
-				if closing {
-					end += 2
-				}
-				for end < len(raw) && (raw[end] == ' ' || raw[end] == '\t') {
-					end++
-				}
-				if bytes.HasPrefix(raw[end:], []byte("\r\n")) {
-					return end + 2, closing
-				}
-				if closing && end == len(raw) {
-					return end, true
-				}
-			}
-			offset = index + 1
-		}
-		return -1, false
-	}
-	position, closed := find(0)
-	for count := 0; position >= 0; count++ {
-		if closed {
-			return nil
-		}
-		if count >= 24 {
-			return uploadTooLarge("Too many multipart parts")
-		}
-		start := position
-		body := start + 2
-		if !bytes.HasPrefix(raw[start:], []byte("\r\n")) {
-			// At most eight 4096-byte lines and their delimiters can be legal.
-			// Never split or allocate an attacker-controlled body as headers.
-			window := raw[start:min(len(raw), start+8*(4096+2)+2)]
-			end := bytes.Index(window, []byte("\r\n\r\n"))
-			if end < 0 {
-				lines := bytes.Split(window, []byte("\r\n"))
-				if len(lines) > 8 {
-					return uploadTooLarge("Maximum segment header count exceeded")
-				}
-				for _, line := range lines {
-					if len(line) > 4096 {
-						return uploadTooLarge("Maximum segment header length exceeded")
-					}
-				}
-				return uploadInvalid("Invalid multipart upload")
-			}
-			lines := bytes.Split(window[:end], []byte("\r\n"))
-			if len(lines) > 8 {
-				return uploadTooLarge("Maximum segment header count exceeded")
-			}
-			for _, line := range lines {
-				if len(line) > 4096 {
-					return uploadTooLarge("Maximum segment header length exceeded")
-				}
-				if len(line) == 0 || line[0] == ' ' || line[0] == '\t' || bytes.ContainsAny(line, "\r\n") {
-					return uploadInvalid("Invalid multipart upload")
-				}
-			}
-			body = start + end + 4
-		}
-		position, closed = find(body)
-	}
-	return uploadInvalid("Invalid multipart upload")
-}
-
 func readMediaMultipart(w http.ResponseWriter, r *http.Request) (map[string][]string, []mediaUploadFile, *mediaUploadError) {
+	if !strings.Contains(r.Header.Get("Content-Type"), "multipart/form-data") {
+		return nil, nil, uploadInvalid("Expected multipart/form-data")
+	}
 	if r.ContentLength <= 0 {
 		return nil, nil, uploadInvalid("Upload body is empty")
 	}
 	if r.ContentLength > 220_000_000 {
 		return nil, nil, uploadTooLarge("Upload body is too large. Maximum request size is 220 MB.")
 	}
-	kind, options, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil || kind != "multipart/form-data" || options["boundary"] == "" {
+	kind, options := mediaMultipartOptions(r.Header.Get("Content-Type"), false)
+	if kind != "multipart/form-data" || options["boundary"] == "" {
 		return nil, nil, uploadInvalid("Upload body is not multipart/form-data")
 	}
 	// The original ASGI parser also reads the bounded raw request before any
@@ -209,65 +130,10 @@ func readMediaMultipart(w http.ResponseWriter, r *http.Request) (map[string][]st
 		}
 		return nil, nil, uploadInvalid("Invalid multipart upload")
 	}
-	if failure := mediaMultipartHeaders(raw, options["boundary"]); failure != nil {
-		return nil, nil, failure
+	if r.ContentLength < int64(len(raw)) {
+		raw = raw[:r.ContentLength]
 	}
-	reader := multipart.NewReader(bytes.NewReader(raw), options["boundary"])
-	fields := make(map[string][]string)
-	var files []mediaUploadFile
-	for count := 0; ; count++ {
-		part, readErr := reader.NextRawPart() // No quoted-printable transformation of retained source bytes.
-		if readErr == io.EOF {
-			return fields, files, nil
-		}
-		if readErr != nil {
-			return nil, nil, uploadInvalid("Malformed multipart upload")
-		}
-		if count >= 24 {
-			return nil, nil, uploadTooLarge("Too many multipart parts")
-		}
-		_, disposition, parseErr := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
-		if parseErr != nil {
-			return nil, nil, uploadInvalid("Malformed multipart disposition")
-		}
-		filename := disposition["filename"]
-		limit := int64(4096)
-		if filename != "" {
-			limit = 200_000_000
-		}
-		data, readErr := io.ReadAll(io.LimitReader(part, limit+1))
-		if readErr != nil {
-			return nil, nil, uploadInvalid("Malformed multipart upload")
-		}
-		if int64(len(data)) > limit {
-			return nil, nil, uploadTooLarge("Upload field or file is too large")
-		}
-		contentType, parameters, parseErr := mime.ParseMediaType(part.Header.Get("Content-Type"))
-		if part.Header.Get("Content-Type") == "" {
-			contentType, parameters, parseErr = "", map[string]string{}, nil
-		}
-		if parseErr != nil {
-			return nil, nil, uploadInvalid("Malformed multipart content type")
-		}
-		if filename != "" {
-			if len(files) >= 20 {
-				return nil, nil, uploadTooLarge("Too many uploaded files")
-			}
-			if contentType == "" {
-				contentType = "application/octet-stream"
-			}
-			files = append(files, mediaUploadFile{mediaUploadFilename(filename), contentType, data})
-		} else if name := pythonTrim(disposition["name"]); name != "" {
-			value, decodeErr := mediaUploadField(data, parameters["charset"])
-			if decodeErr != nil {
-				return nil, nil, &mediaUploadError{500, "internal", "Unable to decode upload field"}
-			}
-			fields[name] = append(fields[name], value)
-		}
-		if closeErr := part.Close(); closeErr != nil {
-			return nil, nil, uploadInvalid("Malformed multipart upload")
-		}
-	}
+	return parseMediaMultipart(raw, options["boundary"])
 }
 
 func mediaUploadFirst(fields map[string][]string, name string) string {

@@ -43,6 +43,7 @@ func mediaMultipartRequest(parts []mediaUploadTestPart) *http.Request {
 }
 
 func TestMediaMultipartParser(t *testing.T) {
+	verifyMediaMultipartReference(t)
 	file := mediaUploadTestPart{name: "files", filename: "C:\\fakepath\\image.PNG", contentType: "image/png", data: []byte{0, 255, 1}}
 	for _, name := range []string{"valid", "no-length", "declared-limit", "boundary-missing", "invalid-content-type", "malformed",
 		"field-limit", "file-count", "part-limit", "header-count", "header-size", "large-independent-headers", "exact-header-line-limit", "folded-header", "field-invalid-utf8", "field-unknown-charset", "unnamed-field", "content-type-missing"} {
@@ -175,6 +176,7 @@ func TestMediaMultipartParser(t *testing.T) {
 }
 
 func TestMediaMultipartFormCodecs(t *testing.T) {
+	verifyMediaMultipartCodecReference(t)
 	for _, v := range []struct {
 		name     string
 		raw      []byte
@@ -205,7 +207,7 @@ func TestMediaMultipartFormCodecs(t *testing.T) {
 }
 
 func TestMediaMultipartPublicTLS(t *testing.T) {
-	for _, name := range []string{"two-files", "single-title", "pdf", "audio", "video", "html", "xhtml", "partial-refusal", "empty-file", "mime-refused", "no-files", "missing-length", "process-unfinished", "unauthenticated", "worker-unavailable", "unknown", "signed-refusal", "result-unavailable"} {
+	for _, name := range []string{"two-files", "single-title", "form-project", "oversized-file", "pdf", "audio", "video", "html", "xhtml", "partial-refusal", "empty-file", "mime-refused", "no-files", "missing-length", "process-unfinished", "unauthenticated", "worker-unavailable", "unknown", "signed-refusal", "result-unavailable"} {
 		t.Run(name, func(t *testing.T) {
 			mode := "upload"
 			if name == "unknown" {
@@ -225,6 +227,12 @@ func TestMediaMultipartPublicTLS(t *testing.T) {
 			case "single-title":
 				parts = []mediaUploadTestPart{first, {name: "title", data: []byte(" retained ")}, {name: "title", data: []byte("ignored")}}
 				calls = 1
+			case "form-project":
+				parts = []mediaUploadTestPart{first, {name: "projectId", data: []byte(" form-project ")}}
+				calls = 1
+			case "oversized-file":
+				parts[0].data = bytes.Repeat([]byte("x"), 50*1024*1024+1)
+				status, calls = 413, 0
 			case "pdf", "audio", "video", "html", "xhtml":
 				mime := map[string]string{"pdf": "application/pdf", "audio": "audio/mpeg", "video": "video/mp4", "html": "text/html", "xhtml": "application/xhtml+xml"}[name]
 				parts = []mediaUploadTestPart{first}
@@ -259,6 +267,11 @@ func TestMediaMultipartPublicTLS(t *testing.T) {
 			}
 			r := mediaMultipartRequest(parts)
 			r.URL.RawQuery = "projectId=first&projectId=project-last"
+			expectedProject := "project-last"
+			if name == "form-project" {
+				r.URL.RawQuery = ""
+				expectedProject = "form-project"
+			}
 			r.Header.Set("Authorization", "Bearer "+strings.Repeat("m", 32))
 			if name == "unauthenticated" {
 				r.Header.Del("Authorization")
@@ -290,7 +303,7 @@ func TestMediaMultipartPublicTLS(t *testing.T) {
 				for i, item := range items {
 					record := item.(map[string]any)
 					hash := sha256.Sum256(parts[i].data)
-					if record["dataSha256"] != hex.EncodeToString(hash[:]) || record["projectId"] != "project-last" {
+					if record["dataSha256"] != hex.EncodeToString(hash[:]) || record["projectId"] != expectedProject {
 						t.Fatal("typed upload bytes or last query value changed", record)
 					}
 				}

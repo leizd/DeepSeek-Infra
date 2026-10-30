@@ -1,3 +1,35 @@
+# Current checkpoint: multipart parser conformance correction, 2026-10-30
+
+Source `b96e66d5` captured an actual cloud RED at run41062512473/job124085519945:
+all97 required Go/race families finished;94 passed and3 failed, containing16
+specific parser/status/header/Unicode conformance failures. Compilation succeeded.
+This candidate preserves those assertions and the original97 required families.
+It replaces the incompatible raw-header preflight/Go MIME parsing with the original
+64 KiB event framing, logical unfolded-header bounds, duplicate-header/parameter
+semantics,415 parser errors and413 resource limits. UTF-7 and native-/explicit-endian
+UTF-16/UTF-32 retain strict decoding and legitimate replacement characters.
+The checked-in reference corpus records45 requests and44 codec observations from
+the original offline ASGI helper/multipart1.3.1 and CPython bytes.decode, including
+framing across read boundaries, part Content-Length and malformed/padded encodings.
+This candidate's runtime evidence is CLOUD_PENDING; local checks do not compile Go.
+
+At parent `48f14d01`, actual launcher run41059443777 passed the existing10 multipart
+cases, including50 MiB, an exact220000000-byte/20-file request, ordered partial
+refusal and retained bytes after whole-launcher restart. Its corrected report
+separates11 JSON creations,31 stored uploads and42 total retained observations.
+Those are parent-source observations and do not qualify this new parser candidate.
+Original full CI41059589502 failed Go coverage at16088/16948=94.925655%,13 covered
+statements short of95%. The original95%/95%/95%/80% floors remain mandatory.
+Parent Rust workflow41059508892 must be observed by its existing handles; metadata
+transport failures are not a reason to redispatch it.
+
+Full server/desktop/Android/background migration remains ACTIVE/NOT_READY. Media
+processing/OCR/indexing, all retained codecs/forms, upload-specific crash and
+concurrency recovery, actual affected browser/platform behavior, retained MCP
+pytest-equivalent engine and complete exact-source CI/Evidence/release acceptance
+remain open. No Python production fallback or scope exception was approved.
+The root dirty checkout is preserved; compilation/caches/containers remain cloud-only.
+
 # Current checkpoint: retained media publication synchronization, 2026-10-28
 
 The complete original source CI/Rust and controlled platform proofs at `0acac3b5`
