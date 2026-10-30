@@ -222,6 +222,51 @@ def sync_fault_command(binary: Path, library: Path, root: Path, log: Path, kind:
             "-e", "inject=fsync,fdatasync:error=EIO", "-o", str(log)]
 
 
+def creation_source_path(root: Path, record: dict[str, Any]) -> Path:
+    """Validate a future native source without creating any runtime directory."""
+    root = root.absolute()
+    require(root.is_dir() and not root.is_symlink(), "MEDIA_CREATE_SOURCE_ROOT_INVALID")
+    media_id, relative = record.get("mediaId"), record.get("path")
+    require(isinstance(media_id, str) and re.fullmatch(r"media_[0-9a-f]{16}", media_id), "MEDIA_CREATE_SOURCE_ID_INVALID")
+    if not isinstance(relative, str) or relative not in {f"objects/{media_id}/source.html", f"objects/{media_id}/source.txt"}:
+        raise patch.ProbeFailure("MEDIA_CREATE_SOURCE_PATH_INVALID")
+    source = root / ".media" / relative
+    current = source
+    while current != root:
+        require(not current.is_symlink(), "MEDIA_CREATE_SOURCE_LINK_REFUSED")
+        if current.exists():
+            require(current.is_file() if current == source else current.is_dir(), "MEDIA_CREATE_SOURCE_ENTRY_INVALID")
+        current = current.parent
+    resolved = source.resolve()
+    require(resolved.is_relative_to(root.resolve()), "MEDIA_CREATE_SOURCE_PATH_ESCAPED")
+    return resolved
+
+
+def creation_source_fault_command(binary: Path, root: Path, record: dict[str, Any], log: Path, kind: str) -> list[str]:
+    require(kind in {"file", "directory"}, "MEDIA_SOURCE_SYNC_FAULT_KIND_INVALID")
+    source = creation_source_path(root, record)
+    if kind == "file":
+        require(source.is_file(), "MEDIA_CREATE_SOURCE_RETAINED_FILE_REQUIRED")
+        target = owned_file(source, root)
+    else:
+        target = source.parent
+    return [str(binary), "-f", "-yy", "-P", str(target), "-e", "trace=fsync,fdatasync",
+            "-e", "inject=fsync,fdatasync:error=EIO", "-o", str(log)]
+
+
+def creation_source_witness(root: Path, record: dict[str, Any], expected: bytes) -> dict[str, Any]:
+    source = creation_source_path(root, record)
+    require(source.is_file(), "MEDIA_CREATE_SOURCE_RETAINED_FILE_REQUIRED")
+    source = owned_file(source, root)
+    before = source.stat()
+    require(before.st_size == len(expected), "MEDIA_CREATE_SOURCE_BYTES_DIFFER")
+    raw = source.read_bytes()
+    after = owned_file(source, root).stat()
+    require(raw == expected and (before.st_ino, before.st_mtime_ns, before.st_size)
+            == (after.st_ino, after.st_mtime_ns, after.st_size), "MEDIA_CREATE_SOURCE_BYTES_DIFFER")
+    return dict(sha256=digest(raw), inode=after.st_ino, mtimeNs=after.st_mtime_ns)
+
+
 def require_sync_failure_retains_original(before_go: dict[str, Any], before_rust: dict[str, Any],
                                          after_go: dict[str, Any], after_rust: dict[str, Any]) -> None:
     require(same_original(before_go, after_go, IMMUTABLE_GO)
@@ -261,6 +306,52 @@ finally:os.close(fd)
     require("EIO" in log.read_text() and "INJECTED" in log.read_text(), "MEDIA_SYNC_EIO_NOT_OBSERVED")
     return dict(targetKind=kind, unrelatedSyncPassed=True, targetedEIOObserved=True,
                 syscallErrorInjected=True, physicalPowerLossSimulated=False)
+
+
+def qualify_creation_source_fault_trace(binary: Path, scratch: Path, out: Path, kind: str) -> dict[str, Any]:
+    root = scratch / ("source-sync-qualification-" + kind)
+    root.mkdir()
+    record = dict(mediaId="media_aaaaaaaaaaaaaaaa", path="objects/media_aaaaaaaaaaaaaaaa/source.html")
+    source = creation_source_path(root, record)
+    if kind == "file":
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"retained-source")
+    target = source if kind == "file" else source.parent
+    initially_absent = not target.exists()
+    code = """from pathlib import Path
+import errno,os,sys
+p=Path(sys.argv[1]);kind=sys.argv[2]
+with (p/'unrelated').open('wb') as f:
+ f.write(b'other');f.flush();os.fsync(f.fileno())
+print('unrelated-sync-passed',flush=True)
+source=p/'.media/objects/media_aaaaaaaaaaaaaaaa/source.html'
+if kind=='directory':
+ source.parent.mkdir(parents=True);source.write_bytes(b'retained-source')
+ with source.open('rb') as f:os.fsync(f.fileno())
+ print('source-file-sync-passed',flush=True)
+fd=os.open(source,os.O_RDONLY) if kind=='file' else os.open(source.parent,os.O_RDONLY|os.O_DIRECTORY)
+try:
+ try:os.fsync(fd)
+ except OSError as e:
+  if e.errno!=errno.EIO:raise
+  print('target-sync-eio',flush=True)
+ else:raise RuntimeError('source sync did not fail')
+finally:os.close(fd)
+"""
+    log = out / ("source-" + kind + "-filter-syscalls.log")
+    result = subprocess.run(creation_source_fault_command(binary, root, record, log, kind)
+                            + [sys.executable, "-c", code, str(root), kind], capture_output=True, timeout=10)
+    (out / ("source-" + kind + "-filter-output.log")).write_bytes(result.stdout + result.stderr)
+    expected = [b"unrelated-sync-passed", b"target-sync-eio"]
+    if kind == "directory":
+        expected.insert(1, b"source-file-sync-passed")
+    require(result.returncode == 0 and result.stdout.splitlines() == expected, "MEDIA_SOURCE_SYNC_FILTER_NOT_QUALIFIED")
+    injected = [line for line in log.read_text().splitlines() if "EIO" in line and "INJECTED" in line]
+    require(len(injected) == 1 and str(target) in injected[0], "MEDIA_SOURCE_SYNC_FILTER_TARGET_DIFFERS")
+    require(source.read_bytes() == b"retained-source", "MEDIA_SOURCE_SYNC_FILTER_CHANGED_BYTES")
+    require(initially_absent is (kind == "directory"), "MEDIA_SOURCE_SYNC_FILTER_INITIAL_STATE_DIFFERS")
+    return dict(targetKind=kind, targetInitiallyAbsent=initially_absent, unrelatedSyncPassed=True,
+                targetedEIOObserved=True, sourceBytesRetained=True, syscallErrorInjected=True, physicalPowerLossSimulated=False)
 
 
 def stop_trace(child: subprocess.Popen[bytes]) -> None:
@@ -324,7 +415,9 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
     require(not subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT), "MEDIA_RECOVERY_SOURCE_IS_DIRTY")
     require(args.strace.is_file(), "STRACE_REQUIRED")
     report["straceVersion"] = subprocess.check_output([str(args.strace), "--version"], text=True).splitlines()[0]
-    if args.recovery_sync_fault != "none":
+    require(not args.recovery_source_sync_faults or (args.mutation == "create" and args.recovery_sync_fault == "none"),
+            "MEDIA_CREATE_SOURCE_SYNC_SELECTION_INVALID")
+    if args.recovery_sync_fault != "none" or args.recovery_source_sync_faults:
         require(args.sync_strace.is_file(), "MEDIA_SYNC_STRACE_REQUIRED")
         require(args.sync_strace.resolve() != args.strace.resolve(), "MEDIA_SYNC_TRACER_MUST_BE_UNPRIVILEGED")
         require(args.sync_strace.read_bytes() == args.strace.read_bytes(), "MEDIA_SYNC_TRACER_BINARY_DIFFERS")
@@ -380,13 +473,17 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
         tracer: subprocess.Popen[bytes] | None = None
         sync_traced = False
 
-        def launch(label: str, sync_fault: str = "none") -> str:
+        def launch(label: str, sync_fault: str = "none", sync_source: dict[str, Any] | None = None) -> str:
             nonlocal child, identities, sync_traced
             command = [str(binaries / "deepseek-launch"), "--server", "--no-prompt", "--port", str(port)]
             sync_traced = sync_fault != "none"
             if sync_traced:
-                command = sync_fault_command(args.sync_strace, profile / ".media/library.json", profile,
-                                             args.out / "recovery-sync-syscalls.log", sync_fault) + command
+                if sync_source is None:
+                    command = sync_fault_command(args.sync_strace, profile / ".media/library.json", profile,
+                                                 args.out / "recovery-sync-syscalls.log", sync_fault) + command
+                else:
+                    command = creation_source_fault_command(args.sync_strace, profile, sync_source,
+                        args.out / (label + "-syscalls.log"), sync_fault) + command
             with (args.out / (label + ".log")).open("wb") as log:
                 child = subprocess.Popen(command, cwd=scratch, env=launch_env, stdout=log,
                                          stderr=subprocess.STDOUT, start_new_session=sync_traced)
@@ -440,6 +537,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 child, identities = None, []
                 sync_traced = False
 
+        created_source_record: dict[str, Any] | None = None
         try:
             launch("empty-launch")
             require(patch.reads.media_snapshot(profile) is None, "MEDIA_RECOVERY_FRESH_PROFILE_HAS_MEDIA")
@@ -511,6 +609,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                     require(not (profile / ".media" / created["path"]).exists(), "MEDIA_CREATE_SOURCE_FINISHED_BEFORE_HELD_PUBLICATION")
                     report.update(createdMediaId=media_id, sourceAbsentAtCrash=True,
                                   createdRecordAtCrashSha256=digest(json.dumps(created, sort_keys=True).encode()))
+                    created_source_record = created
                 if is_delete:
                     cleanup_held = deletion.snapshot(profile, args.backend)
                     deletion.require_cleanup_not_started(cleanup_before, cleanup_held)
@@ -565,6 +664,69 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 report.update(syncFailureKeptOriginalUnresolved=True, syncFailureObservations=observations,
                               injectedRecoverySyncErrors=injected, publicationUnchangedDuringSyncFailure=True)
                 shutdown()
+            if args.recovery_source_sync_faults:
+                if created_source_record is None:
+                    raise patch.ProbeFailure("MEDIA_CREATE_SOURCE_RECORD_NOT_OBSERVED")
+                source = creation_source_path(profile, created_source_record)
+                expected_source = creation.PAYLOAD["html"].encode()
+                retained_source: dict[str, Any] | None = None
+                for kind in ("directory", "file"):
+                    qualification = qualify_creation_source_fault_trace(args.sync_strace, scratch, args.out, kind)
+                    target = source.parent if kind == "directory" else source
+                    target_absent = not target.exists()
+                    require(target_absent is (kind == "directory"), "MEDIA_CREATE_SOURCE_FAULT_INITIAL_STATE_DIFFERS")
+                    generation_before_fault = patch.generation_observation(profile)
+                    label = "source-" + kind + "-fault-launch"
+                    launch(label, kind, created_source_record)
+                    owned_worker = next(row for row in identities if row["executable"] == "deepseek-worker")
+                    worker_tids: set[int] = set()
+                    observations = 0
+                    deadline = time.monotonic() + 6
+                    while time.monotonic() < deadline:
+                        worker_tids.update(int(p.name) for p in Path(f"/proc/{owned_worker['pid']}/task").iterdir())
+                        fault_go, fault_rust = control_snapshot(scratch), journal_snapshot(scratch, mutation="create")
+                        if fault_go is None or fault_rust is None:
+                            raise patch.ProbeFailure("MEDIA_ORIGINAL_RECOVERY_ROW_MISSING")
+                        require_sync_failure_retains_original(before_go, before_rust, fault_go, fault_rust)
+                        require_same_publication(report["publicationAtCrash"], dict(sha256=digest(library.read_bytes()),
+                            inode=library.stat().st_ino, mtimeNs=library.stat().st_mtime_ns))
+                        if source.exists():
+                            observed_source = creation_source_witness(profile, created_source_record, expected_source)
+                            if retained_source is None:
+                                retained_source = observed_source
+                            require_same_publication(retained_source, observed_source)
+                        observations += 1
+                        time.sleep(0.1)
+                    trace = (args.out / (label + "-syscalls.log")).read_text()
+                    source_errors = [line for line in trace.splitlines() if "EIO" in line and "INJECTED" in line]
+                    require(len(source_errors) >= 2 and all(str(target) in line for line in source_errors),
+                            "MEDIA_CREATE_SOURCE_SYNC_ERRORS_NOT_OBSERVED")
+                    matched = [re.match(r"\s*(?:\[pid\s+)?(\d+)\]?\s+", line) for line in source_errors]
+                    require(all(match is not None for match in matched), "MEDIA_CREATE_SOURCE_SYNC_THREAD_MISSING")
+                    injected_tids = {int(match[1]) for match in matched if match is not None}
+                    require(injected_tids <= worker_tids, "MEDIA_CREATE_SOURCE_SYNC_NOT_OWNED_WORKER")
+                    shutdown()
+                    stable_go, stable_rust = control_snapshot(scratch), journal_snapshot(scratch, mutation="create")
+                    if stable_go is None or stable_rust is None:
+                        raise patch.ProbeFailure("MEDIA_ORIGINAL_RECOVERY_ROW_MISSING")
+                    require_sync_failure_retains_original(before_go, before_rust, stable_go, stable_rust)
+                    after_source = creation_source_witness(profile, created_source_record, expected_source)
+                    if retained_source is None:
+                        raise patch.ProbeFailure("MEDIA_CREATE_SOURCE_NOT_RETAINED_DURING_FAULT")
+                    require_same_publication(retained_source, after_source)
+                    generation_after_fault = patch.generation_observation(profile)
+                    require(generation_after_fault["value"] >= generation_before_fault["value"] + 4,
+                            "MEDIA_CREATE_SOURCE_SYNC_ATTEMPTS_NOT_GENERATION_FENCED")
+                    report["sourceSyncFaultCases"].append(dict(status="PASS", targetKind=kind,
+                        targetInitiallyAbsent=target_absent, qualifiedSyscallFilter=qualification,
+                        syncFailureObservations=observations, injectedSyncErrors=len(source_errors),
+                        workerPid=owned_worker["pid"], workerStartTicks=owned_worker["startTicks"],
+                        injectedWorkerThreadIds=sorted(injected_tids), observedWorkerThreadIds=sorted(worker_tids),
+                        originalGo=stable_go, originalRust=stable_rust, sourceWitness=after_source,
+                        sourceIdentityRetained=True, generationBefore=generation_before_fault,
+                        generationAfterFaultShutdown=generation_after_fault))
+                report.update(sourceBeforeFinalRecovery=retained_source,
+                              generationBeforeFinalRecovery=patch.generation_observation(profile))
             token = launch("recovery-launch")
             writer_after = patch.reads.writer(profile)
             require(writer_after[0] > writer_before[0], "MEDIA_RESTART_WRITER_FENCE_NOT_ADVANCED")
@@ -589,7 +751,8 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             report["postRestartPublicationWitnessRetained"] = True
             (args.out / "after-restart-library.json").write_bytes(final_bytes)
             require(after_go["state"] == after_rust["state"] == "APPLIED", "ORIGINAL_MEDIA_NOT_AUTOMATICALLY_RECONCILED")
-            require_recovery_generation(report["generationAtCrash"], report["generationAfterRestart"])
+            require_recovery_generation(report.get("generationBeforeFinalRecovery", report["generationAtCrash"]),
+                                        report["generationAfterRestart"])
             require(library.read_bytes() == raw_after and library.stat().st_ino == stat_after.st_ino and library.stat().st_mtime_ns == stat_after.st_mtime_ns, "MEDIA_RECOVERY_REPUBLISHED_BYTES")
             status, raw, _ = patch.exchange(origin, "/api/media/" + media_id, "GET", token)
             if is_delete:
@@ -611,6 +774,8 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                         and digest(source.read_bytes()) == expected["sourceSha256"], "MEDIA_CREATE_RECOVERY_SOURCE_DIFFERS")
                 source_stat = source.stat()
                 source_witness = dict(sha256=digest(source.read_bytes()), inode=source_stat.st_ino, mtimeNs=source_stat.st_mtime_ns)
+                if args.recovery_source_sync_faults:
+                    require_same_publication(report["sourceBeforeFinalRecovery"], source_witness)
                 shutdown()
                 token = launch("retained-create-launch")
                 retained_go, retained_rust = control_snapshot(scratch), journal_snapshot(scratch, mutation="create")
@@ -627,6 +792,11 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 require_same_publication(report["publicationAtCrash"], dict(sha256=digest(library.read_bytes()), inode=library_stat.st_ino, mtimeNs=library_stat.st_mtime_ns))
                 report.update(actualCreateSIGKILLQualified=True, actualOriginalASGIRouteCompared=True,
                               recoveredCreateSourceSha256=source_witness["sha256"], createRetainedAcrossAnotherRestart=True)
+                if args.recovery_source_sync_faults:
+                    require([r["targetKind"] for r in report["sourceSyncFaultCases"]] == ["directory", "file"],
+                            "MEDIA_CREATE_SOURCE_SYNC_CASES_INCOMPLETE")
+                    report["actualCreateSourceSyncFaultQualified"] = True
+                    report["sourceDirectoryAndRetainedFileSyncFaultQualified"] = True
             report.update(controlledOriginalOperationRecoveryQualified=True, libraryRepublicationObserved=False,
                           originalSignedOutcomeRetained=True, status="PASS")
         except (patch.ProbeFailure, patch.bootstrap.ProbeFailure, patch.reads.ProbeFailure, creation.ProbeFailure) as error:
@@ -651,6 +821,8 @@ def main() -> int:
     parser.add_argument("--sync-strace", type=Path, default=Path(shutil.which("strace") or "/not-installed/strace"))
     parser.add_argument("--reconcile-timeout", type=float, default=20)
     parser.add_argument("--recovery-sync-fault", choices=("none", "file", "directory"), default="none")
+    parser.add_argument("--recovery-source-sync-faults", action="store_true",
+                        help="For one CREATE, hold directory then retained-file source synchronization unresolved")
     parser.add_argument("--mutation", choices=("patch", "delete", "create"), default="patch")
     parser.add_argument("--backend", choices=("sqlite", "sqlite_vec"), default="sqlite")
     args = parser.parse_args()
@@ -662,6 +834,9 @@ def main() -> int:
         sourceCommit=os.environ.get("GITHUB_SHA"), runId=os.environ.get("GITHUB_RUN_ID"),
         event=os.environ.get("GITHUB_EVENT_NAME"), semanticStageReached=False,
         recoverySyncFault=args.recovery_sync_fault,
+        recoverySourceSyncFaults=args.recovery_source_sync_faults, sourceSyncFaultCases=[],
+        sourceSyncFaultScope="source directory after native installation, then equal-byte retained source file" if args.recovery_source_sync_faults else None,
+        initialSourceTemporaryFileSyncFaultQualified=False, sourceDirectoryAndRetainedFileSyncFaultQualified=False,
         mutation=args.mutation, indexBackend=args.backend if args.mutation == "delete" else None,
         actualDeleteSIGKILLQualified=False, actualCreateSIGKILLQualified=False,
         actualCreateSourceSyncFaultQualified=False, backupRestoreInteractionQualified=False,

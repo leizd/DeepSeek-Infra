@@ -168,6 +168,12 @@ jobs:
       run: |
         set -o pipefail
         python scripts/verify_native_media_recovery.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --strace "$RUNNER_TEMP/native-media-recovery-strace" --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --recovery-sync-fault directory --out artifacts/native-media-recovery/directory-sync-failure 2>&1 | tee artifacts/native-media-recovery/directory-sync-failure.log
+    - name: Retain the original CREATE through source-directory and retained-source-file sync errors
+      if: always() && steps.build.outcome == 'success'
+      timeout-minutes: 15
+      run: |
+        set -o pipefail
+        python scripts/verify_native_media_recovery.py --worker "$CARGO_TARGET_DIR/debug/deepseek-worker" --edge "$CARGO_TARGET_DIR/debug/deepseek-gateway" --strace "$RUNNER_TEMP/native-media-recovery-strace" --sync-strace /usr/bin/strace --go-cache "$RUNNER_TEMP/agent-signing-go-cache" --mutation create --recovery-source-sync-faults --out artifacts/native-media-recovery/create-source-sync-failures 2>&1 | tee artifacts/native-media-recovery/create-source-sync-failures.log
     - name: Install the pinned offline vector oracle
       if: always() && steps.build.outcome == 'success'
       run: python -m pip install --no-deps sqlite-vec==0.1.9

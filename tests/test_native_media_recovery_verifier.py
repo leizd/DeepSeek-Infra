@@ -65,6 +65,120 @@ def test_create_recovery_journal_reads_only_the_original_create(tmp_path: Path) 
     assert path.read_bytes() == before
 
 
+def test_creation_source_fault_path_accepts_only_the_bound_future_source_without_creating_it(tmp_path: Path) -> None:
+    record = creation_record()
+    assert probe.creation_source_path(tmp_path, record) == (tmp_path / ".media" / str(record["path"])).resolve()
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("damage", ["foreign-id", "traversal", "absolute", "different-id", "extension", "non-string"])
+def test_creation_source_fault_path_rejects_a_rebound_or_unowned_source(tmp_path: Path, damage: str) -> None:
+    record = creation_record()
+    if damage == "foreign-id":
+        record["mediaId"] = "media_other"
+    elif damage == "traversal":
+        record["path"] = "objects/../elsewhere/source.html"
+    elif damage == "absolute":
+        record["path"] = (tmp_path / "outside/source.html").as_posix()
+    elif damage == "different-id":
+        record["path"] = "objects/media_aaaaaaaaaaaaaaaa/source.html"
+    elif damage == "extension":
+        record["path"] = "objects/media_0123456789abcdef/payload.pb"
+    else:
+        record["path"] = False
+    with pytest.raises(probe.patch.ProbeFailure, match="MEDIA_CREATE_SOURCE"):
+        probe.creation_source_path(tmp_path, record)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("kind", ["directory", "file"])
+def test_creation_source_fault_filter_is_narrow_and_never_creates_the_target(tmp_path: Path, kind: str) -> None:
+    record = creation_record()
+    source = tmp_path / ".media" / str(record["path"])
+    if kind == "file":
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"retained-source")
+    before = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*"))
+    command = probe.creation_source_fault_command(Path("strace"), tmp_path, record, tmp_path / "trace.log", kind)
+    assert command[command.index("-P") + 1] == str((source if kind == "file" else source.parent).resolve())
+    assert "trace=fsync,fdatasync" in command and "inject=fsync,fdatasync:error=EIO" in command
+    assert "retval=" not in " ".join(command) and "delay_exit" not in " ".join(command)
+    assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*")) == before
+    with pytest.raises(probe.patch.ProbeFailure, match="FAULT_KIND_INVALID"):
+        probe.creation_source_fault_command(Path("strace"), tmp_path, record, tmp_path / "trace.log", "all")
+
+
+def test_creation_source_file_fault_refuses_an_absent_or_changed_retained_source(tmp_path: Path) -> None:
+    record = creation_record()
+    with pytest.raises(probe.patch.ProbeFailure):
+        probe.creation_source_fault_command(Path("strace"), tmp_path, record, tmp_path / "trace.log", "file")
+    source = tmp_path / ".media" / str(record["path"])
+    source.parent.mkdir(parents=True)
+    raw = b"retained-source"
+    source.write_bytes(raw)
+    before = source.stat()
+    witness = probe.creation_source_witness(tmp_path, record, raw)
+    assert witness == dict(sha256=hashlib.sha256(raw).hexdigest(), inode=before.st_ino, mtimeNs=before.st_mtime_ns)
+    with pytest.raises(probe.patch.ProbeFailure, match="SOURCE_BYTES_DIFFER"):
+        probe.creation_source_witness(tmp_path, record, b"different-source")
+    assert source.read_bytes() == raw and source.stat().st_mtime_ns == before.st_mtime_ns
+
+
+def test_creation_source_fault_path_never_follows_a_parent_link(tmp_path: Path) -> None:
+    root, external = tmp_path / "profile", tmp_path / "external"
+    root.mkdir()
+    external.mkdir()
+    try:
+        (root / ".media").symlink_to(external, target_is_directory=True)
+    except OSError:
+        pytest.skip("host cannot create the controlled directory symlink")
+    with pytest.raises(probe.patch.ProbeFailure, match="MEDIA_CREATE_SOURCE"):
+        probe.creation_source_path(root, creation_record())
+    assert list(external.iterdir()) == []
+
+
+def test_creation_source_sync_workflow_retains_the_actual_native_and_original_crash_cases() -> None:
+    import yaml
+
+    job = yaml.safe_load((ROOT / ".github/workflows/native-media-recovery.yml").read_bytes())["jobs"]["media-recovery"]
+    steps = job["steps"]
+    source = [s for s in steps if "--recovery-source-sync-faults" in s.get("run", "")]
+    assert len(source) == 1
+    assert "--mutation create" in source[0]["run"] and "--sync-strace /usr/bin/strace" in source[0]["run"]
+    assert "--strace \"$RUNNER_TEMP/native-media-recovery-strace\"" in source[0]["run"]
+    assert source[0]["if"] == "always() && steps.build.outcome == 'success'"
+    original_create = [s for s in steps if "--mutation create" in s.get("run", "") and "--recovery-source-sync-faults" not in s["run"]]
+    assert len(original_create) == 1
+    assert any("--recovery-sync-fault file" in s.get("run", "") for s in steps)
+    assert any("--recovery-sync-fault directory" in s.get("run", "") for s in steps)
+
+
+@pytest.mark.parametrize("mutation,library_fault", [("patch", "none"), ("delete", "none"), ("create", "file"), ("create", "directory")])
+def test_creation_source_fault_selection_fails_before_build_or_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str, library_fault: str,
+) -> None:
+    tracer = tmp_path / "not-executed-tracer"
+    tracer.write_bytes(b"offline-selection-test")
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_SHA", "1" * 40)
+
+    def read_metadata(command: list[str], **_kwargs: object) -> bytes | str:
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return "1" * 40 + "\n"
+        if command[:2] == ["git", "status"]:
+            return b""
+        if command == [str(tracer), "--version"]:
+            return "strace -- version 6.8\n"
+        raise AssertionError("invalid source-fault selection must precede every build and launch")
+
+    monkeypatch.setattr(probe.subprocess, "check_output", read_metadata)
+    args = argparse.Namespace(strace=tracer, recovery_source_sync_faults=True, mutation=mutation, recovery_sync_fault=library_fault)
+    with pytest.raises(probe.patch.ProbeFailure, match="MEDIA_CREATE_SOURCE_SYNC_SELECTION_INVALID"):
+        probe.run(args, {})
+    assert list(tmp_path.iterdir()) == [tracer]
+
+
 def creation_record(media_id: str = "media_0123456789abcdef") -> dict[str, object]:
     return dict(mediaId=media_id, path=f"objects/{media_id}/source.html", createdAt="2026-10-30T01:00:00Z",
                 updatedAt="2026-10-30T01:00:00Z", type="webpage", title="Original", metadata={"zero": 0})
