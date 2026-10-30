@@ -173,12 +173,12 @@ fn registration(
         filename.trim().to_string()
     };
     let mut mime = normalize_mime(first(payload, &["mimeType", "contentType"]));
-    if !mime.is_empty()
-        && !(["application/pdf", "text/html", "application/xhtml+xml"].contains(&mime.as_str())
-            || ["image/", "audio/", "video/"]
-                .iter()
-                .any(|prefix| mime.starts_with(prefix)))
-    {
+    let supported_mime = mime.is_empty()
+        || ["application/pdf", "text/html", "application/xhtml+xml"].contains(&mime.as_str())
+        || ["image/", "audio/", "video/"]
+            .iter()
+            .any(|prefix| mime.starts_with(prefix));
+    if !supported_mime {
         return Err(AppError::invalid_payload("Unsupported media MIME type"));
     }
     let media_type = declared_media_type(payload.get("type"), &mime, &filename)?;

@@ -78,6 +78,31 @@ def test_create_recovery_identifies_one_new_record_and_keeps_every_prior_record(
     assert probe.retained_created_record(raw, baseline, expected) == actual
 
 
+def test_create_recovery_preserves_duplicate_original_ids_and_record_order() -> None:
+    baseline = [{"mediaId": "duplicate", "title": "first"}, {"mediaId": "duplicate", "title": "second"}]
+    actual, expected = creation_record(), creation_record("media_abcdef0123456789")
+    assert probe.retained_created_record(json.dumps({"media": [*baseline, actual]}).encode(), baseline, expected) == actual
+    for changed in [list(reversed(baseline)), [baseline[0], baseline[0]]]:
+        with pytest.raises(probe.patch.ProbeFailure, match="MEDIA_CREATE_RECOVERY_RETAINED_RECORDS_DIFFER"):
+            probe.retained_created_record(json.dumps({"media": [*changed, actual]}).encode(), baseline, expected)
+
+
+def test_create_recovery_baseline_uses_the_real_original_route_normalization(tmp_path: Path) -> None:
+    fixture = json.loads(probe.patch.FIXTURE.read_text(encoding="utf8"))
+    profile = tmp_path / "original-profile"
+    reference, retained = probe.original_creation_fixture(profile, tmp_path / "oracle.log", fixture["media"])
+    rows = json.loads((profile / ".media/library.json").read_bytes())["media"]
+    assert len(fixture["media"]) == 18 and len(retained) == 10 and len(rows) == 11
+    assert probe.creation.same_json(retained, [row for row in rows if row["mediaId"] != reference["body"]["media"]["mediaId"]])
+    actual = json.loads(json.dumps(reference["body"]["media"]))
+    actual["mediaId"] = "media_0123456789abcdef"
+    actual["path"] = "objects/media_0123456789abcdef/source.html"
+    published = json.dumps({"media": [*retained, actual]}).encode()
+    assert probe.retained_created_record(published, retained, reference["body"]["media"]) == actual
+    with pytest.raises(probe.patch.ProbeFailure, match="MEDIA_CREATE_RECOVERY_RECORD_COUNT_DIFFERS"):
+        probe.retained_created_record(published, fixture["media"], reference["body"]["media"])
+
+
 @pytest.mark.parametrize("damage", ["no-new-record", "two-new-records", "changed-retained-record", "changed-scalar-type"])
 def test_create_recovery_rejects_a_missing_ambiguous_or_changed_publication(damage: str) -> None:
     baseline = [{"mediaId": "retained-old", "metadata": {"enabled": False}}]

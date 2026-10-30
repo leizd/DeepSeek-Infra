@@ -172,7 +172,6 @@ def retained_created_record(raw: bytes, baseline: list[dict[str, Any]], expected
     require(isinstance(rows, list) and len(rows) == len(baseline) + 1
             and all(isinstance(row, dict) for row in rows), "MEDIA_CREATE_RECOVERY_RECORD_COUNT_DIFFERS")
     old_ids = {row["mediaId"] for row in baseline}
-    require(len(old_ids) == len(baseline), "MEDIA_CREATE_RECOVERY_BASELINE_AMBIGUOUS")
     retained = [row for row in rows if row.get("mediaId") in old_ids]
     created = [row for row in rows if row.get("mediaId") not in old_ids]
     require(len(created) == 1 and creation.same_json(retained, baseline), "MEDIA_CREATE_RECOVERY_RETAINED_RECORDS_DIFFER")
@@ -183,6 +182,21 @@ def retained_created_record(raw: bytes, baseline: list[dict[str, Any]], expected
         raise patch.ProbeFailure("MEDIA_CREATE_RECOVERY_RECORD_INVALID") from error
     require(same, "MEDIA_CREATE_RECOVERY_ORIGINAL_RESULT_DIFFERS")
     return record
+
+
+def original_creation_fixture(profile: Path, diagnostic: Path, media: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Use the original route's persisted normalization as the independent oracle."""
+    patch.seed(profile, media)
+    reference = creation.original_observation(profile, diagnostic)
+    raw = owned_file(profile / ".media/library.json", profile).read_bytes()
+    require(len(raw) <= 1_000_000, "MEDIA_CREATE_RECOVERY_ORACLE_LIBRARY_BOUND")
+    rows = json.loads(raw).get("media")
+    if not isinstance(rows, list) or not all(isinstance(row, dict) and isinstance(row.get("mediaId"), str) for row in rows):
+        raise patch.ProbeFailure("MEDIA_CREATE_RECOVERY_ORACLE_LIBRARY_INVALID")
+    created_id = reference["body"]["media"]["mediaId"]
+    retained = [row for row in rows if row["mediaId"] != created_id]
+    require(len(retained) + 1 == len(rows), "MEDIA_CREATE_RECOVERY_ORACLE_RECORD_AMBIGUOUS")
+    return reference, retained
 
 
 def proc_state(pid: int) -> str | None:
@@ -320,6 +334,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                       syncTracerSha256=digest(args.sync_strace.read_bytes()))
     fixture = json.loads(patch.FIXTURE.read_text())
     require(fixture["schemaVersion"] == 1 and len(fixture["media"]) == 18, "MEDIA_FIXTURE_DIFFERS")
+    retained_fixture = fixture["media"]
     is_delete = args.mutation == "delete"
     is_create = args.mutation == "create"
     require(not is_create or args.recovery_sync_fault == "none", "MEDIA_CREATE_SOURCE_SYNC_RECOVERY_NOT_YET_QUALIFIED")
@@ -434,8 +449,13 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 cleanup_before, cleanup_expected, expected = deletion.seed_pair(profile, mirror, args.backend, args.out)
             else:
                 patch.seed(profile, fixture["media"])
-                patch.seed(mirror, fixture["media"])
-                expected = creation.original_observation(mirror, args.out / "original-create-oracle.log") if is_create else patch.original_patch(mirror)
+                if is_create:
+                    expected, retained_fixture = original_creation_fixture(mirror, args.out / "original-create-oracle.log", fixture["media"])
+                    report.update(originalRawFixtureRows=len(fixture["media"]), originalNormalizedRetainedRows=len(retained_fixture),
+                                  originalNormalizedRetainedSha256=digest(json.dumps(retained_fixture, sort_keys=True, ensure_ascii=False).encode()))
+                else:
+                    patch.seed(mirror, fixture["media"])
+                    expected = patch.original_patch(mirror)
             report["offlineMediaFixtureSeeded"] = True
             (args.out / "original-patch-oracle.json").write_bytes((json.dumps(expected, ensure_ascii=False, indent=2) + "\n").encode())
             token = launch("mutation-launch")
@@ -485,7 +505,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 before_rust, before_go, raw_after, stat_after = wait_for(held_publication, 8, "MEDIA_REAL_PUBLICATION_NOT_OBSERVED")
                 require(not response.done(), "MEDIA_RESPONSE_RETURNED_BEFORE_CRASH")
                 if is_create:
-                    created = retained_created_record(raw_after, fixture["media"], expected["body"]["media"])
+                    created = retained_created_record(raw_after, retained_fixture, expected["body"]["media"])
                     creation.require_creation_time(created, request_started, datetime.now(timezone.utc))
                     media_id = created["mediaId"]
                     require(not (profile / ".media" / created["path"]).exists(), "MEDIA_CREATE_SOURCE_FINISHED_BEFORE_HELD_PUBLICATION")
@@ -584,7 +604,7 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
             if is_create:
                 recovered = json.loads(raw)
                 require(status == 200 and recovered.get("ok") is True, "MEDIA_CREATE_RECOVERY_PUBLIC_READ_FAILED")
-                created = retained_created_record(final_bytes, fixture["media"], expected["body"]["media"])
+                created = retained_created_record(final_bytes, retained_fixture, expected["body"]["media"])
                 require(creation.same_json(recovered["media"], created), "MEDIA_CREATE_RECOVERY_PUBLIC_READ_DIFFERS")
                 source = owned_file(profile / ".media" / created["path"], profile)
                 require(source.read_bytes() == creation.PAYLOAD["html"].encode()
@@ -594,7 +614,8 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 shutdown()
                 token = launch("retained-create-launch")
                 retained_go, retained_rust = control_snapshot(scratch), journal_snapshot(scratch, mutation="create")
-                require(retained_go is not None and retained_rust is not None, "MEDIA_CREATE_RETAINED_ORIGINAL_MISSING")
+                if retained_go is None or retained_rust is None:
+                    raise patch.ProbeFailure("MEDIA_CREATE_RETAINED_ORIGINAL_MISSING")
                 require(same_original(after_go, retained_go, (*IMMUTABLE_GO, "outcomeSha256", "state"))
                         and same_original(after_rust, retained_rust, (*IMMUTABLE_RUST, "outcomeSha256", "state")),
                         "MEDIA_CREATE_RETAINED_ORIGINAL_CHANGED")
