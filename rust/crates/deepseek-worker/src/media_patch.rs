@@ -7,9 +7,9 @@ use crate::{
 use deepseek_protocol::{
     ActionFence,
     generated::deepseek::media::v1::{
-        ExecuteMediaDeleteRequest, ExecuteMediaPatchRequest, MediaMutationKind, MediaPatchClaim,
-        MediaPatchOutcome, QueryMediaPatchRequest, QueryMediaPatchResponse,
-        media_mutation_worker_server::MediaMutationWorker,
+        ExecuteMediaDeleteRequest, ExecuteMediaPatchRequest, ExecuteMediaProcessRequest,
+        MediaMutationKind, MediaPatchClaim, MediaPatchOutcome, QueryMediaPatchRequest,
+        QueryMediaPatchResponse, media_mutation_worker_server::MediaMutationWorker,
     },
 };
 use prost::Message as _;
@@ -26,6 +26,9 @@ pub(super) fn validate_claim(
     now: i64,
 ) -> Result<(), Status> {
     let intent = c.intent.as_ref().ok_or_else(invalid)?;
+    if intent.process.is_some() {
+        return Err(invalid());
+    }
     let is_delete = intent.kind == MediaMutationKind::Delete as i32;
     let is_create = intent.kind == MediaMutationKind::Create as i32;
     if intent.kind != MediaMutationKind::Unspecified as i32 && !is_delete && !is_create {
@@ -210,6 +213,13 @@ impl WorkerRpcService {
 
 #[tonic::async_trait]
 impl MediaMutationWorker for WorkerRpcService {
+    async fn execute_process(
+        &self,
+        request: Request<ExecuteMediaProcessRequest>,
+    ) -> Result<Response<MediaPatchOutcome>, Status> {
+        self.media_caller(&request)?;
+        Err(Status::unimplemented("MEDIA_PROCESSING_NOT_READY"))
+    }
     async fn execute_create(
         &self,
         request: Request<ExecuteMediaPatchRequest>,

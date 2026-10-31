@@ -36,6 +36,8 @@ fn media_signer_binds_patch_and_delete_result_shapes_to_the_original_operation()
     mixed_delete.media = patch.media.clone();
     let mut mixed_patch = patch.clone();
     mixed_patch.deleted_count = 1;
+    let mut mixed_process = patch.clone();
+    mixed_process.processed = Some(Default::default());
     let mut empty_patch = patch;
     empty_patch.media = None;
     let mut refused = media_library::refusal(deleted.clone(), 409, "conflict", "Conflict");
@@ -47,6 +49,7 @@ fn media_signer_binds_patch_and_delete_result_shapes_to_the_original_operation()
         too_many,
         mixed_delete,
         mixed_patch,
+        mixed_process,
         empty_patch,
         refused,
         foreign_operation,
@@ -410,6 +413,7 @@ fn fixture() -> (
             ),
         }),
         create: None,
+        process: None,
     };
     let claim = MediaPatchClaim {
         schema_version: 1,

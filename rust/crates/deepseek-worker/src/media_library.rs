@@ -82,6 +82,7 @@ pub(super) fn refusal(
     result.signature.clear();
     result.deleted_count = 0;
     result.created = None;
+    result.processed = None;
     result
 }
 pub(super) fn plan(
@@ -108,6 +109,7 @@ pub(super) fn plan(
         writer_fencing_token: claim.writer_fencing_token,
         deleted_count: 0,
         created: None,
+        processed: None,
     };
     if intent.kind == MediaMutationKind::Delete as i32 {
         if intent.patch.is_some() {

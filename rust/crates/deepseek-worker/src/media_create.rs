@@ -650,6 +650,8 @@ impl MediaCreationPayloads for WorkerRpcService {
         let record: MediaObject = journal.created_record(&claim)?;
         Ok(Response::new(ReadMediaCreateResultResponse {
             media: Some(record),
+            segments: None,
+            indexed: 0,
         }))
     }
 }

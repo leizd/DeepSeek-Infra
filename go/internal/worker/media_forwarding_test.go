@@ -32,6 +32,10 @@ func (f *mediaForwardingFixture) ExecuteCreate(_ context.Context, r *mediav1.Exe
 	return &mediav1.MediaPatchOutcome{OperationId: r.OperationId}, f.failure
 }
 
+func (f *mediaForwardingFixture) ExecuteProcess(context.Context, *mediav1.ExecuteMediaProcessRequest, ...grpc.CallOption) (*mediav1.MediaPatchOutcome, error) {
+	return nil, ErrInvalidWorkerResponse
+}
+
 func (f *mediaForwardingFixture) ExecuteDelete(_ context.Context, r *mediav1.ExecuteMediaDeleteRequest, opts ...grpc.CallOption) (*mediav1.MediaPatchOutcome, error) {
 	f.calls++
 	f.delete = proto.Clone(r).(*mediav1.ExecuteMediaDeleteRequest)

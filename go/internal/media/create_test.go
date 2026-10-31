@@ -38,6 +38,7 @@ func TestMediaCreateManifestBindsContentWithoutExpandingControlRows(t *testing.T
 	for name, change := range map[string]func(*mediav1.MediaPatchIntent){
 		"missing-manifest": func(i *mediav1.MediaPatchIntent) { i.Create = nil },
 		"mixed-patch":      func(i *mediav1.MediaPatchIntent) { i.Patch = &mediav1.MediaPatch{} },
+		"mixed-process":    func(i *mediav1.MediaPatchIntent) { i.Process = &mediav1.MediaProcessOptions{Force: true} },
 		"missing-sha":      func(i *mediav1.MediaPatchIntent) { i.Create.PayloadSha256 = nil },
 		"empty-length":     func(i *mediav1.MediaPatchIntent) { i.Create.PayloadBytes = 0 },
 		"excess-length":    func(i *mediav1.MediaPatchIntent) { i.Create.PayloadBytes = MaxCreatePayloadBytes + 1 },

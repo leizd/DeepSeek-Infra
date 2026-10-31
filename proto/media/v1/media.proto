@@ -53,6 +53,7 @@ enum MediaMutationKind {
   MEDIA_MUTATION_KIND_UNSPECIFIED = 0;
   MEDIA_MUTATION_KIND_DELETE = 1;
   MEDIA_MUTATION_KIND_CREATE = 2;
+  MEDIA_MUTATION_KIND_PROCESS = 3;
 }
 
 message MediaPatchIntent {
@@ -64,6 +65,15 @@ message MediaPatchIntent {
   // Only CREATE. The controller retains the content binding; payload bytes
   // remain in Rust custody and do not enlarge historical control rows.
   MediaCreateManifest create = 6;
+  // Only PROCESS. The controller binds options to an existing media identity;
+  // this is neither CREATE nor permission to replace an uncertain operation.
+  MediaProcessOptions process = 7;
+}
+
+message MediaProcessOptions {
+  bool force = 1;
+  optional bool ocr_enabled = 2;
+  string correlation_id = 3;
 }
 
 // Go owns every lease/fence field. Rust obtains this claim from its own pinned,
@@ -136,6 +146,19 @@ message MediaPatchOutcome {
   // Only a successfully applied CREATE. The original public record is retained
   // separately in Rust custody; its exact typed bytes are signed here.
   MediaCreatedResult created = 17;
+  // Only an applied PROCESS. Failed processing can retain a failed record and
+  // original side effects; it cannot be represented as a no-effect refusal.
+  MediaProcessedResult processed = 18;
+}
+
+message MediaProcessedResult {
+  bytes record_sha256 = 1;
+  uint64 record_bytes = 2;
+  bytes preparation_sha256 = 3;
+  deepseek.common.v1.ActionFence original_fence = 4;
+  bytes segments_sha256 = 5;
+  uint64 segments_bytes = 6;
+  uint32 indexed = 7;
 }
 
 message MediaCreateManifest {
@@ -221,6 +244,38 @@ message MediaIndexItem {
   sint64 vector_id = 13;
 }
 
+// Rust-local original PROCESS preparation, never an admission request. Exact
+// prior segment bytes and stored index values allow conditional replacement and
+// reconciliation of the same action/epoch. Raw JSON strings here preserve the
+// existing SQLite column codec; they are not an opaque business RPC or SQL.
+message MediaProcessPreparation {
+  MediaCreatePreparation effects = 1;
+  bytes before_segments = 2;
+  bool before_segments_present = 3;
+  repeated MediaStoredIndexRow before_index_items = 4;
+  string source_relative_path = 5;
+  bool source_present = 6;
+  bytes source_sha256 = 7;
+  MediaArray result_segments = 8;
+}
+
+message MediaStoredIndexRow {
+  MediaIndexItem record = 1;
+  string embedding_json = 2;
+  string metadata_json = 3;
+  MediaStoredVectorRow vector = 4;
+}
+
+message MediaStoredVectorRow {
+  sint64 row_id = 1;
+  string item_id = 2;
+  string collection = 3;
+  string source_id = 4;
+  string project_id = 5;
+  string scope = 6;
+  bytes embedding = 7;
+}
+
 message MediaCreateStageRequest {
   uint32 schema_version = 1;
   string operation_id = 2;
@@ -243,6 +298,10 @@ message ReadMediaCreateResultRequest {
 
 message ReadMediaCreateResultResponse {
   MediaObject media = 1;
+  // Present only for PROCESS; the signed ProcessedResult binds their exact
+  // deterministic typed bytes and count. An empty array remains present.
+  MediaArray segments = 2;
+  uint32 indexed = 3;
 }
 
 message RecordMediaPatchOutcomeRequest {
@@ -262,6 +321,12 @@ message ExecuteMediaPatchRequest {
 }
 
 message ExecuteMediaDeleteRequest {
+  uint32 schema_version = 1;
+  string operation_id = 2;
+  deepseek.common.v1.ActionFence fence = 3;
+}
+
+message ExecuteMediaProcessRequest {
   uint32 schema_version = 1;
   string operation_id = 2;
   deepseek.common.v1.ActionFence fence = 3;
@@ -289,6 +354,7 @@ service MediaMutationWorker {
   rpc ExecutePatch(ExecuteMediaPatchRequest) returns (MediaPatchOutcome);
   rpc ExecuteDelete(ExecuteMediaDeleteRequest) returns (MediaPatchOutcome);
   rpc ExecuteCreate(ExecuteMediaPatchRequest) returns (MediaPatchOutcome);
+  rpc ExecuteProcess(ExecuteMediaProcessRequest) returns (MediaPatchOutcome);
   rpc QueryPatch(QueryMediaPatchRequest) returns (QueryMediaPatchResponse);
 }
 

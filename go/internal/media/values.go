@@ -35,7 +35,7 @@ func RequestDigest(intent *mediav1.MediaPatchIntent) ([]byte, error) {
 	if intent == nil || intent.SchemaVersion != 1 || intent.OperationId == "" || len(intent.OperationId) > 128 || intent.MediaId == "" || len(intent.MediaId) > 512 {
 		return nil, ErrInvalid
 	}
-	if len(intent.ProtoReflect().GetUnknown()) != 0 {
+	if len(intent.ProtoReflect().GetUnknown()) != 0 || intent.Process != nil {
 		return nil, ErrInvalid
 	}
 	switch intent.Kind {
@@ -290,6 +290,9 @@ func VerifyOutcome(outcome *mediav1.MediaPatchOutcome, claim *mediav1.MediaPatch
 		return ErrInvalid
 	}
 	if outcome.State != mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED && outcome.State != mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_REFUSED {
+		return ErrInvalid
+	}
+	if outcome.Processed != nil {
 		return ErrInvalid
 	}
 	if claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED && claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE && claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_CREATE {

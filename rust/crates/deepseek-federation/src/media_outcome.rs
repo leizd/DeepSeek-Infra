@@ -45,6 +45,7 @@ impl ControlSigningKey {
             outcome.created.is_none() && outcome.media.is_some() && outcome.deleted_count == 0
         };
         if outcome.schema_version != 1
+            || outcome.processed.is_some()
             || !(patch || deletion || creation)
             || outcome.operation_id != fence.action_id
             || outcome.operation_id.len() > 128

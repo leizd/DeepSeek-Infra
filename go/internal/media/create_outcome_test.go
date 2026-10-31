@@ -51,6 +51,7 @@ func TestMediaCreateSignedResultRequiresOriginalDigestFenceAndShape(t *testing.T
 		"foreign-result-fence": func(o *mediav1.MediaPatchOutcome) { o.Created.OriginalFence.ActionId = "other" },
 		"mixed-patch":          func(o *mediav1.MediaPatchOutcome) { o.Media = &mediav1.MediaObject{} },
 		"mixed-delete":         func(o *mediav1.MediaPatchOutcome) { o.DeletedCount = 1 },
+		"mixed-process":        func(o *mediav1.MediaPatchOutcome) { o.Processed = &mediav1.MediaProcessedResult{} },
 		"wrong-intent":         func(o *mediav1.MediaPatchOutcome) { o.RequestSha256[0] ^= 1 },
 	} {
 		t.Run(name, func(t *testing.T) {
