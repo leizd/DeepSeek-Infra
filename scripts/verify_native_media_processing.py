@@ -121,7 +121,7 @@ def compare_processing(media: dict[str, Any], segments: list[dict[str, Any]], in
         create.require(create.same_json(actual_index_metadata, prior_index_metadata), "MEDIA_PROCESS_INDEX_METADATA_DIFFERS")
 
 
-def verify(origin: str, token: str, profile: Path, mirror: Path, out: Path, report: dict[str, Any]) -> None:
+def verify(origin: str, token: str, profile: Path, mirror: Path, out: Path, report: dict[str, Any]) -> list[dict[str, Any]]:
     create.require(os.environ.get("GITHUB_ACTIONS") == "true" and sys.platform == "linux", "MEDIA_PROCESS_VERIFICATION_IS_CLOUD_ONLY")
     references = {}
     report["mediaProcessingOriginalReferences"] = []
@@ -148,10 +148,13 @@ def verify(origin: str, token: str, profile: Path, mirror: Path, out: Path, repo
         if source is not None:
             create.require(source.resolve(strict=True).is_relative_to((profile / ".media").resolve()), "MEDIA_PROCESS_SOURCE_ESCAPED_PROFILE")
             create.require(hashlib.sha256(source.read_bytes()).hexdigest() == expected["sourceSha256"], "MEDIA_PROCESS_SOURCE_BYTES_DIFFER")
+        read_status, retained, _ = create.exchange(origin, "/api/media/" + media["mediaId"], "GET", token)
+        row.update(createPublicReadStatus=read_status)
+        create.require(read_status == 200 and create.same_json(retained["media"], media), "MEDIA_PROCESS_READY_PUBLIC_READ_DIFFERS")
         status, segment_body, _ = create.exchange(origin, "/api/media/" + media["mediaId"] + "/segments", "GET", token)
         create.require(status == 200, "MEDIA_PROCESS_PUBLIC_SEGMENTS_UNAVAILABLE")
         compare_processing(media, segment_body["segments"], read_index(profile, references["sqlite"]["ragDatabaseRelativePath"], media), expected)
-        row.update(createProcessingStatus="PASS", createdSegments=len(segment_body["segments"]), mediaId=media["mediaId"])
+        row.update(createProcessingStatus="PASS", createPublicReadMatches=True, createdSegments=len(segment_body["segments"]), mediaId=media["mediaId"])
         created.append((row, expected, media, suffix, source))
     # Every retained creation case must complete before force is exercised.
     # A later force failure cannot erase which actual create/index paths ran.
@@ -180,8 +183,12 @@ def verify(origin: str, token: str, profile: Path, mirror: Path, out: Path, repo
     create.require(read_index(profile, references["sqlite"]["ragDatabaseRelativePath"], failed_media) == [], "MEDIA_PROCESS_FAILED_UNEXPECTED_INDEX")
     report["nativeMediaProcessingFailedCase"].update(status="PASS", retainedFailedRecord=True, originalSourceRetained=True,
         originalPublicErrorRetained=True, operationId=headers.get("x-deepseek-operation-id"))
+    observations = []
     for row, expected, media, suffix, source in created:
-        status, force_body, _ = create.exchange(origin, "/api/media/" + media["mediaId"] + "/process?force=true", "POST", token, {})
+        status, force_body, headers = create.exchange(origin, "/api/media/" + media["mediaId"] + "/process?force=true", "POST", token, {})
+        # Retain the actual numeric failure and body before any assertion.
+        row.update(forceStatus=status, forceErrorBody=force_body if status != 200 else None,
+                   forceOperationId=headers.get("x-deepseek-operation-id"))
         create.require(status == 200, "MEDIA_PROCESS_FORCE_PUBLIC_RESULT_DIFFERS")
         forced_media = force_body["media"]
         create.require(create.same_json(create.canonical_media(forced_media, suffix), create.canonical_media(expected["forced"]["media"], suffix)),
@@ -189,12 +196,21 @@ def verify(origin: str, token: str, profile: Path, mirror: Path, out: Path, repo
         compare_processing(forced_media, force_body["segments"], read_index(profile, references["sqlite"]["ragDatabaseRelativePath"], forced_media), expected, True)
         read_status, retained, _ = create.exchange(origin, "/api/media/" + media["mediaId"], "GET", token)
         create.require(read_status == 200 and create.same_json(retained["media"], forced_media), "MEDIA_PROCESS_PUBLIC_READ_DIFFERS")
+        segment_status, stored_segments, _ = create.exchange(origin, "/api/media/" + media["mediaId"] + "/segments", "GET", token)
+        create.require(segment_status == 200 and create.same_json(stored_segments["segments"], force_body["segments"]),
+                       "MEDIA_PROCESS_FORCE_PUBLIC_SEGMENTS_DIFFER")
+        create.require(isinstance(row["forceOperationId"], str) and row["forceOperationId"].startswith("media-process-"),
+                       "MEDIA_PROCESS_ORIGINAL_OPERATION_MISSING")
         if source is not None:
             create.require(hashlib.sha256(source.read_bytes()).hexdigest() == expected["sourceSha256"], "MEDIA_PROCESS_FORCE_SOURCE_CHANGED")
-        row.update(status="PASS", segments=len(force_body["segments"]), indexed=force_body["indexed"], forceStatus=status)
+        row.update(status="PASS", segments=len(force_body["segments"]), indexed=force_body["indexed"], forcePublicReadsMatch=True)
+        observations.append(dict(media=forced_media, segments=force_body["segments"], sourceSha256=expected["sourceSha256"] if source is not None else None,
+                                 indexedRows=read_index(profile, references["sqlite"]["ragDatabaseRelativePath"], forced_media),
+                                 ragDatabaseRelativePath=references["sqlite"]["ragDatabaseRelativePath"]))
     report.update(actualNativeSQLiteTextProcessingCasesQualified=True, actualNativeProcessingBackend="sqlite",
         nativeSQLiteVecProcessingQualified=False, nativeBinaryOCRAndPDFExtractionQualified=False,
         nativeProcessingCrashRecoveryQualified=False, processPipelineQualified=False)
+    return observations
 
 ORACLE = r'''
 import dataclasses,hashlib,json,os

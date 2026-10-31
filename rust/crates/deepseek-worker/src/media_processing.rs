@@ -38,8 +38,16 @@ fn value(object: &MediaObject) -> Result<Value, Status> {
 /// OCR argument in the original API and process_media receives None, so this
 /// path does not invoke OCR engines or external providers before admission.
 pub(super) fn prepare(
+    prepared: MediaCreatePreparation,
+    now: i64,
+) -> Result<MediaCreatePreparation, Status> {
+    prepare_with_ocr(prepared, now, false)
+}
+
+pub(super) fn prepare_with_ocr(
     mut prepared: MediaCreatePreparation,
     now: i64,
+    ocr_enabled: bool,
 ) -> Result<MediaCreatePreparation, Status> {
     let enabled = std::env::var("LOCAL_RAG_ENABLED")
         .map(|v| ["1", "true", "yes", "on"].contains(&v.trim().to_lowercase().as_str()))
@@ -77,7 +85,12 @@ pub(super) fn prepare(
         final_http_status: 200,
         ..Default::default()
     };
-    match prepare_segments(&processing, &prepared.source_bytes, false, &SystemEntropy) {
+    match prepare_segments(
+        &processing,
+        &prepared.source_bytes,
+        ocr_enabled,
+        &SystemEntropy,
+    ) {
         Ok(segments) => {
             let rows = if enabled {
                 index_items(
@@ -174,7 +187,7 @@ pub(super) fn has_processing(
         .is_some())
 }
 
-fn validate(
+pub(super) fn validate(
     prepared: &MediaCreatePreparation,
     claim: &MediaPatchClaim,
     outcome: &MediaPatchOutcome,
@@ -185,6 +198,11 @@ fn validate(
     let final_record = value(prepared.record.as_ref().ok_or_else(unknown)?)?;
     if effect.schema_version != 1
         || effect.force
+            != claim
+                .intent
+                .as_ref()
+                .and_then(|i| i.process.as_ref())
+                .is_some_and(|p| p.force)
         || processing["mediaId"].as_str() != Some(id)
         || final_record["mediaId"] != processing["mediaId"]
         || processing["status"] != "processing"
@@ -240,7 +258,7 @@ fn validate(
     Ok(())
 }
 
-fn intermediate(
+pub(super) fn intermediate(
     after: &[u8],
     effect: &MediaProcessingPreparation,
     id: &str,
@@ -256,7 +274,10 @@ fn intermediate(
     serde_json::to_vec_pretty(&document).map_err(|_| unknown())
 }
 
-fn schema(connection: &Connection, effect: &MediaProcessingPreparation) -> Result<(), Status> {
+pub(super) fn schema(
+    connection: &Connection,
+    effect: &MediaProcessingPreparation,
+) -> Result<(), Status> {
     let triggers:i64=connection.query_row("SELECT COUNT(*) FROM sqlite_schema WHERE type='trigger' AND tbl_name IN ('rag_items','rag_meta','rag_vec')",[],|r|r.get(0)).map_err(|_|unknown())?;
     if triggers != 0 {
         return Err(unknown());
@@ -316,7 +337,7 @@ fn schema(connection: &Connection, effect: &MediaProcessingPreparation) -> Resul
     Ok(())
 }
 
-fn row_values(item: &MediaIndexItem) -> Result<(String, String, Vec<u8>), Status> {
+pub(super) fn row_values(item: &MediaIndexItem) -> Result<(String, String, Vec<u8>), Status> {
     let embedding = item
         .embedding_f64le
         .chunks_exact(8)

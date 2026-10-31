@@ -85,13 +85,9 @@ pub(super) fn refusal(
     result.processed = None;
     result
 }
-pub(super) fn plan(
-    root: &Path,
-    claim: &MediaPatchClaim,
-    before: &[u8],
-) -> Result<(MediaPatchOutcome, Option<Vec<u8>>), Status> {
+pub(super) fn outcome(claim: &MediaPatchClaim, before: &[u8]) -> Result<MediaPatchOutcome, Status> {
     let intent = claim.intent.as_ref().ok_or_else(invalid)?;
-    let mut result = MediaPatchOutcome {
+    Ok(MediaPatchOutcome {
         schema_version: 1,
         operation_id: intent.operation_id.clone(),
         original_fence: claim.fence.clone(),
@@ -110,7 +106,16 @@ pub(super) fn plan(
         deleted_count: 0,
         created: None,
         processed: None,
-    };
+    })
+}
+
+pub(super) fn plan(
+    root: &Path,
+    claim: &MediaPatchClaim,
+    before: &[u8],
+) -> Result<(MediaPatchOutcome, Option<Vec<u8>>), Status> {
+    let intent = claim.intent.as_ref().ok_or_else(invalid)?;
+    let mut result = outcome(claim, before)?;
     if intent.kind == MediaMutationKind::Delete as i32 {
         if intent.patch.is_some() {
             return Err(invalid());

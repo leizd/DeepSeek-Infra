@@ -39,7 +39,8 @@ def test_processing_observer_refuses_partial_or_unavailable_original_references(
         processing.require_reference(reference, reference["backend"])
 
 
-def test_processing_observer_checks_all_creations_before_force_and_keeps_force_required(tmp_path, monkeypatch):
+@pytest.mark.parametrize("ready_read_matches", [True, False])
+def test_processing_observer_checks_all_creations_before_force_and_keeps_force_required(tmp_path, monkeypatch, ready_read_matches):
     from types import SimpleNamespace
     processing = importlib.import_module("verify_native_media_processing")
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
@@ -74,17 +75,32 @@ def test_processing_observer_checks_all_creations_before_force_and_keeps_force_r
             return 200, dict(media=[failed_media]), {}
         if path == "/api/media/media_failed":
             return 200, dict(media=failed_media), {}
+        if method == "GET" and not path.endswith("/segments"):
+            matching = [row["media"] for row in rows if path.endswith("/" + row["media"]["mediaId"])]
+            if matching:
+                media = matching[0] if ready_read_matches else dict(mediaId="media_wrong")
+                return 200, dict(media=media), {}
         return 200, dict(segments=[]), {}
 
     monkeypatch.setattr(processing.create, "exchange", exchange)
     report = {}
-    with pytest.raises(processing.create.ProbeFailure, match="MEDIA_PROCESS_FORCE_PUBLIC_RESULT_DIFFERS"):
+    failure = "MEDIA_PROCESS_FORCE_PUBLIC_RESULT_DIFFERS" if ready_read_matches else "MEDIA_PROCESS_READY_PUBLIC_READ_DIFFERS"
+    with pytest.raises(processing.create.ProbeFailure, match=failure):
         processing.verify("http://native.invalid", "synthetic", tmp_path, tmp_path, tmp_path, report)
-    assert calls[:12:2] == [("POST", "/api/media")] * 6
-    assert len(calls) == 17 and calls[-1][1].endswith("/process?force=true")
+    if not ready_read_matches:
+        assert calls == [("POST", "/api/media"), ("GET", "/api/media/media_webpage")]
+        assert not report.get("nativeMediaCreationProcessingSubstepQualified")
+        assert not report.get("actualNativeSQLiteTextProcessingCasesQualified")
+        assert report["nativeMediaProcessingCases"][0]["createPublicReadStatus"] == 200
+        return
+    assert calls[:18:3] == [("POST", "/api/media")] * 6
+    assert len(calls) == 23 and calls[-1][1].endswith("/process?force=true")
     assert report["nativeMediaProcessingCreatesVerified"] == 6
     assert report["nativeMediaCreationProcessingSubstepQualified"] is True
     assert all(row["createProcessingStatus"] == "PASS" for row in report["nativeMediaProcessingCases"])
+    assert all(row["createPublicReadMatches"] is True for row in report["nativeMediaProcessingCases"])
+    assert report["nativeMediaProcessingCases"][0]["forceStatus"] == 503
+    assert report["nativeMediaProcessingCases"][0]["forceErrorBody"] == dict(code="EFFECT_UNKNOWN")
     assert report["nativeMediaProcessingFailedCase"]["status"] == "PASS"
     assert not report.get("actualNativeSQLiteTextProcessingCasesQualified")
     assert not report.get("processPipelineQualified")

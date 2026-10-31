@@ -85,7 +85,7 @@ func (c *Client) ReadMediaCreateResult(ctx context.Context, outcome *mediav1.Med
 	if err != nil {
 		return nil, err
 	}
-	if response == nil || response.Media == nil {
+	if response == nil || response.Media == nil || response.Segments != nil || response.Indexed != 0 {
 		return nil, ErrInvalidWorkerResponse
 	}
 	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(response.Media)

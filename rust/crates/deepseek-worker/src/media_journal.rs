@@ -184,6 +184,22 @@ impl MediaJournal {
             .record
             .ok_or_else(invalid)
     }
+    pub(super) fn processed_result(
+        &self,
+        claim: &MediaPatchClaim,
+    ) -> Result<
+        deepseek_protocol::generated::deepseek::media::v1::ReadMediaCreateResultResponse,
+        Status,
+    > {
+        self.verify_original_claim(claim)?;
+        let operation = &claim.intent.as_ref().ok_or_else(invalid)?.operation_id;
+        let row = self.retained(operation)?.ok_or_else(invalid)?;
+        let outcome = self.terminal(&row)?.ok_or_else(invalid)?;
+        if row.state != "APPLIED" || outcome.processed.is_none() {
+            return Err(invalid());
+        }
+        crate::media_process::result(&self.creation_staging, claim, &outcome)
+    }
     pub(super) fn active(&self) -> Result<Option<MediaPatchClaim>, Status> {
         let bytes = self
             .connection
@@ -284,6 +300,10 @@ impl MediaJournal {
         }
         let before = read_library(&self.root)?;
         let (planned, after) = if intent.kind
+            == deepseek_protocol::generated::deepseek::media::v1::MediaMutationKind::Process as i32
+        {
+            crate::media_process::plan(&self.root, &self.creation_staging, claim, &before)?
+        } else if intent.kind
             == deepseek_protocol::generated::deepseek::media::v1::MediaMutationKind::Create as i32
         {
             crate::media_create::plan(&self.root, &self.creation_staging, claim, &before)?
@@ -444,12 +464,24 @@ impl MediaJournal {
             if count != 1 {
                 return Err(invalid());
             }
-            let processing = crate::media_processing::has_processing(
-                &self.creation_staging,
-                claim,
-                &row.planned,
-            )?;
-            let published = if processing {
+            let standalone = row.planned.processed.is_some();
+            let processing = standalone
+                || crate::media_processing::has_processing(
+                    &self.creation_staging,
+                    claim,
+                    &row.planned,
+                )?;
+            let published = if standalone {
+                crate::media_process::publish(
+                    &self.root,
+                    &self.creation_staging,
+                    claim,
+                    &row.planned,
+                    &row.before,
+                    after,
+                    true,
+                )?
+            } else if processing {
                 crate::media_processing::publish(
                     &self.root,
                     &self.creation_staging,
@@ -515,6 +547,21 @@ impl MediaJournal {
         if let Some(outcome) = self.terminal(&row)? {
             return Ok(Some(outcome));
         }
+        if row.state == "APPLYING" && row.planned.processed.is_some() {
+            let _reconciliation = mutation_scope(None, &self.root).map_err(|_| invalid())?;
+            crate::media_process::publish(
+                &self.root,
+                &self.creation_staging,
+                &claim,
+                &row.planned,
+                &row.before,
+                row.after.as_ref().ok_or_else(invalid)?,
+                false,
+            )?;
+            return self
+                .settle(operation, "APPLYING", row.planned, key)
+                .map(Some);
+        }
         if row.state == "APPLYING"
             && crate::media_processing::has_processing(
                 &self.creation_staging,
@@ -569,6 +616,7 @@ impl MediaJournal {
         unknown.media = None;
         unknown.deleted_count = 0;
         unknown.created = None;
+        unknown.processed = None;
         unknown.http_status = 503;
         unknown.error_code = "EFFECT_UNKNOWN".into();
         unknown.error_message = "Media publication requires reconciliation".into();

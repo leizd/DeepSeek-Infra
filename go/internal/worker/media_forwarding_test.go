@@ -15,6 +15,8 @@ import (
 // a TLS server or Rust worker and cannot qualify transport/custody/file effects.
 type mediaForwardingFixture struct {
 	create                       *mediav1.ExecuteMediaPatchRequest
+	process                      *mediav1.ExecuteMediaProcessRequest
+	processOptions               int
 	createOptions                int
 	execute                      *mediav1.ExecuteMediaPatchRequest
 	delete                       *mediav1.ExecuteMediaDeleteRequest
@@ -32,8 +34,11 @@ func (f *mediaForwardingFixture) ExecuteCreate(_ context.Context, r *mediav1.Exe
 	return &mediav1.MediaPatchOutcome{OperationId: r.OperationId}, f.failure
 }
 
-func (f *mediaForwardingFixture) ExecuteProcess(context.Context, *mediav1.ExecuteMediaProcessRequest, ...grpc.CallOption) (*mediav1.MediaPatchOutcome, error) {
-	return nil, ErrInvalidWorkerResponse
+func (f *mediaForwardingFixture) ExecuteProcess(_ context.Context, r *mediav1.ExecuteMediaProcessRequest, opts ...grpc.CallOption) (*mediav1.MediaPatchOutcome, error) {
+	f.calls++
+	f.process = proto.Clone(r).(*mediav1.ExecuteMediaProcessRequest)
+	f.processOptions = len(opts)
+	return &mediav1.MediaPatchOutcome{OperationId: r.OperationId}, f.failure
 }
 
 func (f *mediaForwardingFixture) ExecuteDelete(_ context.Context, r *mediav1.ExecuteMediaDeleteRequest, opts ...grpc.CallOption) (*mediav1.MediaPatchOutcome, error) {

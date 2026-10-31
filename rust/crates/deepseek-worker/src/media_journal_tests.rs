@@ -903,6 +903,8 @@ fn create_claim(
 
 #[path = "media_processing_tests.rs"]
 mod processing;
+#[path = "media_process_tests.rs"]
+mod standalone_process;
 
 #[test]
 fn media_create_original_result_and_source_survive_close_and_replay_without_republishing() {

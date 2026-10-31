@@ -273,7 +273,23 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 **observation_counts(report, len(observations)))
             if getattr(args, "verify_processing", False):
                 import verify_native_media_processing as processing
-                processing.verify(origin, token, profile, mirror / "processing", args.out, report)
+                processed = processing.verify(origin, token, profile, mirror / "processing", args.out, report)
+                published_processing = library.read_bytes()
+                stop()
+                token = launch("processing-retained-launch")
+                for observed in processed:
+                    media = observed["media"]
+                    read_status, retained, _ = exchange(origin, "/api/media/" + media["mediaId"], "GET", token)
+                    segment_status, stored_segments, _ = exchange(origin, "/api/media/" + media["mediaId"] + "/segments", "GET", token)
+                    require(read_status == segment_status == 200 and same_json(retained["media"], media) and
+                            same_json(stored_segments["segments"], observed["segments"]), "MEDIA_PROCESS_RESTART_PUBLIC_READ_DIFFERS")
+                    require(processing.read_index(profile, observed["ragDatabaseRelativePath"], media) == observed["indexedRows"],
+                            "MEDIA_PROCESS_RESTART_INDEX_DIFFERS")
+                    if observed["sourceSha256"] is not None:
+                        require(hashlib.sha256((profile / ".media" / media["path"]).read_bytes()).hexdigest() == observed["sourceSha256"],
+                                "MEDIA_PROCESS_RESTART_SOURCE_DIFFERS")
+                require(library.read_bytes() == published_processing and len(processed) == 6, "MEDIA_PROCESS_RESTART_LIBRARY_CHANGED")
+                report.update(actualNativeProcessingRestartQualified=True, nativeProcessingReadAndRestartCases=len(processed))
             report["status"] = "PASS"
         finally:
             stop()

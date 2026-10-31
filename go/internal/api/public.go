@@ -92,7 +92,13 @@ func RegisterPublicView(mux *http.ServeMux, control *store.Control, view PublicV
 		backupTargetsList(writer, request, control)
 	})
 	mux.HandleFunc("/api/media", func(w http.ResponseWriter, r *http.Request) { mediaCreate(w, r, control, view) })
-	mux.HandleFunc("/api/media/", func(w http.ResponseWriter, r *http.Request) { mediaPatch(w, r, control, view) })
+	mux.HandleFunc("/api/media/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(strings.TrimPrefix(r.URL.Path, "/api/media/"), "/process") {
+			mediaProcess(w, r, control, view)
+			return
+		}
+		mediaPatch(w, r, control, view)
+	})
 	mux.HandleFunc("/api/", notImplemented)
 }
 

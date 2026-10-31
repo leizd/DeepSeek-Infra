@@ -195,7 +195,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .add_service(
             MediaCreationPayloadsServer::new(service.clone())
                 .max_decoding_message_size(256 * 1024 + 1024)
-                .max_encoding_message_size(128 * 1024 * 1024 + 1024),
+                .max_encoding_message_size(2 * 128 * 1024 * 1024 + 1024),
         )
         .add_service(WorkerServer::new(service))
         .serve_with_shutdown(address, async {

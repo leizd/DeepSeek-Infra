@@ -59,16 +59,20 @@ pub(super) fn sync_directory(path: &Path) -> Result<(), Status> {
 }
 
 fn bounded_read(path: &Path) -> Result<Vec<u8>, Status> {
+    bounded_read_limited(path, MAX_PAYLOAD_BYTES)
+}
+
+pub(super) fn bounded_read_limited(path: &Path, limit: usize) -> Result<Vec<u8>, Status> {
     media_library::reject_links(path)?;
     let file = fs::File::open(path).map_err(|_| invalid())?;
     if !file.metadata().map_err(|_| invalid())?.is_file() {
         return Err(invalid());
     }
     let mut bytes = Vec::new();
-    file.take(MAX_PAYLOAD_BYTES as u64 + 1)
+    file.take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| invalid())?;
-    if bytes.len() > MAX_PAYLOAD_BYTES {
+    if bytes.len() > limit {
         return Err(invalid());
     }
     media_library::reject_links(path)?;
@@ -77,7 +81,7 @@ fn bounded_read(path: &Path) -> Result<Vec<u8>, Status> {
 
 // No replacement of an existing content identity. A retry can observe exactly
 // the retained bytes; conflicting/partial content never authorizes a new write.
-fn confirm_retained(path: &Path, bytes: &[u8]) -> Result<(), Status> {
+fn confirm_retained(path: &Path, bytes: &[u8], limit: usize) -> Result<(), Status> {
     media_library::reject_links(path)?;
     let mut options = fs::OpenOptions::new();
     options.read(true);
@@ -91,10 +95,10 @@ fn confirm_retained(path: &Path, bytes: &[u8]) -> Result<(), Status> {
     }
     let mut retained = Vec::new();
     (&file)
-        .take(MAX_PAYLOAD_BYTES as u64 + 1)
+        .take(limit as u64 + 1)
         .read_to_end(&mut retained)
         .map_err(|_| invalid())?;
-    if retained.len() > MAX_PAYLOAD_BYTES || retained.as_slice() != bytes {
+    if retained.len() > limit || retained.as_slice() != bytes {
         return Err(invalid());
     }
     file.sync_all().map_err(|_| invalid())?;
@@ -104,19 +108,23 @@ fn confirm_retained(path: &Path, bytes: &[u8]) -> Result<(), Status> {
         sync_directory(grandparent)?;
     }
     media_library::reject_links(path)?;
-    if bounded_read(path)? != bytes {
+    if bounded_read_limited(path, limit)? != bytes {
         return Err(invalid());
     }
     Ok(())
 }
 
 pub(super) fn persist_bound(path: &Path, bytes: &[u8]) -> Result<(), Status> {
-    if bytes.len() > MAX_PAYLOAD_BYTES {
+    persist_bound_limited(path, bytes, MAX_PAYLOAD_BYTES)
+}
+
+pub(super) fn persist_bound_limited(path: &Path, bytes: &[u8], limit: usize) -> Result<(), Status> {
+    if bytes.len() > limit {
         return Err(invalid());
     }
     media_library::reject_links(path)?;
     if path.exists() {
-        return confirm_retained(path, bytes);
+        return confirm_retained(path, bytes, limit);
     }
     let parent = path.parent().ok_or_else(invalid)?;
     fs::create_dir_all(parent).map_err(|_| invalid())?;
@@ -128,7 +136,7 @@ pub(super) fn persist_bound(path: &Path, bytes: &[u8]) -> Result<(), Status> {
     match temporary.persist_noclobber(path) {
         Ok(file) => file.sync_all().map_err(|_| invalid())?,
         Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
-            return confirm_retained(path, bytes);
+            return confirm_retained(path, bytes, limit);
         }
         Err(_) => return Err(invalid()),
     }
@@ -634,10 +642,13 @@ impl MediaCreationPayloads for WorkerRpcService {
             .media_claim(&input.operation_id, fence)
             .await?;
         if claim.state != "APPLIED"
-            || claim
-                .intent
-                .as_ref()
-                .is_none_or(|intent| intent.kind != MediaMutationKind::Create as i32)
+            || claim.intent.as_ref().is_none_or(|intent| {
+                ![
+                    MediaMutationKind::Create as i32,
+                    MediaMutationKind::Process as i32,
+                ]
+                .contains(&intent.kind)
+            })
         {
             return Err(invalid());
         }
@@ -647,6 +658,13 @@ impl MediaCreationPayloads for WorkerRpcService {
             .ok_or_else(invalid)?
             .lock()
             .await;
+        if claim
+            .intent
+            .as_ref()
+            .is_some_and(|intent| intent.kind == MediaMutationKind::Process as i32)
+        {
+            return journal.processed_result(&claim).map(Response::new);
+        }
         let record: MediaObject = journal.created_record(&claim)?;
         Ok(Response::new(ReadMediaCreateResultResponse {
             media: Some(record),

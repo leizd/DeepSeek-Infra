@@ -26,15 +26,22 @@ pub(super) fn validate_claim(
     now: i64,
 ) -> Result<(), Status> {
     let intent = c.intent.as_ref().ok_or_else(invalid)?;
-    if intent.process.is_some() {
+    let is_process = intent.kind == MediaMutationKind::Process as i32;
+    if !is_process && intent.process.is_some() {
         return Err(invalid());
     }
     let is_delete = intent.kind == MediaMutationKind::Delete as i32;
     let is_create = intent.kind == MediaMutationKind::Create as i32;
-    if intent.kind != MediaMutationKind::Unspecified as i32 && !is_delete && !is_create {
+    if intent.kind != MediaMutationKind::Unspecified as i32
+        && !is_delete
+        && !is_create
+        && !is_process
+    {
         return Err(invalid());
     }
-    let prefix = if is_create {
+    let prefix = if is_process {
+        "media-process-"
+    } else if is_create {
         "media-create-"
     } else if is_delete {
         "media-delete-"
@@ -62,6 +69,31 @@ pub(super) fn validate_claim(
         || intent.encoded_len() > 4 * 1024 * 1024
     {
         return Err(invalid());
+    }
+    if is_process {
+        return if intent.patch.is_none()
+            && intent.create.is_none()
+            && operation
+                .strip_prefix("media-process-")
+                .is_some_and(|nonce| {
+                    nonce.len() == 32
+                        && nonce
+                            .bytes()
+                            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+                })
+            && intent.process.as_ref().is_some_and(|p| {
+                p.correlation_id.len() <= 64
+                    && p.correlation_id
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b"-_.:".contains(&c))
+            })
+            && !intent.media_id.is_empty()
+            && intent.media_id.len() <= 512
+        {
+            Ok(())
+        } else {
+            Err(invalid())
+        };
     }
     if is_create {
         return if intent.patch.is_none()
@@ -217,8 +249,20 @@ impl MediaMutationWorker for WorkerRpcService {
         &self,
         request: Request<ExecuteMediaProcessRequest>,
     ) -> Result<Response<MediaPatchOutcome>, Status> {
-        self.media_caller(&request)?;
-        Err(Status::unimplemented("MEDIA_PROCESSING_NOT_READY"))
+        let (metadata, extensions, input) = request.into_parts();
+        self.execute_media_mutation(
+            Request::from_parts(
+                metadata,
+                extensions,
+                ExecuteMediaPatchRequest {
+                    schema_version: input.schema_version,
+                    operation_id: input.operation_id,
+                    fence: input.fence,
+                },
+            ),
+            MediaMutationKind::Process,
+        )
+        .await
     }
     async fn execute_create(
         &self,

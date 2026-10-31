@@ -19,18 +19,33 @@ impl ControlSigningKey {
         let deletion = outcome.operation_id.starts_with("media-delete-");
         let patch = outcome.operation_id.starts_with("media-patch-");
         let creation = outcome.operation_id.starts_with("media-create-");
+        let processing = outcome.operation_id.starts_with("media-process-");
         let public_success = outcome.http_status == 200
             && outcome.error_code.is_empty()
             && outcome.error_message.is_empty();
         // A CREATE processor error retains a failed record/source, so its
         // terminal effect is applied even though the public request failed.
-        let processing_failure = creation
+        let processing_failure = (creation || processing)
             && (400..600).contains(&outcome.http_status)
             && !outcome.error_code.is_empty()
             && outcome.error_code != "EFFECT_UNKNOWN"
             && !outcome.error_message.is_empty();
-        let applied_shape = if creation {
+        let applied_shape = if processing {
             outcome.media.is_none()
+                && outcome.created.is_none()
+                && outcome.deleted_count == 0
+                && outcome.processed.as_ref().is_some_and(|p| {
+                    p.original_fence == outcome.original_fence
+                        && p.record_sha256.len() == 32
+                        && p.preparation_sha256.len() == 32
+                        && p.segments_sha256.len() == 32
+                        && p.record_bytes > 0
+                        && p.record_bytes <= 128 * 1024 * 1024
+                        && p.segments_bytes <= 128 * 1024 * 1024
+                })
+        } else if creation {
+            outcome.media.is_none()
+                && outcome.processed.is_none()
                 && outcome.deleted_count == 0
                 && outcome.created.as_ref().is_some_and(|created| {
                     created.original_fence == outcome.original_fence
@@ -40,13 +55,18 @@ impl ControlSigningKey {
                         && created.record_bytes <= 128 * 1024 * 1024
                 })
         } else if deletion {
-            outcome.created.is_none() && outcome.media.is_none() && outcome.deleted_count <= 1
+            outcome.created.is_none()
+                && outcome.processed.is_none()
+                && outcome.media.is_none()
+                && outcome.deleted_count <= 1
         } else {
-            outcome.created.is_none() && outcome.media.is_some() && outcome.deleted_count == 0
+            outcome.created.is_none()
+                && outcome.processed.is_none()
+                && outcome.media.is_some()
+                && outcome.deleted_count == 0
         };
         if outcome.schema_version != 1
-            || outcome.processed.is_some()
-            || !(patch || deletion || creation)
+            || !(patch || deletion || creation || processing)
             || outcome.operation_id != fence.action_id
             || outcome.operation_id.len() > 128
             || outcome.request_sha256.len() != 32
@@ -64,6 +84,7 @@ impl ControlSigningKey {
                 && (!(400..500).contains(&outcome.http_status)
                     || outcome.media.is_some()
                     || outcome.created.is_some()
+                    || outcome.processed.is_some()
                     || outcome.deleted_count != 0
                     || !outcome.after_sha256.is_empty()
                     || outcome.error_code.is_empty()))

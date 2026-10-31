@@ -35,7 +35,7 @@ func RequestDigest(intent *mediav1.MediaPatchIntent) ([]byte, error) {
 	if intent == nil || intent.SchemaVersion != 1 || intent.OperationId == "" || len(intent.OperationId) > 128 || intent.MediaId == "" || len(intent.MediaId) > 512 {
 		return nil, ErrInvalid
 	}
-	if len(intent.ProtoReflect().GetUnknown()) != 0 || intent.Process != nil {
+	if len(intent.ProtoReflect().GetUnknown()) != 0 || (intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_PROCESS && intent.Process != nil) {
 		return nil, ErrInvalid
 	}
 	switch intent.Kind {
@@ -59,6 +59,20 @@ func RequestDigest(intent *mediav1.MediaPatchIntent) ([]byte, error) {
 		if intent.Patch != nil || !strings.HasPrefix(intent.OperationId, "media-create-") || intent.Create == nil ||
 			len(intent.Create.ProtoReflect().GetUnknown()) != 0 || len(intent.Create.PayloadSha256) != 32 ||
 			intent.Create.PayloadBytes == 0 || intent.Create.PayloadBytes > MaxCreatePayloadBytes {
+			return nil, ErrInvalid
+		}
+	case mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_PROCESS:
+		if intent.Patch != nil || intent.Create != nil || intent.Process == nil ||
+			!strings.HasPrefix(intent.OperationId, "media-process-") || len(intent.Process.ProtoReflect().GetUnknown()) != 0 || len(intent.Process.CorrelationId) > 64 {
+			return nil, ErrInvalid
+		}
+		for _, c := range intent.Process.CorrelationId {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("-_.:", c)) {
+				return nil, ErrInvalid
+			}
+		}
+		nonce := strings.TrimPrefix(intent.OperationId, "media-process-")
+		if len(nonce) != 32 || strings.IndexFunc(nonce, func(c rune) bool { return !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') }) >= 0 {
 			return nil, ErrInvalid
 		}
 	default:
@@ -292,23 +306,38 @@ func VerifyOutcome(outcome *mediav1.MediaPatchOutcome, claim *mediav1.MediaPatch
 	if outcome.State != mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED && outcome.State != mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_REFUSED {
 		return ErrInvalid
 	}
-	if outcome.Processed != nil {
+	processing := claim.Intent.Kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_PROCESS
+	if !processing && outcome.Processed != nil {
 		return ErrInvalid
 	}
-	if claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED && claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE && claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_CREATE {
+	if claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_UNSPECIFIED && claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_DELETE && claim.Intent.Kind != mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_CREATE && !processing {
 		return ErrInvalid
+	}
+	if processing {
+		digest, err := RequestDigest(claim.Intent)
+		if err != nil || !bytes.Equal(digest, claim.RequestSha256) {
+			return ErrInvalid
+		}
 	}
 	if outcome.State == mediav1.MediaPatchEffectState_MEDIA_PATCH_EFFECT_STATE_APPLIED {
 		success := outcome.HttpStatus == 200 && outcome.ErrorCode == "" && outcome.ErrorMessage == ""
 		// Processing may fail after the original CREATE has retained its source
 		// and failed record. That signed applied effect is never a no-effect
 		// refusal, nor permission to issue a new creation operation.
-		processingFailure := claim.Intent.Kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_CREATE &&
+		processingFailure := (claim.Intent.Kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_CREATE || processing) &&
 			outcome.HttpStatus >= 400 && outcome.HttpStatus < 600 && outcome.ErrorCode != "" && outcome.ErrorCode != "EFFECT_UNKNOWN" && outcome.ErrorMessage != ""
 		if (!success && !processingFailure) || len(outcome.BeforeSha256) != 32 || len(outcome.AfterSha256) != 32 {
 			return ErrInvalid
 		}
-		if claim.Intent.Kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_CREATE {
+		if processing {
+			p := outcome.Processed
+			if outcome.Media != nil || outcome.Created != nil || outcome.DeletedCount != 0 || p == nil ||
+				len(p.ProtoReflect().GetUnknown()) != 0 || len(p.RecordSha256) != 32 || len(p.SegmentsSha256) != 32 ||
+				!proto.Equal(p.OriginalFence, claim.Fence) || len(p.PreparationSha256) != 32 ||
+				p.RecordBytes == 0 || p.RecordBytes > MaxCreatePayloadBytes || p.SegmentsBytes > MaxCreatePayloadBytes {
+				return ErrInvalid
+			}
+		} else if claim.Intent.Kind == mediav1.MediaMutationKind_MEDIA_MUTATION_KIND_CREATE {
 			if outcome.Media != nil || outcome.DeletedCount != 0 || outcome.Created == nil ||
 				len(outcome.Created.ProtoReflect().GetUnknown()) != 0 || len(outcome.Created.RecordSha256) != 32 ||
 				!proto.Equal(outcome.Created.OriginalFence, claim.Fence) || len(outcome.Created.PreparationSha256) != 32 || outcome.Created.RecordBytes == 0 || outcome.Created.RecordBytes > MaxCreatePayloadBytes {
@@ -326,7 +355,7 @@ func VerifyOutcome(outcome *mediav1.MediaPatchOutcome, claim *mediav1.MediaPatch
 				return err
 			}
 		}
-	} else if outcome.HttpStatus < 400 || outcome.HttpStatus >= 500 || outcome.Created != nil || outcome.Media != nil || outcome.DeletedCount != 0 || len(outcome.AfterSha256) != 0 || outcome.ErrorCode == "" {
+	} else if outcome.HttpStatus < 400 || outcome.HttpStatus >= 500 || outcome.Created != nil || outcome.Processed != nil || outcome.Media != nil || outcome.DeletedCount != 0 || len(outcome.AfterSha256) != 0 || outcome.ErrorCode == "" {
 		return ErrInvalid
 	}
 	unsigned := proto.Clone(outcome).(*mediav1.MediaPatchOutcome)

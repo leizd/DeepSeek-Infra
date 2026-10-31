@@ -1,3 +1,31 @@
+# Current checkpoint: standalone PROCESS implementation, 2026-10-31
+
+The separate PROCESS contract at `7c1a6b12` passed pinned cloud source generation
+(run41175785006), including all four reviewed outputs and the historical PATCH
+digest. This candidate adds the actual Go admission/HTTP/result path and Rust
+source reads, conditional segment/index replacement and original-operation phase
+reconciliation. Its runtime qualification is still pending; source code is not
+proof of successful processing or recovery.
+
+The older exact source `4688a38c` now has qualified37/37 original CI jobs and50
+Evidence artifacts, default Go95.022810%, Android Go95.010323%, Rust82.167259% and
+Python95.573611%, with both complete Go race corpora. None of those results is
+assigned to this child or a PR merge candidate. Parent `c4aae0c0` proved all six
+JSON processing creations but retained an actual standalone-force semantic RED.
+The new105-family Go inventory preserves every original97 family. Actual force,
+processing restart/crash evidence, all original floors and full product/platform
+acceptance remain required. See [the complete reprocessing boundaries](media-reprocessing.md).
+
+Overall goal remains ACTIVE/**NOT_READY** across server, desktop, Android,
+background and every retained feature. OCR/provider credentials and telemetry,
+configuration/errors/capacity, backups, MCP test execution, production ownership,
+zero-Python and exact-source full CI/Evidence/platform requirements are not
+waived. Rust/Go/Docker verification and caches remain in the cloud; preserve the
+local dirty root and perform no unscheduled PR, main merge, release or real data
+operation.
+
+---
+
 # Current checkpoint: retained media publication synchronization, 2026-10-28
 
 The complete original source CI/Rust and controlled platform proofs at `0acac3b5`
