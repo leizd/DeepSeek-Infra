@@ -1,5 +1,10 @@
 # Standalone native media reprocessing
 
+<!-- docs-language-switcher:start -->
+[中文](../../README.md) / [English](../../README.en.md)
+<!-- docs-language-switcher:end -->
+
+
 This is one unfinished part of the complete server, desktop, Android and
 background Rust/Go migration. Overall readiness remains **NOT_READY**. Source
 implementation, source generation, a scoped runtime probe, full source CI and a
