@@ -1,3 +1,17 @@
+# Current PROCESS checkpoint, 2026-10-31
+
+- [x] Qualify parent020065e's two105-family Go/race corpora,53 Rust media tests,
+  two real targeted source-sync EIO cases, six actual force/read/restart cases
+  and complete Rust1672-test/82.419972% workflow without changing original floors.
+- [ ] Qualify full source CI41195790266 and its required37 jobs/Evidence.
+- [ ] Run and independently qualify the new24 cloud-only PROCESS SIGKILL cases
+  across six kinds, two backends and processing/final library publication.
+- [ ] Complete all remaining recovery commit boundaries and the unchanged full
+  product/platform/zero-Python/MCP/provider/configuration/security/performance
+  acceptance in [the scope record](media-reprocessing.md); retain NOT_READY.
+
+---
+
 # Current checkpoint: standalone PROCESS implementation, 2026-10-31
 
 The separate PROCESS contract at `7c1a6b12` passed pinned cloud source generation

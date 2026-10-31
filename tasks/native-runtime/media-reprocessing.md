@@ -88,6 +88,38 @@ Windows/Android durability still require their own platform evidence.
   a whole-launcher restart with unchanged records, segments, index and sources.
   Existing35 multipart cases and56 earlier restart observations stay required.
 
+## Current exact-source evidence and external crash probe
+
+Source `020065e4948f49b21beac2f33ed1e65f9069456f` passed both independent
+105-family Go/race corpora (605 tests/subtests and all four packages each),
+53 Rust media tests including all six standalone PROCESS families, and both
+qualified targeted retained-source EIO cases. Its complete original15-crate
+Rust workflow passed1672 tests, with only the existing disposable-Redis ignore;
+independently summed LCOV is94389/114522=82.419971708493%, above the original80%
+floor. Its actual six JSON processing creations, six standalone force200
+responses, independent public reads and complete launcher processing restart
+passed while preserving the existing35 multipart/56 earlier read observations.
+The full source CI is [run41195790266](https://github.com/leizd/DeepSeek-Infra/actions/runs/41195790266);
+it remains a separate qualification and is not a PR merge-candidate check.
+
+The external PROCESS recovery observer adds24 cloud-only cases: all six media
+kinds on SQLite and SQLiteVec, at both the intermediate processing-library and
+final-library publication. A calibrated official tracer delays the actual
+post-rename sync return for five seconds without substituting a return value.
+The observer kills the real native process group, then requires autonomous
+settlement of the same original action/epoch, claim, plan and signed outcome;
+no second public write is sent. Source bytes/inode/mtime, foreign records and
+segments, unrelated exact index columns and namespace metadata must survive.
+SQLiteVec checks actual vector bytes and scalar bindings. Public record/segment
+reads must match the independent original ASGI oracle, and a further complete
+restart must preserve files, index and settled receipt without reprocessing.
+These new actual crash cases remain **CLOUD_PENDING** until this exact candidate
+runs. Offline observer tests do not qualify a native crash or SQLiteVec HTTP.
+
+This probe does not yet cover every clear/segment/index commit boundary,
+physical power loss, Windows/Android durability, all configuration/provider/OCR
+paths or the entire processing pipeline. Those requirements remain open.
+
 ## Remaining acceptance
 
 Exact-source compilation,105 Go/race families, all Rust tests and original

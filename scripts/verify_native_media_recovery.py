@@ -111,7 +111,7 @@ def readonly(path: Path, root: Path) -> sqlite3.Connection:
 
 
 def journal_snapshot(root: Path, allow_empty: bool = False, *, mutation: str = "patch") -> dict[str, Any] | None:
-    require(mutation in {"patch", "delete", "create"}, "MEDIA_RECOVERY_MUTATION_SELECTOR_INVALID")
+    require(mutation in {"patch", "delete", "create", "process"}, "MEDIA_RECOVERY_MUTATION_SELECTOR_INVALID")
     paths = list(root.rglob("media-effects.sqlite3"))
     require(len(paths) == 1, "MEDIA_RUST_JOURNAL_REQUIRED")
     with closing(readonly(paths[0], root)) as db:
@@ -207,10 +207,11 @@ def proc_state(pid: int) -> str | None:
     return raw[raw.rfind(")") + 2:].split()[0]
 
 
-def trace_command(binary: Path, library: Path, root: Path, log: Path) -> list[str]:
+def trace_command(binary: Path, library: Path, root: Path, log: Path, *, delay_seconds: int = 20) -> list[str]:
+    require(type(delay_seconds) is int and delay_seconds in {5, 20}, "MEDIA_RECOVERY_TRACE_DELAY_INVALID")
     target = owned_file(library, root)
     return [str(binary), "-f", "-P", str(target), "-e", "trace=fsync,fdatasync",
-            "-e", "inject=fsync,fdatasync:delay_exit=20s", "-o", str(log)]
+            "-e", f"inject=fsync,fdatasync:delay_exit={delay_seconds}s", "-o", str(log)]
 
 
 def sync_fault_command(binary: Path, library: Path, root: Path, log: Path, kind: str) -> list[str]:
@@ -363,7 +364,7 @@ def stop_trace(child: subprocess.Popen[bytes]) -> None:
     child.wait(timeout=5)
 
 
-def qualify_trace(binary: Path, scratch: Path, out: Path) -> dict[str, Any]:
+def qualify_trace(binary: Path, scratch: Path, out: Path, *, delay_seconds: int = 20) -> dict[str, Any]:
     root = scratch / "trace-qualification"
     root.mkdir()
     target = root / "target"
@@ -380,7 +381,7 @@ with (p/'target-temp').open('wb') as f:
  os.replace(p/'target-temp',p/'target'); os.fsync(f.fileno())
  (p/'returned-to-userspace').write_bytes(b'yes')
 """
-    command = trace_command(binary, target, root, out / "trace-qualification.log")
+    command = trace_command(binary, target, root, out / "trace-qualification.log", delay_seconds=delay_seconds)
     with (out / "trace-qualification-stderr.log").open("wb") as log:
         child = subprocess.Popen(command + [sys.executable, "-c", code, str(root)],
                                  stdout=log, stderr=subprocess.STDOUT, start_new_session=True)

@@ -65,6 +65,31 @@ def test_create_recovery_journal_reads_only_the_original_create(tmp_path: Path) 
     assert path.read_bytes() == before
 
 
+def test_process_recovery_journal_reads_only_the_original_process_without_writing(tmp_path: Path) -> None:
+    path = journal(tmp_path)
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE media_operations SET operation_id=?", ("media-process-" + "a" * 32,))
+    before = path.read_bytes()
+    row = probe.journal_snapshot(tmp_path, mutation="process")
+    assert row is not None and row["operationId"] == "media-process-" + "a" * 32
+    assert row["state"] == "APPLYING" and row["outcomeSha256"] is None
+    for other in ("patch", "delete", "create"):
+        with pytest.raises(probe.patch.ProbeFailure, match="MEDIA_OPERATION_ID_INVALID"):
+            probe.journal_snapshot(tmp_path, mutation=other)
+    assert path.read_bytes() == before
+
+
+def test_bounded_trace_hold_keeps_the_original_default_and_allows_two_real_process_publications(tmp_path: Path) -> None:
+    target = tmp_path / "library.json"
+    target.write_bytes(b"original")
+    args = probe.trace_command(Path("/usr/bin/strace"), target, tmp_path, tmp_path / "trace.log", delay_seconds=5)
+    assert "inject=fsync,fdatasync:delay_exit=5s" in args
+    assert not any("retval=" in arg or "error=" in arg or "when=" in arg for arg in args)
+    for invalid in (0, -1, 6, True, "5"):
+        with pytest.raises(probe.patch.ProbeFailure, match="TRACE_DELAY_INVALID"):
+            probe.trace_command(Path("/usr/bin/strace"), target, tmp_path, tmp_path / "trace.log", delay_seconds=invalid)
+
+
 def test_creation_source_fault_path_accepts_only_the_bound_future_source_without_creating_it(tmp_path: Path) -> None:
     record = creation_record()
     assert probe.creation_source_path(tmp_path, record) == (tmp_path / ".media" / str(record["path"])).resolve()

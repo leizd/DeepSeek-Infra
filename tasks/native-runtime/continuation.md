@@ -1,3 +1,31 @@
+# Current checkpoint: exact-source PROCESS proof and physical crash observer, 2026-10-31
+
+Parent `020065e` has qualified105/105 focused Go/race families in two independent
+runs,53 Rust media tests, two actual targeted source-sync EIO cases, six real
+JSON processing creations and six standalone force200/read/restart cases.
+The complete original Rust workflow passed1672 tests and94389/114522=82.419972%
+line coverage, preserving the80% floor and the one original Redis-only ignore.
+Full source CI41195790266 is a separate pending gate; no PR merge-candidate or
+full-product readiness is inferred.
+
+This candidate adds24 real external SIGKILL cases at processing/final library
+publication across all six kinds and both index backends. It requires original
+operation-only autonomous reconciliation, unchanged source identity, exact
+foreign rows and namespace metadata, actual vector bytes/bindings, independent
+original-ASGI public reads and another complete retained restart. No production
+Go/Rust source, private-key boundary, pinned tool, old recovery step or coverage
+floor changes. The new crash/SQLiteVec results remain CLOUD_PENDING.
+See [the full scope and evidence boundaries](media-reprocessing.md).
+
+The entire server/desktop/Android/background migration remains ACTIVE/NOT_READY.
+All commit-phase recovery, configuration/provider/OCR/credentials/telemetry,
+capacity, backups, retained MCP test execution, ownership/cutover, zero-Python,
+platform/security/performance/full CI/Evidence/release requirements remain.
+Preserve the dirty root, keep native builds/caches/images in the cloud, and
+perform no unscheduled PR, main merge, release or production data operation.
+
+---
+
 # Current checkpoint: standalone PROCESS implementation, 2026-10-31
 
 The separate PROCESS contract at `7c1a6b12` passed pinned cloud source generation
