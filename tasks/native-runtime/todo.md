@@ -1,10 +1,14 @@
-# Current exact-source coverage correction, 2026-10-31
+# Current PROCESS recovery and coverage correction, 2026-10-31
 
-- [ ] Run the expanded assertions inside the same105 required Go families.
-- [ ] Re-establish the original Go95% gate: parent020065e measured
-  16416/17293=94.928584%,13 covered statements short; no exclusions or lower floor.
-- [ ] Qualify full exact-source CI/Evidence/Android-Go, physical PROCESS recovery
-  and all unchanged product/platform acceptance. Parent runs remain separate.
+- [x] Capture source7228a63a's exact observer RED and reproduce10 failures
+  offline before correcting health routing, PID ownership and tracer-exit races.
+- [ ] Execute all24 actual PROCESS crash cases, all original recovery steps and
+  every required Go family at this exact corrected source; no parent transfer.
+- [ ] Re-establish Go95% from parent020065e's16416/17293=94.928584% RED, without
+  exclusions, changed filters, rounding or a lower floor; run Android-Go too.
+- [ ] Qualify exact full CI/Evidence and all remaining product/platform/complete
+  recovery/MCP/ownership/provider/zero-Python/security/performance acceptance.
+
 
 ---
 

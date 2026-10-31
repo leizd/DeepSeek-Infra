@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 import sqlite3
 import sys
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -16,6 +18,90 @@ spec = importlib.util.spec_from_file_location("native_media_recovery_probe", ROO
 assert spec is not None and spec.loader is not None
 probe = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(probe)
+
+
+@pytest.mark.parametrize("race", ["none", "open-exit", "send-exit", "pid-reused"])
+def test_owned_signals_bind_pidfd_and_never_signal_a_reused_numeric_pid(monkeypatch: pytest.MonkeyPatch, race: str) -> None:
+    monkeypatch.setattr(probe.sys, "platform", "linux")
+    monkeypatch.setattr(probe.signal, "SIGKILL", 9, raising=False)
+    state = {"ticks": 123}
+    row = dict(pid=9001, startTicks=123)
+    closed, sent = [], []
+
+    def pidfd_open(pid: int, flags: int = 0) -> int:
+        assert pid == row["pid"] and flags == 0
+        if race == "open-exit":
+            state["ticks"] = 0
+            raise ProcessLookupError("owned process exited before binding")
+        if race == "pid-reused":
+            state["ticks"] = 124
+        return 71
+
+    def pidfd_send(fd: int, signum: int, info: Any, flags: int) -> None:
+        assert fd == 71 and signum == 9 and info is None and flags == 0
+        if race == "send-exit":
+            state["ticks"] = 0
+            raise ProcessLookupError("owned process exited after binding")
+        sent.append((fd, signum))
+
+    def forbidden_raw_kill(*args: Any) -> None:
+        raise AssertionError("numeric PID signal could target a reused process")
+
+    monkeypatch.setattr(probe.os, "pidfd_open", pidfd_open, raising=False)
+    monkeypatch.setattr(probe.signal, "pidfd_send_signal", pidfd_send, raising=False)
+    monkeypatch.setattr(probe.os, "close", lambda fd: closed.append(fd))
+    monkeypatch.setattr(probe.os, "kill", forbidden_raw_kill)
+    monkeypatch.setattr(probe.patch.reads, "process_identity", lambda pid: state["ticks"] or None)
+    monkeypatch.setattr(probe, "proc_state", lambda pid: "R" if state["ticks"] else None)
+    if race == "pid-reused":
+        with pytest.raises(probe.patch.ProbeFailure, match="IDENTITY_CHANGED"):
+            probe.signal_owned(row, 9)
+    else:
+        assert probe.signal_owned(row, 9) is (race == "none")
+    assert sent == ([(71, 9)] if race == "none" else [])
+    assert closed == ([] if race == "open-exit" else [71])
+
+
+def test_owned_stop_cannot_treat_a_disappeared_peer_as_frozen(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(probe.sys, "platform", "linux")
+    monkeypatch.setattr(probe.signal, "SIGKILL", 9, raising=False)
+    monkeypatch.setattr(probe.signal, "SIGSTOP", 19, raising=False)
+    monkeypatch.setattr(probe.patch.reads, "process_identity", lambda pid: None)
+
+    def gone(*args: Any) -> int:
+        raise ProcessLookupError("owned peer exited")
+
+    monkeypatch.setattr(probe.os, "pidfd_open", gone, raising=False)
+    with pytest.raises(probe.patch.ProbeFailure, match="EXITED_BEFORE_SIGNAL"):
+        probe.signal_owned(dict(pid=9001, startTicks=123), 19)
+
+
+@pytest.mark.parametrize("race", ["group-query", "group-signal"])
+def test_trace_cleanup_waits_its_original_child_when_the_owned_group_just_exited(monkeypatch: pytest.MonkeyPatch, race: str) -> None:
+    monkeypatch.setattr(probe.sys, "platform", "linux")
+    monkeypatch.setattr(probe.signal, "SIGKILL", 9, raising=False)
+    waits = []
+
+    def wait_original(timeout: int) -> int:
+        waits.append(timeout)
+        return -9
+
+    child = SimpleNamespace(pid=9001, poll=lambda: None, wait=wait_original)
+
+    def getpgid(pid: int) -> int:
+        assert pid == 9001
+        if race == "group-query":
+            raise ProcessLookupError("the original tracer already exited")
+        return pid
+
+    def killpg(pid: int, signum: int) -> None:
+        assert (pid, signum) == (9001, 9)
+        raise ProcessLookupError("the original tracer group just exited")
+
+    monkeypatch.setattr(probe.os, "getpgid", getpgid, raising=False)
+    monkeypatch.setattr(probe.os, "killpg", killpg, raising=False)
+    probe.stop_trace(child)
+    assert waits == [5]
 
 
 def journal(tmp_path: Path, application_id: int = 0x44534D50) -> Path:

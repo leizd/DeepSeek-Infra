@@ -169,8 +169,8 @@ class Runtime:
         self.report[label + "Processes"] = list(self.identities)
         token = recovery.owned_file(self.profile / ".auth-token", self.profile).read_text().strip()
         require(re.fullmatch(r"[0-9a-f]{64}", token), "MEDIA_PROCESS_CRASH_AUTH_INVALID")
-        status, value, _ = create.exchange(self.origin, "/api/control/status", "GET", token)
-        require(status == 200 and value.get("ok") is True, "MEDIA_PROCESS_CRASH_CONTROL_UNHEALTHY")
+        status, raw, _ = create.patch.exchange(self.origin, "/api/control/status", "GET", token)
+        require(status == 200 and json.loads(raw).get("ok") is True, "MEDIA_PROCESS_CRASH_CONTROL_UNHEALTHY")
         return token
 
     def stop(self) -> None:
@@ -189,15 +189,23 @@ class Runtime:
             raise create.patch.ProbeFailure("MEDIA_PROCESS_CRASH_NATIVE_SIGNAL_REQUIRES_LINUX")
         if self.child is None:
             raise create.patch.ProbeFailure("MEDIA_PROCESS_CRASH_LAUNCHER_MISSING")
+        launcher_pid = self.child.pid
         peers = [row for row in self.identities if row != worker]
+        self.report["observerPhase"] = "stopping-original-peers"
         for row in sorted(peers, key=lambda row: row["executable"] != "deepseek-launch"):
             recovery.signal_owned(row, signal.SIGSTOP)
         recovery.wait_for(lambda: all(recovery.proc_state(row["pid"]) == "T" for row in peers), 5, "MEDIA_PROCESS_CRASH_PEERS_NOT_STOPPED")
-        for row in [worker] + sorted(peers, key=lambda row: row["executable"] == "deepseek-launch"):
-            recovery.signal_owned(row, signal.SIGKILL)
+        self.report["observerPhase"] = "killing-original-processes"
+        for row in [worker] + sorted(peers, key=lambda row: (row["executable"] == "deepseek-launch", row["pid"] == launcher_pid)):
+            delivered = recovery.signal_owned(row, signal.SIGKILL)
+            self.report.setdefault("killSignals", []).append(dict(pid=row["pid"], startTicks=row["startTicks"], signalDelivered=delivered))
+            if row == worker:
+                require(delivered, "MEDIA_PROCESS_CRASH_WORKER_EXITED_BEFORE_SIGKILL")
+                self.report["workerSIGKILLDelivered"] = True
         require(self.child.wait(timeout=5) == -signal.SIGKILL, "MEDIA_PROCESS_CRASH_LAUNCHER_NOT_KILLED")
         recovery.wait_for(lambda: all(recovery.exited(row) for row in self.identities), 5, "MEDIA_PROCESS_CRASH_PROCESS_SURVIVED")
-        self.report["allOriginalProcessesSIGKILLed"] = True
+        self.report["allOriginalProcessesExited"] = True
+        self.report["observerPhase"] = "original-processes-exited"
         self.child, self.identities = None, []
 
 

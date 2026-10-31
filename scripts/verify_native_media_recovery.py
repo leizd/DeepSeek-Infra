@@ -359,8 +359,13 @@ def stop_trace(child: subprocess.Popen[bytes]) -> None:
     if sys.platform != "linux":
         raise patch.ProbeFailure("MEDIA_TRACE_REQUIRES_LINUX")
     if child.poll() is None:
-        require(child.pid > 1 and os.getpgid(child.pid) == child.pid, "MEDIA_TRACE_GROUP_NOT_OWNED")
-        os.killpg(child.pid, signal.SIGKILL)
+        try:
+            require(child.pid > 1 and os.getpgid(child.pid) == child.pid, "MEDIA_TRACE_GROUP_NOT_OWNED")
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            # The traced worker can exit between poll/getpgid/killpg. The
+            # original Popen handle below must still confirm terminal state.
+            pass
     child.wait(timeout=5)
 
 
@@ -395,12 +400,38 @@ with (p/'target-temp').open('wb') as f:
         stop_trace(child)
 
 
-def signal_owned(row: dict[str, Any], signum: int) -> None:
+def signal_owned(row: dict[str, Any], signum: int) -> bool:
+    """Bind the original process with a pidfd; never signal a reused PID.
+
+    Python3.9+/Linux5.3+: https://docs.python.org/3.11/library/os.html#os.pidfd_open
+    https://docs.python.org/3.11/library/signal.html#signal.pidfd_send_signal
+    Only termination may accept a process whose exit is independently confirmed.
+    """
     if sys.platform != "linux":
         raise patch.ProbeFailure("MEDIA_NATIVE_SIGNAL_REQUIRES_LINUX")
     pid = row["pid"]
-    require(pid > 1 and patch.reads.process_identity(pid) == row["startTicks"], "MEDIA_CRASH_PID_IDENTITY_CHANGED")
-    os.kill(pid, signum)
+    require(type(pid) is int and pid > 1 and row.get("startTicks") is not None, "MEDIA_CRASH_PID_IDENTITY_CHANGED")
+    observed = patch.reads.process_identity(pid)
+    if observed is not None:
+        require(observed == row["startTicks"], "MEDIA_CRASH_PID_IDENTITY_CHANGED")
+    terminating = signum in {signal.SIGKILL, signal.SIGTERM}
+    try:
+        descriptor = os.pidfd_open(pid, 0)
+    except ProcessLookupError:
+        if terminating and exited(row):
+            return False
+        raise patch.ProbeFailure("MEDIA_CRASH_PID_EXITED_BEFORE_SIGNAL") from None
+    try:
+        require(patch.reads.process_identity(pid) == row["startTicks"], "MEDIA_CRASH_PID_IDENTITY_CHANGED")
+        try:
+            signal.pidfd_send_signal(descriptor, signum, None, 0)
+        except ProcessLookupError:
+            if terminating and exited(row):
+                return False
+            raise patch.ProbeFailure("MEDIA_CRASH_PID_EXITED_BEFORE_SIGNAL") from None
+        return True
+    finally:
+        os.close(descriptor)
 
 
 def exited(row: dict[str, Any]) -> bool:
@@ -620,14 +651,23 @@ def run(args: argparse.Namespace, report: dict[str, Any]) -> None:
                 report["publicationAtCrash"] = dict(sha256=digest(raw_after), inode=stat_after.st_ino, mtimeNs=stat_after.st_mtime_ns)
                 (args.out / "after-crash-library.json").write_bytes(raw_after)
                 nonworkers = [row for row in identities if row != worker]
+                report["observerPhase"] = "stopping-original-peers"
                 for row in sorted(nonworkers, key=lambda row: row["executable"] != "deepseek-launch"):
                     signal_owned(row, signal.SIGSTOP)
                 wait_for(lambda: all(proc_state(row["pid"]) == "T" for row in nonworkers), 5, "MEDIA_CRASH_PEERS_NOT_STOPPED")
-                for row in [worker] + sorted(nonworkers, key=lambda row: row["executable"] == "deepseek-launch"):
-                    signal_owned(row, signal.SIGKILL)
+                launcher_pid = child.pid if child is not None else 0
+                require(launcher_pid > 1, "MEDIA_CRASH_LAUNCHER_MISSING")
+                report["observerPhase"] = "killing-original-processes"
+                for row in [worker] + sorted(nonworkers, key=lambda row: (row["executable"] == "deepseek-launch", row["pid"] == launcher_pid)):
+                    delivered = signal_owned(row, signal.SIGKILL)
+                    report.setdefault("killSignals", []).append(dict(pid=row["pid"], startTicks=row["startTicks"], signalDelivered=delivered))
+                    if row == worker:
+                        require(delivered, "MEDIA_WORKER_EXITED_BEFORE_SIGKILL")
+                        report["workerSIGKILLDelivered"] = True
                 require(child is not None and child.wait(timeout=5) == -signal.SIGKILL, "MEDIA_LAUNCHER_NOT_SIGKILLED")
                 wait_for(lambda: all(exited(row) for row in identities), 5, "MEDIA_ORIGINAL_PROCESS_STILL_EXECUTING")
                 report["allOriginalProcessesExited"] = True
+                report["observerPhase"] = "original-processes-exited"
                 child, identities = None, []
                 stop_trace(tracer)
                 tracer = None

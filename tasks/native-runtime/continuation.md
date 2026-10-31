@@ -1,25 +1,33 @@
-# Current checkpoint: restore the original Go coverage gate, 2026-10-31
+# Current checkpoint: external recovery observer corrections, 2026-10-31
 
-The exact-source original CI41195790266 at020065e completed37 jobs with
-33success, one skipped and three failures. Native-Go failed only its original
-95% statement gate:16416/17293=94.928583820043%,13 additional covered statements
-short. Evidence Assembly and RC readiness were consequently not qualified;
-Android-Go coverage did not run. Keep all original95/95/95/80 floors.
+Native recovery run41197847611 at7228a63a has164 verified report files. The new
+SQLite/SQLiteVec PROCESS observers failed before business admission because the
+media-only HTTP helper rejected `/api/control/status`; no processing semantic
+failure is inferred. The old PATCH observer held the actual final publication
+with original GoDISPATCHED/RustAPPLYING rows, then encountered ProcessLookupError
+before proving complete process exit. The exact racing call was not captured.
+Other CREATE/DELETE/source-sync reports do not erase those three failed gates.
 
-This candidate adds assertions to existing mandatory Go families: real control
-unavailability before any effect RPC, secured retained-result clients, bounded
-sizes, malformed typed results with correct hashes, unknown kinds and a changed
-claim digest. The store package now directly exercises original PROCESS
-preparation-digest binding, rejection of re-signed substituted results, historical
-settlement after lease expiry and exact receipt replay. It uses the existing
-disposable unit signer, not a production custody key. Production code is unchanged.
-The new Go assertions and coverage remain CLOUD_PENDING.
+Use the existing bounded control observer for startup health, retaining the
+media helper's path restriction. Bind signals with Linux pidfds and recheck
+original start ticks; never signal a reused PID. A vanished peer cannot count as
+frozen. Termination may only accept independently confirmed exit. Reap an
+already exited tracer through its original Popen handle, kill the root launcher
+last, and explicitly require the worker's SIGKILL delivery and every original
+process's exit. All actual re-execution remains CLOUD_PENDING.
 
-Parent7228a63a's24 actual PROCESS crash cases are running separately in
-native-media-recovery run41197847611. Neither that parent run nor the older
-020065e Rust/HTTP proofs qualifies this exact child. All full-product and
-platform/recovery/ownership/zero-Python/MCP/provider/security/performance/
-CI/Evidence/release requirements remain open; retain ACTIVE/NOT_READY.
+The inherited f1e488f6 Go tests preserve105 families and target the original
+16416/17293=94.928584% RED,13 covered statements below95%. Its dispatch suffered
+an ambiguous connection failure with no remote run observed; do not assign old
+results to it. This corrected child must run the complete inherited tests and
+unchanged95/95/95/80 gates at its own exact source. Production code is unchanged.
+
+The full server/desktop/Android/background migration remains ACTIVE/NOT_READY.
+No feature, recovery phase, provider/OCR/configuration/capacity/backup behavior,
+MCP test-engine requirement, ownership, zero-Python, platform/security/performance
+or full CI/Evidence/release requirement is waived. Preserve the dirty root;
+native compilers/caches/images stay in the cloud. No main merge, release, real
+production data or unscheduled PR is authorized by this observer correction.
 
 ---
 

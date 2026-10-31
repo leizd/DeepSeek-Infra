@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import sqlite3
 import sys
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -171,3 +172,35 @@ def test_process_crash_runtime_cannot_launch_outside_cloud_even_on_linux(monkeyp
     with pytest.raises(probe.create.patch.ProbeFailure, match="VERIFICATION_IS_CLOUD_ONLY"):
         runtime.launch("refused-local-launch")
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("status,healthy", [(200, True), (200, False), (503, False)])
+def test_process_launch_health_uses_the_control_observer_without_widening_media_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: int, healthy: bool,
+) -> None:
+    monkeypatch.setattr(probe.sys, "platform", "linux")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    token = "7" * 64
+    (profile / ".auth-token").write_text(token)
+    child = SimpleNamespace(pid=100)
+    monkeypatch.setattr(probe.subprocess, "Popen", lambda *args, **kwargs: child)
+    monkeypatch.setattr(probe.create.patch.bootstrap, "wait_public", lambda *args: None)
+    roles = ["deepseek-launch", "deepseek-launch", "deepseek-worker", "deepseek-launch", "deepseekd", "deepseek-launch", "deepseek-gateway"]
+    monkeypatch.setattr(probe.create.patch.bootstrap, "process_roles", lambda pid: [dict(pid=100+i, executable=role) for i, role in enumerate(roles)])
+    monkeypatch.setattr(probe.create.patch.reads, "process_identity", lambda pid: pid + 2000)
+    calls = []
+
+    def control_exchange(origin: str, path: str, method: str, auth: str) -> tuple[int, bytes, str]:
+        calls.append((origin, path, method, auth))
+        return status, json.dumps(dict(ok=healthy)).encode(), "application/json"
+
+    monkeypatch.setattr(probe.create.patch, "exchange", control_exchange)
+    runtime = probe.Runtime(tmp_path / "bin", profile, 18123, "sqlite", 64, tmp_path, {})
+    if status == 200 and healthy:
+        assert runtime.launch("health") == token
+    else:
+        with pytest.raises(probe.create.patch.ProbeFailure, match="CONTROL_UNHEALTHY"):
+            runtime.launch("health")
+    assert calls == [("http://127.0.0.1:18123", "/api/control/status", "GET", token)]

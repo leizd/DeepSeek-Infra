@@ -133,6 +133,28 @@ pin, schema, signature or coverage denominator is changed. All new runtime and
 coverage results remain CLOUD_PENDING. Parent7228a63a's separate actual crash
 run41197847611 cannot be assigned to this exact child.
 
+## External observer RED and correction
+
+The verified164 reports from source7228a63a/run41197847611 retain two new
+PROCESS failures before admission: the media-only HTTP helper refuses the
+control health path. Use the existing bounded general control observer instead;
+the media whitelist stays strict. The older PATCH case reached real publication
+with original DISPATCHED/APPLYING witnesses, then hit ProcessLookupError before
+complete process exit. The reports do not identify which racing signal/cleanup
+call raised it, and do not prove successful recovery.
+
+The correction uses original-process pidfds, checks start ticks before/after
+binding, refuses disappeared pause targets, and only tolerates independently
+confirmed exit for termination. Root-launcher-last ordering and explicit worker
+SIGKILL-delivery/every-original-exit evidence prevent weaker crash claims. Tracer
+cleanup still waits on the original Popen handle after an ESRCH race. The
+[Python pidfd contract](https://docs.python.org/3.11/library/os.html#os.pidfd_open)
+and [signal contract](https://docs.python.org/3.11/library/signal.html#signal.pidfd_send_signal)
+are Linux-only observer APIs; no application hook, syscall result substitution,
+production dependency or control/data authority change is added. Ten focused
+offline regressions reproduced the failures; actual24-case re-execution and the
+inherited Go coverage regressions remain CLOUD_PENDING at this exact source.
+
 ## Remaining acceptance
 
 Exact-source compilation,105 Go/race families, all Rust tests and original
