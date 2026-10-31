@@ -37,6 +37,7 @@ pub mod file_routes;
 pub mod file_store;
 pub mod file_upload;
 pub mod generated_files;
+pub mod media_processing;
 pub mod media_schema;
 pub mod memory;
 pub mod memory_index;
