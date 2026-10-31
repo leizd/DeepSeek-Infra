@@ -68,3 +68,26 @@ def test_retained_observation_report_refuses_missing_or_pooled_counts():
     report = dict(jsonRegistrationCases=[{} for _ in range(10)], actualMultipartStoredRecords=31)
     with pytest.raises(upload.create.ProbeFailure, match="OBSERVATION_COUNTS_DIFFER"):
         upload.create.observation_counts(report, 41)
+
+
+@pytest.mark.parametrize("name", [
+    "parser-folded-header", "parser-last-disposition", "parser-last-content-type",
+    "parser-preamble", "parser-no-final-crlf", "parser-transport-padding",
+    "parser-malformed-header", "parser-attachment-disposition", "parser-header-count",
+    "parser-folded-header-limit", "parser-truncated-header", "parser-missing-boundary",
+    "parser-last-boundary-parameter", "parser-part-length-exact", "parser-part-length-mismatch",
+    "parser-utf7-title", "parser-utf16-no-bom-title", "parser-utf32-no-bom-title",
+    "parser-utf32le-title", "parser-utf32be-title", "parser-replacement-character-title",
+    "parser-independent-large-headers", "parser-file-count", "parser-part-count", "parser-memory-limit",
+])
+def test_wire_conformance_corpus_observes_the_actual_original_route(name, tmp_path):
+    requests = list(upload.conformance_requests())
+    assert len(requests) == 25 and len({row[0] for row in requests}) == 25
+    label, raw, mime, query, expected_status, stored, _ = next(row for row in requests if row[0] == name)
+    assert label == name
+    reference = upload.original(tmp_path / "oracle", tmp_path / "oracle.log", raw, mime, query)
+    assert reference["status"] == expected_status
+    assert len(reference["storedMedia"]) == len(reference["sourceHashes"]) == stored
+    if "title" in name:
+        title = reference["body"]["media"]["title"]
+        assert title == ("\ufffd" if name == "parser-replacement-character-title" else "café 中文")

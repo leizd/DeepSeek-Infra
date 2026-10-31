@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from collections.abc import Iterator
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, build_opener
@@ -135,20 +136,71 @@ def cases() -> Any:
     yield "maximum-body-and-twenty-files", files, [field("title", "ignored")], "", 200, 20
 
 
+def conformance_requests() -> Iterator[tuple[str, bytes, str, str, int, int, int]]:
+    """Original parser boundaries exercised through both real public routes."""
+    files = [("image.png", "image/png", b"\x00opaque\xff")]
+    raw, mime = multipart(files, [])
+    marker = b"Content-Type: image/png\r\n"
+    opening = ("--" + BOUNDARY + "\r\n").encode()
+    variants = [
+        ("folded-header", raw.replace(marker, marker + b"X-Header: value\r\n continued\r\n", 1), mime, 200),
+        ("last-disposition", raw.replace(marker, marker + b'Content-Disposition: form-data; name="files"; filename="last.png"\r\n', 1), mime, 200),
+        ("last-content-type", raw.replace(marker, marker + b"Content-Type: text/html\r\n", 1), mime, 200),
+        ("preamble", b"original preamble\r\n" + raw, mime, 200),
+        ("no-final-crlf", raw.removesuffix(b"\r\n"), mime, 200),
+        ("transport-padding", raw.replace(opening, opening[:-2] + b" \t\r\n", 1), mime, 415),
+        ("malformed-header", raw.replace(marker, b"BrokenHeader\r\n", 1), mime, 415),
+        ("attachment-disposition", raw.replace(b"form-data; name=", b"attachment; name=", 1), mime, 415),
+        ("header-count", raw.replace(marker, marker + b"X-Header: value\r\n" * 7, 1), mime, 413),
+        ("folded-header-limit", raw.replace(marker, marker + b"X-Header: " + b"x" * (4096-len("X-Header: ")) + b"\r\n continued\r\n", 1), mime, 413),
+        ("truncated-header", opening + b"Content-Type: image/png", mime, 415),
+        ("missing-boundary", raw, "multipart/form-data", 400),
+        ("last-boundary-parameter", raw, "multipart/form-data; boundary=wrong; boundary=" + BOUNDARY, 200),
+        ("part-length-exact", raw.replace(marker, marker + b"Content-Length: 8\r\n", 1), mime, 200),
+        ("part-length-mismatch", raw.replace(marker, marker + b"Content-Length: 9\r\n", 1), mime, 415),
+        ("independent-large-headers", raw.replace(marker, marker + b"X-First: " + b"x" * 4000 + b"\r\nX-Second: " + b"y" * 4000 + b"\r\n", 1), mime, 200),
+    ]
+    for label, wire, content_type, status in variants:
+        yield "parser-" + label, wire, content_type, "", status, int(status == 200), 1
+    for label, charset, data in [
+        ("utf7-title", "utf-7", "café 中文".encode("utf-7")),
+        ("utf16-no-bom-title", "utf-16", "café 中文".encode("utf-16-le")),
+        ("utf32-no-bom-title", "utf-32", "café 中文".encode("utf-32-le")),
+        ("utf32le-title", "utf-32-le", "café 中文".encode("utf-32-le")),
+        ("utf32be-title", "utf-32-be", "café 中文".encode("utf-32-be")),
+        ("replacement-character-title", "utf-16", "\ufffd".encode("utf-16-le")),
+    ]:
+        wire, content_type = multipart(files, [("title", data, charset)])
+        yield "parser-" + label, wire, content_type, "", 200, 1, 1
+    for label, inputs, fields in [
+        ("file-count", files * 21, []),
+        ("part-count", [], [field("title", "value")] * 25),
+        ("memory-limit", [(f"memory-{i}.png", "image/png", b"m" * 1024**2) for i in range(5)], []),
+    ]:
+        wire, content_type = multipart(inputs, fields)
+        yield "parser-" + label, wire, content_type, "", 413, 0, len(inputs)
+
+
+def wire_requests() -> Iterator[tuple[str, bytes, str, str, int, int, int]]:
+    for label, files, fields, query, status, stored in cases():
+        raw, mime = multipart(files, fields)
+        yield label, raw, mime, query, status, stored, len(files)
+    yield from conformance_requests()
+
+
 def verify_cases(origin: str, token: str, profile: Path, mirror: Path, out: Path, report: dict[str, Any]) -> list[tuple[str, dict[str, Any], str]]:
     create.require(os.environ.get("GITHUB_ACTIONS") == "true" and sys.platform == "linux", "MEDIA_UPLOAD_VERIFICATION_IS_CLOUD_ONLY")
     report["multipartUploadCases"] = []
     observations = []
-    for label, files, fields, query, expected_status, expected_stored in cases():
-        raw, content_type = multipart(files, fields)
+    for label, raw, content_type, query, expected_status, expected_stored, input_files in wire_requests():
         if label == "maximum-body-and-twenty-files":
-            create.require(len(raw) == 220_000_000 and len(files) == 20, "MEDIA_UPLOAD_CAPACITY_NOT_EXERCISED")
+            create.require(len(raw) == 220_000_000 and input_files == 20, "MEDIA_UPLOAD_CAPACITY_NOT_EXERCISED")
         reference = original(mirror / label, out / ("oracle-upload-" + label + ".log"), raw, content_type, query)
         create.require(reference["status"] == expected_status and len(reference["storedMedia"]) == expected_stored,
                        "MEDIA_UPLOAD_ORIGINAL_CONTRACT_DIFFERS_" + label)
         before = {record["mediaId"] for record in library_records(profile)}
         status, body, headers = exchange(origin, token, raw, content_type, query)
-        row = dict(case=label, requestBytes=len(raw), files=len(files), expectedStatus=expected_status, nativeStatus=status,
+        row = dict(case=label, requestBytes=len(raw), files=input_files, expectedStatus=expected_status, nativeStatus=status,
                    originalStatus=reference["status"], originalStoredRecords=expected_stored,
                    nativeErrorCode=error_code(body), nativeErrorBody=body if status != 200 else None)
         report["multipartUploadCases"].append(row)
@@ -160,8 +212,8 @@ def verify_cases(origin: str, token: str, profile: Path, mirror: Path, out: Path
         hashes = [hashlib.sha256((profile / ".media" / record["path"]).read_bytes()).hexdigest() for record in retained]
         create.require(hashes == reference["sourceHashes"], "MEDIA_UPLOAD_SOURCE_BYTES_DIFFER_" + label)
         if status == 200:
-            records = require_success(body, len(files))
-            original_records = require_success(reference["body"], len(files))
+            records = require_success(body, input_files)
+            original_records = require_success(reference["body"], input_files)
             create.require(create.same_json(canonical_records(records), canonical_records(original_records)), "MEDIA_UPLOAD_PUBLIC_RECORD_DIFFERS_" + label)
             create.require(create.same_json(records, retained), "MEDIA_UPLOAD_PUBLIC_STORED_RECORD_DIFFERS_" + label)
             create.require(headers.get("x-deepseek-request-id") == create.REQUEST_ID, "MEDIA_UPLOAD_REQUEST_ID_DIFFERS")
